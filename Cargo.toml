@@ -1,0 +1,13 @@
+[package]
+name = "lapis"
+version = "0.1.0"
+edition = "2024"
+description = "A small Markdown editor built with GPUI."
+license = "MIT"
+
+[dependencies]
+gpui = "0.2.2"
+rfd = "0.15"
+
+[dev-dependencies]
+tempfile = "3"

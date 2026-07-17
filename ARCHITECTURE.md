@@ -140,3 +140,10 @@ Created -> Preparing -> Queued -> Running -> Completed
 - 捨てた選択肢
 - 影響範囲
 
+## GPUI による初期エディターの採用
+
+- 決定内容: Windows 向け初期 UI と Markdown 編集欄に GPUI 0.2.2 を採用する。
+- 解決する要件: ローカル Markdown の開く・編集・保存と、編集内容のプレビュー反映。
+- 採用理由: Rust でウィンドウ、描画、キーボード入力を一つの UI 層として実装できるため。
+- 捨てた選択肢: UI フレームワークを未決定のままにすること。初期段階の実装を開始できないため採用しない。
+- 影響範囲: `src/editor.rs` が GPUI に依存し、ファイル I/O は `Document` / `WorkspaceBackend` 境界を通す。GPUI は pre-1.0 のため、将来の更新では API 変更を局所化して確認する。
