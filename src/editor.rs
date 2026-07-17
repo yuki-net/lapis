@@ -34,6 +34,9 @@ actions!(
         New,
         ShowCommands,
         Dismiss,
+        TogglePreview,
+        ToggleBottomPanel,
+        ToggleAssistant,
         Quit,
     ]
 );
@@ -44,6 +47,12 @@ enum ToolPanel {
     Search,
     Git,
     History,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SidePanel {
+    Preview,
+    Assistant,
 }
 
 pub fn run() {
@@ -94,6 +103,9 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("cmd-shift-k", ShowCommands, None),
         KeyBinding::new("ctrl-shift-k", ShowCommands, None),
         KeyBinding::new("escape", Dismiss, None),
+        KeyBinding::new("ctrl-alt-p", TogglePreview, None),
+        KeyBinding::new("ctrl-j", ToggleBottomPanel, None),
+        KeyBinding::new("ctrl-shift-a", ToggleAssistant, None),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("ctrl-q", Quit, None),
     ]);
@@ -108,6 +120,8 @@ pub struct Editor {
     status: String,
     active_tool: ToolPanel,
     command_palette_open: bool,
+    side_panel: Option<SidePanel>,
+    bottom_panel_open: bool,
 }
 
 impl Editor {
@@ -121,6 +135,8 @@ impl Editor {
             status: "新しい Markdown ドキュメント".to_owned(),
             active_tool: ToolPanel::Files,
             command_palette_open: false,
+            side_panel: None,
+            bottom_panel_open: false,
         }
     }
 
@@ -342,6 +358,37 @@ impl Editor {
         }
     }
 
+    fn toggle_preview(&mut self, _: &TogglePreview, _: &mut Window, cx: &mut Context<Self>) {
+        self.side_panel = if self.side_panel == Some(SidePanel::Preview) {
+            None
+        } else {
+            Some(SidePanel::Preview)
+        };
+        self.command_palette_open = false;
+        cx.notify();
+    }
+
+    fn toggle_bottom_panel(
+        &mut self,
+        _: &ToggleBottomPanel,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.bottom_panel_open = !self.bottom_panel_open;
+        self.command_palette_open = false;
+        cx.notify();
+    }
+
+    fn toggle_assistant(&mut self, _: &ToggleAssistant, _: &mut Window, cx: &mut Context<Self>) {
+        self.side_panel = if self.side_panel == Some(SidePanel::Assistant) {
+            None
+        } else {
+            Some(SidePanel::Assistant)
+        };
+        self.command_palette_open = false;
+        cx.notify();
+    }
+
     fn select_tool(&mut self, panel: ToolPanel, cx: &mut Context<Self>) {
         self.active_tool = panel;
         cx.notify();
@@ -439,6 +486,25 @@ impl Editor {
                     this.command_palette_open = false;
                     this.save_file(window, cx);
                 })),
+            )
+            .child(
+                command_item("Markdown Preview", "Ctrl Alt P").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.toggle_preview(&TogglePreview, window, cx);
+                    },
+                )),
+            )
+            .child(command_item("Bottom Panel", "Ctrl J").on_click(cx.listener(
+                |this, _, window, cx| {
+                    this.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
+                },
+            )))
+            .child(
+                command_item("AI Assistant", "Ctrl Shift A").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.toggle_assistant(&ToggleAssistant, window, cx);
+                    },
+                )),
             )
             .child(
                 div()
@@ -554,6 +620,214 @@ impl Editor {
         }
     }
 
+    fn preview_lines(&self) -> Vec<gpui::Div> {
+        self.document
+            .content
+            .lines()
+            .map(|line| {
+                let (text, size, color) = if let Some(value) = line.strip_prefix("# ") {
+                    (value.to_owned(), px(24.0), theme::text())
+                } else if let Some(value) = line.strip_prefix("## ") {
+                    (value.to_owned(), px(19.0), theme::text())
+                } else if let Some(value) = line.strip_prefix("### ") {
+                    (value.to_owned(), px(16.0), theme::text())
+                } else if let Some(value) = line.strip_prefix("- ") {
+                    (format!("• {value}"), px(13.0), theme::muted())
+                } else if let Some(value) = line.strip_prefix("> ") {
+                    (format!("│ {value}"), px(13.0), rgb(0xb8b9f8))
+                } else {
+                    (line.to_owned(), px(13.0), theme::muted())
+                };
+                div()
+                    .min_h(px(22.0))
+                    .text_size(size)
+                    .text_color(color)
+                    .child(text)
+            })
+            .collect()
+    }
+
+    fn render_side_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let panel = self.side_panel.unwrap_or(SidePanel::Preview);
+        let (icon, title) = match panel {
+            SidePanel::Preview => ("◫", "Preview"),
+            SidePanel::Assistant => ("✦", "AI Assistant"),
+        };
+
+        div()
+            .w(px(theme::SIDE_PANEL_WIDTH))
+            .h_full()
+            .flex_shrink_0()
+            .overflow_hidden()
+            .rounded(px(theme::ISLAND_RADIUS))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::island())
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(39.0))
+                    .flex_shrink_0()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.0))
+                    .text_color(theme::text())
+                    .child(
+                        div()
+                            .text_color(if panel == SidePanel::Assistant {
+                                rgb(0xb8b9f8)
+                            } else {
+                                theme::muted()
+                            })
+                            .child(icon),
+                    )
+                    .child(title)
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("close-side-panel")
+                            .size(px(25.0))
+                            .rounded(px(5.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(theme::muted())
+                            .hover(|style| {
+                                style.bg(theme::surface_hover()).text_color(theme::text())
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.side_panel = None;
+                                cx.notify();
+                            }))
+                            .child("×"),
+                    ),
+            )
+            .when_else(
+                panel == SidePanel::Preview,
+                |panel| {
+                    panel.child(
+                        div()
+                            .id("preview-scroll")
+                            .h(px(0.0))
+                            .min_h(px(0.0))
+                            .flex_1()
+                            .overflow_y_scroll()
+                            .p_4()
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .when_else(
+                                self.document.content.is_empty(),
+                                |preview| {
+                                    preview.child(panel_empty_state(
+                                        "◫",
+                                        "プレビューする内容がありません",
+                                        "Markdown を入力するとここに反映されます",
+                                    ))
+                                },
+                                |preview| preview.children(self.preview_lines()),
+                            ),
+                    )
+                },
+                |panel| {
+                    panel.child(
+                        div()
+                            .flex_1()
+                            .p_4()
+                            .flex()
+                            .flex_col()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .size(px(34.0))
+                                    .rounded(px(8.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(theme::accent_soft())
+                                    .text_color(rgb(0xb8b9f8))
+                                    .child("✦"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(13.0))
+                                    .text_color(theme::text())
+                                    .child("AI Assistant"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::muted())
+                                    .child("Assistant バックエンドは未接続です。"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme::subtle())
+                                    .child("接続後、この文書の内容を参照できるようになります。"),
+                            ),
+                    )
+                },
+            )
+    }
+
+    fn render_bottom_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .h(px(theme::BOTTOM_PANEL_HEIGHT))
+            .flex_shrink_0()
+            .overflow_hidden()
+            .rounded(px(theme::ISLAND_RADIUS))
+            .border_1()
+            .border_color(theme::border())
+            .bg(theme::island())
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .h(px(36.0))
+                    .flex_shrink_0()
+                    .px_2()
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(panel_tab("Terminal", true))
+                    .child(panel_tab("Problems", false))
+                    .child(panel_tab("Output", false))
+                    .child(panel_tab("Debug", false))
+                    .child(div().flex_1())
+                    .child(
+                        div()
+                            .id("close-bottom-panel")
+                            .size(px(25.0))
+                            .rounded(px(5.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .text_color(theme::muted())
+                            .hover(|style| {
+                                style.bg(theme::surface_hover()).text_color(theme::text())
+                            })
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.bottom_panel_open = false;
+                                cx.notify();
+                            }))
+                            .child("×"),
+                    ),
+            )
+            .child(panel_empty_state(
+                ">_",
+                "Terminal バックエンドは未接続です",
+                "外部 CLI の出力形式を UI に直接公開しません",
+            ))
+    }
+
     fn cursor_line_column(&self) -> (usize, usize) {
         let cursor = self.cursor_offset();
         let before_cursor = &self.document.content[..cursor];
@@ -607,6 +881,9 @@ impl Render for Editor {
             .on_action(cx.listener(Self::new_document))
             .on_action(cx.listener(Self::show_commands))
             .on_action(cx.listener(Self::dismiss))
+            .on_action(cx.listener(Self::toggle_preview))
+            .on_action(cx.listener(Self::toggle_bottom_panel))
+            .on_action(cx.listener(Self::toggle_assistant))
             .child(
                 div()
                     .h(px(theme::TITLE_BAR_HEIGHT))
@@ -640,8 +917,22 @@ impl Render for Editor {
                             )
                             .child(top_icon("☰", false))
                             .child(top_icon("▤", true))
-                            .child(top_icon("▥", false))
-                            .child(top_icon("▱", false)),
+                            .child(
+                                top_icon(
+                                    "▥",
+                                    self.side_panel == Some(SidePanel::Preview),
+                                )
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.toggle_preview(&TogglePreview, window, cx);
+                                })),
+                            )
+                            .child(
+                                top_icon("▱", self.bottom_panel_open).on_click(cx.listener(
+                                    |this, _, window, cx| {
+                                        this.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
+                                    },
+                                )),
+                            ),
                     )
                     .child(
                         div()
@@ -666,6 +957,7 @@ impl Render for Editor {
                             .gap_1()
                             .child(
                                 div()
+                                    .id("assistant-toggle")
                                     .h(px(27.0))
                                     .px_2()
                                     .rounded(px(6.0))
@@ -674,6 +966,15 @@ impl Render for Editor {
                                     .gap_1()
                                     .text_size(px(11.0))
                                     .text_color(rgb(0x8da8ff))
+                                    .bg(if self.side_panel == Some(SidePanel::Assistant) {
+                                        theme::accent_soft()
+                                    } else {
+                                        theme::title_bar()
+                                    })
+                                    .hover(|style| style.bg(theme::surface_hover()))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.toggle_assistant(&ToggleAssistant, window, cx);
+                                    }))
                                     .child("✦")
                                     .child("Note"),
                             )
@@ -684,6 +985,7 @@ impl Render for Editor {
             .child(
                 div()
                     .h(px(0.0))
+                    .w_full()
                     .min_h(px(0.0))
                     .flex()
                     .flex_1()
@@ -747,157 +1049,182 @@ impl Render for Editor {
                     .child(
                         div()
                             .w(px(0.0))
+                            .flex_1()
                             .flex()
                             .flex_col()
-                            .flex_1()
-                            .relative()
-                            .overflow_hidden()
-                            .rounded(px(theme::ISLAND_RADIUS))
-                            .border_1()
-                            .border_color(theme::border())
-                            .bg(theme::island())
                             .child(
                                 div()
-                                    .h(px(39.0))
-                                    .flex_shrink_0()
-                                    .px(px(7.0))
+                                    .w_full()
                                     .flex()
-                                    .items_end()
-                                    .gap_1()
-                                    .border_b_1()
+                                    .flex_col()
+                                    .flex_1()
+                                    .relative()
+                                    .overflow_hidden()
+                                    .rounded(px(theme::ISLAND_RADIUS))
+                                    .border_1()
                                     .border_color(theme::border())
+                                    .bg(theme::island())
+                                    .child(
+                                        div()
+                                            .h(px(39.0))
+                                            .flex_shrink_0()
+                                            .px(px(7.0))
+                                            .flex()
+                                            .items_end()
+                                            .gap_1()
+                                            .border_b_1()
+                                            .border_color(theme::border())
+                                            .child(
+                                                div()
+                                                    .h(px(31.0))
+                                                    .w(px(180.0))
+                                                    .flex_shrink_0()
+                                                    .px_2()
+                                                    .rounded_t(px(6.0))
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .bg(theme::surface())
+                                                    .text_size(px(12.0))
+                                                    .text_color(theme::text())
+                                                    .child(file_badge("M", theme::orange()))
+                                                    .child(display_name.clone())
+                                                    .child(
+                                                        div()
+                                                            .text_color(theme::subtle())
+                                                            .child(dirty_marker),
+                                                    ),
+                                            ),
+                                    )
                                     .child(
                                         div()
                                             .h(px(31.0))
-                                            .w(px(180.0))
                                             .flex_shrink_0()
-                                            .px_2()
-                                            .rounded_t(px(6.0))
+                                            .px(px(14.0))
                                             .flex()
                                             .items_center()
-                                            .gap_2()
-                                            .bg(theme::surface())
+                                            .gap_3()
                                             .text_size(px(12.0))
-                                            .text_color(theme::text())
-                                            .child(file_badge("M", theme::orange()))
-                                            .child(display_name.clone())
+                                            .text_color(theme::subtle())
+                                            .child("lapis")
+                                            .child("›")
                                             .child(
                                                 div()
-                                                    .text_color(theme::subtle())
-                                                    .child(dirty_marker),
-                                            ),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .h(px(31.0))
-                                    .flex_shrink_0()
-                                    .px(px(14.0))
-                                    .flex()
-                                    .items_center()
-                                    .gap_3()
-                                    .text_size(px(12.0))
-                                    .text_color(theme::subtle())
-                                    .child("lapis")
-                                    .child("›")
-                                    .child(
-                                        div()
-                                            .text_color(theme::muted())
-                                            .child(display_name.clone()),
+                                                    .text_color(theme::muted())
+                                                    .child(display_name.clone()),
+                                            )
+                                            .child("·")
+                                            .child(
+                                                div().text_color(rgb(0x8da8ff)).child("✓ Note"),
+                                            )
+                                            .child(format!("R{}", self.document.revision.number))
+                                            .child(format!("Ln {line}, Col {column}"))
+                                            .child("·")
+                                            .child(self.status.clone()),
                                     )
-                                    .child("·")
-                                    .child(div().text_color(rgb(0x8da8ff)).child("✓ Note"))
-                                    .child(format!("R{}", self.document.revision.number))
-                                    .child(format!("Ln {line}, Col {column}"))
-                                    .child("·")
-                                    .child(self.status.clone()),
-                            )
-                            .child(
-                                div()
-                                    .h(px(0.0))
-                                    .min_h(px(0.0))
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
                                     .child(
                                         div()
-                                            .id("source-scroll")
                                             .h(px(0.0))
                                             .min_h(px(0.0))
                                             .flex_1()
-                                            .overflow_y_scroll()
-                                            .relative()
-                                            .px(px(18.0))
-                                            .py(px(10.0))
-                                            .cursor(CursorStyle::IBeam)
-                                            .text_size(px(14.0))
-                                            .text_color(theme::text())
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                cx.listener(Self::focus_editor),
-                                            )
-                                            .child(EditorElement {
-                                                editor: cx.entity(),
-                                            })
-                                            .when(document_is_empty, |canvas| {
-                                                canvas.child(
-                                                    div()
-                                                        .absolute()
-                                                        .top(px(72.0))
-                                                        .left(px(54.0))
-                                                        .w(px(330.0))
-                                                        .flex()
-                                                        .flex_col()
-                                                        .gap_2()
-                                                        .child(
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .id("source-scroll")
+                                                    .h(px(0.0))
+                                                    .min_h(px(0.0))
+                                                    .flex_1()
+                                                    .overflow_y_scroll()
+                                                    .relative()
+                                                    .px(px(18.0))
+                                                    .py(px(10.0))
+                                                    .cursor(CursorStyle::IBeam)
+                                                    .text_size(px(14.0))
+                                                    .text_color(theme::text())
+                                                    .on_mouse_down(
+                                                        MouseButton::Left,
+                                                        cx.listener(Self::focus_editor),
+                                                    )
+                                                    .child(EditorElement {
+                                                        editor: cx.entity(),
+                                                    })
+                                                    .when(document_is_empty, |canvas| {
+                                                        canvas.child(
                                                             div()
-                                                                .text_size(px(18.0))
-                                                                .text_color(theme::text())
-                                                                .child("Markdown を始める"),
+                                                                .absolute()
+                                                                .top(px(72.0))
+                                                                .left(px(54.0))
+                                                                .w(px(330.0))
+                                                                .flex()
+                                                                .flex_col()
+                                                                .gap_2()
+                                                                .child(
+                                                                    div()
+                                                                        .text_size(px(18.0))
+                                                                        .text_color(theme::text())
+                                                                        .child("Markdown を始める"),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .mb_1()
+                                                                        .text_size(px(12.0))
+                                                                        .text_color(theme::subtle())
+                                                                        .child("新規作成するか、既存の文書を開きます"),
+                                                                )
+                                                                .child(
+                                                                    quick_action(
+                                                                        "Markdown を開く…",
+                                                                        "Ctrl O",
+                                                                    )
+                                                                    .on_click(cx.listener(
+                                                                        |this, _, window, cx| {
+                                                                            this.open_file(
+                                                                                window, cx,
+                                                                            );
+                                                                        },
+                                                                    )),
+                                                                )
+                                                                .child(
+                                                                    quick_action(
+                                                                        "新しい文書",
+                                                                        "Ctrl N",
+                                                                    )
+                                                                    .on_click(cx.listener(
+                                                                        |this, _, window, cx| {
+                                                                            this.new_document(
+                                                                                &New, window, cx,
+                                                                            );
+                                                                        },
+                                                                    )),
+                                                                )
+                                                                .child(
+                                                                    quick_action(
+                                                                        "すべてのコマンド",
+                                                                        "Ctrl Shift K",
+                                                                    )
+                                                                    .on_click(cx.listener(
+                                                                        |this, _, _, cx| {
+                                                                            this.command_palette_open = true;
+                                                                            cx.notify();
+                                                                        },
+                                                                    )),
+                                                                ),
                                                         )
-                                                        .child(
-                                                            div()
-                                                                .mb_1()
-                                                                .text_size(px(12.0))
-                                                                .text_color(theme::subtle())
-                                                                .child("新規作成するか、既存の文書を開きます"),
-                                                        )
-                                                        .child(
-                                                            quick_action("Markdown を開く…", "Ctrl O")
-                                                                .on_click(cx.listener(
-                                                                    |this, _, window, cx| {
-                                                                        this.open_file(window, cx);
-                                                                    },
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            quick_action("新しい文書", "Ctrl N")
-                                                                .on_click(cx.listener(
-                                                                    |this, _, window, cx| {
-                                                                        this.new_document(
-                                                                            &New, window, cx,
-                                                                        );
-                                                                    },
-                                                                )),
-                                                        )
-                                                        .child(
-                                                            quick_action(
-                                                                "すべてのコマンド",
-                                                                "Ctrl Shift K",
-                                                            )
-                                                            .on_click(cx.listener(
-                                                                |this, _, _, cx| {
-                                                                    this.command_palette_open =
-                                                                        true;
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                        ),
-                                                )
-                                            }),
+                                                    }),
+                                            ),
                                     ),
-                            ),
-                    ),
+                            )
+                            .when(self.bottom_panel_open, |center| {
+                                center
+                                    .child(div().h(px(theme::CANVAS_GAP)).flex_shrink_0())
+                                    .child(self.render_bottom_panel(cx))
+                            }),
+                    )
+                    .when(self.side_panel.is_some(), |body| {
+                        body.child(div().w(px(theme::CANVAS_GAP)).flex_shrink_0())
+                            .child(self.render_side_panel(cx))
+                    }),
             )
             .when(self.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
@@ -996,6 +1323,57 @@ fn tool_empty_state(
                 .text_color(theme::subtle())
                 .child(detail),
         )
+}
+
+fn panel_empty_state(icon: &'static str, message: &'static str, detail: &'static str) -> gpui::Div {
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .px_4()
+        .text_center()
+        .child(
+            div()
+                .text_size(px(18.0))
+                .text_color(theme::subtle())
+                .child(icon),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme::muted())
+                .child(message),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::subtle())
+                .child(detail),
+        )
+}
+
+fn panel_tab(label: &'static str, active: bool) -> gpui::Div {
+    div()
+        .h(px(28.0))
+        .px_2()
+        .rounded(px(5.0))
+        .flex()
+        .items_center()
+        .bg(if active {
+            theme::surface()
+        } else {
+            theme::island()
+        })
+        .text_size(px(11.0))
+        .text_color(if active {
+            theme::text()
+        } else {
+            theme::muted()
+        })
+        .child(label)
 }
 
 fn command_item(label: &'static str, shortcut: &'static str) -> gpui::Stateful<gpui::Div> {
