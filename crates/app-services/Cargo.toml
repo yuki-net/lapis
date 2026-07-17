@@ -1,0 +1,10 @@
+[package]
+name = "lapis-app-services"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-document = { path = "../document" }
+

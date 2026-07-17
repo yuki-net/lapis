@@ -2860,10 +2860,82 @@ dependencies = [
 name = "lapis"
 version = "0.1.0"
 dependencies = [
+ "lapis-app-services",
+ "lapis-desktop-ui",
+ "lapis-platform",
+]
+
+[[package]]
+name = "lapis-app-services"
+version = "0.1.0"
+dependencies = [
+ "lapis-document",
+]
+
+[[package]]
+name = "lapis-desktop-ui"
+version = "0.1.0"
+dependencies = [
  "gpui",
+ "lapis-app-services",
+]
+
+[[package]]
+name = "lapis-document"
+version = "0.1.0"
+dependencies = [
+ "lapis-text",
+]
+
+[[package]]
+name = "lapis-editor-core"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-git"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-language"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-lsp"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-persistence"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-platform"
+version = "0.1.0"
+dependencies = [
+ "lapis-app-services",
+ "lapis-document",
  "rfd",
  "tempfile",
 ]
+
+[[package]]
+name = "lapis-project"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-task-runner"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-terminal"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-text"
+version = "0.1.0"
+
+[[package]]
+name = "lapis-workspace"
+version = "0.1.0"
 
 [[package]]
 name = "lazy_static"

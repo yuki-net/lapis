@@ -1,0 +1,7 @@
+[package]
+name = "lapis-project"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+

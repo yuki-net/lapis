@@ -3,6 +3,21 @@
   <component name="NewModuleRootManager" inherit-compiler-output="true">
     <exclude-output />
     <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/crates/app-services/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/app/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/desktop-ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/document/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/editor-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/git/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/language/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/lsp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/persistence/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/platform/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/project/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/task-runner/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/terminal/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/text/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/crates/workspace/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>

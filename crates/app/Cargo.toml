@@ -1,0 +1,12 @@
+[package]
+name = "lapis"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-app-services = { path = "../app-services" }
+lapis-desktop-ui = { path = "../desktop-ui" }
+lapis-platform = { path = "../platform" }
+

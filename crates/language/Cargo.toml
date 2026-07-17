@@ -1,0 +1,7 @@
+[package]
+name = "lapis-language"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+

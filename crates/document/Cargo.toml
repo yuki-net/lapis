@@ -1,0 +1,10 @@
+[package]
+name = "lapis-document"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-text = { path = "../text" }
+

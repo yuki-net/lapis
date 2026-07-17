@@ -8,11 +8,9 @@ use gpui::{
     WindowControlArea, WindowOptions, actions, div, fill, point, prelude::*, px, relative, rgb,
     rgba, size,
 };
+use lapis_app_services::{DocumentAction, EditorSession};
 
-use crate::{
-    document::{Document, WorkspaceBackend},
-    theme,
-};
+use crate::theme;
 
 actions!(
     editor,
@@ -63,8 +61,8 @@ enum ResizeTarget {
     BottomPanel,
 }
 
-pub fn run() {
-    Application::new().run(|cx: &mut App| {
+pub fn run(session: EditorSession) {
+    Application::new().run(move |cx: &mut App| {
         bind_keys(cx);
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(
@@ -77,8 +75,8 @@ pub fn run() {
                 }),
                 ..Default::default()
             },
-            |window, cx| {
-                let editor = cx.new(Editor::new);
+            move |window, cx| {
+                let editor = cx.new(|cx| Editor::new(session, cx));
                 window.focus(&editor.read(cx).focus_handle);
                 editor
             },
@@ -125,7 +123,7 @@ fn bind_keys(cx: &mut App) {
 }
 
 pub struct Editor {
-    document: Document,
+    session: EditorSession,
     focus_handle: FocusHandle,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -142,9 +140,9 @@ pub struct Editor {
 }
 
 impl Editor {
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(session: EditorSession, cx: &mut Context<Self>) -> Self {
         Self {
-            document: Document::new(),
+            session,
             focus_handle: cx.focus_handle(),
             selected_range: 0..0,
             selection_reversed: false,
@@ -189,8 +187,8 @@ impl Editor {
     }
 
     fn previous_boundary(&self, offset: usize) -> usize {
-        self.document
-            .content
+        self.session
+            .content()
             .char_indices()
             .map(|(index, _)| index)
             .rev()
@@ -199,12 +197,12 @@ impl Editor {
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
-        self.document
-            .content
+        self.session
+            .content()
             .char_indices()
             .map(|(index, _)| index)
             .find(|index| *index > offset)
-            .unwrap_or(self.document.content.len())
+            .unwrap_or(self.session.content().len())
     }
 
     fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
@@ -218,7 +216,7 @@ impl Editor {
     fn offset_from_utf16(&self, offset: usize) -> usize {
         let mut utf16 = 0;
         let mut utf8 = 0;
-        for ch in self.document.content.chars() {
+        for ch in self.session.content().chars() {
             if utf16 >= offset {
                 break;
             }
@@ -231,7 +229,7 @@ impl Editor {
     fn offset_to_utf16(&self, offset: usize) -> usize {
         let mut utf16 = 0;
         let mut utf8 = 0;
-        for ch in self.document.content.chars() {
+        for ch in self.session.content().chars() {
             if utf8 >= offset {
                 break;
             }
@@ -243,12 +241,7 @@ impl Editor {
 
     fn replace_selection(&mut self, text: &str, cx: &mut Context<Self>) {
         let range = self.selected_range.clone();
-        self.document.set_content(format!(
-            "{}{}{}",
-            &self.document.content[..range.start],
-            text,
-            &self.document.content[range.end..]
-        ));
+        self.session.replace_range(range.clone(), text);
         let cursor = range.start + text.len();
         self.selected_range = cursor..cursor;
         self.selection_reversed = false;
@@ -299,14 +292,14 @@ impl Editor {
     }
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.document.content.len();
+        self.selected_range = 0..self.session.content().len();
         self.selection_reversed = false;
         cx.notify();
     }
 
     fn home(&mut self, _: &Home, _: &mut Window, cx: &mut Context<Self>) {
         let cursor = self.cursor_offset();
-        let start = self.document.content[..cursor]
+        let start = self.session.content()[..cursor]
             .rfind('\n')
             .map(|index| index + 1)
             .unwrap_or(0);
@@ -315,10 +308,10 @@ impl Editor {
 
     fn end(&mut self, _: &End, _: &mut Window, cx: &mut Context<Self>) {
         let cursor = self.cursor_offset();
-        let end = self.document.content[cursor..]
+        let end = self.session.content()[cursor..]
             .find('\n')
             .map(|index| cursor + index)
-            .unwrap_or(self.document.content.len());
+            .unwrap_or(self.session.content().len());
         self.move_to(end, cx);
     }
 
@@ -335,7 +328,7 @@ impl Editor {
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                self.document.content[self.selected_range.clone()].to_owned(),
+                self.session.content()[self.selected_range.clone()].to_owned(),
             ));
         }
     }
@@ -343,7 +336,7 @@ impl Editor {
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
         if !self.selected_range.is_empty() {
             cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                self.document.content[self.selected_range.clone()].to_owned(),
+                self.session.content()[self.selected_range.clone()].to_owned(),
             ));
         }
         self.replace_selection("", cx);
@@ -360,7 +353,7 @@ impl Editor {
     }
 
     fn new_document(&mut self, _: &New, _: &mut Window, cx: &mut Context<Self>) {
-        self.document = Document::new();
+        self.session.new_document();
         self.selected_range = 0..0;
         self.status = "新しい Markdown ドキュメント".to_owned();
         self.command_palette_open = false;
@@ -464,39 +457,26 @@ impl Editor {
     }
 
     fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Markdown", &["md", "markdown", "mdown"])
-            .pick_file()
-        else {
-            return;
-        };
-        match WorkspaceBackend::read_markdown(&path) {
-            Ok(content) => {
-                self.document = Document::from_file(path, content);
+        match self.session.open_document() {
+            Ok(DocumentAction::Completed) => {
                 self.selected_range = 0..0;
                 self.status = "読み込みました".to_owned();
                 window.focus(&self.focus_handle);
                 cx.notify();
             }
+            Ok(DocumentAction::Cancelled) => {}
             Err(error) => self.status = format!("読み込み失敗: {error}"),
         }
     }
 
     fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let path = self.document.path.clone().or_else(|| {
-            rfd::FileDialog::new()
-                .add_filter("Markdown", &["md", "markdown", "mdown"])
-                .set_file_name("Untitled.md")
-                .save_file()
-        });
-        let Some(path) = path else { return };
-        match WorkspaceBackend::write_markdown(&path, &self.document.content) {
-            Ok(()) => {
-                self.document.mark_saved(path);
+        match self.session.save_document() {
+            Ok(DocumentAction::Completed) => {
                 self.status = "保存しました".to_owned();
                 window.focus(&self.focus_handle);
                 cx.notify();
             }
+            Ok(DocumentAction::Cancelled) => {}
             Err(error) => self.status = format!("保存失敗: {error}"),
         }
     }
@@ -624,16 +604,16 @@ impl Editor {
                         .text_size(px(12.0))
                         .text_color(theme::text())
                         .child(file_badge("M", theme::orange()))
-                        .child(self.document.display_name())
+                        .child(self.session.display_name())
                         .child(div().flex_1())
                         .child(
                             div()
-                                .text_color(if self.document.is_dirty() {
+                                .text_color(if self.session.is_dirty() {
                                     theme::accent()
                                 } else {
                                     theme::subtle()
                                 })
-                                .child(if self.document.is_dirty() { "●" } else { "" }),
+                                .child(if self.session.is_dirty() { "●" } else { "" }),
                         ),
                 ),
             ToolPanel::Search => tool_empty_state(
@@ -672,10 +652,10 @@ impl Editor {
                         .child(
                             div()
                                 .text_color(theme::text())
-                                .child(format!("Revision {}", self.document.revision.number)),
+                                .child(format!("Revision {}", self.session.revision())),
                         )
                         .child(div().text_size(px(11.0)).text_color(theme::subtle()).child(
-                            if self.document.is_dirty() {
+                            if self.session.is_dirty() {
                                 "未保存の変更があります"
                             } else {
                                 "保存済み"
@@ -686,8 +666,8 @@ impl Editor {
     }
 
     fn preview_lines(&self) -> Vec<gpui::Div> {
-        self.document
-            .content
+        self.session
+            .content()
             .lines()
             .map(|line| {
                 let (text, size, color) = if let Some(value) = line.strip_prefix("# ") {
@@ -787,7 +767,7 @@ impl Editor {
                             .flex_col()
                             .gap_2()
                             .when_else(
-                                self.document.content.is_empty(),
+                                self.session.content().is_empty(),
                                 |preview| {
                                     preview.child(panel_empty_state(
                                         "◫",
@@ -895,7 +875,7 @@ impl Editor {
 
     fn cursor_line_column(&self) -> (usize, usize) {
         let cursor = self.cursor_offset();
-        let before_cursor = &self.document.content[..cursor];
+        let before_cursor = &self.session.content()[..cursor];
         let line = before_cursor.bytes().filter(|byte| *byte == b'\n').count() + 1;
         let column = before_cursor
             .rsplit('\n')
@@ -914,9 +894,9 @@ impl Focusable for Editor {
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dirty_marker = if self.document.is_dirty() { " *" } else { "" };
-        let display_name = self.document.display_name();
-        let document_is_empty = self.document.content.is_empty();
+        let dirty_marker = if self.session.is_dirty() { " *" } else { "" };
+        let display_name = self.session.display_name();
+        let document_is_empty = self.session.content().is_empty();
         let editor_focused = self.focus_handle.is_focused(window);
         let compact_layout = f32::from(window.viewport_size().width) < 1080.0;
         let status_is_error = self.status.contains("失敗");
@@ -1237,7 +1217,7 @@ impl Render for Editor {
                                             .child(
                                                 div().text_color(rgb(0x8da8ff)).child("✓ Note"),
                                             )
-                                            .child(format!("R{}", self.document.revision.number))
+                                            .child(format!("R{}", self.session.revision()))
                                             .child(format!("Ln {line}, Col {column}"))
                                             .child("·")
                                             .child(
@@ -1655,7 +1635,14 @@ impl Element for EditorElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let line_count = self.editor.read(cx).document.content.lines().count().max(1);
+        let line_count = self
+            .editor
+            .read(cx)
+            .session
+            .content()
+            .lines()
+            .count()
+            .max(1);
         let mut style = Style::default();
         style.size.width = relative(1.).into();
         style.size.height = px(24.0 * line_count as f32).into();
@@ -1672,7 +1659,7 @@ impl Element for EditorElement {
         cx: &mut App,
     ) -> Self::PrepaintState {
         let editor = self.editor.read(cx);
-        let content = &editor.document.content;
+        let content = editor.session.content();
         let text_style = window.text_style();
         let mut lines = Vec::new();
         let line_height = px(24.0);
@@ -1753,7 +1740,7 @@ impl EntityInputHandler for Editor {
     ) -> Option<String> {
         let range = self.range_from_utf16(&range_utf16);
         actual_range.replace(self.range_to_utf16(&range));
-        Some(self.document.content[range].to_owned())
+        Some(self.session.content()[range].to_owned())
     }
 
     fn selected_text_range(

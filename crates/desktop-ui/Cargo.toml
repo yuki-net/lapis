@@ -1,0 +1,11 @@
+[package]
+name = "lapis-desktop-ui"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui.workspace = true
+lapis-app-services = { path = "../app-services" }
+
