@@ -1,167 +1,313 @@
 # ARCHITECTURE.md
 
-Lapis の論理構成と設計上の境界を定義します。Rust の具体的な実装構成は未確定です。
+## 概要
 
-## 設計状態
+本アプリはRust製のデスクトップコードエディターである。
 
-### 確定
+全体は機能単位のcrateに分ける。
+DDDの4層をトップレベルには置かない。
+必要な場合だけ、各crateの内部でDomain、Application、Infrastructureを分ける。
 
-- デスクトップクライアントとワークスペースバックエンドを分離する。
-- ローカルとリモートで同じ論理プロトコルを使う。
-- 会話を中心に、編集状態、ワークスペース、AIタスクを束ねる。
-- 機能の段階差はモード専用実装ではなく Capability で表す。
-- エージェントは外部 CLI を実行し、状態はバックエンドが所有する。
-- 主な実装言語は Rust とする。
+## 基本方針
 
-### 未確定
+- 機能単位でcrateを分ける。
+- crate間の循環依存を作らない。
+- UIに業務ロジックを書かない。
+- 外部ライブラリの型を他のcrateへ漏らさない。
+- 具体的な実装は`app`で組み合わせる。
+- 共通化は必要になってから行う。
 
-- UI フレームワーク、GPU描画、テキスト編集基盤
-- ローカル IPC、リモート通信、データ形式
-- 非同期ランタイムと内部イベント基盤
-- crate、モジュール、ディレクトリ構成
-- 永続化、検索索引、共同編集、プラグインの実装方式
-
-## 論理構成
+## 構成
 
 ```text
-Desktop Client
-  UI / Editor / Local Buffer / View State
-                |
-        Workspace Protocol
-                |
-Workspace Backend
-  Files / Git / Search / LSP / Index / Terminal
-  Tasks / Agent Executions / Sessions / Persistence
-                |
-  Local / Remote / Container Workspace
+crates/
+├── editor-core/
+├── text/
+├── document/
+├── workspace/
+├── project/
+├── task-runner/
+├── terminal/
+├── language/
+├── lsp/
+├── git/
+├── persistence/
+├── platform/
+├── app-services/
+├── desktop-ui/
+└── app/
 ```
 
-UI はバックエンドの配置を意識しません。ローカル利用ではクライアントがバックエンドを必要時に起動し、リモート利用では接続先だけを差し替えます。
+## 各crateの責務
 
-## 責務
+### editor-core
 
-### Desktop Client
+複数の機能で使う最小限の型を置く。
 
-- 描画、入力、カーソル、選択、スクロール
-- テキストバッファのローカル複製と Undo／Redo
-- 開いている文書、パネル、レイアウトなどの表示状態
-- 軽量な構文表示と Markdown 表示
-- 会話、タスク、差分、診断の表示
+- ID
+- 共通Error
+- 共通Event
+- 基本的なPath型
 
-通信断やバックエンド遅延があっても、入力と閲覧を可能な限り継続します。
+機能固有の処理は置かない。
 
-### Workspace Backend
+### text
 
-- ファイル、監視、検索、Git
-- LSP、索引、ビルド、タスク、ターミナル
-- Project、Workspace、Conversation の状態
-- AI CLI の起動、入出力、承認、終了状態、ログ
-- ローカル、リモート、コンテナ接続
-- 永続化、再接続、リソース休止
+テキスト編集の基礎を持つ。
 
-## 中心モデル
+- Text Buffer
+- Position
+- Range
+- Edit
+- Undo / Redo
 
-| 概念 | 責務 |
-| --- | --- |
-| `Project` | リポジトリやノート保管庫などの論理単位 |
-| `Workspace` | 実際に操作するローカル、worktree、リモート、コンテナ環境 |
-| `Conversation` | 会話と、その会話で復元する編集・表示状態 |
-| `Task` | 会話内で依頼する作業単位 |
-| `Execution` | CLIやスクリプトの一回の実行 |
-| `Checkout` | タスクを分離するworktreeやブランチ |
-| `Document` | コードとノートに共通する編集対象 |
-| `Revision` | Document の版と編集順序 |
-| `Capability` | 必要時に有効化する機能 |
+UI、ファイル保存、LSPには依存しない。
 
-`Conversation` と `Task`、`Task` と `Execution` は一対一に限定しません。
+### document
 
-## Capability
+開いている文書を管理する。
 
-UI 上のモードは Capability のプリセットとして扱います。
+- 文書の状態
+- Dirty状態
+- 保存状態
+- Encoding
+- 編集履歴
+
+テキスト処理は`text`を使う。
+
+### workspace
+
+現在の作業空間を管理する。
+
+- 開いているProject
+- 開いているDocument
+- Session
+- Workspace設定
+- 復元状態
+
+他の機能を直接実装しない。
+
+### project
+
+Project単位の情報を管理する。
+
+- Root directory
+- Project設定
+- File構成
+- Run configuration
+- Build configuration
+
+### task-runner
+
+長時間実行する処理を管理する。
+
+- Codex CLI
+- Claude CLI
+- Build
+- Test
+- 任意Command
+- 状態
+- Log
+- Cancel
+
+Taskの状態遷移をこのcrateに置く。
+
+### terminal
+
+Terminal Sessionを管理する。
+
+- PTY
+- Shell process
+- Input / Output
+- Resize
+- Session lifecycle
+
+Terminalの表示は`desktop-ui`に置く。
+
+### language
+
+言語ごとの定義を管理する。
+
+- Language definition
+- File extension
+- Syntax
+- Language registry
+
+### lsp
+
+Language Serverを管理する。
+
+- Server lifecycle
+- Request / Response
+- Diagnostics
+- Completion
+- Document synchronization
+
+UIには依存しない。
+
+### git
+
+Git機能を管理する。
+
+- Repository
+- Status
+- Diff
+- Branch
+- Commit
+- Worktree
+
+`git2`やCLIの型を外部へ漏らさない。
+
+### persistence
+
+永続化の実装を置く。
+
+- SQLite
+- 設定保存
+- Session保存
+- Workspace履歴
+- Task履歴
+- AI会話履歴
+
+Repositoryの契約は、それを使う機能側に置く。
+
+### platform
+
+OS固有の処理を置く。
+
+- File system
+- Process
+- Clipboard
+- Notification
+- File watcher
+- Native dialog
+- Window連携
+
+大きな`PlatformService`は作らず、小さい機能へ分ける。
+
+### app-services
+
+複数の機能をまたぐ処理を置く。
+
+- Workspaceを開く
+- Projectを切り替える
+- Document復元後にLSPを起動する
+- AI Task完了後に変更Fileを再読込する
+
+単一機能で完結する処理は、その機能側に置く。
+
+### desktop-ui
+
+画面と入力処理を置く。
+
+- Window
+- Editor View
+- Panel
+- Terminal View
+- Command Palette
+- View Model
+- Keybinding
+
+Domain処理、DB操作、OS操作は直接書かない。
+
+### app
+
+アプリ全体を組み立てる。
+
+- Entry point
+- Dependency Injection
+- Event接続
+- 起動処理
+- 終了処理
+- Lifecycle管理
+
+`app`以外のcrateは`app`へ依存しない。
+
+## 依存方向
 
 ```text
-Note   = text + markdown + links
-Editor = Note + syntax + git + basic-language-support
-Smart  = Editor + full-lsp + index + inspections
-Remote = 任意の構成 + remote-workspace
-Pair   = 任意の構成 + collaboration
+desktop-ui
+    ↓
+app-services
+    ↓
+各Feature
+
+persistence ──→ 各Featureの契約
+platform    ──→ 各Featureの契約
+
+app ──→ すべてを組み立てる
 ```
 
-名称と組み合わせは暫定です。各機能は必要時に起動し、未使用時は休止または解放できる構造にします。
-
-## Document と同期
-
-- コードと Markdown を共通の Document として扱う。
-- Document は URI、内容、言語、Revision、メタデータを持つ。
-- 編集要求は基準 Revision と編集元を持つ。
-- 保存済み内容、未保存内容、バックエンド上の内容を区別する。
-- URI の具体的な形式は未確定とする。
-
-## 会話とワークスペース
-
-会話の切り替え時に、次の状態をまとめて復元します。
-
-- Workspace とファイルツリー
-- 開いている文書、カーソル、レイアウト
-- Git差分、診断、ターミナル
-- タスク、エージェント実行、承認待ち
-
-同じ Workspace の読み取り処理は並列化できます。複数の書き込み処理は競合を検出し、必要に応じて Checkout を分離します。
-
-## エージェント実行
+## 禁止する依存
 
 ```text
-Created -> Preparing -> Queued -> Running -> Completed
-                                  |  |  |
-                                  |  |  +-- WaitingForInput
-                                  |  +----- WaitingForApproval
-                                  +-------- Paused
+Feature → desktop-ui
+Feature → app
+document → persistenceの具体実装
+task-runner → OS固有APIの直接利用
+crate間の循環依存
 ```
 
-- CLIごとの差異は Adapter が共通イベントへ変換する。
-- UI は標準出力を直接解析しない。
-- バックエンド再接続後も、状態とログを復元できるようにする。
-- 実行場所は紐づく Workspace に従う。
+## Feature間の連携
 
-## 依存境界
+同期的に完結する処理は、通常の関数やtraitを使う。
 
-- UI から OS、Git、LSP、AI CLI を直接呼ばない。
-- ドメインモデルは UI、通信、永続化の具体技術へ依存しない。
-- 外部ツールの型とイベントを中心モデルへ直接持ち込まない。
-- 認証情報と秘密情報を会話、ログ、リポジトリへ保存しない。
+複数機能へ通知する場合はEventを使う。
 
-## 設計決定の記録
+```text
+DocumentChanged
+    ↓
+app-services / Event Dispatcher
+    ↓
+LSP・Git・UI
+```
 
-未確定項目を決める際は、本文へ次を追記します。
+すべてをEvent化しない。
+処理の流れが明確な場合は直接呼び出す。
 
-- 決定内容
-- 解決する要件
-- 採用理由
-- 捨てた選択肢
-- 影響範囲
+## crate内部の分割
 
-## GPUI による初期エディターの採用
+小さいcrateはファイル単位で分ける。
 
-- 決定内容: Windows 向け初期 UI と Markdown 編集欄に GPUI 0.2.2 を採用する。
-- 解決する要件: ローカル Markdown の開く・編集・保存と、編集内容のプレビュー反映。
-- 採用理由: Rust でウィンドウ、描画、キーボード入力を一つの UI 層として実装できるため。
-- 捨てた選択肢: UI フレームワークを未決定のままにすること。初期段階の実装を開始できないため採用しない。
-- 影響範囲: `src/editor.rs` が GPUI に依存し、ファイル I/O は `Document` / `WorkspaceBackend` 境界を通す。GPUI は pre-1.0 のため、将来の更新では API 変更を局所化して確認する。
+```text
+task-runner/src/
+├── task.rs
+├── runner.rs
+├── event.rs
+├── port.rs
+└── lib.rs
+```
 
-## Fleet 準拠のワークスペースシェル
+大きくなった場合だけ層を分ける。
 
-- 決定内容: Fleet 最終版の操作配置を参考に、上部バー、左ツール島、中央エディター島と、必要時に開く補助パネルで画面を構成する。
-- 解決する要件: `FR-EDIT-02`、`FR-NOTE-01`、`FR-DEV-02`、`FR-CONV-02`、`NFR-PERF-02`、`NFR-TEST-01`。
-- 採用理由: 編集面を常に中心へ置き、ファイル、検索、Git、実行、Assistant をコンテキストに応じて段階的に提示できるため。
-- 捨てた選択肢: 全機能を左右と下部へ常時表示する構成。狭い画面で編集領域を圧迫し、Note 状態でも不要な機能を強調するため採用しない。
-- 影響範囲: パネルの選択、表示、寸法は Desktop Client の View State として保持する。未実装の Git、検索、タスク、Assistant はバックエンド状態を偽装しない。
+```text
+task-runner/src/
+├── domain/
+├── application/
+├── infrastructure/
+└── lib.rs
+```
 
-初期レイアウトの基準値は上部バー 40 px、島間の余白 6 px、角丸 8 px、左ツール島 260 px とする。下部パネル、Markdown プレビュー、Assistant は初期状態で閉じる。寸法は将来の永続化対象となる View State であり、中心モデルへ含めない。
+## 公開API
 
-## Windows カスタムタイトルバー
+各crateは`lib.rs`から必要な型だけ公開する。
 
-- 決定内容: GPUI の透明タイトルバーを利用し、Windows 標準タイトルバーを独立表示せず、40 px の上部バーへウィンドウ操作を統合する。
-- 解決する要件: 段階 1 の Fleet 準拠 UI、`NFR-TEST-01`。
-- 採用理由: 編集領域の上に重複するバーをなくしつつ、ドラッグ、最大化、Snap Layout、端リサイズを Windows ネイティブのヒットテストへ委譲できるため。
-- 捨てた選択肢: OS 標準タイトルバーとアプリ上部バーを併用する構成。Fleet の配置と異なり、垂直領域を余分に消費するため採用しない。
-- 影響範囲: 上部バーはアプリ操作領域、ドラッグ領域、実行系操作領域、ウィンドウ操作領域を分離する。Document や Workspace の境界には影響しない。
+他crateから内部moduleを直接参照しない。
+
+```rust
+pub use task::Task;
+pub use runner::TaskRunner;
+pub use event::TaskEvent;
+```
+
+## 判断基準
+
+新しいコードは次の順で配置を決める。
+
+1. どの機能に属するか。
+2. 外部I/Oか。
+3. 複数機能をまたぐか。
+4. UI固有か。
+5. 本当に共通化が必要か。
+
+迷った場合は、最も近い機能のcrateに置く。
