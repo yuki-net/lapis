@@ -8,7 +8,10 @@ use gpui::{
     prelude::*, px, relative, rgb, rgba, size,
 };
 
-use crate::document::{Document, WorkspaceBackend};
+use crate::{
+    document::{Document, WorkspaceBackend},
+    theme,
+};
 
 actions!(
     editor,
@@ -36,7 +39,7 @@ actions!(
 pub fn run() {
     Application::new().run(|cx: &mut App| {
         bind_keys(cx);
-        let bounds = Bounds::centered(None, size(px(1180.0), px(760.0)), cx);
+        let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -299,33 +302,6 @@ impl Editor {
         window.focus(&self.focus_handle);
     }
 
-    fn on_new_click(
-        &mut self,
-        _: &gpui::MouseUpEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.new_document(&New, window, cx);
-    }
-
-    fn on_open_click(
-        &mut self,
-        _: &gpui::MouseUpEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open_file(window, cx);
-    }
-
-    fn on_save_click(
-        &mut self,
-        _: &gpui::MouseUpEvent,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.save_file(window, cx);
-    }
-
     fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = rfd::FileDialog::new()
             .add_filter("Markdown", &["md", "markdown", "mdown"])
@@ -364,23 +340,16 @@ impl Editor {
         }
     }
 
-    fn preview_lines(&self) -> Vec<gpui::Div> {
-        self.document
-            .content
-            .lines()
-            .map(|line| {
-                let (text, size) = if let Some(value) = line.strip_prefix("# ") {
-                    (value.to_owned(), px(24.0))
-                } else if let Some(value) = line.strip_prefix("## ") {
-                    (value.to_owned(), px(20.0))
-                } else if let Some(value) = line.strip_prefix("- ") {
-                    (format!("• {value}"), px(16.0))
-                } else {
-                    (line.to_owned(), px(16.0))
-                };
-                div().text_size(size).text_color(rgb(0xe8edf5)).child(text)
-            })
-            .collect()
+    fn cursor_line_column(&self) -> (usize, usize) {
+        let cursor = self.cursor_offset();
+        let before_cursor = &self.document.content[..cursor];
+        let line = before_cursor.bytes().filter(|byte| *byte == b'\n').count() + 1;
+        let column = before_cursor
+            .rsplit('\n')
+            .next()
+            .map(|value| value.chars().count() + 1)
+            .unwrap_or(1);
+        (line, column)
     }
 }
 
@@ -393,11 +362,15 @@ impl Focusable for Editor {
 impl Render for Editor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty_marker = if self.document.is_dirty() { " *" } else { "" };
+        let display_name = self.document.display_name();
+        let (line, column) = self.cursor_line_column();
+
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(0x10141c))
+            .bg(theme::canvas())
+            .text_color(theme::text())
             .track_focus(&self.focus_handle(cx))
             .key_context("Editor")
             .on_action(cx.listener(Self::backspace))
@@ -418,131 +391,329 @@ impl Render for Editor {
             .on_action(cx.listener(Self::new_document))
             .child(
                 div()
-                    .h(px(54.0))
+                    .h(px(theme::TITLE_BAR_HEIGHT))
                     .w_full()
-                    .px_4()
+                    .flex_shrink_0()
+                    .px(px(12.0))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .justify_start()
-                    .bg(rgb(0x19202c))
+                    .bg(theme::title_bar())
                     .border_b_1()
-                    .border_color(rgb(0x2d3748))
+                    .border_color(theme::border())
                     .child(
                         div()
-                            .w(px(600.0))
+                            .w(px(320.0))
                             .flex_shrink_0()
-                            .text_size(px(17.0))
-                            .text_color(rgb(0xf5f7fb))
-                            .child(format!("{}{}", self.document.display_name(), dirty_marker)),
+                            .flex()
+                            .items_center()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .size(px(22.0))
+                                    .rounded(px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(theme::accent())
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(11.0))
+                                    .child("L"),
+                            )
+                            .child(top_icon("☰", false))
+                            .child(top_icon("▤", true))
+                            .child(top_icon("▥", false))
+                            .child(top_icon("▱", false)),
                     )
                     .child(
                         div()
-                            .w(px(180.0))
+                            .w(px(480.0))
+                            .flex_shrink()
                             .flex()
-                            .flex_shrink_0()
+                            .items_center()
+                            .justify_center()
                             .gap_2()
-                            .child(toolbar_button("新規", cx.listener(Self::on_new_click)))
-                            .child(toolbar_button("開く", cx.listener(Self::on_open_click)))
-                            .child(toolbar_button("保存", cx.listener(Self::on_save_click))),
+                            .text_size(px(12.0))
+                            .child(div().text_color(theme::muted()).child("lapis"))
+                            .child(div().text_color(theme::subtle()).child("›"))
+                            .child(div().text_color(theme::subtle()).child("local")),
+                    )
+                    .child(
+                        div()
+                            .w(px(320.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .gap_1()
+                            .child(
+                                div()
+                                    .h(px(27.0))
+                                    .px_2()
+                                    .rounded(px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .text_size(px(11.0))
+                                    .text_color(rgb(0x8da8ff))
+                                    .child("✦")
+                                    .child("Note"),
+                            )
+                            .child(top_icon("⌕", false))
+                            .child(top_icon("▷", false)),
                     ),
             )
             .child(
                 div()
+                    .h(px(0.0))
+                    .min_h(px(0.0))
                     .flex()
                     .flex_1()
+                    .p(px(theme::CANVAS_GAP))
                     .child(
                         div()
+                            .w(px(theme::TOOL_ISLAND_WIDTH))
                             .flex()
                             .flex_col()
-                            .flex_1()
-                            .border_r_1()
-                            .border_color(rgb(0x2d3748))
+                            .flex_shrink_0()
+                            .overflow_hidden()
+                            .rounded(px(theme::ISLAND_RADIUS))
+                            .border_1()
+                            .border_color(theme::border())
+                            .bg(theme::island())
                             .child(
                                 div()
-                                    .h(px(34.0))
-                                    .px_4()
+                                    .h(px(39.0))
+                                    .flex_shrink_0()
+                                    .px(px(7.0))
                                     .flex()
                                     .items_center()
-                                    .text_size(px(12.0))
-                                    .text_color(rgb(0x8fa2bd))
-                                    .child("MARKDOWN SOURCE"),
+                                    .gap_1()
+                                    .border_b_1()
+                                    .border_color(theme::border())
+                                    .child(tool_tab("Files", true))
+                                    .child(tool_tab("Search", false))
+                                    .child(tool_tab("Git", false))
+                                    .child(tool_tab("History", false))
+                                    .child(div().flex_1())
+                                    .child(top_icon("+", false)),
                             )
                             .child(
                                 div()
-                                    .id("source-scroll")
+                                    .flex()
+                                    .flex_col()
                                     .flex_1()
-                                    .overflow_y_scroll()
-                                    .p_4()
-                                    .cursor(CursorStyle::IBeam)
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        cx.listener(Self::focus_editor),
+                                    .p(px(6.0))
+                                    .child(
+                                        div()
+                                            .h(px(28.0))
+                                            .px_2()
+                                            .rounded(px(5.0))
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .bg(theme::surface_active())
+                                            .text_size(px(12.0))
+                                            .text_color(theme::text())
+                                            .child("⌄")
+                                            .child("lapis"),
                                     )
-                                    .child(EditorElement {
-                                        editor: cx.entity(),
-                                    }),
+                                    .child(
+                                        div()
+                                            .h(px(28.0))
+                                            .px_2()
+                                            .flex()
+                                            .items_center()
+                                            .text_size(px(10.0))
+                                            .text_color(theme::subtle())
+                                            .child("OPEN DOCUMENTS"),
+                                    )
+                                    .child(
+                                        div()
+                                            .h(px(28.0))
+                                            .px_2()
+                                            .rounded(px(5.0))
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .bg(theme::surface())
+                                            .text_size(px(12.0))
+                                            .text_color(theme::text())
+                                            .child(file_badge("M", theme::orange()))
+                                            .child(display_name.clone())
+                                            .child(div().flex_1())
+                                            .child(
+                                                div()
+                                                    .text_color(if self.document.is_dirty() {
+                                                        theme::accent()
+                                                    } else {
+                                                        theme::subtle()
+                                                    })
+                                                    .child(if self.document.is_dirty() {
+                                                        "●"
+                                                    } else {
+                                                        ""
+                                                    }),
+                                            ),
+                                    ),
                             ),
                     )
+                    .child(div().w(px(theme::CANVAS_GAP)).flex_shrink_0())
                     .child(
                         div()
+                            .w(px(0.0))
                             .flex()
                             .flex_col()
                             .flex_1()
-                            .bg(rgb(0x151b25))
+                            .relative()
+                            .overflow_hidden()
+                            .rounded(px(theme::ISLAND_RADIUS))
+                            .border_1()
+                            .border_color(theme::border())
+                            .bg(theme::island())
                             .child(
                                 div()
-                                    .h(px(34.0))
-                                    .px_4()
+                                    .h(px(39.0))
+                                    .flex_shrink_0()
+                                    .px(px(7.0))
                                     .flex()
-                                    .items_center()
-                                    .text_size(px(12.0))
-                                    .text_color(rgb(0x8fa2bd))
-                                    .child("PREVIEW"),
+                                    .items_end()
+                                    .gap_1()
+                                    .border_b_1()
+                                    .border_color(theme::border())
+                                    .child(
+                                        div()
+                                            .h(px(31.0))
+                                            .w(px(180.0))
+                                            .flex_shrink_0()
+                                            .px_2()
+                                            .rounded_t(px(6.0))
+                                            .flex()
+                                            .items_center()
+                                            .gap_2()
+                                            .bg(theme::surface())
+                                            .text_size(px(12.0))
+                                            .text_color(theme::text())
+                                            .child(file_badge("M", theme::orange()))
+                                            .child(display_name.clone())
+                                            .child(
+                                                div()
+                                                    .text_color(theme::subtle())
+                                                    .child(dirty_marker),
+                                            ),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .id("preview-scroll")
+                                    .h(px(31.0))
+                                    .flex_shrink_0()
+                                    .px(px(14.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::subtle())
+                                    .child("lapis")
+                                    .child("›")
+                                    .child(
+                                        div()
+                                            .text_color(theme::muted())
+                                            .child(display_name.clone()),
+                                    )
+                                    .child("·")
+                                    .child(div().text_color(rgb(0x8da8ff)).child("✓ Note"))
+                                    .child(format!("R{}", self.document.revision.number))
+                                    .child(format!("Ln {line}, Col {column}"))
+                                    .child("·")
+                                    .child(self.status.clone()),
+                            )
+                            .child(
+                                div()
+                                    .h(px(0.0))
+                                    .min_h(px(0.0))
                                     .flex_1()
-                                    .overflow_y_scroll()
-                                    .p_6()
-                                    .children(self.preview_lines()),
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .id("source-scroll")
+                                            .h(px(0.0))
+                                            .min_h(px(0.0))
+                                            .flex_1()
+                                            .overflow_y_scroll()
+                                            .px(px(18.0))
+                                            .py(px(10.0))
+                                            .cursor(CursorStyle::IBeam)
+                                            .text_size(px(14.0))
+                                            .text_color(theme::text())
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(Self::focus_editor),
+                                            )
+                                            .child(EditorElement {
+                                                editor: cx.entity(),
+                                            }),
+                                    ),
                             ),
                     ),
-            )
-            .child(
-                div()
-                    .h(px(30.0))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .bg(rgb(0x19202c))
-                    .text_size(px(12.0))
-                    .text_color(rgb(0x8fa2bd))
-                    .child(format!(
-                        "Revision {}  ·  {}",
-                        self.document.revision.number, self.status
-                    )),
             )
     }
 }
 
-fn toolbar_button(
-    label: &'static str,
-    listener: impl Fn(&gpui::MouseUpEvent, &mut Window, &mut App) + 'static,
-) -> gpui::Div {
+fn top_icon(label: &'static str, active: bool) -> gpui::Div {
     div()
-        .w(px(56.0))
-        .px_3()
-        .py_1()
+        .size(px(28.0))
+        .rounded(px(6.0))
         .flex()
+        .items_center()
         .justify_center()
-        .rounded_md()
-        .bg(rgb(0x2b394d))
-        .text_color(rgb(0xe8edf5))
-        .text_size(px(13.0))
-        .hover(|style| style.bg(rgb(0x3b4d67)).cursor_pointer())
-        .on_mouse_up(MouseButton::Left, listener)
+        .bg(if active {
+            theme::accent_soft()
+        } else {
+            theme::title_bar()
+        })
+        .text_color(if active {
+            rgb(0xbfc0ff)
+        } else {
+            theme::muted()
+        })
+        .text_size(px(14.0))
+        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+        .child(label)
+}
+
+fn tool_tab(label: &'static str, active: bool) -> gpui::Div {
+    div()
+        .h(px(31.0))
+        .px(px(8.0))
+        .rounded_t(px(6.0))
+        .flex()
+        .items_center()
+        .bg(if active {
+            theme::surface()
+        } else {
+            theme::island()
+        })
+        .text_color(if active {
+            theme::text()
+        } else {
+            theme::muted()
+        })
+        .text_size(px(12.0))
+        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+        .child(label)
+}
+
+fn file_badge(label: &'static str, color: gpui::Rgba) -> gpui::Div {
+    div()
+        .size(px(14.0))
+        .rounded(px(3.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(color)
+        .text_color(theme::canvas())
+        .text_size(px(8.0))
         .child(label)
 }
 
