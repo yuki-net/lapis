@@ -32,9 +32,19 @@ actions!(
         Open,
         Save,
         New,
+        ShowCommands,
+        Dismiss,
         Quit,
     ]
 );
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ToolPanel {
+    Files,
+    Search,
+    Git,
+    History,
+}
 
 pub fn run() {
     Application::new().run(|cx: &mut App| {
@@ -45,7 +55,11 @@ pub fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(Editor::new),
+            |window, cx| {
+                let editor = cx.new(Editor::new);
+                window.focus(&editor.read(cx).focus_handle);
+                editor
+            },
         )
         .expect("Lapis window should open");
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -61,16 +75,27 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-left", SelectLeft, Some("Editor")),
         KeyBinding::new("shift-right", SelectRight, Some("Editor")),
         KeyBinding::new("cmd-a", SelectAll, Some("Editor")),
+        KeyBinding::new("ctrl-a", SelectAll, Some("Editor")),
         KeyBinding::new("cmd-v", Paste, Some("Editor")),
+        KeyBinding::new("ctrl-v", Paste, Some("Editor")),
         KeyBinding::new("cmd-c", Copy, Some("Editor")),
+        KeyBinding::new("ctrl-c", Copy, Some("Editor")),
         KeyBinding::new("cmd-x", Cut, Some("Editor")),
+        KeyBinding::new("ctrl-x", Cut, Some("Editor")),
         KeyBinding::new("home", Home, Some("Editor")),
         KeyBinding::new("end", End, Some("Editor")),
         KeyBinding::new("enter", Enter, Some("Editor")),
         KeyBinding::new("cmd-o", Open, None),
+        KeyBinding::new("ctrl-o", Open, None),
         KeyBinding::new("cmd-s", Save, None),
+        KeyBinding::new("ctrl-s", Save, None),
         KeyBinding::new("cmd-n", New, None),
+        KeyBinding::new("ctrl-n", New, None),
+        KeyBinding::new("cmd-shift-k", ShowCommands, None),
+        KeyBinding::new("ctrl-shift-k", ShowCommands, None),
+        KeyBinding::new("escape", Dismiss, None),
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("ctrl-q", Quit, None),
     ]);
 }
 
@@ -81,6 +106,8 @@ pub struct Editor {
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     status: String,
+    active_tool: ToolPanel,
+    command_palette_open: bool,
 }
 
 impl Editor {
@@ -92,6 +119,8 @@ impl Editor {
             selection_reversed: false,
             marked_range: None,
             status: "新しい Markdown ドキュメント".to_owned(),
+            active_tool: ToolPanel::Files,
+            command_palette_open: false,
         }
     }
 
@@ -284,10 +313,12 @@ impl Editor {
     }
 
     fn open(&mut self, _: &Open, window: &mut Window, cx: &mut Context<Self>) {
+        self.command_palette_open = false;
         self.open_file(window, cx);
     }
 
     fn save(&mut self, _: &Save, window: &mut Window, cx: &mut Context<Self>) {
+        self.command_palette_open = false;
         self.save_file(window, cx);
     }
 
@@ -295,6 +326,24 @@ impl Editor {
         self.document = Document::new();
         self.selected_range = 0..0;
         self.status = "新しい Markdown ドキュメント".to_owned();
+        self.command_palette_open = false;
+        cx.notify();
+    }
+
+    fn show_commands(&mut self, _: &ShowCommands, _: &mut Window, cx: &mut Context<Self>) {
+        self.command_palette_open = !self.command_palette_open;
+        cx.notify();
+    }
+
+    fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
+        if self.command_palette_open {
+            self.command_palette_open = false;
+            cx.notify();
+        }
+    }
+
+    fn select_tool(&mut self, panel: ToolPanel, cx: &mut Context<Self>) {
+        self.active_tool = panel;
         cx.notify();
     }
 
@@ -340,6 +389,171 @@ impl Editor {
         }
     }
 
+    fn render_command_palette(&self, cx: &mut Context<Self>) -> gpui::Div {
+        div()
+            .absolute()
+            .top(px(49.0))
+            .left(relative(0.5))
+            .ml(px(-220.0))
+            .w(px(440.0))
+            .p(px(8.0))
+            .rounded(px(9.0))
+            .border_1()
+            .border_color(rgb(0x3d4050))
+            .bg(theme::surface())
+            .shadow_lg()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .child(
+                div()
+                    .h(px(31.0))
+                    .px_2()
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .bg(theme::island())
+                    .text_size(px(12.0))
+                    .text_color(theme::muted())
+                    .child("⌕")
+                    .child("Commands"),
+            )
+            .child(
+                command_item("新しい Markdown", "Ctrl N").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.new_document(&New, window, cx);
+                    },
+                )),
+            )
+            .child(
+                command_item("Markdown を開く…", "Ctrl O").on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.command_palette_open = false;
+                        this.open_file(window, cx);
+                    },
+                )),
+            )
+            .child(
+                command_item("保存", "Ctrl S").on_click(cx.listener(|this, _, window, cx| {
+                    this.command_palette_open = false;
+                    this.save_file(window, cx);
+                })),
+            )
+            .child(
+                div()
+                    .pt_1()
+                    .px_2()
+                    .text_size(px(10.0))
+                    .text_color(theme::subtle())
+                    .child("Esc で閉じる"),
+            )
+    }
+
+    fn render_tool_content(&self) -> gpui::Div {
+        match self.active_tool {
+            ToolPanel::Files => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .p(px(6.0))
+                .child(
+                    div()
+                        .h(px(28.0))
+                        .px_2()
+                        .rounded(px(5.0))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .bg(theme::surface_active())
+                        .text_size(px(12.0))
+                        .text_color(theme::text())
+                        .child("⌄")
+                        .child("lapis"),
+                )
+                .child(
+                    div()
+                        .h(px(28.0))
+                        .px_2()
+                        .flex()
+                        .items_center()
+                        .text_size(px(10.0))
+                        .text_color(theme::subtle())
+                        .child("OPEN DOCUMENTS"),
+                )
+                .child(
+                    div()
+                        .h(px(28.0))
+                        .px_2()
+                        .rounded(px(5.0))
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .bg(theme::surface())
+                        .text_size(px(12.0))
+                        .text_color(theme::text())
+                        .child(file_badge("M", theme::orange()))
+                        .child(self.document.display_name())
+                        .child(div().flex_1())
+                        .child(
+                            div()
+                                .text_color(if self.document.is_dirty() {
+                                    theme::accent()
+                                } else {
+                                    theme::subtle()
+                                })
+                                .child(if self.document.is_dirty() { "●" } else { "" }),
+                        ),
+                ),
+            ToolPanel::Search => tool_empty_state(
+                "⌕",
+                "Search",
+                "検索バックエンドは未接続です",
+                "ワークスペース検索は境界実装後に利用できます",
+            ),
+            ToolPanel::Git => tool_empty_state(
+                "⑂",
+                "Git",
+                "Git バックエンドは未接続です",
+                "変更内容を推測で表示しません",
+            ),
+            ToolPanel::History => div()
+                .flex()
+                .flex_col()
+                .flex_1()
+                .p(px(10.0))
+                .gap_2()
+                .child(
+                    div()
+                        .text_size(px(10.0))
+                        .text_color(theme::subtle())
+                        .child("DOCUMENT HISTORY"),
+                )
+                .child(
+                    div()
+                        .p_2()
+                        .rounded(px(6.0))
+                        .bg(theme::surface())
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .text_size(px(12.0))
+                        .child(
+                            div()
+                                .text_color(theme::text())
+                                .child(format!("Revision {}", self.document.revision.number)),
+                        )
+                        .child(div().text_size(px(11.0)).text_color(theme::subtle()).child(
+                            if self.document.is_dirty() {
+                                "未保存の変更があります"
+                            } else {
+                                "保存済み"
+                            },
+                        )),
+                ),
+        }
+    }
+
     fn cursor_line_column(&self) -> (usize, usize) {
         let cursor = self.cursor_offset();
         let before_cursor = &self.document.content[..cursor];
@@ -363,10 +577,12 @@ impl Render for Editor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty_marker = if self.document.is_dirty() { " *" } else { "" };
         let display_name = self.document.display_name();
+        let document_is_empty = self.document.content.is_empty();
         let (line, column) = self.cursor_line_column();
 
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(theme::canvas())
@@ -389,6 +605,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::new_document))
+            .on_action(cx.listener(Self::show_commands))
+            .on_action(cx.listener(Self::dismiss))
             .child(
                 div()
                     .h(px(theme::TITLE_BAR_HEIGHT))
@@ -491,72 +709,39 @@ impl Render for Editor {
                                     .gap_1()
                                     .border_b_1()
                                     .border_color(theme::border())
-                                    .child(tool_tab("Files", true))
-                                    .child(tool_tab("Search", false))
-                                    .child(tool_tab("Git", false))
-                                    .child(tool_tab("History", false))
+                                    .child(tool_tab(
+                                        "Files",
+                                        self.active_tool == ToolPanel::Files,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.select_tool(ToolPanel::Files, cx);
+                                    })))
+                                    .child(tool_tab(
+                                        "Search",
+                                        self.active_tool == ToolPanel::Search,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.select_tool(ToolPanel::Search, cx);
+                                    })))
+                                    .child(tool_tab(
+                                        "Git",
+                                        self.active_tool == ToolPanel::Git,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.select_tool(ToolPanel::Git, cx);
+                                    })))
+                                    .child(tool_tab(
+                                        "History",
+                                        self.active_tool == ToolPanel::History,
+                                    ).on_click(cx.listener(|this, _, _, cx| {
+                                        this.select_tool(ToolPanel::History, cx);
+                                    })))
                                     .child(div().flex_1())
-                                    .child(top_icon("+", false)),
+                                    .child(top_icon("+", self.command_palette_open).on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            this.command_palette_open = !this.command_palette_open;
+                                            cx.notify();
+                                        }),
+                                    )),
                             )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .p(px(6.0))
-                                    .child(
-                                        div()
-                                            .h(px(28.0))
-                                            .px_2()
-                                            .rounded(px(5.0))
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .bg(theme::surface_active())
-                                            .text_size(px(12.0))
-                                            .text_color(theme::text())
-                                            .child("⌄")
-                                            .child("lapis"),
-                                    )
-                                    .child(
-                                        div()
-                                            .h(px(28.0))
-                                            .px_2()
-                                            .flex()
-                                            .items_center()
-                                            .text_size(px(10.0))
-                                            .text_color(theme::subtle())
-                                            .child("OPEN DOCUMENTS"),
-                                    )
-                                    .child(
-                                        div()
-                                            .h(px(28.0))
-                                            .px_2()
-                                            .rounded(px(5.0))
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .bg(theme::surface())
-                                            .text_size(px(12.0))
-                                            .text_color(theme::text())
-                                            .child(file_badge("M", theme::orange()))
-                                            .child(display_name.clone())
-                                            .child(div().flex_1())
-                                            .child(
-                                                div()
-                                                    .text_color(if self.document.is_dirty() {
-                                                        theme::accent()
-                                                    } else {
-                                                        theme::subtle()
-                                                    })
-                                                    .child(if self.document.is_dirty() {
-                                                        "●"
-                                                    } else {
-                                                        ""
-                                                    }),
-                                            ),
-                                    ),
-                            ),
+                            .child(self.render_tool_content()),
                     )
                     .child(div().w(px(theme::CANVAS_GAP)).flex_shrink_0())
                     .child(
@@ -641,6 +826,7 @@ impl Render for Editor {
                                             .min_h(px(0.0))
                                             .flex_1()
                                             .overflow_y_scroll()
+                                            .relative()
                                             .px(px(18.0))
                                             .py(px(10.0))
                                             .cursor(CursorStyle::IBeam)
@@ -652,16 +838,76 @@ impl Render for Editor {
                                             )
                                             .child(EditorElement {
                                                 editor: cx.entity(),
+                                            })
+                                            .when(document_is_empty, |canvas| {
+                                                canvas.child(
+                                                    div()
+                                                        .absolute()
+                                                        .top(px(72.0))
+                                                        .left(px(54.0))
+                                                        .w(px(330.0))
+                                                        .flex()
+                                                        .flex_col()
+                                                        .gap_2()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(18.0))
+                                                                .text_color(theme::text())
+                                                                .child("Markdown を始める"),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .mb_1()
+                                                                .text_size(px(12.0))
+                                                                .text_color(theme::subtle())
+                                                                .child("新規作成するか、既存の文書を開きます"),
+                                                        )
+                                                        .child(
+                                                            quick_action("Markdown を開く…", "Ctrl O")
+                                                                .on_click(cx.listener(
+                                                                    |this, _, window, cx| {
+                                                                        this.open_file(window, cx);
+                                                                    },
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            quick_action("新しい文書", "Ctrl N")
+                                                                .on_click(cx.listener(
+                                                                    |this, _, window, cx| {
+                                                                        this.new_document(
+                                                                            &New, window, cx,
+                                                                        );
+                                                                    },
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            quick_action(
+                                                                "すべてのコマンド",
+                                                                "Ctrl Shift K",
+                                                            )
+                                                            .on_click(cx.listener(
+                                                                |this, _, _, cx| {
+                                                                    this.command_palette_open =
+                                                                        true;
+                                                                    cx.notify();
+                                                                },
+                                                            )),
+                                                        ),
+                                                )
                                             }),
                                     ),
                             ),
                     ),
             )
+            .when(self.command_palette_open, |root| {
+                root.child(self.render_command_palette(cx))
+            })
     }
 }
 
-fn top_icon(label: &'static str, active: bool) -> gpui::Div {
+fn top_icon(label: &'static str, active: bool) -> gpui::Stateful<gpui::Div> {
     div()
+        .id(label)
         .size(px(28.0))
         .rounded(px(6.0))
         .flex()
@@ -682,8 +928,9 @@ fn top_icon(label: &'static str, active: bool) -> gpui::Div {
         .child(label)
 }
 
-fn tool_tab(label: &'static str, active: bool) -> gpui::Div {
+fn tool_tab(label: &'static str, active: bool) -> gpui::Stateful<gpui::Div> {
     div()
+        .id(label)
         .h(px(31.0))
         .px(px(8.0))
         .rounded_t(px(6.0))
@@ -702,6 +949,98 @@ fn tool_tab(label: &'static str, active: bool) -> gpui::Div {
         .text_size(px(12.0))
         .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
         .child(label)
+}
+
+fn tool_empty_state(
+    icon: &'static str,
+    title: &'static str,
+    message: &'static str,
+    detail: &'static str,
+) -> gpui::Div {
+    div()
+        .flex()
+        .flex_col()
+        .flex_1()
+        .items_center()
+        .justify_center()
+        .px_3()
+        .gap_2()
+        .text_center()
+        .child(
+            div()
+                .size(px(34.0))
+                .rounded(px(8.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(theme::surface())
+                .text_size(px(17.0))
+                .text_color(theme::muted())
+                .child(icon),
+        )
+        .child(
+            div()
+                .text_size(px(12.0))
+                .text_color(theme::text())
+                .child(title),
+        )
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme::muted())
+                .child(message),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::subtle())
+                .child(detail),
+        )
+}
+
+fn command_item(label: &'static str, shortcut: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(label)
+        .h(px(31.0))
+        .px_2()
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .text_size(px(12.0))
+        .text_color(theme::text())
+        .hover(|style| style.bg(theme::surface_active()))
+        .child(label)
+        .child(div().flex_1())
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::subtle())
+                .child(shortcut),
+        )
+}
+
+fn quick_action(label: &'static str, shortcut: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(label)
+        .h(px(34.0))
+        .px_3()
+        .rounded(px(7.0))
+        .border_1()
+        .border_color(theme::border())
+        .bg(theme::surface())
+        .flex()
+        .items_center()
+        .text_size(px(12.0))
+        .text_color(theme::text())
+        .hover(|style| style.bg(theme::surface_hover()).border_color(rgb(0x444657)))
+        .child(label)
+        .child(div().flex_1())
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::subtle())
+                .child(shortcut),
+        )
 }
 
 fn file_badge(label: &'static str, color: gpui::Rgba) -> gpui::Div {
