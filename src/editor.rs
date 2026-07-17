@@ -3,9 +3,9 @@ use std::ops::Range;
 use gpui::{
     App, Application, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler,
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
-    MouseButton, MouseDownEvent, PaintQuad, Pixels, Point, Render, ShapedLine, SharedString, Style,
-    TextRun, UTF16Selection, Window, WindowBounds, WindowOptions, actions, div, fill, point,
-    prelude::*, px, relative, rgb, rgba, size,
+    MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Point, Render, ShapedLine,
+    SharedString, Style, TextRun, UTF16Selection, Window, WindowBounds, WindowOptions, actions,
+    div, fill, point, prelude::*, px, relative, rgb, rgba, size,
 };
 
 use crate::{
@@ -53,6 +53,13 @@ enum ToolPanel {
 enum SidePanel {
     Preview,
     Assistant,
+}
+
+#[derive(Clone, Copy)]
+enum ResizeTarget {
+    ToolIsland,
+    SidePanel,
+    BottomPanel,
 }
 
 pub fn run() {
@@ -122,6 +129,10 @@ pub struct Editor {
     command_palette_open: bool,
     side_panel: Option<SidePanel>,
     bottom_panel_open: bool,
+    tool_island_width: f32,
+    side_panel_width: f32,
+    bottom_panel_height: f32,
+    resizing: Option<ResizeTarget>,
 }
 
 impl Editor {
@@ -137,6 +148,10 @@ impl Editor {
             command_palette_open: false,
             side_panel: None,
             bottom_panel_open: false,
+            tool_island_width: theme::TOOL_ISLAND_WIDTH,
+            side_panel_width: theme::SIDE_PANEL_WIDTH,
+            bottom_panel_height: theme::BOTTOM_PANEL_HEIGHT,
+            resizing: None,
         }
     }
 
@@ -392,6 +407,50 @@ impl Editor {
     fn select_tool(&mut self, panel: ToolPanel, cx: &mut Context<Self>) {
         self.active_tool = panel;
         cx.notify();
+    }
+
+    fn start_resize(&mut self, target: ResizeTarget, cx: &mut Context<Self>) {
+        self.resizing = Some(target);
+        cx.notify();
+    }
+
+    fn resize_panels(
+        &mut self,
+        event: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !event.dragging() {
+            return;
+        }
+        let Some(target) = self.resizing else {
+            return;
+        };
+
+        let viewport = window.viewport_size();
+        match target {
+            ResizeTarget::ToolIsland => {
+                self.tool_island_width =
+                    (f32::from(event.position.x) - theme::CANVAS_GAP).clamp(190.0, 380.0);
+            }
+            ResizeTarget::SidePanel => {
+                self.side_panel_width = (f32::from(viewport.width - event.position.x)
+                    - theme::CANVAS_GAP)
+                    .clamp(260.0, 480.0);
+            }
+            ResizeTarget::BottomPanel => {
+                self.bottom_panel_height = (f32::from(viewport.height - event.position.y)
+                    - theme::CANVAS_GAP)
+                    .clamp(140.0, 360.0);
+            }
+        }
+        cx.notify();
+    }
+
+    fn stop_resize(&mut self, cx: &mut Context<Self>) {
+        if self.resizing.take().is_some() {
+            cx.notify();
+        }
     }
 
     fn focus_editor(&mut self, _: &MouseDownEvent, window: &mut Window, _: &mut Context<Self>) {
@@ -655,7 +714,7 @@ impl Editor {
         };
 
         div()
-            .w(px(theme::SIDE_PANEL_WIDTH))
+            .w(px(self.side_panel_width))
             .h_full()
             .flex_shrink_0()
             .overflow_hidden()
@@ -778,7 +837,7 @@ impl Editor {
 
     fn render_bottom_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
-            .h(px(theme::BOTTOM_PANEL_HEIGHT))
+            .h(px(self.bottom_panel_height))
             .flex_shrink_0()
             .overflow_hidden()
             .rounded(px(theme::ISLAND_RADIUS))
@@ -848,10 +907,13 @@ impl Focusable for Editor {
 }
 
 impl Render for Editor {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let dirty_marker = if self.document.is_dirty() { " *" } else { "" };
         let display_name = self.document.display_name();
         let document_is_empty = self.document.content.is_empty();
+        let editor_focused = self.focus_handle.is_focused(window);
+        let compact_layout = f32::from(window.viewport_size().width) < 1080.0;
+        let status_is_error = self.status.contains("失敗");
         let (line, column) = self.cursor_line_column();
 
         div()
@@ -884,6 +946,11 @@ impl Render for Editor {
             .on_action(cx.listener(Self::toggle_preview))
             .on_action(cx.listener(Self::toggle_bottom_panel))
             .on_action(cx.listener(Self::toggle_assistant))
+            .on_mouse_move(cx.listener(Self::resize_panels))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| this.stop_resize(cx)),
+            )
             .child(
                 div()
                     .h(px(theme::TITLE_BAR_HEIGHT))
@@ -898,7 +965,7 @@ impl Render for Editor {
                     .border_color(theme::border())
                     .child(
                         div()
-                            .w(px(320.0))
+                            .w(px(if compact_layout { 200.0 } else { 320.0 }))
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -936,8 +1003,8 @@ impl Render for Editor {
                     )
                     .child(
                         div()
-                            .w(px(480.0))
-                            .flex_shrink()
+                            .w(px(0.0))
+                            .flex_1()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -949,7 +1016,7 @@ impl Render for Editor {
                     )
                     .child(
                         div()
-                            .w(px(320.0))
+                            .w(px(if compact_layout { 200.0 } else { 320.0 }))
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -992,7 +1059,7 @@ impl Render for Editor {
                     .p(px(theme::CANVAS_GAP))
                     .child(
                         div()
-                            .w(px(theme::TOOL_ISLAND_WIDTH))
+                            .w(px(self.tool_island_width))
                             .flex()
                             .flex_col()
                             .flex_shrink_0()
@@ -1045,7 +1112,19 @@ impl Render for Editor {
                             )
                             .child(self.render_tool_content()),
                     )
-                    .child(div().w(px(theme::CANVAS_GAP)).flex_shrink_0())
+                    .child(
+                        div()
+                            .w(px(theme::CANVAS_GAP))
+                            .flex_shrink_0()
+                            .cursor(CursorStyle::ResizeLeftRight)
+                            .hover(|style| style.bg(theme::accent_soft()))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _, _, cx| {
+                                    this.start_resize(ResizeTarget::ToolIsland, cx);
+                                }),
+                            ),
+                    )
                     .child(
                         div()
                             .w(px(0.0))
@@ -1062,7 +1141,11 @@ impl Render for Editor {
                                     .overflow_hidden()
                                     .rounded(px(theme::ISLAND_RADIUS))
                                     .border_1()
-                                    .border_color(theme::border())
+                                    .border_color(if editor_focused {
+                                        rgb(0x3a3c58)
+                                    } else {
+                                        theme::border()
+                                    })
                                     .bg(theme::island())
                                     .child(
                                         div()
@@ -1120,7 +1203,15 @@ impl Render for Editor {
                                             .child(format!("R{}", self.document.revision.number))
                                             .child(format!("Ln {line}, Col {column}"))
                                             .child("·")
-                                            .child(self.status.clone()),
+                                            .child(
+                                                div()
+                                                    .text_color(if status_is_error {
+                                                        rgb(0xf18f96)
+                                                    } else {
+                                                        theme::subtle()
+                                                    })
+                                                    .child(self.status.clone()),
+                                            ),
                                     )
                                     .child(
                                         div()
@@ -1217,12 +1308,39 @@ impl Render for Editor {
                             )
                             .when(self.bottom_panel_open, |center| {
                                 center
-                                    .child(div().h(px(theme::CANVAS_GAP)).flex_shrink_0())
+                                    .child(
+                                        div()
+                                            .h(px(theme::CANVAS_GAP))
+                                            .flex_shrink_0()
+                                            .cursor(CursorStyle::ResizeUpDown)
+                                            .hover(|style| style.bg(theme::accent_soft()))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.start_resize(
+                                                        ResizeTarget::BottomPanel,
+                                                        cx,
+                                                    );
+                                                }),
+                                            ),
+                                    )
                                     .child(self.render_bottom_panel(cx))
                             }),
                     )
                     .when(self.side_panel.is_some(), |body| {
-                        body.child(div().w(px(theme::CANVAS_GAP)).flex_shrink_0())
+                        body.child(
+                            div()
+                                .w(px(theme::CANVAS_GAP))
+                                .flex_shrink_0()
+                                .cursor(CursorStyle::ResizeLeftRight)
+                                .hover(|style| style.bg(theme::accent_soft()))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.start_resize(ResizeTarget::SidePanel, cx);
+                                    }),
+                                ),
+                        )
                             .child(self.render_side_panel(cx))
                     }),
             )
