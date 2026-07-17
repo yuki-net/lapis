@@ -1,6 +1,8 @@
 use gpui::{Rgba, rgb};
 
 pub const TITLE_BAR_HEIGHT: f32 = 40.0;
+pub const WINDOW_CONTROL_WIDTH: f32 = 46.0;
+pub const WINDOW_RESIZE_BORDER_HEIGHT: f32 = 4.0;
 pub const TOOL_ISLAND_WIDTH: f32 = 260.0;
 pub const SIDE_PANEL_WIDTH: f32 = 310.0;
 pub const BOTTOM_PANEL_HEIGHT: f32 = 196.0;
@@ -57,4 +59,8 @@ pub fn accent_soft() -> Rgba {
 
 pub fn orange() -> Rgba {
     rgb(0xe4a86c)
+}
+
+pub fn close_hover() -> Rgba {
+    rgb(0xc42b1c)
 }

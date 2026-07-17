@@ -4,8 +4,9 @@ use gpui::{
     App, Application, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler,
     Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyBinding, LayoutId,
     MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Point, Render, ShapedLine,
-    SharedString, Style, TextRun, UTF16Selection, Window, WindowBounds, WindowOptions, actions,
-    div, fill, point, prelude::*, px, relative, rgb, rgba, size,
+    SharedString, Style, TextRun, TitlebarOptions, UTF16Selection, Window, WindowBounds,
+    WindowControlArea, WindowOptions, actions, div, fill, point, prelude::*, px, relative, rgb,
+    rgba, size,
 };
 
 use crate::{
@@ -69,6 +70,11 @@ pub fn run() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Lapis".into()),
+                    appears_transparent: true,
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             |window, cx| {
@@ -914,6 +920,7 @@ impl Render for Editor {
         let editor_focused = self.focus_handle.is_focused(window);
         let compact_layout = f32::from(window.viewport_size().width) < 1080.0;
         let status_is_error = self.status.contains("失敗");
+        let maximize_label = if window.is_maximized() { "❐" } else { "□" };
         let (line, column) = self.cursor_line_column();
 
         div()
@@ -956,7 +963,7 @@ impl Render for Editor {
                     .h(px(theme::TITLE_BAR_HEIGHT))
                     .w_full()
                     .flex_shrink_0()
-                    .px(px(12.0))
+                    .pl(px(12.0))
                     .flex()
                     .flex_row()
                     .items_center()
@@ -1004,19 +1011,24 @@ impl Render for Editor {
                     .child(
                         div()
                             .w(px(0.0))
+                            .h(px(
+                                theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT,
+                            ))
+                            .mt(px(theme::WINDOW_RESIZE_BORDER_HEIGHT))
                             .flex_1()
                             .flex()
                             .items_center()
                             .justify_center()
                             .gap_2()
                             .text_size(px(12.0))
+                            .window_control_area(WindowControlArea::Drag)
                             .child(div().text_color(theme::muted()).child("lapis"))
                             .child(div().text_color(theme::subtle()).child("›"))
                             .child(div().text_color(theme::subtle()).child("local")),
                     )
                     .child(
                         div()
-                            .w(px(if compact_layout { 200.0 } else { 320.0 }))
+                            .w(px(if compact_layout { 150.0 } else { 220.0 }))
                             .flex_shrink_0()
                             .flex()
                             .items_center()
@@ -1047,6 +1059,31 @@ impl Render for Editor {
                             )
                             .child(top_icon("⌕", false))
                             .child(top_icon("▷", false)),
+                    )
+                    .child(
+                        div()
+                            .h_full()
+                            .flex_shrink_0()
+                            .flex()
+                            .items_end()
+                            .child(window_control_button(
+                                "window-minimize",
+                                "—",
+                                WindowControlArea::Min,
+                                false,
+                            ))
+                            .child(window_control_button(
+                                "window-maximize",
+                                maximize_label,
+                                WindowControlArea::Max,
+                                false,
+                            ))
+                            .child(window_control_button(
+                                "window-close",
+                                "×",
+                                WindowControlArea::Close,
+                                true,
+                            )),
                     ),
             )
             .child(
@@ -1370,6 +1407,36 @@ fn top_icon(label: &'static str, active: bool) -> gpui::Stateful<gpui::Div> {
         })
         .text_size(px(14.0))
         .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+        .child(label)
+}
+
+fn window_control_button(
+    id: &'static str,
+    label: &'static str,
+    area: WindowControlArea,
+    close: bool,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .h(px(
+            theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT
+        ))
+        .w(px(theme::WINDOW_CONTROL_WIDTH))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .window_control_area(area)
+        .text_size(px(14.0))
+        .text_color(theme::muted())
+        .hover(move |style| {
+            if close {
+                style.bg(theme::close_hover()).text_color(rgb(0xffffff))
+            } else {
+                style.bg(theme::surface_hover()).text_color(theme::text())
+            }
+        })
+        .active(|style| style.bg(theme::surface_active()))
         .child(label)
 }
 
