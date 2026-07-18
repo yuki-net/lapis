@@ -7,4 +7,13 @@ license.workspace = true
 
 [dependencies]
 lapis-document = { path = "../document" }
+lapis-editor-core = { path = "../editor-core" }
+lapis-git = { path = "../git" }
+lapis-lsp = { path = "../lsp" }
+lapis-task-runner = { path = "../task-runner" }
+lapis-terminal = { path = "../terminal" }
+lapis-workspace = { path = "../workspace" }
+serde.workspace = true
 
+[dev-dependencies]
+tempfile.workspace = true

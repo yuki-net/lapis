@@ -1,4 +1,11 @@
-mod editor;
-mod theme;
+mod app;
+mod components;
+pub mod extension_ui;
+mod features;
+pub mod icons;
+pub mod keymap;
+pub mod localization;
+mod shell;
+pub mod theme;
 
-pub use editor::run;
+pub use app::{DesktopServices, InitialView, run};

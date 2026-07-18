@@ -9,4 +9,5 @@ license.workspace = true
 lapis-app-services = { path = "../app-services" }
 lapis-desktop-ui = { path = "../desktop-ui" }
 lapis-platform = { path = "../platform" }
-
+lapis-persistence = { path = "../persistence" }
+lapis-task-runner = { path = "../task-runner" }

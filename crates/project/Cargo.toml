@@ -5,3 +5,5 @@ edition.workspace = true
 description.workspace = true
 license.workspace = true
 
+[dependencies]
+lapis-editor-core = { path = "../editor-core" }
