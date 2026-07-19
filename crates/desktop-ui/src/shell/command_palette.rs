@@ -93,9 +93,15 @@ impl Editor {
             }
             #[cfg(debug_assertions)]
             id::COMMAND_TOGGLE_INSPECTOR => {
-                self.status = "Inspector requires the external GPUI inspector API".to_owned();
-                window.focus(&self.focus_handle);
-                cx.notify();
+                self.shell.command_palette_open = false;
+                cx.defer_in(window, |this, window, cx| {
+                    this.status = match crate::devtools::toggle_inspector(window, cx) {
+                        Ok(true) => "Inspectorを別ウィンドウで開きました".to_owned(),
+                        Ok(false) => "Inspectorを閉じました".to_owned(),
+                        Err(error) => error,
+                    };
+                    cx.notify();
+                });
             }
             _ => {
                 self.status = format!("Unknown command: {}", command.as_str());

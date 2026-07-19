@@ -5,8 +5,8 @@ use std::{
 
 use gpui::{
     App, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
-    KeyDownEvent, ModifiersChangedEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
+    ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Style, TextRun, Timer,
     UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*, px, relative, rgb,
     rgba, size,
@@ -88,14 +88,7 @@ mod terminal_view;
 pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
     use crate::extension_ui::UiContribution;
 
-    let descriptor = crate::extension_ui::FeatureDescriptor::core(id::FEATURE_EDITOR)
-        .contributes(UiContribution::view(
-            id::VIEW_COMMAND_SEARCH,
-            UiSlot::SideDock,
-            "view.command-search",
-            "search",
-            5,
-        ))
+    crate::extension_ui::FeatureDescriptor::core(id::FEATURE_EDITOR)
         .contributes(UiContribution::command(
             id::COMMAND_NEW_DOCUMENT,
             "command.new-document",
@@ -131,15 +124,7 @@ pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
             "command.toggle-assistant",
             "assistant",
             60,
-        ));
-    #[cfg(debug_assertions)]
-    let descriptor = descriptor.contributes(UiContribution::command(
-        id::COMMAND_TOGGLE_INSPECTOR,
-        "command.dev.toggle-inspector",
-        "search",
-        900,
-    ));
-    descriptor
+        ))
 }
 
 pub(super) fn rust_descriptor() -> crate::extension_ui::FeatureDescriptor {
@@ -188,7 +173,7 @@ impl Editor {
         let editor_entity = cx.entity();
         let quick_search = cx.new(|cx| {
             QuickSearch::new(cx, move |event, window, cx| {
-                let _ = editor_entity.update(cx, |editor, cx| {
+                editor_entity.update(cx, |editor, cx| {
                     editor.handle_quick_search_event(event, window, cx);
                 });
             })

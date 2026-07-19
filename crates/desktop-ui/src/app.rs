@@ -87,6 +87,8 @@ pub struct InitialView {
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
     Application::new().run(move |cx: &mut App| {
         bind_keys(cx);
+        #[cfg(debug_assertions)]
+        crate::devtools::init(cx);
         let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
         cx.open_window(
             WindowOptions {

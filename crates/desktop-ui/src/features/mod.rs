@@ -14,6 +14,7 @@ pub mod id {
     pub const FEATURE_SHELL: &str = "core.shell";
     pub const FEATURE_EDITOR: &str = "core.editor";
     pub const FEATURE_COMMAND_SEARCH: &str = "core.command-search";
+    #[cfg(debug_assertions)]
     pub const FEATURE_DEVTOOLS: &str = "bundled.devtools";
     pub const FEATURE_CONVERSATION: &str = "core.conversation";
     pub const FEATURE_FILES: &str = "bundled.files";
@@ -37,6 +38,7 @@ pub mod id {
     pub const COMMAND_TOGGLE_ASSISTANT: &str = "lapis.command.toggle-assistant";
     pub const COMMAND_START_CODEX: &str = "lapis.command.start-codex";
     pub const COMMAND_START_TERMINAL: &str = "lapis.command.start-terminal";
+    #[cfg(debug_assertions)]
     pub const COMMAND_TOGGLE_INSPECTOR: &str = "lapis.command.dev.toggle-inspector";
 
     pub const VIEW_FILES: &str = "lapis.view.files";
@@ -53,8 +55,17 @@ pub mod id {
 
 pub fn bundled_registry() -> FeatureRegistry {
     let mut registry = FeatureRegistry::default();
-    let descriptors = [
+    let descriptors = vec![
         FeatureDescriptor::core(id::FEATURE_SHELL),
+        FeatureDescriptor::core(id::FEATURE_COMMAND_SEARCH).contributes(
+            crate::extension_ui::UiContribution::view(
+                id::VIEW_COMMAND_SEARCH,
+                crate::extension_ui::UiSlot::SideDock,
+                "view.command-search",
+                "search",
+                5,
+            ),
+        ),
         editor::descriptor(),
         conversation::descriptor(),
         files::descriptor(),
@@ -69,6 +80,25 @@ pub fn bundled_registry() -> FeatureRegistry {
         editor::rust_descriptor(),
         preview::markdown_descriptor(),
     ];
+    #[cfg(debug_assertions)]
+    let descriptors = {
+        let mut descriptors = descriptors;
+        descriptors.push(
+            FeatureDescriptor::bundled(
+                id::FEATURE_DEVTOOLS,
+                [crate::extension_ui::ActivationCondition::OnCommand(
+                    id::COMMAND_TOGGLE_INSPECTOR.into(),
+                )],
+            )
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_TOGGLE_INSPECTOR,
+                "command.dev.toggle-inspector",
+                "search",
+                900,
+            )),
+        );
+        descriptors
+    };
     for descriptor in descriptors {
         registry
             .register(descriptor)
@@ -122,5 +152,20 @@ mod tests {
                     .any(|capability| capability.as_str() == "workspace.process")
             );
         }
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_build_registers_inspector_command() {
+        let registry = bundled_registry();
+        assert!(
+            registry
+                .contributions(UiSlot::CommandPalette)
+                .iter()
+                .any(|contribution| contribution
+                    .command
+                    .as_ref()
+                    .is_some_and(|command| { command.as_str() == id::COMMAND_TOGGLE_INSPECTOR }))
+        );
     }
 }

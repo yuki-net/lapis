@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["vendor/gpui"]
 resolver = "3"
 
 [workspace.package]
@@ -9,7 +10,7 @@ description = "A small Markdown editor built with GPUI."
 license = "MIT"
 
 [workspace.dependencies]
-gpui = "0.2.2"
+gpui = { version = "0.2.2", path = "vendor/gpui" }
 rfd = "0.15"
 ropey = "1.6.1"
 serde = { version = "1", features = ["derive"] }

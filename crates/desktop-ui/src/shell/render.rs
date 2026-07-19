@@ -252,10 +252,12 @@ impl Render for Editor {
                                     .child(self.icon_theme.resolve_name(icons::id::ASSISTANT))
                                     .child("Note"),
                             )
-                            .child(top_icon(
-                                self.icon_theme.resolve_name(icons::id::SEARCH),
-                                false,
-                            ))
+                            .child(
+                                top_icon(self.icon_theme.resolve_name(icons::id::SEARCH), false)
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_quick_search(window, cx);
+                                    })),
+                            )
                             .child(top_icon(
                                 self.icon_theme.resolve_name(icons::id::RUN),
                                 false,

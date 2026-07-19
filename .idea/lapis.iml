@@ -19,6 +19,9 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/text/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/workspace/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/gpui/examples" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/gpui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/vendor/gpui/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

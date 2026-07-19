@@ -5,10 +5,9 @@ use std::{
 
 use gpui::{
     App, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
-    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, Modifiers,
-    MouseButton, MouseDownEvent, PaintQuad, Pixels, Point, ShapedLine, Style, TextRun,
-    UTF16Selection, UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, relative,
-    rgba, size,
+    EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, Modifiers, MouseButton,
+    MouseDownEvent, PaintQuad, Pixels, Point, ShapedLine, Style, TextRun, UTF16Selection,
+    UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, relative, rgba, size,
 };
 
 use crate::{
@@ -81,6 +80,8 @@ pub(crate) enum QuickSearchEvent {
     Dismiss,
 }
 
+type QuickSearchEventHandler = dyn Fn(QuickSearchEvent, &mut Window, &mut Context<QuickSearch>);
+
 pub(crate) struct QuickSearch {
     focus_handle: FocusHandle,
     query: String,
@@ -92,7 +93,7 @@ pub(crate) struct QuickSearch {
     provider: CommandSearchProvider,
     matches: Vec<SearchItem>,
     selected_index: usize,
-    on_event: Box<dyn Fn(QuickSearchEvent, &mut Window, &mut Context<QuickSearch>)>,
+    on_event: Box<QuickSearchEventHandler>,
 }
 
 impl QuickSearch {
@@ -167,16 +168,7 @@ impl QuickSearch {
     }
 
     fn offset_from_utf16(&self, target: usize) -> usize {
-        let mut utf8 = 0;
-        let mut utf16 = 0;
-        for ch in self.query.chars() {
-            if utf16 >= target {
-                break;
-            }
-            utf8 += ch.len_utf8();
-            utf16 += ch.len_utf16();
-        }
-        utf8
+        byte_offset_from_utf16(&self.query, target)
     }
 
     fn offset_to_utf16(&self, target: usize) -> usize {
@@ -191,12 +183,7 @@ impl QuickSearch {
         self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
     }
 
-    fn backspace(
-        &mut self,
-        _: &SearchBackspace,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn backspace(&mut self, _: &SearchBackspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             let cursor = self.cursor_offset();
             self.selected_range = self.previous_boundary(cursor)..cursor;
@@ -204,12 +191,7 @@ impl QuickSearch {
         self.replace_text_in_range(None, "", window, cx);
     }
 
-    fn delete(
-        &mut self,
-        _: &SearchDelete,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn delete(&mut self, _: &SearchDelete, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             let cursor = self.cursor_offset();
             self.selected_range = cursor..self.next_boundary(cursor);
@@ -250,27 +232,22 @@ impl QuickSearch {
     }
 
     fn previous(&mut self, _: &SearchPrevious, _: &mut Window, cx: &mut Context<Self>) {
-        if self.matches.is_empty() {
-            return;
+        if let Some(index) = previous_selection(self.selected_index, self.matches.len()) {
+            self.selected_index = index;
+            cx.notify();
         }
-        self.selected_index = self
-            .selected_index
-            .checked_sub(1)
-            .unwrap_or(self.matches.len() - 1);
-        cx.notify();
     }
 
     fn next(&mut self, _: &SearchNext, _: &mut Window, cx: &mut Context<Self>) {
-        if self.matches.is_empty() {
-            return;
+        if let Some(index) = next_selection(self.selected_index, self.matches.len()) {
+            self.selected_index = index;
+            cx.notify();
         }
-        self.selected_index = (self.selected_index + 1) % self.matches.len();
-        cx.notify();
     }
 
     fn confirm(&mut self, _: &SearchConfirm, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(item) = self.matches.get(self.selected_index) {
-            (self.on_event)(QuickSearchEvent::Execute(item.command.clone()), window, cx);
+        if let Some(command) = selected_command(&self.matches, self.selected_index) {
+            (self.on_event)(QuickSearchEvent::Execute(command), window, cx);
         }
     }
 
@@ -302,6 +279,31 @@ impl QuickSearch {
         }
         line.closest_index_for_x(position.x - bounds.left())
     }
+}
+
+fn byte_offset_from_utf16(text: &str, target: usize) -> usize {
+    let mut utf8 = 0;
+    let mut utf16 = 0;
+    for ch in text.chars() {
+        if utf16 >= target {
+            break;
+        }
+        utf8 += ch.len_utf8();
+        utf16 += ch.len_utf16();
+    }
+    utf8
+}
+
+fn previous_selection(current: usize, len: usize) -> Option<usize> {
+    (len > 0).then(|| current.checked_sub(1).unwrap_or(len - 1))
+}
+
+fn next_selection(current: usize, len: usize) -> Option<usize> {
+    (len > 0).then(|| (current + 1) % len)
+}
+
+fn selected_command(matches: &[SearchItem], selected_index: usize) -> Option<CommandId> {
+    matches.get(selected_index).map(|item| item.command.clone())
 }
 
 impl EntityInputHandler for QuickSearch {
@@ -376,12 +378,12 @@ impl EntityInputHandler for QuickSearch {
             .unwrap_or(self.selected_range.clone());
         let new_text = new_text.replace(['\r', '\n'], " ");
         self.query.replace_range(range.clone(), &new_text);
-        self.marked_range = (!new_text.is_empty())
-            .then_some(range.start..range.start + new_text.len());
+        self.marked_range =
+            (!new_text.is_empty()).then_some(range.start..range.start + new_text.len());
         self.selected_range = new_selected_range_utf16
             .map(|selected| {
-                range.start + self.offset_from_utf16(selected.start)
-                    ..range.start + self.offset_from_utf16(selected.end)
+                range.start + byte_offset_from_utf16(&new_text, selected.start)
+                    ..range.start + byte_offset_from_utf16(&new_text, selected.end)
             })
             .unwrap_or(range.start + new_text.len()..range.start + new_text.len());
         self.selection_reversed = false;
@@ -474,7 +476,7 @@ impl Element for SearchTextElement {
             input.query.clone().into()
         };
         let color = if input.query.is_empty() {
-            theme::subtle()
+            theme::subtle().into()
         } else {
             style.color
         };
@@ -588,19 +590,14 @@ impl Element for SearchTextElement {
 
 impl Render for QuickSearch {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self
-            .matches
-            .iter()
-            .cloned()
-            .enumerate()
-            .collect::<Vec<_>>();
+        let rows = self.matches.iter().cloned().enumerate().collect::<Vec<_>>();
         div()
             .size_full()
             .min_h(px(0.0))
             .flex()
             .flex_col()
             .key_context("QuickSearch")
-            .track_focus(&self.focus_handle(cx))
+            .track_focus(&self.focus_handle())
             .on_action(cx.listener(Self::backspace))
             .on_action(cx.listener(Self::delete))
             .on_action(cx.listener(Self::left))
@@ -630,9 +627,12 @@ impl Render for QuickSearch {
                     .text_color(theme::text())
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
                     .child(div().text_color(theme::muted()).child("S"))
-                    .child(div().min_w(px(0.0)).flex_1().child(SearchTextElement {
-                        input: cx.entity(),
-                    })),
+                    .child(
+                        div()
+                            .min_w(px(0.0))
+                            .flex_1()
+                            .child(SearchTextElement { input: cx.entity() }),
+                    ),
             )
             .child(
                 div()
@@ -726,6 +726,14 @@ impl Focusable for QuickSearch {
 mod tests {
     use super::*;
 
+    fn search_item(command: &str) -> SearchItem {
+        SearchItem {
+            command: CommandId::new(command),
+            title: command.to_owned(),
+            shortcut: String::new(),
+        }
+    }
+
     fn shift() -> Modifiers {
         Modifiers {
             shift: true,
@@ -770,5 +778,25 @@ mod tests {
             },
             start + Duration::from_millis(600),
         ));
+    }
+
+    #[test]
+    fn result_selection_wraps_with_up_and_down() {
+        assert_eq!(previous_selection(0, 3), Some(2));
+        assert_eq!(previous_selection(2, 3), Some(1));
+        assert_eq!(next_selection(2, 3), Some(0));
+        assert_eq!(next_selection(0, 3), Some(1));
+        assert_eq!(previous_selection(0, 0), None);
+        assert_eq!(next_selection(0, 0), None);
+    }
+
+    #[test]
+    fn enter_executes_the_currently_selected_command() {
+        let matches = vec![search_item("command.first"), search_item("command.second")];
+        assert_eq!(
+            selected_command(&matches, 1).unwrap().as_str(),
+            "command.second"
+        );
+        assert!(selected_command(&matches, 2).is_none());
     }
 }

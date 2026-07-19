@@ -105,7 +105,10 @@ mod tests {
         ]);
 
         assert_eq!(provider.search("toggle inspector").len(), 1);
-        assert_eq!(provider.search("dev inspector")[0].title, "dev: Toggle Inspector");
+        assert_eq!(
+            provider.search("dev inspector")[0].title,
+            "dev: Toggle Inspector"
+        );
         assert_eq!(
             provider.search("open-workspace")[0].command.as_str(),
             "lapis.command.open-workspace"

@@ -191,9 +191,20 @@ UI からファイル、Git、LSP、Terminal、Taskを直接操作しない既�
 
 GPUI 0.2.2の標準Inspectorは同一ウィンドウ内へ30remの領域を予約するため、現行の公開APIだけでは
 独立ウィンドウ要件を満たせない。外部表示モード、Inspector Entityの参照、既存Picking処理の再利用に
-必要な最小APIをGPUI側へ追加し、forkのcommit hashを固定する。依存元の切り替えは影響を確認してから
-行い、既存の `Window::toggle_inspector` と同一ウィンドウ表示を壊さない。将来upstreamが同等APIを
-提供した時点でcrates.io版へ戻せるよう、GPUI固有処理は `desktop-ui/devtools` 内へ閉じる。
+必要な最小APIだけを `vendor/gpui` のローカルforkへ追加する。GitHub認証を利用できない開発環境でも
+再現可能にするため、現時点ではremote forkではなくpath依存を採用し、GPUI 0.2.2の元ソースと差分を
+リポジトリ内で固定する。既存の `Window::toggle_inspector` と同一ウィンドウ表示は壊さない。
+将来upstreamが同等APIを提供した時点でcrates.io版へ戻せるよう、Lapis側のGPUI固有処理は
+`desktop-ui/devtools` 内へ閉じる。Inspectorの登録とControllerはdebugビルド限定とし、releaseでは
+Inspector関連コードをコンパイルしない。debugでもInspectorが閉じている間はPicking、計測、外部windowの
+再描画を行わない。外部Inspectorは待機状態で開き、利用者がPickボタンを押した期間だけ本体のhitbox登録と
+入力捕捉を有効にする。
+
+外部Inspectorを開いている間だけ、GPUIの`request_layout`再帰からinspect可能なElementの親子関係を
+収集し、`prepaint`で確定したboundsを加えたフレーム単位のスナップショットを保持する。本体が再描画
+されるたびにツリーを自動更新し、手動Refreshでも本体の再描画を要求できる。これは永続DOMではなく、
+条件分岐などで消えたElementは次のスナップショットから除去する。Inspectorを閉じた状態とreleaseでは
+親子関係の収集を行わない。
 
 ### desktop-ui の目標module構成
 

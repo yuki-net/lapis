@@ -345,8 +345,7 @@ impl Editor {
             &self.keymap,
         );
         let focus = self.quick_search.read(cx).focus_handle();
-        let _ = self
-            .quick_search
+        self.quick_search
             .update(cx, |search, cx| search.open(provider, cx));
         self.shell.command_palette_open = false;
         self.shell.side_panel = Some(ViewId::new(id::VIEW_COMMAND_SEARCH));
@@ -363,7 +362,7 @@ impl Editor {
         cx.notify();
     }
 
-    fn handle_quick_search_event(
+    pub(super) fn handle_quick_search_event(
         &mut self,
         event: QuickSearchEvent,
         window: &mut Window,
@@ -394,10 +393,12 @@ impl Editor {
 
     pub(super) fn normal_key_down(
         &mut self,
-        _: &KeyDownEvent,
+        event: &KeyDownEvent,
         _: &mut Window,
         _: &mut Context<Self>,
     ) {
-        self.double_shift.normal_key_pressed();
+        if event.keystroke.key != "shift" {
+            self.double_shift.normal_key_pressed();
+        }
     }
 }
