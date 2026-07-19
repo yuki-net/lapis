@@ -953,6 +953,20 @@ impl WindowsWindowInner {
         wparam: WPARAM,
         lparam: LPARAM,
     ) -> Option<isize> {
+        if matches!(
+            wparam.0 as u32,
+            HTCAPTION
+                | HTLEFT
+                | HTRIGHT
+                | HTTOP
+                | HTBOTTOM
+                | HTTOPLEFT
+                | HTTOPRIGHT
+                | HTBOTTOMLEFT
+                | HTBOTTOMRIGHT
+        ) {
+            return None;
+        }
         let mut lock = self.state.borrow_mut();
         if let Some(mut func) = lock.callbacks.input.take() {
             let scale_factor = lock.scale_factor;
