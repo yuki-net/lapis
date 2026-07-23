@@ -104,6 +104,9 @@ impl Render for Editor {
                     .bg(theme::title_bar())
                     .border_b_1()
                     .border_color(theme::border())
+                    .when(cfg!(target_os = "macos"), |this| {
+                        this.child(div().w(px(80.0)).flex_shrink_0())
+                    })
                     .child(
                         div()
                             .w(px(if compact_layout { 200.0 } else { 320.0 }))
@@ -263,31 +266,33 @@ impl Render for Editor {
                                 false,
                             )),
                     )
-                    .child(
-                        div()
-                            .h_full()
-                            .flex_shrink_0()
-                            .flex()
-                            .items_end()
-                            .child(window_control_button(
-                                "window-minimize",
-                                self.icon_theme.resolve_name(icons::id::MINIMIZE),
-                                WindowControlArea::Min,
-                                false,
-                            ))
-                            .child(window_control_button(
-                                "window-maximize",
-                                maximize_label,
-                                WindowControlArea::Max,
-                                false,
-                            ))
-                            .child(window_control_button(
-                                "window-close",
-                                self.icon_theme.resolve_name(icons::id::CLOSE),
-                                WindowControlArea::Close,
-                                true,
-                            )),
-                    ),
+                    .when(!cfg!(target_os = "macos"), |this| {
+                        this.child(
+                            div()
+                                .h_full()
+                                .flex_shrink_0()
+                                .flex()
+                                .items_end()
+                                .child(window_control_button(
+                                    "window-minimize",
+                                    self.icon_theme.resolve_name(icons::id::MINIMIZE),
+                                    WindowControlArea::Min,
+                                    false,
+                                ).on_click(cx.listener(|_, _, window, _| window.minimize_window())))
+                                .child(window_control_button(
+                                    "window-maximize",
+                                    maximize_label,
+                                    WindowControlArea::Max,
+                                    false,
+                                ).on_click(cx.listener(|_, _, window, _| window.zoom_window())))
+                                .child(window_control_button(
+                                    "window-close",
+                                    self.icon_theme.resolve_name(icons::id::CLOSE),
+                                    WindowControlArea::Close,
+                                    true,
+                                ).on_click(cx.listener(|_, _, window, _| window.remove_window())))
+                        )
+                    }),
             )
             .child(
                 div()

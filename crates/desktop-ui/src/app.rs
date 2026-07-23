@@ -85,30 +85,32 @@ pub struct InitialView {
 }
 
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
-    Application::new().run(move |cx: &mut App| {
-        bind_keys(cx);
-        #[cfg(debug_assertions)]
-        crate::devtools::init(cx);
-        let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some("Lapis".into()),
-                    appears_transparent: true,
+    Application::new()
+        .with_assets(crate::components::IconAssets)
+        .run(move |cx: &mut App| {
+            bind_keys(cx);
+            #[cfg(debug_assertions)]
+            crate::devtools::init(cx);
+            let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    titlebar: Some(TitlebarOptions {
+                        title: Some("Lapis".into()),
+                        appears_transparent: true,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            move |window, cx| {
-                let editor = cx.new(|cx| Editor::new(session, services, initial_view, cx));
-                window.focus(&editor.read(cx).editor_focus_handle());
-                editor
-            },
-        )
-        .expect("Lapis window should open");
-        cx.on_action(|_: &Quit, cx| cx.quit());
-    });
+                },
+                move |window, cx| {
+                    let editor = cx.new(|cx| Editor::new(session, services, initial_view, cx));
+                    window.focus(&editor.read(cx).editor_focus_handle());
+                    editor
+                },
+            )
+            .expect("Lapis window should open");
+            cx.on_action(|_: &Quit, cx| cx.quit());
+        });
 }
 
 fn bind_keys(cx: &mut App) {
