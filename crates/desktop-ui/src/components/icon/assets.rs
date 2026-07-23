@@ -45,5 +45,8 @@ mod tests {
         assert_eq!(path(IconName::Menu), "icons/menu.svg");
         assert_eq!(path(IconName::Search), "icons/search.svg");
         assert_eq!(path(IconName::Close), "icons/close.svg");
+        assert_eq!(path(IconName::Minus), "icons/minus.svg");
+        assert_eq!(path(IconName::Square), "icons/square.svg");
+        assert_eq!(path(IconName::X), "icons/x.svg");
     }
 }

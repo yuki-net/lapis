@@ -1,7 +1,7 @@
 mod controls;
 mod drag;
 
-pub(crate) use controls::{top_icon, window_control_button};
+pub(crate) use controls::{WindowControlIcon, top_icon, window_control_button};
 use drag::apply_drag_region;
 
 use super::*;
@@ -10,11 +10,10 @@ impl Editor {
     /// タイトルバー全体を描画する。
     pub(super) fn render_header(
         &self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
         compact_layout: bool,
     ) -> impl IntoElement {
-        let maximize_label = if window.is_maximized() { "❐" } else { "□" };
         let active_conversation = self.conversation.session.active_id().clone();
         let conversations = self
             .conversation
@@ -36,8 +35,6 @@ impl Editor {
                 .flex_row()
                 .items_center()
                 .bg(theme::title_bar())
-                .border_b_1()
-                .border_color(theme::border())
                 .when(cfg!(target_os = "macos"), |this| {
                     this.child(div().w(px(80.0)).flex_shrink_0())
                 })
@@ -219,7 +216,7 @@ impl Editor {
                             .child(
                                 window_control_button(
                                     "window-minimize",
-                                    "—",
+                                    WindowControlIcon::Minimize,
                                     WindowControlArea::Min,
                                     false,
                                 )
@@ -228,7 +225,7 @@ impl Editor {
                             .child(
                                 window_control_button(
                                     "window-maximize",
-                                    maximize_label,
+                                    WindowControlIcon::Maximize,
                                     WindowControlArea::Max,
                                     false,
                                 )
@@ -237,7 +234,7 @@ impl Editor {
                             .child(
                                 window_control_button(
                                     "window-close",
-                                    "×",
+                                    WindowControlIcon::Close,
                                     WindowControlArea::Close,
                                     true,
                                 )
