@@ -2,10 +2,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lapis_app_services::{
-    ConversationSession, EditorSession, GitSession, LspSession, TaskSession, TerminalSession,
-    WorkspaceSearchSession,
+    ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
+    TerminalSession, WorkspaceSearchSession,
 };
-use lapis_persistence::LocalConversationRepository;
+use lapis_persistence::{LocalConversationRepository, LocalGlobalSettingsRepository};
 use lapis_platform::{
     ConnectionGate, LocalGitBackend, LocalLspBackend, LocalTaskBackend, LocalTerminalBackend,
     LocalWorkspaceRepository, LocalWorkspaceSearchBackend, LocalWorkspaceStateRepository,
@@ -80,6 +80,15 @@ fn main() {
         Arc::new(LocalConversationRepository::user_default()),
         session.snapshot(),
     );
+    let settings_session =
+        SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::user_default()))
+            .unwrap_or_else(|error| {
+                eprintln!("Global settings load failed: {error}");
+                SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
+                    std::env::temp_dir().join("lapis-settings-fallback.json"),
+                )))
+                .expect("temporary global settings must be available")
+            });
     if !arguments
         .iter()
         .any(|value| value == "--workspace" || value == "--open-file")
@@ -146,6 +155,7 @@ fn main() {
         terminal_session,
         search_session,
         conversation_session,
+        settings_session,
     );
     lapis_desktop_ui::run(session, desktop_services, initial_view);
 }

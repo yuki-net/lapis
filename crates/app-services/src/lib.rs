@@ -14,9 +14,11 @@ use lapis_document::{
 };
 use lapis_editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
 use lapis_git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree};
+use lapis_localization::LocaleId;
 use lapis_lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
+use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_task_runner::{
     Execution, ExecutionStatus, Task, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord,
     unix_time_ms,
@@ -29,6 +31,44 @@ use lapis_workspace::{
     WorkspaceSnapshot, WorkspaceStateRepository,
 };
 use serde::{Deserialize, Serialize};
+
+/// グローバル設定を UI に公開し、変更を永続化するアプリケーション境界。
+#[derive(Clone)]
+pub struct SettingsSession {
+    repository: Arc<dyn GlobalSettingsRepository>,
+    settings: Arc<std::sync::Mutex<GlobalSettings>>,
+}
+
+impl SettingsSession {
+    pub fn load(repository: Arc<dyn GlobalSettingsRepository>) -> Result<Self, SettingsError> {
+        let settings = repository.load()?;
+        Ok(Self {
+            repository,
+            settings: Arc::new(std::sync::Mutex::new(settings)),
+        })
+    }
+
+    pub fn settings(&self) -> GlobalSettings {
+        self.settings
+            .lock()
+            .expect("settings state lock failed")
+            .clone()
+    }
+
+    pub fn set_locale(&self, locale: LocaleId) -> Result<(), SettingsError> {
+        let mut settings = self.settings.lock().expect("settings state lock failed");
+        if settings.locale == locale {
+            return Ok(());
+        }
+        let previous = settings.clone();
+        settings.locale = locale;
+        if let Err(error) = self.repository.save(&settings) {
+            *settings = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
+}
 
 /// ネイティブダイアログを利用するユースケース側の契約。
 pub trait WorkspaceDialog: Send + Sync {

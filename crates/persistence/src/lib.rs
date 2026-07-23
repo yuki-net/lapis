@@ -8,12 +8,55 @@ use std::{
 
 use lapis_app_services::{ConversationRecord, ConversationRepository};
 use lapis_editor_core::ConversationId;
+use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_workspace::WorkspaceError;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone)]
 pub struct LocalConversationRepository {
     path: PathBuf,
+}
+
+#[derive(Clone)]
+pub struct LocalGlobalSettingsRepository {
+    path: PathBuf,
+}
+
+impl LocalGlobalSettingsRepository {
+    pub fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn user_default() -> Self {
+        let base = env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .unwrap_or_else(env::temp_dir)
+            .join("Lapis");
+        Self::new(base.join("settings-v1.json"))
+    }
+}
+
+impl GlobalSettingsRepository for LocalGlobalSettingsRepository {
+    fn load(&self) -> Result<GlobalSettings, SettingsError> {
+        let bytes = match fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(GlobalSettings::default());
+            }
+            Err(error) => return Err(SettingsError::new(error.to_string())),
+        };
+        let settings: GlobalSettings = serde_json::from_slice(&bytes)
+            .map_err(|error| SettingsError::new(error.to_string()))?;
+        if settings.version != 1 {
+            return Err(SettingsError::new("Unsupported global settings version"));
+        }
+        Ok(settings)
+    }
+
+    fn save(&self, settings: &GlobalSettings) -> Result<(), SettingsError> {
+        atomic_json_write(&self.path, settings)
+            .map_err(|error| SettingsError::new(error.to_string()))
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,10 +137,26 @@ fn atomic_json_write(path: &Path, value: &impl Serialize) -> Result<(), Workspac
 mod tests {
     use lapis_app_services::{ConversationViewState, RestoredTerminal};
     use lapis_editor_core::ExecutionId;
+    use lapis_localization::LocaleId;
+    use lapis_settings::GlobalSettingsRepository;
     use lapis_terminal::TerminalStatus;
     use lapis_workspace::{DocumentViewState, WorkspaceSnapshot};
 
     use super::*;
+
+    #[test]
+    fn global_settings_repository_round_trips_locale() {
+        let directory = tempfile::tempdir().unwrap();
+        let repository = LocalGlobalSettingsRepository::new(directory.path().join("settings.json"));
+        let settings = GlobalSettings {
+            version: 1,
+            locale: LocaleId::new("ja-JP"),
+        };
+
+        repository.save(&settings).unwrap();
+
+        assert_eq!(repository.load().unwrap(), settings);
+    }
 
     #[test]
     fn conversation_repository_round_trips_active_view_draft_and_terminal_summary() {

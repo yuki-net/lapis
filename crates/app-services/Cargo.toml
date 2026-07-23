@@ -10,6 +10,8 @@ lapis-document = { path = "../document" }
 lapis-editor-core = { path = "../editor-core" }
 lapis-git = { path = "../git" }
 lapis-lsp = { path = "../lsp" }
+lapis-localization = { path = "../localization" }
+lapis-settings = { path = "../settings" }
 lapis-task-runner = { path = "../task-runner" }
 lapis-terminal = { path = "../terminal" }
 lapis-workspace = { path = "../workspace" }

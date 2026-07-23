@@ -3,8 +3,8 @@ use gpui::{
     actions, px, size,
 };
 use lapis_app_services::{
-    ConversationSession, EditorSession, GitSession, LspSession, TaskSession, TerminalSession,
-    WorkspaceSearchSession,
+    ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
+    TerminalSession, WorkspaceSearchSession,
 };
 
 use crate::features::editor::Editor;
@@ -55,6 +55,7 @@ pub struct DesktopServices {
     pub(crate) terminal: TerminalSession,
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
+    pub(crate) settings: SettingsSession,
 }
 
 impl DesktopServices {
@@ -65,6 +66,7 @@ impl DesktopServices {
         terminal: TerminalSession,
         search: WorkspaceSearchSession,
         conversation: ConversationSession,
+        settings: SettingsSession,
     ) -> Self {
         Self {
             task,
@@ -73,6 +75,7 @@ impl DesktopServices {
             terminal,
             search,
             conversation,
+            settings,
         }
     }
 }

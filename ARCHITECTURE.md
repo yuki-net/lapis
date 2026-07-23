@@ -1,5 +1,18 @@
 # ARCHITECTURE.md
 
+## Localization and global settings
+
+`lapis-localization` owns `LocaleId`, `MessageId`, language-pack manifests, package validation,
+and resolving `(LocaleId, MessageId)` to a display string. It does not depend on GPUI, persistence,
+networking, or a language-pack store.
+
+`lapis-settings` owns `GlobalSettings` and the settings repository contract. The selected locale is
+stored in `GlobalSettings.locale`; `app-services::SettingsSession` is the application boundary that
+persists changes. UI code must not access persistence directly.
+
+`desktop-ui` renders strings returned by the Localizer only. The source of a language pack (bundled,
+locally installed, or a future store) is intentionally outside the localizer and uses one package format.
+
 ## 概要
 
 本アプリはRust製のデスクトップコードエディターである。

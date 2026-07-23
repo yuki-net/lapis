@@ -2868,6 +2868,7 @@ dependencies = [
  "lapis-desktop-ui",
  "lapis-persistence",
  "lapis-platform",
+ "lapis-settings",
  "lapis-task-runner",
 ]
 
@@ -2878,7 +2879,9 @@ dependencies = [
  "lapis-document",
  "lapis-editor-core",
  "lapis-git",
+ "lapis-localization",
  "lapis-lsp",
+ "lapis-settings",
  "lapis-task-runner",
  "lapis-terminal",
  "lapis-workspace",
@@ -2895,7 +2898,9 @@ dependencies = [
  "lapis-editor-core",
  "lapis-git",
  "lapis-language",
+ "lapis-localization",
  "lapis-lsp",
+ "lapis-settings",
  "lapis-task-runner",
  "lapis-terminal",
  "lapis-workspace",
@@ -2929,6 +2934,14 @@ name = "lapis-language"
 version = "0.1.0"
 
 [[package]]
+name = "lapis-localization"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lapis-lsp"
 version = "0.1.0"
 dependencies = [
@@ -2943,6 +2956,8 @@ version = "0.1.0"
 dependencies = [
  "lapis-app-services",
  "lapis-editor-core",
+ "lapis-localization",
+ "lapis-settings",
  "lapis-terminal",
  "lapis-workspace",
  "serde",
@@ -2974,6 +2989,14 @@ name = "lapis-project"
 version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
+]
+
+[[package]]
+name = "lapis-settings"
+version = "0.1.0"
+dependencies = [
+ "lapis-localization",
+ "serde",
 ]
 
 [[package]]

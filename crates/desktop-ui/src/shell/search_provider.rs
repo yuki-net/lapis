@@ -1,7 +1,7 @@
 use crate::{
     extension_ui::{CommandId, FeatureRegistry, UiSlot},
     keymap::KeymapRegistry,
-    localization::LocaleRegistry,
+    localization::Localizer,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -23,7 +23,7 @@ pub(crate) struct CommandSearchProvider {
 impl CommandSearchProvider {
     pub(crate) fn from_registry(
         registry: &FeatureRegistry,
-        locale: &LocaleRegistry,
+        locale: &Localizer,
         keymap: &KeymapRegistry,
     ) -> Self {
         let items = registry

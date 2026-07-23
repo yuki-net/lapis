@@ -1,0 +1,10 @@
+[package]
+name = "lapis-settings"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-localization = { path = "../localization" }
+serde.workspace = true

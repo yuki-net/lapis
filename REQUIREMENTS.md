@@ -1,5 +1,12 @@
 # REQUIREMENTS.md
 
+## Global settings and localization
+
+- `GlobalSettings` applies to the whole user profile and does not belong to a Project, Workspace, or Conversation.
+- The display locale is persisted as `GlobalSettings.locale` and must be applied when the UI is rendered.
+- Bundled and installed language packs use `locales/<locale>/manifest.json` and `messages/*.json`.
+- `en-US` is the final fallback language. `ja-JP` and `en-US` are bundled.
+
 ## 1. 製品概要
 
 Lapis は、メモ、コード編集、AIタスク、リモート開発を一つの会話単位で扱う軽量なデスクトップエディターです。

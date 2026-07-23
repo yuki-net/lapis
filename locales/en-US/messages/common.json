@@ -1,0 +1,19 @@
+{
+  "view.files":"Files",
+  "view.search":"Search",
+  "view.git":"Git",
+  "view.history":"History",
+  "view.preview":"Preview",
+  "view.assistant":"AI Assistant",
+  "view.terminal":"Terminal",
+  "view.problems":"Problems",
+  "view.output":"Output",
+  "view.command-search":"Search",
+  "command.new-document":"New Document",
+  "command.open-workspace":"Open Workspace…",
+  "command.save-document":"Save",
+  "command.toggle-preview":"Markdown Preview",
+  "command.toggle-bottom-panel":"Bottom Panel",
+  "command.toggle-assistant":"AI Assistant",
+  "command.dev.toggle-inspector":"dev: Toggle Inspector"
+}

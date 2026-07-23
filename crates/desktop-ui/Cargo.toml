@@ -11,7 +11,9 @@ lapis-app-services = { path = "../app-services" }
 lapis-editor-core = { path = "../editor-core" }
 lapis-git = { path = "../git" }
 lapis-language = { path = "../language" }
+lapis-localization = { path = "../localization" }
 lapis-lsp = { path = "../lsp" }
+lapis-settings = { path = "../settings" }
 lapis-task-runner = { path = "../task-runner" }
 lapis-terminal = { path = "../terminal" }
 lapis-workspace = { path = "../workspace" }

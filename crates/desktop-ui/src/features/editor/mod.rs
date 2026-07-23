@@ -28,7 +28,7 @@ use crate::{
     },
     icons::{self, IconThemeRegistry},
     keymap::KeymapRegistry,
-    localization::LocaleRegistry,
+    localization::Localizer,
     shell::{
         ResizeTarget, ShellState,
         search_page::{DoubleShiftDetector, QuickSearch, QuickSearchEvent},
@@ -154,7 +154,7 @@ pub struct Editor {
     status: String,
     shell: ShellState,
     feature_registry: FeatureRegistry,
-    locale: LocaleRegistry,
+    locale: Localizer,
     icon_theme: IconThemeRegistry,
     keymap: KeymapRegistry,
     is_selecting: bool,
@@ -226,7 +226,11 @@ impl Editor {
                 ..ShellState::default()
             },
             feature_registry: features::bundled_registry(),
-            locale: LocaleRegistry::bundled(),
+            locale: {
+                let mut localizer = Localizer::bundled();
+                let _ = localizer.set_active(&services.settings.settings().locale);
+                localizer
+            },
             icon_theme: IconThemeRegistry::bundled(),
             keymap: KeymapRegistry::bundled(),
             is_selecting: false,

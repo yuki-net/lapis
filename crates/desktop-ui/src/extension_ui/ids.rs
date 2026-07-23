@@ -33,7 +33,5 @@ stable_id!(ViewId);
 stable_id!(IconId);
 stable_id!(IconThemeId);
 stable_id!(KeymapId);
-stable_id!(MessageId);
 stable_id!(ThemeId);
-stable_id!(LocaleId);
 stable_id!(WorkspaceCapabilityId);

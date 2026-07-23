@@ -1,0 +1,19 @@
+{
+  "view.files":"ファイル",
+  "view.search":"検索",
+  "view.git":"Git",
+  "view.history":"履歴",
+  "view.preview":"プレビュー",
+  "view.assistant":"AI アシスタント",
+  "view.terminal":"ターミナル",
+  "view.problems":"問題",
+  "view.output":"出力",
+  "view.command-search":"検索",
+  "command.new-document":"新規ドキュメント",
+  "command.open-workspace":"ワークスペースを開く…",
+  "command.save-document":"保存",
+  "command.toggle-preview":"Markdown プレビュー",
+  "command.toggle-bottom-panel":"下部パネル",
+  "command.toggle-assistant":"AI アシスタント",
+  "command.dev.toggle-inspector":"開発: インスペクターを切替"
+}
