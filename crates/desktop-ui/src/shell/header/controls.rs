@@ -79,10 +79,9 @@ impl WindowControlIconName {
     }
 }
 
-/// A visible Lucide icon for a native window-control button.
+/// ネイティブのウィンドウ操作ボタン用 Lucide アイコン。
 ///
-/// GPUI SVGs need an explicit text color at the SVG boundary; relying on the
-/// parent button's inherited color can leave the icon unpainted.
+/// 色は共通の `Icon` コンポーネントが有効テーマから解決する。
 pub(crate) struct WindowControlIcon {
     name: WindowControlIconName,
 }
@@ -117,6 +116,7 @@ pub(crate) fn top_icon(label: impl Into<SharedString>, active: bool) -> gpui::St
         .flex()
         .items_center()
         .justify_center()
+        .occlude()
         .bg(if active {
             theme::accent_soft()
         } else {
@@ -147,6 +147,7 @@ pub(crate) fn window_control_button(
         .flex()
         .items_center()
         .justify_center()
+        .occlude()
         .window_control_area(area)
         .text_color(theme::muted())
         .hover(move |style| {

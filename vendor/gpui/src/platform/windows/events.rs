@@ -43,6 +43,7 @@ impl WindowsWindowInner {
             WM_CREATE => self.handle_create_msg(handle),
             WM_MOVE => self.handle_move_msg(handle, lparam),
             WM_SIZE => self.handle_size_msg(wparam, lparam),
+            WM_MOVING | WM_SIZING => self.handle_size_move_progress(handle),
             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
             WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
             WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
@@ -241,6 +242,20 @@ impl WindowsWindowInner {
         unsafe {
             KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
         }
+        None
+    }
+
+    fn handle_size_move_progress(&self, handle: HWND) -> Option<isize> {
+        // Native move/resize enters a modal Windows message loop. `WM_TIMER`
+        // is low priority and can be starved while `WM_MOVING` / `WM_SIZING`
+        // keep arriving, so process GPUI work on those progress messages too.
+        for runnable in self.main_receiver.drain() {
+            runnable.run();
+        }
+        self.draw_window(handle, false);
+
+        // Continue through DefWindowProcW so Windows can apply the RECT carried
+        // by WM_MOVING / WM_SIZING.
         None
     }
 

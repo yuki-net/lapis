@@ -44,7 +44,7 @@ impl Editor {
             .min_h(px(0.0))
             .flex()
             .flex_1()
-            .p(px(theme::CANVAS_GAP))
+            .px(px(theme::CANVAS_GAP))
             // --- tool island ---
             .child(
                 div()

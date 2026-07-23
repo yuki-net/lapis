@@ -1,6 +1,6 @@
-use gpui::{IntoElement, Styled, Svg, Transformation, radians, svg};
+use gpui::{radians, svg, IntoElement, Styled, Svg, Transformation};
 
-use super::{IconName, assets};
+use super::{assets, IconName};
 
 /// 固定アイコンを描画する GPUI 要素。
 #[allow(dead_code)] // 既存画面の置換は行わず、段階的に利用する。
@@ -28,7 +28,12 @@ impl IntoElement for Icon {
     type Element = Svg;
 
     fn into_element(self) -> Self::Element {
-        let icon = svg().path(assets::path(self.name)).size_4();
+        // GPUI は SVG 自身に文字色がないと描画しない。SVG アセットや呼び出し側
+        // には色を固定せず、この共通コンポーネントで有効テーマの色を解決する。
+        let icon = svg()
+            .path(assets::path(self.name))
+            .size_4()
+            .text_color(crate::theme::muted());
         if let Some(transformation) = self.transformation {
             icon.with_transformation(transformation)
         } else {

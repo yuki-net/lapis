@@ -6,17 +6,6 @@ impl Editor {
         cx: &mut Context<Self>,
         compact_layout: bool,
     ) -> impl IntoElement {
-        let active_conversation = self.conversation.session.active_id().clone();
-        let conversations = self
-            .conversation
-            .session
-            .records()
-            .iter()
-            .take(if compact_layout { 2 } else { 4 })
-            .enumerate()
-            .map(|(index, record)| (index, record.id.clone()))
-            .collect::<Vec<_>>();
-
         div()
             .w(px(if compact_layout { 200.0 } else { 320.0 }))
             .flex_shrink_0()
@@ -43,6 +32,7 @@ impl Editor {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .occlude()
                     .bg(theme::title_bar())
                     .hover(|style| style.bg(theme::surface_hover()))
                     .child(controls::menu_icon()),
@@ -87,40 +77,6 @@ impl Editor {
                     this.toggle_preview(&TogglePreview, window, cx);
                 })),
             )
-            .children(conversations.into_iter().map(|(index, conversation_id)| {
-                let active = conversation_id == active_conversation;
-                div()
-                    .id(("conversation", index))
-                    .h(px(24.0))
-                    .min_w(px(24.0))
-                    .px_1()
-                    .rounded(px(6.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(10.0))
-                    .text_color(if active { rgb(0xbfc0ff) } else { theme::muted() })
-                    .bg(if active { theme::accent_soft() } else { theme::title_bar() })
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.switch_conversation(conversation_id.clone(), cx);
-                    }))
-                    .child((index + 1).to_string())
-            }))
-            .child(
-                div()
-                    .id("new-conversation")
-                    .size(px(24.0))
-                    .rounded(px(6.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(13.0))
-                    .text_color(theme::muted())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(|this, _, _, cx| this.create_conversation(cx)))
-                    .child("+"),
-            )
     }
 }
 
@@ -136,6 +92,7 @@ fn panel_toggle_button(
         .flex()
         .items_center()
         .justify_center()
+        .occlude()
         .bg(theme::title_bar())
         .hover(|style| style.bg(theme::surface_hover()))
         .child(controls::PanelToggleIcon::new(position, state))

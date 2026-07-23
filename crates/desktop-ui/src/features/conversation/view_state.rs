@@ -53,6 +53,7 @@ impl Editor {
         )
     }
 
+    #[allow(dead_code)] // 会話操作 UI の移設まで、新規作成処理を保持する。
     pub(super) fn create_conversation(&mut self, cx: &mut Context<Self>) {
         if let Err(error) = self.capture_conversation() {
             self.status = format!("Conversation 保存失敗: {error}");
@@ -79,6 +80,7 @@ impl Editor {
         cx.notify();
     }
 
+    #[allow(dead_code)] // 会話一覧 UI の移設まで、復元用の操作を保持する。
     pub(super) fn switch_conversation(
         &mut self,
         id: lapis_editor_core::ConversationId,

@@ -22,6 +22,7 @@ impl Editor {
                     .flex()
                     .items_center()
                     .gap_1()
+                    .occlude()
                     .text_size(px(11.0))
                     .text_color(rgb(0x8da8ff))
                     .bg(if self
@@ -49,6 +50,7 @@ impl Editor {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .occlude()
                     .bg(theme::title_bar())
                     .text_color(theme::muted())
                     .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
