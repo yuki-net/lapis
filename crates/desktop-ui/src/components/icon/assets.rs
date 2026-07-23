@@ -48,5 +48,10 @@ mod tests {
         assert_eq!(path(IconName::Minus), "icons/minus.svg");
         assert_eq!(path(IconName::Square), "icons/square.svg");
         assert_eq!(path(IconName::X), "icons/x.svg");
+        assert_eq!(path(IconName::PanelLeft), "icons/panel-left.svg");
+        assert_eq!(
+            path(IconName::PanelLeftDashed),
+            "icons/panel-left-dashed.svg"
+        );
     }
 }

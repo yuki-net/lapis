@@ -35,26 +35,57 @@ impl Editor {
                     .text_size(px(11.0))
                     .child("L"),
             )
-            .child(controls::top_icon("☰", false))
-            .child(controls::top_icon("▤", true))
             .child(
-                controls::top_icon(
-                    "▥",
-                    self.shell
+                div()
+                    .id("header-menu")
+                    .size(px(28.0))
+                    .rounded(px(6.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme::title_bar())
+                    .hover(|style| style.bg(theme::surface_hover()))
+                    .child(controls::menu_icon()),
+            )
+            .child(
+                panel_toggle_button(
+                    "toggle-left-panel",
+                    controls::PanelPosition::Left,
+                    controls::PanelState::Open,
+                ),
+            )
+            .child(
+                panel_toggle_button(
+                    "toggle-bottom-panel",
+                    controls::PanelPosition::Bottom,
+                    if self.shell.bottom_panel_open {
+                        controls::PanelState::Open
+                    } else {
+                        controls::PanelState::Close
+                    },
+                )
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
+                })),
+            )
+            .child(
+                panel_toggle_button(
+                    "toggle-right-panel",
+                    controls::PanelPosition::Right,
+                    if self
+                        .shell
                         .side_panel
                         .as_ref()
-                        .is_some_and(|view| view.as_str() == id::VIEW_PREVIEW),
+                        .is_some_and(|view| view.as_str() == id::VIEW_PREVIEW)
+                    {
+                        controls::PanelState::Open
+                    } else {
+                        controls::PanelState::Close
+                    },
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_preview(&TogglePreview, window, cx);
                 })),
-            )
-            .child(
-                controls::top_icon("▱", self.shell.bottom_panel_open).on_click(cx.listener(
-                    |this, _, window, cx| {
-                        this.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
-                    },
-                )),
             )
             .children(conversations.into_iter().map(|(index, conversation_id)| {
                 let active = conversation_id == active_conversation;
@@ -91,4 +122,21 @@ impl Editor {
                     .child("+"),
             )
     }
+}
+
+fn panel_toggle_button(
+    id: &'static str,
+    position: controls::PanelPosition,
+    state: controls::PanelState,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .size(px(28.0))
+        .rounded(px(6.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .bg(theme::title_bar())
+        .hover(|style| style.bg(theme::surface_hover()))
+        .child(controls::PanelToggleIcon::new(position, state))
 }

@@ -34,4 +34,6 @@ define_icons! {
     Minus => ("icons/minus.svg", include_bytes!("../../../assets/icons/minus.svg")),
     Square => ("icons/square.svg", include_bytes!("../../../assets/icons/square.svg")),
     X => ("icons/x.svg", include_bytes!("../../../assets/icons/x.svg")),
+    PanelLeft => ("icons/panel-left.svg", include_bytes!("../../../assets/icons/panel-left.svg")),
+    PanelLeftDashed => ("icons/panel-left-dashed.svg", include_bytes!("../../../assets/icons/panel-left-dashed.svg")),
 }
