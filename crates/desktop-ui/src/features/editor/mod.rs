@@ -44,6 +44,8 @@ use canvas::{EditorElement, EditorLineLayout};
 
 #[path = "../../shell/command_palette.rs"]
 mod command_palette;
+#[path = "../conversation/view_state.rs"]
+mod conversation_view_state;
 #[path = "../files/view.rs"]
 mod files_view;
 #[path = "../git/actions.rs"]
@@ -58,18 +60,16 @@ mod problems_view;
 mod search_view;
 #[path = "../../shell/actions.rs"]
 mod shell_actions;
+#[path = "../../shell/footer/mod.rs"]
+mod shell_footer;
 #[path = "../../shell/header/mod.rs"]
 mod shell_header;
 #[path = "../../shell/main/mod.rs"]
 mod shell_main;
-#[path = "../../shell/footer/mod.rs"]
-mod shell_footer;
 #[path = "../../shell/render.rs"]
 mod shell_render;
 #[path = "../../shell/resize.rs"]
 mod shell_resize;
-#[path = "../conversation/view_state.rs"]
-mod conversation_view_state;
 #[path = "../tasks/controls.rs"]
 mod task_controls;
 #[path = "../tasks/actions.rs"]

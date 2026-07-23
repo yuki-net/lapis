@@ -84,19 +84,22 @@ impl Editor {
                                     .flex()
                                     .items_center()
                                     .justify_center()
-                                    .bg(if self
-                                        .shell
-                                        .side_panel
-                                        .as_ref()
-                                        .is_some_and(|view| view.as_str() == id::VIEW_COMMAND_SEARCH)
-                                    {
-                                        theme::accent_soft()
-                                    } else {
-                                        theme::island()
-                                    })
+                                    .bg(
+                                        if self.shell.side_panel.as_ref().is_some_and(|view| {
+                                            view.as_str() == id::VIEW_COMMAND_SEARCH
+                                        }) {
+                                            theme::accent_soft()
+                                        } else {
+                                            theme::island()
+                                        },
+                                    )
                                     .text_color(theme::muted())
-                                    .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-                                    .child(crate::components::Icon::new(crate::components::IconName::Search))
+                                    .hover(|style| {
+                                        style.bg(theme::surface_hover()).text_color(theme::text())
+                                    })
+                                    .child(crate::components::Icon::new(
+                                        crate::components::IconName::Search,
+                                    ))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_quick_search(window, cx);
                                     })),
@@ -203,45 +206,48 @@ impl Editor {
                     .overflow_x_scroll()
                     .border_b_1()
                     .border_color(theme::border())
-                    .children(document_tabs.into_iter().enumerate().map(
-                        |(tab_index, tab)| {
-                            let tab_id = tab.id.clone();
-                            div()
-                                .id(("editor-tab", tab_index))
-                                .h(px(31.0))
-                                .w(px(180.0))
-                                .flex_shrink_0()
-                                .px_2()
-                                .rounded_t(px(6.0))
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .bg(if tab.active {
-                                    theme::surface()
-                                } else {
-                                    theme::island()
-                                })
-                                .text_size(px(12.0))
-                                .text_color(if tab.active {
-                                    theme::text()
-                                } else {
-                                    theme::muted()
-                                })
-                                .hover(|style| style.bg(theme::surface_hover()))
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.persist_active_view();
-                                    if this.session.activate_document(&tab_id) {
-                                        this.restore_active_view();
-                                        window.focus(&this.focus_handle);
-                                        cx.notify();
-                                    }
-                                }))
-                                .child(file_badge("F", theme::orange()))
-                                .child(tab.display_name)
-                                .child(div().flex_1())
-                                .child(if tab.dirty { "●" } else { "" })
-                        },
-                    )),
+                    .children(
+                        document_tabs
+                            .into_iter()
+                            .enumerate()
+                            .map(|(tab_index, tab)| {
+                                let tab_id = tab.id.clone();
+                                div()
+                                    .id(("editor-tab", tab_index))
+                                    .h(px(31.0))
+                                    .w(px(180.0))
+                                    .flex_shrink_0()
+                                    .px_2()
+                                    .rounded_t(px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .gap_2()
+                                    .bg(if tab.active {
+                                        theme::surface()
+                                    } else {
+                                        theme::island()
+                                    })
+                                    .text_size(px(12.0))
+                                    .text_color(if tab.active {
+                                        theme::text()
+                                    } else {
+                                        theme::muted()
+                                    })
+                                    .hover(|style| style.bg(theme::surface_hover()))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.persist_active_view();
+                                        if this.session.activate_document(&tab_id) {
+                                            this.restore_active_view();
+                                            window.focus(&this.focus_handle);
+                                            cx.notify();
+                                        }
+                                    }))
+                                    .child(file_badge("F", theme::orange()))
+                                    .child(tab.display_name)
+                                    .child(div().flex_1())
+                                    .child(if tab.dirty { "●" } else { "" })
+                            }),
+                    ),
             )
             // エディタ本体
             .child(
@@ -265,15 +271,9 @@ impl Editor {
                             .cursor(CursorStyle::IBeam)
                             .text_size(px(14.0))
                             .text_color(theme::text())
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(Self::editor_mouse_down),
-                            )
+                            .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
                             .on_mouse_move(cx.listener(Self::editor_mouse_move))
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(Self::editor_mouse_up),
-                            )
+                            .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
                             .child(EditorElement {
                                 editor: cx.entity(),
                             })
@@ -301,27 +301,22 @@ impl Editor {
                                                 .child("新規作成するか、既存の文書を開きます"),
                                         )
                                         .child(
-                                            quick_action("Workspace を開く…", "Ctrl O")
-                                                .on_click(cx.listener(
-                                                    |this, _, window, cx| {
-                                                        this.open_file(window, cx);
-                                                    },
-                                                )),
-                                        )
-                                        .child(
-                                            quick_action("新しい文書", "Ctrl N").on_click(
+                                            quick_action("Workspace を開く…", "Ctrl O").on_click(
                                                 cx.listener(|this, _, window, cx| {
-                                                    this.new_document(&New, window, cx);
+                                                    this.open_file(window, cx);
                                                 }),
                                             ),
                                         )
+                                        .child(quick_action("新しい文書", "Ctrl N").on_click(
+                                            cx.listener(|this, _, window, cx| {
+                                                this.new_document(&New, window, cx);
+                                            }),
+                                        ))
                                         .child(
                                             quick_action("すべてのコマンド", "Ctrl Shift K")
-                                                .on_click(cx.listener(
-                                                    |this, _, window, cx| {
-                                                        this.open_quick_search(window, cx);
-                                                    },
-                                                )),
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.open_quick_search(window, cx);
+                                                })),
                                         ),
                                 )
                             }),

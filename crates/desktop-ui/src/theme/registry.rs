@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
-use gpui::{rgb, Rgba};
+use gpui::{Rgba, rgb};
 
 use crate::extension_ui::ThemeId;
 

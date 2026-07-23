@@ -1,10 +1,7 @@
 use super::*;
 
 /// タイトルバーのツールボタン。アクティブ状態をアクセントで表す。
-pub(crate) fn top_icon(
-    label: impl Into<SharedString>,
-    active: bool,
-) -> gpui::Stateful<gpui::Div> {
+pub(crate) fn top_icon(label: impl Into<SharedString>, active: bool) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
     div()
         .id(label.clone())
@@ -39,7 +36,7 @@ pub(crate) fn window_control_button(
     div()
         .id(id)
         .h(px(
-            theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT,
+            theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT
         ))
         .w(px(theme::WINDOW_CONTROL_WIDTH))
         .flex_shrink_0()

@@ -44,7 +44,9 @@ impl Editor {
                     .bg(theme::island())
                     .text_size(px(12.0))
                     .text_color(theme::muted())
-                    .child(crate::components::Icon::new(crate::components::IconName::Search))
+                    .child(crate::components::Icon::new(
+                        crate::components::IconName::Search,
+                    ))
                     .child("Commands"),
             )
             .children(

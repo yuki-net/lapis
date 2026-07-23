@@ -19,11 +19,7 @@ impl Editor {
             .text_color(theme::subtle())
             .child("lapis")
             .child("›")
-            .child(
-                div()
-                    .text_color(theme::muted())
-                    .child(display_name.clone()),
-            )
+            .child(div().text_color(theme::muted()).child(display_name.clone()))
             .child("·")
             .child(div().text_color(rgb(0x8da8ff)).child("✓ Note"))
             .child(format!("R{}", self.session.revision()))
