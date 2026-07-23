@@ -1,19 +1,47 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(crate) enum WindowControlIcon {
+pub(crate) enum WindowControlIconName {
     Minimize,
     Maximize,
     Close,
 }
 
-impl WindowControlIcon {
+impl WindowControlIconName {
     fn icon_name(self) -> crate::components::IconName {
         match self {
             Self::Minimize => crate::components::IconName::Minus,
             Self::Maximize => crate::components::IconName::Square,
             Self::Close => crate::components::IconName::X,
         }
+    }
+}
+
+/// A visible Lucide icon for a native window-control button.
+///
+/// GPUI SVGs need an explicit text color at the SVG boundary; relying on the
+/// parent button's inherited color can leave the icon unpainted.
+pub(crate) struct WindowControlIcon {
+    name: WindowControlIconName,
+}
+
+impl WindowControlIcon {
+    pub(crate) const fn new(name: WindowControlIconName) -> Self {
+        Self { name }
+    }
+}
+
+impl IntoElement for WindowControlIcon {
+    type Element = gpui::Div;
+
+    fn into_element(self) -> Self::Element {
+        div()
+            .size_4()
+            .flex()
+            .items_center()
+            .justify_center()
+            .text_color(theme::muted())
+            .child(crate::components::Icon::new(self.name.icon_name()))
     }
 }
 
@@ -45,7 +73,7 @@ pub(crate) fn top_icon(label: impl Into<SharedString>, active: bool) -> gpui::St
 /// ウィンドウコントロールボタン（最小化・最大化・閉じる）。
 pub(crate) fn window_control_button(
     id: &'static str,
-    icon: WindowControlIcon,
+    icon: WindowControlIconName,
     area: WindowControlArea,
     close: bool,
 ) -> gpui::Stateful<gpui::Div> {
@@ -67,5 +95,5 @@ pub(crate) fn window_control_button(
             }
         })
         .active(|style| style.bg(theme::surface_active()))
-        .child(crate::components::Icon::new(icon.icon_name()))
+        .child(WindowControlIcon::new(icon))
 }

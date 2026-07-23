@@ -48,7 +48,7 @@ impl Render for Editor {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.stop_resize(cx)),
             )
-            .child(self.render_header(window, cx, compact_layout))
+            .child(self.render_header(cx, compact_layout))
             .child(self.render_main(window, cx, compact_layout))
             .child(self.render_footer(cx))
             .when(self.shell.command_palette_open, |root| {
