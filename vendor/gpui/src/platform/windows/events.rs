@@ -143,12 +143,18 @@ impl WindowsWindowInner {
                 lock.display = WindowsDisplay::new_with_handle(monitor);
             }
         }
-        if let Some(mut callback) = lock.callbacks.moved.take() {
-            drop(lock);
+        let moved_callback = lock.callbacks.moved.take();
+        drop(lock);
+        if let Some(mut callback) = moved_callback {
             callback();
             self.state.borrow_mut().callbacks.moved = Some(callback);
         }
-        Some(0)
+
+        // Windows enters a modal message loop while a native title-bar drag is active.
+        // `WM_TIMER` is low priority in that loop and can be starved by a continuous stream
+        // of move messages, leaving the client content visibly behind the window frame.
+        // Request a frame for each position update instead of relying only on that timer.
+        self.draw_window(handle, false)
     }
 
     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {

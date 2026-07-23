@@ -1,6 +1,8 @@
 mod controls;
+mod drag;
 
 pub(crate) use controls::{top_icon, window_control_button};
+use drag::apply_drag_region;
 
 use super::*;
 
@@ -122,7 +124,7 @@ impl Editor {
                             .child("+"),
                     ),
             )
-            .child(
+            .child(apply_drag_region(
                 div()
                     .w(px(0.0))
                     .h(px(
@@ -135,7 +137,6 @@ impl Editor {
                     .justify_center()
                     .gap_2()
                     .text_size(px(12.0))
-                    .window_control_area(WindowControlArea::Drag)
                     .child(
                         div()
                             .text_color(theme::muted())
@@ -143,7 +144,7 @@ impl Editor {
                     )
                     .child(div().text_color(theme::subtle()).child("›"))
                     .child(div().text_color(theme::subtle()).child("local")),
-            )
+            ))
             .child(
                 div()
                     .w(px(if compact_layout { 150.0 } else { 220.0 }))

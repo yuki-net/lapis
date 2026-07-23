@@ -60,8 +60,6 @@ mod search_view;
 mod shell_actions;
 #[path = "../../shell/header/mod.rs"]
 mod shell_header;
-#[path = "../../shell/header/controls.rs"]
-mod shell_header_controls;
 #[path = "../../shell/main/mod.rs"]
 mod shell_main;
 #[path = "../../shell/footer/mod.rs"]

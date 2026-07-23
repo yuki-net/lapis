@@ -10,7 +10,7 @@ impl Editor {
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        compact_layout: bool,
+        _compact_layout: bool,
     ) -> impl IntoElement {
         let document_tabs = self.session.tabs();
         let editor_focused = self.focus_handle.is_focused(window);
@@ -174,8 +174,6 @@ impl Editor {
         editor_focused: bool,
         document_tabs: Vec<lapis_app_services::DocumentTab>,
     ) -> impl IntoElement {
-        let display_name = self.session.display_name();
-
         div()
             .w_full()
             .min_h(px(0.0))
