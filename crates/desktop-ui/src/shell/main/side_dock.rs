@@ -15,9 +15,6 @@ impl Editor {
         let title = contribution
             .map(|item| self.locale.resolve(&item.title))
             .unwrap_or_else(|| panel.as_str().to_owned());
-        let icon = contribution
-            .map(|item| self.icon_theme.resolve(&item.icon))
-            .unwrap_or_else(|| "·".to_owned());
         let is_assistant = panel.as_str() == id::VIEW_ASSISTANT;
         let is_command_search = panel.as_str() == id::VIEW_COMMAND_SEARCH;
 
@@ -43,16 +40,11 @@ impl Editor {
                     .items_center()
                     .gap_2()
                     .text_size(px(12.0))
-                    .text_color(theme::text())
-                    .child(
-                        div()
-                            .text_color(if is_assistant {
-                                rgb(0xb8b9f8)
-                            } else {
-                                theme::muted()
-                            })
-                            .child(icon),
-                    )
+                    .text_color(if is_assistant {
+                        rgb(0xb8b9f8)
+                    } else {
+                        theme::text()
+                    })
                     .child(title)
                     .child(div().flex_1())
                     .child(

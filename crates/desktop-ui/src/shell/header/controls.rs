@@ -1,6 +1,10 @@
 use super::*;
 
-pub(super) fn top_icon(label: impl Into<SharedString>, active: bool) -> gpui::Stateful<gpui::Div> {
+/// タイトルバーのツールボタン。アクティブ状態をアクセントで表す。
+pub(crate) fn top_icon(
+    label: impl Into<SharedString>,
+    active: bool,
+) -> gpui::Stateful<gpui::Div> {
     let label = label.into();
     div()
         .id(label.clone())
@@ -24,7 +28,8 @@ pub(super) fn top_icon(label: impl Into<SharedString>, active: bool) -> gpui::St
         .child(label)
 }
 
-pub(super) fn window_control_button(
+/// ウィンドウコントロールボタン（最小化・最大化・閉じる）。
+pub(crate) fn window_control_button(
     id: &'static str,
     label: impl Into<SharedString>,
     area: WindowControlArea,
@@ -34,7 +39,7 @@ pub(super) fn window_control_button(
     div()
         .id(id)
         .h(px(
-            theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT
+            theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT,
         ))
         .w(px(theme::WINDOW_CONTROL_WIDTH))
         .flex_shrink_0()

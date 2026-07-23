@@ -26,7 +26,6 @@ use crate::{
         self, conversation::ConversationFeature, git::GitFeature, id, problems::ProblemsFeature,
         search::SearchFeature, tasks::TasksFeature, terminal::TerminalFeature,
     },
-    icons::{self, IconThemeRegistry},
     keymap::KeymapRegistry,
     localization::Localizer,
     shell::{
@@ -43,8 +42,6 @@ mod interactions;
 mod view_state;
 use canvas::{EditorElement, EditorLineLayout};
 
-#[path = "../../shell/bottom_dock.rs"]
-mod bottom_dock;
 #[path = "../../shell/command_palette.rs"]
 mod command_palette;
 #[path = "../files/view.rs"]
@@ -61,17 +58,18 @@ mod problems_view;
 mod search_view;
 #[path = "../../shell/actions.rs"]
 mod shell_actions;
+#[path = "../../shell/header/mod.rs"]
+mod shell_header;
+#[path = "../../shell/header/controls.rs"]
+mod shell_header_controls;
+#[path = "../../shell/main/mod.rs"]
+mod shell_main;
+#[path = "../../shell/footer/mod.rs"]
+mod shell_footer;
 #[path = "../../shell/render.rs"]
 mod shell_render;
 #[path = "../../shell/resize.rs"]
 mod shell_resize;
-#[path = "../../shell/side_dock.rs"]
-mod side_dock;
-#[path = "../../shell/title_bar.rs"]
-mod title_bar;
-#[path = "../../shell/tool_dock.rs"]
-mod tool_dock;
-use title_bar::{top_icon, window_control_button};
 #[path = "../conversation/view_state.rs"]
 mod conversation_view_state;
 #[path = "../tasks/controls.rs"]
@@ -155,7 +153,6 @@ pub struct Editor {
     shell: ShellState,
     feature_registry: FeatureRegistry,
     locale: Localizer,
-    icon_theme: IconThemeRegistry,
     keymap: KeymapRegistry,
     is_selecting: bool,
     last_editor_bounds: Option<Bounds<Pixels>>,
@@ -231,7 +228,6 @@ impl Editor {
                 let _ = localizer.set_active(&services.settings.settings().locale);
                 localizer
             },
-            icon_theme: IconThemeRegistry::bundled(),
             keymap: KeymapRegistry::bundled(),
             is_selecting: false,
             last_editor_bounds: None,
