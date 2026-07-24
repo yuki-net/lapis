@@ -9,8 +9,10 @@ impl Editor {
         };
         match self.terminal.session.start(&root, 120, 30) {
             Ok(_) => {
-                self.shell.bottom_panel_open = true;
-                self.shell.bottom_panel = ViewId::new(id::VIEW_TERMINAL);
+                self.shell.activate_view(
+                    crate::extension_ui::PanelPosition::Bottom,
+                    ViewId::new(id::VIEW_TERMINAL),
+                );
                 self.refresh_feature_activation();
                 self.status = "Terminal started".to_owned();
             }

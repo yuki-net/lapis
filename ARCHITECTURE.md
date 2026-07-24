@@ -1,5 +1,12 @@
 # ARCHITECTURE.md
 
+## Panel layout
+
+- `left-panel`、`center-panel`、`bottom-panel`、`right-panel` は同じ Panel の概念として扱う。
+- Tool は `ViewId` と Panel 位置を分けて保持する。拡張機能は既定位置と許可位置を宣言し、利用者の配置は Conversation の画面状態に保存する。
+- `center-panel` は Document タブを表示する領域であり、Document がない場合は起動・選択画面を表示する。Tool panel と同じレイアウト状態の原則を共有するが、Document の表示と編集は UI の専用責務とする。
+- アプリ起動時に以前の Project を無条件で開かない。Project を開いた時だけ、同じ Workspace root を持つ保存済み Conversation を復元する。単体ファイルは Workspace を開かず `center-panel` に表示する。
+
 ## Localization and global settings
 
 `lapis-localization` owns `LocaleId`, `MessageId`, language-pack manifests, package validation,

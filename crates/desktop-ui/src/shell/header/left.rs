@@ -37,18 +37,16 @@ impl Editor {
                     .hover(|style| style.bg(theme::surface_hover()))
                     .child(controls::menu_icon()),
             )
-            .child(
-                panel_toggle_button(
-                    "toggle-left-panel",
-                    controls::PanelPosition::Left,
-                    controls::PanelState::Open,
-                ),
-            )
+            .child(panel_toggle_button(
+                "toggle-left-panel",
+                controls::PanelPosition::Left,
+                controls::PanelState::Open,
+            ))
             .child(
                 panel_toggle_button(
                     "toggle-bottom-panel",
                     controls::PanelPosition::Bottom,
-                    if self.shell.bottom_panel_open {
+                    if self.shell.bottom_panel.open {
                         controls::PanelState::Open
                     } else {
                         controls::PanelState::Close
@@ -62,11 +60,13 @@ impl Editor {
                 panel_toggle_button(
                     "toggle-right-panel",
                     controls::PanelPosition::Right,
-                    if self
-                        .shell
-                        .side_panel
-                        .as_ref()
-                        .is_some_and(|view| view.as_str() == id::VIEW_PREVIEW)
+                    if self.shell.right_panel.open
+                        && self
+                            .shell
+                            .right_panel
+                            .active
+                            .as_ref()
+                            .is_some_and(|view| view.as_str() == id::VIEW_PREVIEW)
                     {
                         controls::PanelState::Open
                     } else {

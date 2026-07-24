@@ -89,11 +89,7 @@ fn main() {
                 )))
                 .expect("temporary global settings must be available")
             });
-    if !arguments
-        .iter()
-        .any(|value| value == "--workspace" || value == "--open-file")
-        && let Err(error) = conversation_session.restore_active(&mut session)
-    {
+    if let Err(error) = conversation_session.restore_matching_workspace(&mut session) {
         eprintln!("Conversation restore failed: {error}");
     }
     let task_session = if use_loopback {

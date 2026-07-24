@@ -1146,6 +1146,10 @@ impl WorkspaceDialog for NativeWorkspaceDialog {
         rfd::FileDialog::new().pick_folder()
     }
 
+    fn choose_file_path(&self) -> Option<PathBuf> {
+        rfd::FileDialog::new().pick_file()
+    }
+
     fn choose_save_path(&self, suggested_name: &str) -> Option<PathBuf> {
         rfd::FileDialog::new()
             .set_file_name(suggested_name)

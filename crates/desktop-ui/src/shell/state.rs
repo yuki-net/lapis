@@ -1,51 +1,109 @@
 use crate::{
-    extension_ui::{FeatureRegistry, UiSlot, ViewId},
+    extension_ui::{FeatureRegistry, PanelPosition, ViewId},
     features::id,
     theme,
 };
 
 #[derive(Clone, Copy)]
 pub(crate) enum ResizeTarget {
-    ToolIsland,
-    SidePanel,
+    LeftPanel,
+    RightPanel,
     BottomPanel,
 }
 
+/// 一つの位置に表示されるツール群。位置以外の振る舞いはすべてのパネルで共通にする。
+#[derive(Clone, Debug)]
+pub(crate) struct PanelHost {
+    pub position: PanelPosition,
+    pub tabs: Vec<ViewId>,
+    pub active: Option<ViewId>,
+    pub open: bool,
+    pub size: f32,
+}
+
+impl PanelHost {
+    fn new(position: PanelPosition, tabs: Vec<ViewId>, open: bool, size: f32) -> Self {
+        let active = tabs.first().cloned();
+        Self {
+            position,
+            tabs,
+            active,
+            open,
+            size,
+        }
+    }
+
+    pub fn activate(&mut self, view: ViewId) {
+        if !self.tabs.contains(&view) {
+            self.tabs.push(view.clone());
+        }
+        self.active = Some(view);
+        self.open = true;
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.active = None;
+    }
+}
+
 pub struct ShellState {
-    pub active_tool: ViewId,
-    pub side_panel: Option<ViewId>,
-    pub bottom_panel_open: bool,
-    pub bottom_panel: ViewId,
+    pub left_panel: PanelHost,
+    pub bottom_panel: PanelHost,
+    pub right_panel: PanelHost,
     pub command_palette_open: bool,
-    pub tool_island_width: f32,
-    pub side_panel_width: f32,
-    pub bottom_panel_height: f32,
     pub resizing: Option<ResizeTarget>,
 }
 
 impl Default for ShellState {
     fn default() -> Self {
         Self {
-            active_tool: ViewId::new(id::VIEW_FILES),
-            side_panel: None,
-            bottom_panel_open: false,
-            bottom_panel: ViewId::new(id::VIEW_TERMINAL),
+            left_panel: PanelHost::new(
+                PanelPosition::Left,
+                vec![ViewId::new(id::VIEW_FILES)],
+                true,
+                theme::TOOL_ISLAND_WIDTH,
+            ),
+            bottom_panel: PanelHost::new(
+                PanelPosition::Bottom,
+                Vec::new(),
+                true,
+                theme::BOTTOM_PANEL_HEIGHT,
+            ),
+            right_panel: PanelHost::new(
+                PanelPosition::Right,
+                Vec::new(),
+                true,
+                theme::SIDE_PANEL_WIDTH,
+            ),
             command_palette_open: false,
-            tool_island_width: theme::TOOL_ISLAND_WIDTH,
-            side_panel_width: theme::SIDE_PANEL_WIDTH,
-            bottom_panel_height: theme::BOTTOM_PANEL_HEIGHT,
             resizing: None,
         }
     }
 }
 
 impl ShellState {
+    pub fn panel_mut(&mut self, position: PanelPosition) -> Option<&mut PanelHost> {
+        match position {
+            PanelPosition::Left => Some(&mut self.left_panel),
+            PanelPosition::Bottom => Some(&mut self.bottom_panel),
+            PanelPosition::Right => Some(&mut self.right_panel),
+            PanelPosition::Center => None,
+        }
+    }
+
+    pub fn activate_view(&mut self, position: PanelPosition, view: ViewId) {
+        if let Some(panel) = self.panel_mut(position) {
+            panel.activate(view);
+        }
+    }
+
     pub fn synchronize_activation(&self, registry: &mut FeatureRegistry) {
-        registry.set_active_view(UiSlot::ToolDock, Some(self.active_tool.clone()));
-        registry.set_active_view(UiSlot::SideDock, self.side_panel.clone());
-        registry.set_active_view(
-            UiSlot::BottomDock,
-            self.bottom_panel_open.then(|| self.bottom_panel.clone()),
-        );
+        for panel in [&self.left_panel, &self.bottom_panel, &self.right_panel] {
+            registry.set_panel_active_view(
+                panel.position,
+                panel.open.then(|| panel.active.clone()).flatten(),
+            );
+        }
     }
 }

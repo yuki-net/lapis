@@ -20,7 +20,7 @@ use lapis_workspace::FileEntryKind;
 
 use crate::{
     app::*,
-    components::{panel_empty_state, panel_tab, tool_empty_state, tool_tab},
+    components::{panel_empty_state, tool_empty_state},
     extension_ui::{ActivationEvent, FeatureRegistry, UiSlot, ViewId},
     features::{
         self, conversation::ConversationFeature, git::GitFeature, id, problems::ProblemsFeature,
@@ -208,18 +208,7 @@ impl Editor {
             selection_reversed: false,
             marked_range: None,
             status: "新しいドキュメント".to_owned(),
-            shell: ShellState {
-                side_panel: initial_view
-                    .show_tasks
-                    .then(|| ViewId::new(id::VIEW_ASSISTANT)),
-                bottom_panel_open: initial_view.show_terminal || initial_view.show_problems,
-                bottom_panel: ViewId::new(if initial_view.show_problems {
-                    id::VIEW_PROBLEMS
-                } else {
-                    id::VIEW_TERMINAL
-                }),
-                ..ShellState::default()
-            },
+            shell: ShellState::default(),
             feature_registry: features::bundled_registry(),
             locale: {
                 let mut localizer = Localizer::bundled();
@@ -234,15 +223,20 @@ impl Editor {
         };
         editor.apply_conversation_view(restored_view);
         if initial_view.show_tasks {
-            editor.shell.side_panel = Some(ViewId::new(id::VIEW_ASSISTANT));
+            editor.shell.activate_view(
+                crate::extension_ui::PanelPosition::Right,
+                ViewId::new(id::VIEW_ASSISTANT),
+            );
         }
         if initial_view.show_terminal || initial_view.show_problems {
-            editor.shell.bottom_panel_open = true;
-            editor.shell.bottom_panel = ViewId::new(if initial_view.show_problems {
-                id::VIEW_PROBLEMS
-            } else {
-                id::VIEW_TERMINAL
-            });
+            editor.shell.activate_view(
+                crate::extension_ui::PanelPosition::Bottom,
+                ViewId::new(if initial_view.show_problems {
+                    id::VIEW_PROBLEMS
+                } else {
+                    id::VIEW_TERMINAL
+                }),
+            );
         }
         editor.refresh_feature_activation();
         cx.spawn(async move |this, cx| {

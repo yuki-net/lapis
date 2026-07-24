@@ -25,16 +25,20 @@ impl Editor {
                     .occlude()
                     .text_size(px(11.0))
                     .text_color(rgb(0x8da8ff))
-                    .bg(if self
-                        .shell
-                        .side_panel
-                        .as_ref()
-                        .is_some_and(|view| view.as_str() == id::VIEW_ASSISTANT)
-                    {
-                        theme::accent_soft()
-                    } else {
-                        theme::title_bar()
-                    })
+                    .bg(
+                        if self.shell.right_panel.open
+                            && self
+                                .shell
+                                .right_panel
+                                .active
+                                .as_ref()
+                                .is_some_and(|view| view.as_str() == id::VIEW_ASSISTANT)
+                        {
+                            theme::accent_soft()
+                        } else {
+                            theme::title_bar()
+                        },
+                    )
                     .hover(|style| style.bg(theme::surface_hover()))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.toggle_assistant(&ToggleAssistant, window, cx);
@@ -54,7 +58,9 @@ impl Editor {
                     .bg(theme::title_bar())
                     .text_color(theme::muted())
                     .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-                    .child(crate::components::Icon::new(crate::components::IconName::Search))
+                    .child(crate::components::Icon::new(
+                        crate::components::IconName::Search,
+                    ))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_quick_search(window, cx);
                     })),

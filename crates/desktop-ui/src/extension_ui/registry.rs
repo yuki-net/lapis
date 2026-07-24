@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use lapis_language::LanguageId;
 
 use super::{
-    ActivationCondition, ActivationEvent, CommandId, FeatureId, UiContribution, UiSlot, ViewId,
-    WorkspaceCapabilityId,
+    ActivationCondition, ActivationEvent, CommandId, FeatureId, PanelPosition, UiContribution,
+    UiSlot, ViewId, WorkspaceCapabilityId,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -121,6 +121,19 @@ impl FeatureRegistry {
         contributions
     }
 
+    pub fn panel_contributions(&self, position: PanelPosition) -> Vec<&UiContribution> {
+        let mut contributions = self
+            .descriptors
+            .values()
+            .flat_map(|descriptor| descriptor.contributions.iter())
+            .filter(|contribution| {
+                contribution.view.is_some() && contribution.allowed_panels.contains(&position)
+            })
+            .collect::<Vec<_>>();
+        contributions.sort_by_key(|contribution| contribution.order);
+        contributions
+    }
+
     pub fn set_active_view(&mut self, slot: UiSlot, view: Option<ViewId>) {
         match view {
             Some(view) => {
@@ -131,6 +144,16 @@ impl FeatureRegistry {
             }
         }
         self.recompute();
+    }
+
+    pub fn set_panel_active_view(&mut self, panel: PanelPosition, view: Option<ViewId>) {
+        let slot = match panel {
+            PanelPosition::Left => UiSlot::ToolDock,
+            PanelPosition::Center => UiSlot::EditorDecoration,
+            PanelPosition::Bottom => UiSlot::BottomDock,
+            PanelPosition::Right => UiSlot::SideDock,
+        };
+        self.set_active_view(slot, view);
     }
 
     pub fn activate(&mut self, event: ActivationEvent) {

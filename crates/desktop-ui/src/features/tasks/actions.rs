@@ -38,7 +38,10 @@ impl Editor {
         match result {
             Ok(execution_id) => {
                 self.tasks.selected_execution = Some(execution_id);
-                self.shell.side_panel = Some(ViewId::new(id::VIEW_ASSISTANT));
+                self.shell.activate_view(
+                    crate::extension_ui::PanelPosition::Right,
+                    ViewId::new(id::VIEW_ASSISTANT),
+                );
                 self.refresh_feature_activation();
                 self.status = "Codex Task を開始しました".to_owned();
             }

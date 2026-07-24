@@ -60,9 +60,16 @@ impl Editor {
         self.is_selecting = false;
     }
 
-    pub(super) fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.session.choose_workspace() {
             Ok(DocumentAction::Completed) => {
+                if let Ok(Some(view)) = self
+                    .conversation
+                    .session
+                    .restore_matching_workspace(&mut self.session)
+                {
+                    self.apply_conversation_view(view);
+                }
                 self.selected_range = 0..0;
                 self.status = "Workspaceを開きました".to_owned();
                 window.focus(&self.focus_handle);
@@ -70,6 +77,23 @@ impl Editor {
             }
             Ok(DocumentAction::Cancelled) => {}
             Err(error) => self.status = format!("読み込み失敗: {error}"),
+        }
+    }
+
+    pub(super) fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        match self.session.choose_file() {
+            Ok(DocumentAction::Completed) => {
+                self.selected_range = 0..0;
+                self.status = "ファイルを開きました".to_owned();
+                window.focus(&self.focus_handle);
+                self.refresh_feature_activation();
+                cx.notify();
+            }
+            Ok(DocumentAction::Cancelled) => {}
+            Err(error) => {
+                self.status = format!("ファイルを開けませんでした: {error}");
+                cx.notify();
+            }
         }
     }
 

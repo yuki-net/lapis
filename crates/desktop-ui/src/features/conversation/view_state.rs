@@ -1,45 +1,95 @@
 use super::*;
+use crate::extension_ui::PanelPosition;
+use lapis_app_services::PanelViewState;
 
 impl Editor {
     pub(super) fn conversation_view_state(&self) -> ConversationViewState {
         ConversationViewState {
-            active_tool: self.shell.active_tool.as_str().to_owned(),
+            panels: [
+                &self.shell.left_panel,
+                &self.shell.bottom_panel,
+                &self.shell.right_panel,
+            ]
+            .into_iter()
+            .map(|panel| PanelViewState {
+                position: panel_position_name(panel.position).to_owned(),
+                tabs: panel
+                    .tabs
+                    .iter()
+                    .map(|tab| tab.as_str().to_owned())
+                    .collect(),
+                active_tab: panel.active.as_ref().map(|tab| tab.as_str().to_owned()),
+                open: panel.open,
+                size: panel.size,
+            })
+            .collect(),
+            active_tool: self
+                .shell
+                .left_panel
+                .active
+                .as_ref()
+                .map_or_else(|| "files".to_owned(), |view| view.as_str().to_owned()),
             side_panel: self
                 .shell
-                .side_panel
+                .right_panel
+                .active
                 .as_ref()
-                .map(|panel| panel.as_str().to_owned()),
+                .map(|view| view.as_str().to_owned()),
             bottom_panel: self
                 .shell
-                .bottom_panel_open
-                .then(|| self.shell.bottom_panel.as_str().to_owned()),
-            tool_width: self.shell.tool_island_width,
-            side_width: self.shell.side_panel_width,
-            bottom_height: self.shell.bottom_panel_height,
+                .bottom_panel
+                .active
+                .as_ref()
+                .map(|view| view.as_str().to_owned()),
+            tool_width: self.shell.left_panel.size,
+            side_width: self.shell.right_panel.size,
+            bottom_height: self.shell.bottom_panel.size,
         }
     }
 
     pub(super) fn apply_conversation_view(&mut self, view: ConversationViewState) {
-        self.shell.active_tool = ViewId::new(match view.active_tool.as_str() {
-            "search" | id::VIEW_SEARCH => id::VIEW_SEARCH,
-            "git" | id::VIEW_GIT => id::VIEW_GIT,
-            "history" | id::VIEW_HISTORY => id::VIEW_HISTORY,
-            _ => id::VIEW_FILES,
-        });
-        self.shell.side_panel = match view.side_panel.as_deref() {
-            Some("preview") | Some(id::VIEW_PREVIEW) => Some(ViewId::new(id::VIEW_PREVIEW)),
-            Some("assistant") | Some(id::VIEW_ASSISTANT) => Some(ViewId::new(id::VIEW_ASSISTANT)),
-            _ => None,
-        };
-        self.shell.bottom_panel_open = view.bottom_panel.is_some();
-        self.shell.bottom_panel = ViewId::new(match view.bottom_panel.as_deref() {
-            Some("problems") | Some(id::VIEW_PROBLEMS) => id::VIEW_PROBLEMS,
-            Some("output") | Some(id::VIEW_OUTPUT) => id::VIEW_OUTPUT,
-            _ => id::VIEW_TERMINAL,
-        });
-        self.shell.tool_island_width = view.tool_width.clamp(190.0, 380.0);
-        self.shell.side_panel_width = view.side_width.clamp(260.0, 480.0);
-        self.shell.bottom_panel_height = view.bottom_height.clamp(140.0, 360.0);
+        if !view.panels.is_empty() {
+            for panel_view in view.panels {
+                let position = match panel_view.position.as_str() {
+                    "left-panel" => PanelPosition::Left,
+                    "bottom-panel" => PanelPosition::Bottom,
+                    "right-panel" => PanelPosition::Right,
+                    _ => continue,
+                };
+                if let Some(panel) = self.shell.panel_mut(position) {
+                    panel.tabs = panel_view.tabs.into_iter().map(ViewId::new).collect();
+                    panel.active = panel_view.active_tab.map(ViewId::new);
+                    panel.open = panel_view.open;
+                    panel.size = match position {
+                        PanelPosition::Left => panel_view.size.clamp(190.0, 380.0),
+                        PanelPosition::Bottom => panel_view.size.clamp(140.0, 360.0),
+                        PanelPosition::Right => panel_view.size.clamp(260.0, 480.0),
+                        PanelPosition::Center => panel_view.size,
+                    };
+                }
+            }
+            self.refresh_feature_activation();
+            return;
+        }
+        self.shell
+            .left_panel
+            .activate(ViewId::new(match view.active_tool.as_str() {
+                "search" | id::VIEW_SEARCH => id::VIEW_SEARCH,
+                "git" | id::VIEW_GIT => id::VIEW_GIT,
+                "history" | id::VIEW_HISTORY => id::VIEW_HISTORY,
+                _ => id::VIEW_FILES,
+            }));
+        self.shell.left_panel.size = view.tool_width.clamp(190.0, 380.0);
+        self.shell.right_panel.size = view.side_width.clamp(260.0, 480.0);
+        self.shell.bottom_panel.size = view.bottom_height.clamp(140.0, 360.0);
+        if let Some(side) = view.side_panel {
+            self.shell.right_panel.activate(ViewId::new(side));
+        } else {
+            self.shell.right_panel.close();
+        }
+        if let Some(bottom) = view.bottom_panel {
+            self.shell.bottom_panel.activate(ViewId::new(bottom));
+        }
         self.refresh_feature_activation();
     }
 
@@ -115,5 +165,14 @@ impl Editor {
             Err(error) => self.status = format!("Conversation 切替失敗: {error}"),
         }
         cx.notify();
+    }
+}
+
+fn panel_position_name(position: PanelPosition) -> &'static str {
+    match position {
+        PanelPosition::Left => "left-panel",
+        PanelPosition::Center => "center-panel",
+        PanelPosition::Bottom => "bottom-panel",
+        PanelPosition::Right => "right-panel",
     }
 }

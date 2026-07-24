@@ -21,17 +21,17 @@ impl Editor {
 
         let viewport = window.viewport_size();
         match target {
-            ResizeTarget::ToolIsland => {
-                self.shell.tool_island_width =
+            ResizeTarget::LeftPanel => {
+                self.shell.left_panel.size =
                     (f32::from(event.position.x) - theme::CANVAS_GAP).clamp(190.0, 380.0);
             }
-            ResizeTarget::SidePanel => {
-                self.shell.side_panel_width = (f32::from(viewport.width - event.position.x)
+            ResizeTarget::RightPanel => {
+                self.shell.right_panel.size = (f32::from(viewport.width - event.position.x)
                     - theme::CANVAS_GAP)
                     .clamp(260.0, 480.0);
             }
             ResizeTarget::BottomPanel => {
-                self.shell.bottom_panel_height = (f32::from(viewport.height - event.position.y)
+                self.shell.bottom_panel.size = (f32::from(viewport.height - event.position.y)
                     - theme::CANVAS_GAP)
                     .clamp(140.0, 360.0);
             }

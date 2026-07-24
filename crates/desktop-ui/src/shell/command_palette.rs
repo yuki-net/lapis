@@ -80,7 +80,7 @@ impl Editor {
             id::COMMAND_NEW_DOCUMENT => self.new_document(&New, window, cx),
             id::COMMAND_OPEN_WORKSPACE => {
                 self.shell.command_palette_open = false;
-                self.open_file(window, cx);
+                self.open_project(window, cx);
             }
             id::COMMAND_SAVE_DOCUMENT => {
                 self.shell.command_palette_open = false;

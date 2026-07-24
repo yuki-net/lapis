@@ -4,7 +4,7 @@ mod ids;
 mod registry;
 
 pub use activation::{ActivationCondition, ActivationEvent};
-pub use contribution::{UiContribution, UiSlot};
+pub use contribution::{PanelPosition, UiContribution, UiSlot};
 pub use ids::{
     CommandId, FeatureId, IconId, IconThemeId, KeymapId, ThemeId, ViewId, WorkspaceCapabilityId,
 };

@@ -73,6 +73,9 @@ impl SettingsSession {
 /// ネイティブダイアログを利用するユースケース側の契約。
 pub trait WorkspaceDialog: Send + Sync {
     fn choose_workspace_path(&self) -> Option<PathBuf>;
+    fn choose_file_path(&self) -> Option<PathBuf> {
+        None
+    }
     fn choose_save_path(&self, suggested_name: &str) -> Option<PathBuf>;
 }
 
@@ -88,7 +91,11 @@ pub enum DocumentAction {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ConversationViewState {
+    /// 新しいレイアウト形式。位置ごとのタブ・選択状態・サイズを一律で保持する。
+    pub panels: Vec<PanelViewState>,
+    // 旧セッションとの互換読み込み用。次回保存時は panels が正とする。
     pub active_tool: String,
     pub side_panel: Option<String>,
     pub bottom_panel: Option<String>,
@@ -97,9 +104,19 @@ pub struct ConversationViewState {
     pub bottom_height: f32,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PanelViewState {
+    pub position: String,
+    pub tabs: Vec<String>,
+    pub active_tab: Option<String>,
+    pub open: bool,
+    pub size: f32,
+}
+
 impl Default for ConversationViewState {
     fn default() -> Self {
         Self {
+            panels: Vec::new(),
             active_tool: "files".to_owned(),
             side_panel: None,
             bottom_panel: None,
@@ -199,6 +216,25 @@ impl ConversationSession {
             .ok_or_else(|| WorkspaceError::new("Conversation が見つかりません"))?;
         editor.restore_snapshot(record.workspace.clone())?;
         Ok(record.view.clone())
+    }
+
+    /// 開いた Project が最後に保存した Conversation と同じ場合だけ、その状態を復元する。
+    /// アプリ起動直後に無条件で以前の Project を開かないための境界でもある。
+    pub fn restore_matching_workspace(
+        &self,
+        editor: &mut EditorSession,
+    ) -> Result<Option<ConversationViewState>, WorkspaceError> {
+        let Some(current_root) = editor.workspace_root() else {
+            return Ok(None);
+        };
+        let Some(record) = self.active_record() else {
+            return Ok(None);
+        };
+        if record.workspace.root.as_deref() != Some(current_root) {
+            return Ok(None);
+        }
+        editor.restore_snapshot(record.workspace.clone())?;
+        Ok(Some(record.view.clone()))
     }
 
     pub fn capture(
@@ -1283,6 +1319,14 @@ impl EditorSession {
             return Ok(DocumentAction::Cancelled);
         };
         self.open_workspace(root)?;
+        Ok(DocumentAction::Completed)
+    }
+
+    pub fn choose_file(&mut self) -> Result<DocumentAction, DocumentError> {
+        let Some(path) = self.file_dialog.choose_file_path() else {
+            return Ok(DocumentAction::Cancelled);
+        };
+        self.open_path(path)?;
         Ok(DocumentAction::Completed)
     }
 
