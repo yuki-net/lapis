@@ -1,0 +1,11 @@
+[package]
+name = "lapis-task-runner"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-editor-core = { path = "../../backend/core/editor-core" }
+serde.workspace = true
+serde_json.workspace = true

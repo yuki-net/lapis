@@ -1,0 +1,20 @@
+[package]
+name = "lapis-desktop-ui"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+gpui.workspace = true
+lapis-app-services = { path = "../../../backend/core/app-services" }
+lapis-editor-core = { path = "../../../backend/core/editor-core" }
+lapis-git = { path = "../../../features/git" }
+lapis-language = { path = "../../../features/language" }
+lapis-localization = { path = "../../../backend/core/localization" }
+lapis-lsp = { path = "../../../features/lsp" }
+lapis-settings = { path = "../../../backend/core/settings" }
+lapis-task-runner = { path = "../../../features/task-runner" }
+lapis-terminal = { path = "../../../features/terminal" }
+lapis-workspace = { path = "../../../backend/core/workspace" }
+serde_json.workspace = true

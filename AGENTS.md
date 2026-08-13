@@ -1,6 +1,9 @@
-# AGENTS.md
+# AGENTS.md Lapis
 
-Lapis の開発・レビュー・保守に関する規約です。
+## Project
+
+
+
 
 ## 基本ルール
 

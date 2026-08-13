@@ -1,0 +1,21 @@
+[package]
+name = "lapis-app-services"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-document = { path = "../document" }
+lapis-editor-core = { path = "../editor-core" }
+lapis-git = { path = "../../../features/git" }
+lapis-lsp = { path = "../../../features/lsp" }
+lapis-localization = { path = "../localization" }
+lapis-settings = { path = "../settings" }
+lapis-task-runner = { path = "../../../features/task-runner" }
+lapis-terminal = { path = "../../../features/terminal" }
+lapis-workspace = { path = "../workspace" }
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/*"]
+members = [
+    "apps/desktop/*",
+    "backend/core/*",
+    "backend/local",
+    "backend/persistence",
+    "features/*",
+]
 exclude = ["vendor/gpui"]
 resolver = "3"
 

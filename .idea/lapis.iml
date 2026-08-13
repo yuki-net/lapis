@@ -24,6 +24,31 @@
       <sourceFolder url="file://$MODULE_DIR$/vendor/gpui/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/localization/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/settings/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/app/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/app-services/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/document/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/editor-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/localization/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/project/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/settings/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/text/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/workspace/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/local/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/persistence/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/app-services/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/document/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/editor-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/localization/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/project/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/settings/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/text/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/core/workspace/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/features/git/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/features/language/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/features/lsp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/features/task-runner/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/features/terminal/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

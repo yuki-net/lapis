@@ -1,0 +1,70 @@
+:root {
+  color: #d9dee8;
+  background: #111318;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+#app {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.card {
+  width: min(560px, 100%);
+  padding: 32px;
+  border: 1px solid #2a2e38;
+  border-radius: 18px;
+  background: #191c22;
+  box-shadow: 0 24px 80px rgb(0 0 0 / 28%);
+}
+
+.eyebrow {
+  margin: 0 0 12px;
+  color: #7aa2f7;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+h1 {
+  margin: 0;
+  color: #f1f4fa;
+  font-size: clamp(28px, 5vw, 46px);
+  line-height: 1.08;
+}
+
+.card > p:not(.eyebrow) {
+  margin: 18px 0 26px;
+  color: #8d96a8;
+  line-height: 1.65;
+}
+
+.status {
+  display: inline-flex;
+  gap: 9px;
+  align-items: center;
+  color: #b7c2d8;
+  font-size: 14px;
+}
+
+.status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: #73daca;
+  box-shadow: 0 0 16px rgb(115 218 202 / 70%);
+}

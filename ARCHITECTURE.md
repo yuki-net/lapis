@@ -22,10 +22,12 @@ locally installed, or a future store) is intentionally outside the localizer and
 
 ## 概要
 
-本アプリはRust製のデスクトップコードエディターである。
+本アプリは、Rust Backend CoreへGPUI Desktop、将来のKMP Mobile、Vite Webから接続する
+軽量コードエディターである。現在はDesktopとローカルBackendを同一プロセスで組み立てるが、
+UIとBackendの契約は将来のdaemon分離を妨げない形に保つ。
 
-全体は機能単位のcrateに分ける。
-DDDの4層をトップレベルには置かない。
+リポジトリのトップレベルは実行主体と責務で`apps`、`backend`、`features`に分ける。
+各領域の内部は機能単位のcrateとし、DDDの4層をトップレベルには置かない。
 必要な場合だけ、各crateの内部でDomain、Application、Infrastructureを分ける。
 
 ## 基本方針
@@ -36,6 +38,8 @@ DDDの4層をトップレベルには置かない。
 - 外部ライブラリの型を他のcrateへ漏らさない。
 - 具体的な実装は`app`で組み合わせる。
 - 共通化は必要になってから行う。
+- Desktop、Mobile、WebのUI状態とclient実装は各アプリが所有し、共有するのはprotocol上の契約と型である。
+- 未着手のアプリ、protocol、Featureの空ディレクトリは先に作らない。
 
 ## 中心モデル
 
@@ -327,23 +331,57 @@ desktop-ui/src/
 ## 構成
 
 ```text
-crates/
-├── editor-core/
-├── text/
-├── document/
-├── workspace/
-├── project/
-├── task-runner/
-├── terminal/
+apps/
+├── desktop/
+│   ├── app/                 # GPUI Desktopの起動と依存の組み立て
+│   └── ui/                  # GPUI表示、入力、Desktop固有state
+├── mobile/
+│   ├── androidApp/          # Android entry point
+│   └── sharedUi/            # KMP + Compose Multiplatform UI
+└── web/                     # Vite + TypeScript client
+
+backend/
+├── core/
+│   ├── app-services/
+│   ├── editor-core/
+│   ├── text/
+│   ├── document/
+│   ├── workspace/
+│   ├── project/
+│   ├── settings/
+│   └── localization/
+├── local/                  # ローカルBackend実装。旧lapis-platform crate
+└── persistence/
+
+features/
+├── git/
 ├── language/
 ├── lsp/
-├── git/
-├── persistence/
-├── platform/
-├── app-services/
-├── desktop-ui/
-└── app/
+├── terminal/
+└── task-runner/
 ```
+
+KMP MobileとVite Webは初期ビルド可能なclient shellを持つ。MobileはAndroid entry pointと
+Android/iOSで共有するCompose UIを分離し、WebはTypeScript固有のUI stateを所有する。
+headless daemonは`backend/daemon`、言語間契約は`protocol`へ、それぞれ最初の動く実装を
+追加するときに作る。計画だけの機能を空crateとして追加しない。Desktop、Mobile、Webの
+client cacheとUI stateは各アプリが所有し、Rust/Kotlin/TypeScript間では実行コードではなく
+protocolのschemaと生成型を共有する。
+
+### IDEからの起動
+
+リポジトリrootをIntelliJ IDEAまたはAndroid Studioで開き、共有`.run`を利用する。
+
+| Run Configuration | 用途 | 前提 |
+| --- | --- | --- |
+| `Lapis` | GPUI DesktopをCargoで起動 | Rust plugin / toolchain |
+| `Lapis Mobile Build` | Android Debug APKをGradleでビルド | JDK 17以上、Android SDK |
+| `Lapis Mobile` | Android端末またはAVDへinstallして起動 | Android Studioを推奨、端末またはAVD |
+| `Lapis Web Build` | Vite production build | Node.js、`apps/web`で`npm install`済み |
+| `Lapis Web` | Vite dev serverを起動 | Node.js、`apps/web`で`npm install`済み |
+
+rootの`.idea/gradle.xml`は`apps/mobile`をnested Gradle projectとしてリンクする。Mobileの
+Android実行はAndroid pluginと端末選択UIが必要なため、Android Studioを標準の検証環境とする。
 
 ## 各crateの責務
 
@@ -465,7 +503,7 @@ Git機能を管理する。
 
 `git2`やCLIの型を外部へ漏らさない。
 
-### persistence
+### backend/persistence
 
 永続化の実装を置く。
 
@@ -478,9 +516,10 @@ Git機能を管理する。
 
 Repositoryの契約は、それを使う機能側に置く。
 
-### platform
+### backend/local
 
-OS固有の処理を置く。
+ローカルWorkspaceで必要な外部I/O実装を置く。現在のcrate名は移行中の互換性のため
+`lapis-platform`を維持する。
 
 - File system
 - Process
@@ -492,7 +531,7 @@ OS固有の処理を置く。
 
 大きな`PlatformService`は作らず、小さい機能へ分ける。
 
-### app-services
+### backend/core/app-services
 
 複数の機能をまたぐ処理を置く。
 
@@ -503,7 +542,7 @@ OS固有の処理を置く。
 
 単一機能で完結する処理は、その機能側に置く。
 
-### desktop-ui
+### apps/desktop/ui
 
 画面と入力処理を置く。
 
@@ -517,7 +556,7 @@ OS固有の処理を置く。
 
 Domain処理、DB操作、OS操作は直接書かない。
 
-### app
+### apps/desktop/app
 
 アプリ全体を組み立てる。
 
@@ -528,28 +567,28 @@ Domain処理、DB操作、OS操作は直接書かない。
 - 終了処理
 - Lifecycle管理
 
-`app`以外のcrateは`app`へ依存しない。
+`apps/desktop/app`以外のcrateはDesktopの起動crateへ依存しない。
 
 ## 依存方向
 
 ```text
-desktop-ui
+apps/desktop/ui
     ↓
-app-services
+backend/core/app-services
     ↓
-各Feature
+backend/core + featuresの契約
 
-persistence ──→ 各Featureの契約
-platform    ──→ 各Featureの契約
+backend/persistence ──→ backend/core + featuresの契約
+backend/local       ──→ backend/core + featuresの契約
 
-app ──→ すべてを組み立てる
+apps/desktop/app ──→ DesktopとローカルBackendを組み立てる
 ```
 
 ## 禁止する依存
 
 ```text
-Feature → desktop-ui
-Feature → app
+Feature → apps/desktop/ui
+Feature → apps/desktop/app
 document → persistenceの具体実装
 task-runner → OS固有APIの直接利用
 crate間の循環依存

@@ -1,0 +1,14 @@
+[package]
+name = "lapis"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-app-services = { path = "../../../backend/core/app-services" }
+lapis-desktop-ui = { path = "../ui" }
+lapis-platform = { path = "../../../backend/local" }
+lapis-persistence = { path = "../../../backend/persistence" }
+lapis-settings = { path = "../../../backend/core/settings" }
+lapis-task-runner = { path = "../../../features/task-runner" }

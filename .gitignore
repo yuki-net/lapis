@@ -1,1 +1,8 @@
 /target/
+/apps/mobile/.gradle/
+/apps/mobile/**/build/
+/apps/mobile/local.properties
+/apps/web/dist/
+/apps/web/node_modules/
+*.tsbuildinfo
+*.log
