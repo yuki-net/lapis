@@ -123,7 +123,7 @@ impl Editor {
         let position = panel.position;
         let is_bottom = panel.position == PanelPosition::Bottom;
         let size = if panel.position == PanelPosition::Main {
-            div().w_full().h_full()
+            div().w_full().flex_1().min_h(px(0.0))
         } else if is_bottom {
             div().h(px(panel.size)).w_full()
         } else {
