@@ -1,18 +1,36 @@
 use super::*;
 use crate::{
     extension_ui::PanelPosition,
-    shell::{PanelHost, ResizeTarget},
+    shell::{DraggedPanelTab, PanelHost, PanelTab, ResizeTarget},
 };
 
+struct PanelTabDragPreview {
+    label: String,
+}
+
+impl Render for PanelTabDragPreview {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .rounded(px(5.0))
+            .bg(theme::surface())
+            .border_1()
+            .border_color(theme::border())
+            .text_color(theme::text())
+            .text_size(px(11.0))
+            .child(self.label.clone())
+    }
+}
+
 impl Editor {
-    /// 四つの panel を描画する。中央は Document タブを収容し、他の panel は Tool タブを収容する。
+    /// 四つのPanelを同じレイアウト規則で描画する。
     pub(super) fn render_main(
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
         _compact_layout: bool,
     ) -> impl IntoElement {
-        let document_tabs = self.session.tabs();
         let editor_focused = self.focus_handle.is_focused(window);
         let viewport_width = f32::from(window.viewport_size().width);
         let left_width = if self.shell.left_panel.open {
@@ -36,7 +54,7 @@ impl Editor {
             .flex_1()
             .px(px(theme::CANVAS_GAP))
             .when(self.shell.left_panel.open, |body| {
-                body.child(self.render_tool_panel(&self.shell.left_panel, cx))
+                body.child(self.render_panel_window_frame(&self.shell.left_panel, cx))
                     .child(self.render_resize_handle(ResizeTarget::Left, false, cx))
             })
             .child(
@@ -49,16 +67,30 @@ impl Editor {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(self.render_center_panel(cx, editor_focused, document_tabs))
+                    .child(self.render_panel_window(&self.shell.main_panel, cx, editor_focused))
                     .when(self.shell.bottom_panel.open, |center| {
                         center
                             .child(self.render_resize_handle(ResizeTarget::Bottom, true, cx))
-                            .child(self.render_tool_panel(&self.shell.bottom_panel, cx))
+                            .child(self.render_panel_window_frame(&self.shell.bottom_panel, cx))
                     }),
             )
             .when(self.shell.right_panel.open, |body| {
                 body.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
-                    .child(self.render_tool_panel(&self.shell.right_panel, cx))
+                    .child(self.render_panel_window_frame(&self.shell.right_panel, cx))
+            })
+    }
+
+    fn render_panel_window(
+        &self,
+        panel: &PanelHost,
+        cx: &mut Context<Self>,
+        editor_focused: bool,
+    ) -> gpui::Div {
+        self.render_panel_window_frame(panel, cx)
+            .border_color(if editor_focused {
+                rgb(0x3a3c58)
+            } else {
+                theme::border()
             })
     }
 
@@ -87,9 +119,12 @@ impl Editor {
         handle
     }
 
-    fn render_tool_panel(&self, panel: &PanelHost, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_panel_window_frame(&self, panel: &PanelHost, cx: &mut Context<Self>) -> gpui::Div {
+        let position = panel.position;
         let is_bottom = panel.position == PanelPosition::Bottom;
-        let size = if is_bottom {
+        let size = if panel.position == PanelPosition::Main {
+            div().w_full().h_full()
+        } else if is_bottom {
             div().h(px(panel.size)).w_full()
         } else {
             div().w(px(panel.size)).h_full()
@@ -102,28 +137,46 @@ impl Editor {
             .bg(theme::island())
             .flex()
             .flex_col()
+            .on_drop(cx.listener(move |this, drag: &DraggedPanelTab, _, cx| {
+                this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
+            }))
             .child(self.render_tool_panel_header(panel, cx))
-            .child(
-                panel
-                    .active
-                    .as_ref()
-                    .map(|view| self.render_tool_content(view, cx))
-                    .unwrap_or_else(|| self.render_empty_panel(panel.position, cx)),
-            )
+            .child(match panel.active.as_ref() {
+                Some(PanelTab::Tool(view)) => self.render_tool_content(view, cx).into_any_element(),
+                Some(PanelTab::Document(document_id)) => self
+                    .render_document_content(document_id, cx)
+                    .into_any_element(),
+                None => self
+                    .render_empty_panel(panel.position, cx)
+                    .into_any_element(),
+            })
     }
 
     fn render_tool_panel_header(&self, panel: &PanelHost, cx: &mut Context<Self>) -> gpui::Div {
-        let tabs = panel.tabs.iter().enumerate().map(|(index, view)| {
-            let label = self
-                .feature_registry
-                .panel_contributions(panel.position)
-                .into_iter()
-                .find(|contribution| contribution.view.as_ref() == Some(view))
-                .map(|contribution| self.locale.resolve(&contribution.title))
-                .unwrap_or_else(|| view.as_str().to_owned());
-            let active = panel.active.as_ref() == Some(view);
-            let view = view.clone();
+        let tabs = panel.tabs.iter().enumerate().map(|(index, tab)| {
+            let label = match tab {
+                PanelTab::Tool(view) => self
+                    .feature_registry
+                    .panel_contributions(panel.position)
+                    .into_iter()
+                    .find(|contribution| contribution.view.as_ref() == Some(view))
+                    .map(|contribution| self.locale.resolve(&contribution.title))
+                    .unwrap_or_else(|| view.as_str().to_owned()),
+                PanelTab::Document(document_id) => self
+                    .session
+                    .tabs()
+                    .into_iter()
+                    .find(|document| document.id == *document_id)
+                    .map(|document| document.display_name)
+                    .unwrap_or_else(|| "Document".to_owned()),
+            };
+            let active = panel.active.as_ref() == Some(tab);
+            let tab = tab.clone();
             let position = panel.position;
+            let drag = DraggedPanelTab {
+                source_panel: position,
+                tab: tab.clone(),
+            };
             div()
                 .id(("panel-tab", panel_key(position) * 100 + index as u32))
                 .h(px(30.0))
@@ -143,8 +196,27 @@ impl Editor {
                     theme::muted()
                 })
                 .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.select_view(position, view.clone(), cx);
+                .cursor(CursorStyle::OpenHand)
+                .on_drag(drag, |drag: &DraggedPanelTab, _, _, cx| {
+                    cx.new(|_| PanelTabDragPreview {
+                        label: format!("{:?}", drag.tab),
+                    })
+                })
+                .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
+                    PanelTab::Tool(view) => this.select_view(position, view, cx),
+                    PanelTab::Document(document_id) => {
+                        this.select_panel_tab(
+                            position,
+                            PanelTab::Document(document_id.clone()),
+                            cx,
+                        );
+                        this.persist_active_view();
+                        if this.session.activate_document(&document_id) {
+                            this.restore_active_view();
+                            window.focus(&this.focus_handle);
+                            cx.notify();
+                        }
+                    }
                 }))
                 .child(label)
         });
@@ -162,8 +234,7 @@ impl Editor {
             .child(div().flex_1())
             .when(
                 panel
-                    .active
-                    .as_ref()
+                    .active_tool()
                     .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL),
                 |bar| {
                     bar.child(
@@ -188,13 +259,28 @@ impl Editor {
                     .text_color(theme::muted())
                     .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if let Some(panel) = this.shell.panel_mut(position) {
-                            panel.close();
+                        if position != PanelPosition::Main {
+                            this.shell.panel_mut(position).close();
                         }
                         this.refresh_feature_activation();
                         cx.notify();
                     }))
                     .child("×"),
+            )
+            .child(
+                div()
+                    .id(("open-tool", panel_key(position)))
+                    .size(px(25.0))
+                    .rounded(px(5.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_color(theme::muted())
+                    .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.open_tool_picker(position, cx);
+                    }))
+                    .child("+"),
             )
     }
 
@@ -203,34 +289,102 @@ impl Editor {
             PanelPosition::Left => "Left Panel",
             PanelPosition::Bottom => "Bottom Panel",
             PanelPosition::Right => "Right Panel",
-            PanelPosition::Center => "Center Panel",
+            PanelPosition::Main => "Main Panel",
         };
-        let default_view = self
-            .feature_registry
-            .panel_contributions(position)
-            .into_iter()
-            .find_map(|contribution| contribution.view.clone());
-        panel_empty_state("▤", title, "Open a tool or drag a tool from another panel").when_some(
-            default_view,
-            |empty, view| {
-                empty.child(
-                    div()
-                        .id(("open-tool", panel_key(position)))
-                        .mt_2()
-                        .px_2()
-                        .py_1()
-                        .rounded(px(5.0))
-                        .border_1()
-                        .border_color(theme::border())
-                        .text_size(px(11.0))
-                        .hover(|style| style.bg(theme::surface_hover()))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            this.select_view(position, view.clone(), cx);
-                        }))
-                        .child("Open Tool"),
-                )
-            },
+        panel_empty_state(
+            "▤",
+            title,
+            "Open new tool or drag-n-drop tool from other panels",
         )
+        .child(
+            div()
+                .id(("open-tool", panel_key(position)))
+                .mt_2()
+                .px_2()
+                .py_1()
+                .rounded(px(5.0))
+                .border_1()
+                .border_color(theme::border())
+                .text_size(px(11.0))
+                .hover(|style| style.bg(theme::surface_hover()))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.open_tool_picker(position, cx);
+                }))
+                .child("Open Tool"),
+        )
+    }
+
+    fn render_document_content(
+        &self,
+        document_id: &lapis_editor_core::DocumentId,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let active = self.session.active_document_id() == Some(document_id);
+        if active {
+            div()
+                .h(px(0.0))
+                .min_h(px(0.0))
+                .flex()
+                .flex_col()
+                .flex_1()
+                .child(
+                    div()
+                        .id("source-scroll")
+                        .h(px(0.0))
+                        .min_h(px(0.0))
+                        .flex_1()
+                        .overflow_scroll()
+                        .track_scroll(&self.editor_scroll)
+                        .relative()
+                        .px(px(18.0))
+                        .py(px(10.0))
+                        .cursor(CursorStyle::IBeam)
+                        .text_size(px(14.0))
+                        .text_color(theme::text())
+                        .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
+                        .on_mouse_move(cx.listener(Self::editor_mouse_move))
+                        .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
+                        .child(EditorElement { editor: cx.entity() })
+                        .when(self.session.is_empty(), |canvas| {
+                            canvas.child(
+                                div()
+                                    .absolute()
+                                    .top(px(72.0))
+                                    .left(px(54.0))
+                                    .w(px(330.0))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_size(px(18.0))
+                                            .text_color(theme::text())
+                                            .child("Open a file or project"),
+                                    )
+                                    .child(
+                                        div()
+                                            .mb_1()
+                                            .text_size(px(12.0))
+                                            .text_color(theme::subtle())
+                                            .child("Choose a project to restore its last workspace, or open a file to start here."),
+                                    )
+                                    .child(quick_action("Open file", "Ctrl O").on_click(
+                                        cx.listener(|this, _, window, cx| this.open_file(window, cx)),
+                                    ))
+                                    .child(quick_action("Open project", "").on_click(
+                                        cx.listener(|this, _, window, cx| this.open_project(window, cx)),
+                                    ))
+                                    .child(quick_action("New file", "Ctrl N").on_click(
+                                        cx.listener(|this, _, window, cx| {
+                                            this.new_document(&New, window, cx)
+                                        }),
+                                    )),
+                            )
+                        }),
+                )
+        } else {
+            panel_empty_state("F", "Document", "Select the document tab to edit")
+        }
     }
 
     fn render_tool_content(&self, view: &ViewId, cx: &mut Context<Self>) -> gpui::Div {
@@ -247,6 +401,83 @@ impl Editor {
             id::VIEW_COMMAND_SEARCH => div().flex_1().child(self.quick_search.clone()),
             _ => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
         }
+    }
+
+    pub(super) fn render_tool_picker(
+        &self,
+        position: PanelPosition,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let query = self.shell.tool_picker_query.trim().to_lowercase();
+        let tools = self
+            .feature_registry
+            .panel_contributions(position)
+            .into_iter()
+            .filter(|contribution| {
+                if query.is_empty() {
+                    return true;
+                }
+                let title = self.locale.resolve(&contribution.title).to_lowercase();
+                let view = contribution
+                    .view
+                    .as_ref()
+                    .map(|view| view.as_str().to_lowercase())
+                    .unwrap_or_default();
+                title.contains(&query) || view.contains(&query)
+            })
+            .filter_map(|contribution| {
+                Some((
+                    contribution.view.clone()?,
+                    self.locale.resolve(&contribution.title),
+                    contribution.icon.as_str().to_owned(),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        anchored()
+            .position(point(px(120.0), px(82.0)))
+            .snap_to_window_with_margin(px(8.0))
+            .child(
+                div()
+                    .id("tool-picker")
+                    .w(px(250.0))
+                    .max_h(px(520.0))
+                    .overflow_y_scroll()
+                    .p_2()
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::surface())
+                    .shadow_lg()
+                    .text_color(theme::text())
+                    .child(div().px_2().py_1().text_color(theme::muted()).child(
+                        if self.shell.tool_picker_query.is_empty() {
+                            "Search".to_owned()
+                        } else {
+                            self.shell.tool_picker_query.clone()
+                        },
+                    ))
+                    .child(div().h(px(1.0)).my_1().bg(theme::border()))
+                    .children(tools.into_iter().map(|(view, title, icon)| {
+                        div()
+                            .id(ElementId::Name(
+                                format!("tool-picker-{}", view.as_str()).into(),
+                            ))
+                            .w_full()
+                            .px_2()
+                            .py_1()
+                            .rounded(px(4.0))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .hover(|style| style.bg(theme::surface_hover()))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.select_tool_from_picker(position, view.clone(), cx);
+                            }))
+                            .child(icon)
+                            .child(title)
+                    })),
+            )
     }
 
     fn render_history_content(&self) -> gpui::Div {
@@ -293,6 +524,7 @@ impl Editor {
             })
     }
 
+    #[allow(dead_code)]
     fn render_center_panel(
         &self,
         cx: &mut Context<Self>,
@@ -403,7 +635,7 @@ impl Editor {
 const fn panel_key(position: PanelPosition) -> u32 {
     match position {
         PanelPosition::Left => 1,
-        PanelPosition::Center => 2,
+        PanelPosition::Main => 2,
         PanelPosition::Bottom => 3,
         PanelPosition::Right => 4,
     }

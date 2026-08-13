@@ -8,8 +8,8 @@ use gpui::{
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Style, TextRun, Timer,
-    UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*, px, relative, rgb,
-    rgba, size,
+    UTF16Selection, Window, WindowControlArea, anchored, div, fill, point, prelude::*, px,
+    relative, rgb, rgba, size,
 };
 use lapis_app_services::{ConversationViewState, DocumentAction, EditorSession};
 use lapis_editor_core::{ExecutionId, TaskId};
@@ -29,7 +29,7 @@ use crate::{
     keymap::KeymapRegistry,
     localization::Localizer,
     shell::{
-        ResizeTarget, ShellState,
+        PanelTab, ResizeTarget, ShellState,
         search_page::{DoubleShiftDetector, QuickSearch, QuickSearchEvent},
         search_provider::CommandSearchProvider,
     },
@@ -222,6 +222,7 @@ impl Editor {
             editor_scroll: ScrollHandle::new(),
         };
         editor.apply_conversation_view(restored_view);
+        editor.shell.synchronize_documents(&editor.session.tabs());
         if initial_view.show_tasks {
             editor.shell.activate_view(
                 crate::extension_ui::PanelPosition::Right,

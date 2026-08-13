@@ -2,7 +2,6 @@ mod center;
 mod controls;
 mod drag;
 mod left;
-mod right;
 mod window_controls;
 
 use drag::apply_drag_region;
@@ -31,7 +30,6 @@ impl Editor {
                 })
                 .child(self.render_header_left(cx, compact_layout))
                 .child(self.render_header_center())
-                .child(self.render_header_right(cx, compact_layout))
                 .when(!cfg!(target_os = "macos"), |this| {
                     this.child(self.render_window_controls(cx))
                 }),

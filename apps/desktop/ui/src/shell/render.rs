@@ -42,6 +42,7 @@ impl Render for Editor {
             .on_action(cx.listener(Self::toggle_bottom_panel))
             .on_action(cx.listener(Self::toggle_assistant))
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
+            .on_key_down(cx.listener(Self::tool_picker_key_down))
             .on_key_down(cx.listener(Self::normal_key_down))
             .on_mouse_move(cx.listener(Self::resize_panels))
             .on_mouse_up(
@@ -53,6 +54,9 @@ impl Render for Editor {
             .child(self.render_footer(cx))
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
+            })
+            .when_some(self.shell.tool_picker, |root, position| {
+                root.child(self.render_tool_picker(position, cx))
             })
     }
 }

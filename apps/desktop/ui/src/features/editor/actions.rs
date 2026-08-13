@@ -306,6 +306,7 @@ impl Editor {
 
     pub(super) fn new_document(&mut self, _: &New, _: &mut Window, cx: &mut Context<Self>) {
         self.session.new_document();
+        self.shell.synchronize_documents(&self.session.tabs());
         self.selected_range = 0..0;
         self.search.matches.clear();
         self.status = "新しいドキュメント".to_owned();
@@ -327,8 +328,7 @@ impl Editor {
             && self
                 .shell
                 .right_panel
-                .active
-                .as_ref()
+                .active_tool()
                 .is_some_and(|view| view.as_str() == id::VIEW_COMMAND_SEARCH)
         {
             self.close_quick_search(window, cx);

@@ -149,7 +149,7 @@ impl FeatureRegistry {
     pub fn set_panel_active_view(&mut self, panel: PanelPosition, view: Option<ViewId>) {
         let slot = match panel {
             PanelPosition::Left => UiSlot::ToolDock,
-            PanelPosition::Center => UiSlot::EditorDecoration,
+            PanelPosition::Main => UiSlot::EditorDecoration,
             PanelPosition::Bottom => UiSlot::BottomDock,
             PanelPosition::Right => UiSlot::SideDock,
         };

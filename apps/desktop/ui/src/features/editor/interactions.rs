@@ -71,6 +71,7 @@ impl Editor {
                     self.apply_conversation_view(view);
                 }
                 self.selected_range = 0..0;
+                self.shell.synchronize_documents(&self.session.tabs());
                 self.status = "Workspaceを開きました".to_owned();
                 window.focus(&self.focus_handle);
                 cx.notify();
@@ -84,6 +85,7 @@ impl Editor {
         match self.session.choose_file() {
             Ok(DocumentAction::Completed) => {
                 self.selected_range = 0..0;
+                self.shell.synchronize_documents(&self.session.tabs());
                 self.status = "ファイルを開きました".to_owned();
                 window.focus(&self.focus_handle);
                 self.refresh_feature_activation();

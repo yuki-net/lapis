@@ -4,9 +4,15 @@ use super::{CommandId, IconId, MessageId, ViewId};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PanelPosition {
     Left,
-    Center,
+    Main,
     Bottom,
     Right,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolInstancePolicy {
+    Shared,
+    Multiple,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,6 +36,7 @@ pub struct UiContribution {
     pub icon: IconId,
     pub command: Option<CommandId>,
     pub order: i32,
+    pub instance_policy: ToolInstancePolicy,
 }
 
 impl UiContribution {
@@ -43,12 +50,13 @@ impl UiContribution {
         Self {
             view: Some(view.into()),
             default_panel: default_panel_for_slot(slot),
-            allowed_panels: default_panel_for_slot(slot).into_iter().collect(),
+            allowed_panels: all_panels_for_slot(slot),
             slot,
             title: title.into(),
             icon: icon.into(),
             command: None,
             order,
+            instance_policy: ToolInstancePolicy::Shared,
         }
     }
 
@@ -70,6 +78,7 @@ impl UiContribution {
             icon: icon.into(),
             command: None,
             order,
+            instance_policy: ToolInstancePolicy::Shared,
         }
     }
 
@@ -88,7 +97,13 @@ impl UiContribution {
             icon: icon.into(),
             command: Some(command.into()),
             order,
+            instance_policy: ToolInstancePolicy::Shared,
         }
+    }
+
+    pub fn multiple_instances(mut self) -> Self {
+        self.instance_policy = ToolInstancePolicy::Multiple;
+        self
     }
 }
 
@@ -101,5 +116,17 @@ const fn default_panel_for_slot(slot: UiSlot) -> Option<PanelPosition> {
         | UiSlot::StatusBar
         | UiSlot::EditorDecoration
         | UiSlot::SettingsPage => None,
+    }
+}
+
+fn all_panels_for_slot(slot: UiSlot) -> Vec<PanelPosition> {
+    match slot {
+        UiSlot::ToolDock | UiSlot::SideDock | UiSlot::BottomDock => vec![
+            PanelPosition::Main,
+            PanelPosition::Left,
+            PanelPosition::Bottom,
+            PanelPosition::Right,
+        ],
+        _ => default_panel_for_slot(slot).into_iter().collect(),
     }
 }

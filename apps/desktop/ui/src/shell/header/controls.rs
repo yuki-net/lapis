@@ -108,32 +108,6 @@ impl IntoElement for WindowControlIcon {
     }
 }
 
-/// タイトルバーのツールボタン。アクティブ状態をアクセントで表す。
-pub(crate) fn top_icon(label: impl Into<SharedString>, active: bool) -> gpui::Stateful<gpui::Div> {
-    let label = label.into();
-    div()
-        .id(label.clone())
-        .size(px(28.0))
-        .rounded(px(6.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .bg(if active {
-            theme::accent_soft()
-        } else {
-            theme::title_bar()
-        })
-        .text_color(if active {
-            rgb(0xbfc0ff)
-        } else {
-            theme::muted()
-        })
-        .text_size(px(14.0))
-        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-        .child(label)
-}
-
 /// ウィンドウコントロールボタン（最小化・最大化・閉じる）。
 pub(crate) fn window_control_button(
     id: &'static str,

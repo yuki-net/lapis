@@ -37,11 +37,16 @@ impl Editor {
                     .hover(|style| style.bg(theme::surface_hover()))
                     .child(controls::menu_icon()),
             )
-            .child(panel_toggle_button(
-                "toggle-left-panel",
-                controls::PanelPosition::Left,
-                controls::PanelState::Open,
-            ))
+            .child(
+                panel_toggle_button(
+                    "toggle-left-panel",
+                    controls::PanelPosition::Left,
+                    panel_state(self.shell.left_panel.open),
+                )
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.toggle_header_panel(crate::extension_ui::PanelPosition::Left, cx);
+                })),
+            )
             .child(
                 panel_toggle_button(
                     "toggle-bottom-panel",
@@ -53,30 +58,29 @@ impl Editor {
                     },
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
+                    this.toggle_header_panel(crate::extension_ui::PanelPosition::Bottom, cx);
+                    let _ = window;
                 })),
             )
             .child(
                 panel_toggle_button(
                     "toggle-right-panel",
                     controls::PanelPosition::Right,
-                    if self.shell.right_panel.open
-                        && self
-                            .shell
-                            .right_panel
-                            .active
-                            .as_ref()
-                            .is_some_and(|view| view.as_str() == id::VIEW_PREVIEW)
-                    {
-                        controls::PanelState::Open
-                    } else {
-                        controls::PanelState::Close
-                    },
+                    panel_state(self.shell.right_panel.open),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_preview(&TogglePreview, window, cx);
+                    this.toggle_header_panel(crate::extension_ui::PanelPosition::Right, cx);
+                    let _ = window;
                 })),
             )
+    }
+}
+
+fn panel_state(open: bool) -> controls::PanelState {
+    if open {
+        controls::PanelState::Open
+    } else {
+        controls::PanelState::Close
     }
 }
 
