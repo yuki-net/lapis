@@ -15,7 +15,7 @@ impl Editor {
             content = content.child(
                 div()
                     .text_size(px(11.0))
-                    .text_color(rgb(0xf0a0a0))
+                    .text_color(theme::problem_error())
                     .child(error.to_owned()),
             );
         }

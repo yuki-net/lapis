@@ -7,7 +7,7 @@ use gpui::{
     App, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, Modifiers, MouseButton,
     MouseDownEvent, PaintQuad, Pixels, Point, ShapedLine, Style, TextRun, UTF16Selection,
-    UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, relative, rgba, size,
+    UnderlineStyle, Window, actions, div, fill, point, prelude::*, px, relative, size,
 };
 
 use crate::{
@@ -530,7 +530,7 @@ impl Element for SearchTextElement {
                         bounds.bottom(),
                     ),
                 ),
-                rgba(0x7a7df548),
+                theme::search_selection(),
             )
         });
         let cursor = input.selected_range.is_empty().then(|| {

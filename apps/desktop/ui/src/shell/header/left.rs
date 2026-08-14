@@ -20,7 +20,7 @@ impl Editor {
                     .items_center()
                     .justify_center()
                     .bg(theme::accent())
-                    .text_color(rgb(0xffffff))
+                    .text_color(theme::brand_text())
                     .text_size(px(11.0))
                     .child("L"),
             )

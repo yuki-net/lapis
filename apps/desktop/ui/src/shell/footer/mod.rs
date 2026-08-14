@@ -21,14 +21,14 @@ impl Editor {
             .child("›")
             .child(div().text_color(theme::muted()).child(display_name.clone()))
             .child("·")
-            .child(div().text_color(rgb(0x8da8ff)).child("✓ Note"))
+            .child(div().text_color(theme::note()).child("✓ Note"))
             .child(format!("R{}", self.session.revision()))
             .child(format!("Ln {line}, Col {column}"))
             .child("·")
             .child(
                 div()
                     .text_color(if status_is_error {
-                        rgb(0xf18f96)
+                        theme::status_error()
                     } else {
                         theme::subtle()
                     })

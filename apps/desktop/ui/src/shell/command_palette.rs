@@ -27,7 +27,7 @@ impl Editor {
             .p(px(8.0))
             .rounded(px(9.0))
             .border_1()
-            .border_color(rgb(0x3d4050))
+            .border_color(theme::command_palette_border())
             .bg(theme::surface())
             .shadow_lg()
             .flex()

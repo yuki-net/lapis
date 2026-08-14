@@ -87,12 +87,16 @@ impl Editor {
         self.shell.settings_menu_open = !self.shell.settings_menu_open;
         self.shell.settings_menu_anchor = position;
         self.shell.tool_picker = None;
+        if !self.shell.settings_menu_open {
+            self.shell.theme_picker_open = false;
+        }
         cx.notify();
     }
 
     pub(super) fn close_settings_menu(&mut self, cx: &mut Context<Self>) {
         if self.shell.settings_menu_open {
             self.shell.settings_menu_open = false;
+            self.shell.theme_picker_open = false;
             cx.notify();
         }
     }
@@ -111,14 +115,55 @@ impl Editor {
     pub(super) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
         self.open_panel(PanelPosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)));
         self.shell.settings_menu_open = false;
+        self.shell.theme_picker_open = false;
         self.refresh_feature_activation();
         cx.notify();
     }
 
     pub(super) fn toggle_theme_preference(&mut self, cx: &mut Context<Self>) {
-        self.shell.toggle_theme_mode();
+        if self.shell.theme_save_in_flight {
+            return;
+        }
+        self.shell.theme_picker_open = !self.shell.theme_picker_open;
+        cx.notify();
+    }
+
+    pub(super) fn select_theme(&mut self, theme_id: ThemeId, cx: &mut Context<Self>) {
+        if self.shell.theme_save_in_flight || theme::active_id() == theme_id {
+            return;
+        }
+        let previous = theme::active_id();
+        if !theme::set_active(&theme_id) {
+            self.status = format!("未登録のテーマです: {}", theme_id.as_str());
+            cx.notify();
+            return;
+        }
+
+        self.shell.theme_before_save = Some(previous);
+        self.shell.theme_save_in_flight = true;
+        self.shell.theme_picker_open = false;
         self.shell.settings_menu_open = false;
         cx.notify();
+
+        let settings = self.settings.clone();
+        let theme_value = theme_id.as_str().to_owned();
+        let save = cx.background_spawn(async move { settings.set_theme(theme_value) });
+        cx.spawn(async move |this, cx| {
+            let result = save.await;
+            let _ = this.update(cx, |editor, cx| {
+                if let Err(error) = result {
+                    if let Some(previous) = editor.shell.theme_before_save.take() {
+                        let _ = theme::set_active(&previous);
+                    }
+                    editor.status = format!("テーマ保存失敗: {error}");
+                } else {
+                    editor.shell.theme_before_save = None;
+                }
+                editor.shell.theme_save_in_flight = false;
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub(super) fn select_panel_tab(

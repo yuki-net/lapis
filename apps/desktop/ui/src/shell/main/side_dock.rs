@@ -41,7 +41,7 @@ impl Editor {
                     .gap_2()
                     .text_size(px(12.0))
                     .text_color(if is_assistant {
-                        rgb(0xb8b9f8)
+                        theme::assistant_accent()
                     } else {
                         theme::text()
                     })

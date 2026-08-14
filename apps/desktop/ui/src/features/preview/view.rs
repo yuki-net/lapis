@@ -15,7 +15,7 @@ impl Editor {
                 } else if let Some(value) = line.strip_prefix("- ") {
                     (format!("• {value}"), px(13.0), theme::muted())
                 } else if let Some(value) = line.strip_prefix("> ") {
-                    (format!("│ {value}"), px(13.0), rgb(0xb8b9f8))
+                    (format!("│ {value}"), px(13.0), theme::assistant_accent())
                 } else {
                     (line.to_owned(), px(13.0), theme::muted())
                 };

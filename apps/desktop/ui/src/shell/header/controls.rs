@@ -128,7 +128,9 @@ pub(crate) fn window_control_button(
         .text_color(theme::muted())
         .hover(move |style| {
             if close {
-                style.bg(theme::close_hover()).text_color(rgb(0xffffff))
+                style
+                    .bg(theme::close_hover())
+                    .text_color(theme::on_accent_text())
             } else {
                 style.bg(theme::surface_hover()).text_color(theme::text())
             }

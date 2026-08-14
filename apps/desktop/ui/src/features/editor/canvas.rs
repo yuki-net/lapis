@@ -113,7 +113,7 @@ impl Element for EditorElement {
                 offset,
                 visible_chars,
                 &editor.selected_range,
-                rgba(0x6366f166),
+                theme::editor_selection(),
             );
             for range in &editor.search.matches {
                 push_range_quad(
@@ -123,7 +123,7 @@ impl Element for EditorElement {
                     offset,
                     visible_chars,
                     range,
-                    rgba(0xeab30835),
+                    theme::editor_search_match(),
                 );
             }
             lines.push(EditorLineLayout {
@@ -142,7 +142,7 @@ impl Element for EditorElement {
                 point(bounds.left() + cursor_x, cursor_y),
                 size(px(2.0), line_height),
             ),
-            rgba(0x7dd3fcff),
+            theme::editor_cursor(),
         );
         EditorPrepaint {
             lines,

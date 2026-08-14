@@ -9,7 +9,7 @@ use gpui::{
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Style, TextRun, Timer,
     UTF16Selection, Window, WindowControlArea, anchored, div, fill, point, prelude::*, px,
-    relative, rgb, rgba, size,
+    relative, size,
 };
 use lapis_app_services::{ConversationViewState, DocumentAction, EditorSession};
 use lapis_editor_core::{ExecutionId, TaskId};
@@ -21,7 +21,7 @@ use lapis_workspace::FileEntryKind;
 use crate::{
     app::*,
     components::{Icon, IconName, panel_empty_state, tool_empty_state},
-    extension_ui::{ActivationEvent, FeatureRegistry, UiSlot, ViewId},
+    extension_ui::{ActivationEvent, FeatureRegistry, ThemeId, UiSlot, ViewId},
     features::{
         self, conversation::ConversationFeature, git::GitFeature, id, problems::ProblemsFeature,
         search::SearchFeature, tasks::TasksFeature, terminal::TerminalFeature,
@@ -135,6 +135,7 @@ pub(super) fn rust_descriptor() -> crate::extension_ui::FeatureDescriptor {
 
 pub struct Editor {
     session: EditorSession,
+    settings: lapis_app_services::SettingsSession,
     tasks: TasksFeature,
     git: GitFeature,
     problems: ProblemsFeature,
@@ -165,6 +166,10 @@ impl Editor {
         initial_view: InitialView,
         cx: &mut Context<Self>,
     ) -> Self {
+        let settings = services.settings.clone();
+        let global_settings = settings.settings();
+        let configured_theme = ThemeId::new(global_settings.theme.clone());
+        let theme_loaded = theme::set_active(&configured_theme);
         let editor_entity = cx.entity();
         let quick_search = cx.new(|cx| {
             QuickSearch::new(cx, move |event, window, cx| {
@@ -195,6 +200,7 @@ impl Editor {
             });
         let mut editor = Self {
             session,
+            settings,
             tasks: TasksFeature::new(services.task, selected_execution),
             git: GitFeature::new(services.git),
             problems: ProblemsFeature::new(services.lsp),
@@ -212,7 +218,7 @@ impl Editor {
             feature_registry: features::bundled_registry(),
             locale: {
                 let mut localizer = Localizer::bundled();
-                let _ = localizer.set_active(&services.settings.settings().locale);
+                let _ = localizer.set_active(&global_settings.locale);
                 localizer
             },
             keymap: KeymapRegistry::bundled(),
@@ -221,6 +227,9 @@ impl Editor {
             last_line_layouts: Vec::new(),
             editor_scroll: ScrollHandle::new(),
         };
+        if !theme_loaded {
+            editor.status = format!("未登録のテーマのためDarkを使用: {}", global_settings.theme);
+        }
         editor.apply_conversation_view(restored_view);
         editor.shell.synchronize_documents(&editor.session.tabs());
         if initial_view.show_tasks {
@@ -507,7 +516,7 @@ impl Editor {
 fn settings_menu_item(
     icon: IconName,
     label: &'static str,
-    detail: Option<&'static str>,
+    detail: Option<String>,
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(label)
@@ -543,7 +552,7 @@ fn task_action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui
         .rounded(px(5.0))
         .border_1()
         .border_color(if primary {
-            rgb(0x6366f1)
+            theme::task_primary_border()
         } else {
             theme::border()
         })
@@ -554,7 +563,7 @@ fn task_action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui
         })
         .text_size(px(10.0))
         .text_color(if primary {
-            rgb(0xd8d8ff)
+            theme::task_primary_text()
         } else {
             theme::muted()
         })
@@ -566,10 +575,12 @@ fn task_action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui
 
 fn task_status_color(status: ExecutionStatus) -> gpui::Rgba {
     match status {
-        ExecutionStatus::Succeeded => rgb(0x7dd3a7),
-        ExecutionStatus::Failed | ExecutionStatus::Cancelled => rgb(0xf29a9a),
-        ExecutionStatus::WaitingForInput | ExecutionStatus::WaitingForApproval => rgb(0xf4c67a),
-        ExecutionStatus::Queued | ExecutionStatus::Running => rgb(0x9ba8ff),
+        ExecutionStatus::Succeeded => theme::status_success(),
+        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::status_error(),
+        ExecutionStatus::WaitingForInput | ExecutionStatus::WaitingForApproval => {
+            theme::status_warning()
+        }
+        ExecutionStatus::Queued | ExecutionStatus::Running => theme::status_info(),
     }
 }
 
@@ -586,9 +597,9 @@ fn change_label(kind: ChangeKind) -> &'static str {
 
 fn change_color(kind: ChangeKind) -> gpui::Rgba {
     match kind {
-        ChangeKind::Added => rgb(0x7dd3a7),
-        ChangeKind::Deleted | ChangeKind::Conflicted => rgb(0xf29a9a),
-        ChangeKind::Modified | ChangeKind::Renamed => rgb(0xf4c67a),
+        ChangeKind::Added => theme::diff_added(),
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::diff_removed(),
+        ChangeKind::Modified | ChangeKind::Renamed => theme::diff_changed(),
         ChangeKind::Untracked => theme::muted(),
     }
 }
@@ -635,7 +646,11 @@ fn quick_action(label: &'static str, shortcut: &'static str) -> gpui::Stateful<g
         .items_center()
         .text_size(px(12.0))
         .text_color(theme::text())
-        .hover(|style| style.bg(theme::surface_hover()).border_color(rgb(0x444657)))
+        .hover(|style| {
+            style
+                .bg(theme::surface_hover())
+                .border_color(theme::command_input_border())
+        })
         .child(label)
         .child(div().flex_1())
         .child(

@@ -10,10 +10,14 @@ pub use definition::{
 };
 
 // レジストリ操作
-pub use registry::{active_id, register, set_active};
+pub use registry::{active_id, available, name, register, set_active};
 
 // カラートークン
 pub use tokens::{
-    accent, accent_soft, border, canvas, close_hover, island, muted, orange, subtle, surface,
-    surface_active, surface_hover, text, title_bar,
+    accent, accent_soft, assistant_accent, border, brand_text, canvas, close_hover,
+    command_input_border, command_palette_border, diff_added, diff_changed, diff_removed,
+    editor_cursor, editor_search_match, editor_selection, focus_border, island, muted, note,
+    on_accent_text, orange, problem_error, search_selection, status_error, status_info,
+    status_success, status_warning, subtle, surface, surface_active, surface_hover,
+    task_primary_border, task_primary_text, text, title_bar,
 };

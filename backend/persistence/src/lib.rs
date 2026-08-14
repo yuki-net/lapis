@@ -151,6 +151,7 @@ mod tests {
         let settings = GlobalSettings {
             version: 1,
             locale: LocaleId::new("ja-JP"),
+            theme: "lapis.white".to_owned(),
         };
 
         repository.save(&settings).unwrap();

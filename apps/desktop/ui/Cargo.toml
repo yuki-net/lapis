@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 gpui.workspace = true
+serde.workspace = true
 lapis-app-services = { path = "../../../backend/core/app-services" }
 lapis-editor-core = { path = "../../../backend/core/editor-core" }
 lapis-git = { path = "../../../features/git" }

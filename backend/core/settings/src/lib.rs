@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 pub struct GlobalSettings {
     pub version: u32,
     pub locale: LocaleId,
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+fn default_theme() -> String {
+    "lapis.dark".to_owned()
 }
 
 impl Default for GlobalSettings {
@@ -14,6 +20,7 @@ impl Default for GlobalSettings {
         Self {
             version: 1,
             locale: LocaleId::new("en-US"),
+            theme: default_theme(),
         }
     }
 }
@@ -38,4 +45,17 @@ impl std::error::Error for SettingsError {}
 pub trait GlobalSettingsRepository: Send + Sync {
     fn load(&self) -> Result<GlobalSettings, SettingsError>;
     fn save(&self, settings: &GlobalSettings) -> Result<(), SettingsError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_without_theme_use_dark() {
+        let settings: GlobalSettings =
+            serde_json::from_str(r#"{"version":1,"locale":"ja-JP"}"#).unwrap();
+
+        assert_eq!(settings.theme, "lapis.dark");
+    }
 }

@@ -67,7 +67,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(rgb(0xb8b9f8))
+                            .text_color(theme::assistant_accent())
                             .child(format!("WORKTREE · {} changes", status.files.len())),
                     )
                     .child(div().flex_1())
@@ -130,9 +130,9 @@ impl Editor {
                     div()
                         .text_size(px(9.0))
                         .text_color(if line.starts_with('+') {
-                            rgb(0x7dd3a7)
+                            theme::diff_added()
                         } else if line.starts_with('-') {
-                            rgb(0xf29a9a)
+                            theme::diff_removed()
                         } else {
                             theme::subtle()
                         })

@@ -68,6 +68,20 @@ impl SettingsSession {
         }
         Ok(())
     }
+
+    pub fn set_theme(&self, theme: String) -> Result<(), SettingsError> {
+        let mut settings = self.settings.lock().expect("settings state lock failed");
+        if settings.theme == theme {
+            return Ok(());
+        }
+        let previous = settings.clone();
+        settings.theme = theme;
+        if let Err(error) = self.repository.save(&settings) {
+            *settings = previous;
+            return Err(error);
+        }
+        Ok(())
+    }
 }
 
 /// ネイティブダイアログを利用するユースケース側の契約。
@@ -1594,6 +1608,18 @@ mod tests {
     #[derive(Default)]
     struct MemoryRepository(Mutex<HashMap<PathBuf, FileData>>);
 
+    struct FailingSettingsRepository(Mutex<GlobalSettings>);
+
+    impl GlobalSettingsRepository for FailingSettingsRepository {
+        fn load(&self) -> Result<GlobalSettings, SettingsError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+
+        fn save(&self, _: &GlobalSettings) -> Result<(), SettingsError> {
+            Err(SettingsError::new("settings storage unavailable"))
+        }
+    }
+
     impl DocumentRepository for MemoryRepository {
         fn read_file(&self, path: &Path) -> Result<FileData, DocumentError> {
             self.0
@@ -1767,6 +1793,17 @@ mod tests {
             Some(bytes.len() as u128),
             bytes.len() as u64,
         )
+    }
+
+    #[test]
+    fn setting_theme_rolls_back_when_persistence_fails() {
+        let repository = Arc::new(FailingSettingsRepository(Mutex::new(
+            GlobalSettings::default(),
+        )));
+        let settings = SettingsSession::load(repository).unwrap();
+
+        assert!(settings.set_theme("lapis.white".to_owned()).is_err());
+        assert_eq!(settings.settings().theme, "lapis.dark");
     }
 
     fn insert_file(repository: &MemoryRepository, path: PathBuf, content: &str) {

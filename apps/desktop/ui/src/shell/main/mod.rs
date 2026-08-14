@@ -88,7 +88,7 @@ impl Editor {
     ) -> gpui::Div {
         self.render_panel_window_frame(panel, cx)
             .border_color(if editor_focused {
-                rgb(0x3a3c58)
+                theme::focus_border()
             } else {
                 theme::border()
             })
@@ -451,22 +451,63 @@ impl Editor {
                         this.close_settings_menu(cx);
                     }))
                     .child(
-                        settings_menu_item(IconName::Settings, "Settings", Some("Ctrl+,"))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.open_settings_view(cx);
-                            })),
+                        settings_menu_item(
+                            IconName::Settings,
+                            "Settings",
+                            Some("Ctrl+,".to_owned()),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.open_settings_view(cx);
+                        })),
                     )
                     .child(
                         settings_menu_item(
                             IconName::SunMoon,
                             "Theme",
-                            Some(self.shell.theme_mode.label()),
+                            theme::name(&theme::active_id()),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_theme_preference(cx);
                         })),
-                    ),
+                    )
+                    .when(self.shell.theme_picker_open, |menu| {
+                        menu.child(self.render_theme_picker(cx))
+                    }),
             )
+    }
+
+    fn render_theme_picker(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
+        let active = theme::active_id();
+        div()
+            .id("theme-picker")
+            .mt_1()
+            .mb_1()
+            .pl_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(theme::available().into_iter().map(|(theme_id, name)| {
+                let selected = active == theme_id;
+                let click_id = theme_id.clone();
+                div()
+                    .id(gpui::SharedString::from(theme_id.as_str().to_owned()))
+                    .h(px(30.0))
+                    .w_full()
+                    .px_2()
+                    .rounded(px(5.0))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .text_size(px(12.0))
+                    .text_color(theme::text())
+                    .hover(|style| style.bg(theme::surface_hover()))
+                    .when(selected, |item| item.bg(theme::accent_soft()))
+                    .child(if selected { "✓" } else { "" })
+                    .child(name)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.select_theme(click_id.clone(), cx);
+                    }))
+            }))
     }
 
     pub(super) fn render_tool_picker(
@@ -607,7 +648,11 @@ impl Editor {
             .overflow_hidden()
             .rounded(px(theme::ISLAND_RADIUS))
             .border_1()
-            .border_color(if editor_focused { rgb(0x3a3c58) } else { theme::border() })
+            .border_color(if editor_focused {
+                theme::focus_border()
+            } else {
+                theme::border()
+            })
             .bg(theme::island())
             .child(
                 div()

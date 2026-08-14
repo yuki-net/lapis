@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
-use gpui::{Rgba, rgb};
+use gpui::Rgba;
 
 use crate::extension_ui::ThemeId;
 
@@ -15,30 +15,33 @@ struct ThemeRegistry {
 
 impl ThemeRegistry {
     fn bundled() -> Self {
-        let fallback = ThemeDefinition::new(
-            "lapis.fallback-dark",
-            ThemeColors {
-                canvas: rgb(0x0f1012),
-                title_bar: rgb(0x0d0e10),
-                island: rgb(0x18191d),
-                surface: rgb(0x202127),
-                surface_hover: rgb(0x272931),
-                surface_active: rgb(0x2d3039),
-                border: rgb(0x25262b),
-                text: rgb(0xe6e7eb),
-                muted: rgb(0x989ba5),
-                subtle: rgb(0x676b75),
-                accent: rgb(0x7a7df5),
-                accent_soft: rgb(0x2a2b43),
-                orange: rgb(0xe4a86c),
-                close_hover: rgb(0xc42b1c),
-            },
-        );
+        const BUILTIN: [&str; 2] = [
+            include_str!("../../assets/themes/dark.json"),
+            include_str!("../../assets/themes/white.json"),
+        ];
+        let mut definitions = BTreeMap::new();
+        let mut fallback = None;
+        for source in BUILTIN {
+            match ThemeDefinition::from_json(source) {
+                Ok(definition) => {
+                    if definitions.contains_key(&definition.id) {
+                        eprintln!("Duplicate bundled theme id");
+                        continue;
+                    }
+                    if fallback.is_none() {
+                        fallback = Some(definition.clone());
+                    }
+                    definitions.insert(definition.id.clone(), definition);
+                }
+                Err(error) => eprintln!("Bundled theme ignored: {error}"),
+            }
+        }
+        let fallback = fallback.expect("at least one bundled theme must be valid");
         let id = fallback.id.clone();
         Self {
             fallback: id.clone(),
             active: id.clone(),
-            definitions: [(id, fallback)].into_iter().collect(),
+            definitions,
         }
     }
 
@@ -85,7 +88,48 @@ pub fn active_id() -> ThemeId {
     THEMES.with(|registry| registry.borrow().active.clone())
 }
 
+pub fn available() -> Vec<(ThemeId, String)> {
+    THEMES.with(|registry| {
+        registry
+            .borrow()
+            .definitions
+            .values()
+            .map(|definition| (definition.id.clone(), definition.name.clone()))
+            .collect()
+    })
+}
+
+pub fn name(theme: &ThemeId) -> Option<String> {
+    THEMES.with(|registry| {
+        registry
+            .borrow()
+            .definitions
+            .get(theme)
+            .map(|definition| definition.name.clone())
+    })
+}
+
 /// アクティブテーマの特定カラーを返す内部ヘルパー。
 pub(super) fn color(select: impl FnOnce(&ThemeColors) -> Rgba) -> Rgba {
     THEMES.with(|registry| select(&registry.borrow().active_definition().colors))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_themes_are_available() {
+        let themes = available();
+        assert!(
+            themes
+                .iter()
+                .any(|(id, name)| { id.as_str() == "lapis.dark" && name == "Dark" })
+        );
+        assert!(
+            themes
+                .iter()
+                .any(|(id, name)| { id.as_str() == "lapis.white" && name == "White" })
+        );
+    }
 }
