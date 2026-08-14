@@ -112,6 +112,27 @@ impl Editor {
         cx.notify();
     }
 
+    fn close_empty_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) -> bool {
+        if position == PanelPosition::Main || !self.shell.panel(position).tabs.is_empty() {
+            return false;
+        }
+        self.close_panel(position, cx);
+        true
+    }
+
+    fn panels_with_document(
+        &self,
+        document_id: &lapis_editor_core::DocumentId,
+    ) -> Vec<PanelPosition> {
+        let tab = PanelTab::Document(document_id.clone());
+        self.shell
+            .panels()
+            .into_iter()
+            .filter(|panel| panel.contains(&tab))
+            .map(|panel| panel.position)
+            .collect()
+    }
+
     fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
         let transition = self
             .shell
@@ -273,8 +294,10 @@ impl Editor {
     ) {
         let PanelTab::Document(document_id) = tab else {
             self.shell.panel_mut(position).remove(&tab);
-            self.refresh_feature_activation();
-            cx.notify();
+            if !self.close_empty_panel(position, cx) {
+                self.refresh_feature_activation();
+                cx.notify();
+            }
             return;
         };
 
@@ -286,6 +309,7 @@ impl Editor {
         else {
             return;
         };
+        let affected_panels = self.panels_with_document(&document_id);
 
         if document.dirty {
             if self.session.active_document_id() != Some(&document_id) {
@@ -314,18 +338,24 @@ impl Editor {
                     return;
                 };
                 let _ = this.update(cx, |editor, cx| {
-                    editor.finish_document_close_prompt(document_id, answer, cx);
+                    editor.finish_document_close_prompt(document_id, affected_panels, answer, cx);
                 });
             })
             .detach();
         } else {
-            self.finish_document_close(document_id, DocumentCloseDisposition::PreserveChanges, cx);
+            self.finish_document_close(
+                document_id,
+                affected_panels,
+                DocumentCloseDisposition::PreserveChanges,
+                cx,
+            );
         }
     }
 
     fn finish_document_close_prompt(
         &mut self,
         document_id: lapis_editor_core::DocumentId,
+        affected_panels: Vec<PanelPosition>,
         answer: usize,
         cx: &mut Context<Self>,
     ) {
@@ -334,6 +364,7 @@ impl Editor {
                 Ok(DocumentAction::Completed) => {
                     self.finish_document_close(
                         document_id,
+                        affected_panels,
                         DocumentCloseDisposition::PreserveChanges,
                         cx,
                     );
@@ -346,6 +377,7 @@ impl Editor {
             },
             1 => self.finish_document_close(
                 document_id,
+                affected_panels,
                 DocumentCloseDisposition::DiscardChanges,
                 cx,
             ),
@@ -356,6 +388,7 @@ impl Editor {
     fn finish_document_close(
         &mut self,
         document_id: lapis_editor_core::DocumentId,
+        affected_panels: Vec<PanelPosition>,
         disposition: DocumentCloseDisposition,
         cx: &mut Context<Self>,
     ) {
@@ -363,6 +396,9 @@ impl Editor {
             Ok(true) => {
                 self.shell.synchronize_documents(&self.session.tabs());
                 self.restore_active_view();
+                for position in affected_panels {
+                    self.close_empty_panel(position, cx);
+                }
                 self.refresh_feature_activation();
                 cx.notify();
             }

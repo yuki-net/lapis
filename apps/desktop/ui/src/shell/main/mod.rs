@@ -31,7 +31,6 @@ impl Editor {
         cx: &mut Context<Self>,
         _compact_layout: bool,
     ) -> impl IntoElement {
-        let editor_focused = self.focus_handle.is_focused(window);
         let now = std::time::Instant::now();
         if self
             .shell
@@ -85,7 +84,7 @@ impl Editor {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    .child(self.render_panel_window(&self.shell.main_panel, cx, editor_focused))
+                    .child(self.render_panel_window(&self.shell.main_panel, cx))
                     .when(self.shell.bottom_panel.is_visible(now), |center| {
                         center
                             .when(!self.shell.bottom_panel.is_transitioning(), |center| {
@@ -114,18 +113,8 @@ impl Editor {
             })
     }
 
-    fn render_panel_window(
-        &self,
-        panel: &PanelHost,
-        cx: &mut Context<Self>,
-        editor_focused: bool,
-    ) -> gpui::Div {
+    fn render_panel_window(&self, panel: &PanelHost, cx: &mut Context<Self>) -> gpui::Div {
         self.render_panel_window_frame(panel, None, cx)
-            .border_color(if editor_focused {
-                theme::focus_border()
-            } else {
-                theme::border()
-            })
     }
 
     fn render_resize_handle(
@@ -172,8 +161,6 @@ impl Editor {
         size.flex_shrink_0()
             .overflow_hidden()
             .rounded(px(theme::ISLAND_RADIUS))
-            .border_1()
-            .border_color(theme::border())
             .bg(theme::island())
             .flex()
             .flex_col()
@@ -285,17 +272,25 @@ impl Editor {
                 )
         });
         let position = panel.position;
+        let has_tabs = !panel.tabs.is_empty();
         div()
             .h(px(39.0))
             .flex_shrink_0()
             .px_2()
-            .border_b_1()
-            .border_color(theme::border())
             .flex()
             .items_center()
             .gap_1()
-            .children(tabs)
-            .child(div().flex_1())
+            .child(
+                div()
+                    .id(("panel-tabs", panel_key(position)))
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .overflow_x_scroll()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .children(tabs),
+            )
             .when(
                 panel
                     .active_tool()
@@ -312,36 +307,24 @@ impl Editor {
                     )
                 },
             )
-            .child(
-                div()
-                    .id(("close-panel", panel_key(position)))
-                    .size(px(25.0))
-                    .rounded(px(5.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(theme::muted())
-                    .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.close_panel(position, cx);
-                    }))
-                    .child("×"),
-            )
-            .child(
-                div()
-                    .id(("open-tool", panel_key(position)))
-                    .size(px(25.0))
-                    .rounded(px(5.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_color(theme::muted())
-                    .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.open_tool_picker(position, cx);
-                    }))
-                    .child("+"),
-            )
+            .when(has_tabs, |bar| {
+                bar.child(
+                    div()
+                        .id(("open-tool-tab", panel_key(position)))
+                        .flex_shrink_0()
+                        .size(px(25.0))
+                        .rounded(px(5.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_color(theme::muted())
+                        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.open_tool_picker(position, cx);
+                        }))
+                        .child("+"),
+                )
+            })
     }
 
     fn render_empty_panel(&self, position: PanelPosition, cx: &mut Context<Self>) -> gpui::Div {
