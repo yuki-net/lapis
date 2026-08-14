@@ -93,6 +93,16 @@ impl DirectXDevices {
 fn check_debug_layer_available() -> bool {
     #[cfg(debug_assertions)]
     {
+        // The DirectX debug layer performs validation on the rendering path and
+        // can make interactive development builds visibly stutter. Keep it
+        // opt-in so a normal debug build has production-like frame pacing.
+        let enabled = std::env::var("LAPIS_GPUI_DX_DEBUG")
+            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
+            .unwrap_or(false);
+        if !enabled {
+            return false;
+        }
+
         use windows::Win32::Graphics::Dxgi::{DXGIGetDebugInterface1, IDXGIInfoQueue};
 
         unsafe { DXGIGetDebugInterface1::<IDXGIInfoQueue>(0) }

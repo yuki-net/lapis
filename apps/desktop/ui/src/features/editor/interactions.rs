@@ -12,9 +12,15 @@ impl Editor {
             0
         } else {
             ((f32::from(position.y - bounds.top()) / 24.0).floor() as usize)
-                .min(self.last_line_layouts.len() - 1)
+                .min(self.session.len_lines().saturating_sub(1))
         };
-        let layout = &self.last_line_layouts[line_index];
+        let Some(layout) = self
+            .last_line_layouts
+            .iter()
+            .min_by_key(|layout| layout.line_index.abs_diff(line_index))
+        else {
+            return self.cursor_offset();
+        };
         let byte = layout
             .line
             .closest_index_for_x(position.x - layout.origin.x);

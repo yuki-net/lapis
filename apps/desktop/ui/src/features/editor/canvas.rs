@@ -6,6 +6,7 @@ pub(super) struct EditorElement {
 
 #[derive(Clone)]
 pub(super) struct EditorLineLayout {
+    pub(super) line_index: usize,
     pub(super) start_char: usize,
     pub(super) line: ShapedLine,
     pub(super) origin: Point<Pixels>,
@@ -15,7 +16,7 @@ pub(super) struct EditorPrepaint {
     lines: Vec<EditorLineLayout>,
     search_highlights: Vec<PaintQuad>,
     selection: Vec<PaintQuad>,
-    cursor: PaintQuad,
+    cursor: Option<PaintQuad>,
 }
 
 impl IntoElement for EditorElement {
@@ -73,11 +74,34 @@ impl Element for EditorElement {
         let mut selection = Vec::new();
         let mut search_highlights = Vec::new();
         let line_height = px(24.0);
-        let mut cursor_line = 0;
-        let mut cursor_byte = 0;
-        let mut offset = 0;
+        let line_count = editor.session.len_lines().max(1);
+        let viewport = editor.editor_scroll.bounds();
+        let (first_line, last_line) = if viewport.size.height > px(0.0) {
+            let first = (f32::from(viewport.top() - bounds.top()) / 24.0)
+                .floor()
+                .max(0.0) as usize;
+            let last = (f32::from(viewport.bottom() - bounds.top()) / 24.0)
+                .ceil()
+                .max(0.0) as usize;
+            (
+                first.saturating_sub(1).min(line_count),
+                last.saturating_add(1).min(line_count),
+            )
+        } else {
+            (0, line_count)
+        };
+        let mut offset = editor.session.line_start_char(first_line).unwrap_or(0);
+        let cursor = editor.cursor_offset();
+        let cursor_line = editor
+            .session
+            .char_to_position(cursor)
+            .map(|position| position.line as usize)
+            .unwrap_or(0)
+            .min(line_count.saturating_sub(1));
+        let selection_color = theme::editor_selection();
+        let search_match_color = theme::editor_search_match();
 
-        for line_index in 0..editor.session.len_lines().max(1) {
+        for line_index in first_line..last_line {
             let raw = editor.session.line(line_index).unwrap_or_default();
             let full_char_len = raw.chars().count();
             let text = raw.trim_end_matches(['\r', '\n']).to_owned();
@@ -97,15 +121,6 @@ impl Element for EditorElement {
                 None,
             );
             let origin = point(bounds.left(), bounds.top() + line_height * line_index);
-            let cursor = editor.cursor_offset();
-            if cursor >= offset
-                && (cursor <= offset + visible_chars
-                    || line_index + 1 == editor.session.len_lines())
-            {
-                cursor_line = line_index;
-                cursor_byte =
-                    byte_for_char(&text, cursor.saturating_sub(offset).min(visible_chars));
-            }
             push_range_quad(
                 &mut selection,
                 &shaped,
@@ -113,7 +128,7 @@ impl Element for EditorElement {
                 offset,
                 visible_chars,
                 &editor.selected_range,
-                theme::editor_selection(),
+                selection_color,
             );
             for range in &editor.search.matches {
                 push_range_quad(
@@ -123,10 +138,11 @@ impl Element for EditorElement {
                     offset,
                     visible_chars,
                     range,
-                    theme::editor_search_match(),
+                    search_match_color,
                 );
             }
             lines.push(EditorLineLayout {
+                line_index,
                 start_char: offset,
                 line: shaped,
                 origin,
@@ -134,16 +150,22 @@ impl Element for EditorElement {
             offset += full_char_len;
         }
 
-        let line = &lines[cursor_line].line;
-        let cursor_x = line.x_for_index(cursor_byte);
-        let cursor_y = bounds.top() + line_height * cursor_line;
-        let cursor = fill(
-            Bounds::new(
-                point(bounds.left() + cursor_x, cursor_y),
-                size(px(2.0), line_height),
-            ),
-            theme::editor_cursor(),
-        );
+        let cursor = lines
+            .iter()
+            .find(|layout| layout.line_index == cursor_line)
+            .map(|layout| {
+                let cursor_line_start = layout.start_char;
+                let cursor_byte =
+                    byte_for_char(&layout.line.text, cursor.saturating_sub(cursor_line_start));
+                let cursor_x = layout.line.x_for_index(cursor_byte);
+                fill(
+                    Bounds::new(
+                        point(layout.origin.x + cursor_x, layout.origin.y),
+                        size(px(2.0), line_height),
+                    ),
+                    theme::editor_cursor(),
+                )
+            });
         EditorPrepaint {
             lines,
             search_highlights,
@@ -178,7 +200,9 @@ impl Element for EditorElement {
             layout.line.paint(layout.origin, px(24.0), window, cx).ok();
         }
         if focus_handle.is_focused(window) {
-            window.paint_quad(prepaint.cursor.clone());
+            if let Some(cursor) = prepaint.cursor.clone() {
+                window.paint_quad(cursor);
+            }
         }
         let layouts = prepaint.lines.clone();
         self.editor.update(cx, |editor, _| {
@@ -314,7 +338,10 @@ impl EntityInputHandler for Editor {
     ) -> Option<Bounds<Pixels>> {
         let range = self.range_from_utf16(&range_utf16);
         let position = self.session.char_to_position(range.start).ok()?;
-        let layout = self.last_line_layouts.get(position.line as usize)?;
+        let layout = self
+            .last_line_layouts
+            .iter()
+            .find(|layout| layout.line_index == position.line as usize)?;
         let local_char = range.start.saturating_sub(layout.start_char);
         let byte = byte_for_char(&layout.line.text, local_char);
         let x = layout.line.x_for_index(byte);

@@ -15,6 +15,11 @@ edition = "2024"
 description = "A small Markdown editor built with GPUI."
 license = "MIT"
 
+# Keep debug symbols and assertions for the dev run configuration while
+# avoiding the frame-time cost of a completely unoptimized GPUI application.
+[profile.dev]
+opt-level = 1
+
 [workspace.dependencies]
 gpui = { version = "0.2.2", path = "vendor/gpui" }
 rfd = "0.15"

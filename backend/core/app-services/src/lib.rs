@@ -1204,6 +1204,20 @@ impl EditorSession {
         self.active_document()?.document.line(line)
     }
 
+    pub fn line_start_char(&self, line: usize) -> Result<usize, DocumentError> {
+        self.required_document()?
+            .document
+            .position_to_char(Position::new(
+                u32::try_from(line).map_err(|_| {
+                    DocumentError::new(
+                        lapis_document::DocumentErrorKind::InvalidRange,
+                        "line index is too large",
+                    )
+                })?,
+                0,
+            ))
+    }
+
     pub fn slice_chars(&self, range: Range<usize>) -> Result<String, DocumentError> {
         self.required_document()?.document.slice_chars(range)
     }
