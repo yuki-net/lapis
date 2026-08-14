@@ -77,10 +77,10 @@ impl Editor {
                 if panel.active.is_none() {
                     panel.active = panel.tabs.first().cloned();
                 }
-                panel.open = position == PanelPosition::Main || panel_view.open;
+                panel.set_open_immediate(position == PanelPosition::Main || panel_view.open);
                 panel.size = panel_size(position, panel_view.size);
             }
-            self.shell.main_panel.open = true;
+            self.shell.main_panel.set_open_immediate(true);
             self.refresh_feature_activation();
             return;
         }
@@ -99,7 +99,7 @@ impl Editor {
         if let Some(side) = view.side_panel {
             self.shell.right_panel.activate_tool(ViewId::new(side));
         } else {
-            self.shell.right_panel.close();
+            self.shell.right_panel.set_open_immediate(false);
         }
         if let Some(bottom) = view.bottom_panel {
             self.shell.bottom_panel.activate_tool(ViewId::new(bottom));

@@ -32,14 +32,26 @@ impl Editor {
         _compact_layout: bool,
     ) -> impl IntoElement {
         let editor_focused = self.focus_handle.is_focused(window);
+        let now = std::time::Instant::now();
+        if self
+            .shell
+            .panels()
+            .into_iter()
+            .any(|panel| panel.is_animating(now))
+        {
+            window.request_animation_frame();
+        }
         let viewport_width = f32::from(window.viewport_size().width);
-        let left_width = if self.shell.left_panel.open {
-            self.shell.left_panel.size + theme::CANVAS_GAP
+        let left_size = self.shell.left_panel.effective_size(now);
+        let right_size = self.shell.right_panel.effective_size(now);
+        let bottom_size = self.shell.bottom_panel.effective_size(now);
+        let left_width = if self.shell.left_panel.is_visible(now) {
+            left_size + theme::CANVAS_GAP
         } else {
             0.0
         };
-        let right_width = if self.shell.right_panel.open {
-            self.shell.right_panel.size + theme::CANVAS_GAP
+        let right_width = if self.shell.right_panel.is_visible(now) {
+            right_size + theme::CANVAS_GAP
         } else {
             0.0
         };
@@ -53,9 +65,15 @@ impl Editor {
             .flex()
             .flex_1()
             .px(px(theme::CANVAS_GAP))
-            .when(self.shell.left_panel.open, |body| {
-                body.child(self.render_panel_window_frame(&self.shell.left_panel, cx))
-                    .child(self.render_resize_handle(ResizeTarget::Left, false, cx))
+            .when(self.shell.left_panel.is_visible(now), |body| {
+                body.child(self.render_panel_window_frame(
+                    &self.shell.left_panel,
+                    Some(left_size),
+                    cx,
+                ))
+                .when(!self.shell.left_panel.is_transitioning(), |body| {
+                    body.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
+                })
             })
             .child(
                 div()
@@ -68,15 +86,31 @@ impl Editor {
                     .flex_col()
                     .overflow_hidden()
                     .child(self.render_panel_window(&self.shell.main_panel, cx, editor_focused))
-                    .when(self.shell.bottom_panel.open, |center| {
+                    .when(self.shell.bottom_panel.is_visible(now), |center| {
                         center
-                            .child(self.render_resize_handle(ResizeTarget::Bottom, true, cx))
-                            .child(self.render_panel_window_frame(&self.shell.bottom_panel, cx))
+                            .when(!self.shell.bottom_panel.is_transitioning(), |center| {
+                                center.child(self.render_resize_handle(
+                                    ResizeTarget::Bottom,
+                                    true,
+                                    cx,
+                                ))
+                            })
+                            .child(self.render_panel_window_frame(
+                                &self.shell.bottom_panel,
+                                Some(bottom_size),
+                                cx,
+                            ))
                     }),
             )
-            .when(self.shell.right_panel.open, |body| {
-                body.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
-                    .child(self.render_panel_window_frame(&self.shell.right_panel, cx))
+            .when(self.shell.right_panel.is_visible(now), |body| {
+                body.when(!self.shell.right_panel.is_transitioning(), |body| {
+                    body.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
+                })
+                .child(self.render_panel_window_frame(
+                    &self.shell.right_panel,
+                    Some(right_size),
+                    cx,
+                ))
             })
     }
 
@@ -86,7 +120,7 @@ impl Editor {
         cx: &mut Context<Self>,
         editor_focused: bool,
     ) -> gpui::Div {
-        self.render_panel_window_frame(panel, cx)
+        self.render_panel_window_frame(panel, None, cx)
             .border_color(if editor_focused {
                 theme::focus_border()
             } else {
@@ -119,15 +153,21 @@ impl Editor {
         handle
     }
 
-    fn render_panel_window_frame(&self, panel: &PanelHost, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_panel_window_frame(
+        &self,
+        panel: &PanelHost,
+        animated_size: Option<f32>,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let position = panel.position;
         let is_bottom = panel.position == PanelPosition::Bottom;
+        let panel_size = animated_size.unwrap_or(panel.size);
         let size = if panel.position == PanelPosition::Main {
             div().w_full().flex_1().min_h(px(0.0))
         } else if is_bottom {
-            div().h(px(panel.size)).w_full()
+            div().h(px(panel_size)).w_full()
         } else {
-            div().w(px(panel.size)).h_full()
+            div().w(px(panel_size)).h_full()
         };
         size.flex_shrink_0()
             .overflow_hidden()
@@ -283,11 +323,7 @@ impl Editor {
                     .text_color(theme::muted())
                     .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if position != PanelPosition::Main {
-                            this.shell.panel_mut(position).close();
-                        }
-                        this.refresh_feature_activation();
-                        cx.notify();
+                        this.close_panel(position, cx);
                     }))
                     .child("×"),
             )

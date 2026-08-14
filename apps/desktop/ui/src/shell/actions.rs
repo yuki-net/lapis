@@ -8,7 +8,11 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_panel(PanelPosition::Right, Some(ViewId::new(id::VIEW_PREVIEW)));
+        self.open_panel(
+            PanelPosition::Right,
+            Some(ViewId::new(id::VIEW_PREVIEW)),
+            cx,
+        );
         self.shell.command_palette_open = false;
         self.refresh_feature_activation();
         cx.notify();
@@ -20,7 +24,7 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_panel(PanelPosition::Bottom);
+        self.toggle_panel(PanelPosition::Bottom, cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation();
         cx.notify();
@@ -32,7 +36,11 @@ impl Editor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_panel(PanelPosition::Right, Some(ViewId::new(id::VIEW_ASSISTANT)));
+        self.open_panel(
+            PanelPosition::Right,
+            Some(ViewId::new(id::VIEW_ASSISTANT)),
+            cx,
+        );
         self.shell.command_palette_open = false;
         self.refresh_feature_activation();
         cx.notify();
@@ -48,27 +56,101 @@ impl Editor {
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
-        self.shell.activate_view(position, view);
+        self.activate_panel_view(position, view, cx);
         self.refresh_feature_activation();
         cx.notify();
     }
 
-    pub(super) fn open_panel(&mut self, position: PanelPosition, view: Option<ViewId>) {
-        let panel = self.shell.panel_mut(position);
-        panel.open = true;
+    pub(super) fn open_panel(
+        &mut self,
+        position: PanelPosition,
+        view: Option<ViewId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_panel_open(position, true, cx);
         if let Some(view) = view {
-            panel.activate_tool(view);
+            self.shell
+                .panel_mut(position)
+                .activate_tool_without_open(view);
         }
     }
 
-    pub(super) fn toggle_panel(&mut self, position: PanelPosition) {
-        let panel = self.shell.panel_mut(position);
-        panel.open = !panel.open;
+    pub(super) fn toggle_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
+        if position == PanelPosition::Main {
+            return;
+        }
+        let open = !self.shell.panel(position).open;
+        self.request_panel_open(position, open, cx);
     }
 
     pub(super) fn toggle_header_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
-        self.toggle_panel(position);
+        self.toggle_panel(position, cx);
         self.shell.command_palette_open = false;
+        self.refresh_feature_activation();
+        cx.notify();
+    }
+
+    pub(super) fn activate_panel_view(
+        &mut self,
+        position: PanelPosition,
+        view: ViewId,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_panel_open(position, true, cx);
+        self.shell
+            .panel_mut(position)
+            .activate_tool_without_open(view);
+    }
+
+    pub(super) fn close_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
+        if position == PanelPosition::Main {
+            return;
+        }
+        self.shell.panel_mut(position).active = None;
+        self.request_panel_open(position, false, cx);
+        self.refresh_feature_activation();
+        cx.notify();
+    }
+
+    fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
+        let transition = self
+            .shell
+            .panel_mut(position)
+            .request_open(open, std::time::Instant::now());
+        if let Some((generation, duration)) = transition {
+            self.schedule_panel_transition(position, generation, duration, cx);
+        }
+    }
+
+    fn schedule_panel_transition(
+        &mut self,
+        position: PanelPosition,
+        generation: u64,
+        duration: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            Timer::after(duration).await;
+            let _ = this.update(cx, |editor, cx| {
+                editor.complete_panel_transition(position, generation, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn complete_panel_transition(
+        &mut self,
+        position: PanelPosition,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
+        let next = self
+            .shell
+            .panel_mut(position)
+            .complete_transition(generation, std::time::Instant::now());
+        if let Some((next_generation, duration)) = next {
+            self.schedule_panel_transition(position, next_generation, duration, cx);
+        }
         self.refresh_feature_activation();
         cx.notify();
     }
@@ -113,7 +195,11 @@ impl Editor {
     }
 
     pub(super) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
-        self.open_panel(PanelPosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)));
+        self.open_panel(
+            PanelPosition::Main,
+            Some(ViewId::new(id::VIEW_SETTINGS)),
+            cx,
+        );
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
         self.refresh_feature_activation();
@@ -172,10 +258,8 @@ impl Editor {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        self.shell.panel_mut(position).activate(tab.clone());
-        if let PanelTab::Tool(view) = tab {
-            self.shell.activate_view(position, view);
-        }
+        self.request_panel_open(position, true, cx);
+        self.shell.panel_mut(position).activate_without_open(tab);
         self.refresh_feature_activation();
         cx.notify();
     }
@@ -303,7 +387,7 @@ impl Editor {
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
-        self.shell.activate_view(position, view);
+        self.activate_panel_view(position, view, cx);
         self.shell.tool_picker = None;
         self.shell.set_tool_picker_query(String::new());
         self.refresh_feature_activation();

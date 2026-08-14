@@ -2,6 +2,20 @@ use super::*;
 
 impl Editor {
     pub(super) fn start_resize(&mut self, target: ResizeTarget, cx: &mut Context<Self>) {
+        let can_resize = match target {
+            ResizeTarget::Left => {
+                self.shell.left_panel.open && !self.shell.left_panel.is_transitioning()
+            }
+            ResizeTarget::Right => {
+                self.shell.right_panel.open && !self.shell.right_panel.is_transitioning()
+            }
+            ResizeTarget::Bottom => {
+                self.shell.bottom_panel.open && !self.shell.bottom_panel.is_transitioning()
+            }
+        };
+        if !can_resize {
+            return;
+        }
         self.shell.resizing = Some(target);
         cx.notify();
     }

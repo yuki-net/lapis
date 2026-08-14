@@ -350,9 +350,10 @@ impl Editor {
         self.quick_search
             .update(cx, |search, cx| search.open(provider, cx));
         self.shell.command_palette_open = false;
-        self.shell.activate_view(
+        self.activate_panel_view(
             crate::extension_ui::PanelPosition::Right,
             ViewId::new(id::VIEW_COMMAND_SEARCH),
+            cx,
         );
         self.refresh_feature_activation();
         self.double_shift.reset();
@@ -361,7 +362,7 @@ impl Editor {
     }
 
     fn close_quick_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.shell.right_panel.close();
+        self.close_panel(crate::extension_ui::PanelPosition::Right, cx);
         self.refresh_feature_activation();
         window.focus(&self.focus_handle);
         cx.notify();
@@ -375,7 +376,7 @@ impl Editor {
     ) {
         match event {
             QuickSearchEvent::Execute(command) => {
-                self.shell.right_panel.close();
+                self.close_panel(crate::extension_ui::PanelPosition::Right, cx);
                 self.execute_command(command, window, cx);
             }
             QuickSearchEvent::Dismiss => self.close_quick_search(window, cx),

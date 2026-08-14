@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::{
     extension_ui::{FeatureRegistry, PanelPosition, ThemeId, ViewId},
     features::id,
@@ -11,6 +13,40 @@ pub(crate) enum ResizeTarget {
     Left,
     Right,
     Bottom,
+}
+
+const PANEL_ANIMATION_DURATION: Duration = Duration::from_millis(100);
+
+#[derive(Clone, Debug)]
+struct PanelTransition {
+    from: f32,
+    to: f32,
+    started_at: Instant,
+    generation: u64,
+}
+
+impl PanelTransition {
+    fn progress(&self, now: Instant) -> f32 {
+        (now.duration_since(self.started_at).as_secs_f32() / PANEL_ANIMATION_DURATION.as_secs_f32())
+            .min(1.0)
+    }
+
+    fn is_active(&self, now: Instant) -> bool {
+        self.progress(now) < 1.0
+    }
+
+    fn value(&self, now: Instant) -> f32 {
+        let progress = ease_in_out(self.progress(now));
+        self.from + (self.to - self.from) * progress
+    }
+}
+
+fn ease_in_out(value: f32) -> f32 {
+    if value < 0.5 {
+        2.0 * value * value
+    } else {
+        1.0 - (-2.0 * value + 2.0).powi(2) / 2.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -46,6 +82,9 @@ pub(crate) struct PanelHost {
     pub active: Option<PanelTab>,
     pub open: bool,
     pub size: f32,
+    transition: Option<PanelTransition>,
+    pending_open: Option<bool>,
+    next_generation: u64,
 }
 
 impl PanelHost {
@@ -57,24 +96,112 @@ impl PanelHost {
             active,
             open,
             size,
+            transition: None,
+            pending_open: None,
+            next_generation: 0,
         }
     }
 
     pub fn activate(&mut self, tab: PanelTab) {
+        self.activate_without_open(tab);
+        self.open = true;
+    }
+
+    pub fn activate_without_open(&mut self, tab: PanelTab) {
         if !self.tabs.contains(&tab) {
             self.tabs.push(tab.clone());
         }
         self.active = Some(tab);
-        self.open = true;
     }
 
     pub fn activate_tool(&mut self, view: ViewId) {
         self.activate(PanelTab::Tool(view));
     }
 
-    pub fn close(&mut self) {
-        self.open = false;
-        self.active = None;
+    pub fn activate_tool_without_open(&mut self, view: ViewId) {
+        self.activate_without_open(PanelTab::Tool(view));
+    }
+
+    pub fn set_open_immediate(&mut self, open: bool) {
+        self.open = open;
+        self.transition = None;
+        self.pending_open = None;
+        self.next_generation = self.next_generation.wrapping_add(1);
+    }
+
+    pub fn request_open(&mut self, open: bool, now: Instant) -> Option<(u64, Duration)> {
+        if self.position == PanelPosition::Main {
+            self.set_open_immediate(true);
+            return None;
+        }
+
+        if let Some(transition) = &self.transition
+            && transition.is_active(now)
+        {
+            self.pending_open = Some(open);
+            return None;
+        }
+
+        let from = self.effective_size(now);
+        self.transition = None;
+        self.pending_open = None;
+        if self.open == open {
+            return None;
+        }
+
+        self.open = open;
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        self.transition = Some(PanelTransition {
+            from,
+            to: if open { self.size } else { 0.0 },
+            started_at: now,
+            generation,
+        });
+        Some((generation, PANEL_ANIMATION_DURATION))
+    }
+
+    pub fn complete_transition(
+        &mut self,
+        generation: u64,
+        now: Instant,
+    ) -> Option<(u64, Duration)> {
+        let Some(transition) = &self.transition else {
+            return None;
+        };
+        if transition.generation != generation || transition.is_active(now) {
+            return None;
+        }
+
+        self.transition = None;
+        let Some(open) = self.pending_open.take() else {
+            return None;
+        };
+        self.request_open(open, now)
+    }
+
+    pub fn is_animating(&self, now: Instant) -> bool {
+        self.transition
+            .as_ref()
+            .is_some_and(|transition| transition.is_active(now))
+    }
+
+    pub fn is_transitioning(&self) -> bool {
+        self.transition.is_some()
+    }
+
+    pub fn is_visible(&self, now: Instant) -> bool {
+        self.position == PanelPosition::Main
+            || self.open
+            || self.is_animating(now)
+            || self.pending_open.is_some()
+    }
+
+    pub fn effective_size(&self, now: Instant) -> f32 {
+        self.transition.as_ref().map_or_else(
+            || if self.open { self.size } else { 0.0 },
+            |transition| transition.value(now),
+        )
     }
 
     pub fn remove(&mut self, tab: &PanelTab) -> bool {
@@ -305,5 +432,71 @@ mod tests {
         assert!(state.main_panel.open);
         assert!(state.main_panel.tabs.is_empty());
         assert_eq!(state.main_panel.active, None);
+    }
+
+    #[test]
+    fn panel_transition_interpolates_width_and_height_endpoints() {
+        let start = Instant::now();
+        let mut left = PanelHost::new(PanelPosition::Left, Vec::new(), false, 260.0);
+        let (generation, duration) = left.request_open(true, start).unwrap();
+
+        assert_eq!(left.effective_size(start), 0.0);
+        assert!(left.effective_size(start + duration / 2) > 0.0);
+        assert_eq!(left.effective_size(start + duration), 260.0);
+        assert!(
+            left.complete_transition(generation, start + duration)
+                .is_none()
+        );
+
+        let mut bottom = PanelHost::new(
+            PanelPosition::Bottom,
+            Vec::new(),
+            true,
+            theme::BOTTOM_PANEL_HEIGHT,
+        );
+        let (generation, duration) = bottom.request_open(false, start).unwrap();
+        assert_eq!(bottom.effective_size(start), theme::BOTTOM_PANEL_HEIGHT);
+        assert_eq!(bottom.effective_size(start + duration), 0.0);
+        assert!(
+            bottom
+                .complete_transition(generation, start + duration)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn panel_transition_applies_the_last_requested_state_after_completion() {
+        let start = Instant::now();
+        let mut panel = PanelHost::new(PanelPosition::Right, Vec::new(), false, 310.0);
+        let (generation, duration) = panel.request_open(true, start).unwrap();
+
+        assert!(panel.request_open(false, start + duration / 2).is_none());
+        let next = panel.complete_transition(generation, start + duration);
+        assert!(next.is_some());
+        assert!(!panel.open);
+
+        let (next_generation, next_duration) = next.unwrap();
+        assert_eq!(panel.effective_size(start + duration), 310.0);
+        assert_eq!(panel.effective_size(start + duration + next_duration), 0.0);
+        assert!(
+            panel
+                .complete_transition(next_generation, start + duration + next_duration)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn restoring_panel_state_clears_pending_animation() {
+        let start = Instant::now();
+        let mut panel = PanelHost::new(PanelPosition::Left, Vec::new(), false, 260.0);
+        let _ = panel.request_open(true, start);
+        panel.set_open_immediate(false);
+
+        assert!(!panel.is_animating(start + Duration::from_millis(100)));
+        assert!(!panel.is_visible(start + Duration::from_millis(100)));
+        assert_eq!(
+            panel.effective_size(start + Duration::from_millis(100)),
+            0.0
+        );
     }
 }
