@@ -180,6 +180,116 @@ impl Editor {
         cx.notify();
     }
 
+    pub(super) fn close_panel_tab(
+        &mut self,
+        position: PanelPosition,
+        tab: PanelTab,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let PanelTab::Document(document_id) = tab else {
+            self.shell.panel_mut(position).remove(&tab);
+            self.refresh_feature_activation();
+            cx.notify();
+            return;
+        };
+
+        let Some(document) = self
+            .session
+            .tabs()
+            .into_iter()
+            .find(|document| document.id == document_id)
+        else {
+            return;
+        };
+
+        if document.dirty {
+            if self.session.active_document_id() != Some(&document_id) {
+                self.persist_active_view();
+                self.session.activate_document(&document_id);
+                self.shell.synchronize_documents(&self.session.tabs());
+                self.restore_active_view();
+                cx.notify();
+            }
+
+            let message = format!("Close {}?", document.display_name);
+            let detail = "This document has unsaved changes.";
+            let receiver = window.prompt(
+                PromptLevel::Warning,
+                &message,
+                Some(detail),
+                &[
+                    PromptButton::new("Save"),
+                    PromptButton::new("Discard"),
+                    PromptButton::cancel("Cancel"),
+                ],
+                cx,
+            );
+            cx.spawn(async move |this, cx| {
+                let Ok(answer) = receiver.await else {
+                    return;
+                };
+                let _ = this.update(cx, |editor, cx| {
+                    editor.finish_document_close_prompt(document_id, answer, cx);
+                });
+            })
+            .detach();
+        } else {
+            self.finish_document_close(document_id, DocumentCloseDisposition::PreserveChanges, cx);
+        }
+    }
+
+    fn finish_document_close_prompt(
+        &mut self,
+        document_id: lapis_editor_core::DocumentId,
+        answer: usize,
+        cx: &mut Context<Self>,
+    ) {
+        match answer {
+            0 => match self.session.save_document() {
+                Ok(DocumentAction::Completed) => {
+                    self.finish_document_close(
+                        document_id,
+                        DocumentCloseDisposition::PreserveChanges,
+                        cx,
+                    );
+                }
+                Ok(DocumentAction::Cancelled) => {}
+                Err(error) => {
+                    self.status = format!("保存失敗: {error}");
+                    cx.notify();
+                }
+            },
+            1 => self.finish_document_close(
+                document_id,
+                DocumentCloseDisposition::DiscardChanges,
+                cx,
+            ),
+            _ => {}
+        }
+    }
+
+    fn finish_document_close(
+        &mut self,
+        document_id: lapis_editor_core::DocumentId,
+        disposition: DocumentCloseDisposition,
+        cx: &mut Context<Self>,
+    ) {
+        match self.session.close_document(&document_id, disposition) {
+            Ok(true) => {
+                self.shell.synchronize_documents(&self.session.tabs());
+                self.restore_active_view();
+                self.refresh_feature_activation();
+                cx.notify();
+            }
+            Ok(false) => {}
+            Err(error) => {
+                self.status = format!("閉じることができませんでした: {error}");
+                cx.notify();
+            }
+        }
+    }
+
     pub(super) fn close_tool_picker(&mut self, cx: &mut Context<Self>) {
         if self.shell.tool_picker.take().is_some() {
             self.shell.set_tool_picker_query(String::new());

@@ -7,11 +7,13 @@ use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, Render, ScrollHandle, ShapedLine, SharedString, Style, TextRun, Timer,
-    UTF16Selection, Window, WindowControlArea, anchored, div, fill, point, prelude::*, px,
-    relative, size,
+    Pixels, Point, PromptButton, PromptLevel, Render, ScrollHandle, ShapedLine, SharedString,
+    Style, TextRun, Timer, UTF16Selection, Window, WindowControlArea, anchored, div, fill, point,
+    prelude::*, px, relative, size,
 };
-use lapis_app_services::{ConversationViewState, DocumentAction, EditorSession};
+use lapis_app_services::{
+    ConversationViewState, DocumentAction, DocumentCloseDisposition, EditorSession,
+};
 use lapis_editor_core::{ExecutionId, TaskId};
 use lapis_git::ChangeKind;
 use lapis_lsp::LspPosition;

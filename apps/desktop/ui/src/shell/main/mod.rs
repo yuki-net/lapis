@@ -172,6 +172,7 @@ impl Editor {
             };
             let active = panel.active.as_ref() == Some(tab);
             let tab = tab.clone();
+            let close_tab = tab.clone();
             let position = panel.position;
             let drag = DraggedPanelTab {
                 source_panel: position,
@@ -219,6 +220,29 @@ impl Editor {
                     }
                 }))
                 .child(label)
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
+                        .size(px(20.0))
+                        .rounded(px(4.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .cursor(CursorStyle::PointingHand)
+                        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_, _, _, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.close_panel_tab(position, close_tab.clone(), window, cx);
+                        }))
+                        .child(Icon::new(IconName::X)),
+                )
         });
         let position = panel.position;
         div()

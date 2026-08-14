@@ -104,6 +104,12 @@ pub enum DocumentAction {
     Cancelled,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentCloseDisposition {
+    PreserveChanges,
+    DiscardChanges,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConversationViewState {
@@ -1426,20 +1432,30 @@ impl EditorSession {
         true
     }
 
-    pub fn close_document(&mut self, id: &DocumentId) -> Result<bool, DocumentError> {
+    pub fn close_document(
+        &mut self,
+        id: &DocumentId,
+        disposition: DocumentCloseDisposition,
+    ) -> Result<bool, DocumentError> {
         let Some(index) = self.documents.iter().position(|open| &open.id == id) else {
             return Ok(false);
         };
-        if self.documents[index].document.is_dirty() {
+        if self.documents[index].document.is_dirty()
+            && disposition == DocumentCloseDisposition::PreserveChanges
+        {
             return Err(DocumentError::conflict(
                 "未保存の文書は確認なしに閉じられません",
             ));
         }
+        let was_active = self.active == Some(index);
         self.documents.remove(index);
         self.active = if self.documents.is_empty() {
             None
-        } else {
+        } else if was_active {
             Some(index.min(self.documents.len() - 1))
+        } else {
+            self.active
+                .map(|active| active.saturating_sub(usize::from(active > index)))
         };
         self.persist_best_effort();
         Ok(true)
@@ -1856,6 +1872,78 @@ mod tests {
         let first = editor.tabs()[1].id.clone();
         assert!(editor.activate_document(&first));
         assert_eq!(editor.active_document_id(), Some(&first));
+    }
+
+    #[test]
+    fn closing_active_document_selects_the_previous_document() {
+        let repository = Arc::new(MemoryRepository::default());
+        let state = Arc::new(MemoryState::default());
+        for name in ["one.rs", "two.md", "three.txt"] {
+            insert_file(&repository, PathBuf::from(name), name);
+        }
+        let mut editor = session(repository, state);
+        for name in ["one.rs", "two.md", "three.txt"] {
+            editor.open_path(PathBuf::from(name)).unwrap();
+        }
+        let tabs = editor.tabs();
+        let active = tabs.iter().find(|tab| tab.active).unwrap().id.clone();
+        let previous = tabs[tabs.len() - 2].id.clone();
+
+        assert!(
+            editor
+                .close_document(&active, DocumentCloseDisposition::PreserveChanges)
+                .unwrap()
+        );
+        assert_eq!(editor.active_document_id(), Some(&previous));
+    }
+
+    #[test]
+    fn closing_inactive_document_keeps_the_active_document() {
+        let repository = Arc::new(MemoryRepository::default());
+        let state = Arc::new(MemoryState::default());
+        for name in ["one.rs", "two.md", "three.txt"] {
+            insert_file(&repository, PathBuf::from(name), name);
+        }
+        let mut editor = session(repository, state);
+        for name in ["one.rs", "two.md", "three.txt"] {
+            editor.open_path(PathBuf::from(name)).unwrap();
+        }
+        let tabs = editor.tabs();
+        let inactive = tabs.iter().find(|tab| !tab.active).unwrap().id.clone();
+        let active = tabs.iter().find(|tab| tab.active).unwrap().id.clone();
+        assert_eq!(editor.active_document_id(), Some(&active));
+
+        assert!(
+            editor
+                .close_document(&inactive, DocumentCloseDisposition::PreserveChanges)
+                .unwrap()
+        );
+        assert_eq!(editor.active_document_id(), Some(&active));
+    }
+
+    #[test]
+    fn dirty_document_requires_disposition_before_close() {
+        let repository = Arc::new(MemoryRepository::default());
+        let path = PathBuf::from("note.md");
+        insert_file(&repository, path.clone(), "base");
+        let mut editor = session(repository, Arc::new(MemoryState::default()));
+        editor.open_path(path).unwrap();
+        let id = editor.active_document_id().unwrap().clone();
+        editor.replace_range(0..4, "draft").unwrap();
+
+        assert_eq!(
+            editor
+                .close_document(&id, DocumentCloseDisposition::PreserveChanges)
+                .unwrap_err()
+                .kind(),
+            DocumentErrorKind::Conflict
+        );
+        assert!(
+            editor
+                .close_document(&id, DocumentCloseDisposition::DiscardChanges)
+                .unwrap()
+        );
+        assert!(editor.tabs().iter().all(|tab| tab.id != id));
     }
 
     #[test]

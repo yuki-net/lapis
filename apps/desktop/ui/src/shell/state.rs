@@ -288,4 +288,22 @@ mod tests {
         assert!(!state.left_panel.contains(&tab));
         assert!(state.right_panel.contains(&tab));
     }
+
+    #[test]
+    fn removing_tabs_keeps_panel_open_and_selects_adjacent_tabs() {
+        let mut state = ShellState::default();
+        state.main_panel.activate_tool(ViewId::new(id::VIEW_FILES));
+        state
+            .main_panel
+            .activate_tool(ViewId::new(id::VIEW_TERMINAL));
+        let files = PanelTab::tool(id::VIEW_FILES);
+        let terminal = PanelTab::tool(id::VIEW_TERMINAL);
+
+        assert!(state.main_panel.remove(&files));
+        assert_eq!(state.main_panel.active, Some(terminal.clone()));
+        assert!(state.main_panel.remove(&terminal));
+        assert!(state.main_panel.open);
+        assert!(state.main_panel.tabs.is_empty());
+        assert_eq!(state.main_panel.active, None);
+    }
 }
