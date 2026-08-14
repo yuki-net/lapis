@@ -53,5 +53,7 @@ mod tests {
             path(IconName::PanelLeftDashed),
             "icons/panel-left-dashed.svg"
         );
+        assert_eq!(path(IconName::Settings), "icons/settings.svg");
+        assert_eq!(path(IconName::SunMoon), "icons/sun-moon.svg");
     }
 }

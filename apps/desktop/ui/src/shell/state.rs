@@ -7,6 +7,21 @@ use lapis_app_services::DocumentTab;
 use lapis_editor_core::DocumentId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ThemeMode {
+    Dark,
+    White,
+}
+
+impl ThemeMode {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark",
+            Self::White => "White",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResizeTarget {
     Left,
     Right,
@@ -106,6 +121,9 @@ pub(crate) struct ShellState {
     pub command_palette_open: bool,
     pub tool_picker: Option<PanelPosition>,
     pub tool_picker_query: String,
+    pub settings_menu_open: bool,
+    pub settings_menu_anchor: gpui::Point<gpui::Pixels>,
+    pub theme_mode: ThemeMode,
     pub resizing: Option<ResizeTarget>,
 }
 
@@ -134,6 +152,9 @@ impl Default for ShellState {
             command_palette_open: false,
             tool_picker: None,
             tool_picker_query: String::new(),
+            settings_menu_open: false,
+            settings_menu_anchor: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            theme_mode: ThemeMode::Dark,
             resizing: None,
         }
     }
@@ -182,6 +203,13 @@ impl ShellState {
 
     pub fn set_tool_picker_query(&mut self, query: impl Into<String>) {
         self.tool_picker_query = query.into();
+    }
+
+    pub fn toggle_theme_mode(&mut self) {
+        self.theme_mode = match self.theme_mode {
+            ThemeMode::Dark => ThemeMode::White,
+            ThemeMode::White => ThemeMode::Dark,
+        };
     }
 
     pub fn synchronize_documents(&mut self, documents: &[DocumentTab]) {
@@ -277,5 +305,16 @@ mod tests {
 
         assert!(!state.left_panel.contains(&tab));
         assert!(state.right_panel.contains(&tab));
+    }
+
+    #[test]
+    fn theme_preference_toggles_without_changing_the_default_mode() {
+        let mut state = ShellState::default();
+
+        assert_eq!(state.theme_mode, ThemeMode::Dark);
+        state.toggle_theme_mode();
+        assert_eq!(state.theme_mode, ThemeMode::White);
+        state.toggle_theme_mode();
+        assert_eq!(state.theme_mode, ThemeMode::Dark);
     }
 }

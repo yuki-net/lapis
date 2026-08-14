@@ -36,4 +36,6 @@ define_icons! {
     X => ("icons/x.svg", include_bytes!("../../../assets/icons/x.svg")),
     PanelLeft => ("icons/panel-left.svg", include_bytes!("../../../assets/icons/panel-left.svg")),
     PanelLeftDashed => ("icons/panel-left-dashed.svg", include_bytes!("../../../assets/icons/panel-left-dashed.svg")),
+    Settings => ("icons/settings.svg", include_bytes!("../../../assets/icons/settings.svg")),
+    SunMoon => ("icons/sun-moon.svg", include_bytes!("../../../assets/icons/sun-moon.svg")),
 }

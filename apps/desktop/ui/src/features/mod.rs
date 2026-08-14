@@ -51,12 +51,19 @@ pub mod id {
     pub const VIEW_PROBLEMS: &str = "lapis.view.problems";
     pub const VIEW_OUTPUT: &str = "lapis.view.output";
     pub const VIEW_COMMAND_SEARCH: &str = "lapis.view.command-search";
+    pub const VIEW_SETTINGS: &str = "lapis.view.settings";
 }
 
 pub fn bundled_registry() -> FeatureRegistry {
     let mut registry = FeatureRegistry::default();
     let descriptors = vec![
-        FeatureDescriptor::core(id::FEATURE_SHELL),
+        FeatureDescriptor::core(id::FEATURE_SHELL).contributes(
+            crate::extension_ui::UiContribution::settings_view(
+                id::VIEW_SETTINGS,
+                "view.settings",
+                "settings",
+            ),
+        ),
         FeatureDescriptor::core(id::FEATURE_COMMAND_SEARCH).contributes(
             crate::extension_ui::UiContribution::view(
                 id::VIEW_COMMAND_SEARCH,
@@ -152,6 +159,35 @@ mod tests {
                     .any(|capability| capability.as_str() == "workspace.process")
             );
         }
+    }
+
+    #[test]
+    fn settings_view_is_available_only_in_main_panel() {
+        let registry = bundled_registry();
+        let contribution = registry
+            .panel_contributions(crate::extension_ui::PanelPosition::Main)
+            .into_iter()
+            .find(|contribution| {
+                contribution
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.as_str() == id::VIEW_SETTINGS)
+            })
+            .expect("settings view is registered");
+
+        assert_eq!(
+            contribution.allowed_panels,
+            [crate::extension_ui::PanelPosition::Main]
+        );
+        assert!(
+            registry
+                .panel_contributions(crate::extension_ui::PanelPosition::Left)
+                .into_iter()
+                .all(|candidate| candidate
+                    .view
+                    .as_ref()
+                    .is_none_or(|view| view.as_str() != id::VIEW_SETTINGS))
+        );
     }
 
     #[cfg(debug_assertions)]

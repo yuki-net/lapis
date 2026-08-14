@@ -40,6 +40,24 @@ pub struct UiContribution {
 }
 
 impl UiContribution {
+    pub fn settings_view(
+        view: impl Into<ViewId>,
+        title: impl Into<MessageId>,
+        icon: impl Into<IconId>,
+    ) -> Self {
+        Self {
+            view: Some(view.into()),
+            slot: UiSlot::SettingsPage,
+            default_panel: Some(PanelPosition::Main),
+            allowed_panels: vec![PanelPosition::Main],
+            title: title.into(),
+            icon: icon.into(),
+            command: None,
+            order: 0,
+            instance_policy: ToolInstancePolicy::Shared,
+        }
+    }
+
     pub fn view(
         view: impl Into<ViewId>,
         slot: UiSlot,

@@ -134,6 +134,13 @@ impl FeatureRegistry {
         contributions
     }
 
+    pub fn tool_contributions(&self, position: PanelPosition) -> Vec<&UiContribution> {
+        self.panel_contributions(position)
+            .into_iter()
+            .filter(|contribution| contribution.slot != UiSlot::SettingsPage)
+            .collect()
+    }
+
     pub fn set_active_view(&mut self, slot: UiSlot, view: Option<ViewId>) {
         match view {
             Some(view) => {

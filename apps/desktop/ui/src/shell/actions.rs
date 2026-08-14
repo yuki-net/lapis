@@ -79,6 +79,48 @@ impl Editor {
         cx.notify();
     }
 
+    pub(super) fn toggle_settings_menu(
+        &mut self,
+        position: gpui::Point<gpui::Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        self.shell.settings_menu_open = !self.shell.settings_menu_open;
+        self.shell.settings_menu_anchor = position;
+        self.shell.tool_picker = None;
+        cx.notify();
+    }
+
+    pub(super) fn close_settings_menu(&mut self, cx: &mut Context<Self>) {
+        if self.shell.settings_menu_open {
+            self.shell.settings_menu_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn settings_menu_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shell.settings_menu_open && event.keystroke.key == "escape" {
+            self.close_settings_menu(cx);
+        }
+    }
+
+    pub(super) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
+        self.open_panel(PanelPosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)));
+        self.shell.settings_menu_open = false;
+        self.refresh_feature_activation();
+        cx.notify();
+    }
+
+    pub(super) fn toggle_theme_preference(&mut self, cx: &mut Context<Self>) {
+        self.shell.toggle_theme_mode();
+        self.shell.settings_menu_open = false;
+        cx.notify();
+    }
+
     pub(super) fn select_panel_tab(
         &mut self,
         position: PanelPosition,

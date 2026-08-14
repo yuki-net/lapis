@@ -399,8 +399,74 @@ impl Editor {
             id::VIEW_PROBLEMS => self.render_problems_content(),
             id::VIEW_OUTPUT => self.render_output_content(),
             id::VIEW_COMMAND_SEARCH => div().flex_1().child(self.quick_search.clone()),
+            id::VIEW_SETTINGS => self.render_settings_content(),
             _ => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
         }
+    }
+
+    fn render_settings_content(&self) -> gpui::Div {
+        div()
+            .flex_1()
+            .w_full()
+            .h_full()
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .text_center()
+            .child(Icon::new(IconName::Settings))
+            .child(
+                div()
+                    .text_size(px(18.0))
+                    .text_color(theme::text())
+                    .child("Settings"),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::muted())
+                    .child("Settings will be available here."),
+            )
+    }
+
+    pub(super) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let anchor = self.shell.settings_menu_anchor;
+        anchored()
+            .position(anchor)
+            .offset(point(px(-250.0), px(8.0)))
+            .snap_to_window_with_margin(px(8.0))
+            .child(
+                div()
+                    .id("settings-menu")
+                    .w(px(250.0))
+                    .p_2()
+                    .rounded(px(7.0))
+                    .border_1()
+                    .border_color(theme::border())
+                    .bg(theme::surface())
+                    .shadow_lg()
+                    .text_color(theme::text())
+                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                        this.close_settings_menu(cx);
+                    }))
+                    .child(
+                        settings_menu_item(IconName::Settings, "Settings", Some("Ctrl+,"))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_settings_view(cx);
+                            })),
+                    )
+                    .child(
+                        settings_menu_item(
+                            IconName::SunMoon,
+                            "Theme",
+                            Some(self.shell.theme_mode.label()),
+                        )
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.toggle_theme_preference(cx);
+                        })),
+                    ),
+            )
     }
 
     pub(super) fn render_tool_picker(
@@ -411,7 +477,7 @@ impl Editor {
         let query = self.shell.tool_picker_query.trim().to_lowercase();
         let tools = self
             .feature_registry
-            .panel_contributions(position)
+            .tool_contributions(position)
             .into_iter()
             .filter(|contribution| {
                 if query.is_empty() {

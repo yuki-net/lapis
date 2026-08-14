@@ -4,6 +4,7 @@ impl Editor {
     pub(super) fn render_header_center(&self) -> impl IntoElement {
         div()
             .w(px(0.0))
+            .min_w(px(0.0))
             .h(px(
                 theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT
             ))
