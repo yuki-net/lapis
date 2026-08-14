@@ -3,6 +3,10 @@ use crate::{
     features::id,
 };
 
+mod view;
+
+pub(crate) use view::preview_lines;
+
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(
         id::FEATURE_PREVIEW,

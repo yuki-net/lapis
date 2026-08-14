@@ -2,7 +2,7 @@ use super::*;
 use crate::extension_ui::PanelPosition;
 
 impl Editor {
-    pub(super) fn toggle_preview(
+    pub(crate) fn toggle_preview(
         &mut self,
         _: &TogglePreview,
         _: &mut Window,
@@ -18,7 +18,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn toggle_bottom_panel(
+    pub(crate) fn toggle_bottom_panel(
         &mut self,
         _: &ToggleBottomPanel,
         _: &mut Window,
@@ -30,7 +30,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn toggle_assistant(
+    pub(crate) fn toggle_assistant(
         &mut self,
         _: &ToggleAssistant,
         _: &mut Window,
@@ -46,11 +46,11 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn select_tool(&mut self, view: ViewId, cx: &mut Context<Self>) {
+    pub(crate) fn select_tool(&mut self, view: ViewId, cx: &mut Context<Self>) {
         self.select_view(PanelPosition::Left, view, cx);
     }
 
-    pub(super) fn select_view(
+    pub(crate) fn select_view(
         &mut self,
         position: PanelPosition,
         view: ViewId,
@@ -61,7 +61,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn open_panel(
+    pub(crate) fn open_panel(
         &mut self,
         position: PanelPosition,
         view: Option<ViewId>,
@@ -75,7 +75,7 @@ impl Editor {
         }
     }
 
-    pub(super) fn toggle_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         if position == PanelPosition::Main {
             return;
         }
@@ -83,14 +83,14 @@ impl Editor {
         self.request_panel_open(position, open, cx);
     }
 
-    pub(super) fn toggle_header_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_header_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         self.toggle_panel(position, cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation();
         cx.notify();
     }
 
-    pub(super) fn activate_panel_view(
+    pub(crate) fn activate_panel_view(
         &mut self,
         position: PanelPosition,
         view: ViewId,
@@ -102,7 +102,7 @@ impl Editor {
             .activate_tool_without_open(view);
     }
 
-    pub(super) fn close_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
+    pub(crate) fn close_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         if position == PanelPosition::Main {
             return;
         }
@@ -112,25 +112,16 @@ impl Editor {
         cx.notify();
     }
 
-    fn close_empty_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn close_empty_panel(
+        &mut self,
+        position: PanelPosition,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if position == PanelPosition::Main || !self.shell.panel(position).tabs.is_empty() {
             return false;
         }
         self.close_panel(position, cx);
         true
-    }
-
-    fn panels_with_document(
-        &self,
-        document_id: &lapis_editor_core::DocumentId,
-    ) -> Vec<PanelPosition> {
-        let tab = PanelTab::Document(document_id.clone());
-        self.shell
-            .panels()
-            .into_iter()
-            .filter(|panel| panel.contains(&tab))
-            .map(|panel| panel.position)
-            .collect()
     }
 
     fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
@@ -176,13 +167,13 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn open_tool_picker(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
+    pub(crate) fn open_tool_picker(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         self.shell.tool_picker = Some(position);
         self.shell.set_tool_picker_query(String::new());
         cx.notify();
     }
 
-    pub(super) fn toggle_settings_menu(
+    pub(crate) fn toggle_settings_menu(
         &mut self,
         position: gpui::Point<gpui::Pixels>,
         cx: &mut Context<Self>,
@@ -196,7 +187,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn close_settings_menu(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_settings_menu(&mut self, cx: &mut Context<Self>) {
         if self.shell.settings_menu_open {
             self.shell.settings_menu_open = false;
             self.shell.theme_picker_open = false;
@@ -204,7 +195,7 @@ impl Editor {
         }
     }
 
-    pub(super) fn settings_menu_key_down(
+    pub(crate) fn settings_menu_key_down(
         &mut self,
         event: &KeyDownEvent,
         _: &mut Window,
@@ -215,7 +206,7 @@ impl Editor {
         }
     }
 
-    pub(super) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
         self.open_panel(
             PanelPosition::Main,
             Some(ViewId::new(id::VIEW_SETTINGS)),
@@ -227,7 +218,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn toggle_theme_preference(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_theme_preference(&mut self, cx: &mut Context<Self>) {
         if self.shell.theme_save_in_flight {
             return;
         }
@@ -235,7 +226,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn select_theme(&mut self, theme_id: ThemeId, cx: &mut Context<Self>) {
+    pub(crate) fn select_theme(&mut self, theme_id: ThemeId, cx: &mut Context<Self>) {
         if self.shell.theme_save_in_flight || theme::active_id() == theme_id {
             return;
         }
@@ -273,7 +264,7 @@ impl Editor {
         .detach();
     }
 
-    pub(super) fn select_panel_tab(
+    pub(crate) fn select_panel_tab(
         &mut self,
         position: PanelPosition,
         tab: PanelTab,
@@ -285,7 +276,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn close_panel_tab(
+    pub(crate) fn close_panel_tab(
         &mut self,
         position: PanelPosition,
         tab: PanelTab,
@@ -301,123 +292,17 @@ impl Editor {
             return;
         };
 
-        let Some(document) = self
-            .session
-            .tabs()
-            .into_iter()
-            .find(|document| document.id == document_id)
-        else {
-            return;
-        };
-        let affected_panels = self.panels_with_document(&document_id);
-
-        if document.dirty {
-            if self.session.active_document_id() != Some(&document_id) {
-                self.persist_active_view();
-                self.session.activate_document(&document_id);
-                self.shell.synchronize_documents(&self.session.tabs());
-                self.restore_active_view();
-                cx.notify();
-            }
-
-            let message = format!("Close {}?", document.display_name);
-            let detail = "This document has unsaved changes.";
-            let receiver = window.prompt(
-                PromptLevel::Warning,
-                &message,
-                Some(detail),
-                &[
-                    PromptButton::new("Save"),
-                    PromptButton::new("Discard"),
-                    PromptButton::cancel("Cancel"),
-                ],
-                cx,
-            );
-            cx.spawn(async move |this, cx| {
-                let Ok(answer) = receiver.await else {
-                    return;
-                };
-                let _ = this.update(cx, |editor, cx| {
-                    editor.finish_document_close_prompt(document_id, affected_panels, answer, cx);
-                });
-            })
-            .detach();
-        } else {
-            self.finish_document_close(
-                document_id,
-                affected_panels,
-                DocumentCloseDisposition::PreserveChanges,
-                cx,
-            );
-        }
+        self.request_document_close(document_id, window, cx);
     }
 
-    fn finish_document_close_prompt(
-        &mut self,
-        document_id: lapis_editor_core::DocumentId,
-        affected_panels: Vec<PanelPosition>,
-        answer: usize,
-        cx: &mut Context<Self>,
-    ) {
-        match answer {
-            0 => match self.session.save_document() {
-                Ok(DocumentAction::Completed) => {
-                    self.finish_document_close(
-                        document_id,
-                        affected_panels,
-                        DocumentCloseDisposition::PreserveChanges,
-                        cx,
-                    );
-                }
-                Ok(DocumentAction::Cancelled) => {}
-                Err(error) => {
-                    self.status = format!("保存失敗: {error}");
-                    cx.notify();
-                }
-            },
-            1 => self.finish_document_close(
-                document_id,
-                affected_panels,
-                DocumentCloseDisposition::DiscardChanges,
-                cx,
-            ),
-            _ => {}
-        }
-    }
-
-    fn finish_document_close(
-        &mut self,
-        document_id: lapis_editor_core::DocumentId,
-        affected_panels: Vec<PanelPosition>,
-        disposition: DocumentCloseDisposition,
-        cx: &mut Context<Self>,
-    ) {
-        match self.session.close_document(&document_id, disposition) {
-            Ok(true) => {
-                self.shell.synchronize_documents(&self.session.tabs());
-                self.restore_active_view();
-                for position in affected_panels {
-                    self.close_empty_panel(position, cx);
-                }
-                self.refresh_feature_activation();
-                cx.notify();
-            }
-            Ok(false) => {}
-            Err(error) => {
-                self.status = format!("閉じることができませんでした: {error}");
-                cx.notify();
-            }
-        }
-    }
-
-    pub(super) fn close_tool_picker(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_tool_picker(&mut self, cx: &mut Context<Self>) {
         if self.shell.tool_picker.take().is_some() {
             self.shell.set_tool_picker_query(String::new());
             cx.notify();
         }
     }
 
-    pub(super) fn select_tool_from_picker(
+    pub(crate) fn select_tool_from_picker(
         &mut self,
         position: PanelPosition,
         view: ViewId,
@@ -430,7 +315,7 @@ impl Editor {
         cx.notify();
     }
 
-    pub(super) fn tool_picker_key_down(
+    pub(crate) fn tool_picker_key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -497,7 +382,7 @@ impl Editor {
         title.contains(&query) || view.contains(&query)
     }
 
-    pub(super) fn move_panel_tab(
+    pub(crate) fn move_panel_tab(
         &mut self,
         source: PanelPosition,
         target: PanelPosition,

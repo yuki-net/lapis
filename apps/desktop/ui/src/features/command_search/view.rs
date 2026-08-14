@@ -12,7 +12,7 @@ use gpui::{
 
 use crate::{
     extension_ui::CommandId,
-    shell::search_provider::{CommandSearchProvider, SearchItem, SearchProvider},
+    features::command_search::provider::{CommandSearchProvider, SearchItem, SearchProvider},
     theme,
 };
 
@@ -471,7 +471,7 @@ impl Element for SearchTextElement {
         let input = self.input.read(cx);
         let style = window.text_style();
         let display_text: gpui::SharedString = if input.query.is_empty() {
-            "Search commands…".into()
+            "Search commands窶ｦ".into()
         } else {
             input.query.clone().into()
         };
@@ -640,7 +640,10 @@ impl Render for QuickSearch {
                     .pb_1()
                     .text_size(px(10.0))
                     .text_color(theme::subtle())
-                    .child(format!("{} commands · ↑↓ select · Enter run", rows.len())),
+                    .child(format!(
+                        "{} commands ﾂｷ 竊鯛・ select ﾂｷ Enter run",
+                        rows.len()
+                    )),
             )
             .child(
                 div()

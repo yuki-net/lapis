@@ -1,5 +1,6 @@
 use crate::extension_ui::{FeatureDescriptor, FeatureRegistry};
 
+pub(crate) mod command_search;
 pub(crate) mod conversation;
 pub(crate) mod editor;
 mod files;

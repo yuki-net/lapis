@@ -1,5 +1,8 @@
-pub(crate) mod search_page;
-pub(crate) mod search_provider;
+mod panel;
+mod panel_transition;
 mod state;
+mod tab_state;
 
-pub(crate) use state::{DraggedPanelTab, PanelHost, PanelTab, ResizeTarget, ShellState};
+pub(crate) use panel::PanelHost;
+pub(crate) use state::{ResizeTarget, ShellState};
+pub(crate) use tab_state::{DraggedPanelTab, PanelTab};

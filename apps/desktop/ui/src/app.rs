@@ -7,11 +7,11 @@ use lapis_app_services::{
     TerminalSession, WorkspaceSearchSession,
 };
 
-use crate::features::editor::Editor;
-use crate::shell::search_page::{
+use crate::features::command_search::{
     SearchBackspace, SearchConfirm, SearchDelete, SearchDismiss, SearchEnd, SearchHome, SearchLeft,
     SearchNext, SearchPrevious, SearchRight, SearchSelectAll,
 };
+use crate::features::editor::Editor;
 
 actions!(
     editor,

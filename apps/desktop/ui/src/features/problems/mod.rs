@@ -4,8 +4,10 @@ use crate::{
 };
 
 mod state;
+mod view;
 
 pub(crate) use state::ProblemsFeature;
+pub(crate) use view::{render_content, render_output};
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(

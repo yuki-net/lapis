@@ -1,7 +1,7 @@
 use super::*;
 
 impl Editor {
-    pub(super) fn render_command_palette(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn render_command_palette(&self, cx: &mut Context<Self>) -> gpui::Div {
         let commands = self
             .feature_registry
             .contributions(UiSlot::CommandPalette)
@@ -70,7 +70,7 @@ impl Editor {
             )
     }
 
-    pub(super) fn execute_command(
+    pub(crate) fn execute_command(
         &mut self,
         command: crate::extension_ui::CommandId,
         window: &mut Window,
