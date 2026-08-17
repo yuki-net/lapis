@@ -7,7 +7,7 @@ impl Editor {
             .w(px(theme::WINDOW_CONTROL_WIDTH * 3.0 + 28.0))
             .flex_shrink_0()
             .flex()
-            .items_end()
+            .items_center()
             .child(
                 div()
                     .id("open-settings-menu")
