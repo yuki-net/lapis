@@ -471,7 +471,7 @@ impl Element for SearchTextElement {
         let input = self.input.read(cx);
         let style = window.text_style();
         let display_text: gpui::SharedString = if input.query.is_empty() {
-            "Search commands窶ｦ".into()
+            "Search commands…".into()
         } else {
             input.query.clone().into()
         };

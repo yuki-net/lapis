@@ -101,7 +101,7 @@ mod tests {
                 "lapis.command.dev.toggle-inspector",
                 "dev: Toggle Inspector",
             ),
-            item("lapis.command.open-workspace", "Open Workspace窶ｦ"),
+            item("lapis.command.open-workspace", "Open Workspace…"),
         ]);
 
         assert_eq!(provider.search("toggle inspector").len(), 1);
