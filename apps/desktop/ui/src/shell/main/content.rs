@@ -13,7 +13,7 @@ impl Editor {
             PanelPosition::Main => "Main Panel",
         };
         panel_empty_state(
-            "隨・ｽ､",
+            "▤",
             title,
             "Open new tool or drag-n-drop tool from other panels",
         )
@@ -186,7 +186,7 @@ impl Editor {
             .gap_2()
             .child(if self.session.is_empty() {
                 panel_empty_state(
-                    "隨・ｽｱ",
+                    "▱",
                     "No preview available",
                     "Open a Markdown document to preview it",
                 )
