@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use gpui::{AssetSource, SharedString};
 
-use super::IconName;
+use super::{IconName, file_catalog::FileIconId};
 
 pub(super) const fn path(name: IconName) -> &'static str {
     name.asset().path
@@ -20,6 +20,13 @@ impl AssetSource for IconAssets {
             }
         }
 
+        for &name in FileIconId::ALL {
+            let asset = name.asset();
+            if asset.path == path {
+                return Ok(Some(Cow::Borrowed(asset.bytes)));
+            }
+        }
+
         Ok(None)
     }
 
@@ -29,6 +36,12 @@ impl AssetSource for IconAssets {
                 .iter()
                 .copied()
                 .map(|name| path(name).trim_start_matches("icons/").into())
+                .collect())
+        } else if directory == "file-icons" {
+            Ok(FileIconId::ALL
+                .iter()
+                .copied()
+                .map(|name| name.asset().path.trim_start_matches("file-icons/").into())
                 .collect())
         } else {
             Ok(Vec::new())

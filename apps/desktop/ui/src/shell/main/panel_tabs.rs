@@ -43,6 +43,25 @@ impl Editor {
                     .unwrap_or_else(|| "Document".to_owned()),
             };
             let active = panel.active.as_ref() == Some(tab);
+            let file_icon = match tab {
+                PanelTab::Document(document_id) => self
+                    .session
+                    .tabs()
+                    .into_iter()
+                    .find(|document| document.id == *document_id)
+                    .map(|document| {
+                        crate::features::files::display_info(
+                            document
+                                .path
+                                .as_deref()
+                                .unwrap_or_else(|| std::path::Path::new("")),
+                            FileEntryKind::File,
+                            &self.problems.languages,
+                        )
+                        .icon
+                    }),
+                PanelTab::Tool(_) => None,
+            };
             let tab = tab.clone();
             let close_tab = tab.clone();
             let position = panel.position;
@@ -91,6 +110,9 @@ impl Editor {
                         }
                     }
                 }))
+                .when_some(file_icon, |tab, icon| {
+                    tab.child(crate::components::FileIcon::new(icon))
+                })
                 .child(label)
                 .child(div().flex_1())
                 .child(

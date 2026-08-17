@@ -37,6 +37,13 @@ impl Editor {
             );
         for (tab_index, tab) in self.session.tabs().into_iter().enumerate() {
             let id = tab.id.clone();
+            let file_info = crate::features::files::display_info(
+                tab.path
+                    .as_deref()
+                    .unwrap_or_else(|| std::path::Path::new("")),
+                FileEntryKind::File,
+                &self.problems.languages,
+            );
             content = content.child(
                 div()
                     .id(("open-document", tab_index))
@@ -62,7 +69,7 @@ impl Editor {
                             cx.notify();
                         }
                     }))
-                    .child(file_badge("F", theme::orange()))
+                    .child(crate::components::FileIcon::new(file_info.icon))
                     .child(tab.display_name)
                     .child(div().flex_1())
                     .child(if tab.dirty { "●" } else { "" }),
@@ -81,6 +88,11 @@ impl Editor {
         for (index, entry) in self.session.file_tree().iter().take(500).enumerate() {
             let path = entry.path.clone();
             let is_file = entry.kind == FileEntryKind::File;
+            let file_info = crate::features::files::display_info(
+                &entry.path,
+                entry.kind,
+                &self.problems.languages,
+            );
             let label = entry
                 .relative_path
                 .file_name()
@@ -120,6 +132,7 @@ impl Editor {
                         }))
                     })
                     .child(if is_file { "·" } else { "⌄" })
+                    .child(crate::components::FileIcon::new(file_info.icon))
                     .child(label),
             );
         }

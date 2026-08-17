@@ -430,16 +430,3 @@ fn quick_action(label: &'static str, shortcut: &'static str) -> gpui::Stateful<g
                 .child(shortcut),
         )
 }
-
-fn file_badge(label: &'static str, color: gpui::Rgba) -> gpui::Div {
-    div()
-        .size(px(14.0))
-        .rounded(px(3.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .bg(color)
-        .text_color(theme::canvas())
-        .text_size(px(8.0))
-        .child(label)
-}

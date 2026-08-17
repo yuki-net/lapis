@@ -49,6 +49,14 @@ Lapis 全体に適用する開発・レビュー規約です。下位の `AGENTS
 - UI 変更は対象アプリを実行し、対象ウィンドウを画像で目視確認する。
 - リファクタリングでは、移動後も責務と依存方向が改善されていることを確認する。
 
+### Windows の GPUI 画面検証
+
+- 「ディスプレイ消灯」と「システムスリープ」を分けて扱う。S3 スリープや休止状態では CPU、GPU、GPUI のイベントループが動かないため、その状態のまま新しい画面を撮影することはできない。
+- 無人の起動・撮影では、撮影区間だけ `SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)` または同等の `PowerSetRequest` を設定し、完了直後に解除する。これはアイドルによる消灯・スリープを防ぐもので、電源ボタンや蓋を閉じる操作によるスリープは防がない。`ES_AWAYMODE_REQUIRED` は通常の UI 検証では使わない。
+- Windows の GPUI は Direct3D/DirectComposition を使うため、`PrintWindow` や GDI の `BitBlt` だけを画面検証の根拠にしない。黒いクライアント領域は描画不良ではなく、GPU サーフェスを取得できていない結果の場合がある。
+- キャプチャは、対話中のユーザーセッションと実 GPU がある環境で `Windows.Graphics.Capture` または Desktop Duplication を優先し、取得画像を目視確認する。`PrintWindow` は非 GPU ウィンドウの補助診断に限る。
+- 実行前後に、対象プロセスのウィンドウハンドル・応答状態と電源要求を確認する。対話デスクトップや GPU が利用できない場合は、画面検証を未実施として理由を報告し、利用者のスクリーンショットを代替証跡にする。
+
 ## ドキュメントの責務
 
 - `AGENTS.md`: 実装・変更・レビュー時に守る規約。

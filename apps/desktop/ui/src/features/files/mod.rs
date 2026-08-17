@@ -3,6 +3,10 @@ use crate::{
     features::id,
 };
 
+mod display;
+
+pub(crate) use display::display_info;
+
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(id::FEATURE_FILES, [ActivationCondition::OnWorkspaceOpen])
         .contributes(UiContribution::view(
