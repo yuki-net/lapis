@@ -35,6 +35,9 @@ impl Editor {
                     .occlude()
                     .bg(theme::title_bar())
                     .hover(|style| style.bg(theme::surface_hover()))
+                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                        this.toggle_header_menu(event.position(), cx);
+                    }))
                     .child(controls::menu_icon()),
             )
             .child(

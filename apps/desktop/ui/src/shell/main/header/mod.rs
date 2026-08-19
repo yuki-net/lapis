@@ -2,6 +2,8 @@ mod center;
 mod controls;
 mod drag;
 mod left;
+mod menu;
+mod menu_actions;
 mod window_controls;
 
 use drag::apply_drag_region;

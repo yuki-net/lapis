@@ -44,6 +44,7 @@ impl Render for Editor {
             .on_modifiers_changed(cx.listener(Self::modifiers_changed))
             .on_key_down(cx.listener(Self::tool_picker_key_down))
             .on_key_down(cx.listener(Self::settings_menu_key_down))
+            .on_key_down(cx.listener(Self::header_menu_key_down))
             .on_key_down(cx.listener(Self::normal_key_down))
             .on_mouse_move(cx.listener(Self::resize_panels))
             .on_mouse_up(
@@ -61,6 +62,9 @@ impl Render for Editor {
             })
             .when(self.shell.settings_menu_open, |root| {
                 root.child(self.render_settings_menu(cx))
+            })
+            .when(self.shell.header_menu_open, |root| {
+                root.child(self.render_header_menu(cx))
             })
     }
 }

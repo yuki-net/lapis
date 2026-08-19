@@ -9,6 +9,15 @@ use crate::{
 use super::{panel::PanelHost, tab_state::PanelTab};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum HeaderMenuSection {
+    File,
+    Edit,
+    View,
+    Window,
+    Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ResizeTarget {
     Left,
     Right,
@@ -26,6 +35,9 @@ pub(crate) struct ShellState {
     pub tool_picker_query: String,
     pub settings_menu_open: bool,
     pub settings_menu_anchor: gpui::Point<gpui::Pixels>,
+    pub header_menu_open: bool,
+    pub header_menu_anchor: gpui::Point<gpui::Pixels>,
+    pub header_menu_section: Option<HeaderMenuSection>,
     pub theme_picker_open: bool,
     pub theme_save_in_flight: bool,
     pub theme_before_save: Option<ThemeId>,
@@ -59,6 +71,9 @@ impl Default for ShellState {
             tool_picker_query: String::new(),
             settings_menu_open: false,
             settings_menu_anchor: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            header_menu_open: false,
+            header_menu_anchor: gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            header_menu_section: None,
             theme_picker_open: false,
             theme_save_in_flight: false,
             theme_before_save: None,
