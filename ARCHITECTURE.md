@@ -4,11 +4,11 @@ Lapis の長期的な設計境界を定義します。現在のファイル一�
 
 ## システム境界
 
-Lapis は、Rust backend を GPUI Desktop、KMP Mobile、Vite Web から利用する構成です。Desktop は軽さと即応性を優先し、現時点では local backend と同一プロセスで動かします。ただし UI と backend の契約は、将来 daemon や remote transport へ置き換えられる境界を保ちます。
+Lapis は、Rust backend を GPUI Desktop と KMP MobileのAndroid・iOSから利用する構成です。Desktop は軽さと即応性を優先し、local backend と同一プロセスで動かします。Mobile は同じ契約へ remote transport で接続します。Web client は現在の対象に含めません。
 
 トップレベルは実行主体と責務で分けます。
 
-- `apps/`: Desktop、Mobile、Web 各クライアント。画面とクライアント固有の状態を所有する。
+- `apps/`: Desktop と Mobile。画面とクライアント固有の状態を所有する。
 - `backend/core/`: プラットフォームに依存しないモデル、不変条件、アプリケーション契約を所有する。
 - `backend/local/`: ファイルシステム、プロセスなどローカル環境との接続を実装する。
 - `backend/persistence/`: 永続化契約の具体実装を所有する。
@@ -29,7 +29,7 @@ backend/persistence ─┘
 app entry point ──> concrete adapters を組み立てる
 ```
 
-- `core` は GPUI、Android、Browser、OS、通信方式、永続化方式へ依存しない。
+- `core` は GPUI、KMP、OS、通信方式、永続化方式へ依存しない。
 - feature 間で循環依存を作らない。連携が必要なら、所有者の契約か application 層で調停する。
 - 外部ライブラリ、CLI、SDK の型とエラーは adapter で Lapis の型へ変換する。
 - 具体実装を選択する composition は各 app の entry point に置く。
@@ -85,7 +85,7 @@ Document は内容、保存済み位置、現在 Revision、保存済み Revisio
 - Git CLI、LSP、PTY、OS、通信ライブラリの出力をそのまま公開しない。
 - UI は結果の表示方法を決めるが、業務上の正規状態や回復方針を決めない。
 
-Desktop、Mobile、Web で共有するのは、契約、状態の意味、生成可能な型です。通信、cache、画面状態は各 client のネイティブ実装を基本とします。FFI や WASM による client logic の共有は、重複コストが境界維持コストを実測で上回った場合に再検討します。
+Desktop と Mobile で共有するのは、契約、状態の意味、生成可能な型です。通信、cache、画面状態は各 client のネイティブ実装を基本とします。FFI による client logic の共有は、重複コストが境界維持コストを実測で上回った場合に再検討します。
 
 ## Workspace Files と Language
 

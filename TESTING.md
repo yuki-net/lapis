@@ -22,7 +22,6 @@ Lapisのテスト配置とコード変更の完了条件を定義します。
 | --- | --- |
 | Rust | 必須 |
 | KMP | 未定義 |
-| Vite | 未定義 |
 | UI実画面 | 手動 |
 
 Rustの必須検証は次のとおりです。
@@ -35,7 +34,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo build --workspace --all-targets
 ```
 
-KMPとViteは検証基盤ができた段階でコマンドを登録し、必須へ変更します。
+KMPは検証基盤ができた段階でコマンドを登録し、必須へ変更します。
 
 ## テスト配置
 
@@ -44,8 +43,6 @@ KMPとViteは検証基盤ができた段階でコマンドを登録し、必須�
 | Rust内部 | 対象モジュールの`tests.rs` |
 | Rust公開動作 | 対象crateの`tests/<behavior>.rs` |
 | KMP | 各`*Test` source setの`<Subject>Test.kt` |
-| Vite unit・component | 実装の隣の`*.test.ts`または`*.test.tsx` |
-| Vite E2E | 対象appの`e2e/*.spec.ts` |
 | GPUI公開動作 | `apps/desktop/ui/tests/` |
 | OS・アプリ起動 | 対象appの`tests/` |
 
