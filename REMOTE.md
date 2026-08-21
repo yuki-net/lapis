@@ -57,7 +57,7 @@ Protocol versionは`major.minor`で表します。
 - 未知のcapabilityは無視し、付与されていないcapabilityのmessageは拒否する。
 - messageにはrequest IDを付け、responseと対応させる。
 - errorは安定したcodeと利用者向けではない詳細を分ける。
-- 不明な必須field、上限を超えるmessage、順序違反はprotocol errorとして切断できる。
+- 必須fieldの欠落・不正値、上限を超えるmessage、順序違反はprotocol errorとして切断できる。
 
 Handshake完了前はpairing、認証、version negotiationに必要なmessageだけを受け付けます。
 

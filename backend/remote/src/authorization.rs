@@ -1,33 +1,33 @@
 use std::{error::Error, fmt};
 
-use lapis_client_api::{CapabilityId, CapabilitySet};
+use lapis_client_api::{CapabilityId, CapabilitySet, RequestBody, SessionId, WorkspaceId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionGrant {
-    session_id: String,
-    workspace_id: String,
+    session_id: SessionId,
+    workspace_id: WorkspaceId,
     capabilities: CapabilitySet,
 }
 
 impl SessionGrant {
     pub fn new(
-        session_id: impl Into<String>,
-        workspace_id: impl Into<String>,
+        session_id: SessionId,
+        workspace_id: WorkspaceId,
         capabilities: CapabilitySet,
     ) -> Self {
         Self {
-            session_id: session_id.into(),
-            workspace_id: workspace_id.into(),
+            session_id,
+            workspace_id,
             capabilities,
         }
     }
 
-    pub fn session_id(&self) -> &str {
+    pub fn session_id(&self) -> &SessionId {
         &self.session_id
     }
 
-    pub fn require_workspace(&self, workspace_id: &str) -> Result<(), AuthorizationError> {
-        if self.workspace_id == workspace_id {
+    pub fn require_workspace(&self, workspace_id: &WorkspaceId) -> Result<(), AuthorizationError> {
+        if &self.workspace_id == workspace_id {
             Ok(())
         } else {
             Err(AuthorizationError::WorkspaceDenied)
@@ -42,6 +42,12 @@ impl SessionGrant {
                 capability.as_str().to_owned(),
             ))
         }
+    }
+
+    pub fn require_request(&self, request: &RequestBody) -> Result<(), AuthorizationError> {
+        let capability = CapabilityId::try_new(request.required_capability())
+            .expect("built-in request capability must be valid");
+        self.require_capability(&capability)
     }
 }
 
@@ -73,22 +79,44 @@ mod tests {
 
     #[test]
     fn rejects_other_workspace_and_missing_capability() {
-        let files = CapabilityId::new(capability::FILES_READ);
-        let terminal = CapabilityId::new(capability::TERMINAL_START);
+        let files = CapabilityId::try_new(capability::FILES_READ).unwrap();
+        let terminal = CapabilityId::try_new(capability::TERMINAL_START).unwrap();
         let grant = SessionGrant::new(
-            "session-1",
-            "workspace-1",
-            CapabilitySet::new([files.clone()]),
+            SessionId::try_new("session-1").unwrap(),
+            WorkspaceId::try_new("workspace-1").unwrap(),
+            CapabilitySet::try_new([files.clone()]).unwrap(),
         );
 
-        assert_eq!(grant.require_workspace("workspace-1"), Ok(()));
         assert_eq!(
-            grant.require_workspace("workspace-2"),
+            grant.require_workspace(&WorkspaceId::try_new("workspace-1").unwrap()),
+            Ok(())
+        );
+        assert_eq!(
+            grant.require_workspace(&WorkspaceId::try_new("workspace-2").unwrap()),
             Err(AuthorizationError::WorkspaceDenied)
         );
         assert_eq!(grant.require_capability(&files), Ok(()));
         assert!(matches!(
             grant.require_capability(&terminal),
+            Err(AuthorizationError::CapabilityDenied(_))
+        ));
+
+        let file_tree = RequestBody::FileTree(lapis_client_api::FileTreeRequest {
+            workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
+            path: None,
+        });
+        let terminal_start = RequestBody::TerminalStart(lapis_client_api::TerminalStartRequest {
+            workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
+            cwd: None,
+            command: None,
+            size: lapis_client_api::TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+        });
+        assert_eq!(grant.require_request(&file_tree), Ok(()));
+        assert!(matches!(
+            grant.require_request(&terminal_start),
             Err(AuthorizationError::CapabilityDenied(_))
         ));
     }

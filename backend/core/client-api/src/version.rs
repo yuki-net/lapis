@@ -2,7 +2,8 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
-pub const CURRENT_PROTOCOL: ProtocolVersion = ProtocolVersion::new(1, 0);
+/// Phase 1開発中のpre-release protocol。安定化時に1.0へ移行する。
+pub const CURRENT_PROTOCOL: ProtocolVersion = ProtocolVersion::new(0, 1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ProtocolVersion {
