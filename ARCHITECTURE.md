@@ -79,6 +79,16 @@ Document は内容、保存済み位置、現在 Revision、保存済み Revisio
 
 Desktop、Mobile、Web で共有するのは、契約、状態の意味、生成可能な型です。通信、cache、画面状態は各 client のネイティブ実装を基本とします。FFI や WASM による client logic の共有は、重複コストが境界維持コストを実測で上回った場合に再検討します。
 
+## Workspace Files と Language
+
+Workspace 内のディレクトリsnapshotと外部変更監視のライフサイクルはbackendが所有します。監視eventは正規状態そのものではなく、影響するディレクトリのsnapshotを再取得するための通知として扱います。event欠落や監視失敗が起こり得ることを前提とし、全再取得と手動更新で回復できる契約を維持します。
+
+clientはツリーの展開、選択、スクロールと、backendのsnapshotから得た置換可能な表示用cacheを所有します。Workspace切替や再接続では古いquery応答と監視eventを適用せず、Workspaceの世代またはrequest sequenceで識別します。ファイル列挙と監視はUI threadをblockingしません。
+
+Workspace Files、Document、Language、Desktopの表示は別の責務です。Workspace Filesは列挙と監視、Documentは内容・Encoding・Revision・保存競合、Languageはpathから得る安定した `LanguageId`、Desktopはツリー表示とtheme assetを所有します。OSのファイルAPI、監視ライブラリ、構文解析器、GPUIの型をこれらの境界を越えて漏らしません。
+
+Files、LSP、シンタックスハイライトは同じ `LanguageId` を共有します。構文解析結果は対象DocumentとRevisionを持つ意味的なspanとして公開し、色やfontはclient themeが決めます。現在Revisionと一致しない解析結果は適用しません。
+
 ## 設計判断の記録
 
 非同期 runtime、IPC、remote transport、認証、永続化の詳細、共同編集、拡張 package は未確定です。実装に必要になるまで固定しません。
