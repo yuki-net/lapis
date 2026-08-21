@@ -50,24 +50,26 @@ impl Editor {
         } else {
             div().w(px(panel_size)).h_full()
         };
-        size.flex_shrink_0()
-            .overflow_hidden()
-            .rounded(px(theme::ISLAND_RADIUS))
-            .bg(theme::island())
-            .flex()
-            .flex_col()
-            .on_drop(cx.listener(move |this, drag: &DraggedPanelTab, _, cx| {
-                this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
-            }))
-            .child(self.render_tool_panel_header(panel, cx))
-            .child(match panel.active.as_ref() {
-                Some(PanelTab::Tool(view)) => self.render_tool_content(view, cx).into_any_element(),
-                Some(PanelTab::Document(document_id)) => self
-                    .render_document_content(document_id, cx)
-                    .into_any_element(),
-                None => self
-                    .render_empty_panel(panel.position, cx)
-                    .into_any_element(),
-            })
+        size.flex_shrink_0().overflow_hidden().child(
+            surface(SurfaceVariant::Panel)
+                .size_full()
+                .flex()
+                .flex_col()
+                .on_drop(cx.listener(move |this, drag: &DraggedPanelTab, _, cx| {
+                    this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
+                }))
+                .child(self.render_tool_panel_header(panel, cx))
+                .child(match panel.active.as_ref() {
+                    Some(PanelTab::Tool(view)) => {
+                        self.render_tool_content(view, cx).into_any_element()
+                    }
+                    Some(PanelTab::Document(document_id)) => self
+                        .render_document_content(document_id, cx)
+                        .into_any_element(),
+                    None => self
+                        .render_empty_panel(panel.position, cx)
+                        .into_any_element(),
+                }),
+        )
     }
 }

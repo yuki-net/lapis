@@ -1,6 +1,42 @@
-use gpui::Rgba;
+use gpui::{Pixels, Rgba, px};
 
 use super::registry::color;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Radius {
+    Control,
+    Menu,
+    MenuItem,
+    Panel,
+    Tab,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Spacing {
+    Xs,
+    Sm,
+    Md,
+    Lg,
+}
+
+pub fn radius(value: Radius) -> Pixels {
+    px(match value {
+        Radius::Control => 6.0,
+        Radius::Menu => 7.0,
+        Radius::MenuItem => 4.0,
+        Radius::Panel => 8.0,
+        Radius::Tab => 6.0,
+    })
+}
+
+pub fn spacing(value: Spacing) -> Pixels {
+    px(match value {
+        Spacing::Xs => 4.0,
+        Spacing::Sm => 8.0,
+        Spacing::Md => 12.0,
+        Spacing::Lg => 16.0,
+    })
+}
 
 /// カラートークン関数群。アクティブテーマの色を返す。
 pub fn canvas() -> Rgba {

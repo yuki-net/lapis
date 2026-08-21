@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::icon_button;
 
 impl Editor {
     pub(super) fn render_header_left(
@@ -15,7 +16,7 @@ impl Editor {
             .child(
                 div()
                     .size(px(22.0))
-                    .rounded(px(6.0))
+                    .rounded(theme::radius(theme::Radius::Control))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -25,20 +26,11 @@ impl Editor {
                     .child("L"),
             )
             .child(
-                div()
-                    .id("header-menu")
-                    .size(px(28.0))
-                    .rounded(px(6.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .occlude()
-                    .bg(theme::title_bar())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                icon_button("header-menu", IconName::Menu).on_click(cx.listener(
+                    |this, event: &ClickEvent, _, cx| {
                         this.toggle_header_menu(event.position(), cx);
-                    }))
-                    .child(controls::menu_icon()),
+                    },
+                )),
             )
             .child(
                 panel_toggle_button(
@@ -95,7 +87,7 @@ fn panel_toggle_button(
     div()
         .id(id)
         .size(px(28.0))
-        .rounded(px(6.0))
+        .rounded(theme::radius(theme::Radius::Control))
         .flex()
         .items_center()
         .justify_center()

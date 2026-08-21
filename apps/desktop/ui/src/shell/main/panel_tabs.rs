@@ -9,7 +9,7 @@ impl Render for PanelTabDragPreview {
         div()
             .px_2()
             .py_1()
-            .rounded(px(5.0))
+            .rounded(theme::radius(theme::Radius::MenuItem))
             .bg(theme::surface())
             .border_1()
             .border_color(theme::border())
@@ -69,11 +69,10 @@ impl Editor {
                 source_panel: position,
                 tab: tab.clone(),
             };
-            div()
+            crate::components::surface(crate::components::SurfaceVariant::Tab)
                 .id(("panel-tab", panel_key(position) * 100 + index as u32))
                 .h(px(30.0))
                 .px_2()
-                .rounded_t(px(6.0))
                 .flex()
                 .items_center()
                 .bg(if active {
