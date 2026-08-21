@@ -6,11 +6,18 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+axum.workspace = true
+axum-server.workspace = true
 lapis-client-api = { path = "../core/client-api" }
 getrandom.workspace = true
+rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
+tokio.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+rcgen.workspace = true
 tempfile.workspace = true

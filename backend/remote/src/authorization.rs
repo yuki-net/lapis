@@ -26,6 +26,14 @@ impl SessionGrant {
         &self.session_id
     }
 
+    pub fn workspace_id(&self) -> &WorkspaceId {
+        &self.workspace_id
+    }
+
+    pub fn capabilities(&self) -> &CapabilitySet {
+        &self.capabilities
+    }
+
     pub fn require_workspace(&self, workspace_id: &WorkspaceId) -> Result<(), AuthorizationError> {
         if &self.workspace_id == workspace_id {
             Ok(())

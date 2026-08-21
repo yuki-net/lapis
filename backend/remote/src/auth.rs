@@ -274,6 +274,29 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         Ok(CredentialHandle::new(id, std::mem::take(&mut secret)))
     }
 
+    /// Pairing tokenに結び付いたWorkspaceでcredential発行とsession確立を一体で行う。
+    pub fn complete_pairing_and_authenticate(
+        &mut self,
+        token: &PairingToken,
+        client_id: &ClientId,
+        requested_capabilities: &CapabilitySet,
+    ) -> Result<(CredentialHandle, SessionGrant), AuthError> {
+        let credential = self.complete_pairing(token, client_id, requested_capabilities)?;
+        let workspace_id = self
+            .credentials
+            .get(credential.id())
+            .ok_or(AuthError::CredentialUnavailable)?
+            .workspace_id
+            .clone();
+        match self.authenticate(&credential, client_id, &workspace_id) {
+            Ok(grant) => Ok((credential, grant)),
+            Err(error) => {
+                self.revoke(credential.id());
+                Err(error)
+            }
+        }
+    }
+
     pub fn authenticate(
         &mut self,
         credential: &CredentialHandle,
@@ -327,6 +350,11 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     ) -> Result<(), AccessError> {
         self.require_active_session(grant)
             .map_err(AccessError::Authentication)?;
+        if let Some(workspace_id) = request.workspace_id() {
+            grant
+                .require_workspace(workspace_id)
+                .map_err(AccessError::Authorization)?;
+        }
         grant
             .require_request(request)
             .map_err(AccessError::Authorization)
@@ -528,7 +556,7 @@ mod tests {
             path: None,
         });
         let terminal_request = RequestBody::TerminalStart(lapis_client_api::TerminalStartRequest {
-            workspace_id: workspace,
+            workspace_id: workspace.clone(),
             cwd: None,
             command: None,
             size: lapis_client_api::TerminalSize {
@@ -540,6 +568,16 @@ mod tests {
         assert!(matches!(
             auth.authorize_request(&grant, &terminal_request),
             Err(AccessError::Authorization(_))
+        ));
+        let other_workspace_request = RequestBody::FileTree(lapis_client_api::FileTreeRequest {
+            workspace_id: WorkspaceId::try_new("workspace-2").unwrap(),
+            path: None,
+        });
+        assert!(matches!(
+            auth.authorize_request(&grant, &other_workspace_request),
+            Err(AccessError::Authorization(
+                crate::AuthorizationError::WorkspaceDenied
+            ))
         ));
     }
 

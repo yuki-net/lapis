@@ -4,7 +4,7 @@ use crate::{
     DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest, DocumentHistoryRequest,
     DocumentOpenRequest, DocumentSaveRequest, FileTreeRequest, SnapshotRequest,
     TerminalInputRequest, TerminalResizeRequest, TerminalStartRequest, TerminalTerminateRequest,
-    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceListRequest, capability,
+    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId, WorkspaceListRequest, capability,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +84,28 @@ impl RequestBody {
             Self::SnapshotResync(_) => capability::WORKSPACE_SYNC,
         }
     }
+
+    /// Request自身が明示するWorkspace。Resource ID経由のRequestはbackend所有権表で解決する。
+    pub const fn workspace_id(&self) -> Option<&WorkspaceId> {
+        match self {
+            Self::WorkspaceList(_) => None,
+            Self::WorkspaceConnect(request) => Some(&request.workspace_id),
+            Self::WorkspaceClose(request) => Some(&request.workspace_id),
+            Self::FileTree(request) => Some(&request.workspace_id),
+            Self::DocumentOpen(request) => Some(&request.workspace_id),
+            Self::DocumentCreate(request) => Some(&request.workspace_id),
+            Self::TerminalStart(request) => Some(&request.workspace_id),
+            Self::SnapshotResync(request) => Some(&request.workspace_id),
+            Self::DocumentEdit(_)
+            | Self::DocumentSave(_)
+            | Self::DocumentUndo(_)
+            | Self::DocumentRedo(_)
+            | Self::DocumentClose(_)
+            | Self::TerminalInput(_)
+            | Self::TerminalResize(_)
+            | Self::TerminalTerminate(_) => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +133,20 @@ mod tests {
             terminate.required_capability(),
             capability::TERMINAL_CONTROL
         );
+    }
+
+    #[test]
+    fn direct_workspace_is_exposed_before_resource_dispatch() {
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let tree = RequestBody::FileTree(crate::FileTreeRequest {
+            workspace_id: workspace_id.clone(),
+            path: None,
+        });
+        let terminal_control = RequestBody::TerminalTerminate(crate::TerminalTerminateRequest {
+            terminal_id: crate::TerminalId::try_new("terminal-1").unwrap(),
+        });
+
+        assert_eq!(tree.workspace_id(), Some(&workspace_id));
+        assert_eq!(terminal_control.workspace_id(), None);
     }
 }
