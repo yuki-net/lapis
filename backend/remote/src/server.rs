@@ -255,7 +255,11 @@ async fn upgrade_websocket(
 }
 
 async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: SocketAddr) {
-    let mut connection = ConnectionGuard::new(ConnectionSession::new(), state.auth.clone());
+    let mut connection = ConnectionGuard::new(
+        ConnectionSession::new(),
+        state.auth.clone(),
+        state.handler.clone(),
+    );
     let authentication_deadline =
         TokioInstant::now() + state.limits.authentication_timeout().duration();
 
@@ -411,15 +415,24 @@ async fn close_socket(
 struct ConnectionGuard {
     session: ConnectionSession,
     auth: SharedRemoteAuth,
+    handler: Arc<dyn RemoteRequestHandler>,
 }
 
 impl ConnectionGuard {
-    fn new(session: ConnectionSession, auth: SharedRemoteAuth) -> Self {
-        Self { session, auth }
+    fn new(
+        session: ConnectionSession,
+        auth: SharedRemoteAuth,
+        handler: Arc<dyn RemoteRequestHandler>,
+    ) -> Self {
+        Self {
+            session,
+            auth,
+            handler,
+        }
     }
 
     fn disconnect(&mut self) {
-        self.session.disconnect(&self.auth);
+        self.session.disconnect(&self.auth, self.handler.as_ref());
     }
 }
 

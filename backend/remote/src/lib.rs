@@ -2,6 +2,7 @@
 
 mod auth;
 mod authorization;
+mod backend_handler;
 mod clock;
 mod credential;
 mod handler;
@@ -20,6 +21,7 @@ pub use auth::{
     PairingLifetime, RemoteAuth,
 };
 pub use authorization::{AuthorizationError, SessionGrant};
+pub use backend_handler::BackendRemoteHandler;
 pub use clock::{Clock, SystemClock};
 pub use credential::{CredentialHandle, CredentialId, InvalidCredentialId};
 pub use handler::{RemoteRequestHandler, RemoteResponseFuture};

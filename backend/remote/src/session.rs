@@ -70,10 +70,15 @@ impl ConnectionSession {
         }
     }
 
-    pub(crate) fn disconnect(&mut self, auth: &SharedRemoteAuth) {
+    pub(crate) fn disconnect(
+        &mut self,
+        auth: &SharedRemoteAuth,
+        handler: &dyn RemoteRequestHandler,
+    ) {
         let Some(grant) = self.grant.take() else {
             return;
         };
+        handler.disconnect(&grant);
         if let Ok(mut auth) = auth.lock() {
             auth.disconnect(grant.session_id());
         }
@@ -411,7 +416,7 @@ mod tests {
                     ..
                 }) if error.code.as_str() == INVALID_REQUEST
             ));
-            session.disconnect(&auth);
+            session.disconnect(&auth, &ListHandler);
 
             let mut paired = match serde_json::from_str::<ServerMessage>(&paired_json).unwrap() {
                 ServerMessage::Paired(response) => response,
@@ -438,7 +443,7 @@ mod tests {
                 authenticated.message,
                 ServerMessage::Authenticated(_)
             ));
-            reconnected.disconnect(&auth);
+            reconnected.disconnect(&auth, &ListHandler);
         });
     }
 
@@ -480,7 +485,7 @@ mod tests {
             assert_eq!(error.code.as_str(), INTERNAL);
             assert!(error.retryable);
             assert!(!reply.close);
-            session.disconnect(&auth);
+            session.disconnect(&auth, &PendingHandler);
         });
     }
 

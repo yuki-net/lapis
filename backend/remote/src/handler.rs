@@ -11,4 +11,6 @@ pub type RemoteResponseFuture<'a> = Pin<Box<dyn Future<Output = ResponseEnvelope
 /// 実装側はDocumentやTerminalなどのresource所有権をSession/Workspaceへ結び付けて検証する。
 pub trait RemoteRequestHandler: Send + Sync + 'static {
     fn handle(&self, session: SessionGrant, request: RequestEnvelope) -> RemoteResponseFuture<'_>;
+
+    fn disconnect(&self, _session: &SessionGrant) {}
 }
