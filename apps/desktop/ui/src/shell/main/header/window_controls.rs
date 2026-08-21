@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::icon_button;
 
 impl Editor {
     pub(super) fn render_window_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -9,22 +10,11 @@ impl Editor {
             .flex()
             .items_center()
             .child(
-                div()
-                    .id("open-settings-menu")
-                    .size(px(28.0))
-                    .rounded(px(6.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .occlude()
-                    .bg(theme::title_bar())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                icon_button("open-settings-menu", IconName::Settings).on_click(cx.listener(
+                    |this, event: &ClickEvent, _, cx| {
                         this.toggle_settings_menu(event.position(), cx);
-                    }))
-                    .child(crate::components::Icon::new(
-                        crate::components::IconName::Settings,
-                    )),
+                    },
+                )),
             )
             .child(
                 controls::window_control_button(

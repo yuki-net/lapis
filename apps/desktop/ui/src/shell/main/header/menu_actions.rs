@@ -1,6 +1,6 @@
 use super::*;
 
-use super::menu::MenuAction;
+use super::menu_definition::MenuAction;
 use crate::shell::HeaderMenuSection as MenuId;
 
 impl Editor {

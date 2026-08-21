@@ -22,7 +22,7 @@ use lapis_workspace::FileEntryKind;
 
 use crate::{
     app::*,
-    components::{Icon, IconName, panel_empty_state, tool_empty_state},
+    components::{Icon, IconName, SurfaceVariant, panel_empty_state, surface, tool_empty_state},
     extension_ui::{ActivationEvent, FeatureRegistry, ThemeId, UiSlot, ViewId},
     features::{
         self,
@@ -281,31 +281,6 @@ impl Editor {
             })
             .unwrap_or((1, 1))
     }
-}
-
-fn settings_menu_item(
-    icon: IconName,
-    label: &'static str,
-    detail: Option<String>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(label)
-        .h(px(34.0))
-        .w_full()
-        .px_2()
-        .rounded(px(5.0))
-        .flex()
-        .items_center()
-        .gap_2()
-        .text_size(px(13.0))
-        .text_color(theme::text())
-        .hover(|style| style.bg(theme::surface_hover()))
-        .child(Icon::new(icon))
-        .child(label)
-        .child(div().flex_1())
-        .when_some(detail, |item, detail| {
-            item.child(div().text_color(theme::muted()).child(detail))
-        })
 }
 
 impl Focusable for Editor {

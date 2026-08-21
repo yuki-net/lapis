@@ -4,6 +4,7 @@ mod drag;
 mod left;
 mod menu;
 mod menu_actions;
+mod menu_definition;
 mod window_controls;
 
 use drag::apply_drag_region;

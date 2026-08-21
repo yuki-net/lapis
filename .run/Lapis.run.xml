@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Lapis" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --manifest-path apps/desktop/app/Cargo.toml --bin lapis" />
+    <option name="command" value="run --target-dir target/run --manifest-path apps/desktop/app/Cargo.toml --bin lapis" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
     <option name="emulateTerminal" value="false" />

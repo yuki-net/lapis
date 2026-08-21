@@ -51,19 +51,6 @@ impl IntoElement for PanelToggleIcon {
     }
 }
 
-/// A visible Lucide menu icon for the header.
-pub(crate) fn menu_icon() -> gpui::Div {
-    div()
-        .size_4()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(theme::muted())
-        .child(crate::components::Icon::new(
-            crate::components::IconName::Menu,
-        ))
-}
-
 #[derive(Clone, Copy)]
 pub(crate) enum WindowControlIconName {
     Minimize,

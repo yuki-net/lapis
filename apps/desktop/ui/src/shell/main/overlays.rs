@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::{MenuItemSpec, menu_item, menu_surface};
 
 impl Editor {
     pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -8,35 +9,32 @@ impl Editor {
             .offset(point(px(-250.0), px(8.0)))
             .snap_to_window_with_margin(px(8.0))
             .child(
-                div()
-                    .id("settings-menu")
+                menu_surface("settings-menu")
                     .w(px(250.0))
-                    .p_2()
-                    .rounded(px(7.0))
-                    .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::surface())
-                    .shadow_lg()
-                    .text_color(theme::text())
+                    .p(theme::spacing(theme::Spacing::Sm))
                     .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                         this.close_settings_menu(cx);
                     }))
                     .child(
-                        settings_menu_item(
-                            IconName::Settings,
-                            "Settings",
-                            Some("Ctrl+,".to_owned()),
-                        )
+                        menu_item(MenuItemSpec {
+                            id: "settings-menu-settings".into(),
+                            label: "Settings".into(),
+                            shortcut: Some("Ctrl+,".into()),
+                            icon: Some(IconName::Settings),
+                            enabled: true,
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.open_settings_view(cx);
                         })),
                     )
                     .child(
-                        settings_menu_item(
-                            IconName::SunMoon,
-                            "Theme",
-                            theme::name(&theme::active_id()),
-                        )
+                        menu_item(MenuItemSpec {
+                            id: "settings-menu-theme".into(),
+                            label: "Theme".into(),
+                            shortcut: theme::name(&theme::active_id()).map(Into::into),
+                            icon: Some(IconName::SunMoon),
+                            enabled: true,
+                        })
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.toggle_theme_preference(cx);
                         })),
