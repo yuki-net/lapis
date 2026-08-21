@@ -10,7 +10,7 @@ pub struct SessionGrant {
 }
 
 impl SessionGrant {
-    pub fn new(
+    pub(crate) fn from_authenticated(
         session_id: SessionId,
         workspace_id: WorkspaceId,
         capabilities: CapabilitySet,
@@ -44,7 +44,7 @@ impl SessionGrant {
         }
     }
 
-    pub fn require_request(&self, request: &RequestBody) -> Result<(), AuthorizationError> {
+    pub(crate) fn require_request(&self, request: &RequestBody) -> Result<(), AuthorizationError> {
         let capability = CapabilityId::try_new(request.required_capability())
             .expect("built-in request capability must be valid");
         self.require_capability(&capability)
@@ -81,7 +81,7 @@ mod tests {
     fn rejects_other_workspace_and_missing_capability() {
         let files = CapabilityId::try_new(capability::FILES_READ).unwrap();
         let terminal = CapabilityId::try_new(capability::TERMINAL_START).unwrap();
-        let grant = SessionGrant::new(
+        let grant = SessionGrant::from_authenticated(
             SessionId::try_new("session-1").unwrap(),
             WorkspaceId::try_new("workspace-1").unwrap(),
             CapabilitySet::try_new([files.clone()]).unwrap(),

@@ -3004,8 +3004,12 @@ dependencies = [
 name = "lapis-remote"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
  "lapis-client-api",
+ "sha2 0.10.9",
+ "subtle",
  "tempfile",
+ "zeroize",
 ]
 
 [[package]]
