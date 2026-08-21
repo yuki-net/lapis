@@ -106,9 +106,7 @@ impl PanelHost {
         }
 
         self.transition = None;
-        let Some(open) = self.pending_open.take() else {
-            return None;
-        };
+        let open = self.pending_open.take()?;
         self.request_open(open, now)
     }
 

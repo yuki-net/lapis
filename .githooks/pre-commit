@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+echo "[pre-commit] Checking Rust formatting..."
+cargo fmt --all -- --check
+
+echo "[pre-commit] Checking the workspace..."
+cargo check --workspace --all-targets
