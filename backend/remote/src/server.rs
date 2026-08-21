@@ -18,11 +18,14 @@ use axum::{
     routing::any,
 };
 use axum_server::{Handle, tls_rustls::RustlsConfig};
-use lapis_client_api::{PROTOCOL_ERROR, UNAUTHORIZED};
+use lapis_client_api::{
+    ErrorCode, EventEnvelope, INTERNAL, PROTOCOL_ERROR, ProtocolError, ResponseBody,
+    ResponseEnvelope, UNAUTHORIZED,
+};
 use tokio::time::{Instant as TokioInstant, timeout, timeout_at};
 
 use crate::{
-    RemoteLimits, RemoteRequestHandler, Tls13ServerConfig,
+    RemoteEventReceiver, RemoteLimits, RemoteRequestHandler, Tls13ServerConfig,
     rate_limit::AuthenticationAttemptLimiter,
     session::{ConnectionSession, SharedRemoteAuth},
     wire::{
@@ -262,17 +265,64 @@ async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: Socket
     );
     let authentication_deadline =
         TokioInstant::now() + state.limits.authentication_timeout().duration();
+    let mut idle_deadline = TokioInstant::now() + state.limits.idle_timeout().duration();
+    let mut events: Option<RemoteEventReceiver> = None;
 
     loop {
-        let received = if connection.session.is_authenticated() {
-            timeout(state.limits.idle_timeout().duration(), socket.recv()).await
+        let deadline = if connection.session.is_authenticated() {
+            idle_deadline
         } else {
-            timeout_at(authentication_deadline, socket.recv()).await
+            authentication_deadline
         };
-        let message = match received {
-            Ok(Some(Ok(message))) => message,
-            Ok(Some(Err(_)) | None) => break,
-            Err(_) => {
+        let incoming = if let Some(events) = events.as_mut() {
+            tokio::select! {
+                biased;
+                received = timeout_at(deadline, socket.recv()) => match received {
+                    Ok(Some(Ok(message))) => ConnectionInput::Message(message),
+                    Ok(Some(Err(_)) | None) => ConnectionInput::SocketClosed,
+                    Err(_) => ConnectionInput::Timeout,
+                },
+                event = events.recv() => match event {
+                    Some(event) => ConnectionInput::Event(event),
+                    None => ConnectionInput::EventsClosed,
+                },
+            }
+        } else {
+            match timeout_at(deadline, socket.recv()).await {
+                Ok(Some(Ok(message))) => ConnectionInput::Message(message),
+                Ok(Some(Err(_)) | None) => ConnectionInput::SocketClosed,
+                Err(_) => ConnectionInput::Timeout,
+            }
+        };
+        let message = match incoming {
+            ConnectionInput::Message(message) => {
+                idle_deadline = TokioInstant::now() + state.limits.idle_timeout().duration();
+                message
+            }
+            ConnectionInput::Event(event) => {
+                if send_message(
+                    &mut socket,
+                    ServerMessage::Event(event),
+                    state.limits.request_timeout().duration(),
+                )
+                .await
+                .is_err()
+                {
+                    break;
+                }
+                continue;
+            }
+            ConnectionInput::SocketClosed => break,
+            ConnectionInput::EventsClosed => {
+                let _ = close_socket(
+                    &mut socket,
+                    "event stream lagged; reconnect and request snapshot",
+                    state.limits.request_timeout().duration(),
+                )
+                .await;
+                break;
+            }
+            ConnectionInput::Timeout => {
                 if !connection.session.is_authenticated() {
                     state
                         .authentication_attempts
@@ -343,7 +393,7 @@ async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: Socket
         };
 
         let was_authenticated = connection.session.is_authenticated();
-        let reply = connection
+        let mut reply = connection
             .session
             .receive(
                 client_message,
@@ -354,10 +404,36 @@ async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: Socket
             .await;
         if !was_authenticated && connection.session.is_authenticated() {
             state.authentication_attempts.record_success(peer.ip());
+            idle_deadline = TokioInstant::now() + state.limits.idle_timeout().duration();
         } else if !was_authenticated && reply.close {
             state
                 .authentication_attempts
                 .record_failure(peer.ip(), StdInstant::now());
+        }
+        if matches!(
+            &reply.message,
+            ServerMessage::Response(ResponseEnvelope {
+                body: ResponseBody::WorkspaceConnect(_),
+                ..
+            })
+        ) {
+            let grant = connection
+                .session
+                .grant()
+                .expect("workspace response requires an authenticated session")
+                .clone();
+            match timeout(
+                state.limits.request_timeout().duration(),
+                state.handler.subscribe(grant),
+            )
+            .await
+            {
+                Ok(Ok(receiver)) => events = receiver,
+                Ok(Err(_)) | Err(_) => {
+                    reply.message = subscription_error(&reply.message);
+                    reply.close = true;
+                }
+            }
         }
         if send_message(
             &mut socket,
@@ -381,6 +457,27 @@ async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: Socket
     }
 
     connection.disconnect();
+}
+
+enum ConnectionInput {
+    Message(Message),
+    Event(EventEnvelope),
+    SocketClosed,
+    EventsClosed,
+    Timeout,
+}
+
+fn subscription_error(message: &ServerMessage) -> ServerMessage {
+    let request_id = match message {
+        ServerMessage::Response(response) => response.request_id.clone(),
+        _ => return protocol_error(INTERNAL),
+    };
+    ServerMessage::Response(ResponseEnvelope {
+        request_id,
+        body: ResponseBody::Error(ProtocolError::new(
+            ErrorCode::try_new(INTERNAL).expect("built-in error code must be valid"),
+        )),
+    })
 }
 
 async fn send_message(

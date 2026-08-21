@@ -9,7 +9,7 @@ mod state;
 mod terminal_state;
 
 pub use error::BackendStateError;
-pub use events::BackendEventReceiver;
+pub use events::{BackendEventReceiver, BackendEventSink};
 pub use path::{PathSecurityError, WorkspacePathResolver};
 pub use ports::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 pub use service::{BackendService, BackendServiceError};

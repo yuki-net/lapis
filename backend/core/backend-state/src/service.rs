@@ -7,13 +7,17 @@ use std::{
     time::Duration,
 };
 
-use lapis_client_api::{EventEnvelope, RequestEnvelope, ResponseEnvelope, SessionId, WorkspaceId};
+use lapis_client_api::{
+    EventEnvelope, RequestEnvelope, ResponseBody, ResponseEnvelope, SessionId, WorkspaceId,
+};
 
 use crate::{
-    BackendEventReceiver, BackendSession, BackendState, BackendStateError, state::PublishedEvent,
+    BackendEventReceiver, BackendEventSink, BackendSession, BackendState, BackendStateError,
+    state::PublishedEvent,
 };
 
 const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone)]
 pub struct BackendService {
@@ -67,6 +71,25 @@ impl BackendService {
             .map_err(BackendServiceError::State)
     }
 
+    pub fn dispatch_with_subscription(
+        &self,
+        session: BackendSession,
+        request: RequestEnvelope,
+        sink: Arc<dyn BackendEventSink>,
+    ) -> Result<ResponseEnvelope, BackendServiceError> {
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::DispatchWithSubscription {
+                session,
+                request,
+                sink,
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        receive.recv().map_err(|_| BackendServiceError::Unavailable)
+    }
+
     pub fn disconnect(&self, session_id: SessionId) -> Result<(), BackendServiceError> {
         self.inner
             .sender()?
@@ -112,6 +135,12 @@ enum Command {
         request: RequestEnvelope,
         respond: mpsc::SyncSender<ResponseEnvelope>,
     },
+    DispatchWithSubscription {
+        session: BackendSession,
+        request: RequestEnvelope,
+        sink: Arc<dyn BackendEventSink>,
+        respond: mpsc::SyncSender<ResponseEnvelope>,
+    },
     Subscribe {
         session: BackendSession,
         respond: mpsc::SyncSender<Result<BackendEventReceiver, BackendStateError>>,
@@ -122,7 +151,17 @@ enum Command {
 
 struct Subscriber {
     workspace_id: WorkspaceId,
-    sender: mpsc::Sender<EventEnvelope>,
+    sink: Arc<dyn BackendEventSink>,
+}
+
+struct ChannelEventSink {
+    sender: mpsc::SyncSender<EventEnvelope>,
+}
+
+impl BackendEventSink for ChannelEventSink {
+    fn try_send(&self, event: EventEnvelope) -> bool {
+        self.sender.try_send(event).is_ok()
+    }
 }
 
 fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
@@ -141,17 +180,38 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
                 let _ = respond.send(outcome.response);
                 publish_events(&mut subscribers, outcome.events);
             }
+            Ok(Command::DispatchWithSubscription {
+                session,
+                request,
+                sink,
+                respond,
+            }) => {
+                let outcome = state.dispatch(&session, request);
+                if matches!(outcome.response.body, ResponseBody::WorkspaceConnect(_)) {
+                    subscribers.insert(
+                        session.session_id.clone(),
+                        Subscriber {
+                            workspace_id: session.workspace_id.clone(),
+                            sink,
+                        },
+                    );
+                } else if !state.has_connected_session(&session.session_id) {
+                    subscribers.remove(&session.session_id);
+                }
+                let _ = respond.send(outcome.response);
+                publish_events(&mut subscribers, outcome.events);
+            }
             Ok(Command::Subscribe { session, respond }) => {
                 if let Err(error) = state.require_connected(&session) {
                     let _ = respond.send(Err(error));
                     continue;
                 }
-                let (sender, receiver) = mpsc::channel();
+                let (sender, receiver) = mpsc::sync_channel(SUBSCRIBER_QUEUE_CAPACITY);
                 subscribers.insert(
                     session.session_id,
                     Subscriber {
                         workspace_id: session.workspace_id,
-                        sender,
+                        sink: Arc::new(ChannelEventSink { sender }),
                     },
                 );
                 let _ = respond.send(Ok(BackendEventReceiver { receiver }));
@@ -175,7 +235,7 @@ fn publish_events(subscribers: &mut HashMap<SessionId, Subscriber>, events: Vec<
             if subscriber.workspace_id != published.workspace_id {
                 return true;
             }
-            subscriber.sender.send(published.event.clone()).is_ok()
+            subscriber.sink.try_send(published.event.clone())
         });
     }
 }

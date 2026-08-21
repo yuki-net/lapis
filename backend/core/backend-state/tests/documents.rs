@@ -480,6 +480,60 @@ fn history_without_a_change_does_not_advance_revision_or_publish_an_event() {
     assert!(events.recv_timeout(Duration::from_millis(20)).is_err());
 }
 
+#[test]
+fn slow_event_subscriber_is_dropped_without_blocking_backend_state() {
+    let root = tempfile::tempdir().unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+    let events = service.subscribe(session.clone()).unwrap();
+    let ResponseBody::DocumentCreate(created) = dispatch(
+        &service,
+        &session,
+        2,
+        RequestBody::DocumentCreate(DocumentCreateRequest {
+            workspace_id,
+            path: WorkspaceRelativePath::parse("busy.ts").unwrap(),
+            encoding: DocumentEncoding::Utf8,
+            content: "x".to_owned(),
+        }),
+    ) else {
+        panic!("expected created document");
+    };
+
+    for index in 0..300_u64 {
+        let replacement = if index % 2 == 0 { "y" } else { "x" };
+        let transaction = DocumentTransaction::try_new(vec![
+            DocumentTextEdit::try_new(0, 1, replacement).unwrap(),
+        ])
+        .unwrap();
+        assert!(matches!(
+            dispatch(
+                &service,
+                &session,
+                index + 3,
+                RequestBody::DocumentEdit(DocumentEditRequest {
+                    document_id: created.document.document_id.clone(),
+                    base_revision: Revision::new(index + 1),
+                    transaction,
+                }),
+            ),
+            ResponseBody::DocumentEdit(_)
+        ));
+    }
+
+    let mut received = 0;
+    loop {
+        match events.recv_timeout(Duration::from_secs(1)) {
+            Ok(_) => received += 1,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                panic!("slow subscriber was not disconnected")
+            }
+        }
+    }
+    assert!(received > 0 && received < 301);
+}
+
 fn service(
     root: &Path,
     workspace: &str,

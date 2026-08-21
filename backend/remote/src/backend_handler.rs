@@ -1,36 +1,106 @@
-use lapis_backend_state::{BackendService, BackendSession};
-use lapis_client_api::{
-    ErrorCode, INTERNAL, ProtocolError, RequestEnvelope, ResponseBody, ResponseEnvelope,
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
 };
 
-use crate::{RemoteRequestHandler, RemoteResponseFuture, SessionGrant};
+use lapis_backend_state::{BackendEventSink, BackendService, BackendSession};
+use lapis_client_api::{
+    ErrorCode, EventEnvelope, INTERNAL, ProtocolError, RequestBody, RequestEnvelope, ResponseBody,
+    ResponseEnvelope, SessionId,
+};
+
+use crate::{
+    RemoteEventReceiver, RemoteRequestHandler, RemoteResponseFuture, RemoteSubscriptionError,
+    RemoteSubscriptionFuture, SessionGrant,
+};
+
+const REMOTE_EVENT_QUEUE_CAPACITY: usize = 64;
 
 #[derive(Clone)]
 pub struct BackendRemoteHandler {
     backend: BackendService,
+    pending_subscriptions: Arc<Mutex<HashMap<SessionId, RemoteEventReceiver>>>,
 }
 
 impl BackendRemoteHandler {
     pub fn new(backend: BackendService) -> Self {
-        Self { backend }
+        Self {
+            backend,
+            pending_subscriptions: Arc::new(Mutex::new(HashMap::new())),
+        }
     }
 }
 
 impl RemoteRequestHandler for BackendRemoteHandler {
     fn handle(&self, grant: SessionGrant, request: RequestEnvelope) -> RemoteResponseFuture<'_> {
         let backend = self.backend.clone();
+        let cleanup_backend = self.backend.clone();
         let request_id = request.request_id.clone();
         let session = BackendSession::new(grant.session_id().clone(), grant.workspace_id().clone());
+        let opens_workspace = matches!(&request.body, RequestBody::WorkspaceConnect(_));
+        let pending_subscriptions = self.pending_subscriptions.clone();
         Box::pin(async move {
-            match tokio::task::spawn_blocking(move || backend.dispatch(session, request)).await {
-                Ok(Ok(response)) => response,
+            let receiver = opens_workspace.then(|| {
+                let (sender, receiver) = tokio::sync::mpsc::channel(REMOTE_EVENT_QUEUE_CAPACITY);
+                (
+                    Arc::new(TokioEventSink { sender }) as Arc<dyn BackendEventSink>,
+                    receiver,
+                )
+            });
+            let sink = receiver.as_ref().map(|(sink, _)| sink.clone());
+            let dispatched = tokio::task::spawn_blocking(move || match sink {
+                Some(sink) => backend.dispatch_with_subscription(session, request, sink),
+                None => backend.dispatch(session, request),
+            })
+            .await;
+            match dispatched {
+                Ok(Ok(response)) => {
+                    if matches!(&response.body, ResponseBody::WorkspaceConnect(_))
+                        && let Some((_, receiver)) = receiver
+                    {
+                        let session_id = grant.session_id().clone();
+                        if let Ok(mut pending) = pending_subscriptions.lock() {
+                            pending.insert(session_id, RemoteEventReceiver::new(receiver));
+                        } else {
+                            let _ = cleanup_backend.disconnect(session_id);
+                            return internal_error(request_id);
+                        }
+                    }
+                    response
+                }
                 Ok(Err(_)) | Err(_) => internal_error(request_id),
             }
         })
     }
 
     fn disconnect(&self, grant: &SessionGrant) {
+        if let Ok(mut pending) = self.pending_subscriptions.lock() {
+            pending.remove(grant.session_id());
+        }
         let _ = self.backend.disconnect(grant.session_id().clone());
+    }
+
+    fn subscribe(&self, grant: SessionGrant) -> RemoteSubscriptionFuture<'_> {
+        let receiver = self
+            .pending_subscriptions
+            .lock()
+            .map_err(|_| RemoteSubscriptionError)
+            .and_then(|mut pending| {
+                pending
+                    .remove(grant.session_id())
+                    .ok_or(RemoteSubscriptionError)
+            });
+        Box::pin(async move { receiver.map(Some) })
+    }
+}
+
+struct TokioEventSink {
+    sender: tokio::sync::mpsc::Sender<EventEnvelope>,
+}
+
+impl BackendEventSink for TokioEventSink {
+    fn try_send(&self, event: EventEnvelope) -> bool {
+        self.sender.try_send(event).is_ok()
     }
 }
 
@@ -51,8 +121,9 @@ mod tests {
         BackendState, WorkspaceEntry, WorkspaceFileBackend, WorkspaceRegistration,
     };
     use lapis_client_api::{
-        CapabilitySet, RequestBody, RequestId, ResponseBody, SessionId, SnapshotReason,
-        SnapshotRequest, WorkspaceConnectRequest, WorkspaceId,
+        CapabilitySet, DocumentCreateRequest, DocumentEncoding, EventBody, RequestBody, RequestId,
+        ResponseBody, SessionId, SnapshotReason, SnapshotRequest, WorkspaceConnectRequest,
+        WorkspaceId, WorkspaceRelativePath,
     };
     use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 
@@ -117,6 +188,31 @@ mod tests {
             ),
         ));
         assert!(matches!(connected.body, ResponseBody::WorkspaceConnect(_)));
+
+        let created = runtime.block_on(handler.handle(
+            grant.clone(),
+            request(
+                4,
+                RequestBody::DocumentCreate(DocumentCreateRequest {
+                    workspace_id: workspace_id.clone(),
+                    path: WorkspaceRelativePath::parse("new.ts").unwrap(),
+                    encoding: DocumentEncoding::Utf8,
+                    content: "const value = 1;".to_owned(),
+                }),
+            ),
+        ));
+        assert!(matches!(created.body, ResponseBody::DocumentCreate(_)));
+        let mut events = runtime
+            .block_on(handler.subscribe(grant.clone()))
+            .unwrap()
+            .expect("backend handler must expose events");
+        let event = runtime
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(1), events.recv()).await
+            })
+            .unwrap()
+            .unwrap();
+        assert!(matches!(event.body, EventBody::DocumentReplaced { .. }));
 
         let snapshot = runtime.block_on(handler.handle(
             grant.clone(),

@@ -45,6 +45,10 @@ impl ConnectionSession {
         self.grant.is_some()
     }
 
+    pub(crate) fn grant(&self) -> Option<&SessionGrant> {
+        self.grant.as_ref()
+    }
+
     pub(crate) async fn receive(
         &mut self,
         message: ClientMessage,

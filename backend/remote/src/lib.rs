@@ -24,7 +24,10 @@ pub use authorization::{AuthorizationError, SessionGrant};
 pub use backend_handler::BackendRemoteHandler;
 pub use clock::{Clock, SystemClock};
 pub use credential::{CredentialHandle, CredentialId, InvalidCredentialId};
-pub use handler::{RemoteRequestHandler, RemoteResponseFuture};
+pub use handler::{
+    RemoteEventReceiver, RemoteRequestHandler, RemoteResponseFuture, RemoteSubscriptionError,
+    RemoteSubscriptionFuture,
+};
 pub use lapis_backend_state::{PathSecurityError, WorkspacePathResolver};
 pub use limits::{
     AuthenticationTimeout, IdleTimeout, LimitError, MaxConcurrentRequests, MaxFrameSize,
