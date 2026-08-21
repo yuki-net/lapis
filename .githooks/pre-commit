@@ -4,8 +4,23 @@ set -eu
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# テスト内の一時リポジトリへ、親フックのGit contextを漏らさない。
+git_local_env=$(git rev-parse --local-env-vars)
+unset $git_local_env
+
+# Push運用とCIが整うまで、必須のRust検証をpre-commitへ集約する。
+# 運用再開後は重い検証をpre-pushまたはCIへ戻す。
 echo "[pre-commit] Checking Rust formatting..."
 cargo fmt --all -- --check
 
 echo "[pre-commit] Checking the workspace..."
 cargo check --workspace --all-targets
+
+echo "[pre-commit] Running workspace tests..."
+cargo test --workspace --all-targets
+
+echo "[pre-commit] Running clippy..."
+cargo clippy --workspace --all-targets -- -D warnings
+
+echo "[pre-commit] Building the workspace..."
+cargo build --workspace --all-targets
