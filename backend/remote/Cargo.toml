@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 axum-server.workspace = true
+lapis-backend-state = { path = "../core/backend-state" }
 lapis-client-api = { path = "../core/client-api" }
 getrandom.workspace = true
 rustls.workspace = true

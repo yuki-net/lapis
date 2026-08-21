@@ -14,7 +14,6 @@ mod server;
 mod session;
 mod tls;
 mod wire;
-mod workspace_path;
 
 pub use auth::{
     AccessError, AuthConfig, AuthConfigError, AuthError, AuthPolicy, CredentialLifetime,
@@ -24,6 +23,7 @@ pub use authorization::{AuthorizationError, SessionGrant};
 pub use clock::{Clock, SystemClock};
 pub use credential::{CredentialHandle, CredentialId, InvalidCredentialId};
 pub use handler::{RemoteRequestHandler, RemoteResponseFuture};
+pub use lapis_backend_state::{PathSecurityError, WorkspacePathResolver};
 pub use limits::{
     AuthenticationTimeout, IdleTimeout, LimitError, MaxConcurrentRequests, MaxFrameSize,
     MaxMessageSize, RemoteLimits, RequestTimeout,
@@ -38,4 +38,3 @@ pub use wire::{
     AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
     REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL, ServerMessage,
 };
-pub use workspace_path::{PathSecurityError, WorkspacePathResolver};

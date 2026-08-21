@@ -3105,6 +3105,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapis-backend-state"
+version = "0.1.0"
+dependencies = [
+ "lapis-client-api",
+ "lapis-document",
+ "lapis-text",
+ "tempfile",
+]
+
+[[package]]
 name = "lapis-client-api"
 version = "0.1.0"
 dependencies = [
@@ -3194,6 +3204,7 @@ name = "lapis-platform"
 version = "0.1.0"
 dependencies = [
  "lapis-app-services",
+ "lapis-backend-state",
  "lapis-document",
  "lapis-editor-core",
  "lapis-git",
@@ -3222,6 +3233,7 @@ dependencies = [
  "axum",
  "axum-server",
  "getrandom 0.3.4",
+ "lapis-backend-state",
  "lapis-client-api",
  "rcgen",
  "rustls",

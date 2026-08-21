@@ -20,6 +20,16 @@ impl WorkspacePathResolver {
         &self.canonical_root
     }
 
+    pub fn resolve_directory(
+        &self,
+        relative: Option<&WorkspaceRelativePath>,
+    ) -> Result<PathBuf, PathSecurityError> {
+        match relative {
+            Some(relative) => self.resolve_existing(relative),
+            None => Ok(self.canonical_root.clone()),
+        }
+    }
+
     pub fn resolve_existing(
         &self,
         relative: &WorkspaceRelativePath,
@@ -39,7 +49,6 @@ impl WorkspacePathResolver {
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(error) => return Err(PathSecurityError::Io(error)),
         }
-
         let parent = candidate
             .parent()
             .ok_or(PathSecurityError::WorkspaceEscape)?;
@@ -63,6 +72,7 @@ impl WorkspacePathResolver {
 #[derive(Debug)]
 pub enum PathSecurityError {
     InvalidRoot,
+    InvalidEntry,
     WorkspaceEscape,
     Io(std::io::Error),
 }
@@ -71,6 +81,7 @@ impl fmt::Display for PathSecurityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRoot => formatter.write_str("workspace root is not a directory"),
+            Self::InvalidEntry => formatter.write_str("workspace entry cannot be represented"),
             Self::WorkspaceEscape => formatter.write_str("path resolves outside the workspace"),
             Self::Io(error) => write!(formatter, "workspace path resolution failed: {error}"),
         }
@@ -83,72 +94,5 @@ impl Error for PathSecurityError {
             Self::Io(error) => Some(error),
             _ => None,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn keeps_existing_and_new_files_inside_workspace() {
-        let workspace = tempfile::tempdir().unwrap();
-        fs::create_dir(workspace.path().join("src")).unwrap();
-        fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n").unwrap();
-        let resolver = WorkspacePathResolver::new(workspace.path().to_owned()).unwrap();
-
-        let existing = resolver
-            .resolve_existing(&WorkspaceRelativePath::parse("src/main.rs").unwrap())
-            .unwrap();
-        let new_file = resolver
-            .resolve_new_file(&WorkspaceRelativePath::parse("src/new.rs").unwrap())
-            .unwrap();
-
-        assert!(existing.starts_with(resolver.root()));
-        assert!(new_file.starts_with(resolver.root()));
-    }
-
-    #[test]
-    fn rejects_symlink_escape_when_platform_allows_symlinks() {
-        let workspace = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let outside_file = outside.path().join("secret.txt");
-        fs::write(&outside_file, "secret").unwrap();
-        let link = workspace.path().join("linked-secret.txt");
-
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside_file, &link).unwrap();
-        #[cfg(windows)]
-        if std::os::windows::fs::symlink_file(&outside_file, &link).is_err() {
-            return;
-        }
-
-        let resolver = WorkspacePathResolver::new(workspace.path().to_owned()).unwrap();
-        assert!(matches!(
-            resolver.resolve_existing(&WorkspaceRelativePath::parse("linked-secret.txt").unwrap()),
-            Err(PathSecurityError::WorkspaceEscape)
-        ));
-    }
-
-    #[test]
-    fn rejects_dangling_symlink_as_new_file_when_platform_allows_symlinks() {
-        let workspace = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let outside_file = outside.path().join("not-created.txt");
-        let link = workspace.path().join("new.txt");
-
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&outside_file, &link).unwrap();
-        #[cfg(windows)]
-        if std::os::windows::fs::symlink_file(&outside_file, &link).is_err() {
-            return;
-        }
-
-        let resolver = WorkspacePathResolver::new(workspace.path().to_owned()).unwrap();
-        assert!(
-            resolver
-                .resolve_new_file(&WorkspaceRelativePath::parse("new.txt").unwrap())
-                .is_err()
-        );
     }
 }
