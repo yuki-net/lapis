@@ -35,6 +35,14 @@ app entry point ──> concrete adapters を組み立てる
 - 具体実装を選択する composition は各 app の entry point に置く。
 - UI が契約の型を参照することはよいが、adapter の具体型や外部 I/O を参照してはならない。
 
+## テスト可能性
+
+- 状態遷移と判断をGPUI、OS、外部I/Oから分離する。
+- 外部I/Oは契約を介し、境界だけを差し替える。
+- 非同期結果はRevisionまたは世代で検証する。
+- GPUIのContextを借用したままmodal処理やblocking I/Oを待たない。
+- coreの規則をGPUI・OSテストで重複して検証しない。
+
 ## Core と Feature
 
 `core` は、特定機能を無効にしても成立する概念と不変条件を持ちます。`feature` は、独立した起動条件、状態、外部資源、停止処理を持つ利用者向け能力です。
@@ -81,13 +89,10 @@ Desktop、Mobile、Web で共有するのは、契約、状態の意味、生成
 
 ## Workspace Files と Language
 
-Workspace 内のディレクトリsnapshotと外部変更監視のライフサイクルはbackendが所有します。監視eventは正規状態そのものではなく、影響するディレクトリのsnapshotを再取得するための通知として扱います。event欠落や監視失敗が起こり得ることを前提とし、全再取得と手動更新で回復できる契約を維持します。
-
-clientはツリーの展開、選択、スクロールと、backendのsnapshotから得た置換可能な表示用cacheを所有します。Workspace切替や再接続では古いquery応答と監視eventを適用せず、Workspaceの世代またはrequest sequenceで識別します。ファイル列挙と監視はUI threadをblockingしません。
-
-Workspace Files、Document、Language、Desktopの表示は別の責務です。Workspace Filesは列挙と監視、Documentは内容・Encoding・Revision・保存競合、Languageはpathから得る安定した `LanguageId`、Desktopはツリー表示とtheme assetを所有します。OSのファイルAPI、監視ライブラリ、構文解析器、GPUIの型をこれらの境界を越えて漏らしません。
-
-Files、LSP、シンタックスハイライトは同じ `LanguageId` を共有します。構文解析結果は対象DocumentとRevisionを持つ意味的なspanとして公開し、色やfontはclient themeが決めます。現在Revisionと一致しない解析結果は適用しません。
+- backendはWorkspace内のファイル取得とpath identityを所有し、UIは外部I/Oを直接行わない。
+- clientはツリーの展開、選択、スクロールと、置換可能な表示cacheを所有する。
+- 非同期応答はWorkspace世代またはrequest sequenceで識別し、古い結果を適用しない。
+- Files、Editor、LSPは安定した`LanguageId`を共有し、表示assetはclientが決める。
 
 ## 設計判断の記録
 

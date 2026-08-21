@@ -4,14 +4,21 @@ set -eu
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
-echo "[pre-push] Checking Rust formatting..."
-cargo fmt --all -- --check
+# テスト内の一時リポジトリへ、親フックのGit contextを漏らさない。
+git_local_env=$(git rev-parse --local-env-vars)
+unset $git_local_env
 
-echo "[pre-push] Running workspace tests..."
-cargo test --workspace --all-targets
-
-echo "[pre-push] Running clippy..."
-cargo clippy --workspace --all-targets -- -D warnings
-
-echo "[pre-push] Building the workspace..."
-cargo build --workspace
+# 現在はpush運用ができないため、検証をpre-commitへ一時的に集約している。
+# push運用の再開時は以下をコメント解除し、pre-commitの重い検証を戻す。
+#
+# echo "[pre-push] Checking Rust formatting..."
+# cargo fmt --all -- --check
+#
+# echo "[pre-push] Running workspace tests..."
+# cargo test --workspace --all-targets
+#
+# echo "[pre-push] Running clippy..."
+# cargo clippy --workspace --all-targets -- -D warnings
+#
+# echo "[pre-push] Building the workspace..."
+# cargo build --workspace --all-targets
