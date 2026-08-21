@@ -10,14 +10,19 @@ use lapis_client_api::{
     DocumentSnapshot, ErrorCode, EventBody, EventEnvelope, EventSequence, FORBIDDEN, FileTreeEntry,
     FileTreeKind, FileTreeResponse, INTERNAL, INVALID_PATH, INVALID_REQUEST, NOT_FOUND,
     ProtocolError, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, Revision,
-    RevisionConflict, SessionId, SnapshotResponse, UNSUPPORTED, WorkspaceCloseResponse,
-    WorkspaceConnectResponse, WorkspaceId, WorkspaceListResponse, WorkspaceRelativePath,
-    WorkspaceSnapshot, WorkspaceSummary,
+    RevisionConflict, SessionId, SnapshotResponse, TerminalCommandResponse, TerminalId,
+    TerminalInputRequest, TerminalResizeRequest, TerminalStartRequest, TerminalStartResponse,
+    TerminalTerminateRequest, UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse,
+    WorkspaceId, WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
 use lapis_document::{Document, Encoding};
+use lapis_terminal::TerminalBackend;
 use lapis_text::TextEdit;
 
-use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver};
+use crate::{
+    BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver,
+    terminal_state::TerminalRegistry,
+};
 
 const MAX_RETAINED_EVENTS: usize = 1024;
 
@@ -41,6 +46,7 @@ pub struct WorkspaceRegistration {
     pub name: String,
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
+    pub terminal: Option<Arc<dyn TerminalBackend>>,
 }
 
 impl WorkspaceRegistration {
@@ -55,7 +61,13 @@ impl WorkspaceRegistration {
             name: name.into(),
             root,
             files,
+            terminal: None,
         }
+    }
+
+    pub fn with_terminal(mut self, terminal: Arc<dyn TerminalBackend>) -> Self {
+        self.terminal = Some(terminal);
+        self
     }
 }
 
@@ -63,6 +75,7 @@ pub struct BackendState {
     workspaces: HashMap<WorkspaceId, WorkspaceState>,
     connected_sessions: HashMap<SessionId, WorkspaceId>,
     next_document_id: u64,
+    next_terminal_id: u64,
 }
 
 pub(crate) struct DispatchOutcome {
@@ -91,6 +104,7 @@ impl BackendState {
             workspaces,
             connected_sessions: HashMap::new(),
             next_document_id: 1,
+            next_terminal_id: 1,
         })
     }
 
@@ -122,6 +136,7 @@ impl BackendState {
             for document in workspace.documents.values_mut() {
                 document.attached_sessions.remove(session_id);
             }
+            workspace.terminals.detach(session_id);
         }
     }
 
@@ -177,10 +192,23 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.snapshot(session)
             }
-            RequestBody::TerminalStart(_)
-            | RequestBody::TerminalInput(_)
-            | RequestBody::TerminalResize(_)
-            | RequestBody::TerminalTerminate(_) => Err(BackendStateError::Unsupported),
+            RequestBody::TerminalStart(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                self.terminal_start(session, request)
+            }
+            RequestBody::TerminalInput(request) => {
+                self.require_connected(session)?;
+                self.terminal_input(session, request)
+            }
+            RequestBody::TerminalResize(request) => {
+                self.require_connected(session)?;
+                self.terminal_resize(session, request)
+            }
+            RequestBody::TerminalTerminate(request) => {
+                self.require_connected(session)?;
+                self.terminal_terminate(session, request)
+            }
         }
     }
 
@@ -487,23 +515,109 @@ impl BackendState {
         ))
     }
 
+    fn terminal_start(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalStartRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        if request.command.is_some() {
+            return Err(BackendStateError::Unsupported);
+        }
+        let terminal_id = self.allocate_terminal_id()?;
+        let workspace = self.workspace_mut(session)?;
+        let cwd = workspace.resolver.resolve_directory(request.cwd.as_ref())?;
+        let (terminal, event_body) = workspace.terminals.start(
+            terminal_id,
+            &session.session_id,
+            &workspace.summary.workspace_id,
+            &cwd,
+            request.size,
+        )?;
+        let event = workspace.publish(event_body)?;
+        Ok((
+            ResponseBody::TerminalStart(TerminalStartResponse { terminal }),
+            vec![event],
+        ))
+    }
+
+    fn terminal_input(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalInputRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let terminal = workspace.terminals.input(
+            &session.session_id,
+            &workspace.summary.workspace_id,
+            &request.terminal_id,
+            &request.data,
+        )?;
+        Ok((
+            ResponseBody::TerminalInput(TerminalCommandResponse { terminal }),
+            Vec::new(),
+        ))
+    }
+
+    fn terminal_resize(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalResizeRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let terminal = workspace.terminals.resize(
+            &session.session_id,
+            &workspace.summary.workspace_id,
+            &request.terminal_id,
+            request.size,
+        )?;
+        Ok((
+            ResponseBody::TerminalResize(TerminalCommandResponse { terminal }),
+            Vec::new(),
+        ))
+    }
+
+    fn terminal_terminate(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalTerminateRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let (terminal, event_body) = workspace.terminals.terminate(
+            &session.session_id,
+            &workspace.summary.workspace_id,
+            &request.terminal_id,
+        )?;
+        let events = event_body
+            .map(|event| workspace.publish(event))
+            .transpose()?
+            .into_iter()
+            .collect();
+        Ok((
+            ResponseBody::TerminalTerminate(TerminalCommandResponse { terminal }),
+            events,
+        ))
+    }
+
     fn snapshot(
-        &self,
+        &mut self,
         session: &BackendSession,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
-        let workspace = self.workspace(session)?;
+        let workspace = self.workspace_mut(session)?;
         let documents = workspace
             .documents
             .values()
             .map(|document| document.snapshot(&workspace.summary.workspace_id))
             .collect::<Result<Vec<_>, BackendStateError>>()?;
+        let terminals = workspace
+            .terminals
+            .snapshots_for_session(&session.session_id, &workspace.summary.workspace_id);
         Ok((
             ResponseBody::SnapshotResync(SnapshotResponse {
                 snapshot: WorkspaceSnapshot {
                     event_watermark: workspace.events.watermark(),
                     workspace: workspace.summary.clone(),
                     documents,
-                    terminals: Vec::new(),
+                    terminals,
                 },
             }),
             Vec::new(),
@@ -532,6 +646,10 @@ impl BackendState {
         }
     }
 
+    pub(crate) fn has_connected_session(&self, session_id: &SessionId) -> bool {
+        self.connected_sessions.contains_key(session_id)
+    }
+
     fn workspace(&self, session: &BackendSession) -> Result<&WorkspaceState, BackendStateError> {
         self.workspaces
             .get(&session.workspace_id)
@@ -556,6 +674,27 @@ impl BackendState {
         DocumentId::try_new(format!("document-{value}"))
             .map_err(|_| BackendStateError::CounterOverflow)
     }
+
+    fn allocate_terminal_id(&mut self) -> Result<TerminalId, BackendStateError> {
+        let value = self.next_terminal_id;
+        self.next_terminal_id = self
+            .next_terminal_id
+            .checked_add(1)
+            .ok_or(BackendStateError::CounterOverflow)?;
+        TerminalId::try_new(format!("terminal-{value}"))
+            .map_err(|_| BackendStateError::CounterOverflow)
+    }
+
+    pub(crate) fn poll_terminals(&mut self) -> Result<Vec<PublishedEvent>, BackendStateError> {
+        let mut published = Vec::new();
+        for workspace in self.workspaces.values_mut() {
+            let events = workspace.terminals.poll()?;
+            for event in events {
+                published.push(workspace.publish(event)?);
+            }
+        }
+        Ok(published)
+    }
 }
 
 struct WorkspaceState {
@@ -564,6 +703,7 @@ struct WorkspaceState {
     files: Arc<dyn WorkspaceFileBackend>,
     documents: HashMap<DocumentId, DocumentResource>,
     documents_by_path: HashMap<String, DocumentId>,
+    terminals: TerminalRegistry,
     events: EventJournal,
 }
 
@@ -578,6 +718,7 @@ impl WorkspaceState {
             files: registration.files,
             documents: HashMap::new(),
             documents_by_path: HashMap::new(),
+            terminals: TerminalRegistry::new(registration.terminal),
             events: EventJournal::default(),
         })
     }
@@ -690,13 +831,19 @@ fn protocol_error(error: BackendStateError) -> ProtocolError {
         return ProtocolError::revision_conflict(conflict);
     }
     let code = match error {
-        BackendStateError::WorkspaceNotFound | BackendStateError::DocumentNotFound => NOT_FOUND,
-        BackendStateError::WorkspaceDenied | BackendStateError::DocumentNotAttached => FORBIDDEN,
+        BackendStateError::WorkspaceNotFound
+        | BackendStateError::DocumentNotFound
+        | BackendStateError::TerminalNotFound => NOT_FOUND,
+        BackendStateError::WorkspaceDenied
+        | BackendStateError::DocumentNotAttached
+        | BackendStateError::TerminalNotAttached => FORBIDDEN,
         BackendStateError::WorkspaceNotConnected
         | BackendStateError::DuplicateWorkspace
-        | BackendStateError::Document(_) => INVALID_REQUEST,
+        | BackendStateError::Document(_)
+        | BackendStateError::TerminalNotRunning
+        | BackendStateError::InvalidTerminalSize => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,
-        BackendStateError::CounterOverflow => INTERNAL,
+        BackendStateError::CounterOverflow | BackendStateError::Terminal(_) => INTERNAL,
         BackendStateError::Unsupported => UNSUPPORTED,
         BackendStateError::RevisionConflict(_) => unreachable!("handled above"),
     };

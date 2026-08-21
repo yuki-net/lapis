@@ -16,7 +16,7 @@ use lapis_client_api::{
     DocumentHistoryRequest, DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit,
     DocumentTransaction, EventBody, FileTreeRequest, REVISION_CONFLICT, RequestBody,
     RequestEnvelope, RequestId, ResponseBody, Revision, SessionId, SnapshotReason, SnapshotRequest,
-    WorkspaceConnectRequest, WorkspaceId, WorkspaceRelativePath,
+    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId, WorkspaceRelativePath,
 };
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 
@@ -200,6 +200,10 @@ fn workspace_files_document_revision_events_and_snapshot_form_one_flow() {
         fs::read_to_string(root.path().join("src/main.ts")).unwrap(),
         "a日本b"
     );
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap().body,
+        EventBody::DocumentSaved { revision, .. } if revision == Revision::new(2)
+    ));
 
     let ResponseBody::SnapshotResync(snapshot) = dispatch(
         &service,
@@ -215,6 +219,22 @@ fn workspace_files_document_revision_events_and_snapshot_form_one_flow() {
     assert_eq!(snapshot.snapshot.documents[0].content, "a日本b");
     assert!(!snapshot.snapshot.documents[0].dirty);
     assert_eq!(snapshot.snapshot.event_watermark.value(), 3);
+
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            9,
+            RequestBody::WorkspaceClose(WorkspaceCloseRequest {
+                workspace_id: snapshot.snapshot.workspace.workspace_id,
+            }),
+        ),
+        ResponseBody::WorkspaceClose(_)
+    ));
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(1)),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected)
+    ));
 }
 
 #[test]

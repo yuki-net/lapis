@@ -6,6 +6,7 @@ mod path;
 mod ports;
 mod service;
 mod state;
+mod terminal_state;
 
 pub use error::BackendStateError;
 pub use events::BackendEventReceiver;

@@ -24,10 +24,14 @@ impl WorkspacePathResolver {
         &self,
         relative: Option<&WorkspaceRelativePath>,
     ) -> Result<PathBuf, PathSecurityError> {
-        match relative {
+        let directory = match relative {
             Some(relative) => self.resolve_existing(relative),
             None => Ok(self.canonical_root.clone()),
+        }?;
+        if !directory.is_dir() {
+            return Err(PathSecurityError::InvalidDirectory);
         }
+        Ok(directory)
     }
 
     pub fn resolve_existing(
@@ -72,6 +76,7 @@ impl WorkspacePathResolver {
 #[derive(Debug)]
 pub enum PathSecurityError {
     InvalidRoot,
+    InvalidDirectory,
     InvalidEntry,
     WorkspaceEscape,
     Io(std::io::Error),
@@ -81,6 +86,7 @@ impl fmt::Display for PathSecurityError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidRoot => formatter.write_str("workspace root is not a directory"),
+            Self::InvalidDirectory => formatter.write_str("workspace path is not a directory"),
             Self::InvalidEntry => formatter.write_str("workspace entry cannot be represented"),
             Self::WorkspaceEscape => formatter.write_str("path resolves outside the workspace"),
             Self::Io(error) => write!(formatter, "workspace path resolution failed: {error}"),

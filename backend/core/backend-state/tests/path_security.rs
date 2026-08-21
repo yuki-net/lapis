@@ -22,6 +22,18 @@ fn existing_and_new_paths_remain_inside_workspace() {
 }
 
 #[test]
+fn terminal_working_directory_must_be_a_directory() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join("file.txt"), "not a directory").unwrap();
+    let resolver = WorkspacePathResolver::new(workspace.path().to_owned()).unwrap();
+
+    assert!(matches!(
+        resolver.resolve_directory(Some(&WorkspaceRelativePath::parse("file.txt").unwrap())),
+        Err(PathSecurityError::InvalidDirectory)
+    ));
+}
+
+#[test]
 fn symlink_escape_is_rejected_when_platform_allows_symlinks() {
     let workspace = tempfile::tempdir().unwrap();
     let outside = tempfile::tempdir().unwrap();

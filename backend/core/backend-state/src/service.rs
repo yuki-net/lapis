@@ -4,11 +4,16 @@ use std::{
     fmt,
     sync::{Arc, Mutex, mpsc},
     thread,
+    time::Duration,
 };
 
 use lapis_client_api::{EventEnvelope, RequestEnvelope, ResponseEnvelope, SessionId, WorkspaceId};
 
-use crate::{BackendEventReceiver, BackendSession, BackendState, BackendStateError};
+use crate::{
+    BackendEventReceiver, BackendSession, BackendState, BackendStateError, state::PublishedEvent,
+};
+
+const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Clone)]
 pub struct BackendService {
@@ -122,25 +127,21 @@ struct Subscriber {
 
 fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
-    while let Ok(command) = receiver.recv() {
-        match command {
-            Command::Dispatch {
+    loop {
+        match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+            Ok(Command::Dispatch {
                 session,
                 request,
                 respond,
-            } => {
+            }) => {
                 let outcome = state.dispatch(&session, request);
-                let _ = respond.send(outcome.response);
-                for published in outcome.events {
-                    subscribers.retain(|_, subscriber| {
-                        if subscriber.workspace_id != published.workspace_id {
-                            return true;
-                        }
-                        subscriber.sender.send(published.event.clone()).is_ok()
-                    });
+                if !state.has_connected_session(&session.session_id) {
+                    subscribers.remove(&session.session_id);
                 }
+                let _ = respond.send(outcome.response);
+                publish_events(&mut subscribers, outcome.events);
             }
-            Command::Subscribe { session, respond } => {
+            Ok(Command::Subscribe { session, respond }) => {
                 if let Err(error) = state.require_connected(&session) {
                     let _ = respond.send(Err(error));
                     continue;
@@ -155,12 +156,27 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
                 );
                 let _ = respond.send(Ok(BackendEventReceiver { receiver }));
             }
-            Command::Disconnect(session_id) => {
+            Ok(Command::Disconnect(session_id)) => {
                 state.disconnect(&session_id);
                 subscribers.remove(&session_id);
             }
-            Command::Shutdown => break,
+            Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
+        if let Ok(events) = state.poll_terminals() {
+            publish_events(&mut subscribers, events);
+        }
+    }
+}
+
+fn publish_events(subscribers: &mut HashMap<SessionId, Subscriber>, events: Vec<PublishedEvent>) {
+    for published in events {
+        subscribers.retain(|_, subscriber| {
+            if subscriber.workspace_id != published.workspace_id {
+                return true;
+            }
+            subscriber.sender.send(published.event.clone()).is_ok()
+        });
     }
 }
 

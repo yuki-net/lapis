@@ -2,6 +2,7 @@ use std::{error::Error, fmt};
 
 use lapis_client_api::RevisionConflict;
 use lapis_document::DocumentError;
+use lapis_terminal::TerminalError;
 
 use crate::PathSecurityError;
 
@@ -13,9 +14,14 @@ pub enum BackendStateError {
     WorkspaceNotConnected,
     DocumentNotFound,
     DocumentNotAttached,
+    TerminalNotFound,
+    TerminalNotAttached,
+    TerminalNotRunning,
+    InvalidTerminalSize,
     RevisionConflict(RevisionConflict),
     Path(PathSecurityError),
     Document(DocumentError),
+    Terminal(TerminalError),
     CounterOverflow,
     Unsupported,
 }
@@ -29,9 +35,16 @@ impl fmt::Display for BackendStateError {
             Self::WorkspaceNotConnected => formatter.write_str("workspace is not connected"),
             Self::DocumentNotFound => formatter.write_str("document was not found"),
             Self::DocumentNotAttached => formatter.write_str("document is not attached to session"),
+            Self::TerminalNotFound => formatter.write_str("terminal was not found"),
+            Self::TerminalNotAttached => formatter.write_str("terminal is not attached to session"),
+            Self::TerminalNotRunning => formatter.write_str("terminal is not running"),
+            Self::InvalidTerminalSize => {
+                formatter.write_str("terminal size must be greater than zero")
+            }
             Self::RevisionConflict(_) => formatter.write_str("document revision conflicts"),
             Self::Path(error) => error.fmt(formatter),
             Self::Document(error) => error.fmt(formatter),
+            Self::Terminal(error) => error.fmt(formatter),
             Self::CounterOverflow => formatter.write_str("backend resource counter overflowed"),
             Self::Unsupported => formatter.write_str("request is not implemented by this service"),
         }
@@ -43,6 +56,7 @@ impl Error for BackendStateError {
         match self {
             Self::Path(error) => Some(error),
             Self::Document(error) => Some(error),
+            Self::Terminal(error) => Some(error),
             _ => None,
         }
     }
@@ -57,5 +71,11 @@ impl From<PathSecurityError> for BackendStateError {
 impl From<DocumentError> for BackendStateError {
     fn from(error: DocumentError) -> Self {
         Self::Document(error)
+    }
+}
+
+impl From<TerminalError> for BackendStateError {
+    fn from(error: TerminalError) -> Self {
+        Self::Terminal(error)
     }
 }

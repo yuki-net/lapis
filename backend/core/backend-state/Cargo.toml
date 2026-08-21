@@ -9,6 +9,7 @@ license.workspace = true
 lapis-client-api = { path = "../client-api" }
 lapis-document = { path = "../document" }
 lapis-text = { path = "../text" }
+lapis-terminal = { path = "../../../features/terminal" }
 
 [dev-dependencies]
 tempfile.workspace = true
