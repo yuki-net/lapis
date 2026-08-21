@@ -12,6 +12,7 @@ Lapis は、Rust backend を GPUI Desktop と KMP MobileのAndroid・iOSから�
 - `backend/core/`: プラットフォームに依存しないモデル、不変条件、アプリケーション契約を所有する。
 - `backend/local/`: ファイルシステム、プロセスなどローカル環境との接続を実装する。
 - `backend/persistence/`: 永続化契約の具体実装を所有する。
+- `backend/remote/`: 認証、session、capability、path検証、remote transportのadapterを所有する。
 - `features/`: Git、LSP、Terminal など、core から独立して有効化できる機能を所有する。
 - `vendor/`: 外部コード。Lapis 固有の責務を追加しない。
 
@@ -25,6 +26,7 @@ Lapis は、Rust backend を GPUI Desktop と KMP MobileのAndroid・iOSから�
 apps ────────────────┐
 backend/local ───────┼──> core / feature contracts
 backend/persistence ─┘
+backend/remote ──────┘
 
 app entry point ──> concrete adapters を組み立てる
 ```

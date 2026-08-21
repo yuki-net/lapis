@@ -1,0 +1,12 @@
+[package]
+name = "lapis-remote"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-client-api = { path = "../core/client-api" }
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -4,6 +4,7 @@ members = [
     "backend/core/*",
     "backend/local",
     "backend/persistence",
+    "backend/remote",
     "features/*",
 ]
 exclude = ["vendor/gpui"]
@@ -12,7 +13,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-description = "A small Markdown editor built with GPUI."
+description = "A lightweight development workspace for Desktop and Mobile."
 license = "MIT"
 
 # Keep debug symbols and assertions for the dev run configuration while

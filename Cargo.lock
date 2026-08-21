@@ -2890,6 +2890,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapis-client-api"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lapis-desktop-ui"
 version = "0.1.0"
 dependencies = [
@@ -2990,6 +2998,14 @@ name = "lapis-project"
 version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
+]
+
+[[package]]
+name = "lapis-remote"
+version = "0.1.0"
+dependencies = [
+ "lapis-client-api",
+ "tempfile",
 ]
 
 [[package]]
