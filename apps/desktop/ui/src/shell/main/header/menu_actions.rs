@@ -75,6 +75,7 @@ impl Editor {
             MenuAction::ToggleBottomPanel => {
                 self.toggle_bottom_panel(&ToggleBottomPanel, window, cx)
             }
+            MenuAction::ToggleInspector => self.toggle_inspector_window(window, cx),
             MenuAction::ToggleRightPanel => {
                 self.toggle_header_panel(crate::extension_ui::PanelPosition::Right, cx)
             }

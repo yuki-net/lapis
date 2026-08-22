@@ -206,4 +206,21 @@ impl Editor {
         }
         cx.notify();
     }
+
+    pub(crate) fn toggle_inspector_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shell.command_palette_open = false;
+        #[cfg(debug_assertions)]
+        {
+            self.status = match crate::devtools::toggle_inspector(window, cx) {
+                Ok(true) => "Inspectorを別ウィンドウで開きました".to_owned(),
+                Ok(false) => "Inspectorを閉じました".to_owned(),
+                Err(error) => error,
+            };
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            self.status = "Inspectorは開発ビルドでのみ利用可能です".to_owned();
+        }
+        cx.notify();
+    }
 }

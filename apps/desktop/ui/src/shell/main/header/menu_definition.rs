@@ -17,6 +17,7 @@ pub(crate) enum MenuAction {
     ToggleLeftPanel,
     ToggleBottomPanel,
     ToggleRightPanel,
+    ToggleInspector,
     Placeholder,
 }
 
@@ -157,6 +158,12 @@ const WINDOW_MENU: &[MenuItemDefinition] = &[
 ];
 
 const HELP_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action(
+        "toggle-inspector",
+        "Toggle Inspector",
+        Some("F12"),
+        MenuAction::ToggleInspector,
+    ),
     MenuItemDefinition::disabled("keyboard-shortcuts", "Keyboard Shortcuts"),
     MenuItemDefinition::disabled("documentation", "Documentation"),
     MenuItemDefinition::disabled("about", "About Lapis"),
@@ -222,7 +229,11 @@ mod tests {
 
     #[test]
     fn placeholder_items_are_disabled() {
-        assert!(HELP_MENU.iter().all(|item| !item.enabled));
+        assert!(
+            HELP_MENU
+                .iter()
+                .any(|item| item.id == "about" && !item.enabled)
+        );
         assert!(
             WINDOW_MENU
                 .iter()

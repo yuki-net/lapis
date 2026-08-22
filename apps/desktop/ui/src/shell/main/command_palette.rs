@@ -89,17 +89,7 @@ impl Editor {
                 self.toggle_assistant(&ToggleAssistant, window, cx);
             }
             #[cfg(debug_assertions)]
-            id::COMMAND_TOGGLE_INSPECTOR => {
-                self.shell.command_palette_open = false;
-                cx.defer_in(window, |this, window, cx| {
-                    this.status = match crate::devtools::toggle_inspector(window, cx) {
-                        Ok(true) => "Inspectorを別ウィンドウで開きました".to_owned(),
-                        Ok(false) => "Inspectorを閉じました".to_owned(),
-                        Err(error) => error,
-                    };
-                    cx.notify();
-                });
-            }
+            id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector_window(window, cx),
             _ => {
                 self.status = format!("Unknown command: {}", command.as_str());
                 cx.notify();
