@@ -50,6 +50,13 @@ impl Editor {
         active: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let localized_label = match menu {
+            MenuId::File => self.t("menu.file"),
+            MenuId::Edit => self.t("menu.edit"),
+            MenuId::View => self.t("menu.view"),
+            MenuId::Window => self.t("menu.window"),
+            MenuId::Help => self.t("menu.help"),
+        };
         div()
             .id(ElementId::Name(format!("header-menu-root-{label}").into()))
             .h(px(30.0))
@@ -62,7 +69,7 @@ impl Editor {
             .text_size(px(13.0))
             .when(active, |item| item.bg(theme::accent_soft()))
             .hover(|style| style.bg(theme::accent_soft()))
-            .child(label)
+            .child(localized_label)
             .child(div().text_color(theme::muted()).child("›"))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
@@ -79,6 +86,13 @@ impl Editor {
         menu: MenuId,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
+        let menu_prefix = match menu {
+            MenuId::File => "menu.file",
+            MenuId::Edit => "menu.edit",
+            MenuId::View => "menu.view",
+            MenuId::Window => "menu.window",
+            MenuId::Help => "menu.help",
+        };
         let children = items(menu)
             .iter()
             .flat_map(|item| {
@@ -86,7 +100,8 @@ impl Editor {
                     .separator_before
                     .then(|| separator().into_any_element());
                 separator.into_iter().chain(std::iter::once(
-                    self.render_header_item(item, cx).into_any_element(),
+                    self.render_header_item(menu_prefix, item, cx)
+                        .into_any_element(),
                 ))
             })
             .collect::<Vec<_>>();
@@ -102,15 +117,23 @@ impl Editor {
 
     fn render_header_item(
         &self,
+        menu_prefix: &'static str,
         item: &'static MenuItemDefinition,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let action = item.action;
         let id = item.id;
         let enabled = item.enabled;
+        let key = format!("{menu_prefix}.{id}");
+        let resolved = self.t(&key);
+        let label = if resolved.is_empty() || resolved == key {
+            item.label.to_owned()
+        } else {
+            resolved
+        };
         menu_item(MenuItemSpec {
             id: format!("header-menu-item-{id}").into(),
-            label: item.label.into(),
+            label: label.into(),
             shortcut: item.shortcut.map(Into::into),
             icon: None,
             enabled,

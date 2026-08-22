@@ -10,17 +10,12 @@ impl Editor {
             return self.render_main_empty_panel(cx);
         }
         let title = match position {
-            PanelPosition::Left => "Left Panel",
-            PanelPosition::Bottom => "Bottom Panel",
-            PanelPosition::Right => "Right Panel",
-            PanelPosition::Main => "Main Panel",
+            PanelPosition::Left => self.t("panel.left"),
+            PanelPosition::Bottom => self.t("panel.bottom"),
+            PanelPosition::Right => self.t("panel.right"),
+            PanelPosition::Main => self.t("panel.main"),
         };
-        panel_empty_state(
-            "▤",
-            title,
-            "Open new tool or drag-n-drop tool from other panels",
-        )
-        .child(
+        panel_empty_state("▤", title, self.t("panel.empty-desc")).child(
             div()
                 .id(("open-tool", panel_key(position)))
                 .mt_2()
@@ -34,7 +29,7 @@ impl Editor {
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open_tool_picker(position, cx);
                 }))
-                .child("Open Tool"),
+                .child(self.t("panel.open-tool")),
         )
     }
 
@@ -129,6 +124,12 @@ impl Editor {
     }
 
     pub(super) fn render_main_empty_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let start_label = self.t("welcome.start");
+        let open_proj_label = self.t("welcome.open-project");
+        let open_file_label = self.t("welcome.open-file");
+        let new_file_label = self.t("welcome.new-file");
+        let actions_label = self.t("welcome.actions");
+
         div().flex_1().w_full().h_full().child(
             div()
                 .id("main-empty-panel")
@@ -156,9 +157,10 @@ impl Editor {
                                 .child("Lapis"),
                         )
                         .child(
-                            div().text_size(px(13.0)).text_color(theme::subtle()).child(
-                                "Fast, lightweight development workspace for Desktop & Mobile",
-                            ),
+                            div()
+                                .text_size(px(13.0))
+                                .text_color(theme::subtle())
+                                .child(self.t("welcome.subtitle")),
                         ),
                 )
                 .child(
@@ -173,31 +175,31 @@ impl Editor {
                                 .text_size(px(11.0))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                 .text_color(theme::subtle())
-                                .child("START"),
+                                .child(start_label),
                         )
                         .child(
                             div()
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .child(quick_action("Open Project...", "Ctrl+O").on_click(
+                                .child(quick_action(open_proj_label, "Ctrl+O").on_click(
                                     cx.listener(|this, _, window, cx| {
                                         this.open_project(window, cx)
                                     }),
                                 ))
-                                .child(quick_action("Open File...", "").on_click(
+                                .child(quick_action(open_file_label, "").on_click(
                                     cx.listener(|this, _, window, cx| this.open_file(window, cx)),
                                 ))
-                                .child(quick_action("New File", "Ctrl+N").on_click(cx.listener(
-                                    |this, _, window, cx| this.new_document(&New, window, cx),
-                                )))
-                                .child(
-                                    quick_action("Actions & Commands", "Double Shift").on_click(
-                                        cx.listener(|this, _, window, cx| {
-                                            this.open_quick_search(window, cx);
-                                        }),
-                                    ),
-                                ),
+                                .child(quick_action(new_file_label, "Ctrl+N").on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.new_document(&New, window, cx)
+                                    }),
+                                ))
+                                .child(quick_action(actions_label, "Double Shift").on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.open_quick_search(window, cx);
+                                    }),
+                                )),
                         ),
                 )
                 .child(
@@ -224,13 +226,13 @@ impl Editor {
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.open_tool_picker(PanelPosition::Main, cx);
                                 }))
-                                .child("Open Tool..."),
+                                .child(self.t("panel.open-tool")),
                         )
                         .child(
                             div()
                                 .text_size(px(11.0))
                                 .text_color(theme::muted())
-                                .child("Open new tool or drag-n-drop tool from other panels"),
+                                .child(self.t("panel.empty-desc")),
                         ),
                 ),
         )
@@ -243,7 +245,7 @@ impl Editor {
             .session
             .workspace_root()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "No workspace open".to_owned());
+            .unwrap_or_else(|| self.t("settings.no-workspace"));
 
         div().flex_1().w_full().h_full().child(
             div()
@@ -267,7 +269,7 @@ impl Editor {
                                 .text_size(px(22.0))
                                 .font_weight(gpui::FontWeight::BOLD)
                                 .text_color(theme::text())
-                                .child("Settings"),
+                                .child(self.t("settings.title")),
                         ),
                 )
                 .child(
@@ -292,7 +294,7 @@ impl Editor {
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(theme::text())
-                                        .child("Appearance / Theme"),
+                                        .child(self.t("settings.appearance")),
                                 )
                                 .child(div().flex().flex_wrap().gap_2().children(
                                     theme::available().into_iter().map(|(id, name)| {
@@ -346,7 +348,7 @@ impl Editor {
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(theme::text())
-                                        .child("Language / 言語"),
+                                        .child(self.t("settings.language")),
                                 )
                                 .child(
                                     div()
@@ -381,7 +383,7 @@ impl Editor {
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .text_color(theme::text())
-                                        .child("Workspace & Version"),
+                                        .child(self.t("settings.workspace-info")),
                                 )
                                 .child(
                                     div()

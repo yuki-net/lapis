@@ -247,6 +247,11 @@ impl Editor {
         self.focus_handle.clone()
     }
 
+    pub(crate) fn t(&self, key: &str) -> String {
+        self.locale
+            .resolve(&lapis_localization::MessageId::new(key))
+    }
+
     fn refresh_feature_activation(&mut self) {
         if self.session.workspace_root().is_some() {
             self.feature_registry
@@ -378,9 +383,13 @@ fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful
         )
 }
 
-fn quick_action(label: &'static str, shortcut: &'static str) -> gpui::Stateful<gpui::Div> {
+fn quick_action(
+    label: impl Into<gpui::SharedString>,
+    shortcut: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
     div()
-        .id(label)
+        .id(label.clone())
         .h(px(34.0))
         .px_3()
         .rounded(px(7.0))
