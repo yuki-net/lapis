@@ -55,7 +55,7 @@ pub(super) fn render_inspector(
                                 .hover(|style| style.bg(theme::surface_hover()))
                                 .child("Refresh")
                                 .on_click(cx.listener(|_, _, _, cx| {
-                                    InspectorController::refresh_target(cx);
+                                    cx.defer(|cx| InspectorController::refresh_target(cx));
                                 })),
                         )
                         .child(
@@ -76,7 +76,7 @@ pub(super) fn render_inspector(
                                     inspector.start_picking();
                                     window.refresh();
                                     cx.notify();
-                                    InspectorController::refresh_target(cx);
+                                    cx.defer(|cx| InspectorController::repaint_target(cx));
                                 })),
                         ),
                 ),

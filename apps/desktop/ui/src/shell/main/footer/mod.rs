@@ -11,7 +11,7 @@ impl Editor {
             .h(px(31.0))
             .w_full()
             .flex_shrink_0()
-            .px(px(14.0))
+            .px(px(theme::CANVAS_GAP))
             .flex()
             .items_center()
             .gap_3()

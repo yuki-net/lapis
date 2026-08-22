@@ -49,6 +49,10 @@
       <sourceFolder url="file://$MODULE_DIR$/features/lsp/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/features/task-runner/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/features/terminal/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/backend-state/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/backend-state/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/core/client-api/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/backend/remote/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

@@ -183,6 +183,15 @@ impl InspectorController {
             .target_window
             .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
         if let Some(target_window) = target_window {
+            let _ = target_window.update(cx, |_, window, cx| window.stop_inspector_picking(cx));
+        }
+    }
+    pub(super) fn repaint_target(cx: &mut App) {
+        let target_window = cx
+            .global::<InspectorController>()
+            .target_window
+            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+        if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, _cx| window.refresh());
         }
     }
@@ -195,6 +204,17 @@ impl InspectorController {
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| {
                 window.select_inspector_element(id, cx);
+            });
+        }
+    }
+    pub(super) fn hover_element(id: Option<InspectorElementId>, cx: &mut App) {
+        let target_window = cx
+            .global::<InspectorController>()
+            .target_window
+            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+        if let Some(target_window) = target_window {
+            let _ = target_window.update(cx, |_, window, cx| {
+                window.preview_inspector_element(id, cx);
             });
         }
     }

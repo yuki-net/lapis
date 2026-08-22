@@ -141,6 +141,7 @@ fn render_tree_row(
     cx: &mut gpui::Context<Inspector>,
 ) -> Stateful<Div> {
     let id = row.node.id.clone();
+    let hover_id = id.clone();
     let toggle_id = id.clone();
     let selected = active == Some(&id);
     let collapsed = inspector.is_tree_node_collapsed(&id);
@@ -197,6 +198,12 @@ fn render_tree_row(
                     .child(format!("#{global_id}")),
             )
         })
+        .on_hover(cx.listener(move |_, hovered: &bool, _, cx| {
+            let id = hovered.then(|| hover_id.clone());
+            cx.defer(move |cx| {
+                InspectorController::hover_element(id, cx);
+            });
+        }))
         .on_click(cx.listener(move |_, _, _, cx| {
             let id = id.clone();
             cx.defer(move |cx| InspectorController::select_element(id, cx));

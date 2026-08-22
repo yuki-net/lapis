@@ -29,10 +29,12 @@ impl Editor {
                 .flex_row()
                 .items_center()
                 .bg(theme::title_bar())
+                // Mac OS
                 .when(cfg!(target_os = "macos"), |this| {
                     this.child(div().w(px(80.0)).flex_shrink_0())
                         .child(self.render_app_header(cx, compact_layout))
                 })
+                // Windows and Linux
                 .when(!cfg!(target_os = "macos"), |this| {
                     this.child(self.render_app_header(cx, compact_layout))
                         .child(self.render_window_controls(cx))
@@ -49,6 +51,7 @@ impl Editor {
             .flex_row()
             .items_center()
             .justify_between()
+            .p(px(theme::CANVAS_GAP))
             .child(self.render_header_left(cx, compact_layout))
             .child(self.render_header_center())
             .child(self.render_header_right(cx))

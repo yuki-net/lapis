@@ -10,7 +10,6 @@ impl Editor {
         div()
             .w(px(if compact_layout { 200.0 } else { 320.0 }))
             .flex_shrink_0()
-            .px(px(theme::CANVAS_GAP))
             .flex()
             .items_center()
             .gap_1()

@@ -4492,6 +4492,15 @@ impl Window {
         self.external_inspector_window = window;
     }
 
+    /// Ends inspector picking mode and refreshes the target window.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn stop_inspector_picking(&mut self, cx: &mut App) {
+        if let Some(inspector) = self.inspector.clone() {
+            inspector.update(cx, |inspector, _cx| inspector.stop_picking());
+        }
+        self.refresh_external_inspector(cx);
+        self.refresh();
+    }
     /// Selects an element from an external inspector tree and refreshes its target state.
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub fn select_inspector_element(
@@ -4510,7 +4519,10 @@ impl Window {
         let Some(inspector) = self.inspector.clone() else {
             return false;
         };
-        inspector.update(cx, |inspector, _cx| inspector.select(id, self));
+        inspector.update(cx, |inspector, _cx| {
+            inspector.select(id, self);
+            inspector.set_selected_element_visible(true, self);
+        });
         self.refresh_external_inspector(cx);
         true
     }
@@ -4524,6 +4536,31 @@ impl Window {
         self.refresh();
     }
 
+    /// Previews an element selected by hovering a row in an external inspector.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn preview_inspector_element(
+        &mut self,
+        id: Option<crate::InspectorElementId>,
+        cx: &mut App,
+    ) -> bool {
+        if let Some(id) = &id
+            && !self
+                .rendered_frame
+                .inspector_elements
+                .iter()
+                .any(|node| &node.id == id)
+        {
+            return false;
+        }
+        let Some(inspector) = self.inspector.clone() else {
+            return false;
+        };
+        inspector.update(cx, |inspector, _cx| {
+            inspector.set_hovered_element_id(id, self);
+        });
+        self.refresh_external_inspector(cx);
+        true
+    }
     #[cfg(any(feature = "inspector", debug_assertions))]
     fn refresh_external_inspector(&self, cx: &mut App) {
         let Some(window) = self.external_inspector_window else {
@@ -4557,10 +4594,23 @@ impl Window {
             && let Some(inspector) = &self.inspector
         {
             let inspector = inspector.clone();
-            let active_element_id = inspector.read(cx).active_element_id();
-            if Some(inspector_id) == active_element_id {
+            let (active_element_id, hovered_element_id) = {
+                let inspector = inspector.read(cx);
+                (
+                    inspector.active_element_id().cloned(),
+                    inspector.hovered_element_id().cloned(),
+                )
+            };
+            if active_element_id.as_ref() == Some(inspector_id) {
                 let result = inspector.update(cx, |inspector, _cx| {
                     inspector.with_active_element_state(self, f)
+                });
+                self.refresh_external_inspector(cx);
+                return result;
+            }
+            if hovered_element_id.as_ref() == Some(inspector_id) {
+                let result = inspector.update(cx, |inspector, _cx| {
+                    inspector.with_hovered_element_state(self, f)
                 });
                 self.refresh_external_inspector(cx);
                 return result;
@@ -4715,14 +4765,26 @@ impl Window {
             let inspector = inspector.read(cx);
             // Only show live color overlay on the target window while picking (hovering),
             // and remove the overlay once an element is clicked/selected.
-            if !inspector.is_picking() {
+            let is_picking = inspector.is_picking();
+            let is_tree_preview = inspector.hovered_element_id().is_some();
+            let is_selected = inspector.selected_element_visible();
+            if !is_picking && !is_tree_preview && !is_selected {
                 return;
             }
 
             let rem_size = self.rem_size();
             let mut highlighted_box_model = None;
 
-            if let Some(state) = inspector.active_element_state::<crate::DivInspectorState>() {
+            let highlighted_state = if is_picking || (is_selected && !is_tree_preview) {
+                inspector.active_element_state::<crate::DivInspectorState>()
+            } else if is_tree_preview {
+                inspector
+                    .hovered_element_state::<crate::DivInspectorState>()
+                    .or_else(|| inspector.active_element_state::<crate::DivInspectorState>())
+            } else {
+                inspector.active_element_state::<crate::DivInspectorState>()
+            };
+            if let Some(state) = highlighted_state {
                 if !state.bounds.size.width.is_zero() && !state.bounds.size.height.is_zero() {
                     let to_px_len = |len: &crate::Length| -> Pixels {
                         match len {

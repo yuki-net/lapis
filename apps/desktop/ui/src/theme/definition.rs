@@ -11,7 +11,7 @@ pub const TOOL_ISLAND_WIDTH: f32 = 260.0;
 pub const SIDE_PANEL_WIDTH: f32 = 310.0;
 pub const BOTTOM_PANEL_HEIGHT: f32 = 196.0;
 pub const ISLAND_RADIUS: f32 = 8.0;
-pub const CANVAS_GAP: f32 = 6.0;
+pub const CANVAS_GAP: f32 = 8.0;
 
 /// テーマが提供するカラートークン。
 #[derive(Clone, Debug)]
