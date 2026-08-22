@@ -6,3 +6,5 @@
 /apps/web/node_modules/
 *.tsbuildinfo
 *.log
+.idea/libraries
+.idea/modules

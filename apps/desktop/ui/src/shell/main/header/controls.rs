@@ -51,6 +51,15 @@ impl IntoElement for PanelToggleIcon {
     }
 }
 
+pub(crate) fn open_panel_icon(position: crate::extension_ui::PanelPosition) -> PanelToggleIcon {
+    let position = match position {
+        crate::extension_ui::PanelPosition::Left => PanelPosition::Left,
+        crate::extension_ui::PanelPosition::Bottom => PanelPosition::Bottom,
+        crate::extension_ui::PanelPosition::Right => PanelPosition::Right,
+        crate::extension_ui::PanelPosition::Main => PanelPosition::Left,
+    };
+    PanelToggleIcon::new(position, PanelState::Open)
+}
 #[derive(Clone, Copy)]
 pub(crate) enum WindowControlIconName {
     Minimize,

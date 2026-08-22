@@ -1,6 +1,9 @@
 use gpui::{AnyElement, Context, Inspector, IntoElement, Window, div, prelude::*, px};
 
-use crate::theme;
+use crate::{
+    components::{ScrollAxis, ScrollableElement},
+    theme,
+};
 
 use super::inspector_controller::InspectorController;
 use super::tree_view::{render_active_summary, render_tree};
@@ -55,7 +58,7 @@ pub(super) fn render_inspector(
                                 .hover(|style| style.bg(theme::surface_hover()))
                                 .child("Refresh")
                                 .on_click(cx.listener(|_, _, _, cx| {
-                                    cx.defer(|cx| InspectorController::refresh_target(cx));
+                                    cx.defer(InspectorController::refresh_target);
                                 })),
                         )
                         .child(
@@ -76,7 +79,7 @@ pub(super) fn render_inspector(
                                     inspector.start_picking();
                                     window.refresh();
                                     cx.notify();
-                                    cx.defer(|cx| InspectorController::repaint_target(cx));
+                                    cx.defer(InspectorController::repaint_target);
                                 })),
                         ),
                 ),
@@ -100,8 +103,8 @@ pub(super) fn render_inspector(
                         .min_w(px(0.0))
                         .min_h(px(0.0))
                         .flex_1()
-                        .overflow_x_scroll()
-                        .overflow_y_scroll()
+                        .scrollable(ScrollAxis::Horizontal)
+                        .scrollable(ScrollAxis::Vertical)
                         .p_3()
                         .when_some(render_active_summary(inspector), |element, summary| {
                             element.child(summary)

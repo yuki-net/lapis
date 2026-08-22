@@ -15,7 +15,12 @@ impl Editor {
             PanelPosition::Right => self.t("panel.right"),
             PanelPosition::Main => self.t("panel.main"),
         };
-        panel_empty_state("▤", title, self.t("panel.empty-desc")).child(
+        panel_empty_state_element(
+            super::header::controls::open_panel_icon(position),
+            title,
+            self.t("panel.empty-desc"),
+        )
+        .child(
             div()
                 .id(("open-tool", panel_key(position)))
                 .mt_2()
@@ -52,7 +57,7 @@ impl Editor {
                         .h(px(0.0))
                         .min_h(px(0.0))
                         .flex_1()
-                        .overflow_scroll()
+                        .scrollable(ScrollAxis::Both)
                         .track_scroll(&self.editor_scroll)
                         .relative()
                         .px(px(18.0))
@@ -124,11 +129,27 @@ impl Editor {
     }
 
     pub(super) fn render_main_empty_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let start_label = self.t("welcome.start");
-        let open_proj_label = self.t("welcome.open-project");
-        let open_file_label = self.t("welcome.open-file");
-        let new_file_label = self.t("welcome.new-file");
-        let actions_label = self.t("welcome.actions");
+        // TODO: Workspaceを開いている状態と、作業中の状態で開始画面を分ける。
+        // 現在はどちらも同じWorkspace一覧を表示する。
+        let current_workspace = if self.session.workspace_root().is_some() {
+            self.session.workspace_root().map(ToOwned::to_owned)
+        } else {
+            None
+        };
+        let mut recent_workspaces = Vec::<std::path::PathBuf>::new();
+        if let Some(root) = current_workspace.clone() {
+            recent_workspaces.push(root);
+        }
+        for record in self.conversation.session.records().iter().rev() {
+            let Some(root) = record.workspace.root.as_ref() else {
+                continue;
+            };
+            if !recent_workspaces.iter().any(|recent| recent == root) {
+                recent_workspaces.push(root.clone());
+            }
+        }
+        recent_workspaces.truncate(8);
+        let has_recent_workspaces = !recent_workspaces.is_empty();
 
         div().flex_1().w_full().h_full().child(
             div()
@@ -136,108 +157,98 @@ impl Editor {
                 .flex_1()
                 .w_full()
                 .h_full()
-                .overflow_y_scroll()
+                .scrollable(ScrollAxis::Vertical)
                 .flex()
                 .flex_col()
-                .items_center()
-                .justify_center()
                 .p_8()
-                .gap_6()
+                .gap_5()
                 .child(
                     div()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .gap_1()
-                        .child(
-                            div()
-                                .text_size(px(28.0))
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(theme::text())
-                                .child("Lapis"),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(13.0))
-                                .text_color(theme::subtle())
-                                .child(self.t("welcome.subtitle")),
-                        ),
+                        .w(px(760.0))
+                        .max_w_full()
+                        .text_size(px(24.0))
+                        .font_weight(gpui::FontWeight::BOLD)
+                        .text_color(theme::text())
+                        .child(self.t("workspace.title")),
                 )
                 .child(
                     div()
-                        .w(px(520.0))
+                        .w(px(760.0))
                         .max_w_full()
                         .flex()
-                        .flex_col()
                         .gap_3()
                         .child(
-                            div()
-                                .text_size(px(11.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(theme::subtle())
-                                .child(start_label),
+                            workspace_action("workspace-open", "▱", self.t("workspace.open"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_project(window, cx);
+                                })),
                         )
                         .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(quick_action(open_proj_label, "Ctrl+O").on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.open_project(window, cx)
-                                    }),
-                                ))
-                                .child(quick_action(open_file_label, "").on_click(
-                                    cx.listener(|this, _, window, cx| this.open_file(window, cx)),
-                                ))
-                                .child(quick_action(new_file_label, "Ctrl+N").on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.new_document(&New, window, cx)
-                                    }),
-                                ))
-                                .child(quick_action(actions_label, "Double Shift").on_click(
-                                    cx.listener(|this, _, window, cx| {
-                                        this.open_quick_search(window, cx);
-                                    }),
-                                )),
+                            workspace_action("workspace-clone", "⑂", self.t("workspace.clone"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.clone_from_git(window, cx);
+                                })),
                         ),
                 )
                 .child(
                     div()
-                        .w(px(520.0))
+                        .w(px(760.0))
                         .max_w_full()
                         .flex()
                         .flex_col()
-                        .items_center()
-                        .pt_2()
                         .gap_2()
-                        .child(
-                            div()
-                                .id(("open-tool", panel_key(PanelPosition::Main)))
-                                .px_3()
-                                .py_1()
-                                .rounded(px(6.0))
-                                .border_1()
-                                .border_color(theme::border())
-                                .bg(theme::surface())
-                                .text_size(px(12.0))
-                                .text_color(theme::text())
-                                .hover(|style| style.bg(theme::surface_hover()))
-                                .on_click(cx.listener(move |this, _, _, cx| {
-                                    this.open_tool_picker(PanelPosition::Main, cx);
-                                }))
-                                .child(self.t("panel.open-tool")),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(11.0))
-                                .text_color(theme::muted())
-                                .child(self.t("panel.empty-desc")),
-                        ),
-                ),
+                        .children(recent_workspaces.into_iter().enumerate().map(
+                            |(index, root)| {
+                                let selected = current_workspace.as_ref() == Some(&root);
+                                let open_root = root.clone();
+                                let name = root
+                                    .file_name()
+                                    .and_then(|name| name.to_str())
+                                    .unwrap_or("Workspace")
+                                    .to_owned();
+                                div()
+                                    .id(("recent-workspace", index))
+                                    .w_full()
+                                    .p_3()
+                                    .rounded(px(6.0))
+                                    .bg(if selected {
+                                        theme::accent_soft()
+                                    } else {
+                                        theme::surface()
+                                    })
+                                    .hover(|style| style.bg(theme::surface_hover()))
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .text_color(theme::text())
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.open_recent_workspace(open_root.clone(), window, cx);
+                                    }))
+                                    .child(
+                                        div()
+                                            .text_size(px(14.0))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .child(name),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme::muted())
+                                            .child(root.display().to_string()),
+                                    )
+                            },
+                        )),
+                )
+                .when(!has_recent_workspaces, |content| {
+                    content.child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::muted())
+                            .child(self.t("workspace.no-recent")),
+                    )
+                }),
         )
     }
-
     pub(super) fn render_settings_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let active_theme = theme::active_id();
         let current_locale = self.settings.settings().locale;
@@ -253,7 +264,7 @@ impl Editor {
                 .flex_1()
                 .w_full()
                 .h_full()
-                .overflow_y_scroll()
+                .scrollable(ScrollAxis::Vertical)
                 .flex()
                 .flex_col()
                 .p_8()
@@ -477,4 +488,30 @@ impl Editor {
                 div().children(crate::features::preview::preview_lines(&self.session))
             })
     }
+}
+
+fn workspace_action(
+    id: &'static str,
+    icon: &'static str,
+    label: String,
+) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .w(px(230.0))
+        .h(px(96.0))
+        .p_3()
+        .rounded(px(6.0))
+        .bg(theme::surface())
+        .flex()
+        .flex_col()
+        .justify_between()
+        .text_color(theme::text())
+        .hover(|style| style.bg(theme::surface_hover()))
+        .child(
+            div()
+                .text_size(px(24.0))
+                .text_color(theme::muted())
+                .child(icon),
+        )
+        .child(div().text_size(px(14.0)).child(label))
 }

@@ -1,4 +1,8 @@
-use crate::{components::panel_empty_state, features::problems::ProblemsFeature, theme};
+use crate::{
+    components::{ScrollAxis, ScrollableElement, panel_empty_state},
+    features::problems::ProblemsFeature,
+    theme,
+};
 use gpui::{div, prelude::*, px};
 
 pub(crate) fn render_content(problems: &ProblemsFeature) -> gpui::Div {
@@ -6,7 +10,7 @@ pub(crate) fn render_content(problems: &ProblemsFeature) -> gpui::Div {
         .id("problems-scroll")
         .flex_1()
         .min_h(px(0.0))
-        .overflow_y_scroll()
+        .scrollable(ScrollAxis::Vertical)
         .p_2()
         .gap_1()
         .flex()

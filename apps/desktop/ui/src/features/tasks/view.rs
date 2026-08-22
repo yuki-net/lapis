@@ -9,7 +9,7 @@ impl Editor {
             .flex_col()
             .gap_1()
             .max_h(px(170.0))
-            .overflow_y_scroll();
+            .scrollable(ScrollAxis::Vertical);
         for (task_index, record) in records.iter().take(12).enumerate() {
             let execution_id = record.execution.id.clone();
             let selected = self.tasks.selected_execution.as_ref() == Some(&execution_id);
@@ -98,7 +98,7 @@ impl Editor {
                 .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .overflow_y_scroll()
+                .scrollable(ScrollAxis::Vertical)
                 .gap_1();
             let start = record.events.len().saturating_sub(80);
             for event in &record.events[start..] {

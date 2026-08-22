@@ -1,4 +1,4 @@
-use gpui::{ElementId, Stateful, div, prelude::*};
+use gpui::{div, prelude::*};
 
 use crate::theme;
 
@@ -34,11 +34,4 @@ pub(crate) fn surface(variant: SurfaceVariant) -> gpui::Div {
         .when(matches!(variant, SurfaceVariant::Control), |surface| {
             surface.hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
         })
-}
-
-pub(crate) fn floating_surface(
-    id: impl Into<ElementId>,
-    variant: SurfaceVariant,
-) -> Stateful<gpui::Div> {
-    surface(variant).id(id)
 }

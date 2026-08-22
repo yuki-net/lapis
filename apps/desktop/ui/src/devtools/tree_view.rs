@@ -4,7 +4,10 @@ use gpui::{
     Div, Inspector, InspectorElementId, InspectorElementNode, Stateful, div, prelude::*, px,
 };
 
-use crate::theme;
+use crate::{
+    components::{ScrollAxis, ScrollableElement},
+    theme,
+};
 
 use super::{inspector_controller::InspectorController, style_view::detail_row};
 
@@ -48,8 +51,8 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                 .id("inspector-tree-scroll")
                 .min_h(px(0.0))
                 .flex_1()
-                .overflow_x_scroll()
-                .overflow_y_scroll()
+                .scrollable(ScrollAxis::Horizontal)
+                .scrollable(ScrollAxis::Vertical)
                 .py_1()
                 .when(rows.is_empty(), |element| {
                     element.child(

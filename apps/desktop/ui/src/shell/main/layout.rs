@@ -5,7 +5,6 @@ impl Editor {
         &self,
         window: &mut Window,
         cx: &mut Context<Self>,
-        _compact_layout: bool,
     ) -> impl IntoElement {
         let now = std::time::Instant::now();
         if self

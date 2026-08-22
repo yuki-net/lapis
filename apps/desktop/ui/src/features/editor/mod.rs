@@ -24,8 +24,9 @@ use lapis_workspace::FileEntryKind;
 use crate::{
     app::*,
     components::{
-        Icon, IconName, ScrollAxis, ScrollableElement, SurfaceVariant, panel_empty_state,
-        panel_empty_state_element, panel_scroll_area, scroll_area, surface, tool_empty_state,
+        ButtonSize, Icon, IconName, ScrollAxis, ScrollableElement, SurfaceVariant, button,
+        panel_empty_state, panel_empty_state_element, panel_scroll_area, scroll_area, surface,
+        tool_empty_state,
     },
     extension_ui::{ActivationEvent, FeatureRegistry, ThemeId, UiSlot, ViewId},
     features::{
@@ -305,9 +306,7 @@ impl Focusable for Editor {
 }
 
 fn task_action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(label)
-        .h(px(25.0))
+    button(label, label, ButtonSize::Sm)
         .px_2()
         .rounded(px(5.0))
         .border_1()

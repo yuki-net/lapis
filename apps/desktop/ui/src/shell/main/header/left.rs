@@ -1,14 +1,9 @@
 use super::*;
-use crate::components::icon_button;
+use crate::components::{header_button, icon_button};
 
 impl Editor {
-    pub(super) fn render_header_left(
-        &self,
-        cx: &mut Context<Self>,
-        compact_layout: bool,
-    ) -> impl IntoElement {
+    pub(super) fn render_header_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .w(px(if compact_layout { 200.0 } else { 320.0 }))
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -84,15 +79,6 @@ fn panel_toggle_button(
     position: controls::PanelPosition,
     state: controls::PanelState,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size(px(28.0))
-        .rounded(theme::radius(theme::Radius::Control))
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .bg(theme::title_bar())
-        .hover(|style| style.bg(theme::surface_hover()))
-        .child(controls::PanelToggleIcon::new(position, state))
+    header_button(id, controls::PanelToggleIcon::new(position, state))
+        .w(px(theme::HEADER_BUTTON_SIZE))
 }

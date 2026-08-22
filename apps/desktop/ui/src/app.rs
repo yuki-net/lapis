@@ -82,6 +82,7 @@ impl DesktopServices {
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InitialView {
+    pub empty_window: bool,
     pub show_tasks: bool,
     pub show_terminal: bool,
     pub show_problems: bool,

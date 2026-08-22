@@ -1,4 +1,8 @@
-use crate::{components::panel_empty_state, features::terminal::TerminalFeature, theme};
+use crate::{
+    components::{ScrollAxis, ScrollableElement, panel_empty_state},
+    features::terminal::TerminalFeature,
+    theme,
+};
 use gpui::{div, prelude::*, px};
 
 pub(crate) fn render_content(terminal: &TerminalFeature) -> gpui::Div {
@@ -7,7 +11,7 @@ pub(crate) fn render_content(terminal: &TerminalFeature) -> gpui::Div {
             div()
                 .id("terminal-output-scroll")
                 .size_full()
-                .overflow_y_scroll()
+                .scrollable(ScrollAxis::Vertical)
                 .p_2()
                 .font_family("Cascadia Mono")
                 .text_size(px(11.0))

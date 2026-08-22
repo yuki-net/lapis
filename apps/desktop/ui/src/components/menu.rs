@@ -1,6 +1,6 @@
 use gpui::{ElementId, SharedString, Stateful, div, prelude::*, px};
 
-use super::{Icon, IconName, SurfaceVariant, floating_surface};
+use super::{Icon, IconName, SurfaceVariant, floating_panel};
 use crate::theme;
 
 #[derive(Clone)]
@@ -14,7 +14,7 @@ pub(crate) struct MenuItemSpec {
 
 /// Shared outer surface for header menus, settings menus, and future context menus.
 pub(crate) fn menu_surface(id: impl Into<ElementId>) -> Stateful<gpui::Div> {
-    floating_surface(id, SurfaceVariant::Menu)
+    floating_panel(id, SurfaceVariant::Menu)
 }
 
 pub(crate) fn menu_item(spec: MenuItemSpec) -> Stateful<gpui::Div> {

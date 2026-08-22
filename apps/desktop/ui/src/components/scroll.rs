@@ -30,3 +30,16 @@ impl ScrollableElement for gpui::Stateful<gpui::Div> {
 pub(crate) fn scroll_area(id: impl Into<ElementId>, axis: ScrollAxis) -> gpui::Stateful<gpui::Div> {
     div().id(id).scrollable(axis)
 }
+
+/// Creates the standard scroll area used by a panel body.
+///
+/// The panel scrollbar is intentionally wider than feature-local scrollbars so the
+/// scrollable boundary remains visible even when the body is visually dense.
+pub(crate) fn panel_scroll_area(id: impl Into<ElementId>) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(id)
+        .flex()
+        .flex_col()
+        .scrollable(ScrollAxis::Both)
+        .scrollbar_width(px(theme::PANEL_SCROLLBAR_WIDTH))
+}

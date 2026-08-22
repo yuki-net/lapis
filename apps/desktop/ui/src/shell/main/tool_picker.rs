@@ -32,12 +32,9 @@ impl Editor {
             })
             .collect::<Vec<_>>();
 
-        anchored()
-            .position(self.shell.tool_picker_anchor)
-            .offset(point(px(-20.0), px(8.0)))
-            .snap_to_window_with_margin(px(8.0))
+        crate::components::floating_tree(self.shell.tool_picker_anchor, point(px(-20.0), px(8.0)))
             .child(
-                crate::components::floating_surface(
+                crate::components::floating_panel(
                     "tool-picker",
                     crate::components::SurfaceVariant::Popover,
                 )
@@ -46,7 +43,7 @@ impl Editor {
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_tool_picker(cx);
                 }))
-                .overflow_y_scroll()
+                .scrollable(ScrollAxis::Vertical)
                 .p(theme::spacing(theme::Spacing::Sm))
                 .text_color(theme::text())
                 .child(

@@ -85,3 +85,34 @@ pub(crate) fn panel_empty_state(
                 .child(detail),
         )
 }
+
+pub(crate) fn panel_empty_state_element(
+    icon: impl IntoElement,
+    message: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+) -> gpui::Div {
+    let message = message.into();
+    let detail = detail.into();
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_2()
+        .px_4()
+        .text_center()
+        .child(icon)
+        .child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme::muted())
+                .child(message),
+        )
+        .child(
+            div()
+                .text_size(px(10.0))
+                .text_color(theme::subtle())
+                .child(detail),
+        )
+}

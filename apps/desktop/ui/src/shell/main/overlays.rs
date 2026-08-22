@@ -1,48 +1,44 @@
 use super::*;
-use crate::components::{MenuItemSpec, menu_item, menu_surface};
+use crate::components::{MenuItemSpec, floating_panel, floating_tree, menu_item};
 
 impl Editor {
     pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let anchor = self.shell.settings_menu_anchor;
-        anchored()
-            .position(anchor)
-            .offset(point(px(-250.0), px(8.0)))
-            .snap_to_window_with_margin(px(8.0))
-            .child(
-                menu_surface("settings-menu")
-                    .w(px(250.0))
-                    .p(theme::spacing(theme::Spacing::Sm))
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.close_settings_menu(cx);
-                    }))
-                    .child(
-                        menu_item(MenuItemSpec {
-                            id: "settings-menu-settings".into(),
-                            label: "Settings".into(),
-                            shortcut: Some("Ctrl+,".into()),
-                            icon: Some(IconName::Settings),
-                            enabled: true,
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings_view(cx);
-                        })),
-                    )
-                    .child(
-                        menu_item(MenuItemSpec {
-                            id: "settings-menu-theme".into(),
-                            label: "Theme".into(),
-                            shortcut: theme::name(&theme::active_id()).map(Into::into),
-                            icon: Some(IconName::SunMoon),
-                            enabled: true,
-                        })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_theme_preference(cx);
-                        })),
-                    )
-                    .when(self.shell.theme_picker_open, |menu| {
-                        menu.child(self.render_theme_picker(cx))
-                    }),
-            )
+        floating_tree(anchor, point(px(-250.0), px(8.0))).child(
+            floating_panel("settings-menu", SurfaceVariant::Menu)
+                .w(px(250.0))
+                .p(theme::spacing(theme::Spacing::Sm))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.close_settings_menu(cx);
+                }))
+                .child(
+                    menu_item(MenuItemSpec {
+                        id: "settings-menu-settings".into(),
+                        label: "Settings".into(),
+                        shortcut: Some("Ctrl+,".into()),
+                        icon: Some(IconName::Settings),
+                        enabled: true,
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_settings_view(cx);
+                    })),
+                )
+                .child(
+                    menu_item(MenuItemSpec {
+                        id: "settings-menu-theme".into(),
+                        label: "Theme".into(),
+                        shortcut: theme::name(&theme::active_id()).map(Into::into),
+                        icon: Some(IconName::SunMoon),
+                        enabled: true,
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_theme_preference(cx);
+                    })),
+                )
+                .when(self.shell.theme_picker_open, |menu| {
+                    menu.child(self.render_theme_picker(cx))
+                }),
+        )
     }
 
     pub(super) fn render_theme_picker(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {

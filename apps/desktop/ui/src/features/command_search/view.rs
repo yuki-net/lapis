@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use crate::{
+    components::{ScrollAxis, ScrollableElement},
     extension_ui::CommandId,
     features::command_search::provider::{CommandSearchProvider, SearchItem, SearchProvider},
     theme,
@@ -670,7 +671,7 @@ impl Render for QuickSearch {
                     .h(px(0.0))
                     .min_h(px(0.0))
                     .flex_1()
-                    .overflow_y_scroll()
+                    .scrollable(ScrollAxis::Vertical)
                     .px_2()
                     .pb_2()
                     .flex()

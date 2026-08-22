@@ -5,6 +5,13 @@ use crate::extension_ui::ThemeId;
 
 /// レイアウト定数
 pub const TITLE_BAR_HEIGHT: f32 = 40.0;
+pub const HEADER_BUTTON_SIZE: f32 = 28.0;
+pub const BUTTON_HEIGHT_XS: f32 = 22.0;
+pub const BUTTON_HEIGHT_SM: f32 = 25.0;
+pub const SCROLLBAR_WIDTH: f32 = 8.0;
+/// Panel本文ではスクロール領域を視認しやすくするため、標準より広く確保する。
+/// GPUIはスクロールバーの色を直接指定できないため、幅で強調する。
+pub const PANEL_SCROLLBAR_WIDTH: f32 = 10.0;
 pub const WINDOW_CONTROL_WIDTH: f32 = 46.0;
 pub const WINDOW_RESIZE_BORDER_HEIGHT: f32 = 4.0;
 pub const TOOL_ISLAND_WIDTH: f32 = 260.0;

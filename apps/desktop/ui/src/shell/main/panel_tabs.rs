@@ -151,7 +151,7 @@ impl Editor {
                     .id(("panel-tabs", panel_key(position)))
                     .flex_1()
                     .min_w(px(0.0))
-                    .overflow_x_scroll()
+                    .scrollable(ScrollAxis::Horizontal)
                     .flex()
                     .items_center()
                     .gap_1()

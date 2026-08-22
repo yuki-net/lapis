@@ -59,17 +59,23 @@ impl Editor {
                     this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
                 }))
                 .child(self.render_tool_panel_header(panel, cx))
-                .child(match panel.active.as_ref() {
-                    Some(PanelTab::Tool(view)) => {
-                        self.render_tool_content(view, cx).into_any_element()
-                    }
-                    Some(PanelTab::Document(document_id)) => self
-                        .render_document_content(document_id, cx)
-                        .into_any_element(),
-                    None => self
-                        .render_empty_panel(panel.position, cx)
-                        .into_any_element(),
-                }),
+                .child(
+                    panel_scroll_area(("panel-body-scroll", panel_key(position)))
+                        .flex_1()
+                        .min_h(px(0.0))
+                        .min_w(px(0.0))
+                        .child(match panel.active.as_ref() {
+                            Some(PanelTab::Tool(view)) => {
+                                self.render_tool_content(view, cx).into_any_element()
+                            }
+                            Some(PanelTab::Document(document_id)) => self
+                                .render_document_content(document_id, cx)
+                                .into_any_element(),
+                            None => self
+                                .render_empty_panel(panel.position, cx)
+                                .into_any_element(),
+                        }),
+                ),
         )
     }
 }

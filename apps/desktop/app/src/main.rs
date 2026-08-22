@@ -189,6 +189,7 @@ fn main() {
         eprintln!("Terminal start failed: {error}");
     }
     let initial_view = lapis_desktop_ui::InitialView {
+        empty_window: false,
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),

@@ -9,8 +9,9 @@ use std::{
     thread,
 };
 
+pub use lapis_document::Encoding;
 use lapis_document::{
-    Document, DocumentError, DocumentRepository, Encoding, ExternalChange, Position, Revision,
+    Document, DocumentError, DocumentRepository, ExternalChange, Position, Revision,
 };
 use lapis_editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
 use lapis_git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree};
@@ -1072,7 +1073,23 @@ impl EditorSession {
         file_dialog: Arc<dyn WorkspaceDialog>,
         state_repository: Arc<dyn WorkspaceStateRepository>,
     ) -> Self {
-        let mut session = Self {
+        let mut session = Self::new_empty(repository, file_dialog, state_repository);
+        if let Err(error) = session.restore() {
+            session.restore_warning = Some(error.to_string());
+        }
+        if session.documents.is_empty() {
+            session.new_document();
+        }
+        session
+    }
+
+    /// Creates a session for a new window without restoring a workspace or document.
+    pub fn new_empty(
+        repository: Arc<dyn WorkspaceRepository>,
+        file_dialog: Arc<dyn WorkspaceDialog>,
+        state_repository: Arc<dyn WorkspaceStateRepository>,
+    ) -> Self {
+        Self {
             documents: Vec::new(),
             active: None,
             workspace_root: None,
@@ -1083,14 +1100,7 @@ impl EditorSession {
             file_dialog,
             state_repository,
             restore_warning: None,
-        };
-        if let Err(error) = session.restore() {
-            session.restore_warning = Some(error.to_string());
         }
-        if session.documents.is_empty() {
-            session.new_document();
-        }
-        session
     }
 
     pub fn restore_warning(&self) -> Option<&str> {
@@ -1901,6 +1911,20 @@ mod tests {
             }),
             state,
         )
+    }
+    #[test]
+    fn new_empty_starts_without_workspace_or_document() {
+        let editor = EditorSession::new_empty(
+            Arc::new(MemoryRepository::default()),
+            Arc::new(FixedDialog {
+                workspace: None,
+                save: None,
+            }),
+            Arc::new(MemoryState::default()),
+        );
+
+        assert!(editor.workspace_root().is_none());
+        assert!(editor.tabs().is_empty());
     }
 
     #[test]
