@@ -27,6 +27,10 @@ define_file_icons! {
         "file-icons/document.svg",
         include_bytes!("../../../assets/icons/file/document.svg")
     ),
+    Unknown => (
+        "file-icons/unknown.svg",
+        include_bytes!("../../../assets/icons/file/unknown.svg")
+    ),
     Folder => (
         "file-icons/folder.svg",
         include_bytes!("../../../assets/icons/file/folder.svg")

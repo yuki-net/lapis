@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ops::Range,
     time::{Duration, Instant},
 };
@@ -8,8 +9,8 @@ use gpui::{
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, PromptButton, PromptLevel, Render, ScrollHandle, ShapedLine, SharedString,
-    Style, TextRun, Timer, UTF16Selection, Window, WindowControlArea, anchored, div, fill, point,
-    prelude::*, px, relative, size,
+    Style, TextRun, Timer, UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*,
+    px, relative, size,
 };
 use lapis_app_services::{
     ConversationViewState, DocumentAction, DocumentCloseDisposition, EditorSession,
@@ -22,7 +23,10 @@ use lapis_workspace::FileEntryKind;
 
 use crate::{
     app::*,
-    components::{Icon, IconName, SurfaceVariant, panel_empty_state, surface, tool_empty_state},
+    components::{
+        Icon, IconName, ScrollAxis, ScrollableElement, SurfaceVariant, panel_empty_state,
+        panel_empty_state_element, panel_scroll_area, scroll_area, surface, tool_empty_state,
+    },
     extension_ui::{ActivationEvent, FeatureRegistry, ThemeId, UiSlot, ViewId},
     features::{
         self,
@@ -146,6 +150,7 @@ pub struct Editor {
     is_selecting: bool,
     last_editor_bounds: Option<Bounds<Pixels>>,
     last_line_layouts: Vec<EditorLineLayout>,
+    expanded_directories: HashSet<std::path::PathBuf>,
     editor_scroll: ScrollHandle,
 }
 
@@ -168,7 +173,11 @@ impl Editor {
                 });
             })
         });
-        let restored_view = services.conversation.active_view();
+        let restored_view = if initial_view.empty_window {
+            ConversationViewState::default()
+        } else {
+            services.conversation.active_view()
+        };
         let restored_terminals = services
             .conversation
             .active_record()
@@ -215,6 +224,7 @@ impl Editor {
             is_selecting: false,
             last_editor_bounds: None,
             last_line_layouts: Vec::new(),
+            expanded_directories: HashSet::new(),
             editor_scroll: ScrollHandle::new(),
         };
         if !theme_loaded {

@@ -28,7 +28,7 @@ pub(crate) fn display_info(
         icon: language
             .as_ref()
             .map(icon_for_language)
-            .unwrap_or(FileIconId::File),
+            .unwrap_or(FileIconId::Unknown),
         language,
     }
 }
@@ -40,7 +40,7 @@ pub(crate) fn icon_for_language(language: &LanguageId) -> FileIconId {
         "go" => FileIconId::Go,
         "kotlin" => FileIconId::Kotlin,
         "java" => FileIconId::Java,
-        _ => FileIconId::File,
+        _ => FileIconId::Unknown,
     }
 }
 
@@ -78,7 +78,7 @@ mod tests {
         );
         assert_eq!(
             display_info(Path::new("LICENSE"), FileEntryKind::File, &languages).icon,
-            FileIconId::File
+            FileIconId::Unknown
         );
     }
 }

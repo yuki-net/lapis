@@ -70,23 +70,45 @@ impl Editor {
 
     pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.session.choose_workspace() {
-            Ok(DocumentAction::Completed) => {
-                if let Ok(Some(view)) = self
-                    .conversation
-                    .session
-                    .restore_matching_workspace(&mut self.session)
-                {
-                    self.apply_conversation_view(view);
-                }
-                self.selected_range = 0..0;
-                self.shell.synchronize_documents(&self.session.tabs());
-                self.status = "Workspaceを開きました".to_owned();
-                window.focus(&self.focus_handle);
-                cx.notify();
-            }
+            Ok(DocumentAction::Completed) => self.finish_workspace_open(window, cx),
             Ok(DocumentAction::Cancelled) => {}
             Err(error) => self.status = format!("読み込み失敗: {error}"),
         }
+    }
+
+    pub(super) fn open_recent_workspace(
+        &mut self,
+        root: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.session.open_workspace(root) {
+            Ok(()) => self.finish_workspace_open(window, cx),
+            Err(error) => {
+                self.status = format!("Workspaceを開けませんでした: {error}");
+                cx.notify();
+            }
+        }
+    }
+
+    fn finish_workspace_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Ok(Some(view)) = self
+            .conversation
+            .session
+            .restore_matching_workspace(&mut self.session)
+        {
+            self.apply_conversation_view(view);
+        }
+        self.expanded_directories.clear();
+        if let Some(root) = self.session.workspace_root() {
+            self.expanded_directories.insert(root.to_owned());
+        }
+        self.selected_range = 0..0;
+        self.shell.synchronize_documents(&self.session.tabs());
+        self.status = "Workspaceを開きました".to_owned();
+        window.focus(&self.focus_handle);
+        self.refresh_feature_activation();
+        cx.notify();
     }
 
     pub(super) fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -107,6 +129,12 @@ impl Editor {
         }
     }
 
+    pub(super) fn clone_from_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // TODO: Git URLと保存先を受け取り、clone後にWorkspaceとして開く。
+        self.status = "Clone from Git は準備中です".to_owned();
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
     pub(super) fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.session.save_document() {
             Ok(DocumentAction::Completed) => {
@@ -145,7 +173,7 @@ impl Editor {
         let file_dialog = self.session.file_dialog();
         let state_repository = self.session.state_repository();
         let new_session =
-            lapis_app_services::EditorSession::new(repository, file_dialog, state_repository);
+            lapis_app_services::EditorSession::new_empty(repository, file_dialog, state_repository);
         let snapshot = new_session.snapshot();
         let task = lapis_app_services::TaskSession::new(self.tasks.session.backend());
         let git = lapis_app_services::GitSession::new(self.git.session.backend());
@@ -184,7 +212,10 @@ impl Editor {
                     Editor::new(
                         new_session,
                         services,
-                        crate::app::InitialView::default(),
+                        crate::app::InitialView {
+                            empty_window: true,
+                            ..Default::default()
+                        },
                         cx,
                     )
                 });
@@ -199,6 +230,7 @@ impl Editor {
             self.status = format!("プロジェクト終了失敗: {error}");
         } else {
             self.selected_range = 0..0;
+            self.expanded_directories.clear();
             self.shell.synchronize_documents(&self.session.tabs());
             self.status = "プロジェクトを閉じました".to_owned();
             window.focus(&self.focus_handle);

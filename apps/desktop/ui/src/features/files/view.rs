@@ -2,92 +2,40 @@ use super::*;
 
 impl Editor {
     pub(super) fn render_files_content(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let mut content = div()
-            .id("files-scroll")
+        let workspace_name = self.session.workspace_name().to_owned();
+        let mut content = scroll_area("files-scroll", ScrollAxis::Vertical)
             .flex()
             .flex_col()
             .flex_1()
-            .overflow_y_scroll()
             .p(px(6.0))
             .child(
                 div()
-                    .h(px(28.0))
+                    .h(px(30.0))
                     .px_2()
                     .rounded(px(5.0))
                     .flex()
                     .items_center()
-                    .gap_2()
-                    .bg(theme::surface_active())
-                    .text_size(px(12.0))
+                    .bg(theme::accent_soft())
+                    .text_size(px(13.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme::text())
-                    .child("⌄")
-                    .child(self.session.workspace_name().to_owned())
-                    .child(div().flex_1())
-                    .child("Open…"),
-            )
-            .child(
-                div()
-                    .h(px(25.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .text_size(px(10.0))
-                    .text_color(theme::subtle())
-                    .child("OPEN DOCUMENTS"),
+                    .child(workspace_name),
             );
-        for (tab_index, tab) in self.session.tabs().into_iter().enumerate() {
-            let id = tab.id.clone();
-            let file_info = crate::features::files::display_info(
-                tab.path
-                    .as_deref()
-                    .unwrap_or_else(|| std::path::Path::new("")),
-                FileEntryKind::File,
-                &self.problems.languages,
-            );
-            content = content.child(
-                div()
-                    .id(("open-document", tab_index))
-                    .h(px(27.0))
-                    .px_2()
-                    .rounded(px(5.0))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .bg(if tab.active {
-                        theme::surface()
-                    } else {
-                        theme::island()
-                    })
-                    .text_size(px(12.0))
-                    .text_color(theme::text())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.persist_active_view();
-                        if this.session.activate_document(&id) {
-                            this.restore_active_view();
-                            window.focus(&this.focus_handle);
-                            cx.notify();
-                        }
-                    }))
-                    .child(crate::components::FileIcon::new(file_info.icon))
-                    .child(tab.display_name)
-                    .child(div().flex_1())
-                    .child(if tab.dirty { "●" } else { "" }),
-            );
-        }
-        content = content.child(
-            div()
-                .h(px(25.0))
-                .px_2()
-                .flex()
-                .items_center()
-                .text_size(px(10.0))
-                .text_color(theme::subtle())
-                .child("WORKSPACE FILES"),
-        );
-        for (index, entry) in self.session.file_tree().iter().take(500).enumerate() {
+
+        for (index, entry) in self.session.file_tree().iter().enumerate() {
+            if index >= 500 || !self.file_entry_visible(entry) {
+                continue;
+            }
+
             let path = entry.path.clone();
             let is_file = entry.kind == FileEntryKind::File;
+            let is_expanded = !is_file && self.expanded_directories.contains(&path);
+            let has_children = !is_file
+                && self
+                    .session
+                    .file_tree()
+                    .iter()
+                    .any(|candidate| candidate.path.parent() == Some(path.as_path()));
             let file_info = crate::features::files::display_info(
                 &entry.path,
                 entry.kind,
@@ -99,43 +47,83 @@ impl Editor {
                 .and_then(|name| name.to_str())
                 .unwrap_or("?")
                 .to_owned();
-            content = content.child(
-                div()
-                    .id(("workspace-entry", index))
-                    .h(px(25.0))
-                    .pl(px(8.0 + entry.depth as f32 * 12.0))
-                    .pr_2()
-                    .rounded(px(4.0))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(11.0))
-                    .text_color(if is_file {
-                        theme::muted()
-                    } else {
-                        theme::text()
-                    })
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .when(is_file, |row| {
-                        row.on_click(cx.listener(move |this, _, window, cx| {
-                            match this.session.open_path(path.clone()) {
-                                Ok(()) => {
-                                    this.restore_active_view();
-                                    this.status = "文書を開きました".to_owned();
-                                    window.focus(&this.focus_handle);
-                                }
-                                Err(error) => {
-                                    this.status = format!("読み込み失敗: {error}");
-                                }
-                            }
-                            cx.notify();
-                        }))
-                    })
-                    .child(if is_file { "·" } else { "⌄" })
-                    .child(crate::components::FileIcon::new(file_info.icon))
-                    .child(label),
-            );
+            let directory_path = path.clone();
+            let file_path = path.clone();
+
+            let row = div()
+                .id(("workspace-entry", index))
+                .h(px(27.0))
+                .pl(px(6.0 + entry.depth as f32 * 14.0))
+                .pr_2()
+                .rounded(px(4.0))
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_size(px(12.0))
+                .text_color(theme::text())
+                .hover(|style| style.bg(theme::surface_hover()))
+                .child(
+                    div()
+                        .w(px(14.0))
+                        .flex_shrink_0()
+                        .text_color(theme::muted())
+                        .child(if is_file || !has_children {
+                            ""
+                        } else if is_expanded {
+                            "⌄"
+                        } else {
+                            ">"
+                        }),
+                )
+                .child(crate::components::FileIcon::new(file_info.icon))
+                .child(label);
+
+            content = if is_file {
+                content.child(row.on_click(cx.listener(move |this, _, window, cx| {
+                    match this.session.open_path(file_path.clone()) {
+                        Ok(()) => {
+                            this.restore_active_view();
+                            this.shell.synchronize_documents(&this.session.tabs());
+                            this.status = "文書を開きました".to_owned();
+                            window.focus(&this.focus_handle);
+                            this.refresh_feature_activation();
+                        }
+                        Err(error) => {
+                            this.status = format!("読み込み失敗: {error}");
+                        }
+                    }
+                    cx.notify();
+                })))
+            } else {
+                content.child(row.on_click(cx.listener(move |this, _, _, cx| {
+                    if !this.expanded_directories.remove(&directory_path) {
+                        this.expanded_directories.insert(directory_path.clone());
+                    }
+                    cx.notify();
+                })))
+            };
         }
+
         div().flex().flex_1().min_h(px(0.0)).child(content)
+    }
+
+    fn file_entry_visible(&self, entry: &lapis_workspace::FileEntry) -> bool {
+        if entry.depth == 0 {
+            return true;
+        }
+        let Some(root) = self.session.workspace_root() else {
+            return false;
+        };
+        let mut relative = entry.relative_path.clone();
+        for _ in 0..entry.depth {
+            let Some(parent) = relative.parent() else {
+                return false;
+            };
+            if !self.expanded_directories.contains(&root.join(parent)) {
+                return false;
+            }
+            relative = parent.to_owned();
+        }
+        true
     }
 }
