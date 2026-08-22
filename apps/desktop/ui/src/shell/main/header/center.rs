@@ -9,6 +9,7 @@ impl Editor {
                 theme::TITLE_BAR_HEIGHT - theme::WINDOW_RESIZE_BORDER_HEIGHT
             ))
             .mt(px(theme::WINDOW_RESIZE_BORDER_HEIGHT))
+            .px(px(theme::CANVAS_GAP))
             .flex_1()
             .flex()
             .items_center()
