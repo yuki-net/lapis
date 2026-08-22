@@ -3,8 +3,11 @@ use crate::shell::HeaderMenuSection as MenuId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MenuAction {
     NewFile,
+    NewFolder,
+    NewWindow,
     OpenProject,
     OpenFile,
+    CloseProject,
     CloseWindow,
     Undo,
     Redo,
@@ -76,21 +79,35 @@ const FILE_MENU: &[MenuItemDefinition] = &[
         Some("Ctrl+N"),
         MenuAction::NewFile,
     ),
+    MenuItemDefinition::action("new-folder", "New Folder...", None, MenuAction::NewFolder),
+    MenuItemDefinition::action(
+        "new-window",
+        "New Window",
+        Some("Ctrl+Shift+N"),
+        MenuAction::NewWindow,
+    ),
     MenuItemDefinition::action(
         "open-project",
         "Open Project...",
         Some("Ctrl+O"),
         MenuAction::OpenProject,
-    ),
+    )
+    .with_separator_before(),
     MenuItemDefinition::action("open-file", "Open...", None, MenuAction::OpenFile),
     MenuItemDefinition::disabled("open-recent", "Open Recent"),
+    MenuItemDefinition::action(
+        "close-project",
+        "Close Project",
+        None,
+        MenuAction::CloseProject,
+    )
+    .with_separator_before(),
     MenuItemDefinition::action(
         "close-window",
         "Close Window",
         Some("Ctrl+Shift+F4"),
         MenuAction::CloseWindow,
-    )
-    .with_separator_before(),
+    ),
 ];
 
 const EDIT_MENU: &[MenuItemDefinition] = &[
@@ -124,7 +141,12 @@ const VIEW_MENU: &[MenuItemDefinition] = &[
 ];
 
 const WINDOW_MENU: &[MenuItemDefinition] = &[
-    MenuItemDefinition::disabled("new-window", "New Window"),
+    MenuItemDefinition::action(
+        "new-window",
+        "New Window",
+        Some("Ctrl+Shift+N"),
+        MenuAction::NewWindow,
+    ),
     MenuItemDefinition::action(
         "close-window",
         "Close Window",
@@ -174,7 +196,22 @@ mod tests {
         assert!(
             FILE_MENU
                 .iter()
+                .any(|item| { item.action == Some(MenuAction::NewFolder) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::NewWindow) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
                 .any(|item| { item.action == Some(MenuAction::OpenProject) && item.enabled })
+        );
+        assert!(
+            FILE_MENU
+                .iter()
+                .any(|item| { item.action == Some(MenuAction::CloseProject) && item.enabled })
         );
         assert!(
             FILE_MENU
@@ -189,7 +226,7 @@ mod tests {
         assert!(
             WINDOW_MENU
                 .iter()
-                .any(|item| item.id == "new-window" && !item.enabled)
+                .any(|item| item.id == "switch-window" && !item.enabled)
         );
     }
 }

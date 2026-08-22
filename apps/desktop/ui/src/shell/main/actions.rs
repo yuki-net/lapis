@@ -264,6 +264,27 @@ impl Editor {
         .detach();
     }
 
+    pub(crate) fn select_locale(
+        &mut self,
+        locale: lapis_localization::LocaleId,
+        cx: &mut Context<Self>,
+    ) {
+        let settings = self.settings.clone();
+        let save = cx.background_spawn(async move { settings.set_locale(locale) });
+        cx.spawn(async move |this, cx| {
+            let result = save.await;
+            let _ = this.update(cx, |editor, cx| {
+                if let Err(error) = result {
+                    editor.status = format!("言語設定保存失敗: {error}");
+                } else {
+                    editor.status = "言語設定を保存しました".to_owned();
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn select_panel_tab(
         &mut self,
         position: PanelPosition,

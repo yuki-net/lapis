@@ -321,6 +321,10 @@ impl ConversationSession {
         self.repository.save(&self.records, &self.active)?;
         Ok(record.view)
     }
+
+    pub fn repository(&self) -> Arc<dyn ConversationRepository> {
+        self.repository.clone()
+    }
 }
 
 pub struct GitSession {
@@ -441,6 +445,10 @@ impl GitSession {
             })?;
         self.worktrees[index] = self.backend.discard_worktree(&self.worktrees[index])?;
         Ok(())
+    }
+
+    pub fn backend(&self) -> Arc<dyn GitBackend> {
+        self.backend.clone()
     }
 }
 
@@ -576,6 +584,10 @@ impl TerminalSession {
             terminal.status = TerminalStatus::Exited;
         }
         Ok(())
+    }
+
+    pub fn backend(&self) -> Arc<dyn TerminalBackend> {
+        self.backend.clone()
     }
 }
 
@@ -760,6 +772,10 @@ impl LspSession {
         self.last_error = None;
         Ok(())
     }
+
+    pub fn backend(&self) -> Arc<dyn LanguageServerBackend> {
+        self.backend.clone()
+    }
 }
 
 pub struct WorkspaceSearchSession {
@@ -839,6 +855,10 @@ impl WorkspaceSearchSession {
     }
     pub fn error(&self) -> Option<&str> {
         self.error.as_deref()
+    }
+
+    pub fn backend(&self) -> Arc<dyn WorkspaceSearchBackend> {
+        self.backend.clone()
     }
 }
 
@@ -1007,6 +1027,10 @@ impl TaskSession {
             return Err(TaskError::new("終了済みの Task は操作できません"));
         }
         self.backend.control(execution_id, &control)
+    }
+
+    pub fn backend(&self) -> Arc<dyn TaskBackend> {
+        self.backend.clone()
     }
 }
 
@@ -1377,6 +1401,28 @@ impl EditorSession {
         self.active = None;
         self.persist()?;
         Ok(())
+    }
+
+    pub fn close_workspace(&mut self) -> Result<(), WorkspaceError> {
+        self.workspace_root = None;
+        self.workspace_name = "No Workspace".to_owned();
+        self.file_tree.clear();
+        self.documents.clear();
+        self.active = None;
+        self.persist()?;
+        Ok(())
+    }
+
+    pub fn repository(&self) -> Arc<dyn WorkspaceRepository> {
+        self.repository.clone()
+    }
+
+    pub fn file_dialog(&self) -> Arc<dyn WorkspaceDialog> {
+        self.file_dialog.clone()
+    }
+
+    pub fn state_repository(&self) -> Arc<dyn WorkspaceStateRepository> {
+        self.state_repository.clone()
     }
 
     pub fn refresh_file_tree(&mut self) -> Result<(), WorkspaceError> {

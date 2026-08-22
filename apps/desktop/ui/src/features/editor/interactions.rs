@@ -1,5 +1,7 @@
 use super::*;
 
+use gpui::{TitlebarOptions, WindowBounds, WindowOptions};
+
 impl Editor {
     pub(super) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         if self.session.is_empty() || self.last_line_layouts.is_empty() {
@@ -115,5 +117,93 @@ impl Editor {
             Ok(DocumentAction::Cancelled) => {}
             Err(error) => self.status = format!("保存失敗: {error}"),
         }
+    }
+
+    pub(super) fn create_new_folder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(root) = self.session.workspace_root() {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let folder_name = format!("new-folder-{}", timestamp % 10000);
+            let new_dir = root.join(&folder_name);
+            if let Err(error) = std::fs::create_dir_all(&new_dir) {
+                self.status = format!("フォルダ作成失敗: {error}");
+            } else {
+                let _ = self.session.refresh_file_tree();
+                self.status = format!("フォルダを作成しました: {folder_name}");
+            }
+            cx.notify();
+        } else {
+            self.status = "Workspaceを開いてからフォルダを作成してください".to_owned();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_new_window(&mut self, cx: &mut Context<Self>) {
+        let repository = self.session.repository();
+        let file_dialog = self.session.file_dialog();
+        let state_repository = self.session.state_repository();
+        let new_session =
+            lapis_app_services::EditorSession::new(repository, file_dialog, state_repository);
+        let snapshot = new_session.snapshot();
+        let task = lapis_app_services::TaskSession::new(self.tasks.session.backend());
+        let git = lapis_app_services::GitSession::new(self.git.session.backend());
+        let lsp = lapis_app_services::LspSession::new(self.problems.lsp.backend());
+        let terminal = lapis_app_services::TerminalSession::new(self.terminal.session.backend());
+        let search =
+            lapis_app_services::WorkspaceSearchSession::new(self.search.workspace.backend());
+        let conversation = lapis_app_services::ConversationSession::new(
+            self.conversation.session.repository(),
+            snapshot,
+        );
+        let settings = self.settings.clone();
+        let services = crate::app::DesktopServices::new(
+            task,
+            git,
+            lsp,
+            terminal,
+            search,
+            conversation,
+            settings,
+        );
+
+        let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+        let _ = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Lapis".into()),
+                    appears_transparent: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let editor = cx.new(|cx| {
+                    Editor::new(
+                        new_session,
+                        services,
+                        crate::app::InitialView::default(),
+                        cx,
+                    )
+                });
+                window.focus(&editor.read(cx).editor_focus_handle());
+                editor
+            },
+        );
+    }
+
+    pub(super) fn close_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = self.session.close_workspace() {
+            self.status = format!("プロジェクト終了失敗: {error}");
+        } else {
+            self.selected_range = 0..0;
+            self.shell.synchronize_documents(&self.session.tabs());
+            self.status = "プロジェクトを閉じました".to_owned();
+            window.focus(&self.focus_handle);
+            self.refresh_feature_activation();
+        }
+        cx.notify();
     }
 }
