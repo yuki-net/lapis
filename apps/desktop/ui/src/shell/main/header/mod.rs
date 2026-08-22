@@ -23,7 +23,7 @@ impl Editor {
                 .h(px(theme::TITLE_BAR_HEIGHT))
                 .w_full()
                 .flex_shrink_0()
-                .pl(px(12.0))
+                .pl(px(theme::CANVAS_GAP))
                 .flex()
                 .flex_row()
                 .items_center()

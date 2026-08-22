@@ -138,6 +138,14 @@ mod conditional {
             self.active_element.as_ref().map(|e| &e.id)
         }
 
+        /// Returns a reference to the active element state of type T if available.
+        pub fn active_element_state<T: 'static>(&self) -> Option<&T> {
+            self.active_element
+                .as_ref()
+                .and_then(|element| element.states.get(&TypeId::of::<T>()))
+                .and_then(|boxed| boxed.downcast_ref::<T>())
+        }
+
         /// The inspectable element tree from the target window's most recently rendered frame.
         pub fn element_tree(&self) -> &[InspectorElementNode] {
             &self.element_tree
