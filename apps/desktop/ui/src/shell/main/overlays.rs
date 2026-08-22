@@ -7,7 +7,7 @@ impl Editor {
         floating_tree(anchor, point(px(-250.0), px(8.0))).child(
             floating_panel("settings-menu", SurfaceVariant::Menu)
                 .w(px(250.0))
-                .p(theme::spacing(theme::Spacing::Sm))
+                .p(tokens::spacing::SM)
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_settings_menu(cx);
                 }))
@@ -64,9 +64,9 @@ impl Editor {
                     .items_center()
                     .gap_2()
                     .text_size(px(12.0))
-                    .text_color(theme::text())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .when(selected, |item| item.bg(theme::accent_soft()))
+                    .text_color(theme::colors().text)
+                    .hover(|style| style.bg(theme::colors().surface_hover))
+                    .when(selected, |item| item.bg(theme::colors().accent_soft))
                     .child(if selected { "✓" } else { "" })
                     .child(name)
                     .on_click(cx.listener(move |this, _, _, cx| {

@@ -15,7 +15,7 @@ pub(crate) fn render_content(terminal: &TerminalFeature) -> gpui::Div {
                 .p_2()
                 .font_family("Cascadia Mono")
                 .text_size(px(11.0))
-                .text_color(theme::text())
+                .text_color(theme::colors().text)
                 .child(terminal.output.clone()),
         )
     } else {

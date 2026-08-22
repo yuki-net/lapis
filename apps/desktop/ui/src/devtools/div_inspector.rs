@@ -83,8 +83,8 @@ pub(super) fn render_box_model(state: &DivInspectorState) -> Div {
         .p_2()
         .rounded(px(6.0))
         .border_1()
-        .border_color(theme::border())
-        .bg(theme::island())
+        .border_color(theme::colors().border)
+        .bg(theme::colors().island)
         .flex()
         .flex_col()
         .items_center()
@@ -230,7 +230,7 @@ fn section_title(title: &str) -> Div {
     div()
         .pt_2()
         .pb_1()
-        .text_color(theme::accent())
+        .text_color(theme::colors().accent)
         .child(title.to_owned())
 }
 

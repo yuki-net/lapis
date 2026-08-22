@@ -9,14 +9,15 @@ impl Editor {
             .flex()
             .flex_1()
             .items_center()
-            .gap_1()
+            .gap(tokens::spacing::XS)
             .overflow_hidden();
         for (index, part) in self.footer_path_parts().iter().enumerate() {
             if index > 0 {
-                path = path.child(div().text_color(theme::muted()).child("/"));
+                path = path.child(div().text_color(theme::colors().muted).child("/"));
             }
             path = path.child(
-                button(("footer-path", index), part.clone(), ButtonSize::Xs).text_size(px(12.0)),
+                button(("footer-path", index), part.clone(), ButtonSize::Xs)
+                    .text_size(tokens::typography::FONT_SM),
             );
         }
 
@@ -24,8 +25,8 @@ impl Editor {
             .flex()
             .flex_shrink_0()
             .items_center()
-            .gap_1()
-            .text_size(px(12.0))
+            .gap(tokens::spacing::XS)
+            .text_size(tokens::typography::FONT_SM)
             .child(self.footer_button("footer-position", format!("{line}:{column}")))
             .child(self.footer_button("footer-line-ending", self.footer_line_ending()))
             .child(self.footer_button("footer-encoding", self.footer_encoding()));
@@ -34,7 +35,7 @@ impl Editor {
             .h(px(31.0))
             .w_full()
             .flex_shrink_0()
-            .px(px(theme::CANVAS_GAP))
+            .px(tokens::spacing::GAP)
             .flex()
             .items_center()
             .justify_between()
@@ -70,14 +71,19 @@ impl Editor {
         id: &'static str,
         label: impl Into<SharedString>,
     ) -> gpui::Stateful<gpui::Div> {
-        button(id, label.into(), ButtonSize::Xs).text_size(px(12.0))
+        button(id, label.into(), ButtonSize::Xs).text_size(tokens::typography::FONT_SM)
     }
 
     fn footer_line_ending(&self) -> &'static str {
         self.session
             .active_text()
             .ok()
-            .filter(|text| text.contains("\r\n"))
+            .filter(|text| {
+                text.contains(
+                    "
+",
+                )
+            })
             .map(|_| "CRLF")
             .unwrap_or("LF")
     }

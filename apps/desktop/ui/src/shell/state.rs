@@ -3,7 +3,7 @@ use lapis_app_services::DocumentTab;
 use crate::{
     extension_ui::{FeatureRegistry, PanelPosition, ThemeId, ViewId},
     features::id,
-    theme,
+    tokens,
 };
 
 use super::{panel::PanelHost, tab_state::PanelTab};
@@ -53,19 +53,19 @@ impl Default for ShellState {
                 PanelPosition::Left,
                 vec![PanelTab::tool(id::VIEW_FILES)],
                 true,
-                theme::TOOL_ISLAND_WIDTH,
+                f32::from(tokens::size::TOOL_ISLAND_WIDTH),
             ),
             bottom_panel: PanelHost::new(
                 PanelPosition::Bottom,
                 Vec::new(),
                 false,
-                theme::BOTTOM_PANEL_HEIGHT,
+                f32::from(tokens::size::BOTTOM_PANEL_HEIGHT),
             ),
             right_panel: PanelHost::new(
                 PanelPosition::Right,
                 Vec::new(),
                 false,
-                theme::SIDE_PANEL_WIDTH,
+                f32::from(tokens::size::SIDE_PANEL_WIDTH),
             ),
             command_palette_open: false,
             tool_picker: None,
@@ -262,10 +262,13 @@ mod tests {
             PanelPosition::Bottom,
             Vec::new(),
             true,
-            theme::BOTTOM_PANEL_HEIGHT,
+            f32::from(tokens::size::BOTTOM_PANEL_HEIGHT),
         );
         let (generation, duration) = bottom.request_open(false, start).unwrap();
-        assert_eq!(bottom.effective_size(start), theme::BOTTOM_PANEL_HEIGHT);
+        assert_eq!(
+            bottom.effective_size(start),
+            f32::from(tokens::size::BOTTOM_PANEL_HEIGHT)
+        );
         assert_eq!(bottom.effective_size(start + duration), 0.0);
         assert!(
             bottom

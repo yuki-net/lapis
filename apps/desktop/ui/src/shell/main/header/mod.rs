@@ -18,13 +18,13 @@ impl Editor {
     pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         apply_drag_region(
             div()
-                .h(px(theme::TITLE_BAR_HEIGHT))
+                .h(tokens::size::TITLE_BAR_HEIGHT)
                 .w_full()
                 .flex_shrink_0()
                 .flex()
                 .flex_row()
                 .items_center()
-                .bg(theme::title_bar())
+                .bg(theme::colors().title_bar)
                 // Mac OS
                 .when(cfg!(target_os = "macos"), |this| {
                     this.child(div().w(px(80.0)).flex_shrink_0())
@@ -47,7 +47,7 @@ impl Editor {
             .flex_row()
             .items_center()
             .justify_between()
-            .p(px(theme::CANVAS_GAP))
+            .p(tokens::spacing::GAP)
             .child(self.render_header_left(cx))
             .child(self.render_header_center(cx))
             .child(self.render_header_right(cx))

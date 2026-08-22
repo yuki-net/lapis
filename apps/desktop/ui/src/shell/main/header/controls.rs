@@ -46,7 +46,7 @@ impl IntoElement for PanelToggleIcon {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::muted())
+            .text_color(theme::colors().muted)
             .child(crate::components::Icon::new(name).with_rotation(rotation))
     }
 }
@@ -99,7 +99,7 @@ impl IntoElement for WindowControlIcon {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::muted())
+            .text_color(theme::colors().muted)
             .child(crate::components::Icon::new(self.name.icon_name()))
     }
 }
@@ -114,23 +114,25 @@ pub(crate) fn window_control_button(
     div()
         .id(id)
         .h_full()
-        .w(px(theme::WINDOW_CONTROL_WIDTH))
+        .w(tokens::size::WINDOW_CONTROL_WIDTH)
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
         .occlude()
         .window_control_area(area)
-        .text_color(theme::muted())
+        .text_color(theme::colors().muted)
         .hover(move |style| {
             if close {
                 style
-                    .bg(theme::close_hover())
-                    .text_color(theme::on_accent_text())
+                    .bg(theme::colors().close_hover)
+                    .text_color(theme::colors().on_accent_text)
             } else {
-                style.bg(theme::surface_hover()).text_color(theme::text())
+                style
+                    .bg(theme::colors().surface_hover)
+                    .text_color(theme::colors().text)
             }
         })
-        .active(|style| style.bg(theme::surface_active()))
+        .active(|style| style.bg(theme::colors().surface_active))
         .child(WindowControlIcon::new(icon))
 }

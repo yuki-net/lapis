@@ -3,23 +3,6 @@ use serde::Deserialize;
 
 use crate::extension_ui::ThemeId;
 
-/// レイアウト定数
-pub const TITLE_BAR_HEIGHT: f32 = 40.0;
-pub const HEADER_BUTTON_SIZE: f32 = 28.0;
-pub const BUTTON_HEIGHT_XS: f32 = 22.0;
-pub const BUTTON_HEIGHT_SM: f32 = 25.0;
-pub const SCROLLBAR_WIDTH: f32 = 8.0;
-/// Panel本文ではスクロール領域を視認しやすくするため、標準より広く確保する。
-/// GPUIはスクロールバーの色を直接指定できないため、幅で強調する。
-pub const PANEL_SCROLLBAR_WIDTH: f32 = 10.0;
-pub const WINDOW_CONTROL_WIDTH: f32 = 46.0;
-pub const WINDOW_RESIZE_BORDER_HEIGHT: f32 = 4.0;
-pub const TOOL_ISLAND_WIDTH: f32 = 260.0;
-pub const SIDE_PANEL_WIDTH: f32 = 310.0;
-pub const BOTTOM_PANEL_HEIGHT: f32 = 196.0;
-pub const ISLAND_RADIUS: f32 = 8.0;
-pub const CANVAS_GAP: f32 = 8.0;
-
 /// テーマが提供するカラートークン。
 #[derive(Clone, Debug)]
 pub struct ThemeColors {
@@ -244,7 +227,7 @@ mod tests {
         assert_eq!(definition.id.as_str(), "lapis.dark");
         assert_eq!(definition.name, "Dark");
 
-        let invalid = source.replace("\"version\": 1", "\"version\": 2");
+        let invalid = source.replace(r#""version": 1"#, r#""version": 2"#);
         assert!(ThemeDefinition::from_json(&invalid).is_err());
     }
 }

@@ -15,7 +15,7 @@ impl Editor {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::surface())
+                        .bg(theme::colors().surface)
                         .text_size(px(12.0))
                         .child(self.search.workspace.query().to_owned()),
                 )
@@ -23,7 +23,7 @@ impl Editor {
                     div()
                         .py_1()
                         .text_size(px(10.0))
-                        .text_color(theme::subtle())
+                        .text_color(theme::colors().subtle)
                         .child(if self.search.workspace.is_running() {
                             "SEARCHING WORKSPACE…".to_owned()
                         } else {
@@ -43,7 +43,7 @@ impl Editor {
                         .rounded(px(5.0))
                         .flex()
                         .flex_col()
-                        .hover(|style| style.bg(theme::surface_hover()))
+                        .hover(|style| style.bg(theme::colors().surface_hover))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let Some(root) = this.session.workspace_root().map(ToOwned::to_owned)
                             else {
@@ -58,13 +58,21 @@ impl Editor {
                             }
                             cx.notify();
                         }))
-                        .child(div().text_size(px(10.0)).text_color(theme::subtle()).child(
-                            format!("{}:{}:{}", hit.path.display(), hit.line, hit.utf8_column),
-                        ))
+                        .child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme::colors().subtle)
+                                .child(format!(
+                                    "{}:{}:{}",
+                                    hit.path.display(),
+                                    hit.line,
+                                    hit.utf8_column
+                                )),
+                        )
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(theme::muted())
+                                .text_color(theme::colors().muted)
                                 .child(hit.preview),
                         ),
                 );
@@ -90,7 +98,7 @@ impl Editor {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::surface())
+                        .bg(theme::colors().surface)
                         .text_size(px(12.0))
                         .child(self.search.query.clone()),
                 )
@@ -98,7 +106,7 @@ impl Editor {
                     div()
                         .py_1()
                         .text_size(px(10.0))
-                        .text_color(theme::subtle())
+                        .text_color(theme::colors().subtle)
                         .child(format!("{} MATCHES · F3 NEXT", self.search.matches.len())),
                 );
             for (index, range) in self.search.matches.iter().cloned().enumerate() {
@@ -112,13 +120,13 @@ impl Editor {
                         .flex()
                         .items_center()
                         .text_size(px(11.0))
-                        .text_color(theme::muted())
+                        .text_color(theme::colors().muted)
                         .bg(if index == self.search.current_match {
-                            theme::accent_soft()
+                            theme::colors().accent_soft
                         } else {
-                            theme::island()
+                            theme::colors().island
                         })
-                        .hover(|style| style.bg(theme::surface_hover()))
+                        .hover(|style| style.bg(theme::colors().surface_hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.search.current_match = index;
                             this.selected_range = range.clone();

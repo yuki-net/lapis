@@ -28,9 +28,9 @@ impl Editor {
                 .py_1()
                 .rounded(px(5.0))
                 .border_1()
-                .border_color(theme::border())
+                .border_color(theme::colors().border)
                 .text_size(px(11.0))
-                .hover(|style| style.bg(theme::surface_hover()))
+                .hover(|style| style.bg(theme::colors().surface_hover))
                 .on_click(cx.listener(move |this, _, _, cx| {
                     this.open_tool_picker(position, cx);
                 }))
@@ -64,7 +64,7 @@ impl Editor {
                         .py(px(10.0))
                         .cursor(CursorStyle::IBeam)
                         .text_size(px(14.0))
-                        .text_color(theme::text())
+                        .text_color(theme::colors().text)
                         .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
                         .on_mouse_move(cx.listener(Self::editor_mouse_move))
                         .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
@@ -82,14 +82,14 @@ impl Editor {
                                     .child(
                                         div()
                                             .text_size(px(18.0))
-                                            .text_color(theme::text())
+                                            .text_color(theme::colors().text)
                                             .child("Open a file or project"),
                                     )
                                     .child(
                                         div()
                                             .mb_1()
                                             .text_size(px(12.0))
-                                            .text_color(theme::subtle())
+                                            .text_color(theme::colors().subtle)
                                             .child("Choose a project to restore its last workspace, or open a file to start here."),
                                     )
                                     .child(quick_action("Open file", "Ctrl O").on_click(
@@ -168,7 +168,7 @@ impl Editor {
                         .max_w_full()
                         .text_size(px(24.0))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(theme::text())
+                        .text_color(theme::colors().text)
                         .child(self.t("workspace.title")),
                 )
                 .child(
@@ -212,15 +212,15 @@ impl Editor {
                                     .p_3()
                                     .rounded(px(6.0))
                                     .bg(if selected {
-                                        theme::accent_soft()
+                                        theme::colors().accent_soft
                                     } else {
-                                        theme::surface()
+                                        theme::colors().surface
                                     })
-                                    .hover(|style| style.bg(theme::surface_hover()))
+                                    .hover(|style| style.bg(theme::colors().surface_hover))
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .text_color(theme::text())
+                                    .text_color(theme::colors().text)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.open_recent_workspace(open_root.clone(), window, cx);
                                     }))
@@ -233,7 +233,7 @@ impl Editor {
                                     .child(
                                         div()
                                             .text_size(px(11.0))
-                                            .text_color(theme::muted())
+                                            .text_color(theme::colors().muted)
                                             .child(root.display().to_string()),
                                     )
                             },
@@ -243,7 +243,7 @@ impl Editor {
                     content.child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(theme::muted())
+                            .text_color(theme::colors().muted)
                             .child(self.t("workspace.no-recent")),
                     )
                 }),
@@ -279,7 +279,7 @@ impl Editor {
                             div()
                                 .text_size(px(22.0))
                                 .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(theme::text())
+                                .text_color(theme::colors().text)
                                 .child(self.t("settings.title")),
                         ),
                 )
@@ -295,8 +295,8 @@ impl Editor {
                                 .p_4()
                                 .rounded(px(8.0))
                                 .border_1()
-                                .border_color(theme::border())
-                                .bg(theme::surface())
+                                .border_color(theme::colors().border)
+                                .bg(theme::colors().surface)
                                 .flex()
                                 .flex_col()
                                 .gap_3()
@@ -304,7 +304,7 @@ impl Editor {
                                     div()
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(theme::text())
+                                        .text_color(theme::colors().text)
                                         .child(self.t("settings.appearance")),
                                 )
                                 .child(div().flex().flex_wrap().gap_2().children(
@@ -321,18 +321,18 @@ impl Editor {
                                             .rounded(px(6.0))
                                             .border_1()
                                             .border_color(if is_selected {
-                                                theme::accent()
+                                                theme::colors().accent
                                             } else {
-                                                theme::border()
+                                                theme::colors().border
                                             })
                                             .bg(if is_selected {
-                                                theme::accent_soft()
+                                                theme::colors().accent_soft
                                             } else {
-                                                theme::surface()
+                                                theme::colors().surface
                                             })
-                                            .hover(|style| style.bg(theme::surface_hover()))
+                                            .hover(|style| style.bg(theme::colors().surface_hover))
                                             .text_size(px(12.0))
-                                            .text_color(theme::text())
+                                            .text_color(theme::colors().text)
                                             .child(format!(
                                                 "{} {}",
                                                 if is_selected { "✓" } else { "" },
@@ -349,8 +349,8 @@ impl Editor {
                                 .p_4()
                                 .rounded(px(8.0))
                                 .border_1()
-                                .border_color(theme::border())
-                                .bg(theme::surface())
+                                .border_color(theme::colors().border)
+                                .bg(theme::colors().surface)
                                 .flex()
                                 .flex_col()
                                 .gap_3()
@@ -358,7 +358,7 @@ impl Editor {
                                     div()
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(theme::text())
+                                        .text_color(theme::colors().text)
                                         .child(self.t("settings.language")),
                                 )
                                 .child(
@@ -384,8 +384,8 @@ impl Editor {
                                 .p_4()
                                 .rounded(px(8.0))
                                 .border_1()
-                                .border_color(theme::border())
-                                .bg(theme::surface())
+                                .border_color(theme::colors().border)
+                                .bg(theme::colors().surface)
                                 .flex()
                                 .flex_col()
                                 .gap_2()
@@ -393,19 +393,19 @@ impl Editor {
                                     div()
                                         .text_size(px(14.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(theme::text())
+                                        .text_color(theme::colors().text)
                                         .child(self.t("settings.workspace-info")),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(12.0))
-                                        .text_color(theme::subtle())
+                                        .text_color(theme::colors().subtle)
                                         .child(format!("Workspace Root: {workspace_info}")),
                                 )
                                 .child(
                                     div()
                                         .text_size(px(12.0))
-                                        .text_color(theme::subtle())
+                                        .text_color(theme::colors().subtle)
                                         .child("Version: 0.1.0"),
                                 ),
                         ),
@@ -427,18 +427,18 @@ impl Editor {
             .rounded(px(6.0))
             .border_1()
             .border_color(if is_selected {
-                theme::accent()
+                theme::colors().accent
             } else {
-                theme::border()
+                theme::colors().border
             })
             .bg(if is_selected {
-                theme::accent_soft()
+                theme::colors().accent_soft
             } else {
-                theme::surface()
+                theme::colors().surface
             })
-            .hover(|style| style.bg(theme::surface_hover()))
+            .hover(|style| style.bg(theme::colors().surface_hover))
             .text_size(px(12.0))
-            .text_color(theme::text())
+            .text_color(theme::colors().text)
             .child(format!("{} {}", if is_selected { "✓" } else { "" }, label))
             .on_click(cx.listener(move |this, _, _, cx| {
                 this.select_locale(lapis_localization::LocaleId::new(locale_code), cx);
@@ -455,14 +455,14 @@ impl Editor {
             .child(
                 div()
                     .text_size(px(10.0))
-                    .text_color(theme::subtle())
+                    .text_color(theme::colors().subtle)
                     .child("DOCUMENT HISTORY"),
             )
             .child(
                 div()
                     .p_2()
                     .rounded(px(6.0))
-                    .bg(theme::surface())
+                    .bg(theme::colors().surface)
                     .text_size(px(12.0))
                     .child(format!("Revision {}", self.session.revision())),
             )
@@ -501,16 +501,16 @@ fn workspace_action(
         .h(px(96.0))
         .p_3()
         .rounded(px(6.0))
-        .bg(theme::surface())
+        .bg(theme::colors().surface)
         .flex()
         .flex_col()
         .justify_between()
-        .text_color(theme::text())
-        .hover(|style| style.bg(theme::surface_hover()))
+        .text_color(theme::colors().text)
+        .hover(|style| style.bg(theme::colors().surface_hover))
         .child(
             div()
                 .text_size(px(24.0))
-                .text_color(theme::muted())
+                .text_color(theme::colors().muted)
                 .child(icon),
         )
         .child(div().text_size(px(14.0)).child(label))

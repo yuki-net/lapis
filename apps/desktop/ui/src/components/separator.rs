@@ -1,10 +1,10 @@
 use gpui::{div, prelude::*, px};
 
-use crate::theme;
+use crate::{theme, tokens};
 
 pub(crate) fn separator() -> gpui::Div {
     div()
         .h(px(1.0))
-        .my(theme::spacing(theme::Spacing::Xs))
-        .bg(theme::border())
+        .my(tokens::spacing::XS)
+        .bg(theme::colors().border)
 }

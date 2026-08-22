@@ -1,6 +1,6 @@
-use gpui::{ElementId, div, prelude::*, px};
+use gpui::{ElementId, div, prelude::*};
 
-use crate::theme;
+use crate::tokens;
 
 /// Scroll direction supported by the shared scrollable surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -17,7 +17,7 @@ pub(crate) trait ScrollableElement: Sized {
 
 impl ScrollableElement for gpui::Stateful<gpui::Div> {
     fn scrollable(mut self, axis: ScrollAxis) -> Self {
-        self = self.scrollbar_width(px(theme::SCROLLBAR_WIDTH));
+        self = self.scrollbar_width(tokens::size::SCROLLBAR);
         match axis {
             ScrollAxis::Vertical => self.overflow_y_scroll(),
             ScrollAxis::Horizontal => self.overflow_x_scroll(),
@@ -41,5 +41,5 @@ pub(crate) fn panel_scroll_area(id: impl Into<ElementId>) -> gpui::Stateful<gpui
         .flex()
         .flex_col()
         .scrollable(ScrollAxis::Both)
-        .scrollbar_width(px(theme::PANEL_SCROLLBAR_WIDTH))
+        .scrollbar_width(tokens::size::PANEL_SCROLLBAR)
 }

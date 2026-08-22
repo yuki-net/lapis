@@ -37,12 +37,12 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                 .justify_between()
                 .px_3()
                 .border_b_1()
-                .border_color(theme::border())
+                .border_color(theme::colors().border)
                 .child("Element tree")
                 .child(
                     div()
                         .text_size(px(10.0))
-                        .text_color(theme::muted())
+                        .text_color(theme::colors().muted)
                         .child(format!("{node_count} nodes · rev {revision}")),
                 ),
         )
@@ -59,7 +59,7 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                         div()
                             .p_3()
                             .text_size(px(11.0))
-                            .text_color(theme::muted())
+                            .text_color(theme::colors().muted)
                             .child("対象ウィンドウを描画するとツリーが表示されます"),
                     )
                 })
@@ -160,14 +160,14 @@ fn render_tree_row(
         .pl(px(8.0 + row.depth as f32 * 14.0))
         .pr_2()
         .cursor_pointer()
-        .when(selected, |element| element.bg(theme::accent_soft()))
-        .hover(|style| style.bg(theme::surface_hover()))
+        .when(selected, |element| element.bg(theme::colors().accent_soft))
+        .hover(|style| style.bg(theme::colors().surface_hover))
         .child(
             div()
                 .id(("inspector-tree-toggle", index))
                 .w(px(14.0))
                 .flex_none()
-                .text_color(theme::muted())
+                .text_color(theme::colors().muted)
                 .child(if row.has_children {
                     if collapsed { "▸" } else { "▾" }
                 } else {
@@ -186,9 +186,9 @@ fn render_tree_row(
                 .flex_none()
                 .text_size(px(11.0))
                 .text_color(if selected {
-                    theme::text()
+                    theme::colors().text
                 } else {
-                    theme::accent()
+                    theme::colors().accent
                 })
                 .child(short_type_name(row.node.element_type)),
         )
@@ -197,7 +197,7 @@ fn render_tree_row(
                 div()
                     .min_w(px(0.0))
                     .text_size(px(9.0))
-                    .text_color(theme::muted())
+                    .text_color(theme::colors().muted)
                     .child(format!("#{global_id}")),
             )
         })
@@ -244,7 +244,7 @@ fn section_title(title: &str) -> Div {
     div()
         .pt_2()
         .pb_1()
-        .text_color(theme::accent())
+        .text_color(theme::colors().accent)
         .child(title.to_owned())
 }
 

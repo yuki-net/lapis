@@ -7,14 +7,14 @@ struct PanelTabDragPreview {
 impl Render for PanelTabDragPreview {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div()
-            .px_2()
-            .py_1()
-            .rounded(theme::radius(theme::Radius::MenuItem))
-            .bg(theme::surface())
+            .px(tokens::spacing::XS)
+            .py(px(2.0))
+            .rounded(tokens::radius::MENU_ITEM)
+            .bg(theme::colors().surface)
             .border_1()
-            .border_color(theme::border())
-            .text_color(theme::text())
-            .text_size(px(11.0))
+            .border_color(theme::colors().border)
+            .text_color(theme::colors().text)
+            .text_size(tokens::typography::FONT_XS)
             .child(self.label.clone())
     }
 }
@@ -72,21 +72,25 @@ impl Editor {
             crate::components::surface(crate::components::SurfaceVariant::Tab)
                 .id(("panel-tab", panel_key(position) * 100 + index as u32))
                 .h(px(30.0))
-                .px_2()
+                .px(tokens::spacing::XS)
                 .flex()
                 .items_center()
                 .bg(if active {
-                    theme::surface()
+                    theme::colors().surface
                 } else {
-                    theme::island()
+                    theme::colors().island
                 })
-                .text_size(px(11.0))
+                .text_size(tokens::typography::FONT_XS)
                 .text_color(if active {
-                    theme::text()
+                    theme::colors().text
                 } else {
-                    theme::muted()
+                    theme::colors().muted
                 })
-                .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                .hover(|style| {
+                    style
+                        .bg(theme::colors().surface_hover)
+                        .text_color(theme::colors().text)
+                })
                 .cursor(CursorStyle::OpenHand)
                 .on_drag(drag, |drag: &DraggedPanelTab, _, _, cx| {
                     cx.new(|_| PanelTabDragPreview {
@@ -118,12 +122,16 @@ impl Editor {
                     div()
                         .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
                         .size(px(20.0))
-                        .rounded(px(4.0))
+                        .rounded(tokens::radius::MENU_ITEM)
                         .flex()
                         .items_center()
                         .justify_center()
                         .cursor(CursorStyle::PointingHand)
-                        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                        .hover(|style| {
+                            style
+                                .bg(theme::colors().surface_hover)
+                                .text_color(theme::colors().text)
+                        })
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|_, _, _, cx| {
@@ -142,10 +150,10 @@ impl Editor {
         div()
             .h(px(39.0))
             .flex_shrink_0()
-            .px_2()
+            .px(tokens::spacing::XS)
             .flex()
             .items_center()
-            .gap_1()
+            .gap(tokens::spacing::XS)
             .child(
                 div()
                     .id(("panel-tabs", panel_key(position)))
@@ -154,7 +162,7 @@ impl Editor {
                     .scrollable(ScrollAxis::Horizontal)
                     .flex()
                     .items_center()
-                    .gap_1()
+                    .gap(tokens::spacing::XS)
                     .children(tabs),
             )
             .when(
@@ -178,13 +186,17 @@ impl Editor {
                     div()
                         .id(("open-tool-tab", panel_key(position)))
                         .flex_shrink_0()
-                        .size(px(25.0))
+                        .size(tokens::size::BUTTON_SM)
                         .rounded(px(5.0))
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(theme::muted())
-                        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+                        .text_color(theme::colors().muted)
+                        .hover(|style| {
+                            style
+                                .bg(theme::colors().surface_hover)
+                                .text_color(theme::colors().text)
+                        })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_tool_picker(position, cx);
                         }))

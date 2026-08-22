@@ -311,35 +311,39 @@ fn task_action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui
         .rounded(px(5.0))
         .border_1()
         .border_color(if primary {
-            theme::task_primary_border()
+            theme::colors().task_primary_border
         } else {
-            theme::border()
+            theme::colors().border
         })
         .bg(if primary {
-            theme::accent_soft()
+            theme::colors().accent_soft
         } else {
-            theme::surface()
+            theme::colors().surface
         })
         .text_size(px(10.0))
         .text_color(if primary {
-            theme::task_primary_text()
+            theme::colors().task_primary_text
         } else {
-            theme::muted()
+            theme::colors().muted
         })
         .flex()
         .items_center()
-        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+        .hover(|style| {
+            style
+                .bg(theme::colors().surface_hover)
+                .text_color(theme::colors().text)
+        })
         .child(label)
 }
 
 fn task_status_color(status: ExecutionStatus) -> gpui::Rgba {
     match status {
-        ExecutionStatus::Succeeded => theme::status_success(),
-        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::status_error(),
+        ExecutionStatus::Succeeded => theme::colors().status_success,
+        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::colors().status_error,
         ExecutionStatus::WaitingForInput | ExecutionStatus::WaitingForApproval => {
-            theme::status_warning()
+            theme::colors().status_warning
         }
-        ExecutionStatus::Queued | ExecutionStatus::Running => theme::status_info(),
+        ExecutionStatus::Queued | ExecutionStatus::Running => theme::colors().status_info,
     }
 }
 
@@ -356,10 +360,10 @@ fn change_label(kind: ChangeKind) -> &'static str {
 
 fn change_color(kind: ChangeKind) -> gpui::Rgba {
     match kind {
-        ChangeKind::Added => theme::diff_added(),
-        ChangeKind::Deleted | ChangeKind::Conflicted => theme::diff_removed(),
-        ChangeKind::Modified | ChangeKind::Renamed => theme::diff_changed(),
-        ChangeKind::Untracked => theme::muted(),
+        ChangeKind::Added => theme::colors().diff_added,
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors().diff_removed,
+        ChangeKind::Modified | ChangeKind::Renamed => theme::colors().diff_changed,
+        ChangeKind::Untracked => theme::colors().muted,
     }
 }
 
@@ -380,14 +384,14 @@ fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .text_color(theme::text())
-        .hover(|style| style.bg(theme::surface_active()))
+        .text_color(theme::colors().text)
+        .hover(|style| style.bg(theme::colors().surface_active))
         .child(label)
         .child(div().flex_1())
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_color(theme::colors().subtle)
                 .child(shortcut),
         )
 }
@@ -403,23 +407,23 @@ fn quick_action(
         .px_3()
         .rounded(px(7.0))
         .border_1()
-        .border_color(theme::border())
-        .bg(theme::surface())
+        .border_color(theme::colors().border)
+        .bg(theme::colors().surface)
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .text_color(theme::text())
+        .text_color(theme::colors().text)
         .hover(|style| {
             style
-                .bg(theme::surface_hover())
-                .border_color(theme::command_input_border())
+                .bg(theme::colors().surface_hover)
+                .border_color(theme::colors().command_input_border)
         })
         .child(label)
         .child(div().flex_1())
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_color(theme::colors().subtle)
                 .child(shortcut),
         )
 }

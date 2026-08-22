@@ -1,7 +1,7 @@
 use gpui::{ElementId, SharedString, Stateful, div, prelude::*, px};
 
 use super::{Icon, IconName, SurfaceVariant, floating_panel};
-use crate::theme;
+use crate::{theme, tokens};
 
 #[derive(Clone)]
 pub(crate) struct MenuItemSpec {
@@ -24,24 +24,24 @@ pub(crate) fn menu_item(spec: MenuItemSpec) -> Stateful<gpui::Div> {
         .id(ElementId::Name(id))
         .h(px(32.0))
         .w_full()
-        .px(theme::spacing(theme::Spacing::Sm))
-        .rounded(theme::radius(theme::Radius::MenuItem))
+        .px(tokens::spacing::SM)
+        .rounded(tokens::radius::MENU_ITEM)
         .flex()
         .items_center()
-        .gap(theme::spacing(theme::Spacing::Sm))
-        .text_size(px(13.0))
+        .gap(tokens::spacing::SM)
+        .text_size(tokens::typography::FONT_SM)
         .text_color(if enabled {
-            theme::text()
+            theme::colors().text
         } else {
-            theme::subtle()
+            theme::colors().subtle
         })
         .when(enabled, |item| {
-            item.hover(|style| style.bg(theme::surface_hover()))
+            item.hover(|style| style.bg(theme::colors().surface_hover))
         })
         .when_some(spec.icon, |item, icon| item.child(Icon::new(icon)))
         .child(spec.label)
         .child(div().flex_1())
         .when_some(spec.shortcut, |item, shortcut| {
-            item.child(div().text_color(theme::muted()).child(shortcut))
+            item.child(div().text_color(theme::colors().muted).child(shortcut))
         })
 }

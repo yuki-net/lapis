@@ -19,18 +19,18 @@ impl Editor {
         let left_size = self.shell.left_panel.effective_size(now);
         let right_size = self.shell.right_panel.effective_size(now);
         let bottom_size = self.shell.bottom_panel.effective_size(now);
+        let gap_f32 = f32::from(tokens::spacing::GAP);
         let left_width = if self.shell.left_panel.is_visible(now) {
-            left_size + theme::CANVAS_GAP
+            left_size + gap_f32
         } else {
             0.0
         };
         let right_width = if self.shell.right_panel.is_visible(now) {
-            right_size + theme::CANVAS_GAP
+            right_size + gap_f32
         } else {
             0.0
         };
-        let center_width =
-            (viewport_width - theme::CANVAS_GAP * 2.0 - left_width - right_width).max(320.0);
+        let center_width = (viewport_width - gap_f32 * 2.0 - left_width - right_width).max(320.0);
 
         div()
             .h(px(0.0))
@@ -38,7 +38,7 @@ impl Editor {
             .min_h(px(0.0))
             .flex()
             .flex_1()
-            .px(px(theme::CANVAS_GAP))
+            .px(tokens::spacing::GAP)
             .when(self.shell.left_panel.is_visible(now), |body| {
                 body.child(self.render_panel_window_frame(
                     &self.shell.left_panel,

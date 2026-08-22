@@ -30,7 +30,7 @@ impl Editor {
         .left(relative(0.5))
         .ml(px(-220.0))
         .w(px(440.0))
-        .p(theme::spacing(theme::Spacing::Sm))
+        .p(tokens::spacing::SM)
         .flex()
         .flex_col()
         .gap_1()
@@ -42,9 +42,9 @@ impl Editor {
                 .flex()
                 .items_center()
                 .gap_2()
-                .bg(theme::island())
+                .bg(theme::colors().island)
                 .text_size(px(12.0))
-                .text_color(theme::muted())
+                .text_color(theme::colors().muted)
                 .child(crate::components::Icon::new(
                     crate::components::IconName::Search,
                 ))
@@ -66,7 +66,7 @@ impl Editor {
                 .pt_1()
                 .px_2()
                 .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_color(theme::colors().subtle)
                 .child("Esc で閉じる"),
         )
     }

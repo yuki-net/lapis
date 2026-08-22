@@ -9,17 +9,21 @@ pub(crate) fn preview_lines(session: &EditorSession) -> Vec<gpui::Div> {
         .map(|line| {
             let line = line.trim_end_matches(['\r', '\n']);
             let (text, size, color) = if let Some(value) = line.strip_prefix("# ") {
-                (value.to_owned(), px(24.0), theme::text())
+                (value.to_owned(), px(24.0), theme::colors().text)
             } else if let Some(value) = line.strip_prefix("## ") {
-                (value.to_owned(), px(19.0), theme::text())
+                (value.to_owned(), px(19.0), theme::colors().text)
             } else if let Some(value) = line.strip_prefix("### ") {
-                (value.to_owned(), px(16.0), theme::text())
+                (value.to_owned(), px(16.0), theme::colors().text)
             } else if let Some(value) = line.strip_prefix("- ") {
-                (format!("• {value}"), px(13.0), theme::muted())
+                (format!("• {value}"), px(13.0), theme::colors().muted)
             } else if let Some(value) = line.strip_prefix("> ") {
-                (format!("│ {value}"), px(13.0), theme::assistant_accent())
+                (
+                    format!("│ {value}"),
+                    px(13.0),
+                    theme::colors().assistant_accent,
+                )
             } else {
-                (line.to_owned(), px(13.0), theme::muted())
+                (line.to_owned(), px(13.0), theme::colors().muted)
             };
             div()
                 .min_h(px(22.0))

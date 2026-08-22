@@ -7,17 +7,17 @@ impl Editor {
             .flex_shrink_0()
             .flex()
             .items_center()
-            .gap_1()
+            .gap(tokens::spacing::XS)
             .child(
                 div()
-                    .size(px(22.0))
-                    .rounded(theme::radius(theme::Radius::Control))
+                    .size(tokens::size::BUTTON_XS)
+                    .rounded(tokens::radius::CONTROL)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(theme::accent())
-                    .text_color(theme::brand_text())
-                    .text_size(px(11.0))
+                    .bg(theme::colors().accent)
+                    .text_color(theme::colors().brand_text)
+                    .text_size(tokens::typography::FONT_XS)
                     .child("L"),
             )
             .child(
@@ -80,5 +80,5 @@ fn panel_toggle_button(
     state: controls::PanelState,
 ) -> gpui::Stateful<gpui::Div> {
     header_button(id, controls::PanelToggleIcon::new(position, state))
-        .w(px(theme::HEADER_BUTTON_SIZE))
+        .w(tokens::size::HEADER_BUTTON)
 }

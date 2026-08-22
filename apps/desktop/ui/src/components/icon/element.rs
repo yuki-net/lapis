@@ -33,7 +33,7 @@ impl IntoElement for Icon {
         let icon = svg()
             .path(assets::path(self.name))
             .size_4()
-            .text_color(crate::theme::muted());
+            .text_color(crate::theme::colors().muted);
         if let Some(transformation) = self.transformation {
             icon.with_transformation(transformation)
         } else {

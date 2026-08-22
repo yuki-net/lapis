@@ -496,7 +496,7 @@ impl Element for SearchTextElement {
             input.query.clone().into()
         };
         let color = if input.query.is_empty() {
-            theme::subtle().into()
+            theme::colors().subtle.into()
         } else {
             style.color
         };
@@ -550,7 +550,7 @@ impl Element for SearchTextElement {
                         bounds.bottom(),
                     ),
                 ),
-                theme::search_selection(),
+                theme::colors().search_selection,
             )
         });
         let cursor = input.selected_range.is_empty().then(|| {
@@ -562,7 +562,7 @@ impl Element for SearchTextElement {
                     ),
                     size(px(1.0), bounds.size.height),
                 ),
-                theme::text(),
+                theme::colors().text,
             )
         });
         SearchTextPrepaint {
@@ -637,16 +637,16 @@ impl Render for QuickSearch {
                     .px_2()
                     .rounded(px(6.0))
                     .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::surface())
+                    .border_color(theme::colors().border)
+                    .bg(theme::colors().surface)
                     .flex()
                     .items_center()
                     .gap_2()
                     .cursor(CursorStyle::IBeam)
                     .text_size(px(13.0))
-                    .text_color(theme::text())
+                    .text_color(theme::colors().text)
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                    .child(div().text_color(theme::muted()).child("S"))
+                    .child(div().text_color(theme::colors().muted).child("S"))
                     .child(
                         div()
                             .min_w(px(0.0))
@@ -659,7 +659,7 @@ impl Render for QuickSearch {
                     .px_2()
                     .pb_1()
                     .text_size(px(10.0))
-                    .text_color(theme::subtle())
+                    .text_color(theme::colors().subtle)
                     .child(format!(
                         "{} commands ﾂｷ 竊鯛・ select ﾂｷ Enter run",
                         rows.len()
@@ -682,7 +682,7 @@ impl Render for QuickSearch {
                             div()
                                 .p_3()
                                 .text_size(px(12.0))
-                                .text_color(theme::subtle())
+                                .text_color(theme::colors().subtle)
                                 .child("No matching commands"),
                         )
                     })
@@ -694,11 +694,11 @@ impl Render for QuickSearch {
                             .py_2()
                             .rounded(px(6.0))
                             .bg(if index == self.selected_index {
-                                theme::surface_active()
+                                theme::colors().surface_active
                             } else {
-                                theme::island()
+                                theme::colors().island
                             })
-                            .hover(|style| style.bg(theme::surface_hover()))
+                            .hover(|style| style.bg(theme::colors().surface_hover))
                             .cursor_pointer()
                             .flex()
                             .items_center()
@@ -716,13 +716,13 @@ impl Render for QuickSearch {
                                     .child(
                                         div()
                                             .text_size(px(12.0))
-                                            .text_color(theme::text())
+                                            .text_color(theme::colors().text)
                                             .child(item.title),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(9.0))
-                                            .text_color(theme::subtle())
+                                            .text_color(theme::colors().subtle)
                                             .child(command_label),
                                     ),
                             )
@@ -730,7 +730,7 @@ impl Render for QuickSearch {
                                 row.child(
                                     div()
                                         .text_size(px(10.0))
-                                        .text_color(theme::muted())
+                                        .text_color(theme::colors().muted)
                                         .child(item.shortcut),
                                 )
                             })

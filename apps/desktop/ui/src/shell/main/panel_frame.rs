@@ -17,18 +17,18 @@ impl Editor {
     ) -> gpui::Div {
         let mut handle = div()
             .flex_shrink_0()
-            .hover(|style| style.bg(theme::accent_soft()))
+            .hover(|style| style.bg(theme::colors().accent_soft))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| this.start_resize(target, cx)),
             );
         if horizontal {
             handle = handle
-                .h(px(theme::CANVAS_GAP))
+                .h(tokens::spacing::GAP)
                 .cursor(CursorStyle::ResizeUpDown);
         } else {
             handle = handle
-                .w(px(theme::CANVAS_GAP))
+                .w(tokens::spacing::GAP)
                 .cursor(CursorStyle::ResizeLeftRight);
         }
         handle

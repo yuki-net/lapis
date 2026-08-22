@@ -4,7 +4,7 @@ impl Editor {
     pub(super) fn render_window_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .h_full()
-            .w(px(theme::WINDOW_CONTROL_WIDTH * 3.0))
+            .w(tokens::size::WINDOW_CONTROL_WIDTH * 3.0)
             .flex_shrink_0()
             .flex()
             .items_center()

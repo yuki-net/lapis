@@ -8,5 +8,6 @@ pub mod keymap;
 pub mod localization;
 mod shell;
 pub mod theme;
+pub mod tokens;
 
 pub use app::{DesktopServices, InitialView, run};

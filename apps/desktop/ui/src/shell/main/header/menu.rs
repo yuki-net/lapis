@@ -24,7 +24,7 @@ impl Editor {
                     menu_surface("header-menu-column")
                         .w(px(190.0))
                         .h(px(164.0))
-                        .p(theme::spacing(theme::Spacing::Xs))
+                        .p(tokens::spacing::XS)
                         .children(ROOT_MENUS.iter().map(|(menu, label)| {
                             self.render_header_menu_root(*menu, label, active == Some(*menu), cx)
                         })),
@@ -59,10 +59,10 @@ impl Editor {
             .items_center()
             .justify_between()
             .text_size(px(13.0))
-            .when(active, |item| item.bg(theme::accent_soft()))
-            .hover(|style| style.bg(theme::accent_soft()))
+            .when(active, |item| item.bg(theme::colors().accent_soft))
+            .hover(|style| style.bg(theme::colors().accent_soft))
             .child(localized_label)
-            .child(div().text_color(theme::muted()).child("›"))
+            .child(div().text_color(theme::colors().muted).child("›"))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.select_header_menu(menu, cx);
@@ -103,7 +103,7 @@ impl Editor {
             .left(px(184.0))
             .top(px(0.0))
             .w(px(250.0))
-            .p(theme::spacing(theme::Spacing::Xs))
+            .p(tokens::spacing::XS)
             .children(children)
     }
 

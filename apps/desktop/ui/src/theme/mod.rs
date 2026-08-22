@@ -1,24 +1,35 @@
 mod definition;
 mod registry;
-mod tokens;
 
-// 定義（外部から参照可能なもの）
-pub use definition::{
-    BOTTOM_PANEL_HEIGHT, BUTTON_HEIGHT_SM, BUTTON_HEIGHT_XS, CANVAS_GAP, HEADER_BUTTON_SIZE,
-    ISLAND_RADIUS, PANEL_SCROLLBAR_WIDTH, SCROLLBAR_WIDTH, SIDE_PANEL_WIDTH, TITLE_BAR_HEIGHT,
-    TOOL_ISLAND_WIDTH, ThemeColors, ThemeDefinition, WINDOW_CONTROL_WIDTH,
-    WINDOW_RESIZE_BORDER_HEIGHT,
-};
+// テーマ定義とレジストリ
+pub use definition::{ThemeColors, ThemeDefinition};
+pub use registry::{active_colors, active_id, available, name, register, set_active};
 
-// レジストリ操作
-pub use registry::{active_id, available, name, register, set_active};
+/// アクティブテーマのカラートークンを取得する。
+pub fn colors() -> ThemeColors {
+    active_colors()
+}
 
-// カラートークン
-pub use tokens::{
-    Radius, Spacing, accent, accent_soft, assistant_accent, border, brand_text, canvas,
-    close_hover, command_input_border, command_palette_border, diff_added, diff_changed,
-    diff_removed, editor_cursor, editor_search_match, editor_selection, focus_border, island,
-    muted, note, on_accent_text, orange, problem_error, radius, search_selection, spacing,
-    status_error, status_info, status_success, status_warning, subtle, surface, surface_active,
-    surface_hover, task_primary_border, task_primary_text, text, title_bar,
-};
+#[cfg(test)]
+mod tests {
+    use gpui::rgb;
+
+    use super::*;
+    use crate::extension_ui::ThemeId;
+
+    #[test]
+    fn registered_theme_can_be_activated_without_changing_token_callers() {
+        let original_id = active_id();
+        let original_colors = colors();
+
+        let alternate_id = ThemeId::new("test.tokens.alternate");
+        let mut alternate_colors = original_colors.clone();
+        alternate_colors.accent = rgb(0x123456);
+
+        let _ = register(ThemeDefinition::new(alternate_id.clone(), alternate_colors));
+        assert!(set_active(&alternate_id));
+        assert_eq!(colors().accent, rgb(0x123456));
+        assert!(set_active(&original_id));
+        assert_eq!(colors().accent, original_colors.accent);
+    }
+}

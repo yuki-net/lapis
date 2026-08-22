@@ -1,7 +1,5 @@
 use std::{cell::RefCell, collections::BTreeMap};
 
-use gpui::Rgba;
-
 use crate::extension_ui::ThemeId;
 
 use super::definition::{ThemeColors, ThemeDefinition};
@@ -84,6 +82,10 @@ pub fn set_active(theme: &ThemeId) -> bool {
 }
 
 /// アクティブテーマの ID を返す。
+pub fn active_colors() -> ThemeColors {
+    THEMES.with(|registry| registry.borrow().active_definition().colors.clone())
+}
+
 pub fn active_id() -> ThemeId {
     THEMES.with(|registry| registry.borrow().active.clone())
 }
@@ -107,11 +109,6 @@ pub fn name(theme: &ThemeId) -> Option<String> {
             .get(theme)
             .map(|definition| definition.name.clone())
     })
-}
-
-/// アクティブテーマの特定カラーを返す内部ヘルパー。
-pub(super) fn color(select: impl FnOnce(&ThemeColors) -> Rgba) -> Rgba {
-    THEMES.with(|registry| select(&registry.borrow().active_definition().colors))
 }
 
 #[cfg(test)]

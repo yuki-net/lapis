@@ -98,8 +98,8 @@ impl Element for EditorElement {
             .map(|position| position.line as usize)
             .unwrap_or(0)
             .min(line_count.saturating_sub(1));
-        let selection_color = theme::editor_selection();
-        let search_match_color = theme::editor_search_match();
+        let selection_color = theme::colors().editor_selection;
+        let search_match_color = theme::colors().editor_search_match;
 
         for line_index in first_line..last_line {
             let raw = editor.session.line(line_index).unwrap_or_default();
@@ -163,7 +163,7 @@ impl Element for EditorElement {
                         point(layout.origin.x + cursor_x, layout.origin.y),
                         size(px(2.0), line_height),
                     ),
-                    theme::editor_cursor(),
+                    theme::colors().editor_cursor,
                 )
             });
         EditorPrepaint {
