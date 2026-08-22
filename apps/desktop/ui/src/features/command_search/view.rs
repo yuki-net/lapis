@@ -183,6 +183,10 @@ impl QuickSearch {
         self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
     }
 
+    fn clamp_range(&self, range: Range<usize>) -> Range<usize> {
+        clamp_query_range(&self.query, range)
+    }
+
     fn backspace(&mut self, _: &SearchBackspace, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_range.is_empty() {
             let cursor = self.cursor_offset();
@@ -306,6 +310,19 @@ fn selected_command(matches: &[SearchItem], selected_index: usize) -> Option<Com
     matches.get(selected_index).map(|item| item.command.clone())
 }
 
+fn clamp_query_range(query: &str, range: Range<usize>) -> Range<usize> {
+    let len = query.len();
+    let mut start = range.start.min(len);
+    let mut end = range.end.min(len).max(start);
+    while start > 0 && !query.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < len && !query.is_char_boundary(end) {
+        end += 1;
+    }
+    start..end
+}
+
 impl EntityInputHandler for QuickSearch {
     fn text_for_range(
         &mut self,
@@ -348,11 +365,12 @@ impl EntityInputHandler for QuickSearch {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
+        let raw_range = range_utf16
             .as_ref()
             .map(|range| self.range_from_utf16(range))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
+        let range = self.clamp_range(raw_range);
         let new_text = new_text.replace(['\r', '\n'], " ");
         self.query.replace_range(range.clone(), &new_text);
         let cursor = range.start + new_text.len();
@@ -371,11 +389,12 @@ impl EntityInputHandler for QuickSearch {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
+        let raw_range = range_utf16
             .as_ref()
             .map(|range| self.range_from_utf16(range))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
+        let range = self.clamp_range(raw_range);
         let new_text = new_text.replace(['\r', '\n'], " ");
         self.query.replace_range(range.clone(), &new_text);
         self.marked_range =
@@ -791,6 +810,14 @@ mod tests {
         assert_eq!(next_selection(0, 3), Some(1));
         assert_eq!(previous_selection(0, 0), None);
         assert_eq!(next_selection(0, 0), None);
+    }
+
+    #[test]
+    fn clamp_range_handles_out_of_bounds_and_empty_query() {
+        assert_eq!(clamp_query_range("", 0..18), 0..0);
+        assert_eq!(clamp_query_range("", 10..20), 0..0);
+        assert_eq!(clamp_query_range("hello", 0..10), 0..5);
+        assert_eq!(clamp_query_range("hello", 2..4), 2..4);
     }
 
     #[test]

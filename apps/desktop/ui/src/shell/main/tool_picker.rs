@@ -33,7 +33,8 @@ impl Editor {
             .collect::<Vec<_>>();
 
         anchored()
-            .position(point(px(120.0), px(82.0)))
+            .position(self.shell.tool_picker_anchor)
+            .offset(point(px(-20.0), px(8.0)))
             .snap_to_window_with_margin(px(8.0))
             .child(
                 crate::components::floating_surface(
@@ -42,16 +43,36 @@ impl Editor {
                 )
                 .w(px(250.0))
                 .max_h(px(520.0))
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.close_tool_picker(cx);
+                }))
                 .overflow_y_scroll()
                 .p(theme::spacing(theme::Spacing::Sm))
                 .text_color(theme::text())
-                .child(div().px_2().py_1().text_color(theme::muted()).child(
-                    if self.shell.tool_picker_query.is_empty() {
-                        "Search".to_owned()
-                    } else {
-                        self.shell.tool_picker_query.clone()
-                    },
-                ))
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded(px(5.0))
+                        .border_1()
+                        .border_color(theme::command_input_border())
+                        .bg(theme::surface())
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(crate::components::Icon::new(
+                            crate::components::IconName::Search,
+                        ))
+                        .child(div().text_size(px(12.0)).child(
+                            if self.shell.tool_picker_query.is_empty() {
+                                div().text_color(theme::muted()).child("Search tools...")
+                            } else {
+                                div()
+                                    .text_color(theme::text())
+                                    .child(format!("{}|", self.shell.tool_picker_query))
+                            },
+                        )),
+                )
                 .child(div().h(px(1.0)).my_1().bg(theme::border()))
                 .children(tools.into_iter().map(|(view, title, icon)| {
                     div()
