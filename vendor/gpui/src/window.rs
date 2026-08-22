@@ -4709,9 +4709,16 @@ impl Window {
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     #[cfg(any(feature = "inspector", debug_assertions))]
+    #[cfg(any(feature = "inspector", debug_assertions))]
     fn paint_inspector_hitbox(&mut self, cx: &App) {
         if let Some(inspector) = self.inspector.as_ref() {
             let inspector = inspector.read(cx);
+            // Only show live color overlay on the target window while picking (hovering),
+            // and remove the overlay once an element is clicked/selected.
+            if !inspector.is_picking() {
+                return;
+            }
+
             let rem_size = self.rem_size();
             let mut highlighted_box_model = None;
 
@@ -4869,24 +4876,15 @@ impl Window {
                 // Content (Blue): #6fa8dc
                 self.paint_quad(crate::fill(content, crate::rgba(0x6fa8dc80)));
             } else {
-                let bounds = if inspector.is_picking() {
-                    self.hovered_inspector_hitbox(inspector, &self.next_frame)
-                        .and_then(|(hitbox_id, _)| {
-                            self.next_frame
-                                .hitboxes
-                                .iter()
-                                .find(|hitbox| hitbox.id == hitbox_id)
-                                .map(|hitbox| hitbox.bounds)
-                        })
-                } else {
-                    inspector.active_element_id().and_then(|active| {
+                let bounds = self
+                    .hovered_inspector_hitbox(inspector, &self.next_frame)
+                    .and_then(|(hitbox_id, _)| {
                         self.next_frame
-                            .inspector_elements
+                            .hitboxes
                             .iter()
-                            .find(|node| &node.id == active)
-                            .map(|node| node.bounds)
-                    })
-                };
+                            .find(|hitbox| hitbox.id == hitbox_id)
+                            .map(|hitbox| hitbox.bounds)
+                    });
                 if let Some(bounds) = bounds {
                     self.paint_quad(crate::fill(bounds, crate::rgba(0x61afef4d)));
                 }
