@@ -68,12 +68,29 @@ impl Editor {
         self.is_selecting = false;
     }
 
-    pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.session.choose_workspace() {
-            Ok(DocumentAction::Completed) => self.finish_workspace_open(window, cx),
-            Ok(DocumentAction::Cancelled) => {}
-            Err(error) => self.status = format!("読み込み失敗: {error}"),
-        }
+    pub(super) fn open_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let dialog = self.session.file_dialog();
+        self.status = "Workspaceを選択しています...".to_owned();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(1)).await;
+            let root = dialog.choose_workspace_path();
+            let _ = this.update(cx, |editor, cx| {
+                let Some(root) = root else {
+                    editor.status.clear();
+                    cx.notify();
+                    return;
+                };
+                match editor.session.open_workspace(root) {
+                    Ok(()) => editor.finish_workspace_open(cx),
+                    Err(error) => {
+                        editor.status = format!("Workspaceを開けませんでした: {error}");
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn open_recent_workspace(
@@ -83,15 +100,16 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         match self.session.open_workspace(root) {
-            Ok(()) => self.finish_workspace_open(window, cx),
+            Ok(()) => self.finish_workspace_open(cx),
             Err(error) => {
                 self.status = format!("Workspaceを開けませんでした: {error}");
                 cx.notify();
             }
         }
+        window.focus(&self.focus_handle);
     }
 
-    fn finish_workspace_open(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn finish_workspace_open(&mut self, cx: &mut Context<Self>) {
         if let Ok(Some(view)) = self
             .conversation
             .session
@@ -106,35 +124,46 @@ impl Editor {
         self.selected_range = 0..0;
         self.shell.synchronize_documents(&self.session.tabs());
         self.status = "Workspaceを開きました".to_owned();
-        window.focus(&self.focus_handle);
         self.refresh_feature_activation();
         cx.notify();
     }
 
-    pub(super) fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.session.choose_file() {
-            Ok(DocumentAction::Completed) => {
-                self.selected_range = 0..0;
-                self.shell.synchronize_documents(&self.session.tabs());
-                self.status = "ファイルを開きました".to_owned();
-                window.focus(&self.focus_handle);
-                self.refresh_feature_activation();
+    pub(super) fn open_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let dialog = self.session.file_dialog();
+        self.status = "ファイルを選択しています...".to_owned();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(1)).await;
+            let path = dialog.choose_file_path();
+            let _ = this.update(cx, |editor, cx| {
+                let Some(path) = path else {
+                    editor.status.clear();
+                    cx.notify();
+                    return;
+                };
+                match editor.session.open_path(path) {
+                    Ok(()) => {
+                        editor.restore_active_view();
+                        editor.shell.synchronize_documents(&editor.session.tabs());
+                        editor.status = "ファイルを開きました".to_owned();
+                        editor.refresh_feature_activation();
+                    }
+                    Err(error) => {
+                        editor.status = format!("ファイルを開けませんでした: {error}");
+                    }
+                }
                 cx.notify();
-            }
-            Ok(DocumentAction::Cancelled) => {}
-            Err(error) => {
-                self.status = format!("ファイルを開けませんでした: {error}");
-                cx.notify();
-            }
-        }
+            });
+        })
+        .detach();
     }
-
     pub(super) fn clone_from_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // TODO: Git URLと保存先を受け取り、clone後にWorkspaceとして開く。
         self.status = "Clone from Git は準備中です".to_owned();
         window.focus(&self.focus_handle);
         cx.notify();
     }
+
     pub(super) fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match self.session.save_document() {
             Ok(DocumentAction::Completed) => {
