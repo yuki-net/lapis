@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use rcgen::generate_simple_self_signed;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
@@ -12,6 +13,15 @@ pub struct Tls13ServerConfig(Arc<ServerConfig>);
 impl Tls13ServerConfig {
     pub(crate) fn into_inner(self) -> Arc<ServerConfig> {
         self.0
+    }
+
+    pub fn generate_self_signed(
+        subject_alt_names: impl Into<Vec<String>>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let certified_key = generate_simple_self_signed(subject_alt_names)?;
+        let cert_der = certified_key.cert.der().clone();
+        let key_der = PrivateKeyDer::Pkcs8(certified_key.signing_key.serialize_der().into());
+        Ok(tls13_server_config(vec![cert_der], key_der)?)
     }
 
     #[cfg(test)]

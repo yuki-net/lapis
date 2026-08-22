@@ -11,6 +11,7 @@ axum-server.workspace = true
 lapis-backend-state = { path = "../core/backend-state" }
 lapis-client-api = { path = "../core/client-api" }
 getrandom.workspace = true
+rcgen.workspace = true
 rustls.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -21,5 +22,4 @@ zeroize.workspace = true
 
 [dev-dependencies]
 lapis-document = { path = "../core/document" }
-rcgen.workspace = true
 tempfile.workspace = true

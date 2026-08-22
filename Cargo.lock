@@ -3080,9 +3080,12 @@ name = "lapis"
 version = "0.1.0"
 dependencies = [
  "lapis-app-services",
+ "lapis-backend-state",
+ "lapis-client-api",
  "lapis-desktop-ui",
  "lapis-persistence",
  "lapis-platform",
+ "lapis-remote",
  "lapis-settings",
  "lapis-task-runner",
 ]
