@@ -31,17 +31,21 @@ pub(crate) fn menu_item(spec: MenuItemSpec) -> Stateful<gpui::Div> {
         .gap(tokens::spacing::SM)
         .text_size(tokens::typography::FONT_SM)
         .text_color(if enabled {
-            theme::colors().text
+            theme::colors().text_primary
         } else {
-            theme::colors().subtle
+            theme::colors().text_tertiary
         })
         .when(enabled, |item| {
-            item.hover(|style| style.bg(theme::colors().surface_hover))
+            item.hover(|style| style.bg(theme::colors().button_background_hover))
         })
         .when_some(spec.icon, |item, icon| item.child(Icon::new(icon)))
         .child(spec.label)
         .child(div().flex_1())
         .when_some(spec.shortcut, |item, shortcut| {
-            item.child(div().text_color(theme::colors().muted).child(shortcut))
+            item.child(
+                div()
+                    .text_color(theme::colors().text_secondary)
+                    .child(shortcut),
+            )
         })
 }

@@ -42,9 +42,9 @@ impl Editor {
                 .flex()
                 .items_center()
                 .gap_2()
-                .bg(theme::colors().island)
+                .bg(theme::colors().background_secondary)
                 .text_size(px(12.0))
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .child(crate::components::Icon::new(
                     crate::components::IconName::Search,
                 ))
@@ -66,7 +66,7 @@ impl Editor {
                 .pt_1()
                 .px_2()
                 .text_size(px(10.0))
-                .text_color(theme::colors().subtle)
+                .text_color(theme::colors().text_tertiary)
                 .child("Esc で閉じる"),
         )
     }

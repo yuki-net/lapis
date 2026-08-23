@@ -185,12 +185,12 @@ pub(super) fn detail_row(label: impl Into<String>, value: impl Into<String>) -> 
         .gap_3()
         .py_1()
         .border_b_1()
-        .border_color(theme::colors().border)
+        .border_color(theme::colors().border_default)
         .child(
             div()
                 .w(px(132.0))
                 .flex_none()
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .child(label.into()),
         )
         .child(
@@ -198,7 +198,7 @@ pub(super) fn detail_row(label: impl Into<String>, value: impl Into<String>) -> 
                 .min_w(px(0.0))
                 .flex_1()
                 .font_family("Cascadia Mono")
-                .text_color(theme::colors().text)
+                .text_color(theme::colors().text_primary)
                 .child(value.into()),
         )
 }
@@ -220,7 +220,7 @@ fn section_title(title: &str) -> Div {
     div()
         .pt_2()
         .pb_1()
-        .text_color(theme::colors().accent)
+        .text_color(theme::colors().text_accent)
         .child(title.to_owned())
 }
 
@@ -236,9 +236,9 @@ fn render_json(json: String) -> Div {
                 .gap_0p5()
                 .p_2()
                 .rounded_md()
-                .bg(theme::colors().canvas)
+                .bg(theme::colors().background_primary)
                 .font_family("Cascadia Mono")
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .children(json.lines().map(|line| div().child(line.to_owned()))),
         )
 }

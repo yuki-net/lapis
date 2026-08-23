@@ -163,7 +163,7 @@ impl Element for EditorElement {
                         point(layout.origin.x + cursor_x, layout.origin.y),
                         size(px(2.0), line_height),
                     ),
-                    theme::colors().editor_cursor,
+                    theme::colors().editor_caret,
                 )
             });
         EditorPrepaint {

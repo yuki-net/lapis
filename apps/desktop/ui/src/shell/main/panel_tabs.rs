@@ -10,10 +10,10 @@ impl Render for PanelTabDragPreview {
             .px(tokens::spacing::XS)
             .py(px(2.0))
             .rounded(tokens::radius::MENU_ITEM)
-            .bg(theme::colors().surface)
+            .bg(theme::colors().background_tertiary)
             .border_1()
-            .border_color(theme::colors().border)
-            .text_color(theme::colors().text)
+            .border_color(theme::colors().border_default)
+            .text_color(theme::colors().text_primary)
             .text_size(tokens::typography::FONT_XS)
             .child(self.label.clone())
     }
@@ -76,20 +76,20 @@ impl Editor {
                 .flex()
                 .items_center()
                 .bg(if active {
-                    theme::colors().surface
+                    theme::colors().background_tertiary
                 } else {
-                    theme::colors().island
+                    theme::colors().background_secondary
                 })
                 .text_size(tokens::typography::FONT_XS)
                 .text_color(if active {
-                    theme::colors().text
+                    theme::colors().text_primary
                 } else {
-                    theme::colors().muted
+                    theme::colors().text_secondary
                 })
                 .hover(|style| {
                     style
-                        .bg(theme::colors().surface_hover)
-                        .text_color(theme::colors().text)
+                        .bg(theme::colors().button_background_hover)
+                        .text_color(theme::colors().text_primary)
                 })
                 .cursor(CursorStyle::OpenHand)
                 .on_drag(drag, |drag: &DraggedPanelTab, _, _, cx| {
@@ -129,8 +129,8 @@ impl Editor {
                         .cursor(CursorStyle::PointingHand)
                         .hover(|style| {
                             style
-                                .bg(theme::colors().surface_hover)
-                                .text_color(theme::colors().text)
+                                .bg(theme::colors().button_background_hover)
+                                .text_color(theme::colors().text_primary)
                         })
                         .on_mouse_down(
                             MouseButton::Left,
@@ -191,11 +191,11 @@ impl Editor {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_color(theme::colors().muted)
+                        .text_color(theme::colors().text_secondary)
                         .hover(|style| {
                             style
-                                .bg(theme::colors().surface_hover)
-                                .text_color(theme::colors().text)
+                                .bg(theme::colors().button_background_hover)
+                                .text_color(theme::colors().text_primary)
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.open_tool_picker(position, cx);

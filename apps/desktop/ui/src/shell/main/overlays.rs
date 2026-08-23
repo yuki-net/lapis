@@ -64,9 +64,11 @@ impl Editor {
                     .items_center()
                     .gap_2()
                     .text_size(px(12.0))
-                    .text_color(theme::colors().text)
-                    .hover(|style| style.bg(theme::colors().surface_hover))
-                    .when(selected, |item| item.bg(theme::colors().accent_soft))
+                    .text_color(theme::colors().text_primary)
+                    .hover(|style| style.bg(theme::colors().button_background_hover))
+                    .when(selected, |item| {
+                        item.bg(theme::colors().button_background_selected)
+                    })
                     .child(if selected { "✓" } else { "" })
                     .child(name)
                     .on_click(cx.listener(move |this, _, _, cx| {

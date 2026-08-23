@@ -24,7 +24,7 @@ impl Editor {
                 .flex()
                 .flex_row()
                 .items_center()
-                .bg(theme::colors().title_bar)
+                .bg(theme::colors().background_primary)
                 // Mac OS
                 .when(cfg!(target_os = "macos"), |this| {
                     this.child(div().w(px(80.0)).flex_shrink_0())

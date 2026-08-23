@@ -17,8 +17,8 @@ pub(super) fn render_inspector(
         .size_full()
         .flex()
         .flex_col()
-        .bg(theme::colors().island)
-        .text_color(theme::colors().text)
+        .bg(theme::colors().background_secondary)
+        .text_color(theme::colors().text_primary)
         .child(
             div()
                 .h(px(44.0))
@@ -28,7 +28,7 @@ pub(super) fn render_inspector(
                 .justify_between()
                 .px_3()
                 .border_b_1()
-                .border_color(theme::colors().border)
+                .border_color(theme::colors().border_default)
                 .child(
                     div()
                         .flex()
@@ -38,7 +38,7 @@ pub(super) fn render_inspector(
                         .child(
                             div()
                                 .text_size(px(10.0))
-                                .text_color(theme::colors().muted)
+                                .text_color(theme::colors().text_secondary)
                                 .child("auto update"),
                         ),
                 )
@@ -54,8 +54,8 @@ pub(super) fn render_inspector(
                                 .py_1()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(theme::colors().surface)
-                                .hover(|style| style.bg(theme::colors().surface_hover))
+                                .bg(theme::colors().background_tertiary)
+                                .hover(|style| style.bg(theme::colors().button_background_hover))
                                 .child("Refresh")
                                 .on_click(cx.listener(|_, _, _, cx| {
                                     cx.defer(InspectorController::refresh_target);
@@ -69,11 +69,11 @@ pub(super) fn render_inspector(
                                 .rounded_md()
                                 .cursor_pointer()
                                 .bg(if inspector.is_picking() {
-                                    theme::colors().accent_soft
+                                    theme::colors().button_background_selected
                                 } else {
-                                    theme::colors().surface
+                                    theme::colors().background_tertiary
                                 })
-                                .hover(|style| style.bg(theme::colors().surface_hover))
+                                .hover(|style| style.bg(theme::colors().button_background_hover))
                                 .child("Pick element")
                                 .on_click(cx.listener(|inspector, _, window, cx| {
                                     inspector.start_picking();
@@ -94,7 +94,7 @@ pub(super) fn render_inspector(
                         .w(px(310.0))
                         .flex_none()
                         .border_r_1()
-                        .border_color(theme::colors().border)
+                        .border_color(theme::colors().border_default)
                         .child(render_tree(inspector, cx)),
                 )
                 .child(

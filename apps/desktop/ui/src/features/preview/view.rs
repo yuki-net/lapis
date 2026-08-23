@@ -9,21 +9,21 @@ pub(crate) fn preview_lines(session: &EditorSession) -> Vec<gpui::Div> {
         .map(|line| {
             let line = line.trim_end_matches(['\r', '\n']);
             let (text, size, color) = if let Some(value) = line.strip_prefix("# ") {
-                (value.to_owned(), px(24.0), theme::colors().text)
+                (value.to_owned(), px(24.0), theme::colors().text_primary)
             } else if let Some(value) = line.strip_prefix("## ") {
-                (value.to_owned(), px(19.0), theme::colors().text)
+                (value.to_owned(), px(19.0), theme::colors().text_primary)
             } else if let Some(value) = line.strip_prefix("### ") {
-                (value.to_owned(), px(16.0), theme::colors().text)
+                (value.to_owned(), px(16.0), theme::colors().text_primary)
             } else if let Some(value) = line.strip_prefix("- ") {
-                (format!("• {value}"), px(13.0), theme::colors().muted)
-            } else if let Some(value) = line.strip_prefix("> ") {
                 (
-                    format!("│ {value}"),
+                    format!("• {value}"),
                     px(13.0),
-                    theme::colors().assistant_accent,
+                    theme::colors().text_secondary,
                 )
+            } else if let Some(value) = line.strip_prefix("> ") {
+                (format!("│ {value}"), px(13.0), theme::colors().text_accent)
             } else {
-                (line.to_owned(), px(13.0), theme::colors().muted)
+                (line.to_owned(), px(13.0), theme::colors().text_secondary)
             };
             div()
                 .min_h(px(22.0))

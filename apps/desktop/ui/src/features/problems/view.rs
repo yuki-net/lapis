@@ -19,7 +19,7 @@ pub(crate) fn render_content(problems: &ProblemsFeature) -> gpui::Div {
         content = content.child(
             div()
                 .text_size(px(11.0))
-                .text_color(theme::colors().problem_error)
+                .text_color(theme::colors().danger_text)
                 .child(error.to_owned()),
         );
     }
@@ -27,7 +27,7 @@ pub(crate) fn render_content(problems: &ProblemsFeature) -> gpui::Div {
         content = content.child(
             div()
                 .text_size(px(11.0))
-                .text_color(theme::colors().text)
+                .text_color(theme::colors().text_primary)
                 .child(format!(
                     "{}:{}:{}  {}",
                     diagnostic.path.display(),
@@ -53,6 +53,6 @@ pub(crate) fn render_output(status: &str) -> gpui::Div {
         .min_h(px(0.0))
         .p_3()
         .text_size(px(11.0))
-        .text_color(theme::colors().muted)
+        .text_color(theme::colors().text_secondary)
         .child(status.to_owned())
 }

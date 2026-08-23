@@ -17,7 +17,7 @@ impl Editor {
     ) -> gpui::Div {
         let mut handle = div()
             .flex_shrink_0()
-            .hover(|style| style.bg(theme::colors().accent_soft))
+            .hover(|style| style.bg(theme::colors().button_background_selected))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| this.start_resize(target, cx)),

@@ -15,8 +15,8 @@ impl Editor {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(theme::colors().accent)
-                    .text_color(theme::colors().brand_text)
+                    .bg(theme::colors().text_accent)
+                    .text_color(theme::colors().text_primary)
                     .text_size(tokens::typography::FONT_XS)
                     .child("L"),
             )

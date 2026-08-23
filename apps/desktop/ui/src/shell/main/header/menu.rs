@@ -59,10 +59,12 @@ impl Editor {
             .items_center()
             .justify_between()
             .text_size(px(13.0))
-            .when(active, |item| item.bg(theme::colors().accent_soft))
-            .hover(|style| style.bg(theme::colors().accent_soft))
+            .when(active, |item| {
+                item.bg(theme::colors().button_background_selected)
+            })
+            .hover(|style| style.bg(theme::colors().button_background_selected))
             .child(localized_label)
-            .child(div().text_color(theme::colors().muted).child("›"))
+            .child(div().text_color(theme::colors().text_secondary).child("›"))
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.select_header_menu(menu, cx);

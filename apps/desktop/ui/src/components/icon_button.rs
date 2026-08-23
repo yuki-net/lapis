@@ -30,7 +30,7 @@ pub(crate) fn button(
         .items_center()
         .justify_center()
         .occlude()
-        .text_color(theme::colors().muted)
+        .text_color(theme::colors().text_secondary)
         .child(content)
 }
 

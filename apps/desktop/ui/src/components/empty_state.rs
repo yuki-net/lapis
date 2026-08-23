@@ -24,27 +24,27 @@ pub(crate) fn tool_empty_state(
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme::colors().surface)
+                .bg(theme::colors().background_tertiary)
                 .text_size(tokens::typography::FONT_LG)
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .child(icon),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_SM)
-                .text_color(theme::colors().text)
+                .text_color(theme::colors().text_primary)
                 .child(title),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .child(message),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().subtle)
+                .text_color(theme::colors().text_tertiary)
                 .child(detail),
         )
 }
@@ -69,19 +69,19 @@ pub(crate) fn panel_empty_state(
         .child(
             div()
                 .text_size(tokens::typography::FONT_XL)
-                .text_color(theme::colors().subtle)
+                .text_color(theme::colors().text_tertiary)
                 .child(icon),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .child(message),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().subtle)
+                .text_color(theme::colors().text_tertiary)
                 .child(detail),
         )
 }
@@ -106,13 +106,13 @@ pub(crate) fn panel_empty_state_element(
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().muted)
+                .text_color(theme::colors().text_secondary)
                 .child(message),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().subtle)
+                .text_color(theme::colors().text_tertiary)
                 .child(detail),
         )
 }

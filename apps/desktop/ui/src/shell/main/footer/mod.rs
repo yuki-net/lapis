@@ -13,7 +13,7 @@ impl Editor {
             .overflow_hidden();
         for (index, part) in self.footer_path_parts().iter().enumerate() {
             if index > 0 {
-                path = path.child(div().text_color(theme::colors().muted).child("/"));
+                path = path.child(div().text_color(theme::colors().text_secondary).child("/"));
             }
             path = path.child(
                 button(("footer-path", index), part.clone(), ButtonSize::Xs)

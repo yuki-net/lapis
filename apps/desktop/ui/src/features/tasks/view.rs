@@ -21,11 +21,11 @@ impl Editor {
                     .p_2()
                     .rounded(px(6.0))
                     .bg(if selected {
-                        theme::colors().accent_soft
+                        theme::colors().button_background_selected
                     } else {
-                        theme::colors().surface
+                        theme::colors().background_tertiary
                     })
-                    .hover(|style| style.bg(theme::colors().surface_hover))
+                    .hover(|style| style.bg(theme::colors().button_background_hover))
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -35,7 +35,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(theme::colors().text)
+                            .text_color(theme::colors().text_primary)
                             .child(truncate_chars(&record.task.title, 42)),
                     )
                     .child(
@@ -110,9 +110,9 @@ impl Editor {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::colors().surface)
+                        .bg(theme::colors().background_tertiary)
                         .text_size(px(10.0))
-                        .text_color(theme::colors().muted)
+                        .text_color(theme::colors().text_secondary)
                         .child(text),
                 );
             }
@@ -153,7 +153,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme::colors().subtle)
+                            .text_color(theme::colors().text_tertiary)
                             .child("CODEX TASKS"),
                     )
                     .child(div().flex_1())

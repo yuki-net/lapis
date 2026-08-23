@@ -15,10 +15,10 @@ impl Editor {
                     .rounded(px(5.0))
                     .flex()
                     .items_center()
-                    .bg(theme::colors().accent_soft)
+                    .bg(theme::colors().button_background_selected)
                     .text_size(px(13.0))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme::colors().text)
+                    .text_color(theme::colors().text_primary)
                     .child(workspace_name),
             );
 
@@ -60,13 +60,13 @@ impl Editor {
                 .items_center()
                 .gap_2()
                 .text_size(px(12.0))
-                .text_color(theme::colors().text)
-                .hover(|style| style.bg(theme::colors().surface_hover))
+                .text_color(theme::colors().text_primary)
+                .hover(|style| style.bg(theme::colors().button_background_hover))
                 .child(
                     div()
                         .w(px(14.0))
                         .flex_shrink_0()
-                        .text_color(theme::colors().muted)
+                        .text_color(theme::colors().text_secondary)
                         .child(if is_file || !has_children {
                             ""
                         } else if is_expanded {

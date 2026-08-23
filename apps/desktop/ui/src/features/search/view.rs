@@ -15,7 +15,7 @@ impl Editor {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::colors().surface)
+                        .bg(theme::colors().background_tertiary)
                         .text_size(px(12.0))
                         .child(self.search.workspace.query().to_owned()),
                 )
@@ -23,7 +23,7 @@ impl Editor {
                     div()
                         .py_1()
                         .text_size(px(10.0))
-                        .text_color(theme::colors().subtle)
+                        .text_color(theme::colors().text_tertiary)
                         .child(if self.search.workspace.is_running() {
                             "SEARCHING WORKSPACE…".to_owned()
                         } else {
@@ -43,7 +43,7 @@ impl Editor {
                         .rounded(px(5.0))
                         .flex()
                         .flex_col()
-                        .hover(|style| style.bg(theme::colors().surface_hover))
+                        .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             let Some(root) = this.session.workspace_root().map(ToOwned::to_owned)
                             else {
@@ -61,7 +61,7 @@ impl Editor {
                         .child(
                             div()
                                 .text_size(px(10.0))
-                                .text_color(theme::colors().subtle)
+                                .text_color(theme::colors().text_tertiary)
                                 .child(format!(
                                     "{}:{}:{}",
                                     hit.path.display(),
@@ -72,7 +72,7 @@ impl Editor {
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(theme::colors().muted)
+                                .text_color(theme::colors().text_secondary)
                                 .child(hit.preview),
                         ),
                 );
@@ -98,7 +98,7 @@ impl Editor {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::colors().surface)
+                        .bg(theme::colors().background_tertiary)
                         .text_size(px(12.0))
                         .child(self.search.query.clone()),
                 )
@@ -106,7 +106,7 @@ impl Editor {
                     div()
                         .py_1()
                         .text_size(px(10.0))
-                        .text_color(theme::colors().subtle)
+                        .text_color(theme::colors().text_tertiary)
                         .child(format!("{} MATCHES · F3 NEXT", self.search.matches.len())),
                 );
             for (index, range) in self.search.matches.iter().cloned().enumerate() {
@@ -120,13 +120,13 @@ impl Editor {
                         .flex()
                         .items_center()
                         .text_size(px(11.0))
-                        .text_color(theme::colors().muted)
+                        .text_color(theme::colors().text_secondary)
                         .bg(if index == self.search.current_match {
-                            theme::colors().accent_soft
+                            theme::colors().button_background_selected
                         } else {
-                            theme::colors().island
+                            theme::colors().background_secondary
                         })
-                        .hover(|style| style.bg(theme::colors().surface_hover))
+                        .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.search.current_match = index;
                             this.selected_range = range.clone();

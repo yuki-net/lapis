@@ -24,12 +24,12 @@ mod tests {
 
         let alternate_id = ThemeId::new("test.tokens.alternate");
         let mut alternate_colors = original_colors.clone();
-        alternate_colors.accent = rgb(0x123456);
+        alternate_colors.text_accent = rgb(0x123456);
 
         let _ = register(ThemeDefinition::new(alternate_id.clone(), alternate_colors));
         assert!(set_active(&alternate_id));
-        assert_eq!(colors().accent, rgb(0x123456));
+        assert_eq!(colors().text_accent, rgb(0x123456));
         assert!(set_active(&original_id));
-        assert_eq!(colors().accent, original_colors.accent);
+        assert_eq!(colors().text_accent, original_colors.text_accent);
     }
 }
