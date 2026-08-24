@@ -62,6 +62,15 @@ impl PanelHost {
     }
 
     pub fn request_open(&mut self, open: bool, now: Instant) -> Option<(u64, Duration)> {
+        self.request_open_with_duration(open, PANEL_ANIMATION_DURATION, now)
+    }
+
+    pub fn request_open_with_duration(
+        &mut self,
+        open: bool,
+        duration: Duration,
+        now: Instant,
+    ) -> Option<(u64, Duration)> {
         if self.position == PanelPosition::Main {
             self.set_open_immediate(true);
             return None;
@@ -84,13 +93,14 @@ impl PanelHost {
         self.open = open;
         self.next_generation = self.next_generation.wrapping_add(1);
         let generation = self.next_generation;
-        self.transition = Some(PanelTransition {
+        self.transition = Some(PanelTransition::new(
             from,
-            to: if open { self.size } else { 0.0 },
-            started_at: now,
+            if open { self.size } else { 0.0 },
+            now,
+            duration,
             generation,
-        });
-        Some((generation, PANEL_ANIMATION_DURATION))
+        ));
+        Some((generation, duration))
     }
 
     pub fn complete_transition(

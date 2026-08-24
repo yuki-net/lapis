@@ -1,5 +1,5 @@
 mod panel;
-mod panel_transition;
+pub(crate) mod panel_transition;
 mod state;
 mod tab_state;
 

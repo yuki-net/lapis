@@ -125,14 +125,30 @@ impl Editor {
         true
     }
 
-    fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
-        let transition = self
-            .shell
-            .panel_mut(position)
-            .request_open(open, std::time::Instant::now());
+    pub(crate) fn request_panel_open_with_duration(
+        &mut self,
+        position: PanelPosition,
+        open: bool,
+        duration: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        let transition = self.shell.panel_mut(position).request_open_with_duration(
+            open,
+            duration,
+            std::time::Instant::now(),
+        );
         if let Some((generation, duration)) = transition {
             self.schedule_panel_transition(position, generation, duration, cx);
         }
+    }
+
+    fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
+        self.request_panel_open_with_duration(
+            position,
+            open,
+            crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
+            cx,
+        );
     }
 
     fn schedule_panel_transition(
