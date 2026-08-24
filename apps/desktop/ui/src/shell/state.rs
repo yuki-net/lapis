@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use lapis_app_services::DocumentTab;
 
 use crate::{
@@ -8,6 +10,92 @@ use crate::{
 
 use super::{panel::PanelHost, tab_state::PanelTab};
 
+const PANEL_SPAN_ANIMATION_DURATION: Duration = Duration::from_millis(160);
+
+#[derive(Clone, Debug)]
+pub(crate) struct PanelSpanTransition {
+    from: f32,
+    to: f32,
+    started_at: Instant,
+}
+
+impl PanelSpanTransition {
+    pub(crate) fn new(from: f32, to: f32, started_at: Instant) -> Self {
+        Self {
+            from,
+            to,
+            started_at,
+        }
+    }
+
+    fn progress(&self, now: Instant) -> f32 {
+        (now.duration_since(self.started_at).as_secs_f32()
+            / PANEL_SPAN_ANIMATION_DURATION.as_secs_f32())
+        .min(1.0)
+    }
+
+    fn ease(progress: f32) -> f32 {
+        1.0 - (1.0 - progress).powi(3)
+    }
+
+    pub(crate) fn value(&self, now: Instant) -> f32 {
+        let eased = Self::ease(self.progress(now));
+        self.from + (self.to - self.from) * eased
+    }
+
+    pub(crate) fn spans_layout(&self, now: Instant) -> bool {
+        let progress = self.progress(now);
+        if progress >= 1.0 {
+            return self.to >= 0.5;
+        }
+        if self.to > self.from {
+            progress >= 0.5
+        } else {
+            progress < 0.5
+        }
+    }
+
+    pub(crate) fn bottom_extent(&self, now: Instant) -> f32 {
+        let progress = self.progress(now);
+        if progress >= 1.0 {
+            return self.to;
+        }
+        if self.to > self.from {
+            if progress < 0.5 {
+                0.0
+            } else {
+                Self::ease((progress - 0.5) * 2.0)
+            }
+        } else if progress < 0.5 {
+            1.0 - Self::ease(progress * 2.0)
+        } else {
+            0.0
+        }
+    }
+
+    pub(crate) fn side_shortening(&self, now: Instant) -> f32 {
+        let progress = self.progress(now);
+        if progress >= 1.0 {
+            return self.to;
+        }
+        if self.to > self.from {
+            if progress < 0.5 {
+                Self::ease(progress * 2.0)
+            } else {
+                1.0
+            }
+        } else if progress < 0.5 {
+            1.0
+        } else {
+            1.0 - Self::ease((progress - 0.5) * 2.0)
+        }
+    }
+
+    pub(crate) fn is_active(&self, now: Instant) -> bool {
+        self.progress(now) < 1.0
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HeaderMenuSection {
     File,
@@ -15,6 +103,15 @@ pub(crate) enum HeaderMenuSection {
     View,
     Window,
     Help,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ResizeMode {
+    PanelWidth,
+    BottomSpan,
+    BottomHeight,
+    RestoreLeft,
+    RestoreRight,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +128,10 @@ pub(crate) struct ShellState {
     pub left_panel: PanelHost,
     pub bottom_panel: PanelHost,
     pub right_panel: PanelHost,
+    pub bottom_span_left: bool,
+    pub bottom_span_right: bool,
+    pub bottom_span_left_transition: Option<PanelSpanTransition>,
+    pub bottom_span_right_transition: Option<PanelSpanTransition>,
     pub command_palette_open: bool,
     pub tool_picker: Option<PanelPosition>,
     pub tool_picker_anchor: gpui::Point<gpui::Pixels>,
@@ -44,6 +145,8 @@ pub(crate) struct ShellState {
     pub theme_save_in_flight: bool,
     pub theme_before_save: Option<ThemeId>,
     pub resizing: Option<ResizeTarget>,
+    pub resize_start_pos: Option<gpui::Point<gpui::Pixels>>,
+    pub resize_mode: Option<ResizeMode>,
 }
 
 impl Default for ShellState {
@@ -69,6 +172,10 @@ impl Default for ShellState {
                 false,
                 f32::from(tokens::size::SIDE_PANEL_WIDTH),
             ),
+            bottom_span_left: false,
+            bottom_span_right: false,
+            bottom_span_left_transition: None,
+            bottom_span_right_transition: None,
             command_palette_open: false,
             tool_picker: None,
             tool_picker_anchor: gpui::point(gpui::px(120.0), gpui::px(82.0)),
@@ -82,11 +189,78 @@ impl Default for ShellState {
             theme_save_in_flight: false,
             theme_before_save: None,
             resizing: None,
+            resize_start_pos: None,
+            resize_mode: None,
         }
     }
 }
 
 impl ShellState {
+    pub(crate) fn bottom_span_left_value(&self, now: Instant) -> f32 {
+        self.bottom_span_left_transition
+            .as_ref()
+            .map(|transition| transition.value(now))
+            .unwrap_or(if self.bottom_span_left { 1.0 } else { 0.0 })
+    }
+
+    pub(crate) fn bottom_span_right_value(&self, now: Instant) -> f32 {
+        self.bottom_span_right_transition
+            .as_ref()
+            .map(|transition| transition.value(now))
+            .unwrap_or(if self.bottom_span_right { 1.0 } else { 0.0 })
+    }
+
+    pub(crate) fn bottom_spans_left_layout(&self, now: Instant) -> bool {
+        self.bottom_span_left_transition
+            .as_ref()
+            .map(|transition| transition.spans_layout(now))
+            .unwrap_or(self.bottom_span_left)
+    }
+
+    pub(crate) fn bottom_spans_right_layout(&self, now: Instant) -> bool {
+        self.bottom_span_right_transition
+            .as_ref()
+            .map(|transition| transition.spans_layout(now))
+            .unwrap_or(self.bottom_span_right)
+    }
+
+    pub(crate) fn bottom_left_extent(&self, now: Instant) -> f32 {
+        self.bottom_span_left_transition
+            .as_ref()
+            .map(|transition| transition.bottom_extent(now))
+            .unwrap_or(if self.bottom_span_left { 1.0 } else { 0.0 })
+    }
+
+    pub(crate) fn bottom_right_extent(&self, now: Instant) -> f32 {
+        self.bottom_span_right_transition
+            .as_ref()
+            .map(|transition| transition.bottom_extent(now))
+            .unwrap_or(if self.bottom_span_right { 1.0 } else { 0.0 })
+    }
+
+    pub(crate) fn left_side_shortening(&self, now: Instant) -> f32 {
+        self.bottom_span_left_transition
+            .as_ref()
+            .map(|transition| transition.side_shortening(now))
+            .unwrap_or(if self.bottom_span_left { 1.0 } else { 0.0 })
+    }
+
+    pub(crate) fn right_side_shortening(&self, now: Instant) -> f32 {
+        self.bottom_span_right_transition
+            .as_ref()
+            .map(|transition| transition.side_shortening(now))
+            .unwrap_or(if self.bottom_span_right { 1.0 } else { 0.0 })
+    }
+
+    pub(crate) fn bottom_span_is_animating(&self, now: Instant) -> bool {
+        self.bottom_span_left_transition
+            .as_ref()
+            .is_some_and(|transition| transition.is_active(now))
+            || self
+                .bottom_span_right_transition
+                .as_ref()
+                .is_some_and(|transition| transition.is_active(now))
+    }
     pub fn panel(&self, position: PanelPosition) -> &PanelHost {
         match position {
             PanelPosition::Main => &self.main_panel,
@@ -203,6 +377,56 @@ mod tests {
             state.left_panel.active_tool().map(ViewId::as_str),
             Some(id::VIEW_FILES)
         );
+    }
+
+    #[test]
+    fn left_and_right_span_transitions_are_independent() {
+        let start = Instant::now();
+        let left_state = ShellState {
+            bottom_span_left: true,
+            bottom_span_left_transition: Some(PanelSpanTransition::new(0.0, 1.0, start)),
+            ..ShellState::default()
+        };
+
+        assert!(left_state.bottom_span_left_value(start + Duration::from_millis(45)) > 0.0);
+        assert_eq!(left_state.bottom_span_right_value(start), 0.0);
+
+        let both_state = ShellState {
+            bottom_span_left: true,
+            bottom_span_right: true,
+            bottom_span_left_transition: Some(PanelSpanTransition::new(0.0, 1.0, start)),
+            bottom_span_right_transition: Some(PanelSpanTransition::new(0.0, 1.0, start)),
+            ..ShellState::default()
+        };
+
+        assert!(both_state.bottom_span_right_value(start + Duration::from_millis(45)) > 0.0);
+        assert!(both_state.bottom_span_is_animating(start));
+    }
+    #[test]
+    fn span_transition_runs_side_and_bottom_in_sequence() {
+        let start = Instant::now();
+        let opening = PanelSpanTransition::new(0.0, 1.0, start);
+
+        let opening_side_phase = start + Duration::from_millis(40);
+        assert!(!opening.spans_layout(opening_side_phase));
+        assert!(opening.side_shortening(opening_side_phase) > 0.0);
+        assert_eq!(opening.bottom_extent(opening_side_phase), 0.0);
+
+        let opening_bottom_phase = start + Duration::from_millis(120);
+        assert!(opening.spans_layout(opening_bottom_phase));
+        assert_eq!(opening.side_shortening(opening_bottom_phase), 1.0);
+        assert!(opening.bottom_extent(opening_bottom_phase) > 0.0);
+
+        let closing = PanelSpanTransition::new(1.0, 0.0, start);
+        let closing_bottom_phase = start + Duration::from_millis(40);
+        assert!(closing.spans_layout(closing_bottom_phase));
+        assert_eq!(closing.side_shortening(closing_bottom_phase), 1.0);
+        assert!(closing.bottom_extent(closing_bottom_phase) < 1.0);
+
+        let closing_side_phase = start + Duration::from_millis(120);
+        assert!(!closing.spans_layout(closing_side_phase));
+        assert_eq!(closing.bottom_extent(closing_side_phase), 0.0);
+        assert!(closing.side_shortening(closing_side_phase) < 1.0);
     }
 
     #[test]

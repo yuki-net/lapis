@@ -33,6 +33,7 @@ pub mod size {
     use super::*;
 
     pub const TITLE_BAR_HEIGHT: Pixels = px(40.0);
+    pub const STATUS_BAR_HEIGHT: Pixels = px(31.0);
     pub const HEADER_BUTTON: Pixels = px(28.0);
     pub const BUTTON_XS: Pixels = px(22.0);
     pub const BUTTON_SM: Pixels = px(25.0);

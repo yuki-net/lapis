@@ -32,7 +32,7 @@ impl Editor {
             .child(self.footer_button("footer-encoding", self.footer_encoding()));
 
         div()
-            .h(px(31.0))
+            .h(tokens::size::STATUS_BAR_HEIGHT)
             .w_full()
             .flex_shrink_0()
             .px(tokens::spacing::GAP)

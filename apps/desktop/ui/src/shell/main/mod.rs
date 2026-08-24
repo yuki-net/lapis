@@ -2,7 +2,7 @@ use super::*;
 pub(crate) use crate::tokens;
 use crate::{
     extension_ui::PanelPosition,
-    shell::{DraggedPanelTab, PanelHost, PanelTab, ResizeTarget},
+    shell::{DraggedPanelTab, PanelHost, PanelSpanTransition, PanelTab, ResizeMode, ResizeTarget},
 };
 
 mod actions;

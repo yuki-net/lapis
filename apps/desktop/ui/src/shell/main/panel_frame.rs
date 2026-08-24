@@ -20,15 +20,19 @@ impl Editor {
             .hover(|style| style.bg(theme::colors().button_background_selected))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| this.start_resize(target, cx)),
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.start_resize(target, event.position, window.viewport_size(), cx);
+                }),
             );
         if horizontal {
             handle = handle
                 .h(tokens::spacing::GAP)
+                .w_full()
                 .cursor(CursorStyle::ResizeUpDown);
         } else {
             handle = handle
                 .w(tokens::spacing::GAP)
+                .h_full()
                 .cursor(CursorStyle::ResizeLeftRight);
         }
         handle
