@@ -44,6 +44,8 @@ pub mod size {
     pub const TOOL_ISLAND_WIDTH: Pixels = px(260.0);
     pub const SIDE_PANEL_WIDTH: Pixels = px(310.0);
     pub const BOTTOM_PANEL_HEIGHT: Pixels = px(196.0);
+    pub const PANEL_MIN_WIDTH: Pixels = px(200.0);
+    pub const PANEL_MIN_HEIGHT: Pixels = px(150.0);
 }
 
 pub mod typography {

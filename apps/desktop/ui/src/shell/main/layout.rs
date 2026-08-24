@@ -30,7 +30,9 @@ impl Editor {
         } else {
             0.0
         };
-        let center_width = (viewport_width - gap_f32 * 2.0 - left_width - right_width).max(320.0);
+        let min_center_width = f32::from(tokens::size::PANEL_MIN_WIDTH);
+        let center_width =
+            (viewport_width - gap_f32 * 2.0 - left_width - right_width).max(min_center_width);
 
         div()
             .h(px(0.0))

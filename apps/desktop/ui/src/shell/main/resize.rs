@@ -34,21 +34,38 @@ impl Editor {
         };
 
         let viewport = window.viewport_size();
+        let gap = f32::from(tokens::spacing::GAP);
+        let min_w = f32::from(tokens::size::PANEL_MIN_WIDTH);
+        let min_h = f32::from(tokens::size::PANEL_MIN_HEIGHT);
+        let now = std::time::Instant::now();
+
         match target {
             ResizeTarget::Left => {
-                self.shell.left_panel.size = (f32::from(event.position.x)
-                    - f32::from(tokens::spacing::GAP))
-                .clamp(190.0, 380.0);
+                let right_w = if self.shell.right_panel.is_visible(now) {
+                    self.shell.right_panel.effective_size(now) + gap
+                } else {
+                    0.0
+                };
+                let max_left = (f32::from(viewport.width) - gap * 2.0 - right_w - min_w).max(min_w);
+                self.shell.left_panel.size =
+                    (f32::from(event.position.x) - gap).clamp(min_w, max_left);
             }
             ResizeTarget::Right => {
-                self.shell.right_panel.size = (f32::from(viewport.width - event.position.x)
-                    - f32::from(tokens::spacing::GAP))
-                .clamp(260.0, 480.0);
+                let left_w = if self.shell.left_panel.is_visible(now) {
+                    self.shell.left_panel.effective_size(now) + gap
+                } else {
+                    0.0
+                };
+                let max_right = (f32::from(viewport.width) - gap * 2.0 - left_w - min_w).max(min_w);
+                self.shell.right_panel.size =
+                    (f32::from(viewport.width - event.position.x) - gap).clamp(min_w, max_right);
             }
             ResizeTarget::Bottom => {
-                self.shell.bottom_panel.size = (f32::from(viewport.height - event.position.y)
-                    - f32::from(tokens::spacing::GAP))
-                .clamp(140.0, 360.0);
+                let header_h = f32::from(tokens::size::TITLE_BAR_HEIGHT) + gap;
+                let max_bottom =
+                    (f32::from(viewport.height) - header_h - min_h - gap * 2.0).max(min_h);
+                self.shell.bottom_panel.size =
+                    (f32::from(viewport.height - event.position.y) - gap).clamp(min_h, max_bottom);
             }
         }
         cx.notify();
