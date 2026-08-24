@@ -56,6 +56,7 @@ impl Editor {
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
+        self.shell.focused_panel = position;
         self.activate_panel_view(position, view, cx);
         self.refresh_feature_activation();
         cx.notify();
@@ -295,6 +296,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.request_panel_open(position, true, cx);
+        self.shell.focused_panel = position;
         self.shell.panel_mut(position).activate_without_open(tab);
         self.refresh_feature_activation();
         cx.notify();
@@ -332,6 +334,7 @@ impl Editor {
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
+        self.shell.focused_panel = position;
         self.activate_panel_view(position, view, cx);
         self.shell.tool_picker = None;
         self.shell.set_tool_picker_query(String::new());

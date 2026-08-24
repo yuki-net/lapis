@@ -3,13 +3,7 @@ use super::*;
 impl Editor {
     pub(super) fn render_assistant_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let records = self.tasks.session.records();
-        let mut task_list = div()
-            .id("task-list")
-            .flex()
-            .flex_col()
-            .gap_1()
-            .max_h(px(170.0))
-            .scrollable(ScrollAxis::Vertical);
+        let mut task_list = div().id("task-list").flex().flex_col().gap_1();
         for (task_index, record) in records.iter().take(12).enumerate() {
             let execution_id = record.execution.id.clone();
             let selected = self.tasks.selected_execution.as_ref() == Some(&execution_id);
@@ -51,6 +45,14 @@ impl Editor {
                     ),
             );
         }
+
+        let task_list = scroll_viewport(
+            "task-list-scroll",
+            ScrollAxis::Vertical,
+            &self.scroll_states.task_list,
+            task_list,
+        )
+        .max_h(px(170.0));
 
         let selected = self
             .tasks
@@ -98,7 +100,6 @@ impl Editor {
                 .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .scrollable(ScrollAxis::Vertical)
                 .gap_1();
             let start = record.events.len().saturating_sub(80);
             for event in &record.events[start..] {
@@ -130,7 +131,16 @@ impl Editor {
                         .child(div().flex_1())
                         .child(actions),
                 )
-                .child(events);
+                .child(
+                    scroll_viewport(
+                        "task-events-scroll",
+                        ScrollAxis::Vertical,
+                        &self.scroll_states.task_events,
+                        events,
+                    )
+                    .flex_1()
+                    .min_h(px(0.0)),
+                );
         } else {
             detail = detail.child(panel_empty_state(
                 "✦",

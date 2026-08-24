@@ -11,7 +11,7 @@ use gpui::{
 };
 
 use crate::{
-    components::{ScrollAxis, ScrollableElement},
+    components::{ScrollAxis, ScrollState, scroll_viewport},
     extension_ui::CommandId,
     features::command_search::provider::{CommandSearchProvider, SearchItem, SearchProvider},
     theme,
@@ -95,6 +95,7 @@ pub(crate) struct QuickSearch {
     matches: Vec<SearchItem>,
     selected_index: usize,
     on_event: Box<QuickSearchEventHandler>,
+    results_scroll: ScrollState,
 }
 
 impl QuickSearch {
@@ -114,6 +115,7 @@ impl QuickSearch {
             matches: Vec::new(),
             selected_index: 0,
             on_event: Box::new(on_event),
+            results_scroll: ScrollState::new(),
         }
     }
 
@@ -666,75 +668,78 @@ impl Render for QuickSearch {
                     )),
             )
             .child(
-                div()
-                    .id("quick-search-results")
-                    .h(px(0.0))
-                    .min_h(px(0.0))
-                    .flex_1()
-                    .scrollable(ScrollAxis::Vertical)
-                    .px_2()
-                    .pb_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .when(rows.is_empty(), |results| {
-                        results.child(
-                            div()
-                                .p_3()
-                                .text_size(px(12.0))
-                                .text_color(theme::colors().text_tertiary)
-                                .child("No matching commands"),
-                        )
-                    })
-                    .children(rows.into_iter().map(|(index, item)| {
-                        let command_label = item.command.as_str().to_owned();
-                        div()
-                            .id(("quick-search-result", index))
-                            .px_2()
-                            .py_2()
-                            .rounded(px(6.0))
-                            .bg(if index == self.selected_index {
-                                theme::colors().button_background_selected
-                            } else {
-                                theme::colors().background_secondary
-                            })
-                            .hover(|style| style.bg(theme::colors().button_background_hover))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.execute_index(index, window, cx);
-                            }))
-                            .child(
+                scroll_viewport(
+                    "quick-search-results",
+                    ScrollAxis::Vertical,
+                    &self.results_scroll,
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .when(rows.is_empty(), |results| {
+                            results.child(
                                 div()
-                                    .min_w(px(0.0))
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .text_color(theme::colors().text_primary)
-                                            .child(item.title),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(9.0))
-                                            .text_color(theme::colors().text_tertiary)
-                                            .child(command_label),
-                                    ),
+                                    .p_3()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors().text_tertiary)
+                                    .child("No matching commands"),
                             )
-                            .when(!item.shortcut.is_empty(), |row| {
-                                row.child(
+                        })
+                        .children(rows.into_iter().map(|(index, item)| {
+                            let command_label = item.command.as_str().to_owned();
+                            div()
+                                .id(("quick-search-result", index))
+                                .px_2()
+                                .py_2()
+                                .rounded(px(6.0))
+                                .bg(if index == self.selected_index {
+                                    theme::colors().button_background_selected
+                                } else {
+                                    theme::colors().background_secondary
+                                })
+                                .hover(|style| style.bg(theme::colors().button_background_hover))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.execute_index(index, window, cx);
+                                }))
+                                .child(
                                     div()
-                                        .text_size(px(10.0))
-                                        .text_color(theme::colors().text_secondary)
-                                        .child(item.shortcut),
+                                        .min_w(px(0.0))
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(theme::colors().text_primary)
+                                                .child(item.title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(9.0))
+                                                .text_color(theme::colors().text_tertiary)
+                                                .child(command_label),
+                                        ),
                                 )
-                            })
-                    })),
+                                .when(!item.shortcut.is_empty(), |row| {
+                                    row.child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .text_color(theme::colors().text_secondary)
+                                            .child(item.shortcut),
+                                    )
+                                })
+                        })),
+                )
+                .h(px(0.0))
+                .min_h(px(0.0))
+                .flex_1(),
             )
     }
 }

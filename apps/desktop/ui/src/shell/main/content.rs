@@ -45,72 +45,89 @@ impl Editor {
     ) -> gpui::Div {
         let active = self.session.active_document_id() == Some(document_id);
         if active {
-            div()
-                .h(px(0.0))
-                .min_h(px(0.0))
-                .flex()
-                .flex_col()
-                .flex_1()
-                .child(
-                    div()
-                        .id("source-scroll")
-                        .h(px(0.0))
-                        .min_h(px(0.0))
-                        .flex_1()
-                        .scrollable(ScrollAxis::Both)
-                        .track_scroll(&self.editor_scroll)
-                        .relative()
-                        .px(px(18.0))
-                        .py(px(10.0))
-                        .cursor(CursorStyle::IBeam)
-                        .text_size(px(14.0))
-                        .text_color(theme::colors().text_primary)
-                        .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
-                        .on_mouse_move(cx.listener(Self::editor_mouse_move))
-                        .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
-                        .child(EditorElement { editor: cx.entity() })
-                        .when(self.session.is_empty(), |canvas| {
-                            canvas.child(
+            let line_count = self.session.len_lines().max(1);
+            let max_visual_width = (0..line_count)
+                .filter_map(|line| self.session.line(line))
+                .map(|line| {
+                    line.trim_end_matches(['\r', '\n'])
+                        .chars()
+                        .map(|c| if c.is_ascii() { 9.0 } else { 18.0 })
+                        .sum::<f32>()
+                })
+                .fold(0.0f32, f32::max);
+            let content_width = px((max_visual_width + 80.0).max(600.0));
+
+            let editor_content = div()
+                .relative()
+                .flex_none()
+                .w(content_width)
+                .min_w_full()
+                .min_h_full()
+                .px(px(18.0))
+                .py(px(10.0))
+                .cursor(CursorStyle::IBeam)
+                .text_size(px(14.0))
+                .text_color(theme::colors().text_primary)
+                .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
+                .on_mouse_move(cx.listener(Self::editor_mouse_move))
+                .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
+                .child(EditorElement { editor: cx.entity() })
+                .when(self.session.is_empty(), |canvas| {
+                    canvas.child(
+                        div()
+                            .absolute()
+                            .top(px(72.0))
+                            .left(px(54.0))
+                            .w(px(330.0))
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .child(
                                 div()
-                                    .absolute()
-                                    .top(px(72.0))
-                                    .left(px(54.0))
-                                    .w(px(330.0))
-                                    .flex()
-                                    .flex_col()
-                                    .gap_2()
-                                    .child(
-                                        div()
-                                            .text_size(px(18.0))
-                                            .text_color(theme::colors().text_primary)
-                                            .child("Open a file or project"),
-                                    )
-                                    .child(
-                                        div()
-                                            .mb_1()
-                                            .text_size(px(12.0))
-                                            .text_color(theme::colors().text_tertiary)
-                                            .child("Choose a project to restore its last workspace, or open a file to start here."),
-                                    )
-                                    .child(quick_action("Open file", "Ctrl O").on_click(
-                                        cx.listener(|this, _, window, cx| this.open_file(window, cx)),
-                                    ))
-                                    .child(quick_action("Open project", "").on_click(
-                                        cx.listener(|this, _, window, cx| this.open_project(window, cx)),
-                                    ))
-                                    .child(quick_action("New file", "Ctrl N").on_click(
-                                        cx.listener(|this, _, window, cx| {
-                                            this.new_document(&New, window, cx)
-                                        }),
-                                    )),
+                                    .text_size(px(18.0))
+                                    .text_color(theme::colors().text_primary)
+                                    .child("Open a file or project"),
                             )
-                        }),
-                )
+                            .child(
+                                div()
+                                    .mb_1()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors().text_tertiary)
+                                    .child("Choose a project to restore its last workspace, or open a file to start here."),
+                            )
+                            .child(
+                                quick_action("Open file", "Ctrl O")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_file(window, cx)
+                                    })),
+                            )
+                            .child(
+                                quick_action("Open project", "")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_project(window, cx)
+                                    })),
+                            )
+                            .child(
+                                quick_action("New file", "Ctrl N")
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.new_document(&New, window, cx)
+                                    })),
+                            ),
+                    )
+                });
+
+            scroll_viewport(
+                "source-scroll",
+                ScrollAxis::Both,
+                &self.editor_scroll,
+                editor_content,
+            )
+            .size_full()
+            .flex_1()
         } else {
             panel_empty_state("F", "Document", "Select the document tab to edit")
         }
     }
-
     pub(super) fn render_tool_content(&self, view: &ViewId, cx: &mut Context<Self>) -> gpui::Div {
         match view.as_str() {
             id::VIEW_FILES => self.render_files_content(cx),
@@ -119,7 +136,10 @@ impl Editor {
             id::VIEW_HISTORY => self.render_history_content(),
             id::VIEW_PREVIEW => self.render_preview_content(),
             id::VIEW_ASSISTANT => self.render_assistant_content(cx),
-            id::VIEW_TERMINAL => crate::features::terminal::render_content(&self.terminal),
+            id::VIEW_TERMINAL => crate::features::terminal::render_content(
+                &self.terminal,
+                &self.scroll_states.terminal,
+            ),
             id::VIEW_PROBLEMS => crate::features::problems::render_content(&self.problems),
             id::VIEW_OUTPUT => crate::features::problems::render_output(&self.status),
             id::VIEW_COMMAND_SEARCH => div().flex_1().child(self.quick_search.clone()),
@@ -157,7 +177,6 @@ impl Editor {
                 .flex_1()
                 .w_full()
                 .h_full()
-                .scrollable(ScrollAxis::Vertical)
                 .flex()
                 .flex_col()
                 .p_8()
@@ -266,7 +285,6 @@ impl Editor {
                 .flex_1()
                 .w_full()
                 .h_full()
-                .scrollable(ScrollAxis::Vertical)
                 .flex()
                 .flex_col()
                 .p_8()

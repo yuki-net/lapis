@@ -9,10 +9,10 @@ impl Render for PanelTabDragPreview {
         div()
             .px(tokens::spacing::XS)
             .py(px(2.0))
-            .rounded(tokens::radius::MENU_ITEM)
-            .bg(theme::colors().background_tertiary)
+            .rounded(tokens::radius::CONTROL)
+            .bg(theme::colors().button_background_focused)
             .border_1()
-            .border_color(theme::colors().border_default)
+            .border_color(theme::colors().button_border_focused)
             .text_color(theme::colors().text_primary)
             .text_size(tokens::typography::FONT_XS)
             .child(self.label.clone())
@@ -25,6 +25,8 @@ impl Editor {
         panel: &PanelHost,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let position = panel.position;
+
         let tabs = panel.tabs.iter().enumerate().map(|(index, tab)| {
             let label = match tab {
                 PanelTab::Tool(view) => self
@@ -64,74 +66,87 @@ impl Editor {
             };
             let tab = tab.clone();
             let close_tab = tab.clone();
-            let position = panel.position;
             let drag = DraggedPanelTab {
                 source_panel: position,
                 tab: tab.clone(),
             };
-            crate::components::surface(crate::components::SurfaceVariant::Tab)
+
+            let (bg_color, border_color, text_color) = if active {
+                (
+                    theme::colors().button_background_selected,
+                    theme::colors().button_border_selected,
+                    theme::colors().text_primary,
+                )
+            } else {
+                (
+                    theme::colors().button_background,
+                    gpui::rgba(0x00000000),
+                    theme::colors().text_secondary,
+                )
+            };
+
+            div()
                 .id(("panel-tab", panel_key(position) * 100 + index as u32))
-                .h(px(30.0))
+                .h(px(28.0))
                 .px(tokens::spacing::XS)
+                .gap(tokens::spacing::XS)
+                .rounded(tokens::radius::CONTROL)
+                .border_1()
+                .border_color(border_color)
+                .bg(bg_color)
                 .flex()
                 .items_center()
-                .bg(if active {
-                    theme::colors().background_tertiary
-                } else {
-                    theme::colors().background_secondary
-                })
-                .text_size(tokens::typography::FONT_XS)
-                .text_color(if active {
-                    theme::colors().text_primary
-                } else {
-                    theme::colors().text_secondary
-                })
+                .text_size(tokens::typography::FONT_SM)
+                .text_color(text_color)
                 .hover(|style| {
-                    style
-                        .bg(theme::colors().button_background_hover)
-                        .text_color(theme::colors().text_primary)
+                    if !active {
+                        style
+                            .bg(theme::colors().button_background_hover)
+                            .text_color(theme::colors().text_primary)
+                    } else {
+                        style
+                    }
                 })
-                .cursor(CursorStyle::OpenHand)
+                .cursor(CursorStyle::PointingHand)
                 .on_drag(drag, |drag: &DraggedPanelTab, _, _, cx| {
                     cx.new(|_| PanelTabDragPreview {
                         label: format!("{:?}", drag.tab),
                     })
                 })
-                .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
-                    PanelTab::Tool(view) => this.select_view(position, view, cx),
-                    PanelTab::Document(document_id) => {
-                        this.select_panel_tab(
-                            position,
-                            PanelTab::Document(document_id.clone()),
-                            cx,
-                        );
-                        this.persist_active_view();
-                        if this.session.activate_document(&document_id) {
-                            this.restore_active_view();
-                            window.focus(&this.focus_handle);
-                            cx.notify();
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.shell.focused_panel = position;
+                    match tab.clone() {
+                        PanelTab::Tool(view) => this.select_view(position, view, cx),
+                        PanelTab::Document(document_id) => {
+                            this.select_panel_tab(
+                                position,
+                                PanelTab::Document(document_id.clone()),
+                                cx,
+                            );
+                            this.persist_active_view();
+                            if this.session.activate_document(&document_id) {
+                                this.restore_active_view();
+                                window.focus(&this.focus_handle);
+                                cx.notify();
+                            }
                         }
                     }
                 }))
-                .when_some(file_icon, |tab, icon| {
-                    tab.child(crate::components::FileIcon::new(icon))
+                .when_some(file_icon, |tab_el, icon| {
+                    tab_el.child(crate::components::FileIcon::new(icon))
                 })
                 .child(label)
-                .child(div().flex_1())
                 .child(
                     div()
                         .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
-                        .size(px(20.0))
-                        .rounded(tokens::radius::MENU_ITEM)
+                        .size(px(14.0))
+                        .ml_1()
                         .flex()
                         .items_center()
                         .justify_center()
+                        .text_color(theme::colors().text_secondary)
                         .cursor(CursorStyle::PointingHand)
-                        .hover(|style| {
-                            style
-                                .bg(theme::colors().button_background_hover)
-                                .text_color(theme::colors().text_primary)
-                        })
+                        .hover(|style| style.text_color(theme::colors().text_primary))
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(|_, _, _, cx| {
@@ -145,25 +160,27 @@ impl Editor {
                         .child(Icon::new(IconName::X)),
                 )
         });
-        let position = panel.position;
+
         let has_tabs = !panel.tabs.is_empty();
         div()
-            .h(px(39.0))
+            .h(px(36.0))
             .flex_shrink_0()
-            .px(tokens::spacing::XS)
             .flex()
             .items_center()
             .gap(tokens::spacing::XS)
             .child(
-                div()
-                    .id(("panel-tabs", panel_key(position)))
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .scrollable(ScrollAxis::Horizontal)
-                    .flex()
-                    .items_center()
-                    .gap(tokens::spacing::XS)
-                    .children(tabs),
+                scroll_viewport(
+                    ("panel-tabs", panel_key(position)),
+                    ScrollAxis::Horizontal,
+                    self.scroll_states.panel_tabs(position),
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap(tokens::spacing::XS)
+                        .children(tabs),
+                )
+                .flex_1()
+                .min_w(px(0.0)),
             )
             .when(
                 panel
@@ -187,7 +204,7 @@ impl Editor {
                         .id(("open-tool-tab", panel_key(position)))
                         .flex_shrink_0()
                         .size(tokens::size::BUTTON_SM)
-                        .rounded(px(5.0))
+                        .rounded(tokens::radius::CONTROL)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -198,6 +215,7 @@ impl Editor {
                                 .text_color(theme::colors().text_primary)
                         })
                         .on_click(cx.listener(move |this, _, _, cx| {
+                            this.shell.focused_panel = position;
                             this.open_tool_picker(position, cx);
                         }))
                         .child("+"),

@@ -32,21 +32,7 @@ impl Editor {
             })
             .collect::<Vec<_>>();
 
-        crate::components::floating_tree(
-            self.shell.tool_picker_anchor,
-            point(px(-20.0), tokens::spacing::GAP),
-        )
-        .child(
-            crate::components::floating_panel(
-                "tool-picker",
-                crate::components::SurfaceVariant::Popover,
-            )
-            .w(px(250.0))
-            .max_h(px(520.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.close_tool_picker(cx);
-            }))
-            .scrollable(ScrollAxis::Vertical)
+        let picker_content = div()
             .p(tokens::spacing::SM)
             .text_color(theme::colors().text_primary)
             .child(
@@ -94,7 +80,31 @@ impl Editor {
                     }))
                     .child(icon)
                     .child(title)
-            })),
+            }));
+
+        crate::components::floating_tree(
+            self.shell.tool_picker_anchor,
+            point(px(-20.0), tokens::spacing::GAP),
+        )
+        .child(
+            crate::components::floating_panel(
+                "tool-picker",
+                crate::components::SurfaceVariant::Popover,
+            )
+            .w(px(250.0))
+            .max_h(px(520.0))
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.close_tool_picker(cx);
+            }))
+            .child(
+                scroll_viewport(
+                    "tool-picker-scroll",
+                    ScrollAxis::Vertical,
+                    &self.scroll_states.tool_picker,
+                    picker_content,
+                )
+                .max_h(px(520.0)),
+            ),
         )
     }
 }

@@ -72,7 +72,8 @@ pub fn bundled_registry() -> FeatureRegistry {
                 "view.command-search",
                 "search",
                 5,
-            ),
+            )
+            .feature_owned_scroll(),
         ),
         editor::descriptor(),
         conversation::descriptor(),
@@ -118,7 +119,9 @@ pub fn bundled_registry() -> FeatureRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension_ui::{ActivationEvent, CommandId, UiSlot, ViewId};
+    use crate::extension_ui::{
+        ActivationEvent, CommandId, PanelPosition, PanelScrollPolicy, ScrollAxis, UiSlot, ViewId,
+    };
 
     #[test]
     fn built_in_features_follow_documented_activation_boundaries() {
@@ -162,6 +165,53 @@ mod tests {
         }
     }
 
+    #[test]
+    fn built_in_views_declare_scroll_ownership() {
+        let registry = bundled_registry();
+        let policy = |view_id: &str| {
+            [
+                PanelPosition::Main,
+                PanelPosition::Left,
+                PanelPosition::Bottom,
+                PanelPosition::Right,
+            ]
+            .into_iter()
+            .flat_map(|position| registry.panel_contributions(position))
+            .find(|contribution| {
+                contribution
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.as_str() == view_id)
+            })
+            .map(|contribution| contribution.scroll_policy)
+            .expect("built-in view is registered")
+        };
+
+        for view in [
+            id::VIEW_COMMAND_SEARCH,
+            id::VIEW_ASSISTANT,
+            id::VIEW_TERMINAL,
+        ] {
+            assert_eq!(policy(view), PanelScrollPolicy::FeatureOwned);
+        }
+
+        for view in [
+            id::VIEW_FILES,
+            id::VIEW_SEARCH,
+            id::VIEW_GIT,
+            id::VIEW_HISTORY,
+            id::VIEW_PREVIEW,
+            id::VIEW_PROBLEMS,
+            id::VIEW_OUTPUT,
+            id::VIEW_SETTINGS,
+        ] {
+            assert_eq!(
+                policy(view),
+                PanelScrollPolicy::Panel(ScrollAxis::Both),
+                "{view}"
+            );
+        }
+    }
     #[test]
     fn settings_view_is_available_only_in_main_panel() {
         let registry = bundled_registry();

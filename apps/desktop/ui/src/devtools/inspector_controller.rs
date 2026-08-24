@@ -1,3 +1,5 @@
+use crate::components::ScrollState;
+
 use gpui::{
     AnyWindowHandle, App, Bounds, Global, InspectorElementId, Subscription, TitlebarOptions,
     Window, WindowBounds, WindowId, WindowOptions, px, size,
@@ -63,6 +65,8 @@ pub(super) struct InspectorController {
     target_window: Option<AnyWindowHandle>,
     inspector_window: Option<AnyWindowHandle>,
     _window_closed_subscription: Option<Subscription>,
+    tree_scroll: ScrollState,
+    content_scroll: ScrollState,
 }
 
 impl Global for InspectorController {}
@@ -124,6 +128,13 @@ pub(super) fn init(cx: &mut App) {
 }
 
 impl InspectorController {
+    pub(super) fn tree_scroll(cx: &App) -> ScrollState {
+        cx.global::<InspectorController>().tree_scroll.clone()
+    }
+
+    pub(super) fn content_scroll(cx: &App) -> ScrollState {
+        cx.global::<InspectorController>().content_scroll.clone()
+    }
     pub(super) fn toggle(target_window: &mut Window, cx: &mut App) -> Result<bool, String> {
         let is_open = cx.global::<InspectorController>().lifecycle.is_open();
         if is_open {

@@ -1,5 +1,6 @@
 use std::{
-    collections::HashSet,
+    cell::RefCell,
+    collections::{HashMap, HashSet},
     ops::Range,
     time::{Duration, Instant},
 };
@@ -8,9 +9,9 @@ use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, PromptButton, PromptLevel, Render, ScrollHandle, ShapedLine, SharedString,
-    Style, TextRun, Timer, UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*,
-    px, relative, size,
+    Pixels, Point, PromptButton, PromptLevel, Render, ShapedLine, SharedString, Style, TextRun,
+    Timer, UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*, px, relative,
+    size,
 };
 use lapis_app_services::{
     ConversationViewState, DocumentAction, DocumentCloseDisposition, EditorSession,
@@ -24,11 +25,10 @@ use lapis_workspace::FileEntryKind;
 use crate::{
     app::*,
     components::{
-        ButtonSize, Icon, IconName, ScrollAxis, ScrollableElement, SurfaceVariant, button,
-        panel_empty_state, panel_empty_state_element, panel_scroll_area, scroll_area, surface,
-        tool_empty_state,
+        ButtonSize, Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, button,
+        panel_empty_state, panel_empty_state_element, scroll_viewport, surface, tool_empty_state,
     },
-    extension_ui::{ActivationEvent, FeatureRegistry, ThemeId, UiSlot, ViewId},
+    extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, ThemeId, UiSlot, ViewId},
     features::{
         self,
         command_search::{
@@ -56,6 +56,57 @@ mod interactions;
 mod runtime;
 mod view_state;
 use canvas::{EditorElement, EditorLineLayout};
+
+struct EditorScrollStates {
+    panel_contents: RefCell<HashMap<PanelTab, ScrollState>>,
+    panel_empty: [ScrollState; 4],
+    panel_tabs: [ScrollState; 4],
+    tool_picker: ScrollState,
+    task_list: ScrollState,
+    task_events: ScrollState,
+    terminal: ScrollState,
+}
+
+impl Default for EditorScrollStates {
+    fn default() -> Self {
+        Self {
+            panel_contents: RefCell::new(HashMap::new()),
+            panel_empty: std::array::from_fn(|_| ScrollState::new()),
+            panel_tabs: std::array::from_fn(|_| ScrollState::new()),
+            tool_picker: ScrollState::new(),
+            task_list: ScrollState::new(),
+            task_events: ScrollState::new(),
+            terminal: ScrollState::new(),
+        }
+    }
+}
+
+impl EditorScrollStates {
+    fn panel_content(&self, tab: &PanelTab) -> ScrollState {
+        self.panel_contents
+            .borrow_mut()
+            .entry(tab.clone())
+            .or_default()
+            .clone()
+    }
+
+    fn panel_empty(&self, position: crate::extension_ui::PanelPosition) -> &ScrollState {
+        &self.panel_empty[panel_index(position)]
+    }
+
+    fn panel_tabs(&self, position: crate::extension_ui::PanelPosition) -> &ScrollState {
+        &self.panel_tabs[panel_index(position)]
+    }
+}
+
+const fn panel_index(position: crate::extension_ui::PanelPosition) -> usize {
+    match position {
+        crate::extension_ui::PanelPosition::Left => 0,
+        crate::extension_ui::PanelPosition::Main => 1,
+        crate::extension_ui::PanelPosition::Bottom => 2,
+        crate::extension_ui::PanelPosition::Right => 3,
+    }
+}
 
 #[path = "../files/view.rs"]
 mod files_view;
@@ -152,7 +203,8 @@ pub struct Editor {
     last_editor_bounds: Option<Bounds<Pixels>>,
     last_line_layouts: Vec<EditorLineLayout>,
     expanded_directories: HashSet<std::path::PathBuf>,
-    editor_scroll: ScrollHandle,
+    editor_scroll: ScrollState,
+    scroll_states: EditorScrollStates,
 }
 
 impl Editor {
@@ -226,7 +278,8 @@ impl Editor {
             last_editor_bounds: None,
             last_line_layouts: Vec::new(),
             expanded_directories: HashSet::new(),
-            editor_scroll: ScrollHandle::new(),
+            editor_scroll: ScrollState::new(),
+            scroll_states: EditorScrollStates::default(),
         };
         if !theme_loaded {
             editor.status = format!("未登録のテーマのためDarkを使用: {}", global_settings.theme);

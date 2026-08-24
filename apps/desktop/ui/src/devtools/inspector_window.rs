@@ -1,7 +1,7 @@
 use gpui::{AnyElement, Context, Inspector, IntoElement, Window, div, prelude::*, px};
 
 use crate::{
-    components::{ScrollAxis, ScrollableElement},
+    components::{ScrollAxis, scroll_viewport},
     theme,
 };
 
@@ -13,6 +13,7 @@ pub(super) fn render_inspector(
     window: &mut Window,
     cx: &mut Context<Inspector>,
 ) -> AnyElement {
+    let content_scroll = InspectorController::content_scroll(cx);
     div()
         .size_full()
         .flex()
@@ -98,18 +99,20 @@ pub(super) fn render_inspector(
                         .child(render_tree(inspector, cx)),
                 )
                 .child(
-                    div()
-                        .id("inspector-content")
-                        .min_w(px(0.0))
-                        .min_h(px(0.0))
-                        .flex_1()
-                        .scrollable(ScrollAxis::Horizontal)
-                        .scrollable(ScrollAxis::Vertical)
-                        .p_3()
-                        .when_some(render_active_summary(inspector), |element, summary| {
-                            element.child(summary)
-                        })
-                        .children(inspector.render_inspector_states(window, cx)),
+                    scroll_viewport(
+                        "inspector-content",
+                        ScrollAxis::Both,
+                        &content_scroll,
+                        div()
+                            .p_3()
+                            .when_some(render_active_summary(inspector), |element, summary| {
+                                element.child(summary)
+                            })
+                            .children(inspector.render_inspector_states(window, cx)),
+                    )
+                    .min_w(px(0.0))
+                    .min_h(px(0.0))
+                    .flex_1(),
                 ),
         )
         .into_any_element()

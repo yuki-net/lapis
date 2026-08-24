@@ -53,6 +53,8 @@ Main Panelは常時表示し、他のPanelは利用者の操作だけで開閉�
 
 PanelはHeader、Tab、Body、空状態、drag/drop領域を共通化します。Panel固有の機能ロジックを共通Frameへ入れません。
 
+同じ軸のscroll所有者は一つに限定します。Panel標準を使わないFeatureは、Feature固有のscroll所有権を登録契約で明示します。
+
 DocumentとToolは完全に同じTabとして扱います。
 
 - Tabの形状と操作を区別しない。

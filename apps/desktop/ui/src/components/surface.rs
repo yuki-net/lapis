@@ -8,14 +8,13 @@ pub(crate) enum SurfaceVariant {
     Panel,
     Popover,
     Control,
-    Tab,
 }
 
 pub(crate) fn surface(variant: SurfaceVariant) -> gpui::Div {
     let mut surface = div().bg(match variant {
         SurfaceVariant::Menu | SurfaceVariant::Popover => theme::colors().floating_background,
         SurfaceVariant::Panel => theme::colors().background_secondary,
-        SurfaceVariant::Control | SurfaceVariant::Tab => theme::colors().background_primary,
+        SurfaceVariant::Control => theme::colors().background_primary,
     });
 
     surface = match variant {
@@ -26,7 +25,6 @@ pub(crate) fn surface(variant: SurfaceVariant) -> gpui::Div {
             .shadow_lg(),
         SurfaceVariant::Panel => surface.rounded(tokens::radius::PANEL),
         SurfaceVariant::Control => surface.rounded(tokens::radius::CONTROL),
-        SurfaceVariant::Tab => surface.rounded_t(tokens::radius::TAB),
     };
 
     surface.text_color(theme::colors().text_primary).when(

@@ -5,7 +5,7 @@ use gpui::{
 };
 
 use crate::{
-    components::{ScrollAxis, ScrollableElement},
+    components::{ScrollAxis, scroll_viewport},
     theme,
 };
 
@@ -23,6 +23,24 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
     let node_count = inspector.element_tree().len();
     let revision = inspector.tree_revision();
     let active = inspector.active_element_id().cloned();
+    let scroll_state = InspectorController::tree_scroll(cx);
+
+    let tree_content = div()
+        .py_1()
+        .when(rows.is_empty(), |element| {
+            element.child(
+                div()
+                    .p_3()
+                    .text_size(px(11.0))
+                    .text_color(theme::colors().text_secondary)
+                    .child("対象ウィンドウを描画するとツリーが表示されます"),
+            )
+        })
+        .children(
+            rows.into_iter()
+                .enumerate()
+                .map(|(index, row)| render_tree_row(index, row, active.as_ref(), inspector, cx)),
+        );
 
     div()
         .size_full()
@@ -47,28 +65,16 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                 ),
         )
         .child(
-            div()
-                .id("inspector-tree-scroll")
-                .min_h(px(0.0))
-                .flex_1()
-                .scrollable(ScrollAxis::Horizontal)
-                .scrollable(ScrollAxis::Vertical)
-                .py_1()
-                .when(rows.is_empty(), |element| {
-                    element.child(
-                        div()
-                            .p_3()
-                            .text_size(px(11.0))
-                            .text_color(theme::colors().text_secondary)
-                            .child("対象ウィンドウを描画するとツリーが表示されます"),
-                    )
-                })
-                .children(rows.into_iter().enumerate().map(|(index, row)| {
-                    render_tree_row(index, row, active.as_ref(), inspector, cx)
-                })),
+            scroll_viewport(
+                "inspector-tree-scroll",
+                ScrollAxis::Both,
+                &scroll_state,
+                tree_content,
+            )
+            .min_h(px(0.0))
+            .flex_1(),
         )
 }
-
 pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
     let active = inspector.active_element_id()?;
     let node = inspector

@@ -26,6 +26,7 @@ pub(crate) enum ResizeTarget {
 
 #[derive(Clone)]
 pub(crate) struct ShellState {
+    pub focused_panel: PanelPosition,
     pub main_panel: PanelHost,
     pub left_panel: PanelHost,
     pub bottom_panel: PanelHost,
@@ -48,6 +49,7 @@ pub(crate) struct ShellState {
 impl Default for ShellState {
     fn default() -> Self {
         Self {
+            focused_panel: PanelPosition::Main,
             main_panel: PanelHost::new(PanelPosition::Main, Vec::new(), true, 0.0),
             left_panel: PanelHost::new(
                 PanelPosition::Left,

@@ -15,6 +15,20 @@ pub enum ToolInstancePolicy {
     Multiple,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScrollAxis {
+    Vertical,
+    Horizontal,
+    Both,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelScrollPolicy {
+    Panel(ScrollAxis),
+    FeatureOwned,
+    Disabled,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum UiSlot {
     CommandPalette,
@@ -37,6 +51,7 @@ pub struct UiContribution {
     pub command: Option<CommandId>,
     pub order: i32,
     pub instance_policy: ToolInstancePolicy,
+    pub scroll_policy: PanelScrollPolicy,
 }
 
 impl UiContribution {
@@ -55,6 +70,7 @@ impl UiContribution {
             command: None,
             order: 0,
             instance_policy: ToolInstancePolicy::Shared,
+            scroll_policy: PanelScrollPolicy::Panel(ScrollAxis::Both),
         }
     }
 
@@ -75,6 +91,7 @@ impl UiContribution {
             command: None,
             order,
             instance_policy: ToolInstancePolicy::Shared,
+            scroll_policy: PanelScrollPolicy::Panel(ScrollAxis::Both),
         }
     }
 
@@ -97,6 +114,7 @@ impl UiContribution {
             command: None,
             order,
             instance_policy: ToolInstancePolicy::Shared,
+            scroll_policy: PanelScrollPolicy::Panel(ScrollAxis::Both),
         }
     }
 
@@ -116,11 +134,22 @@ impl UiContribution {
             command: Some(command.into()),
             order,
             instance_policy: ToolInstancePolicy::Shared,
+            scroll_policy: PanelScrollPolicy::Disabled,
         }
     }
 
     pub fn multiple_instances(mut self) -> Self {
         self.instance_policy = ToolInstancePolicy::Multiple;
+        self
+    }
+
+    pub fn feature_owned_scroll(mut self) -> Self {
+        self.scroll_policy = PanelScrollPolicy::FeatureOwned;
+        self
+    }
+
+    pub fn scroll_disabled(mut self) -> Self {
+        self.scroll_policy = PanelScrollPolicy::Disabled;
         self
     }
 }

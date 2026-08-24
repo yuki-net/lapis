@@ -8,7 +8,6 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .scrollable(ScrollAxis::Vertical)
                 .p_2()
                 .gap_1()
                 .child(
@@ -91,7 +90,6 @@ impl Editor {
                 .flex()
                 .flex_col()
                 .flex_1()
-                .scrollable(ScrollAxis::Vertical)
                 .p_2()
                 .gap_1()
                 .child(

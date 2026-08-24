@@ -8,7 +8,6 @@ impl Editor {
             .flex_col()
             .flex_1()
             .min_h(px(0.0))
-            .scrollable(ScrollAxis::Vertical)
             .p_2()
             .gap_2();
         if let Some(status) = self.git.session.status() {

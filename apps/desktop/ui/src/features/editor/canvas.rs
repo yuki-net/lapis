@@ -48,13 +48,17 @@ impl Element for EditorElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let editor = self.editor.read(cx);
         let line_count = editor.session.len_lines().max(1);
-        let max_chars = (0..line_count)
+        let max_visual_width = (0..line_count)
             .filter_map(|line| editor.session.line(line))
-            .map(|line| line.trim_end_matches(['\r', '\n']).chars().count())
-            .max()
-            .unwrap_or(0);
+            .map(|line| {
+                line.trim_end_matches(['\r', '\n'])
+                    .chars()
+                    .map(|c| if c.is_ascii() { 9.0 } else { 18.0 })
+                    .sum::<f32>()
+            })
+            .fold(0.0f32, f32::max);
         let mut style = Style::default();
-        style.size.width = px((max_chars as f32 * 9.0 + 40.0).max(600.0)).into();
+        style.size.width = px((max_visual_width + 80.0).max(600.0)).into();
         style.size.height = px(24.0 * line_count as f32).into();
         (window.request_layout(style, [], cx), ())
     }
@@ -75,17 +79,16 @@ impl Element for EditorElement {
         let mut search_highlights = Vec::new();
         let line_height = px(24.0);
         let line_count = editor.session.len_lines().max(1);
-        let viewport = editor.editor_scroll.bounds();
-        let (first_line, last_line) = if viewport.size.height > px(0.0) {
-            let first = (f32::from(viewport.top() - bounds.top()) / 24.0)
-                .floor()
-                .max(0.0) as usize;
-            let last = (f32::from(viewport.bottom() - bounds.top()) / 24.0)
+        let viewport_height = editor.editor_scroll.handle().bounds().size.height;
+        let (first_line, last_line) = if viewport_height > px(0.0) {
+            let scroll_top = (-editor.editor_scroll.handle().offset().y).max(px(0.0));
+            let first = (f32::from(scroll_top) / 24.0).floor().max(0.0) as usize;
+            let last = (f32::from(scroll_top + viewport_height) / 24.0)
                 .ceil()
                 .max(0.0) as usize;
             (
                 first.saturating_sub(1).min(line_count),
-                last.saturating_add(1).min(line_count),
+                last.saturating_add(2).min(line_count),
             )
         } else {
             (0, line_count)

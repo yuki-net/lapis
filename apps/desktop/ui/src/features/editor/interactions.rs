@@ -38,6 +38,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell.focused_panel = crate::extension_ui::PanelPosition::Main;
         self.is_selecting = true;
         window.focus(&self.focus_handle);
         let offset = self.index_for_mouse_position(event.position);

@@ -1,22 +1,27 @@
 use super::*;
+use crate::tokens;
 
 impl Editor {
     pub(super) fn render_files_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let workspace_name = self.session.workspace_name().to_owned();
-        let mut content = scroll_area("files-scroll", ScrollAxis::Vertical)
+
+        let active_path = self.session.active_path();
+
+        let mut content = div()
+            .id("files-scroll")
             .flex()
             .flex_col()
             .flex_1()
-            .p(px(6.0))
+            .p(tokens::spacing::XS)
             .child(
                 div()
                     .h(px(30.0))
-                    .px_2()
-                    .rounded(px(5.0))
+                    .px(tokens::spacing::XS)
+                    .rounded(tokens::radius::CONTROL)
                     .flex()
                     .items_center()
                     .bg(theme::colors().button_background_selected)
-                    .text_size(px(13.0))
+                    .text_size(tokens::typography::FONT_SM)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(theme::colors().text_primary)
                     .child(workspace_name),
@@ -29,6 +34,8 @@ impl Editor {
 
             let path = entry.path.clone();
             let is_file = entry.kind == FileEntryKind::File;
+            let is_selected_file =
+                is_file && active_path.map(|p| p == path.as_path()).unwrap_or(false);
             let is_expanded = !is_file && self.expanded_directories.contains(&path);
             let has_children = !is_file
                 && self
@@ -50,18 +57,31 @@ impl Editor {
             let directory_path = path.clone();
             let file_path = path.clone();
 
+            let row_bg = if is_selected_file {
+                theme::colors().button_background_selected
+            } else {
+                gpui::rgba(0x00000000)
+            };
+
             let row = div()
                 .id(("workspace-entry", index))
                 .h(px(27.0))
                 .pl(px(6.0 + entry.depth as f32 * 14.0))
-                .pr_2()
-                .rounded(px(4.0))
+                .pr(tokens::spacing::XS)
+                .rounded(tokens::radius::CONTROL)
+                .bg(row_bg)
                 .flex()
                 .items_center()
-                .gap_2()
-                .text_size(px(12.0))
+                .gap(tokens::spacing::XS)
+                .text_size(tokens::typography::FONT_SM)
                 .text_color(theme::colors().text_primary)
-                .hover(|style| style.bg(theme::colors().button_background_hover))
+                .hover(|style| {
+                    if !is_selected_file {
+                        style.bg(theme::colors().button_background_hover)
+                    } else {
+                        style
+                    }
+                })
                 .child(
                     div()
                         .w(px(14.0))
@@ -80,6 +100,7 @@ impl Editor {
 
             content = if is_file {
                 content.child(row.on_click(cx.listener(move |this, _, window, cx| {
+                    this.shell.focused_panel = crate::extension_ui::PanelPosition::Left;
                     match this.session.open_path(file_path.clone()) {
                         Ok(()) => {
                             this.restore_active_view();
@@ -96,6 +117,7 @@ impl Editor {
                 })))
             } else {
                 content.child(row.on_click(cx.listener(move |this, _, _, cx| {
+                    this.shell.focused_panel = crate::extension_ui::PanelPosition::Left;
                     if !this.expanded_directories.remove(&directory_path) {
                         this.expanded_directories.insert(directory_path.clone());
                     }
