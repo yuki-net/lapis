@@ -66,6 +66,12 @@ mod tests {
             ("Main.kt", "kotlin"),
             ("build.gradle.kts", "kotlin"),
             ("Main.java", "java"),
+            ("index.html", "html"),
+            ("app.css", "css"),
+            ("data.json", "json"),
+            ("layout.xml", "xml"),
+            ("config.yaml", "yaml"),
+            ("config.yml", "yaml"),
         ];
 
         for (path, expected) in cases {

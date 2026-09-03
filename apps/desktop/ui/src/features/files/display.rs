@@ -18,7 +18,7 @@ pub(crate) fn display_info(
 ) -> FileDisplayInfo {
     if kind == FileEntryKind::Directory {
         return FileDisplayInfo {
-            icon: FileIconId::Folder,
+            icon: FileIconId::TextAlignStart,
             language: None,
         };
     }
@@ -28,7 +28,7 @@ pub(crate) fn display_info(
         icon: language
             .as_ref()
             .map(icon_for_language)
-            .unwrap_or(FileIconId::Unknown),
+            .unwrap_or(FileIconId::TextAlignStart),
         language,
     }
 }
@@ -37,10 +37,8 @@ pub(crate) fn icon_for_language(language: &LanguageId) -> FileIconId {
     match language.as_str() {
         "javascript" | "javascriptreact" => FileIconId::Javascript,
         "typescript" | "typescriptreact" => FileIconId::Typescript,
-        "go" => FileIconId::Go,
-        "kotlin" => FileIconId::Kotlin,
-        "java" => FileIconId::Java,
-        _ => FileIconId::Unknown,
+        "html" | "css" | "markdown" | "json" | "xml" | "yaml" => FileIconId::TextAlignStart,
+        _ => FileIconId::TextAlignStart,
     }
 }
 
@@ -58,15 +56,16 @@ mod tests {
             icon_for_language(&LanguageId::new("typescriptreact")),
             FileIconId::Typescript
         );
-        assert_eq!(icon_for_language(&LanguageId::new("go")), FileIconId::Go);
-        assert_eq!(
-            icon_for_language(&LanguageId::new("kotlin")),
-            FileIconId::Kotlin
-        );
-        assert_eq!(
-            icon_for_language(&LanguageId::new("java")),
-            FileIconId::Java
-        );
+
+        for language in [
+            "html", "css", "markdown", "json", "xml", "yaml", "rust", "go",
+        ] {
+            assert_eq!(
+                icon_for_language(&LanguageId::new(language)),
+                FileIconId::TextAlignStart,
+                "fallback icon mismatch for {language}"
+            );
+        }
     }
 
     #[test]
@@ -74,11 +73,11 @@ mod tests {
         let languages = LanguageRegistry::bundled();
         assert_eq!(
             display_info(Path::new("src"), FileEntryKind::Directory, &languages).icon,
-            FileIconId::Folder
+            FileIconId::TextAlignStart
         );
         assert_eq!(
             display_info(Path::new("LICENSE"), FileEntryKind::File, &languages).icon,
-            FileIconId::Unknown
+            FileIconId::TextAlignStart
         );
     }
 }

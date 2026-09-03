@@ -14,16 +14,23 @@ const PANEL_SPAN_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 
 #[derive(Clone, Debug)]
 pub(crate) struct PanelSpanTransition {
-    from: f32,
-    to: f32,
+    from_side: f32,
+    from_bottom: f32,
+    target_open: bool,
     started_at: Instant,
 }
 
 impl PanelSpanTransition {
-    pub(crate) fn new(from: f32, to: f32, started_at: Instant) -> Self {
+    pub(crate) fn from_visual(
+        from_side: f32,
+        from_bottom: f32,
+        target_open: bool,
+        started_at: Instant,
+    ) -> Self {
         Self {
-            from,
-            to,
+            from_side,
+            from_bottom,
+            target_open,
             started_at,
         }
     }
@@ -38,56 +45,65 @@ impl PanelSpanTransition {
         1.0 - (1.0 - progress).powi(3)
     }
 
-    pub(crate) fn value(&self, now: Instant) -> f32 {
-        let eased = Self::ease(self.progress(now));
-        self.from + (self.to - self.from) * eased
+    fn phase_split(&self) -> f32 {
+        let (first_distance, second_distance) = if self.target_open {
+            (1.0 - self.from_side, 1.0 - self.from_bottom)
+        } else {
+            (self.from_bottom, self.from_side)
+        };
+        match (
+            first_distance > f32::EPSILON,
+            second_distance > f32::EPSILON,
+        ) {
+            (true, true) => 0.5,
+            (true, false) => 1.0,
+            (false, true) => 0.0,
+            (false, false) => 0.5,
+        }
+    }
+
+    fn phase_progress(progress: f32, start: f32, end: f32) -> f32 {
+        if end <= start {
+            return 1.0;
+        }
+        ((progress - start) / (end - start)).clamp(0.0, 1.0)
     }
 
     pub(crate) fn spans_layout(&self, now: Instant) -> bool {
         let progress = self.progress(now);
         if progress >= 1.0 {
-            return self.to >= 0.5;
+            return self.target_open;
         }
-        if self.to > self.from {
-            progress >= 0.5
+
+        let split = self.phase_split();
+        if self.target_open {
+            self.from_bottom > f32::EPSILON || progress >= split
         } else {
-            progress < 0.5
+            self.from_bottom > f32::EPSILON && progress < split
         }
     }
 
     pub(crate) fn bottom_extent(&self, now: Instant) -> f32 {
         let progress = self.progress(now);
-        if progress >= 1.0 {
-            return self.to;
-        }
-        if self.to > self.from {
-            if progress < 0.5 {
-                0.0
-            } else {
-                Self::ease((progress - 0.5) * 2.0)
-            }
-        } else if progress < 0.5 {
-            1.0 - Self::ease(progress * 2.0)
+        let split = self.phase_split();
+        if self.target_open {
+            let phase = Self::ease(Self::phase_progress(progress, split, 1.0));
+            self.from_bottom + (1.0 - self.from_bottom) * phase
         } else {
-            0.0
+            let phase = Self::ease(Self::phase_progress(progress, 0.0, split));
+            self.from_bottom * (1.0 - phase)
         }
     }
 
     pub(crate) fn side_shortening(&self, now: Instant) -> f32 {
         let progress = self.progress(now);
-        if progress >= 1.0 {
-            return self.to;
-        }
-        if self.to > self.from {
-            if progress < 0.5 {
-                Self::ease(progress * 2.0)
-            } else {
-                1.0
-            }
-        } else if progress < 0.5 {
-            1.0
+        let split = self.phase_split();
+        if self.target_open {
+            let phase = Self::ease(Self::phase_progress(progress, 0.0, split));
+            self.from_side + (1.0 - self.from_side) * phase
         } else {
-            1.0 - Self::ease((progress - 0.5) * 2.0)
+            let phase = Self::ease(Self::phase_progress(progress, split, 1.0));
+            self.from_side * (1.0 - phase)
         }
     }
 
@@ -196,20 +212,6 @@ impl Default for ShellState {
 }
 
 impl ShellState {
-    pub(crate) fn bottom_span_left_value(&self, now: Instant) -> f32 {
-        self.bottom_span_left_transition
-            .as_ref()
-            .map(|transition| transition.value(now))
-            .unwrap_or(if self.bottom_span_left { 1.0 } else { 0.0 })
-    }
-
-    pub(crate) fn bottom_span_right_value(&self, now: Instant) -> f32 {
-        self.bottom_span_right_transition
-            .as_ref()
-            .map(|transition| transition.value(now))
-            .unwrap_or(if self.bottom_span_right { 1.0 } else { 0.0 })
-    }
-
     pub(crate) fn bottom_spans_left_layout(&self, now: Instant) -> bool {
         self.bottom_span_left_transition
             .as_ref()
@@ -384,28 +386,34 @@ mod tests {
         let start = Instant::now();
         let left_state = ShellState {
             bottom_span_left: true,
-            bottom_span_left_transition: Some(PanelSpanTransition::new(0.0, 1.0, start)),
+            bottom_span_left_transition: Some(PanelSpanTransition::from_visual(
+                0.0, 0.0, true, start,
+            )),
             ..ShellState::default()
         };
 
-        assert!(left_state.bottom_span_left_value(start + Duration::from_millis(45)) > 0.0);
-        assert_eq!(left_state.bottom_span_right_value(start), 0.0);
+        assert!(left_state.left_side_shortening(start + Duration::from_millis(45)) > 0.0);
+        assert_eq!(left_state.right_side_shortening(start), 0.0);
 
         let both_state = ShellState {
             bottom_span_left: true,
             bottom_span_right: true,
-            bottom_span_left_transition: Some(PanelSpanTransition::new(0.0, 1.0, start)),
-            bottom_span_right_transition: Some(PanelSpanTransition::new(0.0, 1.0, start)),
+            bottom_span_left_transition: Some(PanelSpanTransition::from_visual(
+                0.0, 0.0, true, start,
+            )),
+            bottom_span_right_transition: Some(PanelSpanTransition::from_visual(
+                0.0, 0.0, true, start,
+            )),
             ..ShellState::default()
         };
 
-        assert!(both_state.bottom_span_right_value(start + Duration::from_millis(45)) > 0.0);
+        assert!(both_state.right_side_shortening(start + Duration::from_millis(45)) > 0.0);
         assert!(both_state.bottom_span_is_animating(start));
     }
     #[test]
     fn span_transition_runs_side_and_bottom_in_sequence() {
         let start = Instant::now();
-        let opening = PanelSpanTransition::new(0.0, 1.0, start);
+        let opening = PanelSpanTransition::from_visual(0.0, 0.0, true, start);
 
         let opening_side_phase = start + Duration::from_millis(40);
         assert!(!opening.spans_layout(opening_side_phase));
@@ -417,7 +425,7 @@ mod tests {
         assert_eq!(opening.side_shortening(opening_bottom_phase), 1.0);
         assert!(opening.bottom_extent(opening_bottom_phase) > 0.0);
 
-        let closing = PanelSpanTransition::new(1.0, 0.0, start);
+        let closing = PanelSpanTransition::from_visual(1.0, 1.0, false, start);
         let closing_bottom_phase = start + Duration::from_millis(40);
         assert!(closing.spans_layout(closing_bottom_phase));
         assert_eq!(closing.side_shortening(closing_bottom_phase), 1.0);
@@ -427,6 +435,33 @@ mod tests {
         assert!(!closing.spans_layout(closing_side_phase));
         assert_eq!(closing.bottom_extent(closing_side_phase), 0.0);
         assert!(closing.side_shortening(closing_side_phase) < 1.0);
+    }
+
+    #[test]
+    fn span_transition_reverses_from_the_current_visual_state() {
+        let start = Instant::now();
+        let opening = PanelSpanTransition::from_visual(0.0, 0.0, true, start);
+        let reverse_at = start + Duration::from_millis(120);
+        let side_at_reverse = opening.side_shortening(reverse_at);
+        let bottom_at_reverse = opening.bottom_extent(reverse_at);
+        let closing =
+            PanelSpanTransition::from_visual(side_at_reverse, bottom_at_reverse, false, reverse_at);
+
+        let after_reverse = reverse_at + Duration::from_millis(40);
+        assert_eq!(closing.side_shortening(after_reverse), side_at_reverse);
+        assert!(closing.bottom_extent(after_reverse) < bottom_at_reverse);
+
+        let reopen_at = after_reverse;
+        let reopening = PanelSpanTransition::from_visual(
+            closing.side_shortening(reopen_at),
+            closing.bottom_extent(reopen_at),
+            true,
+            reopen_at,
+        );
+        assert!(
+            reopening.bottom_extent(reopen_at + Duration::from_millis(40))
+                > closing.bottom_extent(reopen_at)
+        );
     }
 
     #[test]

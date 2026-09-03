@@ -23,17 +23,9 @@ macro_rules! define_file_icons {
 }
 
 define_file_icons! {
-    File => (
-        "file-icons/document.svg",
-        include_bytes!("../../../assets/icons/file/document.svg")
-    ),
-    Unknown => (
-        "file-icons/unknown.svg",
-        include_bytes!("../../../assets/icons/file/unknown.svg")
-    ),
-    Folder => (
-        "file-icons/folder.svg",
-        include_bytes!("../../../assets/icons/file/folder.svg")
+    TextAlignStart => (
+        "file-icons/text-align-start.svg",
+        include_bytes!("../../../assets/icons/file/text-align-start.svg")
     ),
     Javascript => (
         "file-icons/javascript.svg",
@@ -42,18 +34,6 @@ define_file_icons! {
     Typescript => (
         "file-icons/typescript.svg",
         include_bytes!("../../../assets/icons/file/typescript.svg")
-    ),
-    Go => (
-        "file-icons/go.svg",
-        include_bytes!("../../../assets/icons/file/go.svg")
-    ),
-    Kotlin => (
-        "file-icons/kotlin.svg",
-        include_bytes!("../../../assets/icons/file/kotlin.svg")
-    ),
-    Java => (
-        "file-icons/java.svg",
-        include_bytes!("../../../assets/icons/file/java.svg")
     ),
 }
 

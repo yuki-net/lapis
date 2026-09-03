@@ -64,7 +64,7 @@ impl Editor {
                 .min_h(px(0.0))
                 .min_w(px(0.0))
                 .flex_1()
-                .p(tokens::spacing::GAP)
+                .px(tokens::spacing::GAP)
         };
 
         match (span_left, span_right) {
