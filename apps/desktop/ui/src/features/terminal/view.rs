@@ -17,7 +17,7 @@ pub(crate) fn render_content(terminal: &TerminalFeature, scroll_state: &ScrollSt
                     .font_family("Cascadia Mono")
                     .text_size(px(11.0))
                     .text_color(theme::colors().text_primary)
-                    .child(terminal.output.clone()),
+                    .child(String::from_utf8_lossy(&terminal.output).into_owned()),
             )
             .size_full(),
         )

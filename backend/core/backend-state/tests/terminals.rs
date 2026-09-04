@@ -17,7 +17,7 @@ use lapis_client_api::{
 };
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use lapis_terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId as BackendTerminalId,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId as BackendTerminalId, TerminalOutput,
 };
 
 #[derive(Default)]
@@ -72,17 +72,23 @@ struct FakeTerminal {
     columns: u16,
     rows: u16,
     events: VecDeque<TerminalEvent>,
+    next_output_sequence: u64,
 }
 
 impl FakeTerminalBackend {
     fn queue_output(&self, id: &BackendTerminalId, output: &str) {
         self.with_state(|state| {
-            state
+            let terminal = state
                 .terminals
                 .get_mut(id.as_str())
-                .expect("terminal must exist")
+                .expect("terminal must exist");
+            terminal.next_output_sequence += 1;
+            terminal
                 .events
-                .push_back(TerminalEvent::Output(output.to_owned()));
+                .push_back(TerminalEvent::Output(TerminalOutput {
+                    sequence: terminal.next_output_sequence,
+                    data: output.as_bytes().to_vec(),
+                }));
         });
     }
 
@@ -127,6 +133,7 @@ impl TerminalBackend for FakeTerminalBackend {
                     columns,
                     rows,
                     events: VecDeque::new(),
+                    next_output_sequence: 0,
                 },
             );
             Ok(BackendTerminalId::new(id))
@@ -313,7 +320,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
     let backend_id = BackendTerminalId::new("fake-terminal-1");
     first_backend.queue_output(&backend_id, "hello\n");
     first_backend.queue_exit(&backend_id, Some(0));
-    assert_terminal_output(&events, &terminal_id, "hello\n");
+    assert_terminal_output(&events, &terminal_id, b"hello\n");
     assert_terminal_status(&events, &terminal_id, TerminalStatus::Exited);
 
     let ResponseBody::SnapshotResync(snapshot) = dispatch(
@@ -334,7 +341,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
         .find(|terminal| terminal.terminal_id == terminal_id)
         .expect("terminal must be in snapshot");
     assert_eq!(terminal.status, TerminalStatus::Exited);
-    assert_eq!(terminal.buffered_output, "hello\n");
+    assert_eq!(terminal.buffered_output, b"hello\n");
 
     assert!(matches!(
         dispatch(
@@ -416,7 +423,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
         .iter()
         .find(|terminal| terminal.terminal_id != running_terminal_id)
         .expect("exited terminal must remain in snapshot");
-    assert_eq!(restored_exited.buffered_output, "hello\n");
+    assert_eq!(restored_exited.buffered_output, b"hello\n");
     let restored_running = snapshot
         .snapshot
         .terminals
@@ -503,7 +510,7 @@ fn assert_terminal_status(
 fn assert_terminal_output(
     events: &lapis_backend_state::BackendEventReceiver,
     terminal_id: &TerminalId,
-    expected: &str,
+    expected: &[u8],
 ) {
     wait_for_event(events, |event| {
         matches!(

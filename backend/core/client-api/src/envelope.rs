@@ -127,7 +127,7 @@ mod tests {
             body: EventBody::TerminalOutput {
                 terminal_id: TerminalId::try_new("terminal-1").unwrap(),
                 sequence: crate::TerminalOutputSequence::new(4),
-                data: "ok\n".to_owned(),
+                data: b"ok\n".to_vec(),
             },
         };
 
@@ -178,7 +178,7 @@ mod tests {
                         columns: 80,
                         rows: 24,
                     },
-                    buffered_output: String::new(),
+                    buffered_output: Vec::new(),
                     output_watermark: None,
                     output_truncated: false,
                 },

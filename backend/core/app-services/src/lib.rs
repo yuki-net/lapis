@@ -481,10 +481,9 @@ impl TerminalSession {
                 status: TerminalStatus::Exited,
                 columns: terminal.columns,
                 rows: terminal.rows,
-                output: format!(
-                    "[previous terminal: {}; process was not resumed]",
-                    terminal.cwd.display()
-                ),
+                output: Vec::new(),
+                output_sequence: 0,
+                output_truncated: false,
             })
             .collect();
     }
@@ -515,13 +514,19 @@ impl TerminalSession {
             status: TerminalStatus::Running,
             columns,
             rows,
-            output: String::new(),
+            output: Vec::new(),
+            output_sequence: 0,
+            output_truncated: false,
         });
         Ok(id)
     }
 
     pub fn input(&self, id: &TerminalId, text: &str) -> Result<(), TerminalError> {
-        self.backend.input(id, text.as_bytes())
+        self.input_bytes(id, text.as_bytes())
+    }
+
+    pub fn input_bytes(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.backend.input(id, bytes)
     }
 
     pub fn resize(
@@ -550,23 +555,22 @@ impl TerminalSession {
             }
             for event in self.backend.poll(&terminal.id)? {
                 match event {
-                    TerminalEvent::Output(text) => {
-                        terminal.output.push_str(&text);
+                    TerminalEvent::Output(output) => {
+                        if output.sequence <= terminal.output_sequence {
+                            continue;
+                        }
+                        terminal.output.extend(output.data);
+                        terminal.output_sequence = output.sequence;
                         const OUTPUT_LIMIT: usize = 256 * 1024;
                         if terminal.output.len() > OUTPUT_LIMIT {
-                            let mut start = terminal.output.len() - OUTPUT_LIMIT;
-                            while !terminal.output.is_char_boundary(start) {
-                                start += 1;
-                            }
-                            terminal.output = terminal.output[start..].to_owned();
+                            let start = terminal.output.len() - OUTPUT_LIMIT;
+                            terminal.output.drain(..start);
+                            terminal.output_truncated = true;
                         }
                     }
                     TerminalEvent::Exited { .. } => terminal.status = TerminalStatus::Exited,
-                    TerminalEvent::Failed(message) => {
+                    TerminalEvent::Failed(_) => {
                         terminal.status = TerminalStatus::Failed;
-                        terminal
-                            .output
-                            .push_str(&format!("\n[terminal error] {message}\n"));
                     }
                 }
                 changed = true;
@@ -1835,6 +1839,37 @@ mod tests {
         }
     }
 
+    struct ScriptedTerminalBackend {
+        events: Mutex<Vec<TerminalEvent>>,
+    }
+
+    impl TerminalBackend for ScriptedTerminalBackend {
+        fn start(
+            &self,
+            _cwd: &Path,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalId, TerminalError> {
+            Ok(TerminalId::new("scripted-terminal"))
+        }
+
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            Ok(self.events.lock().unwrap().drain(..).collect())
+        }
+
+        fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
+            Ok(())
+        }
+    }
+
     impl TaskBackend for MemoryTaskBackend {
         fn load(&self) -> Result<Vec<TaskRecord>, TaskError> {
             Ok(self.records.lock().unwrap().clone())
@@ -2110,8 +2145,51 @@ mod tests {
 
         assert_eq!(terminals.terminals().len(), 1);
         assert_eq!(terminals.terminals()[0].status, TerminalStatus::Exited);
-        assert!(terminals.terminals()[0].output.contains("was not resumed"));
+        assert!(terminals.terminals()[0].output.is_empty());
         assert!(!terminals.refresh().unwrap());
+    }
+
+    #[test]
+    fn terminal_session_keeps_ordered_raw_output_and_watermark() {
+        let backend = Arc::new(ScriptedTerminalBackend {
+            events: Mutex::new(vec![
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 1,
+                    data: b"\x1b[31mred\x1b[0m".to_vec(),
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 2,
+                    data: b"\x1b[2;4H".to_vec(),
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 3,
+                    data: b"\x1b[2J".to_vec(),
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 4,
+                    data: vec![0xe3],
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 5,
+                    data: vec![0x81, 0x82],
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 6,
+                    data: vec![0xff, 0x00],
+                }),
+            ]),
+        });
+        let mut terminals = TerminalSession::new(backend);
+        terminals.start(Path::new("repo"), 120, 30).unwrap();
+
+        assert!(terminals.refresh().unwrap());
+        let terminal = &terminals.terminals()[0];
+        assert_eq!(
+            terminal.output,
+            b"\x1b[31mred\x1b[0m\x1b[2;4H\x1b[2J\xe3\x81\x82\xff\x00"
+        );
+        assert_eq!(terminal.output_sequence, 6);
+        assert!(!terminal.output_truncated);
     }
 
     #[test]

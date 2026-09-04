@@ -25,8 +25,8 @@ pub struct TerminalSnapshot {
     pub workspace_id: WorkspaceId,
     pub status: TerminalStatus,
     pub size: TerminalSize,
-    /// backendが再同期用に保持している表示text。
-    pub buffered_output: String,
+    /// backendが再同期用に保持しているraw output。
+    pub buffered_output: Vec<u8>,
     /// buffered_outputへ反映済みの最後のoutput。まだoutputがなければNone。
     pub output_watermark: Option<TerminalOutputSequence>,
     /// 保持上限によりwatermark以前のoutputが欠落している場合にtrue。

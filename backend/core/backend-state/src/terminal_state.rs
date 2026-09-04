@@ -137,13 +137,20 @@ impl TerminalRegistry {
             };
             for event in events {
                 match event {
-                    TerminalEvent::Output(data) if !data.is_empty() => {
-                        let sequence = resource.next_output_sequence()?;
-                        resource.append_output(&data);
+                    TerminalEvent::Output(output) if !output.data.is_empty() => {
+                        let sequence = TerminalOutputSequence::new(output.sequence);
+                        if resource
+                            .output_watermark
+                            .is_some_and(|watermark| sequence <= watermark)
+                        {
+                            continue;
+                        }
+                        resource.output_watermark = Some(sequence);
+                        resource.append_output(&output.data);
                         published.push(EventBody::TerminalOutput {
                             terminal_id: resource.terminal_id.clone(),
                             sequence,
-                            data,
+                            data: output.data,
                         });
                     }
                     TerminalEvent::Output(_) => {}
@@ -209,7 +216,7 @@ struct TerminalResource {
     backend_id: BackendTerminalId,
     status: TerminalStatus,
     size: TerminalSize,
-    buffered_output: String,
+    buffered_output: Vec<u8>,
     output_watermark: Option<TerminalOutputSequence>,
     output_truncated: bool,
     attached_sessions: HashSet<SessionId>,
@@ -222,7 +229,7 @@ impl TerminalResource {
             backend_id,
             status: TerminalStatus::Running,
             size,
-            buffered_output: String::new(),
+            buffered_output: Vec::new(),
             output_watermark: None,
             output_truncated: false,
             attached_sessions: HashSet::new(),
@@ -237,25 +244,12 @@ impl TerminalResource {
         }
     }
 
-    fn next_output_sequence(&mut self) -> Result<TerminalOutputSequence, BackendStateError> {
-        let sequence = self
-            .output_watermark
-            .unwrap_or_default()
-            .checked_next()
-            .ok_or(BackendStateError::CounterOverflow)?;
-        self.output_watermark = Some(sequence);
-        Ok(sequence)
-    }
-
-    fn append_output(&mut self, data: &str) {
-        self.buffered_output.push_str(data);
+    fn append_output(&mut self, data: &[u8]) {
+        self.buffered_output.extend_from_slice(data);
         if self.buffered_output.len() <= MAX_BUFFERED_OUTPUT_BYTES {
             return;
         }
-        let mut start = self.buffered_output.len() - MAX_BUFFERED_OUTPUT_BYTES;
-        while !self.buffered_output.is_char_boundary(start) {
-            start += 1;
-        }
+        let start = self.buffered_output.len() - MAX_BUFFERED_OUTPUT_BYTES;
         self.buffered_output.drain(..start);
         self.output_truncated = true;
     }
