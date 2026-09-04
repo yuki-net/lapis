@@ -1,50 +1,44 @@
 use super::*;
+use crate::components::{MenuItemSpec, floating_panel, floating_tree, menu_item};
 
 impl Editor {
     pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let anchor = self.shell.settings_menu_anchor;
-        anchored()
-            .position(anchor)
-            .offset(point(px(-250.0), px(8.0)))
-            .snap_to_window_with_margin(px(8.0))
-            .child(
-                div()
-                    .id("settings-menu")
-                    .w(px(250.0))
-                    .p_2()
-                    .rounded(px(7.0))
-                    .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::surface())
-                    .shadow_lg()
-                    .text_color(theme::text())
-                    .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                        this.close_settings_menu(cx);
-                    }))
-                    .child(
-                        settings_menu_item(
-                            IconName::Settings,
-                            "Settings",
-                            Some("Ctrl+,".to_owned()),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.open_settings_view(cx);
-                        })),
-                    )
-                    .child(
-                        settings_menu_item(
-                            IconName::SunMoon,
-                            "Theme",
-                            theme::name(&theme::active_id()),
-                        )
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.toggle_theme_preference(cx);
-                        })),
-                    )
-                    .when(self.shell.theme_picker_open, |menu| {
-                        menu.child(self.render_theme_picker(cx))
-                    }),
-            )
+        floating_tree(anchor, point(px(-250.0), px(8.0))).child(
+            floating_panel("settings-menu", SurfaceVariant::Menu)
+                .w(px(250.0))
+                .p(tokens::spacing::SM)
+                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                    this.close_settings_menu(cx);
+                }))
+                .child(
+                    menu_item(MenuItemSpec {
+                        id: "settings-menu-settings".into(),
+                        label: "Settings".into(),
+                        shortcut: Some("Ctrl+,".into()),
+                        icon: Some(IconName::Settings),
+                        enabled: true,
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.open_settings_view(cx);
+                    })),
+                )
+                .child(
+                    menu_item(MenuItemSpec {
+                        id: "settings-menu-theme".into(),
+                        label: "Theme".into(),
+                        shortcut: theme::name(&theme::active_id()).map(Into::into),
+                        icon: Some(IconName::SunMoon),
+                        enabled: true,
+                    })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toggle_theme_preference(cx);
+                    })),
+                )
+                .when(self.shell.theme_picker_open, |menu| {
+                    menu.child(self.render_theme_picker(cx))
+                }),
+        )
     }
 
     pub(super) fn render_theme_picker(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
@@ -70,9 +64,11 @@ impl Editor {
                     .items_center()
                     .gap_2()
                     .text_size(px(12.0))
-                    .text_color(theme::text())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .when(selected, |item| item.bg(theme::accent_soft()))
+                    .text_color(theme::colors().text_primary)
+                    .hover(|style| style.bg(theme::colors().button_background_hover))
+                    .when(selected, |item| {
+                        item.bg(theme::colors().button_background_selected)
+                    })
                     .child(if selected { "✓" } else { "" })
                     .child(name)
                     .on_click(cx.listener(move |this, _, _, cx| {

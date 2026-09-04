@@ -1,6 +1,6 @@
-use gpui::{SharedString, div, prelude::*, px};
+use gpui::{SharedString, div, prelude::*};
 
-use crate::theme;
+use crate::{theme, tokens};
 
 pub(crate) fn tool_empty_state(
     icon: &'static str,
@@ -14,37 +14,37 @@ pub(crate) fn tool_empty_state(
         .flex_1()
         .items_center()
         .justify_center()
-        .px_3()
-        .gap_2()
+        .px(tokens::spacing::MD)
+        .gap(tokens::spacing::XS)
         .text_center()
         .child(
             div()
-                .size(px(34.0))
-                .rounded(px(8.0))
+                .size(tokens::size::HEADER_BUTTON)
+                .rounded(tokens::radius::PANEL)
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(theme::surface())
-                .text_size(px(17.0))
-                .text_color(theme::muted())
+                .bg(theme::colors().background_tertiary)
+                .text_size(tokens::typography::FONT_LG)
+                .text_color(theme::colors().text_secondary)
                 .child(icon),
         )
         .child(
             div()
-                .text_size(px(12.0))
-                .text_color(theme::text())
+                .text_size(tokens::typography::FONT_SM)
+                .text_color(theme::colors().text_primary)
                 .child(title),
         )
         .child(
             div()
-                .text_size(px(11.0))
-                .text_color(theme::muted())
+                .text_size(tokens::typography::FONT_XS)
+                .text_color(theme::colors().text_secondary)
                 .child(message),
         )
         .child(
             div()
-                .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_size(tokens::typography::FONT_XS)
+                .text_color(theme::colors().text_tertiary)
                 .child(detail),
         )
 }
@@ -63,25 +63,56 @@ pub(crate) fn panel_empty_state(
         .flex_col()
         .items_center()
         .justify_center()
-        .gap_2()
-        .px_4()
+        .gap(tokens::spacing::XS)
+        .px(tokens::spacing::LG)
         .text_center()
         .child(
             div()
-                .text_size(px(18.0))
-                .text_color(theme::subtle())
+                .text_size(tokens::typography::FONT_XL)
+                .text_color(theme::colors().text_tertiary)
                 .child(icon),
         )
         .child(
             div()
-                .text_size(px(11.0))
-                .text_color(theme::muted())
+                .text_size(tokens::typography::FONT_XS)
+                .text_color(theme::colors().text_secondary)
                 .child(message),
         )
         .child(
             div()
-                .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_size(tokens::typography::FONT_XS)
+                .text_color(theme::colors().text_tertiary)
+                .child(detail),
+        )
+}
+
+pub(crate) fn panel_empty_state_element(
+    icon: impl IntoElement,
+    message: impl Into<SharedString>,
+    detail: impl Into<SharedString>,
+) -> gpui::Div {
+    let message = message.into();
+    let detail = detail.into();
+    div()
+        .flex_1()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap(tokens::spacing::XS)
+        .px(tokens::spacing::LG)
+        .text_center()
+        .child(icon)
+        .child(
+            div()
+                .text_size(tokens::typography::FONT_XS)
+                .text_color(theme::colors().text_secondary)
+                .child(message),
+        )
+        .child(
+            div()
+                .text_size(tokens::typography::FONT_XS)
+                .text_color(theme::colors().text_tertiary)
                 .child(detail),
         )
 }

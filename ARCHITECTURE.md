@@ -4,14 +4,15 @@ Lapis の長期的な設計境界を定義します。現在のファイル一�
 
 ## システム境界
 
-Lapis は、Rust backend を GPUI Desktop、KMP Mobile、Vite Web から利用する構成です。Desktop は軽さと即応性を優先し、現時点では local backend と同一プロセスで動かします。ただし UI と backend の契約は、将来 daemon や remote transport へ置き換えられる境界を保ちます。
+Lapis は、Rust backend を GPUI Desktop と KMP MobileのAndroid・iOSから利用する構成です。Desktop は軽さと即応性を優先し、local backend と同一プロセスで動かします。Mobile は同じ契約へ remote transport で接続します。Web client は現在の対象に含めません。
 
 トップレベルは実行主体と責務で分けます。
 
-- `apps/`: Desktop、Mobile、Web 各クライアント。画面とクライアント固有の状態を所有する。
+- `apps/`: Desktop と Mobile。画面とクライアント固有の状態を所有する。
 - `backend/core/`: プラットフォームに依存しないモデル、不変条件、アプリケーション契約を所有する。
 - `backend/local/`: ファイルシステム、プロセスなどローカル環境との接続を実装する。
 - `backend/persistence/`: 永続化契約の具体実装を所有する。
+- `backend/remote/`: 認証、session、capability、path検証、remote transportのadapterを所有する。
 - `features/`: Git、LSP、Terminal など、core から独立して有効化できる機能を所有する。
 - `vendor/`: 外部コード。Lapis 固有の責務を追加しない。
 
@@ -25,15 +26,24 @@ Lapis は、Rust backend を GPUI Desktop、KMP Mobile、Vite Web から利用�
 apps ────────────────┐
 backend/local ───────┼──> core / feature contracts
 backend/persistence ─┘
+backend/remote ──────┘
 
 app entry point ──> concrete adapters を組み立てる
 ```
 
-- `core` は GPUI、Android、Browser、OS、通信方式、永続化方式へ依存しない。
+- `core` は GPUI、KMP、OS、通信方式、永続化方式へ依存しない。
 - feature 間で循環依存を作らない。連携が必要なら、所有者の契約か application 層で調停する。
 - 外部ライブラリ、CLI、SDK の型とエラーは adapter で Lapis の型へ変換する。
 - 具体実装を選択する composition は各 app の entry point に置く。
 - UI が契約の型を参照することはよいが、adapter の具体型や外部 I/O を参照してはならない。
+
+## テスト可能性
+
+- 状態遷移と判断をGPUI、OS、外部I/Oから分離する。
+- 外部I/Oは契約を介し、境界だけを差し替える。
+- 非同期結果はRevisionまたは世代で検証する。
+- GPUIのContextを借用したままmodal処理やblocking I/Oを待たない。
+- coreの規則をGPUI・OSテストで重複して検証しない。
 
 ## Core と Feature
 
@@ -77,7 +87,14 @@ Document は内容、保存済み位置、現在 Revision、保存済み Revisio
 - Git CLI、LSP、OS、通信ライブラリの出力をそのまま公開しない。PTY は端末 emulator が解釈する専用の raw stream 契約を通す。
 - UI は結果の表示方法を決めるが、業務上の正規状態や回復方針を決めない。
 
-Desktop、Mobile、Web で共有するのは、契約、状態の意味、生成可能な型です。通信、cache、画面状態は各 client のネイティブ実装を基本とします。FFI や WASM による client logic の共有は、重複コストが境界維持コストを実測で上回った場合に再検討します。
+Desktop と Mobile で共有するのは、契約、状態の意味、生成可能な型です。通信、cache、画面状態は各 client のネイティブ実装を基本とします。FFI による client logic の共有は、重複コストが境界維持コストを実測で上回った場合に再検討します。
+
+## Workspace Files と Language
+
+- backendはWorkspace内のファイル取得とpath identityを所有し、UIは外部I/Oを直接行わない。
+- clientはツリーの展開、選択、スクロールと、置換可能な表示cacheを所有する。
+- 非同期応答はWorkspace世代またはrequest sequenceで識別し、古い結果を適用しない。
+- Files、Editor、LSPは安定した`LanguageId`を共有し、表示assetはclientが決める。
 
 Terminal の PTY output は表示用 text ではなく、順序番号付きの byte chunk として契約を越える。ANSI/VT sequence、alternate screen、read 境界を跨ぐ UTF-8、非 UTF-8 byte は client の terminal emulator が解釈するため、backend と transport は変換・除去しない。snapshot は再接続時に再利用できる範囲として raw output の末尾、最後の output sequence、保持上限による欠落状態、size と lifecycle を持つが、終了した PTY process 自体は再開しない。これにより Local と Remote は transport が異なっても同じ ordered stream semantics を共有できる。
 

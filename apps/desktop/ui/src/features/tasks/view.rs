@@ -3,13 +3,7 @@ use super::*;
 impl Editor {
     pub(super) fn render_assistant_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let records = self.tasks.session.records();
-        let mut task_list = div()
-            .id("task-list")
-            .flex()
-            .flex_col()
-            .gap_1()
-            .max_h(px(170.0))
-            .overflow_y_scroll();
+        let mut task_list = div().id("task-list").flex().flex_col().gap_1();
         for (task_index, record) in records.iter().take(12).enumerate() {
             let execution_id = record.execution.id.clone();
             let selected = self.tasks.selected_execution.as_ref() == Some(&execution_id);
@@ -21,11 +15,11 @@ impl Editor {
                     .p_2()
                     .rounded(px(6.0))
                     .bg(if selected {
-                        theme::accent_soft()
+                        theme::colors().button_background_selected
                     } else {
-                        theme::surface()
+                        theme::colors().background_tertiary
                     })
-                    .hover(|style| style.bg(theme::surface_hover()))
+                    .hover(|style| style.bg(theme::colors().button_background_hover))
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -35,7 +29,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(theme::text())
+                            .text_color(theme::colors().text_primary)
                             .child(truncate_chars(&record.task.title, 42)),
                     )
                     .child(
@@ -51,6 +45,14 @@ impl Editor {
                     ),
             );
         }
+
+        let task_list = scroll_viewport(
+            "task-list-scroll",
+            ScrollAxis::Vertical,
+            &self.scroll_states.task_list,
+            task_list,
+        )
+        .max_h(px(170.0));
 
         let selected = self
             .tasks
@@ -98,7 +100,6 @@ impl Editor {
                 .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
-                .overflow_y_scroll()
                 .gap_1();
             let start = record.events.len().saturating_sub(80);
             for event in &record.events[start..] {
@@ -110,9 +111,9 @@ impl Editor {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::surface())
+                        .bg(theme::colors().background_tertiary)
                         .text_size(px(10.0))
-                        .text_color(theme::muted())
+                        .text_color(theme::colors().text_secondary)
                         .child(text),
                 );
             }
@@ -130,7 +131,16 @@ impl Editor {
                         .child(div().flex_1())
                         .child(actions),
                 )
-                .child(events);
+                .child(
+                    scroll_viewport(
+                        "task-events-scroll",
+                        ScrollAxis::Vertical,
+                        &self.scroll_states.task_events,
+                        events,
+                    )
+                    .flex_1()
+                    .min_h(px(0.0)),
+                );
         } else {
             detail = detail.child(panel_empty_state(
                 "✦",
@@ -153,7 +163,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme::subtle())
+                            .text_color(theme::colors().text_tertiary)
                             .child("CODEX TASKS"),
                     )
                     .child(div().flex_1())

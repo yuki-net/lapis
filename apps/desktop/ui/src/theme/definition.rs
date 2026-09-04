@@ -3,54 +3,61 @@ use serde::Deserialize;
 
 use crate::extension_ui::ThemeId;
 
-/// レイアウト定数
-pub const TITLE_BAR_HEIGHT: f32 = 40.0;
-pub const WINDOW_CONTROL_WIDTH: f32 = 46.0;
-pub const WINDOW_RESIZE_BORDER_HEIGHT: f32 = 4.0;
-pub const TOOL_ISLAND_WIDTH: f32 = 260.0;
-pub const SIDE_PANEL_WIDTH: f32 = 310.0;
-pub const BOTTOM_PANEL_HEIGHT: f32 = 196.0;
-pub const ISLAND_RADIUS: f32 = 8.0;
-pub const CANVAS_GAP: f32 = 6.0;
-
-/// テーマが提供するカラートークン。
+/// テーマが提供するセマンティックカラートークン。
 #[derive(Clone, Debug)]
 pub struct ThemeColors {
-    pub canvas: Rgba,
-    pub title_bar: Rgba,
-    pub island: Rgba,
-    pub surface: Rgba,
-    pub surface_hover: Rgba,
-    pub surface_active: Rgba,
-    pub border: Rgba,
-    pub text: Rgba,
-    pub muted: Rgba,
-    pub subtle: Rgba,
-    pub accent: Rgba,
-    pub accent_soft: Rgba,
-    pub orange: Rgba,
-    pub close_hover: Rgba,
-    pub command_palette_border: Rgba,
-    pub focus_border: Rgba,
-    pub brand_text: Rgba,
-    pub on_accent_text: Rgba,
-    pub assistant_accent: Rgba,
+    // Background & Surface (4段階の面構造)
+    pub background_primary: Rgba,
+    pub background_secondary: Rgba,
+    pub background_tertiary: Rgba,
+    pub floating_background: Rgba,
+    pub floating_border: Rgba,
+    pub floating_shadow: Rgba,
+
+    // Text
+    pub text_primary: Rgba,
+    pub text_secondary: Rgba,
+    pub text_tertiary: Rgba,
+    pub text_accent: Rgba,
+    pub text_positive: Rgba,
+    pub text_warning: Rgba,
+    pub text_dangerous: Rgba,
+
+    // Button & Control
+    pub button_background: Rgba,
+    pub button_background_hover: Rgba,
+    pub button_background_selected: Rgba,
+    pub button_background_focused: Rgba,
+    pub button_border: Rgba,
+    pub button_border_selected: Rgba,
+    pub button_border_focused: Rgba,
+
+    // Border
+    pub border_default: Rgba,
+
+    // States (4系統 × 4点セット)
+    pub positive_background: Rgba,
+    pub positive_background_hover: Rgba,
+    pub positive_border: Rgba,
+    pub positive_text: Rgba,
+    pub warning_background: Rgba,
+    pub warning_background_hover: Rgba,
+    pub warning_border: Rgba,
+    pub warning_text: Rgba,
+    pub danger_background: Rgba,
+    pub danger_background_hover: Rgba,
+    pub danger_border: Rgba,
+    pub danger_text: Rgba,
+    pub info_background: Rgba,
+    pub info_background_hover: Rgba,
+    pub info_border: Rgba,
+    pub info_text: Rgba,
+
+    // Editor
+    pub editor_caret: Rgba,
     pub editor_selection: Rgba,
     pub editor_search_match: Rgba,
-    pub editor_cursor: Rgba,
-    pub search_selection: Rgba,
-    pub command_input_border: Rgba,
-    pub task_primary_border: Rgba,
-    pub task_primary_text: Rgba,
-    pub status_success: Rgba,
-    pub status_error: Rgba,
-    pub status_warning: Rgba,
-    pub status_info: Rgba,
-    pub diff_added: Rgba,
-    pub diff_removed: Rgba,
-    pub diff_changed: Rgba,
-    pub problem_error: Rgba,
-    pub note: Rgba,
+    pub editor_current_line: Rgba,
 }
 
 /// テーマの定義。ID とカラートークンのセット。
@@ -105,41 +112,47 @@ struct ThemeFile {
 
 #[derive(Debug, Deserialize)]
 struct ThemeColorsFile {
-    canvas: String,
-    title_bar: String,
-    island: String,
-    surface: String,
-    surface_hover: String,
-    surface_active: String,
-    border: String,
-    text: String,
-    muted: String,
-    subtle: String,
-    accent: String,
-    accent_soft: String,
-    orange: String,
-    close_hover: String,
-    command_palette_border: String,
-    focus_border: String,
-    brand_text: String,
-    on_accent_text: String,
-    assistant_accent: String,
+    background_primary: String,
+    background_secondary: String,
+    background_tertiary: String,
+    floating_background: String,
+    floating_border: String,
+    floating_shadow: String,
+    text_primary: String,
+    text_secondary: String,
+    text_tertiary: String,
+    text_accent: String,
+    text_positive: String,
+    text_warning: String,
+    text_dangerous: String,
+    button_background: String,
+    button_background_hover: String,
+    button_background_selected: String,
+    button_background_focused: String,
+    button_border: String,
+    button_border_selected: String,
+    button_border_focused: String,
+    border_default: String,
+    positive_background: String,
+    positive_background_hover: String,
+    positive_border: String,
+    positive_text: String,
+    warning_background: String,
+    warning_background_hover: String,
+    warning_border: String,
+    warning_text: String,
+    danger_background: String,
+    danger_background_hover: String,
+    danger_border: String,
+    danger_text: String,
+    info_background: String,
+    info_background_hover: String,
+    info_border: String,
+    info_text: String,
+    editor_caret: String,
     editor_selection: String,
     editor_search_match: String,
-    editor_cursor: String,
-    search_selection: String,
-    command_input_border: String,
-    task_primary_border: String,
-    task_primary_text: String,
-    status_success: String,
-    status_error: String,
-    status_warning: String,
-    status_info: String,
-    diff_added: String,
-    diff_removed: String,
-    diff_changed: String,
-    problem_error: String,
-    note: String,
+    editor_current_line: String,
 }
 
 impl TryFrom<ThemeColorsFile> for ThemeColors {
@@ -153,41 +166,47 @@ impl TryFrom<ThemeColorsFile> for ThemeColors {
         }
 
         Ok(Self {
-            canvas: color!(canvas),
-            title_bar: color!(title_bar),
-            island: color!(island),
-            surface: color!(surface),
-            surface_hover: color!(surface_hover),
-            surface_active: color!(surface_active),
-            border: color!(border),
-            text: color!(text),
-            muted: color!(muted),
-            subtle: color!(subtle),
-            accent: color!(accent),
-            accent_soft: color!(accent_soft),
-            orange: color!(orange),
-            close_hover: color!(close_hover),
-            command_palette_border: color!(command_palette_border),
-            focus_border: color!(focus_border),
-            brand_text: color!(brand_text),
-            on_accent_text: color!(on_accent_text),
-            assistant_accent: color!(assistant_accent),
+            background_primary: color!(background_primary),
+            background_secondary: color!(background_secondary),
+            background_tertiary: color!(background_tertiary),
+            floating_background: color!(floating_background),
+            floating_border: color!(floating_border),
+            floating_shadow: color!(floating_shadow),
+            text_primary: color!(text_primary),
+            text_secondary: color!(text_secondary),
+            text_tertiary: color!(text_tertiary),
+            text_accent: color!(text_accent),
+            text_positive: color!(text_positive),
+            text_warning: color!(text_warning),
+            text_dangerous: color!(text_dangerous),
+            button_background: color!(button_background),
+            button_background_hover: color!(button_background_hover),
+            button_background_selected: color!(button_background_selected),
+            button_background_focused: color!(button_background_focused),
+            button_border: color!(button_border),
+            button_border_selected: color!(button_border_selected),
+            button_border_focused: color!(button_border_focused),
+            border_default: color!(border_default),
+            positive_background: color!(positive_background),
+            positive_background_hover: color!(positive_background_hover),
+            positive_border: color!(positive_border),
+            positive_text: color!(positive_text),
+            warning_background: color!(warning_background),
+            warning_background_hover: color!(warning_background_hover),
+            warning_border: color!(warning_border),
+            warning_text: color!(warning_text),
+            danger_background: color!(danger_background),
+            danger_background_hover: color!(danger_background_hover),
+            danger_border: color!(danger_border),
+            danger_text: color!(danger_text),
+            info_background: color!(info_background),
+            info_background_hover: color!(info_background_hover),
+            info_border: color!(info_border),
+            info_text: color!(info_text),
+            editor_caret: color!(editor_caret),
             editor_selection: color!(editor_selection),
             editor_search_match: color!(editor_search_match),
-            editor_cursor: color!(editor_cursor),
-            search_selection: color!(search_selection),
-            command_input_border: color!(command_input_border),
-            task_primary_border: color!(task_primary_border),
-            task_primary_text: color!(task_primary_text),
-            status_success: color!(status_success),
-            status_error: color!(status_error),
-            status_warning: color!(status_warning),
-            status_info: color!(status_info),
-            diff_added: color!(diff_added),
-            diff_removed: color!(diff_removed),
-            diff_changed: color!(diff_changed),
-            problem_error: color!(problem_error),
-            note: color!(note),
+            editor_current_line: color!(editor_current_line),
         })
     }
 }
@@ -237,7 +256,7 @@ mod tests {
         assert_eq!(definition.id.as_str(), "lapis.dark");
         assert_eq!(definition.name, "Dark");
 
-        let invalid = source.replace("\"version\": 1", "\"version\": 2");
+        let invalid = source.replace(r#""version": 1"#, r#""version": 2"#);
         assert!(ThemeDefinition::from_json(&invalid).is_err());
     }
 }

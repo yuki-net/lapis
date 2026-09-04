@@ -46,24 +46,20 @@ impl IntoElement for PanelToggleIcon {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::muted())
+            .text_color(theme::colors().text_secondary)
             .child(crate::components::Icon::new(name).with_rotation(rotation))
     }
 }
 
-/// A visible Lucide menu icon for the header.
-pub(crate) fn menu_icon() -> gpui::Div {
-    div()
-        .size_4()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(theme::muted())
-        .child(crate::components::Icon::new(
-            crate::components::IconName::Menu,
-        ))
+pub(crate) fn open_panel_icon(position: crate::extension_ui::PanelPosition) -> PanelToggleIcon {
+    let position = match position {
+        crate::extension_ui::PanelPosition::Left => PanelPosition::Left,
+        crate::extension_ui::PanelPosition::Bottom => PanelPosition::Bottom,
+        crate::extension_ui::PanelPosition::Right => PanelPosition::Right,
+        crate::extension_ui::PanelPosition::Main => PanelPosition::Left,
+    };
+    PanelToggleIcon::new(position, PanelState::Open)
 }
-
 #[derive(Clone, Copy)]
 pub(crate) enum WindowControlIconName {
     Minimize,
@@ -103,7 +99,7 @@ impl IntoElement for WindowControlIcon {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::muted())
+            .text_color(theme::colors().text_secondary)
             .child(crate::components::Icon::new(self.name.icon_name()))
     }
 }
@@ -118,23 +114,25 @@ pub(crate) fn window_control_button(
     div()
         .id(id)
         .h_full()
-        .w(px(theme::WINDOW_CONTROL_WIDTH))
+        .w(tokens::size::WINDOW_CONTROL_WIDTH)
         .flex_shrink_0()
         .flex()
         .items_center()
         .justify_center()
         .occlude()
         .window_control_area(area)
-        .text_color(theme::muted())
+        .text_color(theme::colors().text_secondary)
         .hover(move |style| {
             if close {
                 style
-                    .bg(theme::close_hover())
-                    .text_color(theme::on_accent_text())
+                    .bg(theme::colors().danger_background)
+                    .text_color(theme::colors().text_primary)
             } else {
-                style.bg(theme::surface_hover()).text_color(theme::text())
+                style
+                    .bg(theme::colors().button_background_hover)
+                    .text_color(theme::colors().text_primary)
             }
         })
-        .active(|style| style.bg(theme::surface_active()))
+        .active(|style| style.bg(theme::colors().button_background_selected))
         .child(WindowControlIcon::new(icon))
 }

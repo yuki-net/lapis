@@ -15,12 +15,15 @@ pub(super) fn descriptor() -> FeatureDescriptor {
             ActivationCondition::OnCommand(id::COMMAND_START_CODEX.into()),
         ],
     )
-    .contributes(UiContribution::view(
-        id::VIEW_ASSISTANT,
-        UiSlot::SideDock,
-        "view.assistant",
-        "assistant",
-        20,
-    ))
+    .contributes(
+        UiContribution::view(
+            id::VIEW_ASSISTANT,
+            UiSlot::SideDock,
+            "view.assistant",
+            "assistant",
+            20,
+        )
+        .feature_owned_scroll(),
+    )
     .requires("workspace.process")
 }

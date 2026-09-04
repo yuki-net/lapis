@@ -1,6 +1,6 @@
 use super::*;
 
-use super::menu::MenuAction;
+use super::menu_definition::MenuAction;
 use crate::shell::HeaderMenuSection as MenuId;
 
 impl Editor {
@@ -58,8 +58,11 @@ impl Editor {
         self.close_header_menu(cx);
         match action {
             MenuAction::NewFile => self.new_document(&New, window, cx),
+            MenuAction::NewFolder => self.create_new_folder(window, cx),
+            MenuAction::NewWindow => self.open_new_window(cx),
             MenuAction::OpenProject => self.open_project(window, cx),
             MenuAction::OpenFile => self.open_file(window, cx),
+            MenuAction::CloseProject => self.close_project(window, cx),
             MenuAction::CloseWindow => window.remove_window(),
             MenuAction::Undo => self.undo(&Undo, window, cx),
             MenuAction::Redo => self.redo(&Redo, window, cx),
@@ -72,6 +75,7 @@ impl Editor {
             MenuAction::ToggleBottomPanel => {
                 self.toggle_bottom_panel(&ToggleBottomPanel, window, cx)
             }
+            MenuAction::ToggleInspector => self.toggle_inspector_window(window, cx),
             MenuAction::ToggleRightPanel => {
                 self.toggle_header_panel(crate::extension_ui::PanelPosition::Right, cx)
             }

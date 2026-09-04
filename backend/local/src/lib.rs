@@ -15,6 +15,7 @@ use std::{
 };
 
 use lapis_app_services::{WorkspaceDialog, WorkspaceRepository};
+use lapis_backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use lapis_editor_core::ExecutionId;
 use lapis_git::{
@@ -926,6 +927,57 @@ impl DocumentRepository for LocalWorkspaceRepository {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(DocumentError::io(error.to_string())),
         }
+    }
+}
+
+impl WorkspaceFileBackend for LocalWorkspaceRepository {
+    fn list_children(&self, directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
+        let entries = fs::read_dir(directory).map_err(|error| {
+            DocumentError::io(format!(
+                "Workspaceディレクトリの項目を読み込めません: {}: {error}",
+                directory.display()
+            ))
+        })?;
+        let mut children = Vec::new();
+
+        for entry in entries {
+            let entry = entry.map_err(|error| {
+                DocumentError::io(format!(
+                    "Workspaceディレクトリの項目を読み込めません: {}: {error}",
+                    directory.display()
+                ))
+            })?;
+            let file_name = entry.file_name();
+            let name = file_name.into_string().map_err(|file_name| {
+                DocumentError::io(format!(
+                    "Workspace項目名をUTF-8へ変換できません: {file_name:?}"
+                ))
+            })?;
+            let metadata = fs::symlink_metadata(entry.path()).map_err(|error| {
+                DocumentError::io(format!(
+                    "Workspace項目の種類を確認できません: {}: {error}",
+                    entry.path().display()
+                ))
+            })?;
+            let file_type = metadata.file_type();
+            let kind = if file_type.is_symlink() {
+                WorkspaceEntryKind::Symlink
+            } else if file_type.is_dir() {
+                WorkspaceEntryKind::Directory
+            } else if file_type.is_file() {
+                WorkspaceEntryKind::File
+            } else {
+                return Err(DocumentError::io(format!(
+                    "Workspace項目の種類に対応していません: {}",
+                    entry.path().display()
+                )));
+            };
+
+            children.push(WorkspaceEntry { name, kind });
+        }
+
+        children.sort_by(|left, right| left.name.cmp(&right.name));
+        Ok(children)
     }
 }
 
@@ -2157,6 +2209,83 @@ mod tests {
             }
         }
         assert_eq!(output, b"\x1b[31mred\x1b[2;4H\x1b[2J\xe3\x81\x82\xff\x00");
+    }
+
+    #[test]
+    fn list_children_returns_sorted_immediate_entries() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::create_dir(directory.path().join("z-directory")).unwrap();
+        fs::create_dir_all(directory.path().join("nested").join("ignored")).unwrap();
+        fs::write(directory.path().join("a-file"), b"file").unwrap();
+
+        let entries = LocalWorkspaceRepository
+            .list_children(directory.path())
+            .unwrap();
+
+        assert_eq!(
+            entries,
+            vec![
+                WorkspaceEntry {
+                    name: "a-file".to_owned(),
+                    kind: WorkspaceEntryKind::File,
+                },
+                WorkspaceEntry {
+                    name: "nested".to_owned(),
+                    kind: WorkspaceEntryKind::Directory,
+                },
+                WorkspaceEntry {
+                    name: "z-directory".to_owned(),
+                    kind: WorkspaceEntryKind::Directory,
+                },
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_children_classifies_symlinks_without_following_them() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("target"), b"file").unwrap();
+        symlink(
+            directory.path().join("target"),
+            directory.path().join("link"),
+        )
+        .unwrap();
+
+        let entries = LocalWorkspaceRepository
+            .list_children(directory.path())
+            .unwrap();
+
+        assert_eq!(entries[0].name, "link");
+        assert_eq!(entries[0].kind, WorkspaceEntryKind::Symlink);
+        assert_eq!(entries[1].kind, WorkspaceEntryKind::File);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_children_rejects_non_utf8_names_as_document_errors() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let directory = tempfile::tempdir().unwrap();
+        let name = OsString::from_vec(vec![b'i', b'n', b'v', b'a', b'l', b'i', b'd', 0xff]);
+        fs::write(directory.path().join(name), b"file").unwrap();
+
+        let error = LocalWorkspaceRepository
+            .list_children(directory.path())
+            .unwrap_err();
+        assert_eq!(error.kind(), lapis_document::DocumentErrorKind::Io);
+    }
+
+    #[test]
+    fn list_children_maps_directory_io_errors_to_document_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("file");
+        fs::write(&file, b"not a directory").unwrap();
+
+        let error = LocalWorkspaceRepository.list_children(&file).unwrap_err();
+        assert_eq!(error.kind(), lapis_document::DocumentErrorKind::Io);
     }
 
     #[test]

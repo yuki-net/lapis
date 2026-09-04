@@ -1,6 +1,9 @@
 use gpui::{AnyElement, Context, Inspector, IntoElement, Window, div, prelude::*, px};
 
-use crate::theme;
+use crate::{
+    components::{ScrollAxis, scroll_viewport},
+    theme,
+};
 
 use super::inspector_controller::InspectorController;
 use super::tree_view::{render_active_summary, render_tree};
@@ -10,12 +13,13 @@ pub(super) fn render_inspector(
     window: &mut Window,
     cx: &mut Context<Inspector>,
 ) -> AnyElement {
+    let content_scroll = InspectorController::content_scroll(cx);
     div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(theme::island())
-        .text_color(theme::text())
+        .bg(theme::colors().background_secondary)
+        .text_color(theme::colors().text_primary)
         .child(
             div()
                 .h(px(44.0))
@@ -25,7 +29,7 @@ pub(super) fn render_inspector(
                 .justify_between()
                 .px_3()
                 .border_b_1()
-                .border_color(theme::border())
+                .border_color(theme::colors().border_default)
                 .child(
                     div()
                         .flex()
@@ -35,7 +39,7 @@ pub(super) fn render_inspector(
                         .child(
                             div()
                                 .text_size(px(10.0))
-                                .text_color(theme::muted())
+                                .text_color(theme::colors().text_secondary)
                                 .child("auto update"),
                         ),
                 )
@@ -51,11 +55,11 @@ pub(super) fn render_inspector(
                                 .py_1()
                                 .rounded_md()
                                 .cursor_pointer()
-                                .bg(theme::surface())
-                                .hover(|style| style.bg(theme::surface_hover()))
+                                .bg(theme::colors().background_tertiary)
+                                .hover(|style| style.bg(theme::colors().button_background_hover))
                                 .child("Refresh")
                                 .on_click(cx.listener(|_, _, _, cx| {
-                                    InspectorController::refresh_target(cx);
+                                    cx.defer(InspectorController::refresh_target);
                                 })),
                         )
                         .child(
@@ -66,17 +70,17 @@ pub(super) fn render_inspector(
                                 .rounded_md()
                                 .cursor_pointer()
                                 .bg(if inspector.is_picking() {
-                                    theme::accent_soft()
+                                    theme::colors().button_background_selected
                                 } else {
-                                    theme::surface()
+                                    theme::colors().background_tertiary
                                 })
-                                .hover(|style| style.bg(theme::surface_hover()))
+                                .hover(|style| style.bg(theme::colors().button_background_hover))
                                 .child("Pick element")
                                 .on_click(cx.listener(|inspector, _, window, cx| {
                                     inspector.start_picking();
                                     window.refresh();
                                     cx.notify();
-                                    InspectorController::refresh_target(cx);
+                                    cx.defer(InspectorController::repaint_target);
                                 })),
                         ),
                 ),
@@ -91,22 +95,24 @@ pub(super) fn render_inspector(
                         .w(px(310.0))
                         .flex_none()
                         .border_r_1()
-                        .border_color(theme::border())
+                        .border_color(theme::colors().border_default)
                         .child(render_tree(inspector, cx)),
                 )
                 .child(
-                    div()
-                        .id("inspector-content")
-                        .min_w(px(0.0))
-                        .min_h(px(0.0))
-                        .flex_1()
-                        .overflow_x_scroll()
-                        .overflow_y_scroll()
-                        .p_3()
-                        .when_some(render_active_summary(inspector), |element, summary| {
-                            element.child(summary)
-                        })
-                        .children(inspector.render_inspector_states(window, cx)),
+                    scroll_viewport(
+                        "inspector-content",
+                        ScrollAxis::Both,
+                        &content_scroll,
+                        div()
+                            .p_3()
+                            .when_some(render_active_summary(inspector), |element, summary| {
+                                element.child(summary)
+                            })
+                            .children(inspector.render_inspector_states(window, cx)),
+                    )
+                    .min_w(px(0.0))
+                    .min_h(px(0.0))
+                    .flex_1(),
                 ),
         )
         .into_any_element()

@@ -5,11 +5,16 @@ use lapis_app_services::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
+use lapis_backend_state::{BackendService, BackendState, WorkspaceRegistration};
 use lapis_persistence::{LocalConversationRepository, LocalGlobalSettingsRepository};
 use lapis_platform::{
     ConnectionGate, LocalGitBackend, LocalLspBackend, LocalTaskBackend, LocalTerminalBackend,
     LocalWorkspaceRepository, LocalWorkspaceSearchBackend, LocalWorkspaceStateRepository,
     LoopbackBackend, NativeWorkspaceDialog, run_task_worker,
+};
+use lapis_remote::{
+    AuthConfig, AuthPolicy, BackendRemoteHandler, CredentialLifetime, PairingLifetime, RemoteAuth,
+    RemoteLimits, RemoteServer, RemoteServerConfig, Tls13ServerConfig,
 };
 
 fn main() {
@@ -132,6 +137,50 @@ fn main() {
     } else {
         WorkspaceSearchSession::new(Arc::new(LocalWorkspaceSearchBackend))
     };
+
+    let mut _remote_server: Option<RemoteServer> = None;
+    if let Some(root) = session.workspace_root() {
+        let workspace_id = lapis_client_api::WorkspaceId::try_new("workspace-default")
+            .expect("default workspace id must be valid");
+        let local_files = Arc::new(LocalWorkspaceRepository);
+        let local_terminals = Arc::new(LocalTerminalBackend::default());
+        let registration = WorkspaceRegistration::new(
+            workspace_id,
+            session.workspace_name(),
+            root.to_owned(),
+            local_files,
+        )
+        .with_terminal(local_terminals);
+
+        if let Ok(state) = BackendState::new([registration])
+            && let Ok(backend_service) = BackendService::start(state)
+        {
+            let auth_config = AuthConfig::new(
+                PairingLifetime::new(300).expect("valid pairing lifetime"),
+                CredentialLifetime::new(86400).expect("valid credential lifetime"),
+            );
+            let mut auth = RemoteAuth::system(auth_config, AuthPolicy::new(Default::default()));
+            auth.enable();
+            let shared_auth = Arc::new(std::sync::Mutex::new(auth));
+            let handler = Arc::new(BackendRemoteHandler::new(backend_service));
+            if let Ok(tls) = Tls13ServerConfig::generate_self_signed(vec![
+                "localhost".to_owned(),
+                "127.0.0.1".to_owned(),
+            ]) {
+                let server_config = RemoteServerConfig::new(
+                    "127.0.0.1:0"
+                        .parse()
+                        .expect("valid loopback socket address"),
+                    tls,
+                    RemoteLimits::default(),
+                );
+                if let Ok(server) = RemoteServer::start(server_config, shared_auth, handler) {
+                    _remote_server = Some(server);
+                }
+            }
+        }
+    }
+
     let show_terminal = arguments.iter().any(|value| value == "--show-terminal");
     if show_terminal
         && let Some(root) = session.workspace_root()
@@ -140,6 +189,7 @@ fn main() {
         eprintln!("Terminal start failed: {error}");
     }
     let initial_view = lapis_desktop_ui::InitialView {
+        empty_window: false,
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),

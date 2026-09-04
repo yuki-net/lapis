@@ -9,10 +9,18 @@ impl Editor {
     pub(super) fn apply_conversation_view(&mut self, view: ConversationViewState) {
         let documents = self.session.tabs();
         apply_view_state(view, &mut self.shell, &documents, &self.feature_registry);
+        self.expanded_directories.clear();
+        if let Some(root) = self.session.workspace_root() {
+            self.expanded_directories.insert(root.to_owned());
+        }
         self.refresh_feature_activation();
     }
 
     pub(super) fn capture_conversation(&mut self) -> Result<(), lapis_workspace::WorkspaceError> {
+        // 新規Windowの空状態は、既存ConversationのWorkspaceを上書きしない。
+        if self.session.workspace_root().is_none() && self.session.tabs().is_empty() {
+            return Ok(());
+        }
         let view = self.conversation_view_state();
         self.conversation.session.capture(
             &self.session,

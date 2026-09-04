@@ -1,3 +1,5 @@
+use crate::components::ScrollState;
+
 use gpui::{
     AnyWindowHandle, App, Bounds, Global, InspectorElementId, Subscription, TitlebarOptions,
     Window, WindowBounds, WindowId, WindowOptions, px, size,
@@ -63,6 +65,8 @@ pub(super) struct InspectorController {
     target_window: Option<AnyWindowHandle>,
     inspector_window: Option<AnyWindowHandle>,
     _window_closed_subscription: Option<Subscription>,
+    tree_scroll: ScrollState,
+    content_scroll: ScrollState,
 }
 
 impl Global for InspectorController {}
@@ -124,6 +128,13 @@ pub(super) fn init(cx: &mut App) {
 }
 
 impl InspectorController {
+    pub(super) fn tree_scroll(cx: &App) -> ScrollState {
+        cx.global::<InspectorController>().tree_scroll.clone()
+    }
+
+    pub(super) fn content_scroll(cx: &App) -> ScrollState {
+        cx.global::<InspectorController>().content_scroll.clone()
+    }
     pub(super) fn toggle(target_window: &mut Window, cx: &mut App) -> Result<bool, String> {
         let is_open = cx.global::<InspectorController>().lifecycle.is_open();
         if is_open {
@@ -183,6 +194,15 @@ impl InspectorController {
             .target_window
             .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
         if let Some(target_window) = target_window {
+            let _ = target_window.update(cx, |_, window, cx| window.stop_inspector_picking(cx));
+        }
+    }
+    pub(super) fn repaint_target(cx: &mut App) {
+        let target_window = cx
+            .global::<InspectorController>()
+            .target_window
+            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+        if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, _cx| window.refresh());
         }
     }
@@ -195,6 +215,17 @@ impl InspectorController {
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| {
                 window.select_inspector_element(id, cx);
+            });
+        }
+    }
+    pub(super) fn hover_element(id: Option<InspectorElementId>, cx: &mut App) {
+        let target_window = cx
+            .global::<InspectorController>()
+            .target_window
+            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+        if let Some(target_window) = target_window {
+            let _ = target_window.update(cx, |_, window, cx| {
+                window.preview_inspector_element(id, cx);
             });
         }
     }

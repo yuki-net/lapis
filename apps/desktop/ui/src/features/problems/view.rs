@@ -6,7 +6,6 @@ pub(crate) fn render_content(problems: &ProblemsFeature) -> gpui::Div {
         .id("problems-scroll")
         .flex_1()
         .min_h(px(0.0))
-        .overflow_y_scroll()
         .p_2()
         .gap_1()
         .flex()
@@ -15,20 +14,23 @@ pub(crate) fn render_content(problems: &ProblemsFeature) -> gpui::Div {
         content = content.child(
             div()
                 .text_size(px(11.0))
-                .text_color(theme::problem_error())
+                .text_color(theme::colors().danger_text)
                 .child(error.to_owned()),
         );
     }
     for diagnostic in problems.lsp.diagnostics().iter().take(100) {
-        content = content.child(div().text_size(px(11.0)).text_color(theme::text()).child(
-            format!(
-                "{}:{}:{}  {}",
-                diagnostic.path.display(),
-                diagnostic.range.start.line + 1,
-                diagnostic.range.start.utf16_column + 1,
-                diagnostic.message
-            ),
-        ));
+        content = content.child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme::colors().text_primary)
+                .child(format!(
+                    "{}:{}:{}  {}",
+                    diagnostic.path.display(),
+                    diagnostic.range.start.line + 1,
+                    diagnostic.range.start.utf16_column + 1,
+                    diagnostic.message
+                )),
+        );
     }
     if problems.lsp.last_error().is_none() && problems.lsp.diagnostics().is_empty() {
         content = content.child(panel_empty_state(
@@ -46,6 +48,6 @@ pub(crate) fn render_output(status: &str) -> gpui::Div {
         .min_h(px(0.0))
         .p_3()
         .text_size(px(11.0))
-        .text_color(theme::muted())
+        .text_color(theme::colors().text_secondary)
         .child(status.to_owned())
 }

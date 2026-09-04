@@ -1,7 +1,7 @@
 use crate::extension_ui::{PanelPosition, ViewId};
 use lapis_editor_core::DocumentId;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {
     Document(DocumentId),
     Tool(ViewId),

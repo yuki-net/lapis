@@ -1,0 +1,15 @@
+[package]
+name = "lapis-backend-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-client-api = { path = "../client-api" }
+lapis-document = { path = "../document" }
+lapis-text = { path = "../text" }
+lapis-terminal = { path = "../../../features/terminal" }
+
+[dev-dependencies]
+tempfile.workspace = true

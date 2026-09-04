@@ -1,44 +1,31 @@
 use super::*;
+use crate::components::{header_button, icon_button};
 
 impl Editor {
-    pub(super) fn render_header_left(
-        &self,
-        cx: &mut Context<Self>,
-        compact_layout: bool,
-    ) -> impl IntoElement {
+    pub(super) fn render_header_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
-            .w(px(if compact_layout { 200.0 } else { 320.0 }))
             .flex_shrink_0()
             .flex()
             .items_center()
-            .gap_1()
+            .gap(tokens::spacing::XS)
             .child(
                 div()
-                    .size(px(22.0))
-                    .rounded(px(6.0))
+                    .size(tokens::size::BUTTON_XS)
+                    .rounded(tokens::radius::CONTROL)
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(theme::accent())
-                    .text_color(theme::brand_text())
-                    .text_size(px(11.0))
+                    .bg(theme::colors().text_accent)
+                    .text_color(theme::colors().text_primary)
+                    .text_size(tokens::typography::FONT_XS)
                     .child("L"),
             )
             .child(
-                div()
-                    .id("header-menu")
-                    .size(px(28.0))
-                    .rounded(px(6.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .occlude()
-                    .bg(theme::title_bar())
-                    .hover(|style| style.bg(theme::surface_hover()))
-                    .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                icon_button("header-menu", IconName::Menu).on_click(cx.listener(
+                    |this, event: &ClickEvent, _, cx| {
                         this.toggle_header_menu(event.position(), cx);
-                    }))
-                    .child(controls::menu_icon()),
+                    },
+                )),
             )
             .child(
                 panel_toggle_button(
@@ -92,15 +79,6 @@ fn panel_toggle_button(
     position: controls::PanelPosition,
     state: controls::PanelState,
 ) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
-        .size(px(28.0))
-        .rounded(px(6.0))
-        .flex()
-        .items_center()
-        .justify_center()
-        .occlude()
-        .bg(theme::title_bar())
-        .hover(|style| style.bg(theme::surface_hover()))
-        .child(controls::PanelToggleIcon::new(position, state))
+    header_button(id, controls::PanelToggleIcon::new(position, state))
+        .w(tokens::size::HEADER_BUTTON)
 }

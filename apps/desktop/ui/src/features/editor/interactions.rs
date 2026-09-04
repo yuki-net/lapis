@@ -1,5 +1,7 @@
 use super::*;
 
+use gpui::{TitlebarOptions, WindowBounds, WindowOptions};
+
 impl Editor {
     pub(super) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
         if self.session.is_empty() || self.last_line_layouts.is_empty() {
@@ -36,6 +38,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.shell.focused_panel = crate::extension_ui::PanelPosition::Main;
         self.is_selecting = true;
         window.focus(&self.focus_handle);
         let offset = self.index_for_mouse_position(event.position);
@@ -66,43 +69,100 @@ impl Editor {
         self.is_selecting = false;
     }
 
-    pub(super) fn open_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.session.choose_workspace() {
-            Ok(DocumentAction::Completed) => {
-                if let Ok(Some(view)) = self
-                    .conversation
-                    .session
-                    .restore_matching_workspace(&mut self.session)
-                {
-                    self.apply_conversation_view(view);
+    pub(super) fn open_project(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let dialog = self.session.file_dialog();
+        self.status = "Workspaceを選択しています...".to_owned();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(1)).await;
+            let root = dialog.choose_workspace_path();
+            let _ = this.update(cx, |editor, cx| {
+                let Some(root) = root else {
+                    editor.status.clear();
+                    cx.notify();
+                    return;
+                };
+                match editor.session.open_workspace(root) {
+                    Ok(()) => editor.finish_workspace_open(cx),
+                    Err(error) => {
+                        editor.status = format!("Workspaceを開けませんでした: {error}");
+                        cx.notify();
+                    }
                 }
-                self.selected_range = 0..0;
-                self.shell.synchronize_documents(&self.session.tabs());
-                self.status = "Workspaceを開きました".to_owned();
-                window.focus(&self.focus_handle);
-                cx.notify();
-            }
-            Ok(DocumentAction::Cancelled) => {}
-            Err(error) => self.status = format!("読み込み失敗: {error}"),
-        }
+            });
+        })
+        .detach();
     }
 
-    pub(super) fn open_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.session.choose_file() {
-            Ok(DocumentAction::Completed) => {
-                self.selected_range = 0..0;
-                self.shell.synchronize_documents(&self.session.tabs());
-                self.status = "ファイルを開きました".to_owned();
-                window.focus(&self.focus_handle);
-                self.refresh_feature_activation();
-                cx.notify();
-            }
-            Ok(DocumentAction::Cancelled) => {}
+    pub(super) fn open_recent_workspace(
+        &mut self,
+        root: std::path::PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.session.open_workspace(root) {
+            Ok(()) => self.finish_workspace_open(cx),
             Err(error) => {
-                self.status = format!("ファイルを開けませんでした: {error}");
+                self.status = format!("Workspaceを開けませんでした: {error}");
                 cx.notify();
             }
         }
+        window.focus(&self.focus_handle);
+    }
+
+    fn finish_workspace_open(&mut self, cx: &mut Context<Self>) {
+        if let Ok(Some(view)) = self
+            .conversation
+            .session
+            .restore_matching_workspace(&mut self.session)
+        {
+            self.apply_conversation_view(view);
+        }
+        self.expanded_directories.clear();
+        if let Some(root) = self.session.workspace_root() {
+            self.expanded_directories.insert(root.to_owned());
+        }
+        self.selected_range = 0..0;
+        self.shell.synchronize_documents(&self.session.tabs());
+        self.status = "Workspaceを開きました".to_owned();
+        self.refresh_feature_activation();
+        cx.notify();
+    }
+
+    pub(super) fn open_file(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let dialog = self.session.file_dialog();
+        self.status = "ファイルを選択しています...".to_owned();
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(1)).await;
+            let path = dialog.choose_file_path();
+            let _ = this.update(cx, |editor, cx| {
+                let Some(path) = path else {
+                    editor.status.clear();
+                    cx.notify();
+                    return;
+                };
+                match editor.session.open_path(path) {
+                    Ok(()) => {
+                        editor.restore_active_view();
+                        editor.shell.synchronize_documents(&editor.session.tabs());
+                        editor.status = "ファイルを開きました".to_owned();
+                        editor.refresh_feature_activation();
+                    }
+                    Err(error) => {
+                        editor.status = format!("ファイルを開けませんでした: {error}");
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+    pub(super) fn clone_from_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // TODO: Git URLと保存先を受け取り、clone後にWorkspaceとして開く。
+        self.status = "Clone from Git は準備中です".to_owned();
+        window.focus(&self.focus_handle);
+        cx.notify();
     }
 
     pub(super) fn save_file(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -115,5 +175,114 @@ impl Editor {
             Ok(DocumentAction::Cancelled) => {}
             Err(error) => self.status = format!("保存失敗: {error}"),
         }
+    }
+
+    pub(super) fn create_new_folder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(root) = self.session.workspace_root() {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let folder_name = format!("new-folder-{}", timestamp % 10000);
+            let new_dir = root.join(&folder_name);
+            if let Err(error) = std::fs::create_dir_all(&new_dir) {
+                self.status = format!("フォルダ作成失敗: {error}");
+            } else {
+                let _ = self.session.refresh_file_tree();
+                self.status = format!("フォルダを作成しました: {folder_name}");
+            }
+            cx.notify();
+        } else {
+            self.status = "Workspaceを開いてからフォルダを作成してください".to_owned();
+            cx.notify();
+        }
+    }
+
+    pub(super) fn open_new_window(&mut self, cx: &mut Context<Self>) {
+        let repository = self.session.repository();
+        let file_dialog = self.session.file_dialog();
+        let state_repository = self.session.state_repository();
+        let new_session =
+            lapis_app_services::EditorSession::new_empty(repository, file_dialog, state_repository);
+        let snapshot = new_session.snapshot();
+        let task = lapis_app_services::TaskSession::new(self.tasks.session.backend());
+        let git = lapis_app_services::GitSession::new(self.git.session.backend());
+        let lsp = lapis_app_services::LspSession::new(self.problems.lsp.backend());
+        let terminal = lapis_app_services::TerminalSession::new(self.terminal.session.backend());
+        let search =
+            lapis_app_services::WorkspaceSearchSession::new(self.search.workspace.backend());
+        let conversation = lapis_app_services::ConversationSession::new(
+            self.conversation.session.repository(),
+            snapshot,
+        );
+        let settings = self.settings.clone();
+        let services = crate::app::DesktopServices::new(
+            task,
+            git,
+            lsp,
+            terminal,
+            search,
+            conversation,
+            settings,
+        );
+
+        let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+        let _ = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Lapis".into()),
+                    appears_transparent: true,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let editor = cx.new(|cx| {
+                    Editor::new(
+                        new_session,
+                        services,
+                        crate::app::InitialView {
+                            empty_window: true,
+                            ..Default::default()
+                        },
+                        cx,
+                    )
+                });
+                window.focus(&editor.read(cx).editor_focus_handle());
+                editor
+            },
+        );
+    }
+
+    pub(super) fn close_project(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Err(error) = self.session.close_workspace() {
+            self.status = format!("プロジェクト終了失敗: {error}");
+        } else {
+            self.selected_range = 0..0;
+            self.expanded_directories.clear();
+            self.shell.synchronize_documents(&self.session.tabs());
+            self.status = "プロジェクトを閉じました".to_owned();
+            window.focus(&self.focus_handle);
+            self.refresh_feature_activation();
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn toggle_inspector_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shell.command_palette_open = false;
+        #[cfg(debug_assertions)]
+        {
+            self.status = match crate::devtools::toggle_inspector(window, cx) {
+                Ok(true) => "Inspectorを別ウィンドウで開きました".to_owned(),
+                Ok(false) => "Inspectorを閉じました".to_owned(),
+                Err(error) => error,
+            };
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            self.status = "Inspectorは開発ビルドでのみ利用可能です".to_owned();
+        }
+        cx.notify();
     }
 }

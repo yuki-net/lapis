@@ -11,6 +11,7 @@ use gpui::{
 };
 
 use crate::{
+    components::{ScrollAxis, ScrollState, scroll_viewport},
     extension_ui::CommandId,
     features::command_search::provider::{CommandSearchProvider, SearchItem, SearchProvider},
     theme,
@@ -94,6 +95,7 @@ pub(crate) struct QuickSearch {
     matches: Vec<SearchItem>,
     selected_index: usize,
     on_event: Box<QuickSearchEventHandler>,
+    results_scroll: ScrollState,
 }
 
 impl QuickSearch {
@@ -113,6 +115,7 @@ impl QuickSearch {
             matches: Vec::new(),
             selected_index: 0,
             on_event: Box::new(on_event),
+            results_scroll: ScrollState::new(),
         }
     }
 
@@ -181,6 +184,10 @@ impl QuickSearch {
 
     fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
         self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
+    }
+
+    fn clamp_range(&self, range: Range<usize>) -> Range<usize> {
+        clamp_query_range(&self.query, range)
     }
 
     fn backspace(&mut self, _: &SearchBackspace, window: &mut Window, cx: &mut Context<Self>) {
@@ -306,6 +313,19 @@ fn selected_command(matches: &[SearchItem], selected_index: usize) -> Option<Com
     matches.get(selected_index).map(|item| item.command.clone())
 }
 
+fn clamp_query_range(query: &str, range: Range<usize>) -> Range<usize> {
+    let len = query.len();
+    let mut start = range.start.min(len);
+    let mut end = range.end.min(len).max(start);
+    while start > 0 && !query.is_char_boundary(start) {
+        start -= 1;
+    }
+    while end < len && !query.is_char_boundary(end) {
+        end += 1;
+    }
+    start..end
+}
+
 impl EntityInputHandler for QuickSearch {
     fn text_for_range(
         &mut self,
@@ -348,11 +368,12 @@ impl EntityInputHandler for QuickSearch {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
+        let raw_range = range_utf16
             .as_ref()
             .map(|range| self.range_from_utf16(range))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
+        let range = self.clamp_range(raw_range);
         let new_text = new_text.replace(['\r', '\n'], " ");
         self.query.replace_range(range.clone(), &new_text);
         let cursor = range.start + new_text.len();
@@ -371,11 +392,12 @@ impl EntityInputHandler for QuickSearch {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let range = range_utf16
+        let raw_range = range_utf16
             .as_ref()
             .map(|range| self.range_from_utf16(range))
             .or(self.marked_range.clone())
             .unwrap_or(self.selected_range.clone());
+        let range = self.clamp_range(raw_range);
         let new_text = new_text.replace(['\r', '\n'], " ");
         self.query.replace_range(range.clone(), &new_text);
         self.marked_range =
@@ -476,7 +498,7 @@ impl Element for SearchTextElement {
             input.query.clone().into()
         };
         let color = if input.query.is_empty() {
-            theme::subtle().into()
+            theme::colors().text_tertiary.into()
         } else {
             style.color
         };
@@ -530,7 +552,7 @@ impl Element for SearchTextElement {
                         bounds.bottom(),
                     ),
                 ),
-                theme::search_selection(),
+                theme::colors().editor_search_match,
             )
         });
         let cursor = input.selected_range.is_empty().then(|| {
@@ -542,7 +564,7 @@ impl Element for SearchTextElement {
                     ),
                     size(px(1.0), bounds.size.height),
                 ),
-                theme::text(),
+                theme::colors().text_primary,
             )
         });
         SearchTextPrepaint {
@@ -617,16 +639,16 @@ impl Render for QuickSearch {
                     .px_2()
                     .rounded(px(6.0))
                     .border_1()
-                    .border_color(theme::border())
-                    .bg(theme::surface())
+                    .border_color(theme::colors().border_default)
+                    .bg(theme::colors().background_tertiary)
                     .flex()
                     .items_center()
                     .gap_2()
                     .cursor(CursorStyle::IBeam)
                     .text_size(px(13.0))
-                    .text_color(theme::text())
+                    .text_color(theme::colors().text_primary)
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                    .child(div().text_color(theme::muted()).child("S"))
+                    .child(div().text_color(theme::colors().text_secondary).child("S"))
                     .child(
                         div()
                             .min_w(px(0.0))
@@ -639,82 +661,85 @@ impl Render for QuickSearch {
                     .px_2()
                     .pb_1()
                     .text_size(px(10.0))
-                    .text_color(theme::subtle())
+                    .text_color(theme::colors().text_tertiary)
                     .child(format!(
                         "{} commands ﾂｷ 竊鯛・ select ﾂｷ Enter run",
                         rows.len()
                     )),
             )
             .child(
-                div()
-                    .id("quick-search-results")
-                    .h(px(0.0))
-                    .min_h(px(0.0))
-                    .flex_1()
-                    .overflow_y_scroll()
-                    .px_2()
-                    .pb_2()
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .when(rows.is_empty(), |results| {
-                        results.child(
-                            div()
-                                .p_3()
-                                .text_size(px(12.0))
-                                .text_color(theme::subtle())
-                                .child("No matching commands"),
-                        )
-                    })
-                    .children(rows.into_iter().map(|(index, item)| {
-                        let command_label = item.command.as_str().to_owned();
-                        div()
-                            .id(("quick-search-result", index))
-                            .px_2()
-                            .py_2()
-                            .rounded(px(6.0))
-                            .bg(if index == self.selected_index {
-                                theme::surface_active()
-                            } else {
-                                theme::island()
-                            })
-                            .hover(|style| style.bg(theme::surface_hover()))
-                            .cursor_pointer()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.execute_index(index, window, cx);
-                            }))
-                            .child(
+                scroll_viewport(
+                    "quick-search-results",
+                    ScrollAxis::Vertical,
+                    &self.results_scroll,
+                    div()
+                        .px_2()
+                        .pb_2()
+                        .flex()
+                        .flex_col()
+                        .gap_1()
+                        .when(rows.is_empty(), |results| {
+                            results.child(
                                 div()
-                                    .min_w(px(0.0))
-                                    .flex_1()
-                                    .flex()
-                                    .flex_col()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .text_size(px(12.0))
-                                            .text_color(theme::text())
-                                            .child(item.title),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_size(px(9.0))
-                                            .text_color(theme::subtle())
-                                            .child(command_label),
-                                    ),
+                                    .p_3()
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors().text_tertiary)
+                                    .child("No matching commands"),
                             )
-                            .when(!item.shortcut.is_empty(), |row| {
-                                row.child(
+                        })
+                        .children(rows.into_iter().map(|(index, item)| {
+                            let command_label = item.command.as_str().to_owned();
+                            div()
+                                .id(("quick-search-result", index))
+                                .px_2()
+                                .py_2()
+                                .rounded(px(6.0))
+                                .bg(if index == self.selected_index {
+                                    theme::colors().button_background_selected
+                                } else {
+                                    theme::colors().background_secondary
+                                })
+                                .hover(|style| style.bg(theme::colors().button_background_hover))
+                                .cursor_pointer()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.execute_index(index, window, cx);
+                                }))
+                                .child(
                                     div()
-                                        .text_size(px(10.0))
-                                        .text_color(theme::muted())
-                                        .child(item.shortcut),
+                                        .min_w(px(0.0))
+                                        .flex_1()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_1()
+                                        .child(
+                                            div()
+                                                .text_size(px(12.0))
+                                                .text_color(theme::colors().text_primary)
+                                                .child(item.title),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(9.0))
+                                                .text_color(theme::colors().text_tertiary)
+                                                .child(command_label),
+                                        ),
                                 )
-                            })
-                    })),
+                                .when(!item.shortcut.is_empty(), |row| {
+                                    row.child(
+                                        div()
+                                            .text_size(px(10.0))
+                                            .text_color(theme::colors().text_secondary)
+                                            .child(item.shortcut),
+                                    )
+                                })
+                        })),
+                )
+                .h(px(0.0))
+                .min_h(px(0.0))
+                .flex_1(),
             )
     }
 }
@@ -791,6 +816,14 @@ mod tests {
         assert_eq!(next_selection(0, 3), Some(1));
         assert_eq!(previous_selection(0, 0), None);
         assert_eq!(next_selection(0, 0), None);
+    }
+
+    #[test]
+    fn clamp_range_handles_out_of_bounds_and_empty_query() {
+        assert_eq!(clamp_query_range("", 0..18), 0..0);
+        assert_eq!(clamp_query_range("", 10..20), 0..0);
+        assert_eq!(clamp_query_range("hello", 0..10), 0..5);
+        assert_eq!(clamp_query_range("hello", 2..4), 2..4);
     }
 
     #[test]

@@ -2,15 +2,13 @@ use super::*;
 
 impl Render for Editor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let compact_layout = f32::from(window.viewport_size().width) < 1080.0;
-
         div()
             .size_full()
             .relative()
             .flex()
             .flex_col()
-            .bg(theme::canvas())
-            .text_color(theme::text())
+            .bg(theme::colors().background_primary)
+            .text_color(theme::colors().text_primary)
             .track_focus(&self.focus_handle(cx))
             .key_context("Editor")
             .on_action(cx.listener(Self::backspace))
@@ -51,8 +49,8 @@ impl Render for Editor {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.stop_resize(cx)),
             )
-            .child(self.render_header(cx, compact_layout))
-            .child(self.render_main(window, cx, compact_layout))
+            .child(self.render_header(cx))
+            .child(self.render_main(window, cx))
             .child(self.render_footer(cx))
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))

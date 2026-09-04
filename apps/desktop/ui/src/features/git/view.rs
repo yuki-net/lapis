@@ -8,17 +8,19 @@ impl Editor {
             .flex_col()
             .flex_1()
             .min_h(px(0.0))
-            .overflow_y_scroll()
             .p_2()
             .gap_2();
         if let Some(status) = self.git.session.status() {
-            content = content.child(div().text_size(px(10.0)).text_color(theme::subtle()).child(
-                format!(
-                    "SHARED · {} · {} changes",
-                    status.branch,
-                    status.files.len()
-                ),
-            ));
+            content = content.child(
+                div()
+                    .text_size(px(10.0))
+                    .text_color(theme::colors().text_tertiary)
+                    .child(format!(
+                        "SHARED · {} · {} changes",
+                        status.branch,
+                        status.files.len()
+                    )),
+            );
             for (index, file) in status.files.iter().take(40).enumerate() {
                 let path = file.path.clone();
                 content = content.child(
@@ -30,7 +32,7 @@ impl Editor {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .hover(|style| style.bg(theme::surface_hover()))
+                        .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.select_git_diff(path.clone(), cx);
                         }))
@@ -43,7 +45,7 @@ impl Editor {
                         .child(
                             div()
                                 .text_size(px(10.0))
-                                .text_color(theme::muted())
+                                .text_color(theme::colors().text_secondary)
                                 .child(file.path.to_string_lossy().into_owned()),
                         ),
                 );
@@ -67,7 +69,7 @@ impl Editor {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme::assistant_accent())
+                            .text_color(theme::colors().text_accent)
                             .child(format!("WORKTREE · {} changes", status.files.len())),
                     )
                     .child(div().flex_1())
@@ -89,7 +91,7 @@ impl Editor {
                         .flex()
                         .items_center()
                         .gap_2()
-                        .hover(|style| style.bg(theme::surface_hover()))
+                        .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.select_worktree_diff(task_for_diff.clone(), diff_path.clone(), cx);
                         }))
@@ -97,7 +99,7 @@ impl Editor {
                             div()
                                 .flex_1()
                                 .text_size(px(10.0))
-                                .text_color(theme::muted())
+                                .text_color(theme::colors().text_secondary)
                                 .child(file.path.to_string_lossy().into_owned()),
                         )
                         .child(task_action_button("取込", true).on_click(cx.listener(
@@ -118,7 +120,7 @@ impl Editor {
                     div()
                         .mt_2()
                         .text_size(px(10.0))
-                        .text_color(theme::subtle())
+                        .text_color(theme::colors().text_tertiary)
                         .child(format!(
                             "DIFF · {} · +{} -{}",
                             diff.path.display(),
@@ -130,11 +132,11 @@ impl Editor {
                     div()
                         .text_size(px(9.0))
                         .text_color(if line.starts_with('+') {
-                            theme::diff_added()
+                            theme::colors().positive_text
                         } else if line.starts_with('-') {
-                            theme::diff_removed()
+                            theme::colors().danger_text
                         } else {
-                            theme::subtle()
+                            theme::colors().text_tertiary
                         })
                         .child(line.to_owned())
                 }));

@@ -17,12 +17,15 @@ pub(super) fn descriptor() -> FeatureDescriptor {
             ActivationCondition::OnCommand(id::COMMAND_START_TERMINAL.into()),
         ],
     )
-    .contributes(UiContribution::view(
-        id::VIEW_TERMINAL,
-        UiSlot::BottomDock,
-        "view.terminal",
-        "terminal",
-        10,
-    ))
+    .contributes(
+        UiContribution::view(
+            id::VIEW_TERMINAL,
+            UiSlot::BottomDock,
+            "view.terminal",
+            "terminal",
+            10,
+        )
+        .feature_owned_scroll(),
+    )
     .requires("workspace.process")
 }

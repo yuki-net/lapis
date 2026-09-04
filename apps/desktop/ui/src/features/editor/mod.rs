@@ -1,4 +1,6 @@
 use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
     ops::Range,
     time::{Duration, Instant},
 };
@@ -7,9 +9,9 @@ use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
-    Pixels, Point, PromptButton, PromptLevel, Render, ScrollHandle, ShapedLine, SharedString,
-    Style, TextRun, Timer, UTF16Selection, Window, WindowControlArea, anchored, div, fill, point,
-    prelude::*, px, relative, size,
+    Pixels, Point, PromptButton, PromptLevel, Render, ShapedLine, SharedString, Style, TextRun,
+    Timer, UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*, px, relative,
+    size,
 };
 use lapis_app_services::{
     ConversationViewState, DocumentAction, DocumentCloseDisposition, EditorSession,
@@ -22,8 +24,11 @@ use lapis_workspace::FileEntryKind;
 
 use crate::{
     app::*,
-    components::{Icon, IconName, panel_empty_state, tool_empty_state},
-    extension_ui::{ActivationEvent, FeatureRegistry, ThemeId, UiSlot, ViewId},
+    components::{
+        ButtonSize, Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, button,
+        panel_empty_state, panel_empty_state_element, scroll_viewport, surface, tool_empty_state,
+    },
+    extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, ThemeId, UiSlot, ViewId},
     features::{
         self,
         command_search::{
@@ -51,6 +56,57 @@ mod interactions;
 mod runtime;
 mod view_state;
 use canvas::{EditorElement, EditorLineLayout};
+
+struct EditorScrollStates {
+    panel_contents: RefCell<HashMap<PanelTab, ScrollState>>,
+    panel_empty: [ScrollState; 4],
+    panel_tabs: [ScrollState; 4],
+    tool_picker: ScrollState,
+    task_list: ScrollState,
+    task_events: ScrollState,
+    terminal: ScrollState,
+}
+
+impl Default for EditorScrollStates {
+    fn default() -> Self {
+        Self {
+            panel_contents: RefCell::new(HashMap::new()),
+            panel_empty: std::array::from_fn(|_| ScrollState::new()),
+            panel_tabs: std::array::from_fn(|_| ScrollState::new()),
+            tool_picker: ScrollState::new(),
+            task_list: ScrollState::new(),
+            task_events: ScrollState::new(),
+            terminal: ScrollState::new(),
+        }
+    }
+}
+
+impl EditorScrollStates {
+    fn panel_content(&self, tab: &PanelTab) -> ScrollState {
+        self.panel_contents
+            .borrow_mut()
+            .entry(tab.clone())
+            .or_default()
+            .clone()
+    }
+
+    fn panel_empty(&self, position: crate::extension_ui::PanelPosition) -> &ScrollState {
+        &self.panel_empty[panel_index(position)]
+    }
+
+    fn panel_tabs(&self, position: crate::extension_ui::PanelPosition) -> &ScrollState {
+        &self.panel_tabs[panel_index(position)]
+    }
+}
+
+const fn panel_index(position: crate::extension_ui::PanelPosition) -> usize {
+    match position {
+        crate::extension_ui::PanelPosition::Left => 0,
+        crate::extension_ui::PanelPosition::Main => 1,
+        crate::extension_ui::PanelPosition::Bottom => 2,
+        crate::extension_ui::PanelPosition::Right => 3,
+    }
+}
 
 #[path = "../files/view.rs"]
 mod files_view;
@@ -146,7 +202,9 @@ pub struct Editor {
     is_selecting: bool,
     last_editor_bounds: Option<Bounds<Pixels>>,
     last_line_layouts: Vec<EditorLineLayout>,
-    editor_scroll: ScrollHandle,
+    expanded_directories: HashSet<std::path::PathBuf>,
+    editor_scroll: ScrollState,
+    scroll_states: EditorScrollStates,
 }
 
 impl Editor {
@@ -168,7 +226,11 @@ impl Editor {
                 });
             })
         });
-        let restored_view = services.conversation.active_view();
+        let restored_view = if initial_view.empty_window {
+            ConversationViewState::default()
+        } else {
+            services.conversation.active_view()
+        };
         let restored_terminals = services
             .conversation
             .active_record()
@@ -215,7 +277,9 @@ impl Editor {
             is_selecting: false,
             last_editor_bounds: None,
             last_line_layouts: Vec::new(),
-            editor_scroll: ScrollHandle::new(),
+            expanded_directories: HashSet::new(),
+            editor_scroll: ScrollState::new(),
+            scroll_states: EditorScrollStates::default(),
         };
         if !theme_loaded {
             editor.status = format!("未登録のテーマのためDarkを使用: {}", global_settings.theme);
@@ -245,6 +309,11 @@ impl Editor {
 
     pub(crate) fn editor_focus_handle(&self) -> FocusHandle {
         self.focus_handle.clone()
+    }
+
+    pub(crate) fn t(&self, key: &str) -> String {
+        self.locale
+            .resolve(&lapis_localization::MessageId::new(key))
     }
 
     fn refresh_feature_activation(&mut self) {
@@ -283,31 +352,6 @@ impl Editor {
     }
 }
 
-fn settings_menu_item(
-    icon: IconName,
-    label: &'static str,
-    detail: Option<String>,
-) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(label)
-        .h(px(34.0))
-        .w_full()
-        .px_2()
-        .rounded(px(5.0))
-        .flex()
-        .items_center()
-        .gap_2()
-        .text_size(px(13.0))
-        .text_color(theme::text())
-        .hover(|style| style.bg(theme::surface_hover()))
-        .child(Icon::new(icon))
-        .child(label)
-        .child(div().flex_1())
-        .when_some(detail, |item, detail| {
-            item.child(div().text_color(theme::muted()).child(detail))
-        })
-}
-
 impl Focusable for Editor {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -315,42 +359,44 @@ impl Focusable for Editor {
 }
 
 fn task_action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(label)
-        .h(px(25.0))
+    button(label, label, ButtonSize::Sm)
         .px_2()
         .rounded(px(5.0))
         .border_1()
         .border_color(if primary {
-            theme::task_primary_border()
+            theme::colors().button_border_focused
         } else {
-            theme::border()
+            theme::colors().border_default
         })
         .bg(if primary {
-            theme::accent_soft()
+            theme::colors().button_background_selected
         } else {
-            theme::surface()
+            theme::colors().background_tertiary
         })
         .text_size(px(10.0))
         .text_color(if primary {
-            theme::task_primary_text()
+            theme::colors().text_primary
         } else {
-            theme::muted()
+            theme::colors().text_secondary
         })
         .flex()
         .items_center()
-        .hover(|style| style.bg(theme::surface_hover()).text_color(theme::text()))
+        .hover(|style| {
+            style
+                .bg(theme::colors().button_background_hover)
+                .text_color(theme::colors().text_primary)
+        })
         .child(label)
 }
 
 fn task_status_color(status: ExecutionStatus) -> gpui::Rgba {
     match status {
-        ExecutionStatus::Succeeded => theme::status_success(),
-        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::status_error(),
+        ExecutionStatus::Succeeded => theme::colors().positive_text,
+        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::colors().danger_text,
         ExecutionStatus::WaitingForInput | ExecutionStatus::WaitingForApproval => {
-            theme::status_warning()
+            theme::colors().warning_text
         }
-        ExecutionStatus::Queued | ExecutionStatus::Running => theme::status_info(),
+        ExecutionStatus::Queued | ExecutionStatus::Running => theme::colors().info_text,
     }
 }
 
@@ -367,10 +413,10 @@ fn change_label(kind: ChangeKind) -> &'static str {
 
 fn change_color(kind: ChangeKind) -> gpui::Rgba {
     match kind {
-        ChangeKind::Added => theme::diff_added(),
-        ChangeKind::Deleted | ChangeKind::Conflicted => theme::diff_removed(),
-        ChangeKind::Modified | ChangeKind::Renamed => theme::diff_changed(),
-        ChangeKind::Untracked => theme::muted(),
+        ChangeKind::Added => theme::colors().positive_text,
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors().danger_text,
+        ChangeKind::Modified | ChangeKind::Renamed => theme::colors().warning_text,
+        ChangeKind::Untracked => theme::colors().text_secondary,
     }
 }
 
@@ -391,42 +437,46 @@ fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .text_color(theme::text())
-        .hover(|style| style.bg(theme::surface_active()))
+        .text_color(theme::colors().text_primary)
+        .hover(|style| style.bg(theme::colors().button_background_selected))
         .child(label)
         .child(div().flex_1())
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_color(theme::colors().text_tertiary)
                 .child(shortcut),
         )
 }
 
-fn quick_action(label: &'static str, shortcut: &'static str) -> gpui::Stateful<gpui::Div> {
+fn quick_action(
+    label: impl Into<gpui::SharedString>,
+    shortcut: &'static str,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
     div()
-        .id(label)
+        .id(label.clone())
         .h(px(34.0))
         .px_3()
         .rounded(px(7.0))
         .border_1()
-        .border_color(theme::border())
-        .bg(theme::surface())
+        .border_color(theme::colors().border_default)
+        .bg(theme::colors().background_tertiary)
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .text_color(theme::text())
+        .text_color(theme::colors().text_primary)
         .hover(|style| {
             style
-                .bg(theme::surface_hover())
-                .border_color(theme::command_input_border())
+                .bg(theme::colors().button_background_hover)
+                .border_color(theme::colors().button_border_focused)
         })
         .child(label)
         .child(div().flex_1())
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(theme::subtle())
+                .text_color(theme::colors().text_tertiary)
                 .child(shortcut),
         )
 }

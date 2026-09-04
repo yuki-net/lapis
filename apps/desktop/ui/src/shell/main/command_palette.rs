@@ -1,7 +1,10 @@
 use super::*;
 
 impl Editor {
-    pub(crate) fn render_command_palette(&self, cx: &mut Context<Self>) -> gpui::Div {
+    pub(crate) fn render_command_palette(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
         let commands = self
             .feature_registry
             .contributions(UiSlot::CommandPalette)
@@ -18,56 +21,54 @@ impl Editor {
             })
             .collect::<Vec<_>>();
 
-        div()
-            .absolute()
-            .top(px(49.0))
-            .left(relative(0.5))
-            .ml(px(-220.0))
-            .w(px(440.0))
-            .p(px(8.0))
-            .rounded(px(9.0))
-            .border_1()
-            .border_color(theme::command_palette_border())
-            .bg(theme::surface())
-            .shadow_lg()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .child(
-                div()
-                    .h(px(31.0))
-                    .px_2()
-                    .rounded(px(6.0))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .bg(theme::island())
-                    .text_size(px(12.0))
-                    .text_color(theme::muted())
-                    .child(crate::components::Icon::new(
-                        crate::components::IconName::Search,
+        crate::components::floating_panel(
+            "command-palette",
+            crate::components::SurfaceVariant::Popover,
+        )
+        .absolute()
+        .top(px(49.0))
+        .left(relative(0.5))
+        .ml(px(-220.0))
+        .w(px(440.0))
+        .p(tokens::spacing::SM)
+        .flex()
+        .flex_col()
+        .gap_1()
+        .child(
+            div()
+                .h(px(31.0))
+                .px_2()
+                .rounded(px(6.0))
+                .flex()
+                .items_center()
+                .gap_2()
+                .bg(theme::colors().background_secondary)
+                .text_size(px(12.0))
+                .text_color(theme::colors().text_secondary)
+                .child(crate::components::Icon::new(
+                    crate::components::IconName::Search,
+                ))
+                .child("Commands"),
+        )
+        .children(
+            commands
+                .into_iter()
+                .map(|(index, label, shortcut, command)| {
+                    command_item(index, label, shortcut).on_click(cx.listener(
+                        move |this, _, window, cx| {
+                            this.execute_command(command.clone(), window, cx);
+                        },
                     ))
-                    .child("Commands"),
-            )
-            .children(
-                commands
-                    .into_iter()
-                    .map(|(index, label, shortcut, command)| {
-                        command_item(index, label, shortcut).on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.execute_command(command.clone(), window, cx);
-                            },
-                        ))
-                    }),
-            )
-            .child(
-                div()
-                    .pt_1()
-                    .px_2()
-                    .text_size(px(10.0))
-                    .text_color(theme::subtle())
-                    .child("Esc で閉じる"),
-            )
+                }),
+        )
+        .child(
+            div()
+                .pt_1()
+                .px_2()
+                .text_size(px(10.0))
+                .text_color(theme::colors().text_tertiary)
+                .child("Esc で閉じる"),
+        )
     }
 
     pub(crate) fn execute_command(
@@ -94,17 +95,7 @@ impl Editor {
                 self.toggle_assistant(&ToggleAssistant, window, cx);
             }
             #[cfg(debug_assertions)]
-            id::COMMAND_TOGGLE_INSPECTOR => {
-                self.shell.command_palette_open = false;
-                cx.defer_in(window, |this, window, cx| {
-                    this.status = match crate::devtools::toggle_inspector(window, cx) {
-                        Ok(true) => "Inspectorを別ウィンドウで開きました".to_owned(),
-                        Ok(false) => "Inspectorを閉じました".to_owned(),
-                        Err(error) => error,
-                    };
-                    cx.notify();
-                });
-            }
+            id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector_window(window, cx),
             _ => {
                 self.status = format!("Unknown command: {}", command.as_str());
                 cx.notify();

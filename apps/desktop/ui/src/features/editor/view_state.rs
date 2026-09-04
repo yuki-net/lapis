@@ -2,7 +2,7 @@ use super::*;
 
 impl Editor {
     pub(super) fn persist_active_view(&mut self) {
-        let offset = self.editor_scroll.offset();
+        let offset = self.editor_scroll.handle().offset();
         self.session.update_active_view(
             self.selected_range.clone(),
             self.cursor_offset(),
@@ -20,6 +20,7 @@ impl Editor {
             self.selection_reversed =
                 view.cursor_char == self.selected_range.start && !self.selected_range.is_empty();
             self.editor_scroll
+                .handle()
                 .scroll_to_top_of_item((view.scroll_y / 24.0).max(0.0) as usize);
         } else {
             self.selected_range = 0..0;

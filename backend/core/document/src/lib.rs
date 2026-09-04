@@ -96,6 +96,18 @@ impl Document {
         })
     }
 
+    /// まだ保存されていない、保存先を持つ新規Documentを作る。
+    pub fn draft(path: PathBuf, content: String, encoding: Encoding) -> Self {
+        Self {
+            path: Some(path),
+            text: TextBuffer::from_string(content),
+            encoding,
+            revision: Revision(1),
+            saved_revision: Revision::default(),
+            saved_fingerprint: None,
+        }
+    }
+
     pub fn len_chars(&self) -> usize {
         self.text.len_chars()
     }
@@ -451,5 +463,19 @@ mod tests {
             ExternalChange::Modified
         );
         assert_eq!(document.external_change(None), ExternalChange::Deleted);
+    }
+
+    #[test]
+    fn draft_keeps_requested_encoding_and_starts_dirty() {
+        let document = Document::draft(
+            PathBuf::from("new.ts"),
+            "const value = 1;".to_owned(),
+            Encoding::Utf8Bom,
+        );
+
+        assert!(document.is_dirty());
+        assert_eq!(document.revision().number(), 1);
+        assert_eq!(document.encoding(), Encoding::Utf8Bom);
+        assert!(document.encoded_bytes().starts_with(&[0xef, 0xbb, 0xbf]));
     }
 }
