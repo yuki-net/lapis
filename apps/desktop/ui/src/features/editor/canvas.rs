@@ -199,10 +199,10 @@ impl Element for EditorElement {
         for layout in &prepaint.lines {
             layout.line.paint(layout.origin, px(24.0), window, cx).ok();
         }
-        if focus_handle.is_focused(window) {
-            if let Some(cursor) = prepaint.cursor.clone() {
-                window.paint_quad(cursor);
-            }
+        if focus_handle.is_focused(window)
+            && let Some(cursor) = prepaint.cursor.clone()
+        {
+            window.paint_quad(cursor);
         }
         let layouts = prepaint.lines.clone();
         self.editor.update(cx, |editor, _| {
