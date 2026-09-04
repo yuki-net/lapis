@@ -3088,6 +3088,7 @@ dependencies = [
  "lapis-remote",
  "lapis-settings",
  "lapis-task-runner",
+ "lapis-workspace",
 ]
 
 [[package]]
@@ -3209,6 +3210,7 @@ version = "0.1.0"
 dependencies = [
  "lapis-app-services",
  "lapis-backend-state",
+ "lapis-client-api",
  "lapis-document",
  "lapis-editor-core",
  "lapis-git",
