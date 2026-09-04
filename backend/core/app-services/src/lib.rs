@@ -586,6 +586,7 @@ pub struct LspSession {
     synced_document: Option<(PathBuf, Revision)>,
     diagnostics: Vec<Diagnostic>,
     diagnostics_receiver: Option<mpsc::Receiver<Result<Vec<Diagnostic>, LspError>>>,
+    diagnostics_request: Option<(PathBuf, Revision)>,
     last_error: Option<String>,
 }
 
@@ -598,6 +599,7 @@ impl LspSession {
             synced_document: None,
             diagnostics: Vec::new(),
             diagnostics_receiver: None,
+            diagnostics_request: None,
             last_error: None,
         }
     }
@@ -661,15 +663,31 @@ impl LspSession {
         Ok(true)
     }
 
-    pub fn refresh(&mut self) -> Result<bool, LspError> {
+    pub fn refresh(&mut self, editor: &EditorSession) -> Result<bool, LspError> {
         if self.started_workspace.is_none() {
             return Ok(false);
         }
+        let current_document = editor
+            .active_path()
+            .map(|path| (path.to_owned(), editor.active_revision()));
         if let Some(receiver) = &self.diagnostics_receiver {
+            if self.diagnostics_request.as_ref() != current_document.as_ref() {
+                self.diagnostics_receiver = None;
+                self.diagnostics_request = None;
+                return Ok(false);
+            }
             match receiver.try_recv() {
                 Ok(result) => {
                     self.diagnostics_receiver = None;
+                    let request = self.diagnostics_request.take();
                     let diagnostics = result?;
+                    if let Some((path, revision)) = request
+                        && diagnostics.iter().any(|diagnostic| {
+                            diagnostic.path == path && diagnostic.revision != revision
+                        })
+                    {
+                        return Ok(false);
+                    }
                     let changed = diagnostics != self.diagnostics;
                     self.diagnostics = diagnostics;
                     return Ok(changed);
@@ -677,16 +695,21 @@ impl LspSession {
                 Err(mpsc::TryRecvError::Empty) => return Ok(false),
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.diagnostics_receiver = None;
+                    self.diagnostics_request = None;
                     return Err(LspError::new("LSP diagnostics worker disconnected"));
                 }
             }
         }
+        let Some(request) = self.synced_document.clone() else {
+            return Ok(false);
+        };
         let backend = self.backend.clone();
         let (sender, receiver) = mpsc::channel();
         thread::spawn(move || {
             let _ = sender.send(backend.diagnostics());
         });
         self.diagnostics_receiver = Some(receiver);
+        self.diagnostics_request = Some(request);
         Ok(false)
     }
 
@@ -757,6 +780,7 @@ impl LspSession {
         self.synced_document = None;
         self.diagnostics.clear();
         self.diagnostics_receiver = None;
+        self.diagnostics_request = None;
         self.last_error = None;
         Ok(())
     }
@@ -1631,6 +1655,7 @@ mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
     use lapis_document::{DocumentErrorKind, FileData, FileFingerprint};
+    use lapis_lsp::{DiagnosticSeverity, LspRange};
     use lapis_workspace::{FileEntryKind, WorkspaceStateRepository};
 
     use super::*;
@@ -1751,6 +1776,60 @@ mod tests {
     }
 
     struct UnavailableTerminalBackend;
+
+    struct ControlledLspBackend {
+        diagnostics_started: Mutex<mpsc::Sender<()>>,
+        diagnostics_finished: Mutex<mpsc::Sender<()>>,
+        diagnostics_results: Mutex<mpsc::Receiver<Result<Vec<Diagnostic>, LspError>>>,
+    }
+
+    impl LanguageServerBackend for ControlledLspBackend {
+        fn start(&self, _workspace: &Path) -> Result<(), LspError> {
+            Ok(())
+        }
+
+        fn did_open(&self, _path: &Path, _text: &str, _revision: Revision) -> Result<(), LspError> {
+            Ok(())
+        }
+
+        fn did_change(
+            &self,
+            _path: &Path,
+            _text: &str,
+            _revision: Revision,
+        ) -> Result<(), LspError> {
+            Ok(())
+        }
+
+        fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError> {
+            self.diagnostics_started.lock().unwrap().send(()).unwrap();
+            let result = self.diagnostics_results.lock().unwrap().recv().unwrap();
+            self.diagnostics_finished.lock().unwrap().send(()).unwrap();
+            result
+        }
+
+        fn completion(
+            &self,
+            _path: &Path,
+            _position: LspPosition,
+            _revision: Revision,
+        ) -> Result<Vec<CompletionItem>, LspError> {
+            Ok(Vec::new())
+        }
+
+        fn definition(
+            &self,
+            _path: &Path,
+            _position: LspPosition,
+            _revision: Revision,
+        ) -> Result<Option<DefinitionTarget>, LspError> {
+            Ok(None)
+        }
+
+        fn shutdown(&self) -> Result<(), LspError> {
+            Ok(())
+        }
+    }
 
     impl TerminalBackend for UnavailableTerminalBackend {
         fn start(
@@ -2068,5 +2147,87 @@ mod tests {
             )
             .unwrap();
         assert_eq!(backend.controls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn lsp_diagnostics_discard_results_for_an_older_document_revision() {
+        let repository = Arc::new(MemoryRepository::default());
+        let root = PathBuf::from("repo");
+        let path = root.join("main.rs");
+        insert_file(&repository, path.clone(), "fn main() {}\n");
+        let mut editor = session(repository, Arc::new(MemoryState::default()));
+        editor.open_workspace(root).unwrap();
+        editor.open_path(path.clone()).unwrap();
+
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (finished_sender, finished_receiver) = mpsc::channel();
+        let (result_sender, result_receiver) = mpsc::channel();
+        let backend = Arc::new(ControlledLspBackend {
+            diagnostics_started: Mutex::new(started_sender),
+            diagnostics_finished: Mutex::new(finished_sender),
+            diagnostics_results: Mutex::new(result_receiver),
+        });
+        let mut lsp = LspSession::new(backend);
+        lsp.sync_active(&editor).unwrap();
+        assert!(!lsp.refresh(&editor).unwrap());
+        started_receiver.recv().unwrap();
+
+        let old_revision = editor.active_revision();
+        editor.replace_range(0..0, "// changed\n").unwrap();
+        result_sender
+            .send(Ok(vec![Diagnostic {
+                path: path.clone(),
+                range: LspRange {
+                    start: LspPosition {
+                        line: 0,
+                        utf16_column: 0,
+                    },
+                    end: LspPosition {
+                        line: 0,
+                        utf16_column: 2,
+                    },
+                },
+                severity: DiagnosticSeverity::Warning,
+                message: "stale".to_owned(),
+                revision: old_revision,
+            }]))
+            .unwrap();
+
+        finished_receiver.recv().unwrap();
+        assert!(!lsp.refresh(&editor).unwrap());
+        assert!(lsp.diagnostics().is_empty());
+
+        lsp.sync_active(&editor).unwrap();
+        assert!(!lsp.refresh(&editor).unwrap());
+        started_receiver.recv().unwrap();
+        result_sender
+            .send(Ok(vec![Diagnostic {
+                path,
+                range: LspRange {
+                    start: LspPosition {
+                        line: 0,
+                        utf16_column: 0,
+                    },
+                    end: LspPosition {
+                        line: 0,
+                        utf16_column: 2,
+                    },
+                },
+                severity: DiagnosticSeverity::Warning,
+                message: "current".to_owned(),
+                revision: editor.active_revision(),
+            }]))
+            .unwrap();
+        finished_receiver.recv().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let changed = loop {
+            if lsp.refresh(&editor).unwrap() {
+                break true;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        assert!(changed);
+        assert_eq!(lsp.diagnostics()[0].message, "current");
     }
 }
