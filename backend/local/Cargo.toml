@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 lapis-app-services = { path = "../core/app-services" }
 lapis-backend-state = { path = "../core/backend-state" }
+lapis-client-api = { path = "../core/client-api" }
 lapis-document = { path = "../core/document" }
 lapis-editor-core = { path = "../core/editor-core" }
 lapis-git = { path = "../../features/git" }

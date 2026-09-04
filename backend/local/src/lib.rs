@@ -37,6 +37,12 @@ use lapis_workspace::{
 };
 use serde::{Deserialize, Serialize};
 
+mod client;
+
+pub use client::{
+    BackendClient, BackendClientError, BackendTerminalBackend, BackendWorkspaceRepository,
+};
+
 #[derive(Clone, Default)]
 pub struct ConnectionGate(Arc<AtomicBool>);
 

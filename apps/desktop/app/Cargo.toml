@@ -15,3 +15,4 @@ lapis-persistence = { path = "../../../backend/persistence" }
 lapis-remote = { path = "../../../backend/remote" }
 lapis-settings = { path = "../../../backend/core/settings" }
 lapis-task-runner = { path = "../../../features/task-runner" }
+lapis-workspace = { path = "../../../backend/core/workspace" }
