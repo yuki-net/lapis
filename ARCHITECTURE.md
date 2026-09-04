@@ -74,10 +74,12 @@ Document は内容、保存済み位置、現在 Revision、保存済み Revisio
 
 - command は状態変更の意図、query は読み取り、event は確定した変化を表す。
 - メッセージには必要に応じて ID、Revision、順序情報を含める。
-- Git CLI、LSP、PTY、OS、通信ライブラリの出力をそのまま公開しない。
+- Git CLI、LSP、OS、通信ライブラリの出力をそのまま公開しない。PTY は端末 emulator が解釈する専用の raw stream 契約を通す。
 - UI は結果の表示方法を決めるが、業務上の正規状態や回復方針を決めない。
 
 Desktop、Mobile、Web で共有するのは、契約、状態の意味、生成可能な型です。通信、cache、画面状態は各 client のネイティブ実装を基本とします。FFI や WASM による client logic の共有は、重複コストが境界維持コストを実測で上回った場合に再検討します。
+
+Terminal の PTY output は表示用 text ではなく、順序番号付きの byte chunk として契約を越える。ANSI/VT sequence、alternate screen、read 境界を跨ぐ UTF-8、非 UTF-8 byte は client の terminal emulator が解釈するため、backend と transport は変換・除去しない。snapshot は再接続時に再利用できる範囲として raw output の末尾、最後の output sequence、保持上限による欠落状態、size と lifecycle を持つが、終了した PTY process 自体は再開しない。これにより Local と Remote は transport が異なっても同じ ordered stream semantics を共有できる。
 
 ## 設計判断の記録
 

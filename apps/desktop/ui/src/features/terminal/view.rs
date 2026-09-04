@@ -12,7 +12,7 @@ pub(crate) fn render_content(terminal: &TerminalFeature) -> gpui::Div {
                 .font_family("Cascadia Mono")
                 .text_size(px(11.0))
                 .text_color(theme::text())
-                .child(terminal.output.clone()),
+                .child(String::from_utf8_lossy(&terminal.output).into_owned()),
         )
     } else {
         panel_empty_state(
