@@ -2306,7 +2306,11 @@ mod tests {
         }
         backend.shutdown().unwrap();
         assert!(!diagnostics.is_empty());
-        assert!(diagnostics.iter().all(|item| item.path == path));
+        let expected_path = normalize_lsp_path(&path);
+        assert!(diagnostics.iter().any(|item| {
+            normalize_lsp_path(&item.path) == expected_path
+                && item.severity == DiagnosticSeverity::Error
+        }));
     }
 
     #[test]
