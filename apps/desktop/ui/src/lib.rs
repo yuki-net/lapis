@@ -4,6 +4,7 @@ mod components;
 mod devtools;
 pub mod extension_ui;
 mod features;
+mod hot_reload;
 pub mod keymap;
 pub mod localization;
 mod shell;

@@ -193,6 +193,7 @@ fn main() {
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),
+        hot_reload_demo: arguments.iter().any(|value| value == "--hot-reload-demo"),
     };
     let desktop_services = lapis_desktop_ui::DesktopServices::new(
         task_session,

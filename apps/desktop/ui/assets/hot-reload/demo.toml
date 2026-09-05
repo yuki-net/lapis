@@ -1,0 +1,159 @@
+version = 1
+
+[root]
+id = "demo-shell"
+component = "container"
+
+[root.layout]
+direction = "column"
+gap = 16.0
+align = "stretch"
+justify = "start"
+
+[root.style]
+padding = 24.0
+background = "token.background_primary"
+foreground = "token.text_primary"
+
+[[root.children]]
+id = "header"
+component = "surface"
+
+[root.children.layout]
+direction = "row"
+gap = 12.0
+align = "center"
+justify = "space-between"
+
+[root.children.style]
+padding = 16.0
+background = "token.background_secondary"
+border = 1.0
+border_color = "token.border_default"
+radius = 8.0
+
+[[root.children.children]]
+id = "header-title"
+component = "text"
+text_key = "hot_reload.title"
+
+[root.children.children.style]
+font_size = 20.0
+font_weight = 700.0
+foreground = "token.text_accent"
+
+[[root.children.children]]
+id = "header-badge"
+component = "badge"
+text_key = "hot_reload.badge"
+
+[[root.children]]
+id = "body"
+component = "container"
+
+[root.children.layout]
+direction = "row"
+gap = 16.0
+align = "stretch"
+
+[root.children.style]
+height = 420.0
+
+[[root.children.children]]
+id = "sidebar"
+component = "surface"
+
+[root.children.children.layout]
+direction = "column"
+gap = 12.0
+align = "stretch"
+
+[root.children.children.style]
+width = 240.0
+padding = 16.0
+background = "token.background_secondary"
+
+[[root.children.children.children]]
+id = "sidebar-title"
+component = "text"
+text_key = "hot_reload.sidebar"
+
+[root.children.children.children.style]
+font_weight = 700.0
+
+[[root.children.children.children]]
+id = "sidebar-detail"
+component = "text"
+text = "Edit demo.toml and save to update this tree."
+
+[root.children.children.children.style]
+foreground = "token.text_secondary"
+line_height = 18.0
+
+[[root.children.children.children]]
+id = "counter"
+component = "counter"
+text_key = "hot_reload.counter"
+
+[root.children.children.children.style]
+padding_y = 8.0
+foreground = "token.text_positive"
+
+[[root.children.children.children]]
+id = "increment"
+component = "button"
+text_key = "hot_reload.button"
+
+[root.children.children.children.style]
+background = "token.button_background_selected"
+foreground = "token.text_primary"
+radius = 6.0
+
+[[root.children.children.children]]
+id = "sidebar-spacer"
+component = "container"
+visible = false
+
+[root.children.children.children.style]
+height = 8.0
+
+[[root.children.children]]
+id = "main"
+component = "surface"
+
+[root.children.children.layout]
+direction = "column"
+gap = 12.0
+align = "start"
+
+[root.children.children.style]
+padding = 24.0
+background = "token.background_tertiary"
+foreground = "token.text_primary"
+
+[[root.children.children.children]]
+id = "main-title"
+component = "text"
+text_key = "hot_reload.main"
+
+[root.children.children.children.style]
+font_size = 18.0
+font_weight = 700.0
+
+[[root.children.children.children]]
+id = "main-detail"
+component = "text"
+text_key = "hot_reload.subtitle"
+
+[root.children.children.children.style]
+foreground = "token.text_secondary"
+line_height = 18.0
+
+[[root.children.children.children]]
+id = "main-note"
+component = "text"
+text = "Try changing padding, width, color, direction, order, or visibility."
+
+[root.children.children.children.style]
+foreground = "token.text_warning"
+line_height = 18.0
