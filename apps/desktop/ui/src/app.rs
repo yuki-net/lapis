@@ -86,12 +86,14 @@ pub struct InitialView {
     pub show_tasks: bool,
     pub show_terminal: bool,
     pub show_problems: bool,
+    pub hot_reload_demo: bool,
 }
 
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
+            let hot_reload_demo = initial_view.hot_reload_demo;
             bind_keys(cx);
             #[cfg(debug_assertions)]
             crate::devtools::init(cx);
@@ -113,6 +115,21 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
                 },
             )
             .expect("Lapis window should open");
+            if hot_reload_demo {
+                let bounds = Bounds::centered(None, size(px(960.0), px(680.0)), cx);
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Lapis Hot Reload Demo".into()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    |_window, cx| cx.new(crate::hot_reload::HotReloadDemo::new),
+                )
+                .expect("Lapis hot reload demo window should open");
+            }
             cx.on_action(|_: &Quit, cx| cx.quit());
         });
 }
