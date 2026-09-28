@@ -20,8 +20,8 @@ env:
   RUST_TOOLCHAIN: 1.96.0
 
 jobs:
-  core:
-    name: Core
+  backend:
+    name: Backend
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
@@ -44,28 +44,37 @@ jobs:
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
             target/
-          key: core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          key: backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+            backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Check Core
+      - name: Check Backend
         run: cargo check --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
 
-      - name: Test Core
+      - name: Test Backend
         run: cargo test --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
 
-      - name: Lint Core
+      - name: Lint Backend
         run: cargo clippy --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui -- -D warnings
 
-      - name: Build Core
+      - name: Build Backend
         run: cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
 
   desktop:
-    name: Desktop
-    runs-on: windows-2022
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2022
+          # TODO: DesktopのLinuxサポートを保証する段階で有効化する。
+          # - ubuntu-latest
+          # TODO: DesktopのmacOSサポートを保証する段階で有効化する。
+          # - macos-14
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 45
 
     steps:
