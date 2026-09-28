@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lapis_app_services::{WorkspaceDialog, WorkspaceRepository};
+use lapis_app_services::WorkspaceRepository;
 use lapis_backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use lapis_editor_core::ExecutionId;
@@ -825,10 +825,7 @@ fn file_uri(path: &Path) -> String {
 }
 
 fn path_from_file_uri(uri: &str) -> PathBuf {
-    let value = uri
-        .strip_prefix("file:///")
-        .or_else(|| uri.strip_prefix("file://"))
-        .unwrap_or(uri);
+    let value = uri.strip_prefix("file://").unwrap_or(uri);
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -846,6 +843,17 @@ fn path_from_file_uri(uri: &str) -> PathBuf {
         }
     }
     let decoded = String::from_utf8_lossy(&decoded).replace('/', std::path::MAIN_SEPARATOR_STR);
+    #[cfg(windows)]
+    let decoded = {
+        let bytes = decoded.as_bytes();
+        let windows_drive_path =
+            bytes.get(1).is_some_and(u8::is_ascii_alphabetic) && bytes.get(2) == Some(&b':');
+        if decoded.starts_with(std::path::MAIN_SEPARATOR) && windows_drive_path {
+            decoded[1..].to_owned()
+        } else {
+            decoded
+        }
+    };
     normalize_lsp_path(Path::new(&decoded))
 }
 
@@ -1195,25 +1203,6 @@ fn fingerprint_for(path: &Path, bytes: &[u8]) -> Result<FileFingerprint, Documen
         hash = hash.wrapping_mul(0x100000001b3);
     }
     Ok(FileFingerprint::new(metadata.len(), modified_nanos, hash))
-}
-
-#[derive(Default)]
-pub struct NativeWorkspaceDialog;
-
-impl WorkspaceDialog for NativeWorkspaceDialog {
-    fn choose_workspace_path(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new().pick_folder()
-    }
-
-    fn choose_file_path(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new().pick_file()
-    }
-
-    fn choose_save_path(&self, suggested_name: &str) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_file_name(suggested_name)
-            .save_file()
-    }
 }
 
 pub struct LocalWorkspaceStateRepository {
@@ -2150,6 +2139,16 @@ mod tests {
         (workspace, path)
     }
 
+    #[test]
+    fn file_uri_round_trips_absolute_paths() {
+        let path = if cfg!(windows) {
+            PathBuf::from("C:/lapis/lsp test/メモ %.rs")
+        } else {
+            PathBuf::from("/tmp/lapis/lsp test/メモ %.rs")
+        };
+
+        assert_eq!(path_from_file_uri(&file_uri(&path)), path);
+    }
     #[test]
     fn local_repository_round_trips_and_detects_conflicts() {
         let directory = tempfile::tempdir().unwrap();

@@ -1,3 +1,5 @@
+mod workspace_dialog;
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +12,7 @@ use lapis_persistence::{LocalConversationRepository, LocalGlobalSettingsReposito
 use lapis_platform::{
     ConnectionGate, LocalGitBackend, LocalLspBackend, LocalTaskBackend, LocalTerminalBackend,
     LocalWorkspaceRepository, LocalWorkspaceSearchBackend, LocalWorkspaceStateRepository,
-    LoopbackBackend, NativeWorkspaceDialog, run_task_worker,
+    LoopbackBackend, run_task_worker,
 };
 use lapis_remote::{
     AuthConfig, AuthPolicy, BackendRemoteHandler, CredentialLifetime, PairingLifetime, RemoteAuth,
@@ -50,7 +52,7 @@ fn main() {
     };
     let mut session = EditorSession::new(
         workspace_repository,
-        Arc::new(NativeWorkspaceDialog),
+        Arc::new(workspace_dialog::NativeWorkspaceDialog),
         Arc::new(LocalWorkspaceStateRepository::user_default()),
     );
     if let Some(index) = arguments.iter().position(|value| value == "--workspace") {

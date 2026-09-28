@@ -4,37 +4,99 @@ Lapisのテスト配置とコード変更の完了条件を定義します。
 
 ## 完了条件
 
-変更領域と直接依存する領域のうち、必須プロファイルを実行します。未定義の領域は検証対象へ推測で加えず、影響の可能性を報告します。ドキュメントだけの変更は対象外です。
-
-> 現在はpush運用ができないため、Gitフックでは必須プロファイルをpre-commitへ集約します。pre-pushは理由を添えてコメントアウトし、push再開時に戻します。
+変更領域と直接依存する領域のうち、必須プロファイルを実行します。CIでは製品・実行境界ごとにcheckを分け、どの領域が壊れたかを判別できるようにします。
 
 ## 検証状態
 
 | 状態 | 扱い |
 | --- | --- |
 | 必須 | コード変更の完了条件として実行する |
-| 未定義 | 検証基盤を推測で作らず、影響の可能性を報告する |
+| 未実装 | 対象のentry pointや検証基盤がまだ存在しない |
 | 手動 | 実機または利用者が確認する |
 
-## 検証プロファイル
+## CIプロファイル
 
-| 対象 | 状態 |
-| --- | --- |
-| Rust | 必須 |
-| KMP | 未定義 |
-| UI実画面 | 手動 |
+### Backend
 
-Rustの必須検証は次のとおりです。
+Desktop UIを除くRust workspaceを検証します。対象は `backend/*` だけに限定せず、Backendから利用する `features/*` も含みます。
 
 ```text
 cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo test --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace --all-targets
+cargo check --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+cargo test --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+cargo clippy --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui -- -D warnings
+cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
 ```
 
-KMPは検証基盤ができた段階でコマンドを登録し、必須へ変更します。
+### Desktop
+
+Desktop固有のGPUI app/UIを対象OS上で検証します。
+
+現在はWindowsのみを保証対象として実行し、workflowは将来Linux/macOSを追加できるmatrix構造にします。
+
+```text
+matrix:
+- windows-2022
+# - ubuntu-latest  # Desktop Linuxを保証する段階で有効化
+# - macos-14       # Desktop macOSを保証する段階で有効化
+```
+
+各OSでは次を実行します。
+
+```text
+cargo check -p lapis -p lapis-desktop-ui --all-targets
+cargo test -p lapis -p lapis-desktop-ui --all-targets
+cargo clippy -p lapis -p lapis-desktop-ui --all-targets -- -D warnings
+cargo build -p lapis --all-targets
+```
+
+UIの実画面・GPU描画・native window操作は引き続き手動確認です。
+
+### CLI
+
+#22で独立CLI entry pointを作成するまで未実装です。
+
+CLIはDesktop GUIの全機能を再実装することを目的にしません。BackendをGUIなしで起動・設定・診断・管理するための薄いCUIとして設計し、必要になった操作だけ追加します。
+
+独立後はCLI固有のbuild/test/smoke checkを追加します。最初から全OS対応を必須にはせず、必要に応じてmatrixを拡張します。
+
+### Mobile
+
+Linux runner上でKMPのAndroid/commonコードを検証します。
+
+```text
+cd apps/mobile
+./gradlew :sharedUi:testDebugUnitTest
+./gradlew :androidApp:assembleDebug
+```
+
+iOS native buildはこのprofileには含めません。必要になった段階でmacOS runnerを追加します。
+
+### Web
+
+現在のVite placeholderが壊れていないことだけを確認します。
+
+```text
+cd apps/web
+npm ci
+npm run build
+```
+
+#23でRust/WASMへ移行した後は、このprofileをWASM build/testへ置き換えます。
+
+## GitHub Actions
+
+PRと`develop` pushでは、次のcheckを独立して表示します。
+
+| Check | 状態 |
+| --- | --- |
+| Backend | 必須 |
+| Desktop (Windows) | 必須 |
+| Mobile | 必須 |
+| Web | 必須 |
+| CLI | #22完了後に追加 |
+
+将来のcross-client contract test、clean container build、Linux/macOS Desktop、CLIの追加OS、WASM検証は、それぞれの基盤ができた段階で追加します。
 
 ## テスト配置
 

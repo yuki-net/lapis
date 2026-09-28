@@ -16,7 +16,6 @@ lapis-terminal = { path = "../../features/terminal" }
 portable-pty.workspace = true
 lapis-task-runner = { path = "../../features/task-runner" }
 lapis-workspace = { path = "../core/workspace" }
-rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

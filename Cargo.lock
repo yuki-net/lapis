@@ -3088,6 +3088,7 @@ dependencies = [
  "lapis-remote",
  "lapis-settings",
  "lapis-task-runner",
+ "rfd",
 ]
 
 [[package]]
@@ -3217,7 +3218,6 @@ dependencies = [
  "lapis-terminal",
  "lapis-workspace",
  "portable-pty",
- "rfd",
  "serde",
  "serde_json",
  "tempfile",

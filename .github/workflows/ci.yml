@@ -1,0 +1,170 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy, rust-analyzer
+
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Backend
+        run: cargo check --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+
+      - name: Test Backend
+        run: cargo test --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+
+      - name: Lint Backend
+        run: cargo clippy --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui -- -D warnings
+
+      - name: Build Backend
+        run: cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - windows-2022
+          # TODO: DesktopのLinuxサポートを保証する段階で有効化する。
+          # - ubuntu-latest
+          # TODO: DesktopのmacOSサポートを保証する段階で有効化する。
+          # - macos-14
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check Desktop
+        run: cargo check -p lapis -p lapis-desktop-ui --all-targets
+
+      - name: Test Desktop
+        run: cargo test -p lapis -p lapis-desktop-ui --all-targets
+
+      - name: Lint Desktop
+        run: cargo clippy -p lapis -p lapis-desktop-ui --all-targets -- -D warnings
+
+      - name: Build Desktop
+        run: cargo build -p lapis --all-targets
+
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: apps/mobile
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Test shared KMP code
+        run: ./gradlew :sharedUi:testDebugUnitTest --stacktrace
+
+      - name: Build Android app
+        run: ./gradlew :androidApp:assembleDebug --stacktrace
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Web
+        run: npm run build
