@@ -4,37 +4,84 @@ Lapisのテスト配置とコード変更の完了条件を定義します。
 
 ## 完了条件
 
-変更領域と直接依存する領域のうち、必須プロファイルを実行します。未定義の領域は検証対象へ推測で加えず、影響の可能性を報告します。ドキュメントだけの変更は対象外です。
-
-> 現在はpush運用ができないため、Gitフックでは必須プロファイルをpre-commitへ集約します。pre-pushは理由を添えてコメントアウトし、push再開時に戻します。
+変更領域と直接依存する領域のうち、必須プロファイルを実行します。CIでは製品・実行境界ごとにcheckを分け、どの領域が壊れたかを判別できるようにします。
 
 ## 検証状態
 
 | 状態 | 扱い |
 | --- | --- |
 | 必須 | コード変更の完了条件として実行する |
-| 未定義 | 検証基盤を推測で作らず、影響の可能性を報告する |
+| 未実装 | 対象のentry pointや検証基盤がまだ存在しない |
 | 手動 | 実機または利用者が確認する |
 
-## 検証プロファイル
+## CIプロファイル
 
-| 対象 | 状態 |
-| --- | --- |
-| Rust | 必須 |
-| KMP | 未定義 |
-| UI実画面 | 手動 |
+### Core
 
-Rustの必須検証は次のとおりです。
+Desktop UIを除くRust workspaceを検証します。
 
 ```text
 cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo test --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-cargo build --workspace --all-targets
+cargo check --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+cargo test --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+cargo clippy --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui -- -D warnings
+cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
 ```
 
-KMPは検証基盤ができた段階でコマンドを登録し、必須へ変更します。
+### Desktop
+
+Windows上でGPUI Desktopを検証します。
+
+```text
+cargo check -p lapis -p lapis-desktop-ui --all-targets
+cargo test -p lapis -p lapis-desktop-ui --all-targets
+cargo clippy -p lapis -p lapis-desktop-ui --all-targets -- -D warnings
+cargo build -p lapis --all-targets
+```
+
+UIの実画面・GPU描画・native window操作は引き続き手動確認です。
+
+### Mobile
+
+Linux runner上でKMPのAndroid/commonコードを検証します。
+
+```text
+cd apps/mobile
+./gradlew :sharedUi:testDebugUnitTest
+./gradlew :androidApp:assembleDebug
+```
+
+iOS native buildはこのprofileには含めません。必要になった段階でmacOS runnerを追加します。
+
+### Web
+
+現在のVite placeholderが壊れていないことだけを確認します。
+
+```text
+cd apps/web
+npm ci
+npm run build
+```
+
+#23でRust/WASMへ移行した後は、このprofileをWASM build/testへ置き換えます。
+
+### CLI
+
+#22で独立CLI entry pointを作成するまで未実装です。現在のDesktop binaryに含まれるheadless分岐をCLI成功扱いにはしません。
+
+## GitHub Actions
+
+PRと`develop` pushでは、次のcheckを独立して表示します。
+
+| Check | 状態 |
+| --- | --- |
+| Core | 必須 |
+| Desktop | 必須 |
+| Mobile | 必須 |
+| Web | 必須 |
+| CLI | #22完了後に追加 |
+
+将来のcross-client contract test、clean container build、macOS/iOS、WASM検証は、それぞれの基盤ができた段階で追加します。
 
 ## テスト配置
 
