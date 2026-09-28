@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+  push:
+    branches:
+      - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  core:
+    name: Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check Core
+        run: cargo check --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+
+      - name: Test Core
+        run: cargo test --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+
+      - name: Lint Core
+        run: cargo clippy --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui -- -D warnings
+
+      - name: Build Core
+        run: cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+
+  desktop:
+    name: Desktop
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check Desktop
+        run: cargo check -p lapis -p lapis-desktop-ui --all-targets
+
+      - name: Test Desktop
+        run: cargo test -p lapis -p lapis-desktop-ui --all-targets
+
+      - name: Lint Desktop
+        run: cargo clippy -p lapis -p lapis-desktop-ui --all-targets -- -D warnings
+
+      - name: Build Desktop
+        run: cargo build -p lapis --all-targets
+
+  mobile:
+    name: Mobile
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    defaults:
+      run:
+        working-directory: apps/mobile
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Test shared KMP code
+        run: ./gradlew :sharedUi:testDebugUnitTest --stacktrace
+
+      - name: Build Android app
+        run: ./gradlew :androidApp:assembleDebug --stacktrace
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build Web
+        run: npm run build
