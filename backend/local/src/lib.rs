@@ -835,16 +835,18 @@ fn path_from_file_uri(uri: &str) -> PathBuf {
             index += 1;
         }
     }
-    let mut decoded = String::from_utf8_lossy(&decoded).replace('/', std::path::MAIN_SEPARATOR_STR);
+    let decoded = String::from_utf8_lossy(&decoded).replace('/', std::path::MAIN_SEPARATOR_STR);
     #[cfg(windows)]
-    {
+    let decoded = {
         let bytes = decoded.as_bytes();
         let windows_drive_path =
             bytes.get(1).is_some_and(u8::is_ascii_alphabetic) && bytes.get(2) == Some(&b':');
         if decoded.starts_with(std::path::MAIN_SEPARATOR) && windows_drive_path {
-            decoded.remove(0);
+            decoded[1..].to_owned()
+        } else {
+            decoded
         }
-    }
+    };
     normalize_lsp_path(Path::new(&decoded))
 }
 
