@@ -14,7 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lapis_app_services::{WorkspaceDialog, WorkspaceRepository};
+use lapis_app_services::WorkspaceRepository;
 use lapis_backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use lapis_editor_core::ExecutionId;
@@ -1188,25 +1188,6 @@ fn fingerprint_for(path: &Path, bytes: &[u8]) -> Result<FileFingerprint, Documen
         hash = hash.wrapping_mul(0x100000001b3);
     }
     Ok(FileFingerprint::new(metadata.len(), modified_nanos, hash))
-}
-
-#[derive(Default)]
-pub struct NativeWorkspaceDialog;
-
-impl WorkspaceDialog for NativeWorkspaceDialog {
-    fn choose_workspace_path(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new().pick_folder()
-    }
-
-    fn choose_file_path(&self) -> Option<PathBuf> {
-        rfd::FileDialog::new().pick_file()
-    }
-
-    fn choose_save_path(&self, suggested_name: &str) -> Option<PathBuf> {
-        rfd::FileDialog::new()
-            .set_file_name(suggested_name)
-            .save_file()
-    }
 }
 
 pub struct LocalWorkspaceStateRepository {
