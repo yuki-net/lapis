@@ -30,7 +30,10 @@ use lapis_task_runner::{
     CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
     TaskEvent, TaskRecord, run_codex_app_server,
 };
-use lapis_terminal::{TerminalBackend, TerminalError, TerminalEvent, TerminalId};
+use lapis_terminal::{
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalOutput,
+    TerminalOutputSequence,
+};
 use lapis_workspace::{
     DocumentViewState, FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError,
     WorkspaceSearchBackend, WorkspaceSnapshot, WorkspaceStateRepository,
@@ -86,8 +89,15 @@ struct LiveTerminal {
     master: Box<dyn portable_pty::MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send>,
-    receiver: mpsc::Receiver<TerminalEvent>,
+    receiver: mpsc::Receiver<RawTerminalEvent>,
+    next_output_sequence: TerminalOutputSequence,
+    reader_finished: Arc<AtomicBool>,
     exited: bool,
+}
+
+enum RawTerminalEvent {
+    Output(Vec<u8>),
+    Failed(String),
 }
 
 #[derive(Clone, Default)]
@@ -106,42 +116,33 @@ impl LocalTerminalBackend {
     }
 }
 
-fn terminal_display_text(input: &str) -> String {
-    #[derive(Clone, Copy)]
-    enum EscapeState {
-        Text,
-        Escape,
-        Csi,
-        Osc,
-        OscEscape,
-    }
-    let mut state = EscapeState::Text;
-    let mut output = String::new();
-    for character in input.chars() {
-        state = match (state, character) {
-            (EscapeState::Text, '\u{1b}') => EscapeState::Escape,
-            (EscapeState::Text, '\r') => EscapeState::Text,
-            (EscapeState::Text, '\u{8}') => {
-                output.pop();
-                EscapeState::Text
+fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminalEvent>) {
+    let mut buffer = [0; 4096];
+    loop {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(length) => {
+                if sender
+                    .send(RawTerminalEvent::Output(buffer[..length].to_vec()))
+                    .is_err()
+                {
+                    break;
+                }
             }
-            (EscapeState::Text, value) => {
-                output.push(value);
-                EscapeState::Text
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::UnexpectedEof
+                ) =>
+            {
+                break;
             }
-            (EscapeState::Escape, '[') => EscapeState::Csi,
-            (EscapeState::Escape, ']') => EscapeState::Osc,
-            (EscapeState::Escape, _) => EscapeState::Text,
-            (EscapeState::Csi, value) if ('@'..='~').contains(&value) => EscapeState::Text,
-            (EscapeState::Csi, _) => EscapeState::Csi,
-            (EscapeState::Osc, '\u{7}') => EscapeState::Text,
-            (EscapeState::Osc, '\u{1b}') => EscapeState::OscEscape,
-            (EscapeState::Osc, _) => EscapeState::Osc,
-            (EscapeState::OscEscape, '\\') => EscapeState::Text,
-            (EscapeState::OscEscape, _) => EscapeState::Osc,
-        };
+            Err(error) => {
+                let _ = sender.send(RawTerminalEvent::Failed(error.to_string()));
+                break;
+            }
+        }
     }
-    output
 }
 
 impl TerminalBackend for LocalTerminalBackend {
@@ -179,29 +180,16 @@ impl TerminalBackend for LocalTerminalBackend {
             .write_all(b"\x1b[1;1R")
             .and_then(|()| writer.flush())
             .map_err(|error| TerminalError::new(error.to_string()))?;
-        let mut reader = pair
+        let reader = pair
             .master
             .try_clone_reader()
             .map_err(|error| TerminalError::new(error.to_string()))?;
         let (sender, receiver) = mpsc::channel();
+        let reader_finished = Arc::new(AtomicBool::new(false));
+        let reader_finished_for_thread = reader_finished.clone();
         thread::spawn(move || {
-            let mut buffer = [0; 4096];
-            loop {
-                match reader.read(&mut buffer) {
-                    Ok(0) => break,
-                    Ok(length) => {
-                        let text =
-                            terminal_display_text(&String::from_utf8_lossy(&buffer[..length]));
-                        if sender.send(TerminalEvent::Output(text)).is_err() {
-                            break;
-                        }
-                    }
-                    Err(error) => {
-                        let _ = sender.send(TerminalEvent::Failed(error.to_string()));
-                        break;
-                    }
-                }
-            }
+            read_terminal_stream(reader, sender);
+            reader_finished_for_thread.store(true, Ordering::Release);
         });
         let id = TerminalId::new(format!(
             "terminal-{}",
@@ -214,6 +202,8 @@ impl TerminalBackend for LocalTerminalBackend {
                 writer,
                 child,
                 receiver,
+                next_output_sequence: 0,
+                reader_finished,
                 exited: false,
             },
         );
@@ -253,8 +243,25 @@ impl TerminalBackend for LocalTerminalBackend {
         let terminal = terminals
             .get_mut(id.as_str())
             .ok_or_else(|| TerminalError::new("Terminal not found"))?;
-        let mut events = terminal.receiver.try_iter().collect::<Vec<_>>();
+        let mut events = Vec::new();
+        for event in terminal.receiver.try_iter() {
+            match event {
+                RawTerminalEvent::Output(data) if !data.is_empty() => {
+                    terminal.next_output_sequence = terminal
+                        .next_output_sequence
+                        .checked_add(1)
+                        .ok_or_else(|| TerminalError::new("Terminal output sequence overflowed"))?;
+                    events.push(TerminalEvent::Output(TerminalOutput {
+                        sequence: terminal.next_output_sequence,
+                        data,
+                    }));
+                }
+                RawTerminalEvent::Output(_) => {}
+                RawTerminalEvent::Failed(message) => events.push(TerminalEvent::Failed(message)),
+            }
+        }
         if !terminal.exited
+            && terminal.reader_finished.load(Ordering::Acquire)
             && let Some(status) = terminal
                 .child
                 .try_wait()
@@ -2162,6 +2169,49 @@ mod tests {
     }
 
     #[test]
+    fn terminal_reader_preserves_vt_utf8_boundaries_and_arbitrary_bytes() {
+        struct ChunkedReader {
+            chunks: Vec<Vec<u8>>,
+        }
+
+        impl Read for ChunkedReader {
+            fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+                let Some(chunk) = self.chunks.first_mut() else {
+                    return Ok(0);
+                };
+                let length = chunk.len().min(target.len());
+                target[..length].copy_from_slice(&chunk[..length]);
+                chunk.drain(..length);
+                if chunk.is_empty() {
+                    self.chunks.remove(0);
+                }
+                Ok(length)
+            }
+        }
+
+        let (sender, receiver) = mpsc::channel();
+        read_terminal_stream(
+            ChunkedReader {
+                chunks: vec![
+                    b"\x1b[31mred".to_vec(),
+                    b"\x1b[2;4H\x1b[2J".to_vec(),
+                    vec![0xe3],
+                    vec![0x81, 0x82, 0xff, 0x00],
+                ],
+            },
+            sender,
+        );
+
+        let mut output = Vec::new();
+        for event in receiver {
+            if let RawTerminalEvent::Output(data) = event {
+                output.extend(data);
+            }
+        }
+        assert_eq!(output, b"\x1b[31mred\x1b[2;4H\x1b[2J\xe3\x81\x82\xff\x00");
+    }
+
+    #[test]
     fn list_children_returns_sorted_immediate_entries() {
         let directory = tempfile::tempdir().unwrap();
         fs::create_dir(directory.path().join("z-directory")).unwrap();
@@ -2394,20 +2444,29 @@ mod tests {
             .input(&id, b"Write-Output lapis-terminal-smoke\r")
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(8);
-        let mut output = String::new();
+        let mut output = Vec::new();
+        let mut sequences = Vec::new();
         while Instant::now() < deadline {
             for event in backend.poll(&id).unwrap() {
-                if let TerminalEvent::Output(text) = event {
-                    output.push_str(&text);
+                if let TerminalEvent::Output(chunk) = event {
+                    sequences.push(chunk.sequence);
+                    output.extend(chunk.data);
                 }
             }
-            if output.contains("lapis-terminal-smoke") {
+            if String::from_utf8_lossy(&output).contains("lapis-terminal-smoke") {
                 break;
             }
             thread::sleep(Duration::from_millis(50));
         }
         backend.terminate(&id).unwrap();
-        assert!(output.contains("lapis-terminal-smoke"), "output: {output}");
+        assert!(
+            String::from_utf8_lossy(&output).contains("lapis-terminal-smoke"),
+            "output: {output:?}"
+        );
+        assert!(
+            sequences.windows(2).all(|pair| pair[0] < pair[1]),
+            "output sequences: {sequences:?}"
+        );
     }
 
     #[test]

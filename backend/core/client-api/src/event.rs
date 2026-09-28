@@ -30,7 +30,7 @@ pub enum EventBody {
     TerminalOutput {
         terminal_id: TerminalId,
         sequence: TerminalOutputSequence,
-        data: String,
+        data: Vec<u8>,
     },
     #[serde(rename = "terminal.status")]
     TerminalStatus {
