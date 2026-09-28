@@ -16,9 +16,9 @@ Lapisのテスト配置とコード変更の完了条件を定義します。
 
 ## CIプロファイル
 
-### Core
+### Backend
 
-Desktop UIを除くRust workspaceを検証します。
+Desktop UIを除くRust workspaceを検証します。対象は `backend/*` だけに限定せず、Backendから利用する `features/*` も含みます。
 
 ```text
 cargo fmt --all -- --check
@@ -30,7 +30,18 @@ cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
 
 ### Desktop
 
-Windows上でGPUI Desktopを検証します。
+Desktop固有のGPUI app/UIを対象OS上で検証します。
+
+現在はWindowsのみを保証対象として実行し、workflowは将来Linux/macOSを追加できるmatrix構造にします。
+
+```text
+matrix:
+- windows-2022
+# - ubuntu-latest  # Desktop Linuxを保証する段階で有効化
+# - macos-14       # Desktop macOSを保証する段階で有効化
+```
+
+各OSでは次を実行します。
 
 ```text
 cargo check -p lapis -p lapis-desktop-ui --all-targets
@@ -40,6 +51,14 @@ cargo build -p lapis --all-targets
 ```
 
 UIの実画面・GPU描画・native window操作は引き続き手動確認です。
+
+### CLI
+
+#22で独立CLI entry pointを作成するまで未実装です。
+
+CLIはDesktop GUIの全機能を再実装することを目的にしません。BackendをGUIなしで起動・設定・診断・管理するための薄いCUIとして設計し、必要になった操作だけ追加します。
+
+独立後はCLI固有のbuild/test/smoke checkを追加します。最初から全OS対応を必須にはせず、必要に応じてmatrixを拡張します。
 
 ### Mobile
 
@@ -65,23 +84,19 @@ npm run build
 
 #23でRust/WASMへ移行した後は、このprofileをWASM build/testへ置き換えます。
 
-### CLI
-
-#22で独立CLI entry pointを作成するまで未実装です。現在のDesktop binaryに含まれるheadless分岐をCLI成功扱いにはしません。
-
 ## GitHub Actions
 
 PRと`develop` pushでは、次のcheckを独立して表示します。
 
 | Check | 状態 |
 | --- | --- |
-| Core | 必須 |
-| Desktop | 必須 |
+| Backend | 必須 |
+| Desktop (Windows) | 必須 |
 | Mobile | 必須 |
 | Web | 必須 |
 | CLI | #22完了後に追加 |
 
-将来のcross-client contract test、clean container build、macOS/iOS、WASM検証は、それぞれの基盤ができた段階で追加します。
+将来のcross-client contract test、clean container build、Linux/macOS Desktop、CLIの追加OS、WASM検証は、それぞれの基盤ができた段階で追加します。
 
 ## テスト配置
 
