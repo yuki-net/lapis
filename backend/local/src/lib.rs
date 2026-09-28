@@ -818,10 +818,7 @@ fn file_uri(path: &Path) -> String {
 }
 
 fn path_from_file_uri(uri: &str) -> PathBuf {
-    let value = uri
-        .strip_prefix("file:///")
-        .or_else(|| uri.strip_prefix("file://"))
-        .unwrap_or(uri);
+    let value = uri.strip_prefix("file://").unwrap_or(uri);
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
     let mut index = 0;
@@ -838,7 +835,16 @@ fn path_from_file_uri(uri: &str) -> PathBuf {
             index += 1;
         }
     }
-    let decoded = String::from_utf8_lossy(&decoded).replace('/', std::path::MAIN_SEPARATOR_STR);
+    let mut decoded = String::from_utf8_lossy(&decoded).replace('/', std::path::MAIN_SEPARATOR_STR);
+    #[cfg(windows)]
+    {
+        let bytes = decoded.as_bytes();
+        let windows_drive_path =
+            bytes.get(1).is_some_and(u8::is_ascii_alphabetic) && bytes.get(2) == Some(&b':');
+        if decoded.starts_with(std::path::MAIN_SEPARATOR) && windows_drive_path {
+            decoded.remove(0);
+        }
+    }
     normalize_lsp_path(Path::new(&decoded))
 }
 
@@ -2124,6 +2130,16 @@ mod tests {
         (workspace, path)
     }
 
+    #[test]
+    fn file_uri_round_trips_absolute_paths() {
+        let path = if cfg!(windows) {
+            PathBuf::from("C:/lapis/lsp test/メモ %.rs")
+        } else {
+            PathBuf::from("/tmp/lapis/lsp test/メモ %.rs")
+        };
+
+        assert_eq!(path_from_file_uri(&file_uri(&path)), path);
+    }
     #[test]
     fn local_repository_round_trips_and_detects_conflicts() {
         let directory = tempfile::tempdir().unwrap();
