@@ -106,7 +106,7 @@ impl Editor {
                             return;
                         }
                         let synced = editor.problems.lsp.sync_active(&editor.session);
-                        let refreshed = editor.problems.lsp.refresh();
+                        let refreshed = editor.problems.lsp.refresh(&editor.session);
                         match (synced, refreshed) {
                             (Ok(sync_changed), Ok(diagnostics_changed)) => {
                                 if sync_changed || diagnostics_changed {
