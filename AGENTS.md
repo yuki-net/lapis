@@ -14,7 +14,7 @@
 - **ブランチ命名**: `<type>/<概要>` または `<type>/<issue番号>-<概要>`
   - `type` はGitHubラベルや一般的な区分（`feat`, `fix`, `refactor`, `docs`, `chore` 等）に準拠。
   - 例: `feat/issue-123-terminal`, `fix/remote-reconnect`, `refactor/desktop-state`
-- **PR・Issue作成**: 指示を受けて作成する場合は原則 **Draft PR** とし、リポジトリのテンプレート（`.github/` 配下）のフォーマットに従う。
+- **PR・Issue作成**: 指示を受けて作成する場合は原則 **Draft PR** とし、リポジトリのテンプレート（`.github/` 配下）のフォーマットに従う。作成時は適切なラベルを付与し、作業者をアサイン（`@me`）する。
 
 ## 実装・技術制約
 - **Desktop (GPUI)**: 描画処理・UIスレッド中にブロッキングI/Oを行わない。
