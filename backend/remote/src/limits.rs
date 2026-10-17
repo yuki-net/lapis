@@ -110,7 +110,8 @@ impl Default for AuthenticationTimeout {
     }
 }
 
-/// 1 clientで処理中にできるrequest数の上限。Phase 1 transportは順序保証のため直列処理する。
+/// 1 clientあたりのin-flight request上限。現行のWebSocket処理は応答を待ってから
+/// 次のrequestを受け取るため、同時処理数を1に固定する。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MaxConcurrentRequests(usize);
 

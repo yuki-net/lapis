@@ -1,6 +1,6 @@
 # Remote — internal constraints and design notes
 
-この文書はRemote実装の**安全上の設計意図**を保存します。現行アプリにすべて実装されているという意味ではありません。通信方式、認証フローの具体化は機能実装時に現状のコードと合わせて再確認します。
+この文書はRemoteの**安全上の制約**と**未確定の設計案**を区別します。「実装済み」は主に `backend/remote/` のServer側でコードから確認できる範囲を指し、Clientとの連携まで完成している意味ではありません。
 
 ## 信頼境界
 
@@ -10,11 +10,21 @@
 - Document・Terminalなどのresource identityを認証session・Workspaceへ関連付け、別sessionから利用させません。
 - 認証情報、ファイル内容、Terminalの入出力を不用意にログへ記録しません。
 
-## 接続と権限の設計案
+## Server側で実装済みの制御
 
-初期案はTLSで保護したWebSocketと証明書pinning、短命の一回限りのPairing招待、端末ごとの失効可能なcredentialです。詳細手順や保存先、暗号方式は実装前の安全性検討・テストを必要とし、現段階で実装済みとみなしません。
+- `server.rs` と `tls.rs`: Remoteが有効化されていなければlistenしません。WebSocketのServerはTLS 1.3のみを許可し、TLS early dataを無効にしています。
+- `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。発行するcredentialはClient・Workspace・許可capability・期限に結び付き、失効させると関連sessionも無効になります。
+- `auth.rs`: 認証済みsessionの有効性と、requestが要求するWorkspace・capabilityを検証します。
 
-Protocol versionとcapabilityを接続時に交渉し、未対応の操作を誤って実行しないこと。資格情報の失効、プロトコル不一致、証明書不一致を単なる一時切断として自動的に信頼し直さないこと。
+これらはServer側の実装の説明であり、Clientの証明書検証、認証情報の安全な永続化、完成した接続体験を保証するものではありません。現在のcredential管理は `RemoteAuth` 内のメモリ上の状態です。
+
+## Client連携などの未確認・未確定事項
+
+- ClientがServer証明書のfingerprintをPairing時に受け取り、その後もpinningする仕組み。
+- QR・手動codeによるPairing招待の配布と、Client資格情報の安全な永続化。
+- Server秘密鍵・証明書の保存と更新手順。
+
+これらは現行のServer実装だけでは完了を確認できません。具体化するときに実装・検証し、認証拒否、protocol不一致、証明書不一致を単なる一時切断として自動的に信頼し直さないこと。
 
 ## 状態と回復
 

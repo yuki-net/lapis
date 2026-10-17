@@ -2,7 +2,8 @@ use std::{error::Error, fmt};
 
 use serde::{Deserialize, Serialize};
 
-/// Phase 1開発中のpre-release protocol。安定化時に1.0へ移行する。
+/// 開発中のpre-release protocol。Client/Host間の互換性方針と混在バージョンの検証が
+/// 整うまでは0.1を維持し、1.0への移行はその条件を確認して判断する。
 pub const CURRENT_PROTOCOL: ProtocolVersion = ProtocolVersion::new(0, 1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
