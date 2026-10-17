@@ -12,4 +12,4 @@ Rust/GPUIによるDesktop Clientの実装領域です。現在のファイル配
 
 必要な境界は状態の所有者やライフサイクルで判断し、行数のためだけのEntity・ファイル分割をしません。
 
-UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [Testing](../../docs/TESTING.md) を参照してください。
+UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [AGENTS.md](../../AGENTS.md) を参照してください。
