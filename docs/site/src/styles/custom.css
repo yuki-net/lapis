@@ -1,0 +1,11 @@
+/* Site presentation belongs here; keep content Markdown renderer-agnostic. */
+:root {
+  --sl-color-accent-low: #122442;
+  --sl-color-accent: #92b8fc;
+  --sl-color-accent-high: #e0ecff;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #eaf2ff;
+  --sl-color-accent: #2858b8;
+  --sl-color-accent-high: #163577;
+}
