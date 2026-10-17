@@ -1,0 +1,25 @@
+# 共通レビュー規約は CodeRabbit が自動検出する AGENTS.md を正本とする。
+# ここではレビュー動作と領域固有の重点観点だけを設定する。
+language: ja-JP
+
+reviews:
+  profile: chill
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "backend/remote/**"
+      instructions: |
+        TLS 1.3、ペアリングの期限と一回性、認証情報の失効、
+        認可の抜け、競合状態を重点的に確認する。
+        セキュリティ上の保証は実装とテストに照らして判定し、
+        未実装のクライアント側設計と混同しない。
+    - path: "apps/desktop/**"
+      instructions: |
+        GPUI の描画スレッドでのブロッキング、描画中の外部 I/O、
+        非同期結果による古い状態の反映、
+        状態とライフサイクルの所有境界を重点的に確認する。
+    - path: "docs/**"
+      instructions: |
+        実装済みと未実装の混同、リンク切れ、
+        仕様の正本の重複、維持すべき設計根拠の脱落を確認する。
