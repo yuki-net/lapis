@@ -223,6 +223,28 @@ mod tests {
     }
 
     #[gpui::test]
+    fn explicit_viewport_width_can_override_root_allocation(cx: &mut TestAppContext) {
+        struct ExplicitRoot;
+        impl Render for ExplicitRoot {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .id("explicit-root")
+                    .debug_selector(|| "explicit-root".into())
+                    .w(window.viewport_size().width)
+                    .h_full()
+            }
+        }
+        let (_, target) = cx.add_window_view(|_, _| ExplicitRoot);
+        target.update(|window, cx| {
+            cx.set_inspector_renderer(Box::new(|_, _, _| gpui::Empty.into_any_element()));
+            window.toggle_inspector(cx);
+        });
+        draw(target);
+        let width = target.debug_bounds("explicit-root").unwrap().size.width;
+        target.update(|window, _| assert_eq!(width, window.viewport_size().width));
+    }
+
+    #[gpui::test]
     fn picked_div_state_can_render_in_separate_window(cx: &mut TestAppContext) {
         let (_, target) = cx.add_window_view(|_, _| Target);
         let session = target.update(|window, cx| {
