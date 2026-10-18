@@ -1,0 +1,18 @@
+[dx.log]
+[DEBUG] dx::build::builder: Build completed in 234320ms telemetry="{\"blah\":123,\"event\":\"build_and_bundle_complete\",\"format\":\"windows\",\"mode\":\"fat\",\"num_dependencies\":721,\"time_taken\":234320,\"triple\":\"x86_64-pc-windows-msvc\"}" 
+[DEBUG] dx::build::builder: Patch rebuild: changed_crates=["lapis_desktop_ui"], modified_crates={"lapis", "lapis_desktop_ui"} 
+[DEBUG] dx::build::link: replaying crates: ["lapis_desktop_ui"] 
+[DEBUG] dx::build::builder: Build completed in 14899ms telemetry="{\"blah\":123,\"event\":\"build_and_bundle_complete\",\"format\":\"windows\",\"mode\":\"thin\",\"num_dependencies\":721,\"time_taken\":14899,\"triple\":\"x86_64-pc-windows-msvc\"}" 
+[INFO] dx::build::builder: Hot-patching: apps\desktop\ui\src\shell\main\render.rs took 3559ms 
+[ERROR] dx::serve::output: thread 'main' (42216) has overflowed its stack 
+[ERROR] dx::serve: Application [windows] exited with error: exit code: 0xc000041d 
+[DEBUG] dx::build::builder: Patch rebuild: changed_crates=["lapis_desktop_ui"], modified_crates={"lapis", "lapis_desktop_ui"} 
+[DEBUG] dx::build::link: replaying crates: ["lapis_desktop_ui"] 
+[dx-third.log]
+[DEBUG] dx::build::builder: Build completed in 57706ms telemetry="{\"blah\":123,\"event\":\"build_and_bundle_complete\",\"format\":\"windows\",\"mode\":\"fat\",\"num_dependencies\":721,\"time_taken\":57706,\"triple\":\"x86_64-pc-windows-msvc\"}" 
+[DEBUG] dx::build::builder: Patch rebuild: changed_crates=["lapis_desktop_ui"], modified_crates={"lapis_desktop_ui", "lapis"} 
+[DEBUG] dx::build::link: replaying crates: ["lapis_desktop_ui"] 
+[DEBUG] dx::build::builder: Build completed in 9717ms telemetry="{\"blah\":123,\"event\":\"build_and_bundle_complete\",\"format\":\"windows\",\"mode\":\"thin\",\"num_dependencies\":721,\"time_taken\":9717,\"triple\":\"x86_64-pc-windows-msvc\"}" 
+[INFO] dx::build::builder: Hot-patching: apps\desktop\ui\src\shell\main\render.rs took 1587ms 
+[ERROR] dx::serve::output: thread 'main' (18076) has overflowed its stack 
+[ERROR] dx::serve: Application [windows] exited with error: exit code: 0xc000041d 
