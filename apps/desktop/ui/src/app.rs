@@ -1,6 +1,6 @@
 use gpui::{
-    App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
-    actions, px, size,
+    App, AppContext, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions, actions, px,
+    size,
 };
 use lapis_app_services::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
@@ -88,33 +88,76 @@ pub struct InitialView {
     pub show_problems: bool,
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
-    Application::new()
+    gpui::Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
-            bind_keys(cx);
-            #[cfg(debug_assertions)]
-            crate::devtools::init(cx);
-            let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Lapis".into()),
-                        appears_transparent: true,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    let editor = cx.new(|cx| Editor::new(session, services, initial_view, cx));
-                    window.focus(&editor.read(cx).editor_focus_handle());
-                    editor
-                },
-            )
-            .expect("Lapis window should open");
-            cx.on_action(|_: &Quit, cx| cx.quit());
+            open_main_window(session, services, initial_view, cx);
         });
+}
+
+#[cfg(target_family = "wasm")]
+pub fn run_web(
+    session: EditorSession,
+    services: DesktopServices,
+    initial_view: InitialView,
+    fonts: Vec<std::borrow::Cow<'static, [u8]>>,
+    backend: &str,
+    on_ready: fn(),
+) -> gpui::ApplicationHandle {
+    gpui_platform::web_init();
+    let preference = match backend {
+        "webgl" => gpui_web::WebBackendPreference::WebGl,
+        "webgpu" => gpui_web::WebBackendPreference::WebGpu,
+        _ => gpui_web::WebBackendPreference::Auto,
+    };
+    let platform = std::rc::Rc::new(gpui_web::WebPlatform::new_with_backend_and_font_fallback(
+        false,
+        preference,
+        gpui_web::CanvasFontFallback::EmojiAndCjk,
+    ));
+    let http_client = std::sync::Arc::new(platform.fetch_http_client());
+    gpui::Application::with_platform(platform)
+        .with_http_client(http_client)
+        .with_assets(crate::components::IconAssets)
+        .run_embedded(move |cx| {
+            cx.text_system()
+                .add_fonts(fonts)
+                .expect("Web fonts should load");
+            open_main_window(session, services, initial_view, cx);
+            on_ready();
+        })
+}
+
+fn open_main_window(
+    session: EditorSession,
+    services: DesktopServices,
+    initial_view: InitialView,
+    cx: &mut App,
+) {
+    bind_keys(cx);
+    #[cfg(all(debug_assertions, not(target_family = "wasm")))]
+    crate::devtools::init(cx);
+    let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+    cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Lapis".into()),
+                appears_transparent: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        move |window, cx| {
+            let editor = cx.new(|cx| Editor::new(session, services, initial_view, cx));
+            crate::gpui_compat::focus(window, &editor.read(cx).editor_focus_handle(), cx);
+            editor
+        },
+    )
+    .expect("Lapis window should open");
+    cx.on_action(|_: &Quit, cx| cx.quit());
 }
 
 fn bind_keys(cx: &mut App) {

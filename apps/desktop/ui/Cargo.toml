@@ -6,7 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-gpui.workspace = true
+web-time.workspace = true
 serde.workspace = true
 lapis-app-services = { path = "../../../backend/core/app-services" }
 lapis-editor-core = { path = "../../../backend/core/editor-core" }
@@ -19,3 +19,11 @@ lapis-task-runner = { path = "../../../features/task-runner" }
 lapis-terminal = { path = "../../../features/terminal" }
 lapis-workspace = { path = "../../../backend/core/workspace" }
 serde_json.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+gpui.workspace = true
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+gpui_preview = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false }
+gpui_web = { package = "gpui-pre-web", version = "=0.3.9", default-features = false }

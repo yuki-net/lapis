@@ -6,7 +6,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         if self
             .shell
             .panels()

@@ -4,7 +4,7 @@ impl Editor {
     pub(super) fn start_background_tasks(&mut self, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_secs(2)).await;
+                cx.background_executor().timer(Duration::from_secs(2)).await;
                 if this
                     .update(cx, |editor, cx| {
                         if !editor.session.poll_external_changes().is_empty() {
@@ -21,7 +21,9 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(250)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
                 if this
                     .update(cx, |editor, cx| match editor.tasks.session.refresh() {
                         Ok(true) => {
@@ -50,7 +52,7 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_secs(1)).await;
+                cx.background_executor().timer(Duration::from_secs(1)).await;
                 if this
                     .update(cx, |editor, cx| {
                         if !editor.feature_registry.is_running(id::FEATURE_GIT) {
@@ -73,7 +75,9 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(250)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
                 if this
                     .update(cx, |editor, cx| match editor.terminal.session.refresh() {
                         Ok(true) => cx.notify(),
@@ -92,7 +96,9 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(500)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
                 if this
                     .update(cx, |editor, cx| {
                         editor.refresh_feature_activation();
@@ -128,7 +134,9 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(100)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
                 if this
                     .update(cx, |editor, cx| {
                         if editor.search.workspace.refresh() {
@@ -155,7 +163,9 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_millis(50)).await;
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
                 if this
                     .update(cx, |editor, cx| {
                         if let Some(result) = editor
@@ -211,7 +221,7 @@ impl Editor {
         .detach();
         cx.spawn(async move |this, cx| {
             loop {
-                Timer::after(Duration::from_secs(1)).await;
+                cx.background_executor().timer(Duration::from_secs(1)).await;
                 if this
                     .update(cx, |editor, _| {
                         let _ = editor.capture_conversation();

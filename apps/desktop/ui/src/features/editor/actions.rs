@@ -146,10 +146,47 @@ impl Editor {
         self.replace_selection("\n", cx);
     }
 
+    #[cfg(not(target_family = "wasm"))]
     pub(super) fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
             self.replace_selection(&text, cx);
         }
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(super) fn paste(&mut self, _: &Paste, _: &mut Window, cx: &mut Context<Self>) {
+        self.clipboard_generation = self.clipboard_generation.wrapping_add(1);
+        let generation = self.clipboard_generation;
+        let document = self.session.active_document_id().cloned();
+        let revision = self.session.active_revision();
+        let selection = self.selected_range.clone();
+        // Clipboard APIはuser activationが有効なこのcallback内で呼び出す。
+        let read = cx.read_from_clipboard_async();
+        cx.spawn(async move |this, cx| {
+            let result = read.await;
+            let _ = this.update(cx, |editor, cx| {
+                if editor.clipboard_generation != generation
+                    || editor.session.active_document_id() != document.as_ref()
+                    || editor.session.active_revision() != revision
+                    || editor.selected_range != selection
+                {
+                    return;
+                }
+                match result {
+                    Ok(Some(item)) => {
+                        if let Some(text) = item.text() {
+                            editor.replace_selection(&text, cx);
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        editor.status = format!("Clipboard: {error}");
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
@@ -357,14 +394,14 @@ impl Editor {
         );
         self.refresh_feature_activation();
         self.double_shift.reset();
-        window.focus(&focus);
+        crate::gpui_compat::focus(window, &focus, cx);
         cx.notify();
     }
 
     fn close_quick_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.close_panel(crate::extension_ui::PanelPosition::Right, cx);
         self.refresh_feature_activation();
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         cx.notify();
     }
 

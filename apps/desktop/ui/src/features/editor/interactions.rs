@@ -1,5 +1,6 @@
 use super::*;
 
+#[cfg(not(target_family = "wasm"))]
 use gpui::{TitlebarOptions, WindowBounds, WindowOptions};
 
 impl Editor {
@@ -40,7 +41,7 @@ impl Editor {
     ) {
         self.shell.focused_panel = crate::extension_ui::PanelPosition::Main;
         self.is_selecting = true;
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         let offset = self.index_for_mouse_position(event.position);
         if event.modifiers.shift {
             self.select_to(offset, cx);
@@ -74,7 +75,9 @@ impl Editor {
         self.status = "Workspaceを選択しています...".to_owned();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(1)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(1))
+                .await;
             let root = dialog.choose_workspace_path();
             let _ = this.update(cx, |editor, cx| {
                 let Some(root) = root else {
@@ -107,7 +110,7 @@ impl Editor {
                 cx.notify();
             }
         }
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
     }
 
     fn finish_workspace_open(&mut self, cx: &mut Context<Self>) {
@@ -134,7 +137,9 @@ impl Editor {
         self.status = "ファイルを選択しています...".to_owned();
         cx.notify();
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(1)).await;
+            cx.background_executor()
+                .timer(Duration::from_millis(1))
+                .await;
             let path = dialog.choose_file_path();
             let _ = this.update(cx, |editor, cx| {
                 let Some(path) = path else {
@@ -161,7 +166,7 @@ impl Editor {
     pub(super) fn clone_from_git(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // TODO: Git URLと保存先を受け取り、clone後にWorkspaceとして開く。
         self.status = "Clone from Git は準備中です".to_owned();
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         cx.notify();
     }
 
@@ -169,7 +174,7 @@ impl Editor {
         match self.session.save_document() {
             Ok(DocumentAction::Completed) => {
                 self.status = "保存しました".to_owned();
-                window.focus(&self.focus_handle);
+                crate::gpui_compat::focus(window, &self.focus_handle, cx);
                 cx.notify();
             }
             Ok(DocumentAction::Cancelled) => {}
@@ -177,10 +182,17 @@ impl Editor {
         }
     }
 
+    #[cfg(target_family = "wasm")]
+    pub(super) fn create_new_folder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        self.status = "Web試作ではフォルダ作成は未対応です".to_owned();
+        cx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub(super) fn create_new_folder(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(root) = self.session.workspace_root() {
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
+            let timestamp = web_time::SystemTime::now()
+                .duration_since(web_time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or(0);
             let folder_name = format!("new-folder-{}", timestamp % 10000);
@@ -198,6 +210,13 @@ impl Editor {
         }
     }
 
+    #[cfg(target_family = "wasm")]
+    pub(super) fn open_new_window(&mut self, cx: &mut Context<Self>) {
+        self.status = "Web試作は1ページにつき1ウィンドウです".to_owned();
+        cx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
     pub(super) fn open_new_window(&mut self, cx: &mut Context<Self>) {
         let repository = self.session.repository();
         let file_dialog = self.session.file_dialog();
@@ -249,7 +268,7 @@ impl Editor {
                         cx,
                     )
                 });
-                window.focus(&editor.read(cx).editor_focus_handle());
+                crate::gpui_compat::focus(window, &editor.read(cx).editor_focus_handle(), cx);
                 editor
             },
         );
@@ -263,25 +282,29 @@ impl Editor {
             self.expanded_directories.clear();
             self.shell.synchronize_documents(&self.session.tabs());
             self.status = "プロジェクトを閉じました".to_owned();
-            window.focus(&self.focus_handle);
+            crate::gpui_compat::focus(window, &self.focus_handle, cx);
             self.refresh_feature_activation();
         }
         cx.notify();
     }
 
-    pub(crate) fn toggle_inspector_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_inspector_window(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         self.shell.command_palette_open = false;
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, not(target_family = "wasm")))]
         {
-            self.status = match crate::devtools::toggle_inspector(window, cx) {
+            self.status = match crate::devtools::toggle_inspector(_window, cx) {
                 Ok(true) => "Inspectorを別ウィンドウで開きました".to_owned(),
                 Ok(false) => "Inspectorを閉じました".to_owned(),
                 Err(error) => error,
             };
         }
-        #[cfg(not(debug_assertions))]
+        #[cfg(all(not(debug_assertions), not(target_family = "wasm")))]
         {
             self.status = "Inspectorは開発ビルドでのみ利用可能です".to_owned();
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            self.status = "InspectorはWeb試作では未対応です".to_owned();
         }
         cx.notify();
     }

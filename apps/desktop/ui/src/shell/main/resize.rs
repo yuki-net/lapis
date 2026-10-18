@@ -8,7 +8,7 @@ impl Editor {
         viewport: gpui::Size<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let can_resize = match target {
             ResizeTarget::Left => !self.shell.left_panel.is_transitioning(),
             ResizeTarget::Right => !self.shell.right_panel.is_transitioning(),
@@ -90,7 +90,7 @@ impl Editor {
         let shape_release = gap;
         let delta_x = f32::from(event.position.x - start.x);
         let delta_y = f32::from(event.position.y - start.y);
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
 
         match (target, mode) {
             (ResizeTarget::Left, ResizeMode::BottomSpan) => {
@@ -199,7 +199,7 @@ impl Editor {
         viewport_width: f32,
         gap: f32,
         min_w: f32,
-        now: std::time::Instant,
+        now: web_time::Instant,
         cx: &mut Context<Self>,
     ) {
         let current_raw = mouse_x - gap;
@@ -240,7 +240,7 @@ impl Editor {
         viewport_width: f32,
         gap: f32,
         min_w: f32,
-        now: std::time::Instant,
+        now: web_time::Instant,
         cx: &mut Context<Self>,
     ) {
         let current_raw = viewport_width - mouse_x - gap;
@@ -311,7 +311,7 @@ impl Editor {
         }
     }
 
-    fn set_bottom_span_left(&mut self, enabled: bool, now: std::time::Instant) {
+    fn set_bottom_span_left(&mut self, enabled: bool, now: web_time::Instant) {
         if self.shell.bottom_span_left == enabled {
             return;
         }
@@ -326,7 +326,7 @@ impl Editor {
         ));
     }
 
-    fn set_bottom_span_right(&mut self, enabled: bool, now: std::time::Instant) {
+    fn set_bottom_span_right(&mut self, enabled: bool, now: web_time::Instant) {
         if self.shell.bottom_span_right == enabled {
             return;
         }

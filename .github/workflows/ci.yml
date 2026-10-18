@@ -156,6 +156,34 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            ~/.cargo/bin/wasm-bindgen*
+            target/
+          key: web-wasm-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            web-wasm-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Install WebAssembly bindings CLI
+        run: |
+          if ! wasm-bindgen --version 2>/dev/null | grep -qx 'wasm-bindgen 0.2.129'; then
+            cargo install wasm-bindgen-cli --version 0.2.129 --locked
+          fi
+
+      - name: Lint shared UI for WebAssembly
+        run: cargo clippy -p lapis-web --target wasm32-unknown-unknown --locked -- -D warnings
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -168,3 +196,17 @@ jobs:
 
       - name: Build Web
         run: npm run build
+
+      - name: Install browser for Web UI tests
+        run: npx playwright install --with-deps chromium
+
+      - name: Test Web UI
+        run: npm run test:browser
+
+      - name: Upload Web UI test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-ui-test-results
+          path: apps/web/test-results/
+          if-no-files-found: ignore

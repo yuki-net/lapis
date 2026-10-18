@@ -2,16 +2,15 @@ use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Range,
-    time::{Duration, Instant},
 };
+use web_time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClickEvent, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, KeyDownEvent, LayoutId,
     ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad,
     Pixels, Point, PromptButton, PromptLevel, Render, ShapedLine, SharedString, Style, TextRun,
-    Timer, UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*, px, relative,
-    size,
+    UTF16Selection, Window, WindowControlArea, div, fill, point, prelude::*, px, relative, size,
 };
 use lapis_app_services::{
     ConversationViewState, DocumentAction, DocumentCloseDisposition, EditorSession,
@@ -192,6 +191,8 @@ pub struct Editor {
     conversation: ConversationFeature,
     focus_handle: FocusHandle,
     selected_range: Range<usize>,
+    #[cfg(target_family = "wasm")]
+    clipboard_generation: u64,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     status: String,
@@ -263,6 +264,8 @@ impl Editor {
             conversation: ConversationFeature::new(services.conversation),
             focus_handle: cx.focus_handle(),
             selected_range: 0..0,
+            #[cfg(target_family = "wasm")]
+            clipboard_generation: 0,
             selection_reversed: false,
             marked_range: None,
             status: "New document".to_owned(),
