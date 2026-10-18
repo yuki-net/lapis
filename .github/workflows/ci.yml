@@ -85,7 +85,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: clippy
+          components: clippy, rustfmt
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -111,6 +111,21 @@ jobs:
 
       - name: Build Desktop
         run: cargo build -p lapis --all-targets
+
+      - name: Check official GPUI PoC formatting
+        run: cargo fmt --manifest-path tools/gpui-devtools-poc/Cargo.toml -- --check
+
+      - name: Check official GPUI PoC
+        run: cargo check --manifest-path tools/gpui-devtools-poc/Cargo.toml --target-dir target --locked --all-targets
+
+      - name: Test official GPUI PoC
+        run: cargo test --manifest-path tools/gpui-devtools-poc/Cargo.toml --target-dir target --locked --all-targets
+
+      - name: Lint official GPUI PoC
+        run: cargo clippy --manifest-path tools/gpui-devtools-poc/Cargo.toml --target-dir target --locked --all-targets -- -D warnings
+
+      - name: Build official GPUI PoC
+        run: cargo build --manifest-path tools/gpui-devtools-poc/Cargo.toml --target-dir target --locked --all-targets
 
   mobile:
     name: Mobile

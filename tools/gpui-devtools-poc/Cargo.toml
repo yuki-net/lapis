@@ -1,0 +1,17 @@
+[package]
+name = "gpui-devtools-poc"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# 本体のvendor依存とは分離し、公開crateだけで検証する。
+[workspace]
+
+[dependencies]
+gpui = { version = "=0.2.2", features = ["inspector"] }
+
+[dev-dependencies]
+gpui = { version = "=0.2.2", features = ["inspector", "test-support"] }
+
+[profile.dev]
+opt-level = 1
