@@ -17,5 +17,8 @@ lapis-terminal = { path = "../../../features/terminal" }
 lapis-workspace = { path = "../workspace" }
 serde.workspace = true
 
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen-futures = "0.4"
+
 [dev-dependencies]
 tempfile.workspace = true

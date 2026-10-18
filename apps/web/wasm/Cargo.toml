@@ -1,0 +1,25 @@
+[package]
+name = "lapis-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lapis-app-services = { path = "../../../backend/core/app-services" }
+lapis-document = { path = "../../../backend/core/document" }
+lapis-editor-core = { path = "../../../backend/core/editor-core" }
+lapis-git = { path = "../../../features/git" }
+lapis-lsp = { path = "../../../features/lsp" }
+lapis-settings = { path = "../../../backend/core/settings" }
+lapis-task-runner = { path = "../../../features/task-runner" }
+lapis-terminal = { path = "../../../features/terminal" }
+lapis-workspace = { path = "../../../backend/core/workspace" }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
+lapis-desktop-ui = { path = "../../desktop/ui" }
+wasm-bindgen = "=0.2.129"

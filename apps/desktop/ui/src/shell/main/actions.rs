@@ -135,7 +135,7 @@ impl Editor {
         let transition = self.shell.panel_mut(position).request_open_with_duration(
             open,
             duration,
-            std::time::Instant::now(),
+            web_time::Instant::now(),
         );
         if let Some((generation, duration)) = transition {
             self.schedule_panel_transition(position, generation, duration, cx);
@@ -159,7 +159,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         cx.spawn(async move |this, cx| {
-            Timer::after(duration).await;
+            cx.background_executor().timer(duration).await;
             let _ = this.update(cx, |editor, cx| {
                 editor.complete_panel_transition(position, generation, cx);
             });
@@ -176,7 +176,7 @@ impl Editor {
         let next = self
             .shell
             .panel_mut(position)
-            .complete_transition(generation, std::time::Instant::now());
+            .complete_transition(generation, web_time::Instant::now());
         if let Some((next_generation, duration)) = next {
             self.schedule_panel_transition(position, next_generation, duration, cx);
         }

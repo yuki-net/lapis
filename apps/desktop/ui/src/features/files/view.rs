@@ -106,7 +106,7 @@ impl Editor {
                             this.restore_active_view();
                             this.shell.synchronize_documents(&this.session.tabs());
                             this.status = "文書を開きました".to_owned();
-                            window.focus(&this.focus_handle);
+                            crate::gpui_compat::focus(window, &this.focus_handle, cx);
                             this.refresh_feature_activation();
                         }
                         Err(error) => {

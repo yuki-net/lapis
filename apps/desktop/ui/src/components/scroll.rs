@@ -1,6 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use gpui::{
     CursorStyle, ElementId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
@@ -126,7 +126,7 @@ impl ScrollState {
         drag.last_pointer = Some(pointer);
 
         let viewport = self.inner.handle.bounds().size;
-        let max_offset = self.inner.handle.max_offset();
+        let max_offset = crate::gpui_compat::max_offset(&self.inner.handle);
         let (track_length, max_scroll) = match drag.axis {
             ScrollAxis::Vertical => (viewport.height, max_offset.height),
             ScrollAxis::Horizontal => (viewport.width, max_offset.width),
@@ -203,7 +203,7 @@ pub(crate) fn scroll_viewport(
 
 fn scrollbar_track(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui::Div> {
     let handle = state.handle();
-    let max_offset = handle.max_offset();
+    let max_offset = crate::gpui_compat::max_offset(&handle);
 
     let has_overflow = match axis {
         ScrollAxis::Vertical => max_offset.height > px(0.0),
@@ -274,7 +274,7 @@ fn scrollbar_thumb(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui:
     let handle = state.handle();
     let bounds = handle.bounds();
     let viewport = bounds.size;
-    let max_offset = handle.max_offset();
+    let max_offset = crate::gpui_compat::max_offset(&handle);
     let offset = handle.offset();
     let (track_length, max_scroll, current_scroll) = match axis {
         ScrollAxis::Vertical => (viewport.height, max_offset.height, -offset.y),

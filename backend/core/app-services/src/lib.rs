@@ -6,7 +6,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
-    thread,
 };
 
 pub use lapis_document::Encoding;
@@ -722,7 +721,7 @@ impl LspSession {
         };
         let backend = self.backend.clone();
         let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
+        spawn_session_work(move || {
             let _ = sender.send(backend.diagnostics());
         });
         self.diagnostics_receiver = Some(receiver);
@@ -754,7 +753,7 @@ impl LspSession {
         let revision = editor.active_revision();
         let backend = self.backend.clone();
         let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
+        spawn_session_work(move || {
             let _ = sender.send(backend.completion(&path, position, revision));
         });
         Ok(receiver)
@@ -784,7 +783,7 @@ impl LspSession {
         let revision = editor.active_revision();
         let backend = self.backend.clone();
         let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
+        spawn_session_work(move || {
             let _ = sender.send(backend.definition(&path, position, revision));
         });
         Ok(receiver)
@@ -839,7 +838,7 @@ impl WorkspaceSearchSession {
         let worker_cancelled = cancelled.clone();
         let backend = self.backend.clone();
         let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || {
+        spawn_session_work(move || {
             let result = backend.search(&root, &query, &worker_cancelled);
             let _ = sender.send(result);
         });
@@ -953,7 +952,12 @@ impl TaskSession {
             )));
         }
         self.next_id = self.next_id.saturating_add(1);
-        let suffix = format!("{}-{}-{}", unix_time_ms(), std::process::id(), self.next_id);
+        let suffix = format!(
+            "{}-{}-{}",
+            unix_time_ms(),
+            session_process_id(),
+            self.next_id
+        );
         let task_id = TaskId::new(format!("task-{suffix}"));
         let execution_id = ExecutionId::new(format!("execution-{suffix}"));
         let title = prompt
@@ -1002,7 +1006,12 @@ impl TaskSession {
             return Err(TaskError::new("Task の指示が空です"));
         }
         self.next_id = self.next_id.saturating_add(1);
-        let suffix = format!("{}-{}-{}", unix_time_ms(), std::process::id(), self.next_id);
+        let suffix = format!(
+            "{}-{}-{}",
+            unix_time_ms(),
+            session_process_id(),
+            self.next_id
+        );
         let task_id = TaskId::new(format!("task-{suffix}"));
         let execution_id = ExecutionId::new(format!("execution-{suffix}"));
         let worktree = git
@@ -1707,6 +1716,27 @@ impl EditorSession {
 
     fn persist(&self) -> Result<(), WorkspaceError> {
         self.state_repository.save(&self.snapshot())
+    }
+}
+
+// Webの試作backendは小さなメモリー内データだけを扱い、ブラウザーのtaskへ委譲する。
+fn spawn_session_work(work: impl FnOnce() + Send + 'static) {
+    #[cfg(not(target_family = "wasm"))]
+    std::thread::spawn(work);
+    #[cfg(target_family = "wasm")]
+    wasm_bindgen_futures::spawn_local(async move {
+        work();
+    });
+}
+
+fn session_process_id() -> u32 {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        std::process::id()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        0
     }
 }
 

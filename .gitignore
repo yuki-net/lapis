@@ -3,6 +3,9 @@
 /apps/mobile/**/build/
 /apps/mobile/local.properties
 /apps/web/dist/
+/apps/web/src/wasm/
+/apps/web/test-results/
+/apps/web/playwright-report/
 /apps/web/node_modules/
 *.tsbuildinfo
 *.log

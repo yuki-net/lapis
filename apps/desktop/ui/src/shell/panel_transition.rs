@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 pub(crate) const PANEL_ANIMATION_DURATION: Duration = Duration::from_millis(120);
 pub(crate) const PANEL_SNAP_ANIMATION_DURATION: Duration = Duration::from_millis(70);

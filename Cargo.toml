@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/desktop/*",
+    "apps/web/wasm",
     "backend/core/*",
     "backend/local",
     "backend/persistence",
@@ -21,6 +22,10 @@ license = "MIT"
 [profile.dev]
 opt-level = 1
 
+[profile.web]
+inherits = "dev"
+debug = 0
+
 [workspace.dependencies]
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
@@ -29,6 +34,7 @@ rfd = "0.15"
 ropey = "1.6.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+web-time = "1"
 rustls = "0.23"
 getrandom = "0.3"
 sha2 = "0.10"

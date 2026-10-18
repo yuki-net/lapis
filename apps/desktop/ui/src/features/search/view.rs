@@ -51,7 +51,7 @@ impl Editor {
                             match this.session.open_path(root.join(&path)) {
                                 Ok(()) => {
                                     this.restore_active_view();
-                                    window.focus(&this.focus_handle);
+                                    crate::gpui_compat::focus(window, &this.focus_handle, cx);
                                 }
                                 Err(error) => this.status = format!("読み込み失敗: {error}"),
                             }

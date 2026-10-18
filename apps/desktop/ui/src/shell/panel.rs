@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::extension_ui::{PanelPosition, ViewId};
 

@@ -2,6 +2,8 @@
 //!
 //! 外部 CLI 固有の JSON はこの crate で `TaskEvent` に変換し、UI へ公開しない。
 
+use web_time::{SystemTime, UNIX_EPOCH};
+
 use std::{
     fmt,
     io::{BufRead, BufReader, Write},
@@ -13,7 +15,7 @@ use std::{
         mpsc::Receiver,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use lapis_editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};

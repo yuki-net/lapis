@@ -200,7 +200,7 @@ impl Element for EditorElement {
             window.paint_quad(selection);
         }
         for layout in &prepaint.lines {
-            layout.line.paint(layout.origin, px(24.0), window, cx).ok();
+            crate::gpui_compat::paint_line(&layout.line, layout.origin, px(24.0), window, cx);
         }
         if focus_handle.is_focused(window)
             && let Some(cursor) = prepaint.cursor.clone()
