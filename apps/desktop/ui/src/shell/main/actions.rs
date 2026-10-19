@@ -2,6 +2,18 @@ use super::*;
 use crate::extension_ui::PanelPosition;
 
 impl Editor {
+    pub(crate) fn toggle_inspector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.shell.command_palette_open = false;
+        #[cfg(debug_assertions)]
+        window.toggle_inspector(cx);
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = window;
+            self.status = "Inspectorは開発ビルドでのみ利用可能です".to_owned();
+        }
+        cx.notify();
+    }
+
     pub(crate) fn toggle_preview(
         &mut self,
         _: &TogglePreview,

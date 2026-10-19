@@ -167,6 +167,7 @@ pub(super) fn render_style(style: &StyleRefinement) -> Div {
         .unwrap_or_else(|error| format!("StyleRefinementのJSON生成に失敗しました: {error}"));
 
     div()
+        .debug_selector(|| "inspector-style".into())
         .flex()
         .flex_col()
         .gap_3()
@@ -181,15 +182,14 @@ pub(super) fn render_style(style: &StyleRefinement) -> Div {
 pub(super) fn detail_row(label: impl Into<String>, value: impl Into<String>) -> Div {
     div()
         .flex()
-        .items_start()
-        .gap_3()
+        .flex_col()
+        .gap_1()
         .py_1()
         .border_b_1()
         .border_color(theme::colors().border_default)
         .child(
             div()
-                .w(px(132.0))
-                .flex_none()
+                .text_size(px(11.0))
                 .text_color(theme::colors().text_secondary)
                 .child(label.into()),
         )

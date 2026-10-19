@@ -9,8 +9,13 @@ pub(super) fn render_div_inspector(_id: InspectorElementId, state: &DivInspector
         .flex()
         .flex_col()
         .gap_3()
+        .child(section_title("Bounds"))
+        .child(detail_row("x", pixels(state.bounds.origin.x)))
+        .child(detail_row("y", pixels(state.bounds.origin.y)))
+        .child(detail_row("width", pixels(state.bounds.size.width)))
+        .child(detail_row("height", pixels(state.bounds.size.height)))
         .child(section_title("Box Model"))
-        .child(render_box_model(state))
+        .child(render_box_model(state).debug_selector(|| "inspector-box-model".into()))
         .child(section_title("Div Content"))
         .child(detail_row(
             "content width",

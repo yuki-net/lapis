@@ -19,3 +19,6 @@ lapis-task-runner = { path = "../../../features/task-runner" }
 lapis-terminal = { path = "../../../features/terminal" }
 lapis-workspace = { path = "../../../backend/core/workspace" }
 serde_json.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

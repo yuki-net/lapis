@@ -13,3 +13,19 @@ Rust/GPUIによるDesktop Clientの実装領域です。現在のファイル配
 必要な境界は状態の所有者やライフサイクルで判断し、行数のためだけのEntity・ファイル分割をしません。
 
 UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [AGENTS.md](../../AGENTS.md) を参照してください。
+
+## 開発用Inspector
+
+DebugビルドのHelp → Toggle Inspector、またはコマンド検索の`dev: Toggle Inspector`で開閉します。
+F12はEditorのGo to Definition用です。Inspectorには割り当てていません。
+
+GPUI公式のInspectorが対象ウィンドウの右側30remを使用し、閉じると通常画面の幅に戻ります。
+Pick elementで対象をクリックして選択し、ホイールで重なった要素の深さを変更できます。
+Pick中は公式GPUIがマウス入力を捕捉するため、対象を選択してからCloseなどを操作します。
+DivのBox Model、content size、StyleRefinement、生成元を縦方向に表示します。
+選択・検査状態と対象Windowの連携はGPUIが所有し、Lapis DevToolsは表示の登録だけを担当します。
+独立OSウィンドウ、全要素ツリー、ツリーの折り畳み・hover・任意選択、外部Windowへの同期はありません。
+Inspectorは通常のPanelHostには属さず、ReleaseにはDevToolsモジュールを含めません。
+
+画面確認では開閉、Pickと再Pick、Box Model・スタイルのスクロール、リサイズ後の配置、
+Close後の通常UI復元、複数Windowを開いた状態での個別の開閉を確認してください。

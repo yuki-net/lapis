@@ -161,7 +161,7 @@ const HELP_MENU: &[MenuItemDefinition] = &[
     MenuItemDefinition::action(
         "toggle-inspector",
         "Toggle Inspector",
-        Some("F12"),
+        None,
         MenuAction::ToggleInspector,
     ),
     MenuItemDefinition::disabled("keyboard-shortcuts", "Keyboard Shortcuts"),
@@ -182,6 +182,15 @@ pub(crate) fn items(menu: MenuId) -> &'static [MenuItemDefinition] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inspector_menu_does_not_advertise_the_editor_definition_key() {
+        let inspector = HELP_MENU
+            .iter()
+            .find(|item| item.action == Some(MenuAction::ToggleInspector))
+            .unwrap();
+        assert_eq!(inspector.shortcut, None);
+    }
 
     #[test]
     fn header_menu_has_five_root_sections() {

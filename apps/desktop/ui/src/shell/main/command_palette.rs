@@ -95,7 +95,7 @@ impl Editor {
                 self.toggle_assistant(&ToggleAssistant, window, cx);
             }
             #[cfg(debug_assertions)]
-            id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector_window(window, cx),
+            id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector(window, cx),
             _ => {
                 self.status = format!("Unknown command: {}", command.as_str());
                 cx.notify();
