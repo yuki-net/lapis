@@ -77,6 +77,23 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["packages"][2]["dependencies"].append({"name": "infra"})
         self.assertIn("ui -> infra", "\n".join(check(self.metadata, {})))
 
+    def test_only_desktop_composition_root_can_depend_on_host(self):
+        self.metadata["workspace_members"].extend(["desktop", "cli", "host"])
+        self.metadata["packages"].extend([
+            package("desktop", "apps/desktop/app", ["host"]),
+            package("cli", "apps/cli"),
+            package("host", "backend/host", ["runtime"]),
+        ])
+        self.assertEqual(check(self.metadata, {}), [])
+        for client in ("ui", "cli"):
+            with self.subTest(client=client):
+                metadata = copy.deepcopy(self.metadata)
+                target = next(item for item in metadata["packages"] if item["name"] == client)
+                target["dependencies"].append({"name": "host"})
+                errors = check(metadata, {})
+                self.assertEqual(len(errors), 1)
+                self.assertIn(f"{client} -> host", errors[0])
+
 
 if __name__ == "__main__":
     unittest.main()

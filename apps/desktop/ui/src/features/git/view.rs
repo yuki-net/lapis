@@ -46,7 +46,7 @@ impl Editor {
                             div()
                                 .text_size(px(10.0))
                                 .text_color(theme::colors().text_secondary)
-                                .child(file.path.to_string_lossy().into_owned()),
+                                .child(file.path.clone()),
                         ),
                 );
             }
@@ -100,7 +100,7 @@ impl Editor {
                                 .flex_1()
                                 .text_size(px(10.0))
                                 .text_color(theme::colors().text_secondary)
-                                .child(file.path.to_string_lossy().into_owned()),
+                                .child(file.path.clone()),
                         )
                         .child(task_action_button("取込", true).on_click(cx.listener(
                             move |this, _, _, cx| {
@@ -123,9 +123,7 @@ impl Editor {
                         .text_color(theme::colors().text_tertiary)
                         .child(format!(
                             "DIFF · {} · +{} -{}",
-                            diff.path.display(),
-                            diff.additions,
-                            diff.deletions
+                            diff.path, diff.additions, diff.deletions
                         )),
                 )
                 .children(diff.patch.lines().take(80).map(|line| {

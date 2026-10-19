@@ -7,7 +7,7 @@ impl Editor {
         isolated: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(workspace_root) = self.session.workspace_root().map(ToOwned::to_owned) else {
+        let Some(workspace) = self.session.workspace_id().cloned() else {
             self.status = "Codex Task を開始する前に Workspace を開いてください".to_owned();
             cx.notify();
             return;
@@ -24,16 +24,13 @@ impl Editor {
                     .to_owned()
             });
         let result = if isolated {
-            self.tasks.session.start_codex_in_worktree(
-                &mut self.git.session,
-                workspace_root,
-                prompt,
-                mode,
-            )
+            self.tasks
+                .session
+                .start_codex_in_worktree(workspace, prompt, mode)
         } else {
             self.tasks
                 .session
-                .start_codex_with_mode(workspace_root, prompt, mode)
+                .start_codex_with_mode(workspace, prompt, mode)
         };
         match result {
             Ok(execution_id) => {

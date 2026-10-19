@@ -6,6 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+lapis-task = { path = "../../../shared/models/task" }
 lapis-editor-core = { path = "../../../shared/models/editor-core" }
 serde.workspace = true
 serde_json.workspace = true

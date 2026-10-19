@@ -6,6 +6,8 @@ use std::{
 };
 
 pub use lapis_text::{Position, TextRange};
+mod connection;
+pub use connection::{DocumentCache, DocumentConnection};
 use lapis_text::{TextBuffer, TextEdit, TextError};
 
 /// Document内で単調増加する変更世代。
@@ -13,6 +15,9 @@ use lapis_text::{TextBuffer, TextEdit, TextError};
 pub struct Revision(u64);
 
 impl Revision {
+    pub const fn new(number: u64) -> Self {
+        Self(number)
+    }
     pub const fn number(self) -> u64 {
         self.0
     }
@@ -72,6 +77,32 @@ pub struct Document {
 }
 
 impl Document {
+    pub fn from_snapshot(
+        path: Option<PathBuf>,
+        content: String,
+        encoding: Encoding,
+        revision: Revision,
+        dirty: bool,
+    ) -> Self {
+        Self {
+            path,
+            text: TextBuffer::from_string(content),
+            encoding,
+            revision,
+            saved_revision: if dirty { Revision(u64::MAX) } else { revision },
+            saved_fingerprint: None,
+        }
+    }
+
+    pub fn reload(&mut self, data: FileData) -> Result<(), DocumentError> {
+        let (content, encoding) = decode_text(&data.bytes)?;
+        self.text = TextBuffer::from_string(content);
+        self.encoding = encoding;
+        self.revision = self.revision.next();
+        self.saved_revision = self.revision;
+        self.saved_fingerprint = Some(data.fingerprint);
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
             path: None,

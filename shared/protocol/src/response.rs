@@ -10,6 +10,16 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ResponseBody {
+    #[serde(rename = "document.inspect")]
+    DocumentInspect(DocumentHistoryResponse),
+    #[serde(rename = "document.untitled")]
+    DocumentUntitled(DocumentHistoryResponse),
+    #[serde(rename = "document.save_as")]
+    DocumentSaveAs(DocumentHistoryResponse),
+    #[serde(rename = "document.reload")]
+    DocumentReload(DocumentHistoryResponse),
+    #[serde(rename = "workspace.execute")]
+    WorkspaceExecute(crate::WorkspaceOperationResult),
     #[serde(rename = "workspace.list")]
     WorkspaceList(WorkspaceListResponse),
     #[serde(rename = "workspace.connect")]
@@ -49,6 +59,11 @@ pub enum ResponseBody {
 impl ResponseBody {
     pub const fn method(&self) -> Option<&'static str> {
         match self {
+            Self::DocumentInspect(_) => Some("document.inspect"),
+            Self::DocumentUntitled(_) => Some("document.untitled"),
+            Self::DocumentSaveAs(_) => Some("document.save_as"),
+            Self::DocumentReload(_) => Some("document.reload"),
+            Self::WorkspaceExecute(_) => Some("workspace.execute"),
             Self::WorkspaceList(_) => Some("workspace.list"),
             Self::WorkspaceConnect(_) => Some("workspace.connect"),
             Self::WorkspaceClose(_) => Some("workspace.close"),

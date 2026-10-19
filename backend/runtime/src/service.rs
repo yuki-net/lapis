@@ -13,7 +13,7 @@ use lapis_client_api::{
 
 use crate::{
     BackendEventReceiver, BackendEventSink, BackendSession, BackendState, BackendStateError,
-    state::PublishedEvent,
+    WorkspaceRegistration, state::PublishedEvent,
 };
 
 const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -25,6 +25,31 @@ pub struct BackendService {
 }
 
 impl BackendService {
+    pub fn relocate_document(
+        &self,
+        source: WorkspaceId,
+        destination: WorkspaceId,
+        document_id: lapis_client_api::DocumentId,
+        revision: lapis_client_api::Revision,
+        path: lapis_client_api::WorkspaceRelativePath,
+    ) -> Result<(), BackendServiceError> {
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::RelocateDocument {
+                source,
+                destination,
+                document_id,
+                revision,
+                path,
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        receive
+            .recv()
+            .map_err(|_| BackendServiceError::Unavailable)?
+            .map_err(BackendServiceError::State)
+    }
     pub fn start(state: BackendState) -> Result<Self, BackendServiceError> {
         let (sender, receiver) = mpsc::sync_channel(64);
         let thread = thread::Builder::new()
@@ -37,6 +62,24 @@ impl BackendService {
                 thread: Mutex::new(Some(thread)),
             }),
         })
+    }
+
+    pub fn register_workspace(
+        &self,
+        registration: WorkspaceRegistration,
+    ) -> Result<(), BackendServiceError> {
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::RegisterWorkspace {
+                registration,
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        receive
+            .recv()
+            .map_err(|_| BackendServiceError::Unavailable)?
+            .map_err(BackendServiceError::State)
     }
 
     pub fn dispatch(
@@ -130,6 +173,18 @@ impl Drop for ServiceInner {
 }
 
 enum Command {
+    RelocateDocument {
+        source: WorkspaceId,
+        destination: WorkspaceId,
+        document_id: lapis_client_api::DocumentId,
+        revision: lapis_client_api::Revision,
+        path: lapis_client_api::WorkspaceRelativePath,
+        respond: mpsc::SyncSender<Result<(), BackendStateError>>,
+    },
+    RegisterWorkspace {
+        registration: WorkspaceRegistration,
+        respond: mpsc::SyncSender<Result<(), BackendStateError>>,
+    },
     Dispatch {
         session: BackendSession,
         request: RequestEnvelope,
@@ -168,6 +223,32 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
     loop {
         match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+            Ok(Command::RelocateDocument {
+                source,
+                destination,
+                document_id,
+                revision,
+                path,
+                respond,
+            }) => {
+                let result =
+                    state.relocate_document(source, destination, document_id, revision, path);
+                match result {
+                    Ok(events) => {
+                        publish_events(&mut subscribers, events);
+                        let _ = respond.send(Ok(()));
+                    }
+                    Err(error) => {
+                        let _ = respond.send(Err(error));
+                    }
+                }
+            }
+            Ok(Command::RegisterWorkspace {
+                registration,
+                respond,
+            }) => {
+                let _ = respond.send(state.register_workspace(registration));
+            }
             Ok(Command::Dispatch {
                 session,
                 request,
@@ -244,6 +325,7 @@ fn publish_events(subscribers: &mut HashMap<SessionId, Subscriber>, events: Vec<
 pub enum BackendServiceError {
     ThreadSpawn(std::io::Error),
     State(BackendStateError),
+    Rejected(lapis_client_api::ProtocolError),
     Unavailable,
 }
 
@@ -254,6 +336,13 @@ impl fmt::Display for BackendServiceError {
                 write!(formatter, "failed to start backend worker: {error}")
             }
             Self::State(error) => write!(formatter, "backend state rejected operation: {error}"),
+            Self::Rejected(error) => {
+                write!(
+                    formatter,
+                    "backend rejected request: {}",
+                    error.detail.as_deref().unwrap_or(error.code.as_str())
+                )
+            }
             Self::Unavailable => formatter.write_str("backend worker is unavailable"),
         }
     }
@@ -264,7 +353,7 @@ impl Error for BackendServiceError {
         match self {
             Self::ThreadSpawn(error) => Some(error),
             Self::State(error) => Some(error),
-            Self::Unavailable => None,
+            Self::Unavailable | Self::Rejected(_) => None,
         }
     }
 }

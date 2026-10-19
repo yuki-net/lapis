@@ -1,0 +1,21 @@
+[package]
+name = "lapis-host"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-workspace = { path = "../../shared/models/workspace" }
+lapis-document = { path = "../../shared/models/document" }
+lapis-git = { path = "../../shared/models/git" }
+lapis-task = { path = "../../shared/models/task" }
+lapis-editor-core = { path = "../../shared/models/editor-core" }
+lapis-backend-state = { path = "../runtime" }
+lapis-client-api = { path = "../../shared/protocol" }
+lapis-platform = { path = "../infrastructure/local" }
+lapis-terminal = { path = "../../shared/models/terminal" }
+
+[dev-dependencies]
+lapis-app-services = { path = "../application/services" }
+tempfile.workspace = true

@@ -47,6 +47,8 @@ pub struct WorkspaceRegistration {
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
     pub terminal: Option<Arc<dyn TerminalBackend>>,
+    pub git: Option<Arc<dyn lapis_git::GitBackend>>,
+    pub tasks: Option<Arc<dyn lapis_task::TaskBackend>>,
 }
 
 impl WorkspaceRegistration {
@@ -62,9 +64,19 @@ impl WorkspaceRegistration {
             root,
             files,
             terminal: None,
+            git: None,
+            tasks: None,
         }
     }
 
+    pub fn with_git(mut self, backend: Arc<dyn lapis_git::GitBackend>) -> Self {
+        self.git = Some(backend);
+        self
+    }
+    pub fn with_tasks(mut self, backend: Arc<dyn lapis_task::TaskBackend>) -> Self {
+        self.tasks = Some(backend);
+        self
+    }
     pub fn with_terminal(mut self, terminal: Arc<dyn TerminalBackend>) -> Self {
         self.terminal = Some(terminal);
         self
@@ -75,6 +87,7 @@ pub struct BackendState {
     workspaces: HashMap<WorkspaceId, WorkspaceState>,
     connected_sessions: HashMap<SessionId, WorkspaceId>,
     next_document_id: u64,
+    document_epoch: u128,
     next_terminal_id: u64,
 }
 
@@ -89,6 +102,87 @@ pub(crate) struct PublishedEvent {
 }
 
 impl BackendState {
+    pub(crate) fn relocate_document(
+        &mut self,
+        source: WorkspaceId,
+        destination: WorkspaceId,
+        document_id: DocumentId,
+        revision: Revision,
+        path: WorkspaceRelativePath,
+    ) -> Result<Vec<PublishedEvent>, BackendStateError> {
+        if source == destination {
+            return Err(BackendStateError::WorkspaceDenied);
+        }
+        let source_workspace = self
+            .workspaces
+            .get(&source)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        let resource = source_workspace
+            .documents
+            .get(&document_id)
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        require_revision(&document_id, revision, resource.revision())?;
+        let target = self
+            .workspaces
+            .get(&destination)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        let absolute = self.document_target(&destination, &path)?;
+        let path = canonical_document_path(&target.resolver, &absolute)?;
+        if target.documents_by_path.contains_key(&absolute) {
+            return Err(lapis_document::DocumentError::conflict(
+                "保存先は開いている文書と重複しています",
+            )
+            .into());
+        }
+        if target.files.fingerprint(&absolute)?.is_some() {
+            return Err(lapis_document::DocumentError::conflict("保存先は既に存在します").into());
+        }
+        let fingerprint =
+            target
+                .files
+                .write_file(&absolute, &resource.document.encoded_bytes(), None)?;
+        let source_workspace = self
+            .workspaces
+            .get_mut(&source)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        let mut resource = source_workspace
+            .documents
+            .remove(&document_id)
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        if let Some(previous) = resource.document.path() {
+            source_workspace.documents_by_path.remove(previous);
+        }
+        let closed = source_workspace.publish(EventBody::DocumentClosed {
+            document_id: document_id.clone(),
+        })?;
+        resource.path = Some(path.clone());
+        resource.document.mark_saved(absolute.clone(), fingerprint);
+        resource.attached_sessions.clear();
+        let target = self
+            .workspaces
+            .get_mut(&destination)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        let snapshot = resource.snapshot(&destination)?;
+        target
+            .documents_by_path
+            .insert(absolute, document_id.clone());
+        target.documents.insert(document_id, resource);
+        let replaced = target.publish(EventBody::DocumentReplaced { document: snapshot })?;
+        Ok(vec![closed, replaced])
+    }
+    pub fn register_workspace(
+        &mut self,
+        registration: WorkspaceRegistration,
+    ) -> Result<(), BackendStateError> {
+        let workspace_id = registration.workspace_id.clone();
+        if self.workspaces.contains_key(&workspace_id) {
+            return Err(BackendStateError::DuplicateWorkspace);
+        }
+        let workspace = WorkspaceState::new(registration)?;
+        self.workspaces.insert(workspace_id, workspace);
+        Ok(())
+    }
+
     pub fn new(
         registrations: impl IntoIterator<Item = WorkspaceRegistration>,
     ) -> Result<Self, BackendStateError> {
@@ -104,6 +198,10 @@ impl BackendState {
             workspaces,
             connected_sessions: HashMap::new(),
             next_document_id: 1,
+            document_epoch: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos(),
             next_terminal_id: 1,
         })
     }
@@ -146,6 +244,43 @@ impl BackendState {
         request: RequestBody,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         match request {
+            RequestBody::WorkspaceExecute(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let workspace = self
+                    .workspaces
+                    .get_mut(&session.workspace_id)
+                    .ok_or(BackendStateError::WorkspaceNotFound)?;
+                let changed = request.operation.is_mutation();
+                let result = workspace
+                    .operations
+                    .execute(request.operation, workspace.resolver.root())?;
+                let events = if changed {
+                    vec![workspace.publish(EventBody::WorkspaceChanged {
+                        workspace_id: session.workspace_id.clone(),
+                    })?]
+                } else {
+                    Vec::new()
+                };
+                Ok((ResponseBody::WorkspaceExecute(result), events))
+            }
+            RequestBody::DocumentUntitled(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                self.document_untitled(session)
+            }
+            RequestBody::DocumentInspect(request) => {
+                self.require_connected(session)?;
+                self.document_inspect(session, request.document_id)
+            }
+            RequestBody::DocumentSaveAs(request) => {
+                self.require_connected(session)?;
+                self.document_save_as(session, request)
+            }
+            RequestBody::DocumentReload(request) => {
+                self.require_connected(session)?;
+                self.document_reload(session, request.document_id, request.base_revision)
+            }
             RequestBody::WorkspaceList(_) => self.workspace_list(session),
             RequestBody::WorkspaceConnect(request) => {
                 self.workspace_connect(session, request.workspace_id)
@@ -307,14 +442,197 @@ impl BackendState {
         ))
     }
 
+    fn document_untitled(
+        &mut self,
+        session: &BackendSession,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let document_id = self.allocate_document_id()?;
+        let workspace = self.workspace_mut(session)?;
+        let resource = DocumentResource {
+            document_id: document_id.clone(),
+            path: None,
+            document: Document::new(),
+            attached_sessions: HashSet::from([session.session_id.clone()]),
+        };
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        workspace.documents.insert(document_id, resource);
+        let event = workspace.publish(EventBody::DocumentReplaced {
+            document: snapshot.clone(),
+        })?;
+        Ok((
+            ResponseBody::DocumentUntitled(DocumentHistoryResponse { document: snapshot }),
+            vec![event],
+        ))
+    }
+
+    fn document_inspect(
+        &mut self,
+        session: &BackendSession,
+        document_id: DocumentId,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let resource = workspace
+            .documents
+            .get_mut(&document_id)
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        resource
+            .attached_sessions
+            .insert(session.session_id.clone());
+        let mut snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        if let Some(path) = &resource.path {
+            let absolute = workspace.resolver.resolve_new_file(path)?;
+            snapshot.external_change = match resource
+                .document
+                .external_change(workspace.files.fingerprint(&absolute)?.as_ref())
+            {
+                lapis_document::ExternalChange::Unchanged => {
+                    lapis_client_api::DocumentExternalChange::Unchanged
+                }
+                lapis_document::ExternalChange::Modified => {
+                    lapis_client_api::DocumentExternalChange::Modified
+                }
+                lapis_document::ExternalChange::Deleted => {
+                    lapis_client_api::DocumentExternalChange::Deleted
+                }
+            };
+        }
+        Ok((
+            ResponseBody::DocumentInspect(DocumentHistoryResponse { document: snapshot }),
+            Vec::new(),
+        ))
+    }
+
+    fn document_save_as(
+        &mut self,
+        session: &BackendSession,
+        request: lapis_client_api::DocumentSaveAsRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let absolute = self.document_target(&session.workspace_id, &request.path)?;
+        let workspace = self.workspace_mut(session)?;
+        let path = canonical_document_path(&workspace.resolver, &absolute)?;
+        let document = workspace.require_attached_document_mut(session, &request.document_id)?;
+        require_revision(
+            &request.document_id,
+            request.base_revision,
+            document.revision(),
+        )?;
+        let previous = document.path.clone();
+        if previous.as_ref() == Some(&path) {
+            let (_, events) =
+                self.document_save(session, request.document_id.clone(), request.base_revision)?;
+            let (response, _) = self.document_inspect(session, request.document_id)?;
+            let ResponseBody::DocumentInspect(snapshot) = response else {
+                unreachable!()
+            };
+            return Ok((ResponseBody::DocumentSaveAs(snapshot), events));
+        }
+        if workspace.documents_by_path.contains_key(&absolute) {
+            return Err(lapis_document::DocumentError::conflict(
+                "保存先は開いている文書と重複しています",
+            )
+            .into());
+        }
+        if workspace.files.fingerprint(&absolute)?.is_some() {
+            return Err(BackendStateError::Document(
+                lapis_document::DocumentError::conflict("保存先は既に存在します"),
+            ));
+        }
+        let resource = workspace
+            .documents
+            .get_mut(&request.document_id)
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        let fingerprint =
+            workspace
+                .files
+                .write_file(&absolute, &resource.document.encoded_bytes(), None)?;
+        let previous_absolute = resource.document.path().map(ToOwned::to_owned);
+        resource.document.mark_saved(absolute.clone(), fingerprint);
+        resource.path = Some(path);
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        if let Some(previous) = previous_absolute {
+            workspace.documents_by_path.remove(&previous);
+        }
+        workspace
+            .documents_by_path
+            .insert(absolute, request.document_id);
+        let event = workspace.publish(EventBody::DocumentReplaced {
+            document: snapshot.clone(),
+        })?;
+        Ok((
+            ResponseBody::DocumentSaveAs(DocumentHistoryResponse { document: snapshot }),
+            vec![event],
+        ))
+    }
+
+    fn document_reload(
+        &mut self,
+        session: &BackendSession,
+        document_id: DocumentId,
+        base_revision: Revision,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let resource = workspace.require_attached_document_mut(session, &document_id)?;
+        require_revision(&document_id, base_revision, resource.revision())?;
+        if resource.document.is_dirty() {
+            return Err(BackendStateError::Document(
+                lapis_document::DocumentError::conflict(
+                    "未保存変更がある文書は再読み込みできません",
+                ),
+            ));
+        }
+        let path = resource
+            .path
+            .clone()
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        let absolute = workspace.resolver.resolve_existing(&path)?;
+        let data = workspace.files.read_file(&absolute)?;
+        let resource = workspace
+            .documents
+            .get_mut(&document_id)
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        resource.document.reload(data)?;
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let event = workspace.publish(EventBody::DocumentReplaced {
+            document: snapshot.clone(),
+        })?;
+        Ok((
+            ResponseBody::DocumentReload(DocumentHistoryResponse { document: snapshot }),
+            vec![event],
+        ))
+    }
+
+    fn document_target(
+        &self,
+        workspace_id: &WorkspaceId,
+        path: &WorkspaceRelativePath,
+    ) -> Result<PathBuf, BackendStateError> {
+        let workspace = self
+            .workspaces
+            .get(workspace_id)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        let absolute = workspace.resolver.resolve_new_file(path)?;
+        if self.workspaces.iter().any(|(owner, workspace)| {
+            owner != workspace_id && workspace.documents_by_path.contains_key(&absolute)
+        }) {
+            return Err(lapis_document::DocumentError::conflict(
+                "別の Workspace が同じ Document を所有しています",
+            )
+            .into());
+        }
+        Ok(absolute)
+    }
+
     fn document_open(
         &mut self,
         session: &BackendSession,
         path: WorkspaceRelativePath,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let allocated_document_id = self.allocate_document_id()?;
+        let absolute = self.document_target(&session.workspace_id, &path)?;
         let workspace = self.workspace_mut(session)?;
-        if let Some(document_id) = workspace.documents_by_path.get(path.as_str()).cloned() {
+        let path = canonical_document_path(&workspace.resolver, &absolute)?;
+        let existing = workspace.documents_by_path.get(&absolute).cloned();
+        if let Some(document_id) = existing {
             let document = workspace
                 .documents
                 .get_mut(&document_id)
@@ -324,13 +642,15 @@ impl BackendState {
                 .insert(session.session_id.clone());
             let snapshot = document.snapshot(&workspace.summary.workspace_id)?;
             return Ok((
-                ResponseBody::DocumentOpen(DocumentOpenResponse { document: snapshot }),
+                ResponseBody::DocumentOpen(DocumentOpenResponse {
+                    document: snapshot,
+                    reused: true,
+                }),
                 Vec::new(),
             ));
         }
-        let absolute = workspace.resolver.resolve_existing(&path)?;
         let data = workspace.files.read_file(&absolute)?;
-        let document = Document::from_file(absolute, data)?;
+        let document = Document::from_file(absolute.clone(), data)?;
         let document_id = allocated_document_id;
         let mut resource = DocumentResource::new(document_id.clone(), path.clone(), document);
         resource
@@ -339,13 +659,16 @@ impl BackendState {
         let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
         workspace
             .documents_by_path
-            .insert(path.as_str().to_owned(), document_id.clone());
+            .insert(absolute, document_id.clone());
         workspace.documents.insert(document_id, resource);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
         })?;
         Ok((
-            ResponseBody::DocumentOpen(DocumentOpenResponse { document: snapshot }),
+            ResponseBody::DocumentOpen(DocumentOpenResponse {
+                document: snapshot,
+                reused: false,
+            }),
             vec![event],
         ))
     }
@@ -358,19 +681,21 @@ impl BackendState {
         content: String,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let document_id = self.allocate_document_id()?;
+        let absolute = self.document_target(&session.workspace_id, &path)?;
         let workspace = self.workspace_mut(session)?;
-        if workspace.documents_by_path.contains_key(path.as_str()) {
-            return Err(BackendStateError::Document(
-                lapis_document::DocumentError::conflict("document already exists in backend state"),
-            ));
+        let path = canonical_document_path(&workspace.resolver, &absolute)?;
+        if workspace.documents_by_path.contains_key(&absolute) {
+            return Err(lapis_document::DocumentError::conflict(
+                "document already exists in backend state",
+            )
+            .into());
         }
-        let absolute = workspace.resolver.resolve_new_file(&path)?;
         if workspace.files.fingerprint(&absolute)?.is_some() {
             return Err(BackendStateError::Document(
                 lapis_document::DocumentError::conflict("document already exists on disk"),
             ));
         }
-        let document = Document::draft(absolute, content, to_document_encoding(encoding));
+        let document = Document::draft(absolute.clone(), content, to_document_encoding(encoding));
         let mut resource = DocumentResource::new(document_id.clone(), path.clone(), document);
         resource
             .attached_sessions
@@ -378,7 +703,7 @@ impl BackendState {
         let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
         workspace
             .documents_by_path
-            .insert(path.as_str().to_owned(), document_id.clone());
+            .insert(absolute, document_id.clone());
         workspace.documents.insert(document_id, resource);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
@@ -439,13 +764,14 @@ impl BackendState {
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
         let files = workspace.files.clone();
+        let relative = workspace
+            .require_attached_document_mut(session, &document_id)?
+            .path
+            .clone()
+            .ok_or(BackendStateError::DocumentNotFound)?;
+        let path = workspace.resolver.resolve_new_file(&relative)?;
         let document = workspace.require_attached_document_mut(session, &document_id)?;
         require_revision(&document_id, base_revision, document.revision())?;
-        let path = document
-            .document
-            .path()
-            .ok_or(BackendStateError::DocumentNotFound)?
-            .to_owned();
         let fingerprint = files.write_file(
             &path,
             &document.document.encoded_bytes(),
@@ -671,8 +997,12 @@ impl BackendState {
             .next_document_id
             .checked_add(1)
             .ok_or(BackendStateError::CounterOverflow)?;
-        DocumentId::try_new(format!("document-{value}"))
-            .map_err(|_| BackendStateError::CounterOverflow)
+        DocumentId::try_new(format!(
+            "document-{}-{}-{value}",
+            std::process::id(),
+            self.document_epoch
+        ))
+        .map_err(|_| BackendStateError::CounterOverflow)
     }
 
     fn allocate_terminal_id(&mut self) -> Result<TerminalId, BackendStateError> {
@@ -702,8 +1032,9 @@ struct WorkspaceState {
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
     documents: HashMap<DocumentId, DocumentResource>,
-    documents_by_path: HashMap<String, DocumentId>,
+    documents_by_path: HashMap<PathBuf, DocumentId>,
     terminals: TerminalRegistry,
+    operations: crate::operations::WorkspaceOperations,
     events: EventJournal,
 }
 
@@ -711,7 +1042,7 @@ impl WorkspaceState {
     fn new(registration: WorkspaceRegistration) -> Result<Self, BackendStateError> {
         Ok(Self {
             summary: WorkspaceSummary {
-                workspace_id: registration.workspace_id,
+                workspace_id: registration.workspace_id.clone(),
                 name: registration.name,
             },
             resolver: WorkspacePathResolver::new(registration.root)?,
@@ -719,6 +1050,11 @@ impl WorkspaceState {
             documents: HashMap::new(),
             documents_by_path: HashMap::new(),
             terminals: TerminalRegistry::new(registration.terminal),
+            operations: crate::operations::WorkspaceOperations::new(
+                registration.git,
+                registration.tasks,
+                &registration.workspace_id,
+            ),
             events: EventJournal::default(),
         })
     }
@@ -749,7 +1085,7 @@ impl WorkspaceState {
 
 struct DocumentResource {
     document_id: DocumentId,
-    path: WorkspaceRelativePath,
+    path: Option<WorkspaceRelativePath>,
     document: Document,
     attached_sessions: HashSet<SessionId>,
 }
@@ -758,7 +1094,7 @@ impl DocumentResource {
     fn new(document_id: DocumentId, path: WorkspaceRelativePath, document: Document) -> Self {
         Self {
             document_id,
-            path,
+            path: Some(path),
             document,
             attached_sessions: HashSet::new(),
         }
@@ -777,6 +1113,9 @@ impl DocumentResource {
             encoding: from_document_encoding(self.document.encoding()),
             revision: self.revision(),
             dirty: self.document.is_dirty(),
+            can_undo: self.document.can_undo(),
+            can_redo: self.document.can_redo(),
+            external_change: lapis_client_api::DocumentExternalChange::Unchanged,
         })
     }
 }
@@ -827,6 +1166,11 @@ fn require_revision(
 }
 
 fn protocol_error(error: BackendStateError) -> ProtocolError {
+    if let BackendStateError::Document(ref document) = error
+        && document.kind() == lapis_document::DocumentErrorKind::Conflict
+    {
+        return ProtocolError::new(ErrorCode::try_new("document_conflict").expect("valid code"));
+    }
     if let BackendStateError::RevisionConflict(conflict) = error {
         return ProtocolError::revision_conflict(conflict);
     }
@@ -843,11 +1187,27 @@ fn protocol_error(error: BackendStateError) -> ProtocolError {
         | BackendStateError::TerminalNotRunning
         | BackendStateError::InvalidTerminalSize => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,
-        BackendStateError::CounterOverflow | BackendStateError::Terminal(_) => INTERNAL,
+        BackendStateError::CounterOverflow
+        | BackendStateError::Terminal(_)
+        | BackendStateError::Operation(_) => INTERNAL,
         BackendStateError::Unsupported => UNSUPPORTED,
         BackendStateError::RevisionConflict(_) => unreachable!("handled above"),
     };
     ProtocolError::new(ErrorCode::try_new(code).expect("built-in error code must be valid"))
+}
+
+fn canonical_document_path(
+    resolver: &WorkspacePathResolver,
+    absolute: &std::path::Path,
+) -> Result<WorkspaceRelativePath, BackendStateError> {
+    let relative = absolute
+        .strip_prefix(resolver.root())
+        .map_err(|_| crate::PathSecurityError::WorkspaceEscape)?;
+    let relative = relative
+        .to_str()
+        .ok_or(crate::PathSecurityError::InvalidEntry)?;
+    WorkspaceRelativePath::parse(relative.replace('\\', "/"))
+        .map_err(|_| crate::PathSecurityError::InvalidEntry.into())
 }
 
 fn to_document_encoding(encoding: DocumentEncoding) -> Encoding {

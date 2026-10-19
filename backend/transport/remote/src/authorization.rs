@@ -55,7 +55,15 @@ impl SessionGrant {
     pub(crate) fn require_request(&self, request: &RequestBody) -> Result<(), AuthorizationError> {
         let capability = CapabilityId::try_new(request.required_capability())
             .expect("built-in request capability must be valid");
-        self.require_capability(&capability)
+        self.require_capability(&capability)?;
+        if let RequestBody::WorkspaceExecute(request) = request
+            && let Some(additional) = request.operation.additional_required_capability()
+        {
+            let capability = CapabilityId::try_new(additional)
+                .expect("built-in request capability must be valid");
+            self.require_capability(&capability)?;
+        }
+        Ok(())
     }
 }
 
@@ -84,6 +92,66 @@ impl Error for AuthorizationError {}
 mod tests {
     use super::*;
     use lapis_client_api::capability;
+
+    #[test]
+    fn isolated_task_start_requires_both_task_start_and_git_write() {
+        let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+        let request = |isolated| {
+            RequestBody::WorkspaceExecute(lapis_client_api::WorkspaceOperationRequest {
+                workspace_id: workspace.clone(),
+                operation: lapis_client_api::WorkspaceOperation::StartTask {
+                    input: lapis_task::TaskStart {
+                        prompt: "テスト".into(),
+                        mode: lapis_task::TaskMode::Default,
+                        isolated,
+                        conversation_id: lapis_editor_core::ConversationId::new("conversation-1"),
+                    },
+                },
+            })
+        };
+        for (capabilities, allowed, missing) in [
+            (vec![], false, "workspace.tasks.start"),
+            (vec!["workspace.tasks.start"], false, "workspace.git.write"),
+            (vec!["workspace.git.write"], false, "workspace.tasks.start"),
+            (
+                vec!["workspace.tasks.start", "workspace.git.read"],
+                false,
+                "workspace.git.write",
+            ),
+            (
+                vec!["workspace.tasks.start", "workspace.git.write"],
+                true,
+                "",
+            ),
+        ] {
+            let grant = SessionGrant::from_authenticated(
+                SessionId::try_new("session-1").unwrap(),
+                workspace.clone(),
+                CapabilitySet::try_new(
+                    capabilities
+                        .into_iter()
+                        .map(|value| CapabilityId::try_new(value).unwrap()),
+                )
+                .unwrap(),
+            );
+            let result = grant.require_request(&request(true));
+            if allowed {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert_eq!(
+                    result,
+                    Err(AuthorizationError::CapabilityDenied(missing.into()))
+                );
+            }
+        }
+        let start_only = SessionGrant::from_authenticated(
+            SessionId::try_new("session-1").unwrap(),
+            workspace.clone(),
+            CapabilitySet::try_new([CapabilityId::try_new("workspace.tasks.start").unwrap()])
+                .unwrap(),
+        );
+        assert_eq!(start_only.require_request(&request(false)), Ok(()));
+    }
 
     #[test]
     fn rejects_other_workspace_and_missing_capability() {

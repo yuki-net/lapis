@@ -5,6 +5,11 @@ use std::{fmt, path::PathBuf};
 use lapis_editor_core::TaskId;
 use serde::{Deserialize, Serialize};
 
+mod connection;
+pub use connection::{
+    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitSnapshot, WorktreeSnapshot,
+};
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ChangeKind {

@@ -38,6 +38,7 @@ pub struct TerminalOutput {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalEvent {
     Output(TerminalOutput),
+    Snapshot(TerminalSnapshot),
     Exited { code: Option<i32> },
     Failed(String),
 }
@@ -141,5 +142,11 @@ mod tests {
         let encoded = serde_json::to_vec(&snapshot).unwrap();
         let decoded: TerminalSnapshot = serde_json::from_slice(&encoded).unwrap();
         assert_eq!(decoded, snapshot);
+        let event = TerminalEvent::Snapshot(snapshot);
+        let encoded = serde_json::to_vec(&event).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<TerminalEvent>(&encoded).unwrap(),
+            event
+        );
     }
 }

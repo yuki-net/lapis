@@ -1,0 +1,65 @@
+use crate::{ChangeKind, GitError, WorktreeState};
+use lapis_editor_core::{TaskId, WorkspaceId};
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitFileSnapshot {
+    pub path: String,
+    pub old_path: Option<String>,
+    pub kind: ChangeKind,
+    pub staged: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub worktree_id: Option<TaskId>,
+    pub branch: String,
+    pub head: String,
+    pub files: Vec<GitFileSnapshot>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitDiffSnapshot {
+    pub path: String,
+    pub additions: usize,
+    pub deletions: usize,
+    pub patch: String,
+    pub binary: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub worktree_id: TaskId,
+    pub base_commit: String,
+    pub state: WorktreeState,
+    pub conflict: Option<String>,
+}
+
+pub trait GitConnection: Send + Sync {
+    fn status(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: Option<&TaskId>,
+    ) -> Result<GitSnapshot, GitError>;
+    fn diff(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: Option<&TaskId>,
+        path: &str,
+    ) -> Result<GitDiffSnapshot, GitError>;
+    fn worktrees(&self, workspace: &WorkspaceId) -> Result<Vec<WorktreeSnapshot>, GitError>;
+    fn create_worktree(&self, workspace: &WorkspaceId) -> Result<WorktreeSnapshot, GitError>;
+    fn import_file(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: &TaskId,
+        path: &str,
+    ) -> Result<WorktreeSnapshot, GitError>;
+    fn discard_worktree(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: &TaskId,
+    ) -> Result<WorktreeSnapshot, GitError>;
+}

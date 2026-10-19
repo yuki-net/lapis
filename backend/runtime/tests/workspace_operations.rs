@@ -1,0 +1,682 @@
+use lapis_backend_state::{
+    BackendService, BackendState, EmbeddedClient, WorkspaceEntry, WorkspaceFileBackend,
+    WorkspaceRegistration,
+};
+use lapis_client_api::{
+    RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceOperation as Operation,
+    WorkspaceOperationRequest, WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
+};
+use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+use lapis_editor_core::{ConversationId, ExecutionId, TaskId};
+use lapis_git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree, WorktreeState};
+use lapis_task::{
+    Execution, ExecutionStatus, Task, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord,
+    TaskSnapshot, TaskStart,
+};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
+
+struct EmptyFiles;
+impl DocumentRepository for EmptyFiles {
+    fn read_file(&self, _: &Path) -> Result<FileData, DocumentError> {
+        Err(DocumentError::io("未使用"))
+    }
+    fn write_file(
+        &self,
+        _: &Path,
+        _: &[u8],
+        _: Option<&FileFingerprint>,
+    ) -> Result<FileFingerprint, DocumentError> {
+        Err(DocumentError::io("未使用"))
+    }
+    fn fingerprint(&self, _: &Path) -> Result<Option<FileFingerprint>, DocumentError> {
+        Ok(None)
+    }
+}
+impl WorkspaceFileBackend for EmptyFiles {
+    fn list_children(&self, _: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
+        Ok(vec![])
+    }
+}
+#[derive(Default)]
+struct FakeTasks {
+    records: Mutex<Vec<TaskRecord>>,
+    controls: Mutex<Vec<(ExecutionId, TaskControl)>>,
+}
+impl TaskBackend for FakeTasks {
+    fn load(&self) -> Result<Vec<TaskRecord>, TaskError> {
+        Ok(self.records.lock().unwrap().clone())
+    }
+    fn start(&self, record: &TaskRecord) -> Result<(), TaskError> {
+        self.records.lock().unwrap().push(record.clone());
+        Ok(())
+    }
+    fn control(&self, id: &ExecutionId, control: &TaskControl) -> Result<(), TaskError> {
+        self.controls
+            .lock()
+            .unwrap()
+            .push((id.clone(), control.clone()));
+        Ok(())
+    }
+}
+#[derive(Default)]
+struct FakeGit {
+    trees: Mutex<Vec<TaskWorktree>>,
+    calls: Mutex<Vec<PathBuf>>,
+    status_root: Mutex<Option<PathBuf>>,
+    fail_discovery: Mutex<bool>,
+    unscoped_discovery: Mutex<bool>,
+    status_files: Mutex<Vec<lapis_git::ChangedFile>>,
+}
+impl GitBackend for FakeGit {
+    fn status(&self, repository: &Path) -> Result<RepositoryStatus, GitError> {
+        self.calls.lock().unwrap().push(repository.to_owned());
+        Ok(RepositoryStatus {
+            root: self
+                .status_root
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| repository.to_owned()),
+            branch: "test".into(),
+            head: "abc".into(),
+            files: self.status_files.lock().unwrap().clone(),
+        })
+    }
+    fn diff(&self, repository: &Path, path: &Path) -> Result<FileDiff, GitError> {
+        self.calls.lock().unwrap().push(repository.to_owned());
+        Ok(FileDiff {
+            path: path.to_owned(),
+            additions: 1,
+            deletions: 0,
+            patch: "+test".into(),
+            binary: false,
+        })
+    }
+    fn create_worktree(
+        &self,
+        repository: &Path,
+        task_id: &TaskId,
+    ) -> Result<TaskWorktree, GitError> {
+        self.calls.lock().unwrap().push(repository.to_owned());
+        let path = repository.join("trees").join(task_id.as_str());
+        std::fs::create_dir_all(&path).unwrap();
+        let tree = TaskWorktree {
+            task_id: task_id.clone(),
+            repository_root: repository.to_owned(),
+            path,
+            base_commit: "abc".into(),
+            state: WorktreeState::Active,
+            conflict: None,
+        };
+        self.trees.lock().unwrap().push(tree.clone());
+        Ok(tree)
+    }
+    fn worktrees(&self, repository: &Path) -> Result<Vec<TaskWorktree>, GitError> {
+        if *self.fail_discovery.lock().unwrap() {
+            return Err(GitError::new(
+                lapis_git::GitErrorKind::NotRepository,
+                "Git なし",
+            ));
+        }
+        Ok(self
+            .trees
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|tree| {
+                *self.unscoped_discovery.lock().unwrap() || tree.repository_root == repository
+            })
+            .cloned()
+            .collect())
+    }
+    fn import_file(&self, tree: &TaskWorktree, _: &Path) -> Result<TaskWorktree, GitError> {
+        self.calls.lock().unwrap().push(tree.path.clone());
+        Ok(tree.clone())
+    }
+    fn discard_worktree(&self, tree: &TaskWorktree) -> Result<TaskWorktree, GitError> {
+        self.calls.lock().unwrap().push(tree.path.clone());
+        Ok(tree.clone())
+    }
+}
+struct Fixture {
+    root: tempfile::TempDir,
+    other: tempfile::TempDir,
+    service: BackendService,
+    git: Arc<FakeGit>,
+    tasks: Arc<FakeTasks>,
+}
+impl Fixture {
+    fn new() -> Self {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let git = Arc::new(FakeGit::default());
+        let tasks = Arc::new(FakeTasks::default());
+        let registrations = [("first", &root), ("second", &other)].map(|(name, directory)| {
+            WorkspaceRegistration::new(
+                WorkspaceId::try_new(name).unwrap(),
+                name,
+                directory.path().to_owned(),
+                Arc::new(EmptyFiles),
+            )
+            .with_git(git.clone())
+            .with_tasks(tasks.clone())
+        });
+        let service = BackendService::start(BackendState::new(registrations).unwrap()).unwrap();
+        Self {
+            root,
+            other,
+            service,
+            git,
+            tasks,
+        }
+    }
+    fn client(&self, name: &str, workspace: &str) -> EmbeddedClient {
+        EmbeddedClient::connect(
+            self.service.clone(),
+            SessionId::try_new(name).unwrap(),
+            WorkspaceId::try_new(workspace).unwrap(),
+        )
+        .unwrap()
+    }
+    fn record(&self, name: &str) -> TaskRecord {
+        TaskRecord::new(
+            Task {
+                id: TaskId::new(name),
+                conversation_id: ConversationId::new("conversation"),
+                title: "既存タスク".into(),
+                prompt: "テスト".into(),
+                created_at_ms: 1,
+            },
+            Execution {
+                id: ExecutionId::new(format!("execution-{name}")),
+                task_id: TaskId::new(name),
+                workspace_id: lapis_editor_core::WorkspaceId::new("obsolete-id"),
+                workspace_root: self.root.path().canonicalize().unwrap(),
+                runner: "codex-app-server".into(),
+                mode: TaskMode::Default,
+                status: ExecutionStatus::Queued,
+                started_at_ms: None,
+                completed_at_ms: None,
+                external_thread_id: None,
+                failure: None,
+            },
+        )
+    }
+}
+fn input(isolated: bool) -> TaskStart {
+    TaskStart {
+        prompt: "回帰テスト\n指示".into(),
+        mode: TaskMode::Plan,
+        isolated,
+        conversation_id: ConversationId::new("conversation"),
+    }
+}
+fn body(workspace: &WorkspaceId, operation: Operation) -> RequestBody {
+    RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+        workspace_id: workspace.clone(),
+        operation,
+    })
+}
+fn execute(client: &EmbeddedClient, operation: Operation) -> ResponseBody {
+    client
+        .request(body(client.workspace_id(), operation))
+        .unwrap()
+}
+fn outcome(response: ResponseBody) -> Outcome {
+    match response {
+        ResponseBody::WorkspaceExecute(value) => value,
+        other => panic!("操作失敗: {other:?}"),
+    }
+}
+fn denied(response: ResponseBody) {
+    let ResponseBody::Error(error) = response else {
+        panic!("拒否されなかった: {response:?}")
+    };
+    assert_eq!(error.code.as_str(), lapis_client_api::FORBIDDEN);
+}
+fn started(client: &EmbeddedClient, isolated: bool) -> TaskSnapshot {
+    let Outcome::TaskStarted(value) = outcome(execute(
+        client,
+        Operation::StartTask {
+            input: input(isolated),
+        },
+    )) else {
+        panic!("開始結果が必要")
+    };
+    *value
+}
+fn tasks(client: &EmbeddedClient) -> Vec<TaskSnapshot> {
+    let Outcome::Tasks(value) = outcome(execute(client, Operation::Tasks)) else {
+        panic!("一覧が必要")
+    };
+    value
+}
+
+#[test]
+fn request_capabilities_separate_git_reads_writes_and_task_controls() {
+    let workspace = WorkspaceId::try_new("first").unwrap();
+    let id = TaskId::new("tree");
+    let path = WorkspaceRelativePath::parse("note.txt").unwrap();
+    for (operation, expected) in [
+        (
+            Operation::GitStatus { worktree: None },
+            "workspace.git.read",
+        ),
+        (
+            Operation::GitDiff {
+                path: path.clone(),
+                worktree: Some(id.clone()),
+            },
+            "workspace.git.read",
+        ),
+        (Operation::Worktrees, "workspace.git.read"),
+        (Operation::CreateWorktree, "workspace.git.write"),
+        (
+            Operation::ImportFile {
+                worktree_id: id.clone(),
+                path,
+            },
+            "workspace.git.write",
+        ),
+        (
+            Operation::DiscardWorktree { worktree_id: id },
+            "workspace.git.write",
+        ),
+        (Operation::Tasks, "workspace.tasks.read"),
+        (
+            Operation::StartTask {
+                input: input(false),
+            },
+            "workspace.tasks.start",
+        ),
+        (
+            Operation::ControlTask {
+                execution_id: ExecutionId::new("execution"),
+                control: TaskControl::Cancel,
+            },
+            "workspace.tasks.control",
+        ),
+    ] {
+        assert_eq!(
+            operation.is_mutation(),
+            matches!(
+                expected,
+                "workspace.git.write" | "workspace.tasks.start" | "workspace.tasks.control"
+            )
+        );
+        let request = body(&workspace, operation);
+        assert_eq!(request.required_capability(), expected);
+        assert_eq!(request.workspace_id(), Some(&workspace));
+    }
+}
+
+#[test]
+fn clients_share_tasks_worktrees_and_survive_all_connections_dropping() {
+    let fixture = Fixture::new();
+    let first = fixture.client("one", "first");
+    let second = fixture.client("two", "first");
+    let task = started(&first, true);
+    assert_eq!(tasks(&first), vec![task.clone()]);
+    assert_eq!(tasks(&second), vec![task.clone()]);
+    let trees = outcome(execute(&first, Operation::Worktrees));
+    assert_eq!(outcome(execute(&second, Operation::Worktrees)), trees);
+    drop(first);
+    drop(second);
+    fixture.tasks.records.lock().unwrap()[0].set_status(ExecutionStatus::Running);
+    let reconnected = fixture.client("reconnected", "first");
+    let running = tasks(&reconnected);
+    assert_eq!(running[0].execution.id, task.execution.id);
+    assert_eq!(running[0].execution.status, ExecutionStatus::Running);
+    assert_eq!(outcome(execute(&reconnected, Operation::Worktrees)), trees);
+    assert!(fixture.tasks.controls.lock().unwrap().is_empty());
+    fixture.tasks.records.lock().unwrap()[0].set_status(ExecutionStatus::Succeeded);
+    assert_eq!(
+        tasks(&reconnected)[0].execution.status,
+        ExecutionStatus::Succeeded
+    );
+    denied(execute(
+        &reconnected,
+        Operation::ControlTask {
+            execution_id: task.execution.id,
+            control: TaskControl::Cancel,
+        },
+    ));
+    assert!(fixture.tasks.controls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn identical_start_inputs_receive_unique_server_ids_across_clients_and_workspaces() {
+    let fixture = Fixture::new();
+    let first = fixture.client("one", "first");
+    let second = fixture.client("two", "first");
+    let other = fixture.client("other", "second");
+    let mut seeded = fixture.record("persisted-task");
+    seeded.execution.id = ExecutionId::new("persisted-execution");
+    fixture.tasks.records.lock().unwrap().push(seeded);
+    let results = [
+        started(&first, false),
+        started(&second, false),
+        started(&other, false),
+    ];
+    for (index, result) in results.iter().enumerate() {
+        assert_ne!(result.task.id.as_str(), "persisted-task");
+        assert_ne!(result.execution.id.as_str(), "persisted-execution");
+        assert_eq!(result.execution.task_id, result.task.id);
+        for previous in &results[..index] {
+            assert_ne!(previous.task.id, result.task.id);
+            assert_ne!(previous.execution.id, result.execution.id);
+        }
+    }
+    assert_eq!(fixture.tasks.load().unwrap().len(), 4);
+    assert_eq!(results[0].execution.workspace_id.as_str(), "first");
+    assert_eq!(results[2].execution.workspace_id.as_str(), "second");
+}
+
+#[test]
+fn foreign_workspace_task_and_worktree_operations_are_denied_before_backend_calls() {
+    let fixture = Fixture::new();
+    let first = fixture.client("one", "first");
+    let second = fixture.client("two", "second");
+    let task = started(&first, true);
+    let tree = task.execution.worktree_id.unwrap();
+    fixture.git.calls.lock().unwrap().clear();
+    for operation in [
+        Operation::Tasks,
+        Operation::Worktrees,
+        Operation::GitStatus { worktree: None },
+        Operation::StartTask {
+            input: input(false),
+        },
+    ] {
+        denied(
+            second
+                .request(body(first.workspace_id(), operation))
+                .unwrap(),
+        );
+    }
+    assert!(tasks(&second).is_empty());
+    for operation in [
+        Operation::GitStatus {
+            worktree: Some(tree.clone()),
+        },
+        Operation::GitDiff {
+            worktree: Some(tree.clone()),
+            path: WorkspaceRelativePath::parse("note.txt").unwrap(),
+        },
+        Operation::ImportFile {
+            worktree_id: tree.clone(),
+            path: WorkspaceRelativePath::parse("note.txt").unwrap(),
+        },
+        Operation::DiscardWorktree { worktree_id: tree },
+        Operation::ControlTask {
+            execution_id: task.execution.id,
+            control: TaskControl::Cancel,
+        },
+    ] {
+        denied(execute(&second, operation));
+    }
+    assert!(fixture.git.calls.lock().unwrap().is_empty());
+    assert!(fixture.tasks.controls.lock().unwrap().is_empty());
+    assert_eq!(fixture.tasks.load().unwrap().len(), 1);
+}
+
+#[test]
+fn task_start_rejects_empty_prompts_and_unsafe_conversation_ids_before_side_effects() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    let mut empty = input(true);
+    empty.prompt = " \n\t".into();
+    denied(execute(&client, Operation::StartTask { input: empty }));
+    for invalid in ["", "..", "../escape", "..\\escape", "日本語"] {
+        let mut start = input(true);
+        start.conversation_id = ConversationId::new(invalid);
+        denied(execute(&client, Operation::StartTask { input: start }));
+    }
+    assert!(fixture.git.calls.lock().unwrap().is_empty());
+    assert!(fixture.tasks.load().unwrap().is_empty());
+}
+
+#[test]
+fn task_and_execution_id_traversal_is_rejected_before_backend_calls() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    for invalid in [
+        "",
+        ".",
+        "..",
+        "../escape",
+        "..\\escape",
+        "/absolute",
+        "C:\\escape",
+        "nested/task",
+        "nested\\task",
+    ] {
+        denied(execute(
+            &client,
+            Operation::GitStatus {
+                worktree: Some(TaskId::new(invalid)),
+            },
+        ));
+        denied(execute(
+            &client,
+            Operation::DiscardWorktree {
+                worktree_id: TaskId::new(invalid),
+            },
+        ));
+        denied(execute(
+            &client,
+            Operation::ControlTask {
+                execution_id: ExecutionId::new(invalid),
+                control: TaskControl::Cancel,
+            },
+        ));
+    }
+    assert!(fixture.git.calls.lock().unwrap().is_empty());
+    assert!(fixture.tasks.controls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn parent_repository_cannot_be_exposed_by_a_nested_workspace() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    *fixture.git.status_root.lock().unwrap() =
+        Some(fixture.root.path().parent().unwrap().to_owned());
+    for operation in [
+        Operation::GitStatus { worktree: None },
+        Operation::GitDiff {
+            path: WorkspaceRelativePath::parse("note.txt").unwrap(),
+            worktree: None,
+        },
+        Operation::Worktrees,
+        Operation::CreateWorktree,
+        Operation::StartTask { input: input(true) },
+    ] {
+        denied(execute(&client, operation));
+    }
+    assert!(fixture.git.trees.lock().unwrap().is_empty());
+    assert!(fixture.tasks.load().unwrap().is_empty());
+}
+
+#[test]
+fn task_start_constructs_authoritative_metadata_without_client_execution_state() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    let snapshot = started(&client, false);
+    let records = fixture.tasks.load().unwrap();
+    let record = &records[0];
+    assert_eq!(
+        record.execution.workspace_root,
+        fixture.root.path().canonicalize().unwrap()
+    );
+    assert_eq!(record.execution.workspace_id.as_str(), "first");
+    assert_eq!(record.execution.status, ExecutionStatus::Queued);
+    assert_eq!(record.execution.runner, "codex-app-server");
+    assert_eq!(record.execution.mode, TaskMode::Plan);
+    assert_eq!(record.execution.started_at_ms, None);
+    assert_eq!(record.execution.completed_at_ms, None);
+    assert_eq!(record.execution.failure, None);
+    assert_eq!(record.execution.external_thread_id, None);
+    assert!(record.events.is_empty());
+    assert_eq!(record.task.id, snapshot.task.id);
+    assert_eq!(record.task.conversation_id, input(false).conversation_id);
+    assert_eq!(record.task.prompt, input(false).prompt);
+    assert_eq!(snapshot.execution.worktree_id, None);
+}
+
+#[test]
+fn conversation_id_length_boundaries_and_server_worktree_ids() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    let mut invalid = input(false);
+    invalid.conversation_id = ConversationId::new("a".repeat(129));
+    denied(execute(&client, Operation::StartTask { input: invalid }));
+    let mut valid = input(false);
+    valid.conversation_id = ConversationId::new(format!("Aa0-_{}", "z".repeat(123)));
+    outcome(execute(&client, Operation::StartTask { input: valid }));
+    let Outcome::Worktree(first) = outcome(execute(&client, Operation::CreateWorktree)) else {
+        panic!("worktree が必要")
+    };
+    let Outcome::Worktree(second) = outcome(execute(&client, Operation::CreateWorktree)) else {
+        panic!("worktree が必要")
+    };
+    assert_ne!(first.worktree_id, second.worktree_id);
+    assert!(
+        first
+            .worktree_id
+            .as_str()
+            .bytes()
+            .all(|value| value.is_ascii_alphanumeric() || value == b'-' || value == b'_')
+    );
+}
+
+#[test]
+fn task_listing_survives_missing_git_and_failed_worktree_discovery() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    let task = started(&client, false);
+    *fixture.git.fail_discovery.lock().unwrap() = true;
+    assert_eq!(tasks(&client), vec![task.clone()]);
+    let state = BackendState::new([WorkspaceRegistration::new(
+        WorkspaceId::try_new("first").unwrap(),
+        "no Git",
+        fixture.root.path().to_owned(),
+        Arc::new(EmptyFiles),
+    )
+    .with_tasks(fixture.tasks.clone())])
+    .unwrap();
+    let service = BackendService::start(state).unwrap();
+    let without_git = EmbeddedClient::connect(
+        service,
+        SessionId::try_new("no-git").unwrap(),
+        WorkspaceId::try_new("first").unwrap(),
+    )
+    .unwrap();
+    assert_eq!(tasks(&without_git), vec![task]);
+}
+
+#[test]
+fn task_controls_accept_only_nonterminal_statuses_in_the_workspace() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    for (index, status) in [
+        ExecutionStatus::Queued,
+        ExecutionStatus::Running,
+        ExecutionStatus::WaitingForInput,
+        ExecutionStatus::WaitingForApproval,
+        ExecutionStatus::Succeeded,
+        ExecutionStatus::Failed,
+        ExecutionStatus::Cancelled,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut record = fixture.record(&format!("status-{index}"));
+        record.execution.status = status;
+        fixture.tasks.records.lock().unwrap().push(record.clone());
+        let response = execute(
+            &client,
+            Operation::ControlTask {
+                execution_id: record.execution.id,
+                control: TaskControl::Cancel,
+            },
+        );
+        if status.is_terminal() {
+            denied(response);
+        } else {
+            assert_eq!(outcome(response), Outcome::Completed);
+        }
+    }
+    assert_eq!(fixture.tasks.controls.lock().unwrap().len(), 4);
+}
+
+#[test]
+fn isolated_start_uses_runtime_worktree_and_unregistered_subdirectory_is_not_a_task_scope() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    let task = started(&client, true);
+    let tree = fixture.git.trees.lock().unwrap()[0].clone();
+    let record = fixture.tasks.load().unwrap()[0].clone();
+    assert_eq!(record.execution.workspace_root, tree.path);
+    assert_eq!(task.execution.worktree_id, Some(tree.task_id));
+    assert_eq!(tasks(&client), vec![task]);
+    let mut nested = fixture.record("unregistered");
+    nested.execution.workspace_root = fixture.root.path().join("nested");
+    std::fs::create_dir(&nested.execution.workspace_root).unwrap();
+    fixture.tasks.records.lock().unwrap().push(nested);
+    assert_eq!(tasks(&client).len(), 1);
+}
+
+#[test]
+fn parent_repository_worktrees_cannot_authorize_nested_workspace_task_access() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    let mut record = fixture.record("parent-task");
+    record.execution.workspace_root = fixture.other.path().canonicalize().unwrap();
+    fixture.tasks.records.lock().unwrap().push(record.clone());
+    fixture.git.trees.lock().unwrap().push(TaskWorktree {
+        task_id: record.task.id.clone(),
+        repository_root: fixture.root.path().parent().unwrap().to_owned(),
+        path: record.execution.workspace_root,
+        base_commit: "abc".into(),
+        state: WorktreeState::Active,
+        conflict: None,
+    });
+    *fixture.git.unscoped_discovery.lock().unwrap() = true;
+    assert!(tasks(&client).is_empty());
+    denied(execute(
+        &client,
+        Operation::ControlTask {
+            execution_id: record.execution.id,
+            control: TaskControl::Cancel,
+        },
+    ));
+    denied(execute(
+        &client,
+        Operation::DiscardWorktree {
+            worktree_id: record.task.id,
+        },
+    ));
+    assert!(fixture.tasks.controls.lock().unwrap().is_empty());
+    assert!(fixture.git.calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn git_snapshots_reject_absolute_backend_file_paths() {
+    let fixture = Fixture::new();
+    let client = fixture.client("one", "first");
+    fixture
+        .git
+        .status_files
+        .lock()
+        .unwrap()
+        .push(lapis_git::ChangedFile {
+            path: fixture.other.path().join("secret.txt"),
+            old_path: None,
+            kind: lapis_git::ChangeKind::Modified,
+            staged: false,
+        });
+    denied(execute(&client, Operation::GitStatus { worktree: None }));
+}

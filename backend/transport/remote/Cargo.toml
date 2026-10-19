@@ -22,4 +22,6 @@ zeroize.workspace = true
 
 [dev-dependencies]
 lapis-document = { path = "../../../shared/models/document" }
+lapis-editor-core = { path = "../../../shared/models/editor-core" }
+lapis-task = { path = "../../../shared/models/task" }
 tempfile.workspace = true

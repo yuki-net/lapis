@@ -10,6 +10,16 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum RequestBody {
+    #[serde(rename = "document.inspect")]
+    DocumentInspect(crate::DocumentInspectRequest),
+    #[serde(rename = "document.untitled")]
+    DocumentUntitled(crate::DocumentUntitledRequest),
+    #[serde(rename = "document.save_as")]
+    DocumentSaveAs(crate::DocumentSaveAsRequest),
+    #[serde(rename = "document.reload")]
+    DocumentReload(DocumentHistoryRequest),
+    #[serde(rename = "workspace.execute")]
+    WorkspaceExecute(crate::WorkspaceOperationRequest),
     #[serde(rename = "workspace.list")]
     WorkspaceList(WorkspaceListRequest),
     #[serde(rename = "workspace.connect")]
@@ -47,6 +57,11 @@ pub enum RequestBody {
 impl RequestBody {
     pub const fn method(&self) -> &'static str {
         match self {
+            Self::DocumentInspect(_) => "document.inspect",
+            Self::DocumentUntitled(_) => "document.untitled",
+            Self::DocumentSaveAs(_) => "document.save_as",
+            Self::DocumentReload(_) => "document.reload",
+            Self::WorkspaceExecute(_) => "workspace.execute",
             Self::WorkspaceList(_) => "workspace.list",
             Self::WorkspaceConnect(_) => "workspace.connect",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -68,6 +83,11 @@ impl RequestBody {
 
     pub const fn required_capability(&self) -> &'static str {
         match self {
+            Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
+            Self::DocumentUntitled(_) | Self::DocumentSaveAs(_) | Self::DocumentReload(_) => {
+                capability::DOCUMENTS_WRITE
+            }
+            Self::WorkspaceExecute(request) => request.operation.required_capability(),
             Self::WorkspaceList(_) => capability::WORKSPACES,
             Self::WorkspaceConnect(_) | Self::WorkspaceClose(_) => capability::WORKSPACES_CONNECT,
             Self::FileTree(_) => capability::FILES_READ,
@@ -88,6 +108,9 @@ impl RequestBody {
     /// Request自身が明示するWorkspace。Resource ID経由のRequestはbackend所有権表で解決する。
     pub const fn workspace_id(&self) -> Option<&WorkspaceId> {
         match self {
+            Self::DocumentUntitled(request) => Some(&request.workspace_id),
+            Self::DocumentInspect(_) | Self::DocumentSaveAs(_) | Self::DocumentReload(_) => None,
+            Self::WorkspaceExecute(request) => Some(&request.workspace_id),
             Self::WorkspaceList(_) => None,
             Self::WorkspaceConnect(request) => Some(&request.workspace_id),
             Self::WorkspaceClose(request) => Some(&request.workspace_id),

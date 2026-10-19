@@ -24,11 +24,13 @@ pub enum BackendStateError {
     Terminal(TerminalError),
     CounterOverflow,
     Unsupported,
+    Operation(String),
 }
 
 impl fmt::Display for BackendStateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Operation(message) => formatter.write_str(message),
             Self::WorkspaceNotFound => formatter.write_str("workspace was not found"),
             Self::DuplicateWorkspace => formatter.write_str("workspace is already registered"),
             Self::WorkspaceDenied => formatter.write_str("workspace is not granted to session"),

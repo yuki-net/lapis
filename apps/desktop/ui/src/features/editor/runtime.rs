@@ -23,22 +23,27 @@ impl Editor {
             loop {
                 Timer::after(Duration::from_millis(250)).await;
                 if this
-                    .update(cx, |editor, cx| match editor.tasks.session.refresh() {
-                        Ok(true) => {
-                            if editor.tasks.selected_execution.is_none() {
-                                editor.tasks.selected_execution = editor
-                                    .tasks
-                                    .session
-                                    .records()
-                                    .first()
-                                    .map(|record| record.execution.id.clone());
+                    .update(cx, |editor, cx| {
+                        let Some(workspace) = editor.session.workspace_id().cloned() else {
+                            return;
+                        };
+                        match editor.tasks.session.refresh(&workspace) {
+                            Ok(true) => {
+                                if editor.tasks.selected_execution.is_none() {
+                                    editor.tasks.selected_execution = editor
+                                        .tasks
+                                        .session
+                                        .records()
+                                        .first()
+                                        .map(|record| record.execution.id.clone());
+                                }
+                                cx.notify();
                             }
-                            cx.notify();
-                        }
-                        Ok(false) => {}
-                        Err(error) => {
-                            editor.status = format!("Task 更新失敗: {error}");
-                            cx.notify();
+                            Ok(false) => {}
+                            Err(error) => {
+                                editor.status = format!("Task 更新失敗: {error}");
+                                cx.notify();
+                            }
                         }
                     })
                     .is_err()
@@ -56,8 +61,7 @@ impl Editor {
                         if !editor.feature_registry.is_running(id::FEATURE_GIT) {
                             return;
                         }
-                        let Some(root) = editor.session.workspace_root().map(ToOwned::to_owned)
-                        else {
+                        let Some(root) = editor.session.workspace_id().cloned() else {
                             return;
                         };
                         if editor.git.session.refresh(&root).unwrap_or(false) {

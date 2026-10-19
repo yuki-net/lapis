@@ -14,7 +14,7 @@ ALLOWED = {
     "transport": {"transport", "runtime", "protocol", "models"},
     "host": {"host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
     "ui": {"ui", "application", "models", "protocol"},
-    "desktop_entry": {"desktop_entry", "ui", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
+    "desktop_entry": {"desktop_entry", "ui", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
     "client": {"client", "models", "protocol"},
 }
 

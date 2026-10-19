@@ -143,6 +143,10 @@ impl fmt::Display for WorkspaceError {
 
 impl Error for WorkspaceError {}
 
+pub trait WorkspaceRepository: Send + Sync {
+    fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError>;
+}
+
 pub trait WorkspaceStateRepository: Send + Sync {
     fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError>;
     fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError>;

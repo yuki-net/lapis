@@ -15,7 +15,7 @@ lapis-language = { path = "../../../shared/models/language" }
 lapis-localization = { path = "../../../shared/models/localization" }
 lapis-lsp = { path = "../../../shared/models/lsp" }
 lapis-settings = { path = "../../../shared/models/settings" }
-lapis-task-runner = { path = "../../../backend/infrastructure/task-runner" }
+lapis-task-runner = { package = "lapis-task", path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true

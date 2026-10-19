@@ -17,11 +17,39 @@ pub enum DocumentEncoding {
 pub struct DocumentSnapshot {
     pub document_id: DocumentId,
     pub workspace_id: WorkspaceId,
-    pub path: WorkspaceRelativePath,
+    pub path: Option<WorkspaceRelativePath>,
     pub content: String,
     pub encoding: DocumentEncoding,
     pub revision: Revision,
     pub dirty: bool,
+    pub can_undo: bool,
+    pub can_redo: bool,
+    pub external_change: DocumentExternalChange,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentExternalChange {
+    Unchanged,
+    Modified,
+    Deleted,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentInspectRequest {
+    pub document_id: DocumentId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentUntitledRequest {
+    pub workspace_id: WorkspaceId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentSaveAsRequest {
+    pub document_id: DocumentId,
+    pub base_revision: Revision,
+    pub path: WorkspaceRelativePath,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -166,6 +194,7 @@ pub struct DocumentCreateResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentOpenResponse {
     pub document: DocumentSnapshot,
+    pub reused: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
