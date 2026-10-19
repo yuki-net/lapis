@@ -15,11 +15,11 @@
 
 ## 配置の判断
 
-1. プラットフォーム固有の表示状態なら Client。複数の Client に一致して見える状態なら Runtime。
-2. 値・規則・port は models、通信に公開する契約は protocol、操作判断は application。
-3. 外部環境に触れる具体実装は infrastructure。認証や wire は transport。
-4. 実際の所有・寿命の境界がなければモジュールで分割する。空 crate や転送だけの層を作らない。
-5. Window/Panel/Conversation の破棄や接続切断は実行終了を意味しない。明示的な終了操作と区別する。
+状態とリソースの所有原則は [全体アーキテクチャ](../ARCHITECTURE.md) を参照する。追加実装の具体的な配置は次のとおり。
+
+1. 値・規則・port は models、通信に公開する契約は protocol、操作判断は application。
+2. 外部環境に触れる具体実装は infrastructure。認証や wire は transport。
+3. 実際の所有・寿命の境界がなければモジュールで分割する。空 crate や転送だけの層を作らない。
 
 ## 依存の検査
 
@@ -29,7 +29,3 @@ Host と Desktop の `apps/desktop/app/` は Composition Root として具体実
 Backend と共通契約から GPUI/native dialog への依存は禁止。
 
 既存違反は `scripts/architecture-exceptions.json` の完全一致した crate 対と理由に限定する。未使用例外も失敗するため、削除した違反を再導入する余地を残さない。新規違反を「移行中」として追加しない。
-
-## 移行の現在地
-
-初期の配置変更だけでは正規状態の統一を意味しない。application/services の Session は Desktop の表示・操作と Backend の処理を含む移行対象。Task runner の契約とプロセス実装も同居している。状態統合・UI 分離の変更でこれらを解消する。現時点の動作契約はコードとテストを参照する。
