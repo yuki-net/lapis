@@ -1,0 +1,23 @@
+[package]
+name = "lapis-platform"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-app-services = { path = "../../application/services" }
+lapis-backend-state = { path = "../../runtime" }
+lapis-document = { path = "../../../shared/models/document" }
+lapis-editor-core = { path = "../../../shared/models/editor-core" }
+lapis-git = { path = "../../../shared/models/git" }
+lapis-lsp = { path = "../../../shared/models/lsp" }
+lapis-terminal = { path = "../../../shared/models/terminal" }
+portable-pty.workspace = true
+lapis-task-runner = { path = "../task-runner" }
+lapis-workspace = { path = "../../../shared/models/workspace" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]

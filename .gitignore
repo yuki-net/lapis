@@ -8,3 +8,5 @@
 *.log
 .idea/libraries
 .idea/modules
+
+__pycache__/

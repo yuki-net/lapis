@@ -1,0 +1,15 @@
+[package]
+name = "lapis-backend-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-client-api = { path = "../../shared/protocol" }
+lapis-document = { path = "../../shared/models/document" }
+lapis-text = { path = "../../shared/models/text" }
+lapis-terminal = { path = "../../shared/models/terminal" }
+
+[dev-dependencies]
+tempfile.workspace = true

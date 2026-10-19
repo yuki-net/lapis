@@ -8,8 +8,8 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 axum-server.workspace = true
-lapis-backend-state = { path = "../core/backend-state" }
-lapis-client-api = { path = "../core/client-api" }
+lapis-backend-state = { path = "../../runtime" }
+lapis-client-api = { path = "../../../shared/protocol" }
 getrandom.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
@@ -21,5 +21,5 @@ tokio.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-lapis-document = { path = "../core/document" }
+lapis-document = { path = "../../../shared/models/document" }
 tempfile.workspace = true

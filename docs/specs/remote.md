@@ -1,6 +1,6 @@
 # Remote — internal constraints and design notes
 
-この文書はRemoteの**安全上の制約**と**未確定の設計案**を区別します。「実装済み」は主に `backend/remote/` のServer側でコードから確認できる範囲を指し、Clientとの連携まで完成している意味ではありません。
+この文書はRemoteの**安全上の制約**と**未確定の設計案**を区別します。「実装済み」は主に `backend/transport/remote/` のServer側でコードから確認できる範囲を指し、Clientとの連携まで完成している意味ではありません。
 
 ## 信頼境界
 

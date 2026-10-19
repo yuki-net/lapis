@@ -8,14 +8,14 @@ license.workspace = true
 [dependencies]
 gpui.workspace = true
 serde.workspace = true
-lapis-app-services = { path = "../../../backend/core/app-services" }
-lapis-editor-core = { path = "../../../backend/core/editor-core" }
-lapis-git = { path = "../../../features/git" }
-lapis-language = { path = "../../../features/language" }
-lapis-localization = { path = "../../../backend/core/localization" }
-lapis-lsp = { path = "../../../features/lsp" }
-lapis-settings = { path = "../../../backend/core/settings" }
-lapis-task-runner = { path = "../../../features/task-runner" }
-lapis-terminal = { path = "../../../features/terminal" }
-lapis-workspace = { path = "../../../backend/core/workspace" }
+lapis-app-services = { path = "../../../backend/application/services" }
+lapis-editor-core = { path = "../../../shared/models/editor-core" }
+lapis-git = { path = "../../../shared/models/git" }
+lapis-language = { path = "../../../shared/models/language" }
+lapis-localization = { path = "../../../shared/models/localization" }
+lapis-lsp = { path = "../../../shared/models/lsp" }
+lapis-settings = { path = "../../../shared/models/settings" }
+lapis-task-runner = { path = "../../../backend/infrastructure/task-runner" }
+lapis-terminal = { path = "../../../shared/models/terminal" }
+lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true

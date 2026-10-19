@@ -4,6 +4,7 @@ on:
   pull_request:
     branches:
       - develop
+      - "refactor/**"
   push:
     branches:
       - develop
@@ -47,6 +48,11 @@ jobs:
           key: backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check architecture
+        run: |
+          python3 -m unittest discover -s scripts -p "test_*.py"
+          python3 scripts/check_architecture.py
 
       - name: Check formatting
         run: cargo fmt --all -- --check
