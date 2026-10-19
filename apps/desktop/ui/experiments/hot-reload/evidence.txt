@@ -16,3 +16,17 @@
 [INFO] dx::build::builder: Hot-patching: apps\desktop\ui\src\shell\main\render.rs took 1587ms 
 [ERROR] dx::serve::output: thread 'main' (18076) has overflowed its stack 
 [ERROR] dx::serve: Application [windows] exited with error: exit code: 0xc000041d 
+
+[retest-20261020]
+[ERROR] dx::serve::output: [hot-reload-retest] init pid=68908
+[INFO] dx::build::builder: Hot-patching: apps\desktop\ui\src\shell\main\render.rs took 2068ms
+[ERROR] dx::serve::output: [hot-reload-retest] patch-applied pid=68908
+[ERROR] dx::serve::output: [hot-reload-retest] refresh windows=1
+[ERROR] dx::serve::output: thread 'main' (19116) has overflowed its stack
+[ERROR] dx::serve: Application [windows] exited with error: exit code: 0xc000041d
+[process monitor: final observations]
+{"time":"2026-10-20T02:42:56.5150715+09:00","pid":68908,"exited":false,"windowHandle":32903478,"responding":true}
+{"time":"2026-10-20T02:42:57.5460408+09:00","pid":68908,"exited":false,"windowHandle":32903478,"responding":true}
+{"time":"2026-10-20T02:42:58.5792741+09:00","pid":68908,"exited":false,"windowHandle":32903478,"responding":true}
+{"time":"2026-10-20T02:42:59.6155706+09:00","pid":68908,"exited":false,"windowHandle":32903478,"responding":false}
+{"time":"2026-10-20T02:43:05.6369301+09:00","pid":68908,"exited":true}

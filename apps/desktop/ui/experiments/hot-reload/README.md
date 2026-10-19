@@ -50,6 +50,30 @@ CLIのHot-patching表示は保存から画面反映までの時間ではない�
 
 ## 再現手順（クラッシュする実験用）
 
+### 2026-10-20: ウィンドウを閉じない条件での再試験
+
+手動閉鎖が原因だった可能性を切り分けるため、同じRust 1.96.0／DX 0.7.10と名前付き描画境界で再試験した。ウィンドウを閉じる操作は行っていない。試験中の記録だけを追加し、製品コードには残していない。
+
+- `hot_reload::init`で`App::on_window_closed`を一度登録し、`window-closed remaining=...`を記録。
+- Subsecondのハンドラで`patch-applied pid=...`、foregroundの再描画要求直前で`refresh windows=...`を記録。
+- PID `68908`、Window handle `32903478`。新規文書に`LAPIS_RETEST_KEEP_WINDOW_OPEN_20261020`を入力し、画面に表示されていることを確認。
+- 02:42:47.943（JST）に背景色だけを保存。保存時は同じPID・Window handleが存在し、応答あり。
+- thin build 11,326ms、CLIのHot-patching表示2,068ms。その後のログは`patch-applied pid=68908` → `refresh windows=1` → `thread 'main' (...) has overflowed its stack`の順。
+- パッチ前からクラッシュまで`window-closed`記録なし。プロセス監視では02:42:58.579まで同じWindow handleと応答あり、02:42:59.615に応答なし、02:43:05.636に終了を確認。終了コードは`0xc000041d`。
+
+**ウィンドウが1つ存在する状態で再描画を要求した直後にも再現した。手動で閉じたことだけでは今回の失敗を説明できない。** 根本原因は引き続き未特定。成功した反映時間・状態維持は測定できていない。
+
+ログ抜粋は[evidence.txt](evidence.txt)の`retest-20261020`節を参照。ウィンドウ数の記録は、既存PoCの`cx.refresh_windows()`直前に`cx.windows().len()`を出力したもの。閉鎖記録は次の公開APIで追加した。
+
+```rust
+cx.on_window_closed(|cx| {
+    eprintln!("[hot-reload-retest] window-closed remaining={}", cx.windows().len());
+})
+.detach();
+```
+
+### 基本手順
+
 未保存の実データを使わず、通常の開発セッションと分けて試験する。
 
 ```powershell
