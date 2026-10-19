@@ -23,6 +23,7 @@ GPUI公式のInspectorが対象ウィンドウの右側30remを使用し、閉�
 Pick elementで対象をクリックして選択し、ホイールで重なった要素の深さを変更できます。
 Pick中は公式GPUIがマウス入力を捕捉するため、対象を選択してからCloseなどを操作します。
 DivのBox Model、content size、StyleRefinement、生成元を縦方向に表示します。
+対象画面のハイライトはGPUI公式のPick表示です。独自のmargin・border・padding色分けoverlayは使いません。
 選択・検査状態と対象Windowの連携はGPUIが所有し、Lapis DevToolsは表示の登録だけを担当します。
 独立OSウィンドウ、全要素ツリー、ツリーの折り畳み・hover・任意選択、外部Windowへの同期はありません。
 Inspectorは通常のPanelHostには属さず、ReleaseにはDevToolsモジュールを含めません。

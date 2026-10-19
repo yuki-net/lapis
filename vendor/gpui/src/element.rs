@@ -359,18 +359,13 @@ impl<E: Element> Drawable<E> {
                 let inspector_id;
                 #[cfg(any(feature = "inspector", debug_assertions))]
                 {
-                    inspector_id = window
-                        .inspector_is_enabled()
-                        .then(|| self.element.source_location())
-                        .flatten()
-                        .map(|source| {
-                            let path = crate::InspectorElementPath {
-                                global_id: GlobalElementId(window.element_id_stack.clone()),
-                                source_location: source,
-                            };
-                            window.build_inspector_element_id(path, type_name::<E>())
-                        });
-                    window.push_inspector_element(inspector_id.as_ref());
+                    inspector_id = self.element.source_location().map(|source| {
+                        let path = crate::InspectorElementPath {
+                            global_id: GlobalElementId(window.element_id_stack.clone()),
+                            source_location: source,
+                        };
+                        window.build_inspector_element_id(path)
+                    });
                 }
                 #[cfg(not(any(feature = "inspector", debug_assertions)))]
                 {
@@ -383,9 +378,6 @@ impl<E: Element> Drawable<E> {
                     window,
                     cx,
                 );
-
-                #[cfg(any(feature = "inspector", debug_assertions))]
-                window.pop_inspector_element(inspector_id.as_ref());
 
                 if global_id.is_some() {
                     window.element_id_stack.pop();
@@ -424,8 +416,6 @@ impl<E: Element> Drawable<E> {
                 }
 
                 let bounds = window.layout_bounds(layout_id);
-                #[cfg(any(feature = "inspector", debug_assertions))]
-                window.set_inspector_element_bounds(inspector_id.as_ref(), bounds);
                 let node_id = window.next_frame.dispatch_tree.push_node();
                 let prepaint = self.element.prepaint(
                     global_id.as_ref(),

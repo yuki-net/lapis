@@ -684,10 +684,6 @@ pub(crate) struct Frame {
     pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub(crate) inspector_elements: Vec<crate::InspectorElementNode>,
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    inspector_element_indices: FxHashMap<crate::InspectorElementId, usize>,
     pub(crate) tab_stops: TabStopMap,
 }
 
@@ -737,10 +733,6 @@ impl Frame {
 
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector_hitboxes: FxHashMap::default(),
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            inspector_elements: Vec::new(),
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            inspector_element_indices: FxHashMap::default(),
             tab_stops: TabStopMap::default(),
         }
     }
@@ -764,8 +756,6 @@ impl Frame {
         {
             self.next_inspector_instance_ids.clear();
             self.inspector_hitboxes.clear();
-            self.inspector_elements.clear();
-            self.inspector_element_indices.clear();
         }
     }
 
@@ -844,8 +834,6 @@ pub struct Window {
     layout_engine: Option<TaffyLayoutEngine>,
     pub(crate) root: Option<AnyView>,
     pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    inspector_element_stack: Vec<crate::InspectorElementId>,
     pub(crate) text_style_stack: Vec<TextStyleRefinement>,
     pub(crate) rendered_entity_stack: Vec<EntityId>,
     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
@@ -886,10 +874,6 @@ pub struct Window {
     pub(crate) client_inset: Option<Pixels>,
     #[cfg(any(feature = "inspector", debug_assertions))]
     inspector: Option<Entity<Inspector>>,
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    inspector_is_external: bool,
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    external_inspector_window: Option<AnyWindowHandle>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1234,8 +1218,6 @@ impl Window {
             layout_engine: Some(TaffyLayoutEngine::new()),
             root: None,
             element_id_stack: SmallVec::default(),
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            inspector_element_stack: Vec::new(),
             text_style_stack: Vec::new(),
             rendered_entity_stack: Vec::new(),
             element_offset_stack: Vec::new(),
@@ -1276,10 +1258,6 @@ impl Window {
             image_cache_stack: Vec::new(),
             #[cfg(any(feature = "inspector", debug_assertions))]
             inspector: None,
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            inspector_is_external: false,
-            #[cfg(any(feature = "inspector", debug_assertions))]
-            external_inspector_window: None,
         })
     }
 
@@ -1963,8 +1941,6 @@ impl Window {
         let previous_window_active = self.rendered_frame.window_active;
         mem::swap(&mut self.rendered_frame, &mut self.next_frame);
         self.next_frame.clear();
-        #[cfg(any(feature = "inspector", debug_assertions))]
-        self.publish_inspector_tree(cx);
         let current_focus_path = self.rendered_frame.focus_path();
         let current_window_active = self.rendered_frame.window_active;
 
@@ -2042,7 +2018,7 @@ impl Window {
         let root_size = {
             #[cfg(any(feature = "inspector", debug_assertions))]
             {
-                if self.inspector.is_some() && !self.inspector_is_external {
+                if self.inspector.is_some() {
                     let mut size = self.viewport_size;
                     size.width = (size.width - _inspector_width).max(px(0.0));
                     size
@@ -4455,120 +4431,10 @@ impl Window {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub fn toggle_inspector(&mut self, cx: &mut App) {
         self.inspector = match self.inspector {
-            None => {
-                self.inspector_is_external = false;
-                self.external_inspector_window = None;
-                Some(cx.new(|_| Inspector::new()))
-            }
+            None => Some(cx.new(|_| Inspector::new())),
             Some(_) => None,
         };
-        if self.inspector.is_none() {
-            self.inspector_is_external = false;
-            self.external_inspector_window = None;
-        }
         self.refresh();
-    }
-
-    /// Enables inspector picking and state collection without rendering the inspector inside this
-    /// window. The returned entity can be rendered as the root of a separate window.
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub fn enable_external_inspector(&mut self, cx: &mut App) -> Entity<Inspector> {
-        let inspector = self
-            .inspector
-            .get_or_insert_with(|| cx.new(|_| Inspector::new()))
-            .clone();
-        inspector.update(cx, |inspector, _cx| inspector.pick_depth = None);
-        self.inspector_is_external = true;
-        self.refresh();
-        inspector
-    }
-
-    /// Associates the external inspector entity with the window that renders it.
-    ///
-    /// GPUI uses this handle to refresh the viewer when inspected state changes in the target
-    /// window. Passing `None` detaches the viewer while leaving inspector picking enabled.
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub fn set_external_inspector_window(&mut self, window: Option<AnyWindowHandle>) {
-        self.external_inspector_window = window;
-    }
-
-    /// Ends inspector picking mode and refreshes the target window.
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub fn stop_inspector_picking(&mut self, cx: &mut App) {
-        if let Some(inspector) = self.inspector.clone() {
-            inspector.update(cx, |inspector, _cx| inspector.stop_picking());
-        }
-        self.refresh_external_inspector(cx);
-        self.refresh();
-    }
-    /// Selects an element from an external inspector tree and refreshes its target state.
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub fn select_inspector_element(
-        &mut self,
-        id: crate::InspectorElementId,
-        cx: &mut App,
-    ) -> bool {
-        if !self
-            .rendered_frame
-            .inspector_elements
-            .iter()
-            .any(|node| node.id == id)
-        {
-            return false;
-        }
-        let Some(inspector) = self.inspector.clone() else {
-            return false;
-        };
-        inspector.update(cx, |inspector, _cx| {
-            inspector.select(id, self);
-            inspector.set_selected_element_visible(true, self);
-        });
-        self.refresh_external_inspector(cx);
-        true
-    }
-
-    /// Disables inspector picking and state collection for this window.
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub fn disable_inspector(&mut self) {
-        self.inspector = None;
-        self.inspector_is_external = false;
-        self.external_inspector_window = None;
-        self.refresh();
-    }
-
-    /// Previews an element selected by hovering a row in an external inspector.
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub fn preview_inspector_element(
-        &mut self,
-        id: Option<crate::InspectorElementId>,
-        cx: &mut App,
-    ) -> bool {
-        if let Some(id) = &id
-            && !self
-                .rendered_frame
-                .inspector_elements
-                .iter()
-                .any(|node| &node.id == id)
-        {
-            return false;
-        }
-        let Some(inspector) = self.inspector.clone() else {
-            return false;
-        };
-        inspector.update(cx, |inspector, _cx| {
-            inspector.set_hovered_element_id(id, self);
-        });
-        self.refresh_external_inspector(cx);
-        true
-    }
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    fn refresh_external_inspector(&self, cx: &mut App) {
-        let Some(window) = self.external_inspector_window else {
-            return;
-        };
-        cx.defer(move |cx| {
-            let _ = window.update(cx, |_, window, _cx| window.refresh());
-        });
     }
 
     /// Returns true if the window is in inspector mode.
@@ -4594,26 +4460,11 @@ impl Window {
             && let Some(inspector) = &self.inspector
         {
             let inspector = inspector.clone();
-            let (active_element_id, hovered_element_id) = {
-                let inspector = inspector.read(cx);
-                (
-                    inspector.active_element_id().cloned(),
-                    inspector.hovered_element_id().cloned(),
-                )
-            };
-            if active_element_id.as_ref() == Some(inspector_id) {
-                let result = inspector.update(cx, |inspector, _cx| {
+            let active_element_id = inspector.read(cx).active_element_id();
+            if Some(inspector_id) == active_element_id {
+                return inspector.update(cx, |inspector, _cx| {
                     inspector.with_active_element_state(self, f)
                 });
-                self.refresh_external_inspector(cx);
-                return result;
-            }
-            if hovered_element_id.as_ref() == Some(inspector_id) {
-                let result = inspector.update(cx, |inspector, _cx| {
-                    inspector.with_hovered_element_state(self, f)
-                });
-                self.refresh_external_inspector(cx);
-                return result;
             }
         }
         f(&mut None, self)
@@ -4623,7 +4474,6 @@ impl Window {
     pub(crate) fn build_inspector_element_id(
         &mut self,
         path: crate::InspectorElementPath,
-        element_type: &'static str,
     ) -> crate::InspectorElementId {
         self.invalidator.debug_assert_paint_or_prepaint();
         let path = Rc::new(path);
@@ -4634,87 +4484,11 @@ impl Window {
             .or_insert(0);
         let instance_id = *next_instance_id;
         *next_instance_id += 1;
-        let id = crate::InspectorElementId { path, instance_id };
-        if self.inspector_is_external {
-            let index = self.next_frame.inspector_elements.len();
-            self.next_frame
-                .inspector_elements
-                .push(crate::InspectorElementNode {
-                    id: id.clone(),
-                    parent: self.inspector_element_stack.last().cloned(),
-                    element_type,
-                    bounds: Bounds::default(),
-                });
-            self.next_frame
-                .inspector_element_indices
-                .insert(id.clone(), index);
-        }
-        id
-    }
-
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub(crate) fn inspector_is_enabled(&self) -> bool {
-        self.inspector.is_some()
-    }
-
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub(crate) fn push_inspector_element(&mut self, id: Option<&crate::InspectorElementId>) {
-        if self.inspector_is_external
-            && let Some(id) = id
-        {
-            self.inspector_element_stack.push(id.clone());
-        }
-    }
-
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub(crate) fn pop_inspector_element(&mut self, id: Option<&crate::InspectorElementId>) {
-        if self.inspector_is_external && id.is_some() {
-            let popped = self.inspector_element_stack.pop();
-            debug_assert_eq!(popped.as_ref(), id);
-        }
-    }
-
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    pub(crate) fn set_inspector_element_bounds(
-        &mut self,
-        id: Option<&crate::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-    ) {
-        let Some(id) = id else {
-            return;
-        };
-        let Some(index) = self.next_frame.inspector_element_indices.get(id).copied() else {
-            return;
-        };
-        self.next_frame.inspector_elements[index].bounds = bounds;
-    }
-
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    fn publish_inspector_tree(&mut self, cx: &mut App) {
-        if !self.inspector_is_external {
-            return;
-        }
-        let Some(inspector) = self.inspector.clone() else {
-            return;
-        };
-        let nodes = self.rendered_frame.inspector_elements.clone();
-        let changed = inspector.update(cx, |inspector, cx| {
-            let changed = inspector.replace_element_tree(nodes);
-            if changed {
-                cx.notify();
-            }
-            changed
-        });
-        if changed {
-            self.refresh_external_inspector(cx);
-        }
+        crate::InspectorElementId { path, instance_id }
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
     fn prepaint_inspector(&mut self, inspector_width: Pixels, cx: &mut App) -> Option<AnyElement> {
-        if self.inspector_is_external {
-            return None;
-        }
         if let Some(inspector) = self.inspector.take() {
             let mut inspector_element = AnyView::from(inspector.clone()).into_any_element();
             inspector_element.prepaint_as_root(
@@ -4758,198 +4532,17 @@ impl Window {
     }
 
     #[cfg(any(feature = "inspector", debug_assertions))]
-    #[cfg(any(feature = "inspector", debug_assertions))]
-    #[cfg(any(feature = "inspector", debug_assertions))]
     fn paint_inspector_hitbox(&mut self, cx: &App) {
         if let Some(inspector) = self.inspector.as_ref() {
             let inspector = inspector.read(cx);
-            // Only show live color overlay on the target window while picking (hovering),
-            // and remove the overlay once an element is clicked/selected.
-            let is_picking = inspector.is_picking();
-            let is_tree_preview = inspector.hovered_element_id().is_some();
-            let is_selected = inspector.selected_element_visible();
-            if !is_picking && !is_tree_preview && !is_selected {
-                return;
-            }
-
-            let rem_size = self.rem_size();
-            let mut highlighted_box_model = None;
-
-            let highlighted_state = if is_picking || (is_selected && !is_tree_preview) {
-                inspector.active_element_state::<crate::DivInspectorState>()
-            } else if is_tree_preview {
-                inspector
-                    .hovered_element_state::<crate::DivInspectorState>()
-                    .or_else(|| inspector.active_element_state::<crate::DivInspectorState>())
-            } else {
-                inspector.active_element_state::<crate::DivInspectorState>()
-            };
-            if let Some(state) = highlighted_state {
-                if !state.bounds.size.width.is_zero() && !state.bounds.size.height.is_zero() {
-                    let to_px_len = |len: &crate::Length| -> Pixels {
-                        match len {
-                            crate::Length::Definite(def) => {
-                                def.to_pixels(crate::AbsoluteLength::Pixels(Pixels::ZERO), rem_size)
-                            }
-                            crate::Length::Auto => Pixels::ZERO,
-                        }
-                    };
-                    let to_px_def = |def: &crate::DefiniteLength| -> Pixels {
-                        def.to_pixels(crate::AbsoluteLength::Pixels(Pixels::ZERO), rem_size)
-                    };
-                    let to_px_abs =
-                        |abs: &crate::AbsoluteLength| -> Pixels { abs.to_pixels(rem_size) };
-
-                    let margin_top = state
-                        .base_style
-                        .margin
-                        .top
-                        .as_ref()
-                        .map(to_px_len)
-                        .unwrap_or(Pixels::ZERO);
-                    let margin_right = state
-                        .base_style
-                        .margin
-                        .right
-                        .as_ref()
-                        .map(to_px_len)
-                        .unwrap_or(Pixels::ZERO);
-                    let margin_bottom = state
-                        .base_style
-                        .margin
-                        .bottom
-                        .as_ref()
-                        .map(to_px_len)
-                        .unwrap_or(Pixels::ZERO);
-                    let margin_left = state
-                        .base_style
-                        .margin
-                        .left
-                        .as_ref()
-                        .map(to_px_len)
-                        .unwrap_or(Pixels::ZERO);
-
-                    let border_top = state
-                        .base_style
-                        .border_widths
-                        .top
-                        .as_ref()
-                        .map(to_px_abs)
-                        .unwrap_or(Pixels::ZERO);
-                    let border_right = state
-                        .base_style
-                        .border_widths
-                        .right
-                        .as_ref()
-                        .map(to_px_abs)
-                        .unwrap_or(Pixels::ZERO);
-                    let border_bottom = state
-                        .base_style
-                        .border_widths
-                        .bottom
-                        .as_ref()
-                        .map(to_px_abs)
-                        .unwrap_or(Pixels::ZERO);
-                    let border_left = state
-                        .base_style
-                        .border_widths
-                        .left
-                        .as_ref()
-                        .map(to_px_abs)
-                        .unwrap_or(Pixels::ZERO);
-
-                    let padding_top = state
-                        .base_style
-                        .padding
-                        .top
-                        .as_ref()
-                        .map(to_px_def)
-                        .unwrap_or(Pixels::ZERO);
-                    let padding_right = state
-                        .base_style
-                        .padding
-                        .right
-                        .as_ref()
-                        .map(to_px_def)
-                        .unwrap_or(Pixels::ZERO);
-                    let padding_bottom = state
-                        .base_style
-                        .padding
-                        .bottom
-                        .as_ref()
-                        .map(to_px_def)
-                        .unwrap_or(Pixels::ZERO);
-                    let padding_left = state
-                        .base_style
-                        .padding
-                        .left
-                        .as_ref()
-                        .map(to_px_def)
-                        .unwrap_or(Pixels::ZERO);
-
-                    let border_bounds = state.bounds;
-                    let margin_bounds = Bounds {
-                        origin: Point {
-                            x: border_bounds.origin.x - margin_left,
-                            y: border_bounds.origin.y - margin_top,
-                        },
-                        size: Size {
-                            width: border_bounds.size.width + margin_left + margin_right,
-                            height: border_bounds.size.height + margin_top + margin_bottom,
-                        },
-                    };
-                    let padding_bounds = Bounds {
-                        origin: Point {
-                            x: border_bounds.origin.x + border_left,
-                            y: border_bounds.origin.y + border_top,
-                        },
-                        size: Size {
-                            width: (border_bounds.size.width - border_left - border_right)
-                                .max(Pixels::ZERO),
-                            height: (border_bounds.size.height - border_top - border_bottom)
-                                .max(Pixels::ZERO),
-                        },
-                    };
-                    let content_bounds = Bounds {
-                        origin: Point {
-                            x: padding_bounds.origin.x + padding_left,
-                            y: padding_bounds.origin.y + padding_top,
-                        },
-                        size: Size {
-                            width: (padding_bounds.size.width - padding_left - padding_right)
-                                .max(Pixels::ZERO),
-                            height: (padding_bounds.size.height - padding_top - padding_bottom)
-                                .max(Pixels::ZERO),
-                        },
-                    };
-
-                    highlighted_box_model =
-                        Some((margin_bounds, border_bounds, padding_bounds, content_bounds));
-                }
-            }
-
-            if let Some((margin, border, padding, content)) = highlighted_box_model {
-                // Margin (Orange): #f6b26b
-                self.paint_quad(crate::fill(margin, crate::rgba(0xf6b26b59)));
-                // Border (Yellow): #ffe599
-                self.paint_quad(crate::fill(border, crate::rgba(0xffe59959)));
-                // Padding (Green): #93c47d
-                self.paint_quad(crate::fill(padding, crate::rgba(0x93c47d59)));
-                // Content (Blue): #6fa8dc
-                self.paint_quad(crate::fill(content, crate::rgba(0x6fa8dc80)));
-            } else {
-                let bounds = self
-                    .hovered_inspector_hitbox(inspector, &self.next_frame)
-                    .and_then(|(hitbox_id, _)| {
-                        self.next_frame
-                            .hitboxes
-                            .iter()
-                            .find(|hitbox| hitbox.id == hitbox_id)
-                            .map(|hitbox| hitbox.bounds)
-                    });
-                if let Some(bounds) = bounds {
-                    self.paint_quad(crate::fill(bounds, crate::rgba(0x61afef4d)));
-                }
+            if let Some((hitbox_id, _)) = self.hovered_inspector_hitbox(inspector, &self.next_frame)
+                && let Some(hitbox) = self
+                    .next_frame
+                    .hitboxes
+                    .iter()
+                    .find(|hitbox| hitbox.id == hitbox_id)
+            {
+                self.paint_quad(crate::fill(hitbox.bounds, crate::rgba(0x61afef4d)));
             }
         }
     }
@@ -4967,7 +4560,6 @@ impl Window {
                     inspector.hover(inspector_id, self);
                 }
             });
-            self.refresh_external_inspector(cx);
         } else if event.downcast_ref::<crate::MouseDownEvent>().is_some() {
             inspector.update(cx, |inspector, _cx| {
                 if let Some((_, inspector_id)) =
@@ -4976,7 +4568,6 @@ impl Window {
                     inspector.select(inspector_id, self);
                 }
             });
-            self.refresh_external_inspector(cx);
         } else if let Some(event) = event.downcast_ref::<crate::ScrollWheelEvent>() {
             // This should be kept in sync with SCROLL_LINES in x11 platform.
             const SCROLL_LINES: f32 = 3.0;
@@ -5002,7 +4593,6 @@ impl Window {
                         }
                     }
                 });
-                self.refresh_external_inspector(cx);
             }
         }
     }

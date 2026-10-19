@@ -21,8 +21,8 @@ pub use conditional::*;
 #[cfg(any(feature = "inspector", debug_assertions))]
 mod conditional {
     use super::*;
-    use crate::{AnyElement, App, Bounds, Context, Empty, IntoElement, Pixels, Render, Window};
-    use collections::{FxHashMap, FxHashSet};
+    use crate::{AnyElement, App, Context, Empty, IntoElement, Render, Window};
+    use collections::FxHashMap;
     use std::any::{Any, TypeId};
 
     /// `GlobalElementId` qualified by source location of element construction.
@@ -51,22 +51,6 @@ mod conditional {
         }
     }
 
-    /// A node in the most recently rendered inspectable element tree.
-    ///
-    /// Unlike a browser DOM node, this is a snapshot. GPUI rebuilds its element tree for every
-    /// frame, and the inspector replaces this list after the target window finishes rendering.
-    #[derive(Clone, Debug, PartialEq)]
-    pub struct InspectorElementNode {
-        /// ID used to select this element and associate its inspector state.
-        pub id: InspectorElementId,
-        /// Nearest inspectable parent in the rendered element tree.
-        pub parent: Option<InspectorElementId>,
-        /// Concrete Rust element type used for this frame.
-        pub element_type: &'static str,
-        /// Actual bounds computed during prepaint.
-        pub bounds: Bounds<Pixels>,
-    }
-
     /// Function set on `App` to render the inspector UI.
     pub type InspectorRenderer =
         Box<dyn Fn(&mut Inspector, &mut Window, &mut Context<Inspector>) -> AnyElement>;
@@ -75,12 +59,7 @@ mod conditional {
     /// in picking mode.
     pub struct Inspector {
         active_element: Option<InspectedElement>,
-        selected_element_visible: bool,
-        hovered_element: Option<InspectedElement>,
         pub(crate) pick_depth: Option<f32>,
-        element_tree: Vec<InspectorElementNode>,
-        tree_revision: u64,
-        collapsed_elements: FxHashSet<InspectorElementId>,
     }
 
     struct InspectedElement {
@@ -100,63 +79,16 @@ mod conditional {
     impl Inspector {
         pub(crate) fn new() -> Self {
             Self {
-                selected_element_visible: false,
                 active_element: None,
-                hovered_element: None,
                 pick_depth: Some(0.0),
-                element_tree: Vec::new(),
-                tree_revision: 0,
-                collapsed_elements: FxHashSet::default(),
             }
         }
 
         pub(crate) fn select(&mut self, id: InspectorElementId, window: &mut Window) {
-            self.set_active_element_id(id.clone(), window);
-            self.hovered_element = None;
-            self.selected_element_visible = false;
-            self.expand_ancestors(&id);
+            self.set_active_element_id(id, window);
             self.pick_depth = None;
         }
 
-        pub(crate) fn expand_ancestors(&mut self, id: &InspectorElementId) {
-            let mut current = id.clone();
-            while let Some(parent) = self
-                .element_tree
-                .iter()
-                .find(|node| node.id == current)
-                .and_then(|node| node.parent.clone())
-            {
-                self.collapsed_elements.remove(&parent);
-                current = parent;
-            }
-        }
-        pub(crate) fn set_hovered_element_id(
-            &mut self,
-            id: Option<InspectorElementId>,
-            window: &mut Window,
-        ) {
-            let changed = self.hovered_element.as_ref().map(|element| &element.id) != id.as_ref();
-            if changed {
-                self.hovered_element = id.map(InspectedElement::new);
-                window.refresh();
-            }
-        }
-
-        /// ID of the element currently hovered in the inspector tree.
-        pub fn hovered_element_id(&self) -> Option<&InspectorElementId> {
-            self.hovered_element.as_ref().map(|element| &element.id)
-        }
-        pub(crate) fn set_selected_element_visible(&mut self, visible: bool, window: &mut Window) {
-            if self.selected_element_visible != visible {
-                self.selected_element_visible = visible;
-                window.refresh();
-            }
-        }
-
-        /// Returns whether the selected element should remain highlighted.
-        pub fn selected_element_visible(&self) -> bool {
-            self.selected_element_visible
-        }
         pub(crate) fn hover(&mut self, id: InspectorElementId, window: &mut Window) {
             if self.is_picking() {
                 let changed = self.set_active_element_id(id, window);
@@ -182,92 +114,6 @@ mod conditional {
         /// ID of the currently hovered or selected element.
         pub fn active_element_id(&self) -> Option<&InspectorElementId> {
             self.active_element.as_ref().map(|e| &e.id)
-        }
-
-        /// Returns a reference to the active element state of type T if available.
-        pub fn active_element_state<T: 'static>(&self) -> Option<&T> {
-            self.active_element
-                .as_ref()
-                .and_then(|element| element.states.get(&TypeId::of::<T>()))
-                .and_then(|boxed| boxed.downcast_ref::<T>())
-        }
-
-        /// Returns a reference to the currently hovered element state of type T if available.
-        pub fn hovered_element_state<T: 'static>(&self) -> Option<&T> {
-            self.hovered_element
-                .as_ref()
-                .and_then(|element| element.states.get(&TypeId::of::<T>()))
-                .and_then(|boxed| boxed.downcast_ref::<T>())
-        }
-
-        /// The inspectable element tree from the target window's most recently rendered frame.
-        pub fn element_tree(&self) -> &[InspectorElementNode] {
-            &self.element_tree
-        }
-
-        /// Monotonically increasing revision of the element tree snapshot.
-        pub fn tree_revision(&self) -> u64 {
-            self.tree_revision
-        }
-
-        /// Returns whether a tree node is collapsed in the inspector UI.
-        pub fn is_tree_node_collapsed(&self, id: &InspectorElementId) -> bool {
-            self.collapsed_elements.contains(id)
-        }
-
-        /// Toggles whether a tree node is collapsed in the inspector UI.
-        pub fn toggle_tree_node(&mut self, id: InspectorElementId) {
-            if !self.collapsed_elements.remove(&id) {
-                self.collapsed_elements.insert(id);
-            }
-        }
-
-        pub(crate) fn replace_element_tree(&mut self, nodes: Vec<InspectorElementNode>) -> bool {
-            if self.element_tree == nodes {
-                return false;
-            }
-
-            self.element_tree = nodes;
-            self.tree_revision = self.tree_revision.wrapping_add(1);
-            self.collapsed_elements
-                .retain(|id| self.element_tree.iter().any(|node| &node.id == id));
-
-            if self
-                .active_element_id()
-                .is_some_and(|active| !self.element_tree.iter().any(|node| &node.id == active))
-            {
-                self.active_element = None;
-            }
-            if self
-                .hovered_element_id()
-                .is_some_and(|hovered| !self.element_tree.iter().any(|node| &node.id == hovered))
-            {
-                self.hovered_element = None;
-            }
-            true
-        }
-
-        pub(crate) fn with_hovered_element_state<T: 'static, R>(
-            &mut self,
-            window: &mut Window,
-            f: impl FnOnce(&mut Option<T>, &mut Window) -> R,
-        ) -> R {
-            let Some(hovered_element) = &mut self.hovered_element else {
-                return f(&mut None, window);
-            };
-
-            let type_id = TypeId::of::<T>();
-            let mut inspector_state = hovered_element
-                .states
-                .remove(&type_id)
-                .map(|state| *state.downcast().unwrap());
-            let result = f(&mut inspector_state, window);
-            if let Some(inspector_state) = inspector_state {
-                hovered_element
-                    .states
-                    .insert(type_id, Box::new(inspector_state));
-            }
-            result
         }
 
         pub(crate) fn with_active_element_state<T: 'static, R>(
@@ -299,11 +145,6 @@ mod conditional {
         /// Starts element picking mode, allowing the user to select elements by clicking.
         pub fn start_picking(&mut self) {
             self.pick_depth = Some(0.0);
-        }
-        /// Ends element picking mode without changing the selected element.
-        pub fn stop_picking(&mut self) {
-            self.pick_depth = None;
-            self.hovered_element = None;
         }
 
         /// Returns whether the inspector is currently in picking mode.
