@@ -10,3 +10,13 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 - Resourceの開始・終了・再接続・失敗からの回復は所有する側で一貫して扱います。
 
 全体に関わる意味は [Architecture](../docs/ARCHITECTURE.md)、Remote固有の検討事項は [Remote internal specifications](../docs/specs/remote.md) を参照してください。
+
+## 実装領域
+
+- `application/`：操作判断とユースケース。
+- `runtime/`：Workspace 等の正規状態と実行リソースの寿命。
+- `infrastructure/`：ファイルシステム、Git CLI、PTY、Agent、永続化の具体実装。
+- `transport/`：認証と通信経路。独立した正規状態を作らない。
+- `host/`：起動・終了・依存注入（必要になったときに実装）。
+
+依存方向は [責務と依存方向](../docs/specs/architecture.md) を参照してください。

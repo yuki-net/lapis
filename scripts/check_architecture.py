@@ -14,7 +14,8 @@ ALLOWED = {
     "transport": {"transport", "runtime", "protocol", "models"},
     "host": {"host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
     "ui": {"ui", "application", "models", "protocol"},
-    "client": {"client", "ui", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
+    "desktop_entry": {"desktop_entry", "ui", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
+    "client": {"client", "models", "protocol"},
 }
 
 
@@ -24,7 +25,8 @@ def layer(manifest, root):
         ("shared/models/", "models"), ("shared/protocol/", "protocol"),
         ("backend/application/", "application"), ("backend/runtime/", "runtime"),
         ("backend/infrastructure/", "infrastructure"), ("backend/transport/", "transport"),
-        ("backend/host/", "host"), ("apps/desktop/ui/", "ui"), ("apps/", "client"),
+        ("backend/host/", "host"), ("apps/desktop/ui/", "ui"),
+        ("apps/desktop/app/", "desktop_entry"), ("apps/", "client"),
     ]:
         if relative.startswith(prefix):
             return value

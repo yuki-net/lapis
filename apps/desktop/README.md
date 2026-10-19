@@ -13,3 +13,10 @@ Rust/GPUIによるDesktop Clientの実装領域です。現在のファイル配
 必要な境界は状態の所有者やライフサイクルで判断し、行数のためだけのEntity・ファイル分割をしません。
 
 UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [AGENTS.md](../../AGENTS.md) を参照してください。
+
+## ディレクトリの責務
+
+- `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
+- `ui/shell/` は Window・Panel・Tab・Layout、`ui/features/` は個別機能の表示・入力・描画を担当します。
+- UI に Backend の正規状態や実行ロジックを移さず、既存の機能横断的な `#[path]` 取り込みを増やさないでください。
+- 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。

@@ -47,6 +47,36 @@ class ArchitectureTests(unittest.TestCase):
         metadata["packages"][1]["dependencies"].append({"name": "gpui"})
         self.assertTrue(check(metadata, {}))
 
+    def test_regular_client_cannot_depend_on_backend_implementation(self):
+        self.metadata["workspace_members"].extend(["cli", "infra"])
+        self.metadata["packages"].extend([
+            package("cli", "apps/cli", ["infra"]),
+            package("infra", "backend/infrastructure/local"),
+        ])
+        self.assertIn("cli -> infra", "\n".join(check(self.metadata, {})))
+
+    def test_regular_client_can_depend_on_protocol(self):
+        self.metadata["workspace_members"].extend(["cli", "protocol"])
+        self.metadata["packages"].extend([
+            package("cli", "apps/cli", ["protocol"]),
+            package("protocol", "shared/protocol"),
+        ])
+        self.assertEqual(check(self.metadata, {}), [])
+
+    def test_desktop_entry_can_compose_backend(self):
+        self.metadata["workspace_members"].extend(["desktop", "infra"])
+        self.metadata["packages"].extend([
+            package("desktop", "apps/desktop/app", ["ui", "runtime", "infra"]),
+            package("infra", "backend/infrastructure/local"),
+        ])
+        self.assertEqual(check(self.metadata, {}), [])
+
+    def test_desktop_ui_cannot_depend_on_infrastructure(self):
+        self.metadata["workspace_members"].append("infra")
+        self.metadata["packages"].append(package("infra", "backend/infrastructure/local"))
+        self.metadata["packages"][2]["dependencies"].append({"name": "infra"})
+        self.assertIn("ui -> infra", "\n".join(check(self.metadata, {})))
+
 
 if __name__ == "__main__":
     unittest.main()

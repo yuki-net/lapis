@@ -36,5 +36,5 @@
 - レビューでは不具合、データ損失、セキュリティ、並行性、リーク、テスト不足を最優先とする。
 
 ## アーキテクチャ
-- 状態の所有・配置・依存方向は `docs/specs/architecture.md` を正本とする。
+- 状態の所有・配置・依存方向は `docs/specs/architecture.md` を正本とし、領域固有の判断はその `README.md` を参照する。
 - 変更時は `python scripts/check_architecture.py` を実行し、例外を増やして回避しない。
