@@ -13,6 +13,9 @@ lapis-client-api = { path = "../../../shared/protocol" }
 getrandom.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
+quinn.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -4,6 +4,31 @@ mod features;
 mod terminal;
 mod workspace;
 
+/// Hostが提供する操作だけをペアリングで許可する。
+pub fn supported_capabilities() -> lapis_client_api::CapabilitySet {
+    use lapis_client_api::{CapabilityId, CapabilitySet, capability::*};
+    CapabilitySet::try_new(
+        [
+            WORKSPACES,
+            WORKSPACES_CONNECT,
+            WORKSPACE_SYNC,
+            FILES_READ,
+            FILES_WRITE,
+            DOCUMENTS_READ,
+            DOCUMENTS_WRITE,
+            TERMINAL_START,
+            TERMINAL_CONTROL,
+            "workspace.git.read",
+            "workspace.git.write",
+            "workspace.tasks.read",
+            "workspace.tasks.start",
+            "workspace.tasks.control",
+        ]
+        .map(|name| CapabilityId::try_new(name).expect("built-in capability")),
+    )
+    .expect("bounded capabilities")
+}
+
 use lapis_backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };

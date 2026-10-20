@@ -8,11 +8,13 @@ mod credential;
 mod handler;
 mod limits;
 mod pairing;
+mod quic;
 mod random;
 mod rate_limit;
 mod secret;
 mod server;
 mod session;
+mod socket;
 mod tls;
 mod wire;
 
@@ -34,6 +36,7 @@ pub use limits::{
     MaxMessageSize, RemoteLimits, RequestTimeout,
 };
 pub use pairing::PairingToken;
+pub use quic::{QUIC_PROTOCOL, QuicClient, QuicServer};
 pub use random::{OsRandom, RandomError, RandomSource};
 pub use rate_limit::{AuthenticationRateLimit, AuthenticationRateLimitError};
 pub use server::{RemoteServer, RemoteServerConfig, RemoteServerError};

@@ -372,7 +372,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         self.clock.now_unix_seconds().saturating_add(lifetime)
     }
 
-    fn require_active_session(&self, grant: &SessionGrant) -> Result<(), AuthError> {
+    pub(crate) fn require_active_session(&self, grant: &SessionGrant) -> Result<(), AuthError> {
         self.require_enabled()?;
         let credential_id = self
             .sessions
