@@ -336,13 +336,14 @@ fn stale_discard_close_keeps_tab_and_refreshes_newer_canonical_edits() {
     let path = PathBuf::from("discard.md");
     insert_file(&repository, path.clone(), "saved");
     let documents = Arc::new(MemoryDocuments::new(repository.clone()));
+    let state = Arc::new(MemoryState::default());
     let mut editor = EditorSession::new_empty(
         repository,
         Arc::new(FixedDialog {
             workspace: None,
             save: None,
         }),
-        Arc::new(MemoryState::default()),
+        state.clone(),
         documents.clone(),
     );
     editor.open_path(path).unwrap();
@@ -364,6 +365,13 @@ fn stale_discard_close_keeps_tab_and_refreshes_newer_canonical_edits() {
     assert_eq!(editor.active_revision(), updated.document.revision());
     assert!(editor.is_dirty());
     assert_eq!(documents.attach(&id).unwrap().document, updated.document);
+    let persisted = state.load().unwrap().unwrap();
+    assert_eq!(persisted.open_documents.len(), 1);
+    assert_eq!(persisted.open_documents[0].document_id.as_ref(), Some(&id));
+    assert_eq!(
+        persisted.open_documents[0].draft_content.as_deref(),
+        Some("other clients draft")
+    );
 }
 
 #[test]

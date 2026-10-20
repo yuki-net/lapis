@@ -1512,6 +1512,7 @@ impl EditorSession {
                 Err(error) => {
                     if let Ok(cache) = self.document_connection.attach(id) {
                         self.documents[index].update(cache);
+                        self.persist_best_effort();
                     }
                     return Err(error);
                 }
