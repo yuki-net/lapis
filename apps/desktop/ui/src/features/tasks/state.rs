@@ -158,7 +158,7 @@ impl TasksFeature {
                     Err(error) => {
                         tasks.message = error;
                         tasks.message_from_refresh = is_refresh;
-                    },
+                    }
                 }
                 cx.notify();
             },

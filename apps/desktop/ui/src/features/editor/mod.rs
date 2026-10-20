@@ -275,12 +275,10 @@ impl Editor {
                 } else {
                     // Undo・Remote 短縮更新後に範囲外カーソルを残さない。
                     let len = editor.session.len_chars();
-                    editor.selected_range = editor.selected_range.start.min(len)
-                        ..editor.selected_range.end.min(len);
-                    editor.marked_range = editor
-                        .marked_range
-                        .take()
-                        .filter(|range| range.end <= len);
+                    editor.selected_range =
+                        editor.selected_range.start.min(len)..editor.selected_range.end.min(len);
+                    editor.marked_range =
+                        editor.marked_range.take().filter(|range| range.end <= len);
                     editor.last_line_layouts.clear();
                 }
                 cx.emit(EditorEvent::Snapshot(Box::new(snapshot)));

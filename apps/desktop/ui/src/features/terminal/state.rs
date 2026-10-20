@@ -161,7 +161,7 @@ impl TerminalFeature {
                     Err(error) => {
                         feature.message = error;
                         feature.message_from_poll = false;
-                    },
+                    }
                 }
                 cx.notify();
             },
@@ -231,7 +231,7 @@ impl TerminalFeature {
                     Err(error) => {
                         feature.message = error;
                         feature.message_from_poll = true;
-                    },
+                    }
                 }
                 cx.notify();
             },

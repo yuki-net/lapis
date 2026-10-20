@@ -112,7 +112,7 @@ impl GitFeature {
                     Err(error) => {
                         git.message = error;
                         git.message_from_refresh = is_refresh;
-                    },
+                    }
                 }
                 cx.notify();
             },

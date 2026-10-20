@@ -40,7 +40,10 @@ impl Render for SearchFeature {
             );
         }
         if self.hits.len() > 500 {
-            content = content.child(format!("最初の500件を表示しています（全{}件）", self.hits.len()));
+            content = content.child(format!(
+                "最初の500件を表示しています（全{}件）",
+                self.hits.len()
+            ));
         }
         content
     }
