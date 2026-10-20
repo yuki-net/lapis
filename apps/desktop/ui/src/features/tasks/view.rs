@@ -197,12 +197,7 @@ impl Render for TasksFeature {
             .flex_col()
             .child(
                 action_button("Start Codex", true).on_click(cx.listener(|this, _, _, cx| {
-                    let prompt = this
-                        .selected_text
-                        .clone()
-                        .or_else(|| cx.read_from_clipboard().and_then(|item| item.text()))
-                        .unwrap_or_else(|| "このWorkspaceを読み取り専用で調査してください".into());
-                    this.start(prompt, TaskMode::Default, false, cx);
+                    this.start_codex_task(TaskMode::Default, false, cx);
                 })),
             )
             .child(self.message.clone())

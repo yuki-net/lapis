@@ -40,6 +40,7 @@ pub(crate) struct DesktopRoot {
     search: Entity<SearchFeature>,
     conversation: Entity<ConversationFeature>,
     preview: Entity<PreviewFeature>,
+    preview_revision: Option<(lapis_editor_core::DocumentId, lapis_document::Revision)>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
     _subscriptions: Vec<Subscription>,
@@ -225,21 +226,20 @@ impl DesktopRoot {
                 let target = editor
                     .document_id()
                     .map(|id| (id, editor.document().revision()));
-                let text = editor.document().content_for_save();
                 let selected = editor.selected_text();
                 root.tasks
                     .update(cx, |tasks, _| tasks.set_selected_text(selected));
                 root.problems
                     .update(cx, |problems, cx| problems.set_target(target, cx));
-                root.preview
-                    .update(cx, |preview, cx| preview.update(text, cx));
                 root.shell.update(cx, |shell, cx| {
                     if shell.session.cursor != cursor {
                         shell.session.cursor = cursor;
                         cx.notify();
                     }
                 });
+                root.sync_preview(cx);
             }),
+            cx.observe(&shell, |root, _, cx| root.sync_preview(cx)),
         ];
 
         let weak = cx.entity().downgrade();
@@ -313,6 +313,7 @@ impl DesktopRoot {
             search,
             conversation,
             preview,
+            preview_revision: None,
             settings,
             quick_search,
             _subscriptions: subscriptions,
@@ -322,6 +323,27 @@ impl DesktopRoot {
             persisting: false,
             closing: false,
         }
+    }
+
+    fn sync_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.shell.read(cx).preview_visible() {
+            return;
+        }
+        let editor = self.editor.read(cx);
+        let Some(document_id) = editor.document_id() else {
+            if self.preview_revision.take().is_some() {
+                self.preview
+                    .update(cx, |preview, cx| preview.update(String::new(), cx));
+            }
+            return;
+        };
+        let version = (document_id, editor.document().revision());
+        if self.preview_revision.as_ref() == Some(&version) {
+            return;
+        }
+        let text = editor.document().content_for_save();
+        self.preview_revision = Some(version);
+        self.preview.update(cx, |preview, cx| preview.update(text, cx));
     }
 
     fn apply_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
@@ -373,7 +395,7 @@ impl DesktopRoot {
             root: snapshot.root.clone(),
             workspace_name: snapshot.workspace_name.clone(),
             cursor: editor.cursor_line_column(),
-            line_ending: if editor.document().content_for_save().contains("\r\n") {
+            line_ending: if editor.document().contains_crlf() {
                 "CRLF"
             } else {
                 "LF"
@@ -391,6 +413,7 @@ impl DesktopRoot {
                 shell.restore_view(snapshot.view.clone(), cx);
             }
         });
+        self.sync_preview(cx);
     }
 
     fn persisted_view(&self, cx: &Context<Self>) -> PersistedView {

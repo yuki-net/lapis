@@ -211,9 +211,8 @@ impl TerminalFeature {
         let admitted = self.worker.submit(
             cx,
             |sessions| {
-                let result = sessions.refresh();
-                result.map_err(|error| error.to_string())?;
-                Ok(sessions.session.terminals().to_vec())
+                let changed = sessions.refresh().map_err(|error| error.to_string())?;
+                Ok(changed.then(|| sessions.session.terminals().to_vec()))
             },
             move |feature, result, cx| {
                 feature.busy = false;
@@ -221,19 +220,27 @@ impl TerminalFeature {
                     return;
                 }
                 match result {
-                    Ok(terminals) => {
+                    Ok(Some(terminals)) => {
                         feature.terminals = terminals;
                         if feature.message_from_poll {
                             feature.message.clear();
                             feature.message_from_poll = false;
                         }
+                        cx.notify();
+                    }
+                    Ok(None) => {
+                        if feature.message_from_poll {
+                            feature.message.clear();
+                            feature.message_from_poll = false;
+                            cx.notify();
+                        }
                     }
                     Err(error) => {
                         feature.message = error;
                         feature.message_from_poll = true;
+                        cx.notify();
                     }
                 }
-                cx.notify();
             },
         );
         if let Err(error) = admitted {

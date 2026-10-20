@@ -196,6 +196,23 @@ impl Shell {
         self.shell
             .synchronize_activation(&mut self.feature_registry);
     }
+    pub(crate) fn preview_visible(&self) -> bool {
+        [
+            &self.shell.left_panel,
+            &self.shell.main_panel,
+            &self.shell.bottom_panel,
+            &self.shell.right_panel,
+        ]
+        .into_iter()
+        .any(|panel| {
+            panel.open
+                && matches!(
+                    panel.active.as_ref(),
+                    Some(PanelTab::Tool(view)) if view.as_str() == id::VIEW_PREVIEW
+                )
+        })
+    }
+
     pub(crate) fn view_state(&self) -> lapis_desktop_client::ConversationViewState {
         crate::features::conversation::capture_view_state(&self.shell)
     }
