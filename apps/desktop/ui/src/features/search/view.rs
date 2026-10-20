@@ -17,7 +17,7 @@ impl Render for SearchFeature {
                 "選択範囲またはクリップボードを Ctrl+Shift+F で検索",
             ));
         }
-        for (index, hit) in self.hits.iter().enumerate() {
+        for (index, hit) in self.hits.iter().take(500).enumerate() {
             let path = self.root.as_ref().map(|root| root.join(&hit.path));
             content = content.child(
                 div()
@@ -38,6 +38,9 @@ impl Render for SearchFeature {
                         hit.preview
                     )),
             );
+        }
+        if self.hits.len() > 500 {
+            content = content.child(format!("最初の500件を表示しています（全{}件）", self.hits.len()));
         }
         content
     }

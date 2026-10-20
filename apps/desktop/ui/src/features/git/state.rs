@@ -25,6 +25,7 @@ pub(crate) struct GitFeature {
     pending: usize,
     pub(super) snapshot: Snapshot,
     pub(super) message: String,
+    message_from_refresh: bool,
 }
 impl GitFeature {
     pub(crate) fn new(session: GitSession, cx: &mut Context<Self>) -> Self {
@@ -51,6 +52,7 @@ impl GitFeature {
             pending: 0,
             snapshot: Snapshot::default(),
             message: String::new(),
+            message_from_refresh: false,
         }
     }
     pub(crate) fn set_workspace(&mut self, workspace: Option<WorkspaceId>, cx: &mut Context<Self>) {
@@ -61,6 +63,7 @@ impl GitFeature {
         self.gate.invalidate();
         self.snapshot = Snapshot::default();
         self.message.clear();
+        self.message_from_refresh = false;
         self.submit(GitOperation::Refresh, cx);
         cx.notify();
     }
@@ -68,6 +71,7 @@ impl GitFeature {
         let Some(workspace) = self.workspace.clone() else {
             return;
         };
+        let is_refresh = matches!(&operation, GitOperation::Refresh);
         let token = self.gate.issue();
         self.pending += 1;
         let admitted = self.worker.submit(
@@ -100,9 +104,15 @@ impl GitFeature {
                 match result {
                     Ok(snapshot) => {
                         git.snapshot = snapshot;
-                        git.message.clear();
+                        if !is_refresh || git.message_from_refresh {
+                            git.message.clear();
+                            git.message_from_refresh = false;
+                        }
                     }
-                    Err(error) => git.message = error,
+                    Err(error) => {
+                        git.message = error;
+                        git.message_from_refresh = is_refresh;
+                    },
                 }
                 cx.notify();
             },
@@ -110,6 +120,7 @@ impl GitFeature {
         if let Err(error) = admitted {
             self.pending = self.pending.saturating_sub(1);
             self.message = error;
+            self.message_from_refresh = is_refresh;
             cx.notify();
         }
     }

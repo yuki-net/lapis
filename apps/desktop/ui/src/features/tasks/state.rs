@@ -18,6 +18,7 @@ pub(crate) struct TasksFeature {
     pending: usize,
     gate: ResponseGate,
     pub(super) message: String,
+    message_from_refresh: bool,
     pub(super) scroll_states: TaskScrollStates,
 }
 pub(super) struct TaskScrollStates {
@@ -52,6 +53,7 @@ impl TasksFeature {
             pending: 0,
             gate: ResponseGate::default(),
             message: String::new(),
+            message_from_refresh: false,
             scroll_states: TaskScrollStates {
                 task_list: ScrollState::new(),
                 task_events: ScrollState::new(),
@@ -76,6 +78,8 @@ impl TasksFeature {
         self.gate.invalidate();
         self.records.clear();
         self.selected_execution = None;
+        self.message.clear();
+        self.message_from_refresh = false;
         self.refresh(cx);
         cx.notify();
     }
@@ -93,10 +97,20 @@ impl TasksFeature {
         self.start(prompt, mode, isolated, cx);
     }
     fn refresh(&mut self, cx: &mut Context<Self>) {
-        self.operation(|_, _| Ok(None), cx);
+        self.operation_with(true, |_, _| Ok(None), cx);
     }
     fn operation(
         &mut self,
+        operation: impl FnOnce(&mut TaskSession, WorkspaceId) -> Result<Option<ExecutionId>, String>
+        + Send
+        + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        self.operation_with(false, operation, cx);
+    }
+    fn operation_with(
+        &mut self,
+        is_refresh: bool,
         operation: impl FnOnce(&mut TaskSession, WorkspaceId) -> Result<Option<ExecutionId>, String>
         + Send
         + 'static,
@@ -136,9 +150,15 @@ impl TasksFeature {
                                     .first()
                                     .map(|record| record.execution.id.clone())
                             });
-                        tasks.message.clear();
+                        if !is_refresh || tasks.message_from_refresh {
+                            tasks.message.clear();
+                            tasks.message_from_refresh = false;
+                        }
                     }
-                    Err(error) => tasks.message = error,
+                    Err(error) => {
+                        tasks.message = error;
+                        tasks.message_from_refresh = is_refresh;
+                    },
                 }
                 cx.notify();
             },
@@ -146,6 +166,7 @@ impl TasksFeature {
         if let Err(error) = admitted {
             self.pending = self.pending.saturating_sub(1);
             self.message = error;
+            self.message_from_refresh = is_refresh;
             cx.notify();
         }
     }

@@ -40,6 +40,7 @@ impl Shell {
             .items_center()
             .justify_between()
             .child(path)
+            .child(div().text_color(theme::colors().text_secondary).child(self.status.clone()))
             .child(right)
     }
 

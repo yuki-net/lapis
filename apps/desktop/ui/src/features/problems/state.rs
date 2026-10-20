@@ -151,9 +151,7 @@ impl ProblemsFeature {
             },
         );
         if let Err(error) = admitted {
-            self.busy = false;
-            self.message = error;
-            cx.notify();
+            cx.emit(ProblemsEvent::Status(error));
         }
     }
 }

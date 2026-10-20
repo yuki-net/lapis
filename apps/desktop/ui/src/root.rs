@@ -221,6 +221,7 @@ impl DesktopRoot {
             }),
             cx.observe(&editor, |root, editor, cx| {
                 let editor = editor.read(cx);
+                let cursor = editor.cursor_line_column();
                 let target = editor
                     .document_id()
                     .map(|id| (id, editor.document().revision()));
@@ -232,6 +233,12 @@ impl DesktopRoot {
                     .update(cx, |problems, cx| problems.set_target(target, cx));
                 root.preview
                     .update(cx, |preview, cx| preview.update(text, cx));
+                root.shell.update(cx, |shell, cx| {
+                    if shell.session.cursor != cursor {
+                        shell.session.cursor = cursor;
+                        cx.notify();
+                    }
+                });
             }),
         ];
 
