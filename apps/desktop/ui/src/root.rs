@@ -343,7 +343,8 @@ impl DesktopRoot {
         }
         let text = editor.document().content_for_save();
         self.preview_revision = Some(version);
-        self.preview.update(cx, |preview, cx| preview.update(text, cx));
+        self.preview
+            .update(cx, |preview, cx| preview.update(text, cx));
     }
 
     fn apply_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
