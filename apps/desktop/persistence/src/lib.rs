@@ -175,6 +175,7 @@ mod tests {
             workspace: WorkspaceSnapshot {
                 root: Some(PathBuf::from("C:/作業/lapis")),
                 active_path: Some(PathBuf::from("C:/作業/lapis/メモ.md")),
+                active_document_id: None,
                 open_documents: vec![DocumentViewState {
                     path: PathBuf::from("C:/作業/lapis/メモ.md"),
                     cursor_char: 7,

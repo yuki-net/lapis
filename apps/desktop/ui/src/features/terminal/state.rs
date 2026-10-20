@@ -56,6 +56,14 @@ impl TerminalSessions {
         first_error.map_or(Ok(changed), Err)
     }
 
+    fn action(
+        &mut self,
+        operation: impl FnOnce(&mut TerminalSession) -> Result<(), TerminalError>,
+    ) -> (Result<(), String>, Vec<lapis_terminal::TerminalSnapshot>) {
+        let result = operation(&mut self.session).map_err(|error| error.to_string());
+        (result, self.session.terminals().to_vec())
+    }
+
     #[cfg(test)]
     pub fn has_running_process(&self) -> bool {
         std::iter::once(&self.session)
@@ -65,13 +73,44 @@ impl TerminalSessions {
     }
 }
 
+#[derive(Default)]
+struct TerminalRequests {
+    gate: crate::client_adapter::ResponseGate,
+    poll_pending: bool,
+    pending_actions: usize,
+}
+
+impl TerminalRequests {
+    fn begin_action(&mut self) -> crate::client_worker::RequestToken {
+        self.pending_actions += 1;
+        self.gate.issue()
+    }
+
+    fn finish_action(&mut self, token: crate::client_worker::RequestToken) -> bool {
+        self.pending_actions = self.pending_actions.saturating_sub(1);
+        self.gate.accept(token)
+    }
+
+    fn begin_poll(&mut self) -> Option<crate::client_worker::RequestToken> {
+        if self.poll_pending || self.pending_actions > 0 {
+            return None;
+        }
+        self.poll_pending = true;
+        Some(self.gate.issue())
+    }
+
+    fn finish_poll(&mut self, token: crate::client_worker::RequestToken) -> bool {
+        self.poll_pending = false;
+        self.gate.accept(token)
+    }
+}
+
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
     pub(super) terminals: Vec<lapis_terminal::TerminalSnapshot>,
     pub(super) root: Option<std::path::PathBuf>,
     conversation: ConversationId,
-    gate: crate::client_adapter::ResponseGate,
-    busy: bool,
+    requests: TerminalRequests,
     pub(super) message: String,
     message_from_poll: bool,
     pub(super) scroll: crate::components::ScrollState,
@@ -91,8 +130,7 @@ impl TerminalFeature {
             terminals: Vec::new(),
             root: None,
             conversation,
-            gate: crate::client_adapter::ResponseGate::default(),
-            busy: false,
+            requests: TerminalRequests::default(),
             message: String::new(),
             message_from_poll: false,
             scroll: crate::components::ScrollState::new(),
@@ -132,7 +170,7 @@ impl TerminalFeature {
         }
         self.root = root;
         self.conversation = conversation;
-        self.gate.invalidate();
+        self.requests.gate.invalidate();
         self.terminals.clear();
         cx.notify();
     }
@@ -140,22 +178,18 @@ impl TerminalFeature {
         let Some(root) = self.root.clone() else {
             return;
         };
-        let token = self.gate.issue();
+        let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| {
-                let result = sessions.session.start(&root, 80, 24);
-                result.map_err(|error| error.to_string())?;
-                Ok(sessions.session.terminals().to_vec())
-            },
+            move |sessions| Ok(sessions.action(|session| session.start(&root, 80, 24).map(|_| ()))),
             move |feature, result, cx| {
-                if !feature.gate.accept(token) {
+                if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok(terminals) => {
+                    Ok((result, terminals)) => {
                         feature.terminals = terminals;
-                        feature.message.clear();
+                        feature.message = result.err().unwrap_or_default();
                         feature.message_from_poll = false;
                     }
                     Err(error) => {
@@ -167,6 +201,7 @@ impl TerminalFeature {
             },
         );
         if let Err(error) = admitted {
+            self.requests.finish_action(token);
             self.message = error;
             self.message_from_poll = false;
             cx.notify();
@@ -179,35 +214,35 @@ impl TerminalFeature {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let token = self.gate.issue();
+        let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| {
-                sessions
-                    .session
-                    .input(&id, &text)
-                    .map_err(|error| error.to_string())
-            },
+            move |sessions| Ok(sessions.action(|session| session.input(&id, &text))),
             move |feature, result, cx| {
-                if feature.gate.accept(token) {
-                    feature.message = result.err().unwrap_or_default();
+                if feature.requests.finish_action(token) {
+                    match result {
+                        Ok((outcome, terminals)) => {
+                            feature.terminals = terminals;
+                            feature.message = outcome.err().unwrap_or_default();
+                        }
+                        Err(error) => feature.message = error,
+                    }
                     feature.message_from_poll = false;
                     cx.notify();
                 }
             },
         );
         if let Err(error) = admitted {
+            self.requests.finish_action(token);
             self.message = error;
             self.message_from_poll = false;
             cx.notify();
         }
     }
     fn poll(&mut self, cx: &mut gpui::Context<Self>) {
-        if self.busy {
+        let Some(token) = self.requests.begin_poll() else {
             return;
-        }
-        self.busy = true;
-        let token = self.gate.issue();
+        };
         let admitted = self.worker.submit(
             cx,
             |sessions| {
@@ -215,8 +250,7 @@ impl TerminalFeature {
                 Ok(changed.then(|| sessions.session.terminals().to_vec()))
             },
             move |feature, result, cx| {
-                feature.busy = false;
-                if !feature.gate.accept(token) {
+                if !feature.requests.finish_poll(token) {
                     return;
                 }
                 match result {
@@ -244,7 +278,7 @@ impl TerminalFeature {
             },
         );
         if let Err(error) = admitted {
-            self.busy = false;
+            self.requests.finish_poll(token);
             self.message = error;
             self.message_from_poll = true;
             cx.notify();
@@ -264,6 +298,83 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
+
+    #[test]
+    fn pending_operation_errors_cannot_be_superseded_by_periodic_polling() {
+        for message in ["PTY start failed", "terminal input failed"] {
+            let worker = crate::client_adapter::ClientWorker::new(());
+            let mut requests = TerminalRequests::default();
+            let token = requests.begin_action();
+            let receive = worker
+                .try_request(move |_| Err::<(), _>(message.to_owned()))
+                .unwrap();
+            let result = receive
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            assert!(requests.begin_poll().is_none());
+            assert!(requests.finish_action(token));
+            assert_eq!(result.unwrap_err(), message);
+            let poll = requests.begin_poll().unwrap();
+            assert!(requests.finish_poll(poll));
+        }
+    }
+
+    #[test]
+    fn rejected_or_stale_actions_release_poll_suppression_only_after_all_callbacks_finish() {
+        let mut requests = TerminalRequests::default();
+        let first = requests.begin_action();
+        let second = requests.begin_action();
+        assert!(!requests.finish_action(first));
+        assert!(requests.begin_poll().is_none());
+        requests.gate.invalidate();
+        assert!(!requests.finish_action(second));
+        assert_eq!(requests.pending_actions, 0);
+        let poll = requests.begin_poll().unwrap();
+        assert!(requests.begin_poll().is_none());
+        assert!(requests.finish_poll(poll));
+        let rejected = requests.begin_action();
+        assert!(requests.finish_action(rejected));
+        assert_eq!(requests.pending_actions, 0);
+        assert!(requests.begin_poll().is_some());
+    }
+
+    #[test]
+    fn action_snapshots_retain_output_consumed_by_a_superseded_poll_even_on_failure() {
+        let (mut sessions, backend) = feature();
+        let id = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        backend.events.lock().unwrap().insert(
+            id.as_str().to_owned(),
+            vec![TerminalEvent::Output(TerminalOutput {
+                sequence: 1,
+                data: b"background output".to_vec(),
+            })],
+        );
+        let mut requests = TerminalRequests::default();
+        let poll = requests.begin_poll().unwrap();
+        assert!(sessions.refresh().unwrap());
+        let action = requests.begin_action();
+        let (outcome, terminals) = sessions.action(|_| Err(TerminalError::new("input failed")));
+        assert!(!requests.finish_poll(poll));
+        assert!(requests.finish_action(action));
+        assert_eq!(outcome.unwrap_err(), "input failed");
+        assert_eq!(terminals[0].output, b"background output");
+        assert!(!sessions.refresh().unwrap());
+    }
+
+    #[test]
+    fn a_pending_poll_cannot_overwrite_a_later_user_action() {
+        let mut requests = TerminalRequests::default();
+        let poll = requests.begin_poll().unwrap();
+        let action = requests.begin_action();
+        assert!(!requests.finish_poll(poll));
+        assert!(requests.begin_poll().is_none());
+        assert!(requests.finish_action(action));
+        let next_poll = requests.begin_poll().unwrap();
+        assert!(requests.finish_poll(next_poll));
+    }
 
     #[derive(Default)]
     struct Backend {

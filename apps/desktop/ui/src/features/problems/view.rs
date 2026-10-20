@@ -8,7 +8,7 @@ impl Render for ProblemsFeature {
             .gap_1()
             .p_2()
             .child(self.message.clone())
-            .children(self.diagnostics.iter().take(100).map(|diagnostic| {
+            .children(self.state.diagnostics.iter().take(100).map(|diagnostic| {
                 div().child(format!(
                     "{}:{}:{} {}",
                     diagnostic.path.display(),

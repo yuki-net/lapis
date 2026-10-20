@@ -13,6 +13,7 @@ fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
         }],
         ..Default::default()
     };
+    let retained_root = root.path().to_owned();
     root.close().unwrap();
     let host = BackendHost::start().unwrap();
     let store = std::sync::Arc::new(ViewStore::default());
@@ -32,7 +33,7 @@ fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     let saved = lapis_desktop_client::WorkspaceStateRepository::load(&*store)
         .unwrap()
         .unwrap();
-    assert!(saved.root.is_none());
+    assert_eq!(saved.root, Some(retained_root));
     assert_eq!(
         saved.open_documents[0].draft_content.as_deref(),
         Some("unsaved workspace draft 😀")
@@ -118,4 +119,45 @@ fn desktop_sessions_share_runtime_resources_across_close_restore_and_workspace_s
     assert_eq!(reopened.id, id);
     assert!(reopened.can_undo);
     assert!(!reopened.document.is_dirty());
+}
+
+#[test]
+fn recovered_selection_survives_persistence_and_runtime_id_reallocation() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("original.txt");
+    std::fs::write(&path, "saved").unwrap();
+    let store: std::sync::Arc<dyn lapis_desktop_client::WorkspaceStateRepository> =
+        std::sync::Arc::new(lapis_persistence::LocalWorkspaceStateRepository::new(
+            root.path().join("session.txt"),
+        ));
+    let previous_id = {
+        let host = BackendHost::start().unwrap();
+        let mut editor = lapis_desktop_client::EditorSession::new_empty(
+            host.workspaces(),
+            std::sync::Arc::new(NoDialog),
+            store.clone(),
+            host.documents(),
+        );
+        editor.open_path(path).unwrap();
+        editor.recover_draft("selected recovery 😀").unwrap();
+        editor.active_document_id().unwrap().clone()
+    };
+    let host = BackendHost::start().unwrap();
+    let mut editor = lapis_desktop_client::EditorSession::new_empty(
+        host.workspaces(),
+        std::sync::Arc::new(NoDialog),
+        store.clone(),
+        host.documents(),
+    );
+    editor
+        .restore_snapshot(store.load().unwrap().unwrap())
+        .unwrap();
+    assert_ne!(editor.active_document_id(), Some(&previous_id));
+    assert_eq!(editor.tabs().len(), 2);
+    assert!(editor.active_path().is_none());
+    assert_eq!(editor.active_text().unwrap(), "selected recovery 😀");
+    assert_eq!(
+        editor.snapshot().active_document_id.as_ref(),
+        editor.active_document_id()
+    );
 }

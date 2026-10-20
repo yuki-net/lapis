@@ -22,6 +22,8 @@ pub struct WorkspaceSnapshot {
     pub root: Option<PathBuf>,
     pub open_documents: Vec<DocumentViewState>,
     pub active_path: Option<PathBuf>,
+    #[serde(default)]
+    pub active_document_id: Option<DocumentId>,
 }
 
 pub trait WorkspaceStateRepository: Send + Sync {

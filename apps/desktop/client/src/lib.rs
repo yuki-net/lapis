@@ -1025,6 +1025,7 @@ pub struct EditorSession {
     documents: Vec<OpenDocument>,
     active: Option<usize>,
     workspace_root: Option<PathBuf>,
+    workspace_restore_root: Option<PathBuf>,
     workspace_id: Option<WorkspaceId>,
     workspace_name: String,
     file_tree: Vec<FileEntry>,
@@ -1068,6 +1069,7 @@ impl EditorSession {
             documents: Vec::new(),
             active: None,
             workspace_root: None,
+            workspace_restore_root: None,
             workspace_id: None,
             workspace_name: "No Workspace".to_owned(),
             file_tree: Vec::new(),
@@ -1097,7 +1099,10 @@ impl EditorSession {
 
     pub fn snapshot(&self) -> WorkspaceSnapshot {
         WorkspaceSnapshot {
-            root: self.workspace_root.clone(),
+            root: self
+                .workspace_root
+                .clone()
+                .or_else(|| self.workspace_restore_root.clone()),
             open_documents: self
                 .documents
                 .iter()
@@ -1118,6 +1123,7 @@ impl EditorSession {
             active_path: self
                 .active_document()
                 .and_then(|open| open.document.path().map(Path::to_owned)),
+            active_document_id: self.active_document_id().cloned(),
         }
     }
 
@@ -1386,6 +1392,7 @@ impl EditorSession {
             .unwrap_or("Workspace")
             .to_owned();
         self.workspace_root = Some(root);
+        self.workspace_restore_root = None;
         self.workspace_id = Some(workspace_id);
         self.file_tree = tree;
         self.documents.clear();
@@ -1397,6 +1404,7 @@ impl EditorSession {
     pub fn close_workspace(&mut self) -> Result<(), WorkspaceError> {
         self.detach_documents();
         self.workspace_root = None;
+        self.workspace_restore_root = None;
         self.workspace_id = None;
         self.workspace_name = "No Workspace".to_owned();
         self.file_tree.clear();
@@ -1683,6 +1691,7 @@ impl EditorSession {
     }
 
     pub fn restore_snapshot(&mut self, snapshot: WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+        self.workspace_restore_root = snapshot.root.clone();
         self.detach_documents();
         self.documents.clear();
         self.active = None;
@@ -1713,7 +1722,10 @@ impl EditorSession {
                 }
             }
         }
+        let mut restored_active = None;
         for view in snapshot.open_documents {
+            let was_active = snapshot.active_document_id.is_some()
+                && view.document_id == snapshot.active_document_id;
             let attached = view
                 .document_id
                 .as_ref()
@@ -1775,6 +1787,9 @@ impl EditorSession {
                 }
             }
             let id = cache.id.clone();
+            if was_active {
+                restored_active = Some(self.documents.len());
+            }
             self.documents.push(OpenDocument::from_cache(
                 cache,
                 DocumentViewState {
@@ -1783,10 +1798,12 @@ impl EditorSession {
                 },
             ));
         }
-        self.active = snapshot.active_path.and_then(|path| {
-            self.documents
-                .iter()
-                .position(|open| open.document.path() == Some(path.as_path()))
+        self.active = restored_active.or_else(|| {
+            snapshot.active_path.and_then(|path| {
+                self.documents
+                    .iter()
+                    .position(|open| open.document.path() == Some(path.as_path()))
+            })
         });
         if self.active.is_none() && !self.documents.is_empty() {
             self.active = Some(0);

@@ -5,6 +5,7 @@ use std::{
 };
 
 use lapis_desktop_client::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
+use lapis_editor_core::DocumentId;
 use lapis_workspace::WorkspaceError;
 
 pub struct LocalWorkspaceStateRepository {
@@ -68,8 +69,14 @@ fn format_snapshot(snapshot: &WorkspaceSnapshot) -> String {
             encode_bytes(active.to_string_lossy().as_bytes())
         ));
     }
-    for view in &snapshot.open_documents {
+    if let Some(id) = &snapshot.active_document_id {
         lines.push(format!(
+            "active_id\t{}",
+            encode_bytes(id.as_str().as_bytes())
+        ));
+    }
+    for view in &snapshot.open_documents {
+        let mut line = format!(
             "doc\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             encode_bytes(view.path.to_string_lossy().as_bytes()),
             view.cursor_char,
@@ -81,7 +88,12 @@ fn format_snapshot(snapshot: &WorkspaceSnapshot) -> String {
                 .as_deref()
                 .map(|draft| encode_bytes(draft.as_bytes()))
                 .unwrap_or_else(|| "-".to_owned())
-        ));
+        );
+        if let Some(id) = &view.document_id {
+            line.push('\t');
+            line.push_str(&encode_bytes(id.as_str().as_bytes()));
+        }
+        lines.push(line);
     }
     lines.push(String::new());
     lines.join("\n")
@@ -98,9 +110,23 @@ fn parse_snapshot(text: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
         match fields.as_slice() {
             ["root", value] => snapshot.root = Some(decode_path(value)?),
             ["active", value] => snapshot.active_path = Some(decode_path(value)?),
-            ["doc", path, cursor, start, end, scroll_x, scroll_y, draft] => {
+            ["active_id", value] => snapshot.active_document_id = Some(decode_document_id(value)?),
+            [
+                "doc",
+                path,
+                cursor,
+                start,
+                end,
+                scroll_x,
+                scroll_y,
+                draft,
+                identity @ ..,
+            ] if identity.len() <= 1 => {
                 snapshot.open_documents.push(DocumentViewState {
-                    document_id: None,
+                    document_id: identity
+                        .first()
+                        .map(|value| decode_document_id(value))
+                        .transpose()?,
                     path: decode_path(path)?,
                     cursor_char: parse_number(cursor, "cursor")?,
                     selection_start: parse_number(start, "selection start")?,
@@ -128,6 +154,12 @@ fn parse_number<T: std::str::FromStr>(value: &str, label: &str) -> Result<T, Wor
     value
         .parse()
         .map_err(|_| WorkspaceError::new(format!("{label}を復元できません")))
+}
+
+fn decode_document_id(value: &str) -> Result<DocumentId, WorkspaceError> {
+    String::from_utf8(decode_bytes(value)?)
+        .map(DocumentId::new)
+        .map_err(|error| WorkspaceError::new(error.to_string()))
 }
 
 fn decode_path(value: &str) -> Result<PathBuf, WorkspaceError> {
@@ -182,6 +214,7 @@ mod tests {
         let snapshot = WorkspaceSnapshot {
             root: Some(PathBuf::from("C:/作業/lapis")),
             active_path: Some(PathBuf::from("C:/作業/lapis/メモ.md")),
+            active_document_id: None,
             open_documents: vec![DocumentViewState {
                 path: PathBuf::from("C:/作業/lapis/メモ.md"),
                 cursor_char: 4,
@@ -202,6 +235,7 @@ mod tests {
         let snapshot = WorkspaceSnapshot {
             root: Some(PathBuf::from("repo")),
             active_path: Some(PathBuf::from("a.txt")),
+            active_document_id: None,
             open_documents: vec![DocumentViewState {
                 path: PathBuf::from("a.txt"),
                 cursor_char: 4,
@@ -241,6 +275,27 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_preserves_active_untitled_identity_with_legacy_session_support() {
+        let id = DocumentId::new("recovered-😀");
+        let snapshot = WorkspaceSnapshot {
+            active_document_id: Some(id.clone()),
+            open_documents: vec![DocumentViewState {
+                document_id: Some(id),
+                draft_content: Some("recovered input".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            parse_snapshot(&format_snapshot(&snapshot)).unwrap(),
+            snapshot
+        );
+        let legacy = r#"{"root":null,"open_documents":[],"active_path":null}"#;
+        let restored: WorkspaceSnapshot = serde_json::from_str(legacy).unwrap();
+        assert_eq!(restored, WorkspaceSnapshot::default());
+    }
+
+    #[test]
     fn missing_session_is_not_an_error_and_malformed_sessions_are_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("state/session.txt");
@@ -254,6 +309,8 @@ mod tests {
             "LAPIS_SESSION_V1\nroot\t0\n",
             "LAPIS_SESSION_V1\nroot\tzz\n",
             "LAPIS_SESSION_V1\nroot\tff\n",
+            "LAPIS_SESSION_V1\nactive_id\tzz\n",
+            "LAPIS_SESSION_V1\ndoc\t\t0\t0\t0\t0\t0\t-\tff\n",
             "LAPIS_SESSION_V1\ndoc\t61\tbad\t0\t0\t0\t0\t-\n",
         ] {
             std::fs::write(&path, invalid).unwrap();
