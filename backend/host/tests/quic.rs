@@ -545,7 +545,8 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
             .await,
             ResponseBody::TerminalInput(_)
         ));
-        tokio::time::timeout(Duration::from_secs(15), async {
+        let mut last_output = Vec::new();
+        let completed = tokio::time::timeout(Duration::from_secs(15), async {
             let mut number = 3;
             loop {
                 let ResponseBody::SnapshotResync(response) = request(
@@ -567,6 +568,7 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                     .find(|value| value.terminal_id == terminal)
                     .unwrap();
                 assert_eq!(value.status, TerminalStatus::Running);
+                last_output = value.buffered_output.clone();
                 if String::from_utf8_lossy(&value.buffered_output).contains("LAPIS_QUIC_SHARED_PTY")
                 {
                     break;
@@ -575,8 +577,12 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         })
-        .await
-        .unwrap();
+        .await;
+        assert!(
+            completed.is_ok(),
+            "shell output missing: {:?}",
+            String::from_utf8_lossy(&last_output[last_output.len().saturating_sub(4096)..])
+        );
         // Local埋め込み接続も同じHostのPTYを再起動せず発見する。
         let embedded = fixture.host.connect(fixture._root.path()).unwrap();
         let ResponseBody::SnapshotResync(response) = embedded
