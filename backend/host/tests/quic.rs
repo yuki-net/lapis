@@ -534,7 +534,12 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                 2,
                 RequestBody::TerminalInput(TerminalInputRequest {
                     terminal_id: terminal.clone(),
-                    data: "echo LAPIS_QUIC_SHARED_PTY\r\n".to_owned(),
+                    data: if cfg!(windows) {
+                        "Write-Output ('LAPIS_QUIC_' + 'SHARED_PTY')\r\n"
+                    } else {
+                        "printf 'LAPIS_QUIC_%s\\n' SHARED_PTY\n"
+                    }
+                    .to_owned(),
                 })
             )
             .await,

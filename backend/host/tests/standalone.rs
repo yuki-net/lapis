@@ -14,6 +14,41 @@ impl Drop for HostProcess {
     }
 }
 
+fn hello() -> ClientHello {
+    ClientHello {
+        protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
+        client_id: ClientId::try_new("standalone-test").unwrap(),
+        client_name: "Test".to_owned(),
+        client_kind: ClientKind::Desktop,
+        requested_capabilities: lapis_host::supported_capabilities(),
+    }
+}
+
+async fn request(client: &mut QuicClient, id: &str, body: RequestBody) -> ResponseBody {
+    let request_id = RequestId::try_new(id).unwrap();
+    client
+        .send(&ClientMessage::Request(RequestEnvelope {
+            request_id: request_id.clone(),
+            body,
+        }))
+        .await
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match client.recv().await.unwrap() {
+                ServerMessage::Event(_) => {}
+                ServerMessage::Response(response) => {
+                    assert_eq!(response.request_id, request_id);
+                    return response.body;
+                }
+                _ => panic!("unexpected response"),
+            }
+        }
+    })
+    .await
+    .unwrap()
+}
+
 #[test]
 fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificate_overwrite() {
     let directory = tempfile::tempdir().unwrap();
@@ -77,45 +112,116 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
         .await
         .unwrap();
         client
-            .send(&ClientMessage::Pair(PairRequest::new(
-                ClientHello {
-                    protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
-                    client_id: ClientId::try_new("standalone-test").unwrap(),
-                    client_name: "Test".to_owned(),
-                    client_kind: ClientKind::Desktop,
-                    requested_capabilities: lapis_host::supported_capabilities(),
+            .send(&ClientMessage::Pair(PairRequest::new(hello(), &token)))
+            .await
+            .unwrap();
+        let ServerMessage::Paired(mut paired) =
+            tokio::time::timeout(Duration::from_secs(5), client.recv())
+                .await
+                .unwrap()
+                .unwrap()
+        else {
+            panic!("pairing failed")
+        };
+        assert!(matches!(
+            request(
+                &mut client,
+                "connect",
+                RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                    workspace_id: workspace.clone(),
+                })
+            )
+            .await,
+            ResponseBody::WorkspaceConnect(_)
+        ));
+        let ResponseBody::TerminalStart(started) = request(
+            &mut client,
+            "start",
+            RequestBody::TerminalStart(TerminalStartRequest {
+                workspace_id: workspace.clone(),
+                cwd: None,
+                command: None,
+                size: TerminalSize {
+                    columns: 80,
+                    rows: 24,
                 },
-                &token,
+            }),
+        )
+        .await
+        else {
+            panic!("PTY start failed")
+        };
+        drop(client);
+        let mut reconnected = QuicClient::connect(
+            address,
+            "lapis-host",
+            std::fs::read(&certificate).unwrap().into(),
+            RemoteLimits::default(),
+        )
+        .await
+        .unwrap();
+        let credential = paired.credential_id().unwrap();
+        let secret = zeroize::Zeroizing::new(paired.take_secret().unwrap());
+        reconnected
+            .send(&ClientMessage::Authenticate(AuthenticateRequest::new(
+                hello(),
+                workspace.clone(),
+                &credential,
+                &secret,
             )))
             .await
             .unwrap();
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(5), client.recv())
+            tokio::time::timeout(Duration::from_secs(5), reconnected.recv())
                 .await
                 .unwrap()
                 .unwrap(),
-            ServerMessage::Paired(_)
+            ServerMessage::Authenticated(_)
         ));
-        client
-            .send(&ClientMessage::Request(RequestEnvelope {
-                request_id: RequestId::try_new("connect").unwrap(),
-                body: RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
-                    workspace_id: workspace,
-                }),
-            }))
-            .await
-            .unwrap();
         assert!(matches!(
-            tokio::time::timeout(Duration::from_secs(5), client.recv())
-                .await
-                .unwrap()
-                .unwrap(),
-            ServerMessage::Response(ResponseEnvelope {
-                body: ResponseBody::WorkspaceConnect(_),
-                ..
-            })
+            request(
+                &mut reconnected,
+                "connect",
+                RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                    workspace_id: workspace.clone()
+                })
+            )
+            .await,
+            ResponseBody::WorkspaceConnect(_)
         ));
-        drop(client);
+        let ResponseBody::SnapshotResync(response) = request(
+            &mut reconnected,
+            "snapshot",
+            RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: workspace,
+                reason: SnapshotReason::Reconnect,
+            }),
+        )
+        .await
+        else {
+            panic!("snapshot failed")
+        };
+        assert!(
+            response
+                .snapshot
+                .terminals
+                .iter()
+                .any(
+                    |terminal| terminal.terminal_id == started.terminal.terminal_id
+                        && terminal.status == TerminalStatus::Running
+                )
+        );
+        assert!(matches!(
+            request(
+                &mut reconnected,
+                "terminate",
+                RequestBody::TerminalTerminate(TerminalTerminateRequest {
+                    terminal_id: started.terminal.terminal_id
+                })
+            )
+            .await,
+            ResponseBody::TerminalTerminate(_)
+        ));
     });
     assert!(process.0.try_wait().unwrap().is_none());
     writeln!(input, "quit").unwrap();
