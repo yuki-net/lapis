@@ -6,6 +6,13 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        if self.detached {
+            return div()
+                .flex_1()
+                .min_h(px(0.0))
+                .p(tokens::spacing::GAP)
+                .child(self.render_panel_window(&self.shell.main_panel, cx));
+        }
         let now = std::time::Instant::now();
         if self
             .shell

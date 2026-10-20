@@ -49,6 +49,9 @@ const fn panel_key(position: PanelPosition) -> u32 {
 
 pub(crate) struct Shell {
     pub(crate) shell: ShellState,
+    pub(crate) host: super::window_group::HostId,
+    pub(crate) group: Option<gpui::EntityId>,
+    pub(crate) detached: bool,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
     views: HashMap<ViewId, AnyView>,
@@ -156,6 +159,9 @@ impl Shell {
     ) -> Self {
         Self {
             shell: ShellState::default(),
+            host: 0,
+            group: None,
+            detached: false,
             session: ShellPresentation::default(),
             document_view,
             views,

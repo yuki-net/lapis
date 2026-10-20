@@ -15,6 +15,12 @@ pub(crate) enum UiCommand {
     CloneRepository,
     NewWindow,
     CloseWindow,
+    DetachTab(crate::shell::PanelTab),
+    DockTab(crate::shell::PanelTab),
+    MoveTab(
+        crate::shell::DraggedPanelTab,
+        crate::extension_ui::PanelPosition,
+    ),
     Undo,
     Redo,
     Cut,

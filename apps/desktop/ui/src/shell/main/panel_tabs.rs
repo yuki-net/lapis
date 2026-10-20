@@ -104,7 +104,11 @@ impl Shell {
                 };
                 let tab = tab.clone();
                 let close_tab = tab.clone();
+                let detach_tab = tab.clone();
+                let movable = matches!(tab, PanelTab::Document(_));
                 let drag = DraggedPanelTab {
+                    group: self.group,
+                    source_host: self.host,
                     source_panel: position,
                     tab: tab.clone(),
                 };
@@ -176,6 +180,26 @@ impl Shell {
                         tab_el.child(crate::components::FileIcon::new(icon).size(px(12.0)))
                     })
                     .child(label)
+                    .when(movable, |element| {
+                        element.child(
+                            div()
+                                .id(("detach-tab", panel_key(position) * 100 + index as u32))
+                                .px(px(3.0))
+                                .child(if self.detached { "↩" } else { "↗" })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(if this.detached {
+                                        UiCommand::DockTab(detach_tab.clone())
+                                    } else {
+                                        UiCommand::DetachTab(detach_tab.clone())
+                                    });
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
@@ -202,7 +226,7 @@ impl Shell {
             })
             .collect();
 
-        if has_tabs && !has_overflow {
+        if has_tabs && !has_overflow && !self.detached {
             tab_items.push(add_button("inline").into_any_element());
         }
 
@@ -264,7 +288,7 @@ impl Shell {
             .items_center()
             .gap(tokens::spacing::XS)
             .child(tab_container)
-            .when(has_tabs && has_overflow, |bar| {
+            .when(has_tabs && has_overflow && !self.detached, |bar| {
                 bar.child(add_button("fixed"))
             })
     }

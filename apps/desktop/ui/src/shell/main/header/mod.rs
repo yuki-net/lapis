@@ -48,8 +48,14 @@ impl Shell {
             .items_center()
             .justify_between()
             .p(tokens::spacing::GAP)
-            .child(self.render_header_left(cx))
-            .child(self.render_header_center(cx))
-            .child(self.render_header_right(cx))
+            .when(self.detached, |header| {
+                header.child(format!("Lapis — {}", self.session.display_name()))
+            })
+            .when(!self.detached, |header| {
+                header
+                    .child(self.render_header_left(cx))
+                    .child(self.render_header_center(cx))
+                    .child(self.render_header_right(cx))
+            })
     }
 }

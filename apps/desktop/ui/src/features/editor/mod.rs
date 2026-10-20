@@ -86,6 +86,10 @@ pub(crate) struct Editor {
     document_id: Option<DocumentId>,
     worker: ClientWorker<DocumentClient>,
     generation: u64,
+    snapshot_sequence: u64,
+    pub(crate) host: u64,
+    pub(crate) excluded_documents: Vec<DocumentId>,
+    pub(crate) only_documents: Option<Vec<DocumentId>>,
     recovery: bool,
     recovering: bool,
     enabled: bool,
@@ -109,11 +113,23 @@ impl gpui::EventEmitter<EditorEvent> for Editor {}
 
 impl Editor {
     pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
+        Self::new_with_polling(worker, true, cx)
+    }
+
+    pub(crate) fn new_with_polling(
+        worker: ClientWorker<DocumentClient>,
+        poll: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut editor = Self {
             session: Document::new(),
             document_id: None,
             worker,
             generation: 0,
+            snapshot_sequence: 0,
+            host: 0,
+            excluded_documents: Vec::new(),
+            only_documents: None,
             recovery: false,
             recovering: false,
             enabled: true,
@@ -132,23 +148,27 @@ impl Editor {
             views: HashMap::new(),
             scroll_positions: HashMap::new(),
         };
-        editor.submit(false, |_| Ok(()), cx);
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_secs(2)).await;
-                if this
-                    .update(cx, |editor, cx| {
-                        if editor.in_flight == 0 && !editor.recovery {
-                            editor.submit_with_recovery(true, false, |_| Ok(()), cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
+        if poll {
+            editor.submit(false, |_| Ok(()), cx);
+        }
+        if poll {
+            cx.spawn(async move |this, cx| {
+                loop {
+                    Timer::after(Duration::from_secs(2)).await;
+                    if this
+                        .update(cx, |editor, cx| {
+                            if editor.in_flight == 0 && !editor.recovery {
+                                editor.submit_with_recovery(true, false, |_| Ok(()), cx);
+                            }
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
         editor
     }
 
@@ -183,16 +203,32 @@ impl Editor {
         self.in_flight += 1;
         let recovering = self.recovering;
         let epoch = self.edit_epoch;
+        let target = self.document_id.clone();
+        let host = self.host;
         let admitted = self.worker.submit(
             cx,
             move |client| {
+                if let Some(target) = target {
+                    client.editor.activate_document(&target);
+                }
                 let epoch = epoch.unwrap_or_else(|| client.edit_chain.epoch());
                 let permitted = if recovering {
                     Ok(())
                 } else {
                     client.edit_chain.apply(epoch, || Ok(()))
                 };
+                let before = client
+                    .editor
+                    .tabs()
+                    .into_iter()
+                    .map(|tab| tab.id)
+                    .collect::<Vec<_>>();
                 let result = permitted.and_then(|_| operation(client));
+                for tab in client.editor.tabs() {
+                    if !before.contains(&tab.id) {
+                        client.document_owners.insert(tab.id, host);
+                    }
+                }
                 let current_epoch = client.edit_chain.epoch();
                 let broken = client.edit_chain.apply(current_epoch, || Ok(())).is_err();
                 Ok((result, broken, client.snapshot()))
@@ -222,65 +258,15 @@ impl Editor {
                 };
                 editor.recovery = false;
                 editor.edit_epoch = Some(snapshot.edit_epoch);
-                for view in &snapshot.workspace_view.open_documents {
-                    if let Some(id) = &view.document_id {
-                        editor
-                            .scroll_positions
-                            .entry(id.clone())
-                            .or_insert_with(|| gpui::point(px(view.scroll_x), px(view.scroll_y)));
-                        editor.views.entry(id.clone()).or_insert((
-                            view.selection_start..view.selection_end,
-                            view.cursor_char == view.selection_start,
-                        ));
-                    }
+                if recovering
+                    && let Some(allowed) = &mut editor.only_documents
+                    && let Some(id) = &snapshot.active
+                    && !allowed.contains(id)
+                {
+                    allowed.push(id.clone());
                 }
-                if let Some(id) = &editor.document_id {
-                    editor
-                        .scroll_positions
-                        .insert(id.clone(), editor.editor_scroll.handle().offset());
-                    editor.views.insert(
-                        id.clone(),
-                        (editor.selected_range.clone(), editor.selection_reversed),
-                    );
-                }
-                let changed_document = editor.document_id != snapshot.active;
-                editor.document_id = snapshot.active.clone();
-                if changed_document {
-                    let offset = editor
-                        .document_id
-                        .as_ref()
-                        .and_then(|id| editor.scroll_positions.get(id))
-                        .copied()
-                        .unwrap_or_else(|| gpui::point(px(0.0), px(0.0)));
-                    editor.editor_scroll.handle().set_offset(offset);
-                }
-                editor.session = snapshot
-                    .documents
-                    .iter()
-                    .find(|cache| Some(&cache.id) == snapshot.active.as_ref())
-                    .map(|cache| cache.document.clone())
-                    .unwrap_or_default();
-                if changed_document || !preserve_input {
-                    let (range, reversed) = editor
-                        .document_id
-                        .as_ref()
-                        .and_then(|id| editor.views.get(id))
-                        .cloned()
-                        .unwrap_or((0..0, false));
-                    editor.selected_range = range.start.min(editor.session.len_chars())
-                        ..range.end.min(editor.session.len_chars());
-                    editor.selection_reversed = reversed;
-                    editor.marked_range = None;
-                    editor.last_line_layouts.clear();
-                } else {
-                    // Undo・Remote 短縮更新後に範囲外カーソルを残さない。
-                    let len = editor.session.len_chars();
-                    editor.selected_range =
-                        editor.selected_range.start.min(len)..editor.selected_range.end.min(len);
-                    editor.marked_range =
-                        editor.marked_range.take().filter(|range| range.end <= len);
-                    editor.last_line_layouts.clear();
-                }
+                let local = editor.local_snapshot(&snapshot);
+                editor.accept_snapshot(&local, preserve_input, cx);
                 cx.emit(EditorEvent::Snapshot(Box::new(snapshot)));
                 cx.notify();
             },
@@ -297,12 +283,123 @@ impl Editor {
         }
     }
 
+    pub(crate) fn local_snapshot(&self, snapshot: &ClientSnapshot) -> ClientSnapshot {
+        let mut snapshot = snapshot.clone();
+        snapshot.tabs.retain(|tab| {
+            !self.excluded_documents.contains(&tab.id)
+                && self
+                    .only_documents
+                    .as_ref()
+                    .is_none_or(|ids| ids.contains(&tab.id))
+        });
+        snapshot.active = snapshot
+            .active
+            .clone()
+            .filter(|id| snapshot.tabs.iter().any(|tab| &tab.id == id))
+            .or_else(|| {
+                self.document_id
+                    .clone()
+                    .filter(|id| snapshot.tabs.iter().any(|tab| &tab.id == id))
+            })
+            .or_else(|| snapshot.tabs.first().map(|tab| tab.id.clone()));
+        for tab in &mut snapshot.tabs {
+            tab.active = Some(&tab.id) == snapshot.active.as_ref();
+        }
+        snapshot
+    }
+
+    pub(crate) fn receive_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
+        if !self.has_pending() {
+            self.edit_epoch = Some(snapshot.edit_epoch);
+            let mut snapshot = snapshot.clone();
+            snapshot.active = self.document_id.clone();
+            let local = self.local_snapshot(&snapshot);
+            self.accept_snapshot(&local, true, cx);
+            cx.notify();
+        }
+    }
+
+    fn accept_snapshot(
+        &mut self,
+        snapshot: &ClientSnapshot,
+        preserve_input: bool,
+        _cx: &mut Context<Self>,
+    ) {
+        if snapshot.sequence < self.snapshot_sequence {
+            return;
+        }
+        self.snapshot_sequence = snapshot.sequence;
+        for view in &snapshot.workspace_view.open_documents {
+            if let Some(id) = &view.document_id {
+                self.scroll_positions
+                    .entry(id.clone())
+                    .or_insert_with(|| gpui::point(px(view.scroll_x), px(view.scroll_y)));
+                self.views.entry(id.clone()).or_insert((
+                    view.selection_start..view.selection_end,
+                    view.cursor_char == view.selection_start,
+                ));
+            }
+        }
+        if let Some(id) = &self.document_id {
+            self.scroll_positions
+                .insert(id.clone(), self.editor_scroll.handle().offset());
+            self.views.insert(
+                id.clone(),
+                (self.selected_range.clone(), self.selection_reversed),
+            );
+        }
+        let changed_document = self.document_id != snapshot.active;
+        self.document_id = snapshot.active.clone();
+        if changed_document {
+            let offset = self
+                .document_id
+                .as_ref()
+                .and_then(|id| self.scroll_positions.get(id))
+                .copied()
+                .unwrap_or_else(|| gpui::point(px(0.0), px(0.0)));
+            self.editor_scroll.handle().set_offset(offset);
+        }
+        self.session = snapshot
+            .documents
+            .iter()
+            .find(|cache| Some(&cache.id) == snapshot.active.as_ref())
+            .map(|cache| cache.document.clone())
+            .unwrap_or_default();
+        if changed_document || !preserve_input {
+            let (range, reversed) = self
+                .document_id
+                .as_ref()
+                .and_then(|id| self.views.get(id))
+                .cloned()
+                .unwrap_or((0..0, false));
+            self.selected_range =
+                range.start.min(self.session.len_chars())..range.end.min(self.session.len_chars());
+            self.selection_reversed = reversed;
+            self.marked_range = None;
+            self.last_line_layouts.clear();
+        } else {
+            // Undo・Remote 短縮更新後に範囲外カーソルを残さない。
+            let len = self.session.len_chars();
+            self.selected_range =
+                self.selected_range.start.min(len)..self.selected_range.end.min(len);
+            self.marked_range = self.marked_range.take().filter(|range| range.end <= len);
+            self.last_line_layouts.clear();
+        }
+        self.views
+            .retain(|id, _| snapshot.documents.iter().any(|cache| &cache.id == id));
+        self.scroll_positions
+            .retain(|id, _| snapshot.documents.iter().any(|cache| &cache.id == id));
+    }
+
     fn edit(
         &mut self,
         range: Range<usize>,
         text: &str,
         cx: &mut Context<Self>,
     ) -> Result<bool, DocumentError> {
+        if !self.enabled {
+            return Ok(false);
+        }
         let Some(id) = self.document_id.clone() else {
             return Ok(false);
         };
@@ -405,8 +502,36 @@ impl Editor {
     pub(crate) fn document(&self) -> &Document {
         &self.session
     }
+
+    pub(crate) fn tab_view(
+        &self,
+        id: &DocumentId,
+    ) -> Option<(DocumentId, Range<usize>, usize, f32, f32)> {
+        if self.document_id.as_ref() == Some(id) {
+            return self.view_state();
+        }
+        let (range, reversed) = self.views.get(id)?;
+        let offset = self.scroll_positions.get(id).copied().unwrap_or_default();
+        Some((
+            id.clone(),
+            range.clone(),
+            if *reversed { range.start } else { range.end },
+            offset.x.into(),
+            offset.y.into(),
+        ))
+    }
+
+    pub(crate) fn seed_view(&mut self, view: (DocumentId, Range<usize>, usize, f32, f32)) {
+        let (id, selection, cursor, x, y) = view;
+        self.views
+            .insert(id.clone(), (selection.clone(), cursor == selection.start));
+        self.scroll_positions.insert(id, gpui::point(px(x), px(y)));
+    }
     pub(crate) fn has_pending(&self) -> bool {
         self.in_flight > 0 || self.recovery
+    }
+    pub(crate) fn has_in_flight(&self) -> bool {
+        self.in_flight > 0
     }
     pub(crate) fn needs_recovery(&self) -> bool {
         self.recovery

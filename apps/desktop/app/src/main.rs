@@ -160,6 +160,7 @@ fn main() {
     }
     let initial_view = lapis_desktop_ui::InitialView {
         empty_window: false,
+        native_window_smoke: arguments.iter().any(|value| value == "--window-host-smoke"),
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),

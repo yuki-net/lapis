@@ -1541,6 +1541,44 @@ impl EditorSession {
         Ok(true)
     }
 
+    /// 全対象を検証してから閉じる。承認待ち・保存失敗時は呼び出さない。
+    pub fn close_documents(
+        &mut self,
+        documents: &[(
+            DocumentId,
+            DocumentCloseDisposition,
+            lapis_document::Revision,
+        )],
+    ) -> Result<(), DocumentError> {
+        self.validate_document_closes(documents)?;
+        for (id, disposition, _) in documents {
+            self.close_document(id, *disposition)?;
+        }
+        Ok(())
+    }
+
+    pub fn validate_document_closes(
+        &self,
+        documents: &[(
+            DocumentId,
+            DocumentCloseDisposition,
+            lapis_document::Revision,
+        )],
+    ) -> Result<(), DocumentError> {
+        for (id, disposition, revision) in documents {
+            let current = self.document_connection.attach(id)?;
+            if current.document.revision() != *revision {
+                return Err(DocumentError::conflict("確認後に文書が変更されました"));
+            }
+            if current.document.is_dirty()
+                && *disposition == DocumentCloseDisposition::PreserveChanges
+            {
+                return Err(DocumentError::conflict("未保存の文書を保持します"));
+            }
+        }
+        Ok(())
+    }
+
     pub fn save_document(&mut self) -> Result<DocumentAction, DocumentError> {
         let path = if let Some(path) = self.required_document()?.document.path() {
             path.to_owned()
@@ -2338,6 +2376,109 @@ mod tests {
                 .unwrap()
         );
         assert!(editor.tabs().iter().all(|tab| tab.id != id));
+    }
+
+    #[test]
+    fn cancelled_save_path_keeps_all_tabs_and_the_unsaved_input() {
+        let mut editor = session(
+            Arc::new(MemoryRepository::default()),
+            Arc::new(MemoryState::default()),
+        );
+        let first = editor.active_document_id().unwrap().clone();
+        editor.new_document();
+        editor.replace_range(0..0, "keep draft").unwrap();
+        let dirty = editor.active_document_id().unwrap().clone();
+        assert_eq!(editor.save_document().unwrap(), DocumentAction::Cancelled);
+        assert_eq!(editor.tabs().len(), 2);
+        assert!(editor.tabs().iter().any(|tab| tab.id == first));
+        assert!(editor.tabs().iter().any(|tab| tab.id == dirty && tab.dirty));
+        assert_eq!(
+            editor
+                .document_connection()
+                .attach(&dirty)
+                .unwrap()
+                .document
+                .content_for_save(),
+            "keep draft"
+        );
+    }
+
+    #[test]
+    fn group_close_preflight_keeps_clean_tabs_when_another_tab_is_unapproved() {
+        let repository = Arc::new(MemoryRepository::default());
+        let mut editor = session(repository, Arc::new(MemoryState::default()));
+        let clean = editor.active_document_id().unwrap().clone();
+        let clean_revision = editor.active_revision();
+        editor.new_document();
+        editor.replace_range(0..0, "draft").unwrap();
+        let dirty = editor.active_document_id().unwrap().clone();
+        let dirty_revision = editor.active_revision();
+        let plan = vec![
+            (
+                clean.clone(),
+                DocumentCloseDisposition::PreserveChanges,
+                clean_revision,
+            ),
+            (
+                dirty.clone(),
+                DocumentCloseDisposition::PreserveChanges,
+                dirty_revision,
+            ),
+        ];
+        assert!(editor.close_documents(&plan).is_err());
+        assert!(editor.tabs().iter().any(|tab| tab.id == clean));
+        assert!(editor.tabs().iter().any(|tab| tab.id == dirty && tab.dirty));
+        editor
+            .close_documents(&[
+                (
+                    clean,
+                    DocumentCloseDisposition::PreserveChanges,
+                    clean_revision,
+                ),
+                (
+                    dirty,
+                    DocumentCloseDisposition::DiscardChanges,
+                    dirty_revision,
+                ),
+            ])
+            .unwrap();
+        assert!(editor.tabs().is_empty());
+    }
+
+    #[test]
+    fn group_close_rejects_changes_after_confirmation_without_closing_any_tab() {
+        let repository = Arc::new(MemoryRepository::default());
+        let mut editor = session(repository, Arc::new(MemoryState::default()));
+        let first = editor.active_document_id().unwrap().clone();
+        let first_revision = editor.active_revision();
+        editor.new_document();
+        let second = editor.active_document_id().unwrap().clone();
+        let confirmed_revision = editor.active_revision();
+        editor.replace_range(0..0, "new input").unwrap();
+        assert!(
+            editor
+                .close_documents(&[
+                    (
+                        first.clone(),
+                        DocumentCloseDisposition::PreserveChanges,
+                        first_revision
+                    ),
+                    (
+                        second.clone(),
+                        DocumentCloseDisposition::DiscardChanges,
+                        confirmed_revision
+                    ),
+                ])
+                .is_err()
+        );
+        assert_eq!(editor.tabs().len(), 2);
+        assert!(editor.tabs().iter().any(|tab| tab.id == first));
+        assert!(
+            editor
+                .tabs()
+                .iter()
+                .any(|tab| tab.id == second && tab.dirty)
+        );
     }
 
     #[test]

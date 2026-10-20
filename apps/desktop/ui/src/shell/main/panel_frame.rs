@@ -113,7 +113,14 @@ impl Shell {
                 .flex()
                 .flex_col()
                 .on_drop(cx.listener(move |this, drag: &DraggedPanelTab, _, cx| {
-                    this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
+                    if !drag.belongs_to(this.group) {
+                        return;
+                    }
+                    if drag.source_host == this.host {
+                        this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
+                    } else {
+                        cx.emit(UiCommand::MoveTab(drag.clone(), position));
+                    }
                 }))
                 .child(self.render_tool_panel_header(panel, cx))
                 .child(body),

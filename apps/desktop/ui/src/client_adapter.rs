@@ -15,10 +15,14 @@ pub(crate) struct DocumentClient {
     pub conversation: ConversationSession,
     pub lsp: LspSession,
     pub edit_chain: EditChain,
+    pub snapshot_sequence: u64,
+    pub document_owners: std::collections::HashMap<DocumentId, u64>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ClientSnapshot {
+    pub sequence: u64,
+    pub document_owners: std::collections::HashMap<DocumentId, u64>,
     pub tabs: Vec<DocumentTab>,
     pub documents: Vec<DocumentCache>,
     pub active: Option<DocumentId>,
@@ -43,7 +47,12 @@ impl DocumentClient {
             .map(|tab| connection.attach(&tab.id))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
+        self.document_owners
+            .retain(|id, _| tabs.iter().any(|tab| &tab.id == id));
+        self.snapshot_sequence += 1;
         Ok(ClientSnapshot {
+            sequence: self.snapshot_sequence,
+            document_owners: self.document_owners.clone(),
             tabs,
             documents,
             active: self.editor.active_document_id().cloned(),
