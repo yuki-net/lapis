@@ -77,6 +77,19 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["packages"][2]["dependencies"].append({"name": "infra"})
         self.assertIn("ui -> infra", "\n".join(check(self.metadata, {})))
 
+    def test_backend_host_cannot_depend_on_gpui_or_rfd(self):
+        for dependency in ("gpui", "rfd"):
+            with self.subTest(dependency=dependency):
+                metadata = copy.deepcopy(self.metadata)
+                metadata["workspace_members"].append("host")
+                metadata["packages"].append(
+                    package("host", "backend/host", [dependency])
+                )
+                self.assertIn(
+                    f"host -> {dependency}: Client 固有依存",
+                    check(metadata, {}),
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
