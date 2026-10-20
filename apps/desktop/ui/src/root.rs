@@ -41,6 +41,7 @@ pub(crate) struct DesktopRoot {
     conversation: Entity<ConversationFeature>,
     preview: Entity<PreviewFeature>,
     preview_revision: Option<(lapis_editor_core::DocumentId, lapis_document::Revision)>,
+    line_ending_cache: Option<((lapis_editor_core::DocumentId, lapis_document::Revision), &'static str)>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
     _subscriptions: Vec<Subscription>,
@@ -314,6 +315,7 @@ impl DesktopRoot {
             conversation,
             preview,
             preview_revision: None,
+            line_ending_cache: None,
             settings,
             quick_search,
             _subscriptions: subscriptions,
@@ -390,17 +392,28 @@ impl DesktopRoot {
             )
         });
         let editor = self.editor.read(cx);
+        let line_ending_version = editor
+            .document_id()
+            .map(|id| (id, editor.document().revision()));
+        let line_ending = match self.line_ending_cache.as_ref() {
+            Some((cached, ending)) if line_ending_version.as_ref() == Some(cached) => *ending,
+            _ => {
+                let ending = if editor.document().contains_crlf() {
+                    "CRLF"
+                } else {
+                    "LF"
+                };
+                self.line_ending_cache = line_ending_version.map(|version| (version, ending));
+                ending
+            }
+        };
         let presentation = ShellPresentation {
             documents: snapshot.tabs.clone(),
             active: snapshot.active.clone(),
             root: snapshot.root.clone(),
             workspace_name: snapshot.workspace_name.clone(),
             cursor: editor.cursor_line_column(),
-            line_ending: if editor.document().contains_crlf() {
-                "CRLF"
-            } else {
-                "LF"
-            },
+            line_ending,
             encoding: editor.document().encoding(),
             recent_workspaces: snapshot
                 .conversations
