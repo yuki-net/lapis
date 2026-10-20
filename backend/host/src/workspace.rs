@@ -1,5 +1,5 @@
-use crate::BackendHost;
-use lapis_backend_state::EmbeddedClient;
+use crate::BackendClient;
+use crate::client::Client;
 use lapis_client_api::{
     FileTreeKind, FileTreeRequest, RequestBody, ResponseBody, WorkspaceRelativePath,
 };
@@ -7,15 +7,15 @@ use lapis_workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceReposit
 use std::path::Path;
 
 pub(super) struct HostWorkspaces {
-    host: BackendHost,
+    host: BackendClient,
 }
 impl HostWorkspaces {
-    pub fn new(host: BackendHost) -> Self {
+    pub fn new(host: BackendClient) -> Self {
         Self { host }
     }
 
     fn collect(
-        client: &EmbeddedClient,
+        client: &Client,
         root: &Path,
         directory: Option<WorkspaceRelativePath>,
         depth: usize,
@@ -78,7 +78,7 @@ impl WorkspaceRepository for HostWorkspaces {
     }
 
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
-        let root = root.canonicalize().map_err(problem)?;
+        let root = self.host.normalize_path(root).map_err(problem)?;
         let client = self.host.connect(&root).map_err(problem)?;
         let mut entries = Vec::new();
         Self::collect(&client, &root, None, 0, &mut entries)?;

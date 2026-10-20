@@ -15,6 +15,7 @@ mod secret;
 mod server;
 mod session;
 mod socket;
+mod sync_client;
 mod tls;
 mod wire;
 
@@ -41,6 +42,7 @@ pub use random::{OsRandom, RandomError, RandomSource};
 pub use rate_limit::{AuthenticationRateLimit, AuthenticationRateLimitError};
 pub use server::{RemoteServer, RemoteServerConfig, RemoteServerError};
 pub use session::SharedRemoteAuth;
+pub use sync_client::{QuicConnection, QuicConnectionConfig};
 pub use tls::{Tls13ServerConfig, tls13_server_config};
 pub use wire::{
     AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,

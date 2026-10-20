@@ -1,5 +1,5 @@
-use crate::BackendHost;
-use lapis_backend_state::EmbeddedClient;
+use crate::BackendClient;
+use crate::client::Client;
 use lapis_client_api::{
     RequestBody, ResponseBody, WorkspaceOperation as Operation, WorkspaceOperationRequest,
     WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
@@ -10,20 +10,14 @@ use lapis_git::{
 };
 use lapis_task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 
-fn client(host: &BackendHost, workspace: &WorkspaceId) -> Result<EmbeddedClient, String> {
-    let root = host
-        .inner
-        .workspaces
-        .lock()
-        .map_err(|error| error.to_string())?
-        .iter()
-        .find(|(_, id)| id.as_str() == workspace.as_str())
-        .map(|(path, _)| path.clone())
-        .ok_or_else(|| "Workspace is not registered".to_owned())?;
-    host.connect(&root).map_err(|error| error.to_string())
+fn client(host: &BackendClient, workspace: &WorkspaceId) -> Result<Client, String> {
+    let workspace = lapis_client_api::WorkspaceId::try_new(workspace.as_str())
+        .map_err(|error| error.to_string())?;
+    host.connect_workspace(workspace)
+        .map_err(|error| error.to_string())
 }
 fn execute(
-    host: &BackendHost,
+    host: &BackendClient,
     workspace: &WorkspaceId,
     operation: Operation,
 ) -> Result<Outcome, String> {
@@ -50,10 +44,10 @@ fn relative(path: &str) -> Result<WorkspaceRelativePath, GitError> {
 }
 
 pub(super) struct HostGit {
-    host: BackendHost,
+    host: BackendClient,
 }
 impl HostGit {
-    pub fn new(host: BackendHost) -> Self {
+    pub fn new(host: BackendClient) -> Self {
         Self { host }
     }
 }
@@ -149,10 +143,10 @@ impl GitConnection for HostGit {
 }
 
 pub(super) struct HostTasks {
-    host: BackendHost,
+    host: BackendClient,
 }
 impl HostTasks {
-    pub fn new(host: BackendHost) -> Self {
+    pub fn new(host: BackendClient) -> Self {
         Self { host }
     }
 }

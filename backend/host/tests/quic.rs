@@ -18,6 +18,21 @@ struct Fixture {
 }
 
 impl Fixture {
+    async fn config(&self, id: &str) -> QuicConnectionConfig {
+        let (client, mut paired) = self.pair(id).await;
+        drop(client);
+        QuicConnectionConfig {
+            address: self.address(),
+            server_name: "localhost".to_owned(),
+            certificate: self.cert.clone(),
+            hello: hello(id),
+            workspace_id: self.workspace.clone(),
+            credential: Arc::new(CredentialHandle::from_parts(
+                paired.credential_id().unwrap(),
+                &mut paired.take_secret().unwrap(),
+            )),
+        }
+    }
     async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
         let host = BackendHost::start().unwrap();
@@ -162,6 +177,223 @@ fn run(test: impl std::future::Future<Output = ()>) {
         .build()
         .unwrap()
         .block_on(test);
+}
+
+#[test]
+fn quic_connection_recovers_attachments_without_replaying_successful_edits() {
+    run(async {
+        let fixture = Fixture::new().await;
+        let connection = QuicConnection::connect(fixture.config("sync-client").await).unwrap();
+        let receiver = connection.subscribe().unwrap();
+        let ResponseBody::DocumentCreate(created) = connection
+            .request(RequestBody::DocumentCreate(DocumentCreateRequest {
+                workspace_id: fixture.workspace.clone(),
+                path: WorkspaceRelativePath::parse("reconnect.ts").unwrap(),
+                encoding: DocumentEncoding::Utf8,
+                content: "let value = 1;".to_owned(),
+            }))
+            .unwrap()
+        else {
+            panic!("create failed")
+        };
+        let ResponseBody::DocumentEdit(edited) = connection
+            .request(RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id: created.document.document_id.clone(),
+                base_revision: created.document.revision,
+                transaction: DocumentTransaction::try_new(vec![
+                    DocumentTextEdit::try_new(12, 13, "42").unwrap(),
+                ])
+                .unwrap(),
+            }))
+            .unwrap()
+        else {
+            panic!("edit failed")
+        };
+        connection.disconnect().unwrap();
+        loop {
+            if receiver.recv_timeout(Duration::from_secs(2)).is_err() {
+                break;
+            }
+        }
+        let ResponseBody::SnapshotResync(response) = connection
+            .request(RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: fixture.workspace.clone(),
+                reason: SnapshotReason::Reconnect,
+            }))
+            .unwrap()
+        else {
+            panic!("resync failed")
+        };
+        let document = response
+            .snapshot
+            .documents
+            .iter()
+            .find(|document| document.document_id == created.document.document_id)
+            .unwrap();
+        assert_eq!(document.content, "let value = 42;");
+        assert_eq!(document.revision, edited.revision);
+        assert!(document.dirty);
+    });
+}
+
+#[test]
+fn remote_desktop_ports_edit_and_save_without_accessing_client_filesystem() {
+    run(async {
+        let fixture = Fixture::new().await;
+        std::fs::write(fixture._root.path().join("remote.ts"), "let value = 1;").unwrap();
+        let namespace = fixture._root.path().join("nonexistent-client-namespace");
+        let backend = lapis_host::BackendClient::remote(
+            namespace.clone(),
+            fixture.config("desktop-port").await,
+        )
+        .unwrap();
+        assert!(!namespace.exists());
+        assert!(
+            backend
+                .workspaces()
+                .list_tree(&namespace)
+                .unwrap()
+                .iter()
+                .any(|file| file.path == namespace.join("remote.ts"))
+        );
+        let documents = backend.documents();
+        let opened = documents.open(&namespace.join("remote.ts")).unwrap();
+        let edited = documents
+            .edit(&opened.id, opened.document.revision(), 12..13, "42")
+            .unwrap();
+        assert!(
+            documents
+                .edit(&opened.id, opened.document.revision(), 0..0, "stale")
+                .is_err()
+        );
+        let saved = documents
+            .save(&opened.id, edited.document.revision(), None)
+            .unwrap();
+        assert!(!saved.document.is_dirty());
+        assert_eq!(
+            std::fs::read_to_string(fixture._root.path().join("remote.ts")).unwrap(),
+            "let value = 42;"
+        );
+        assert!(!namespace.exists());
+        assert!(
+            documents
+                .open(&fixture._root.path().join("remote.ts"))
+                .is_err(),
+            "Client paths outside the Remote namespace must not be sent to Host"
+        );
+    });
+}
+
+#[test]
+fn normal_pairing_cannot_register_folders_or_transfer_documents() {
+    run(async {
+        let fixture = Fixture::new().await;
+        let (mut client, _) = fixture.pair("guest").await;
+        connect_workspace(&mut client, &fixture.workspace).await;
+        let ResponseBody::Error(denied) = request(
+            &mut client,
+            2,
+            RequestBody::HostRegister(HostRegisterRequest {
+                root: fixture._root.path().to_string_lossy().into_owned(),
+            }),
+        )
+        .await
+        else {
+            panic!("guest must not manage Host")
+        };
+        assert_eq!(denied.code.as_str(), FORBIDDEN);
+        let ResponseBody::Error(denied) = request(
+            &mut client,
+            3,
+            RequestBody::DocumentRelocate(DocumentRelocateRequest {
+                document_id: DocumentId::try_new("unknown").unwrap(),
+                destination_workspace: fixture.workspace.clone(),
+                base_revision: Revision::new(1),
+                path: WorkspaceRelativePath::parse("new.ts").unwrap(),
+            }),
+        )
+        .await
+        else {
+            panic!("guest must not transfer documents")
+        };
+        assert_eq!(denied.code.as_str(), FORBIDDEN);
+    });
+}
+
+#[test]
+fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_documents() {
+    run(async {
+        let fixture = Fixture::new().await;
+        let state = tempfile::tempdir().unwrap();
+        std::fs::write(fixture._root.path().join("profile.ts"), "let value = 1;").unwrap();
+        let token = fixture
+            .auth
+            .lock()
+            .unwrap()
+            .begin_pairing(fixture.workspace.clone())
+            .unwrap();
+        let path = state.path().join("invite.json");
+        let invitation = lapis_host::HostInvitation {
+            version: 1,
+            address: fixture.address(),
+            server_name: "localhost".to_owned(),
+            certificate: fixture.cert.to_vec(),
+            workspace_id: fixture.workspace.as_str().to_owned(),
+            name: "RemoteProject".to_owned(),
+            token: token.secret_bytes().to_vec(),
+        };
+        lapis_host::write_invitation(&path, &invitation).unwrap();
+        assert!(lapis_host::write_invitation(&path, &invitation).is_err());
+        let profiles = state.path().join("profiles");
+        let (backend, namespace, profile) = {
+            let path = path.clone();
+            let profiles = profiles.clone();
+            tokio::task::spawn_blocking(move || lapis_host::open_host_file(&path, &profiles))
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        let documents = backend.documents();
+        let original = documents.open(&namespace.join("profile.ts")).unwrap();
+        let edited = documents
+            .edit(&original.id, original.document.revision(), 12..13, "42")
+            .unwrap();
+        assert!(edited.document.is_dirty());
+        drop(documents);
+        drop(backend);
+        let (restored, restored_namespace, _) = {
+            let profile = profile.clone();
+            let profiles = profiles.clone();
+            tokio::task::spawn_blocking(move || lapis_host::open_host_file(&profile, &profiles))
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(namespace, restored_namespace);
+        let document = restored
+            .documents()
+            .open(&namespace.join("profile.ts"))
+            .unwrap();
+        assert_eq!(document.id, original.id);
+        assert_eq!(document.document.content_for_save(), "let value = 42;");
+        let before = zeroize::Zeroizing::new(std::fs::read(&profile).unwrap());
+        #[cfg(windows)]
+        assert_ne!(before.first(), Some(&b'{'));
+        let reused = {
+            let path = path.clone();
+            let profiles = profiles.clone();
+            tokio::task::spawn_blocking(move || lapis_host::open_host_file(&path, &profiles))
+                .await
+                .unwrap()
+        };
+        assert!(
+            reused.is_err(),
+            "used invitations must not silently replace a credential"
+        );
+        assert!(std::fs::read(&profile).unwrap().as_slice() == before.as_slice());
+        std::fs::write(&profile, b"corrupt data").unwrap();
+        assert!(lapis_host::open_host_file(&profile, &profiles).is_err());
+    });
 }
 
 #[test]

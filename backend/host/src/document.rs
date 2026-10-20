@@ -1,5 +1,5 @@
-use crate::BackendHost;
-use lapis_backend_state::EmbeddedClient;
+use crate::BackendClient;
+use crate::client::Client;
 use lapis_client_api as wire;
 use lapis_document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
@@ -13,20 +13,45 @@ use std::{
 };
 
 pub(super) struct HostDocuments {
-    host: BackendHost,
-    resources: Mutex<HashMap<DocumentId, (EmbeddedClient, PathBuf)>>,
+    host: BackendClient,
+    connections: Mutex<HashMap<wire::WorkspaceId, Client>>,
+    resources: Mutex<HashMap<DocumentId, (Client, PathBuf)>>,
 }
 
 impl HostDocuments {
-    pub(super) fn new(host: BackendHost) -> Self {
+    pub(super) fn new(host: BackendClient) -> Self {
         Self {
             host,
+            connections: Mutex::new(HashMap::new()),
             resources: Mutex::new(HashMap::new()),
         }
     }
 
+    fn connection(&self, workspace: wire::WorkspaceId) -> Result<Client, DocumentError> {
+        let mut connections = self
+            .connections
+            .lock()
+            .map_err(|_| DocumentError::io("Document接続を取得できません"))?;
+        if let Some(client) = connections.get(&workspace) {
+            return Ok(client.clone());
+        }
+        let client = self
+            .host
+            .connect_workspace(workspace.clone())
+            .map_err(|error| DocumentError::io(error.to_string()))?;
+        connections.insert(workspace, client.clone());
+        Ok(client)
+    }
+    fn connect(&self, root: &Path) -> Result<Client, DocumentError> {
+        let workspace = self
+            .host
+            .register_workspace(root)
+            .map_err(|error| DocumentError::io(error.to_string()))?;
+        self.connection(workspace)
+    }
+
     fn request(
-        client: &EmbeddedClient,
+        client: &Client,
         body: wire::RequestBody,
     ) -> Result<wire::ResponseBody, DocumentError> {
         match client
@@ -53,7 +78,7 @@ impl HostDocuments {
     fn resource(
         &self,
         id: &DocumentId,
-    ) -> Result<(EmbeddedClient, PathBuf, wire::DocumentId), DocumentError> {
+    ) -> Result<(Client, PathBuf, wire::DocumentId), DocumentError> {
         let (client, root) = self
             .resources
             .lock()
@@ -68,7 +93,7 @@ impl HostDocuments {
 
     fn cache(
         &self,
-        client: EmbeddedClient,
+        client: Client,
         root: PathBuf,
         snapshot: wire::DocumentSnapshot,
     ) -> Result<DocumentCache, DocumentError> {
@@ -130,15 +155,16 @@ impl DocumentConnection for HostDocuments {
     fn create(&self, root: Option<&Path>) -> Result<DocumentCache, DocumentError> {
         let root = match root {
             Some(root) => root.to_owned(),
-            None => {
-                std::env::current_dir().map_err(|error| DocumentError::io(error.to_string()))?
-            }
+            None => self
+                .host
+                .default_root()
+                .map_err(|error| DocumentError::io(error.to_string()))?,
         };
-        let root = root
-            .canonicalize()
+        let root = self
+            .host
+            .normalize_path(&root)
             .map_err(|error| DocumentError::io(error.to_string()))?;
         let client = self
-            .host
             .connect(&root)
             .map_err(|error| DocumentError::io(error.to_string()))?;
         let response = Self::request(
@@ -156,40 +182,18 @@ impl DocumentConnection for HostDocuments {
     }
 
     fn open(&self, path: &Path) -> Result<DocumentCache, DocumentError> {
-        let path = match path.canonicalize() {
-            Ok(path) => path,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                let name = path
-                    .file_name()
-                    .ok_or_else(|| DocumentError::io("ファイル名がありません"))?;
-                let parent = path
-                    .parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                    .unwrap_or(Path::new("."));
-                parent
-                    .canonicalize()
-                    .map_err(|error| DocumentError::io(error.to_string()))?
-                    .join(name)
-            }
-            Err(error) => return Err(DocumentError::io(error.to_string())),
-        };
+        let path = self
+            .host
+            .normalize_file(path)
+            .map_err(|error| DocumentError::io(error.to_string()))?;
         let parent = path
             .parent()
             .ok_or_else(|| DocumentError::io("親ディレクトリがありません"))?;
-        let (client, _) = self
+        let (root, _) = self
             .host
-            .connect_directory(parent)
+            .directory(parent)
             .map_err(|error| DocumentError::io(error.to_string()))?;
-        let root = self
-            .host
-            .inner
-            .workspaces
-            .lock()
-            .map_err(|_| DocumentError::io("Workspace lock に失敗しました"))?
-            .iter()
-            .find(|(_, id)| *id == client.workspace_id())
-            .map(|(root, _)| root.clone())
-            .ok_or_else(|| DocumentError::io("Workspace がありません"))?;
+        let client = self.connect(&root)?;
         let relative = relative(&root, &path)?;
         let response = Self::request(
             &client,
@@ -214,16 +218,11 @@ impl DocumentConnection for HostDocuments {
         }
         let mut roots = self
             .host
-            .inner
-            .workspaces
-            .lock()
-            .map_err(|_| DocumentError::io("Workspace lock に失敗しました"))?
-            .iter()
-            .map(|(root, id)| (root.clone(), id.clone()))
-            .collect::<Vec<_>>();
+            .roots()
+            .map_err(|error| DocumentError::io(error.to_string()))?;
         roots.sort_by(|left, right| left.0.cmp(&right.0));
         for (root, workspace_id) in roots {
-            let Ok(client) = self.host.connect_workspace(workspace_id) else {
+            let Ok(client) = self.connection(workspace_id) else {
                 continue;
             };
             let document_id = wire::DocumentId::try_new(id.as_str())
@@ -293,23 +292,10 @@ impl DocumentConnection for HostDocuments {
         let (client, root, document_id) = self.resource(id)?;
         let base_revision = wire::Revision::new(revision.number());
         let request = if let Some(path) = path {
-            let path = if path.is_absolute() {
-                path
-            } else {
-                std::env::current_dir()
-                    .map_err(|error| DocumentError::io(error.to_string()))?
-                    .join(path)
-            };
-            let parent = path
-                .parent()
-                .ok_or_else(|| DocumentError::io("親ディレクトリがありません"))?;
-            let name = path
-                .file_name()
-                .ok_or_else(|| DocumentError::io("ファイル名がありません"))?;
-            let path = parent
-                .canonicalize()
-                .map_err(|error| DocumentError::io(error.to_string()))?
-                .join(name);
+            let path = self
+                .host
+                .normalize_file(&path)
+                .map_err(|error| DocumentError::io(error.to_string()))?;
             if !path.starts_with(&root) {
                 let parent = path
                     .parent()
@@ -320,16 +306,9 @@ impl DocumentConnection for HostDocuments {
                     .map_err(|error| DocumentError::io(error.to_string()))?;
                 let destination_root = self
                     .host
-                    .inner
-                    .workspaces
-                    .lock()
-                    .map_err(|_| DocumentError::io("Workspace lock に失敗しました"))?
-                    .iter()
-                    .find(|(_, workspace_id)| *workspace_id == destination.workspace_id())
-                    .map(|(root, _)| root.clone())
-                    .ok_or_else(|| DocumentError::io("Workspace がありません"))?;
+                    .root_for(destination.workspace_id())
+                    .map_err(|error| DocumentError::io(error.to_string()))?;
                 self.host
-                    .service()
                     .relocate_document(
                         client.workspace_id().clone(),
                         destination.workspace_id().clone(),
@@ -344,6 +323,12 @@ impl DocumentConnection for HostDocuments {
                         lapis_backend_state::BackendServiceError::State(
                             lapis_backend_state::BackendStateError::RevisionConflict(_),
                         ) => DocumentError::conflict("Document revision が競合しています"),
+                        lapis_backend_state::BackendServiceError::Rejected(problem)
+                            if problem.revision_conflict.is_some()
+                                || problem.code.as_str() == "document_conflict" =>
+                        {
+                            DocumentError::conflict("保存先またはDocument revisionが競合しています")
+                        }
                         error => DocumentError::io(error.to_string()),
                     })?;
                 return self.attach(id);

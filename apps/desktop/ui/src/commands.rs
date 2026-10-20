@@ -14,6 +14,7 @@ pub(crate) enum UiCommand {
     NewFolder,
     CloneRepository,
     NewWindow,
+    ConnectHost,
     CloseWindow,
     Undo,
     Redo,

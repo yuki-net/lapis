@@ -330,7 +330,9 @@ impl BackendState {
                     vec![event],
                 ))
             }
-            RequestBody::WorkspaceExecute(_) => Err(BackendStateError::Unsupported),
+            RequestBody::WorkspaceExecute(_)
+            | RequestBody::HostRegister(_)
+            | RequestBody::DocumentRelocate(_) => Err(BackendStateError::Unsupported),
             RequestBody::DocumentUntitled(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
@@ -1140,8 +1142,12 @@ impl BackendState {
             .next_terminal_id
             .checked_add(1)
             .ok_or(BackendStateError::CounterOverflow)?;
-        TerminalId::try_new(format!("terminal-{value}"))
-            .map_err(|_| BackendStateError::CounterOverflow)
+        TerminalId::try_new(format!(
+            "terminal-{}-{}-{value}",
+            std::process::id(),
+            self.document_epoch
+        ))
+        .map_err(|_| BackendStateError::CounterOverflow)
     }
 
     pub(crate) fn poll_terminals(&mut self) -> Result<Vec<PublishedEvent>, BackendStateError> {

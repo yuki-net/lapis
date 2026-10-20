@@ -1,5 +1,14 @@
 //! 実行資源を組み立て、接続とは独立して Runtime を所有する Host。
+mod client;
+mod local;
+mod profile;
+mod remote_handler;
+pub use remote_handler::HostRemoteHandler;
+mod protected;
+pub use local::run_managed_host;
+pub use profile::{HostInvitation, open_host_file, write_invitation};
 mod document;
+pub use client::BackendClient;
 mod features;
 mod terminal;
 mod workspace;
@@ -59,10 +68,10 @@ struct HostInner {
 
 impl BackendHost {
     pub fn workspaces(&self) -> Arc<dyn lapis_workspace::WorkspaceRepository> {
-        Arc::new(workspace::HostWorkspaces::new(self.clone()))
+        BackendClient::from(self.clone()).workspaces()
     }
     pub fn documents(&self) -> Arc<dyn lapis_document::DocumentConnection> {
-        Arc::new(document::HostDocuments::new(self.clone()))
+        BackendClient::from(self.clone()).documents()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
@@ -80,6 +89,15 @@ impl BackendHost {
     }
 
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
+        if let Some(id) = self
+            .inner
+            .workspaces
+            .lock()
+            .map_err(|_| BackendServiceError::Unavailable)?
+            .get(root)
+        {
+            return Ok(id.clone());
+        }
         let root = root
             .canonicalize()
             .map_err(|_| BackendServiceError::Unavailable)?;
@@ -91,8 +109,13 @@ impl BackendHost {
         if let Some(workspace_id) = workspaces.get(&root) {
             return Ok(workspace_id.clone());
         }
-        let workspace_id = WorkspaceId::try_new(format!("workspace-{}", workspaces.len() + 1))
-            .expect("bounded workspace id");
+        if !root.is_dir() {
+            return Err(BackendServiceError::Unavailable);
+        }
+        use sha2::{Digest, Sha256};
+        let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
+        let workspace_id =
+            WorkspaceId::try_new(format!("workspace-{key}")).expect("bounded workspace id");
         let registration = WorkspaceRegistration::new(
             workspace_id.clone(),
             root.file_name().unwrap_or_default().to_string_lossy(),
@@ -122,58 +145,13 @@ impl BackendHost {
         EmbeddedClient::connect(self.service(), session_id, workspace_id)
     }
 
-    pub(crate) fn connect_directory(
-        &self,
-        directory: &Path,
-    ) -> Result<
-        (
-            EmbeddedClient,
-            Option<lapis_client_api::WorkspaceRelativePath>,
-        ),
-        BackendServiceError,
-    > {
-        let directory = directory
-            .canonicalize()
-            .map_err(|_| BackendServiceError::Unavailable)?;
-        let root = {
-            let workspaces = self
-                .inner
-                .workspaces
-                .lock()
-                .map_err(|_| BackendServiceError::Unavailable)?;
-            workspaces
-                .keys()
-                .filter(|root| directory.starts_with(root))
-                .max_by_key(|root| root.components().count())
-                .cloned()
-        }
-        .unwrap_or_else(|| directory.clone());
-        let relative = directory
-            .strip_prefix(&root)
-            .map_err(|_| BackendServiceError::Unavailable)?;
-        let relative = if relative.as_os_str().is_empty() {
-            None
-        } else {
-            Some(
-                lapis_client_api::WorkspaceRelativePath::parse(
-                    relative
-                        .to_str()
-                        .ok_or(BackendServiceError::Unavailable)?
-                        .replace('\\', "/"),
-                )
-                .map_err(|_| BackendServiceError::Unavailable)?,
-            )
-        };
-        Ok((self.connect(&root)?, relative))
-    }
-
     pub fn git(&self) -> Arc<dyn lapis_git::GitConnection> {
-        Arc::new(features::HostGit::new(self.clone()))
+        BackendClient::from(self.clone()).git()
     }
     pub fn tasks(&self) -> Arc<dyn lapis_task::TaskConnection> {
-        Arc::new(features::HostTasks::new(self.clone()))
+        BackendClient::from(self.clone()).tasks()
     }
     pub fn terminals(&self) -> Arc<dyn TerminalBackend> {
-        Arc::new(terminal::HostTerminals::new(self.clone()))
+        BackendClient::from(self.clone()).terminals()
     }
 }

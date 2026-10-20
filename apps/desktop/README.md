@@ -22,3 +22,9 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - `ui/shell/` は Window・Panel・Tab・Layout、`ui/features/` は個別機能の表示・入力・描画を担当します。
 - UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。
+
+## Host接続
+
+通常起動は独立したLocal HostへQUICで接続します。「ファイル → Hostに接続…」は招待または保存済みprofileを選び、新しい接続画面を開きます。既存画面の未保存編集は保持します。起動時は `--host <file>`、検証用に状態を分離する場合は `--state-directory <directory>` を使用できます。
+
+Remoteのファイル操作はHostのWorkspaceを使用し、Client上に同じsource folderを必要としません。接続先ごとに画面状態を保存します。Remote向けのLSPと検索は未接続です。招待の発行・期限・保護方法は [Backend](../../backend/README.md) を参照してください。

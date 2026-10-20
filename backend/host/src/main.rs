@@ -47,6 +47,20 @@ fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if arguments
         .get(1)
+        .is_some_and(|value| value == "--managed-host")
+    {
+        let result = arguments
+            .get(2)
+            .ok_or("Workspaceがありません")
+            .map_err(|error| -> Error { error.into() })
+            .and_then(|root| lapis_host::run_managed_host(std::path::Path::new(root)));
+        if result.is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
+    if arguments
+        .get(1)
         .is_some_and(|value| value == "--task-worker")
     {
         let result = arguments
@@ -115,7 +129,7 @@ fn run() -> Result<(), Error> {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
             Arc::new(BackendRemoteHandler::new(host.service())), RemoteLimits::default()).await?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
-        println!("Commands: pair / revoke <credential-id> / quit");
+        println!("Commands: pair / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
         let mut input_open = true;
         loop {
@@ -135,6 +149,19 @@ fn run() -> Result<(), Error> {
                             write!(invitation, "{byte:02x}")?;
                         }
                         println!("Pairing token (5 minutes, one use): {}", invitation.as_str());
+                    } else if let Some(input) = line.strip_prefix("invite ") {
+                        let mut parts = input.splitn(2, char::is_whitespace);
+                        let address = parts.next().and_then(|value| value.parse().ok());
+                        let path = parts.next().map(str::trim).filter(|path| !path.is_empty());
+                        if let (Some(address), Some(path)) = (address, path) {
+                            let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
+                            let invitation = lapis_host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                                workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: token.secret_bytes().to_vec() };
+                            match lapis_host::write_invitation(std::path::Path::new(path), &invitation) {
+                                Ok(()) => println!("招待を作成しました（5分間・一回限り）。安全な経路でClientへ渡してください。"),
+                                Err(_) => eprintln!("招待ファイルを作成できません。新規ファイルを指定してください。"),
+                            }
+                        } else { eprintln!("Usage: invite <address:port> <new-file.json>"); }
                     } else if let Some(id) = line.strip_prefix("revoke ") {
                         match CredentialId::parse(id.to_owned()) {
                             Ok(id) => println!("revoked={}", auth.lock().map_err(|_| "authentication unavailable")?.revoke(&id)),

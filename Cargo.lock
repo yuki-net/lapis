@@ -3182,6 +3182,7 @@ name = "lapis-host"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "getrandom 0.3.4",
  "lapis-backend-state",
  "lapis-client-api",
  "lapis-document",
@@ -3192,12 +3193,16 @@ dependencies = [
  "lapis-task",
  "lapis-terminal",
  "lapis-workspace",
+ "libc",
  "rcgen",
  "rustls",
+ "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tokio-tungstenite",
+ "windows-sys 0.61.2",
  "zeroize",
 ]
 
