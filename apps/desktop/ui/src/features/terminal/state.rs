@@ -73,6 +73,7 @@ pub(crate) struct TerminalFeature {
     gate: crate::client_adapter::ResponseGate,
     busy: bool,
     pub(super) message: String,
+    message_from_poll: bool,
     pub(super) scroll: crate::components::ScrollState,
 }
 impl TerminalFeature {
@@ -93,6 +94,7 @@ impl TerminalFeature {
             gate: crate::client_adapter::ResponseGate::default(),
             busy: false,
             message: String::new(),
+            message_from_poll: false,
             scroll: crate::components::ScrollState::new(),
         };
         cx.spawn(async move |this, cx| {
@@ -124,6 +126,7 @@ impl TerminalFeature {
         }) {
             self.root = None;
             self.message = error;
+            self.message_from_poll = false;
             cx.notify();
             return;
         }
@@ -153,15 +156,19 @@ impl TerminalFeature {
                     Ok(terminals) => {
                         feature.terminals = terminals;
                         feature.message.clear();
+                        feature.message_from_poll = false;
                     }
-                    Err(error) => feature.message = error,
+                    Err(error) => {
+                        feature.message = error;
+                        feature.message_from_poll = false;
+                    },
                 }
                 cx.notify();
             },
         );
         if let Err(error) = admitted {
-            self.busy = false;
             self.message = error;
+            self.message_from_poll = false;
             cx.notify();
         }
     }
@@ -184,12 +191,14 @@ impl TerminalFeature {
             move |feature, result, cx| {
                 if feature.gate.accept(token) {
                     feature.message = result.err().unwrap_or_default();
+                    feature.message_from_poll = false;
                     cx.notify();
                 }
             },
         );
         if let Err(error) = admitted {
             self.message = error;
+            self.message_from_poll = false;
             cx.notify();
         }
     }
@@ -214,9 +223,15 @@ impl TerminalFeature {
                 match result {
                     Ok(terminals) => {
                         feature.terminals = terminals;
-                        feature.message.clear();
+                        if feature.message_from_poll {
+                            feature.message.clear();
+                            feature.message_from_poll = false;
+                        }
                     }
-                    Err(error) => feature.message = error,
+                    Err(error) => {
+                        feature.message = error;
+                        feature.message_from_poll = true;
+                    },
                 }
                 cx.notify();
             },
@@ -224,6 +239,7 @@ impl TerminalFeature {
         if let Err(error) = admitted {
             self.busy = false;
             self.message = error;
+            self.message_from_poll = true;
             cx.notify();
         }
     }
