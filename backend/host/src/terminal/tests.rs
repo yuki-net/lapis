@@ -11,6 +11,7 @@ use std::sync::{
 struct ScriptedTerminal {
     events: Mutex<Vec<TerminalEvent>>,
     terminations: AtomicUsize,
+    inputs: AtomicUsize,
     blocked_input: Mutex<Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>>,
 }
 
@@ -20,6 +21,7 @@ impl TerminalBackend for ScriptedTerminal {
     }
 
     fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+        self.inputs.fetch_add(1, Ordering::SeqCst);
         if let Some((entered, release)) = self.blocked_input.lock().unwrap().take() {
             entered.send(()).unwrap();
             release.recv().unwrap();
@@ -510,4 +512,48 @@ fn overflow_recovers_authoritative_termination_and_releases_attachment() {
     assert_eq!(fixture.cache.lock().unwrap().output, vec![b'x'; 600]);
     assert_eq!(fixture.snapshot().status, TerminalStatus::Terminated);
     assert!(fixture.terminals.attachments.lock().unwrap().is_empty());
+}
+
+#[test]
+fn commands_reattach_after_disconnect_without_waiting_for_ui_poll_or_resync_completion() {
+    let fixture = Fixture::new();
+    fixture
+        .host
+        .service()
+        .disconnect(SessionId::try_new("desktop-1").unwrap())
+        .unwrap();
+    fixture.snapshot();
+    let (_sender, pending_recovery) = mpsc::sync_channel(1);
+    {
+        let mut attachments = fixture.terminals.attachments.lock().unwrap();
+        let attachment = attachments.get_mut(fixture.id.as_str()).unwrap();
+        attachment.receiver = None;
+        attachment.recovery = Some(pending_recovery);
+    }
+    fixture
+        .terminals
+        .input(&fixture.id, b"exactly once")
+        .unwrap();
+    assert_eq!(fixture.backend.inputs.load(Ordering::SeqCst), 1);
+    fixture.terminals.resize(&fixture.id, 100, 40).unwrap();
+    let snapshot = fixture.snapshot();
+    assert_eq!(snapshot.status, TerminalStatus::Running);
+    assert_eq!(
+        snapshot.size,
+        TerminalSize {
+            columns: 100,
+            rows: 40
+        }
+    );
+    assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
+    fixture
+        .host
+        .service()
+        .disconnect(SessionId::try_new("desktop-1").unwrap())
+        .unwrap();
+    fixture.snapshot();
+    fixture.terminals.terminate(&fixture.id).unwrap();
+    assert_eq!(fixture.backend.inputs.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 1);
+    assert_eq!(fixture.snapshot().status, TerminalStatus::Terminated);
 }

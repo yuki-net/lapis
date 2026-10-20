@@ -272,7 +272,39 @@ impl HostTerminals {
             .clone();
         let request = body(&attachment.terminal_id);
         drop(attachments);
-        match client.request(request).map_err(error)? {
+        let mut response = client.request(request.clone()).map_err(error)?;
+        if matches!(&response, ResponseBody::Error(problem)
+            if matches!(problem.code.as_str(), lapis_client_api::FORBIDDEN | lapis_client_api::INVALID_REQUEST))
+        {
+            match client
+                .request(RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                    workspace_id: client.workspace_id().clone(),
+                }))
+                .map_err(error)?
+            {
+                ResponseBody::WorkspaceConnect(_) => {}
+                _ => return Err(error("terminal reconnect rejected")),
+            }
+            let ResponseBody::SnapshotResync(snapshot) = client
+                .request(RequestBody::SnapshotResync(SnapshotRequest {
+                    workspace_id: client.workspace_id().clone(),
+                    reason: SnapshotReason::Reconnect,
+                }))
+                .map_err(error)?
+            else {
+                return Err(error("terminal reattachment rejected"));
+            };
+            if !snapshot
+                .snapshot
+                .terminals
+                .iter()
+                .any(|terminal| terminal.terminal_id.as_str() == id.as_str())
+            {
+                return Err(error("terminal missing from authoritative snapshot"));
+            }
+            response = client.request(request).map_err(error)?;
+        }
+        match response {
             ResponseBody::TerminalInput(_)
             | ResponseBody::TerminalResize(_)
             | ResponseBody::TerminalTerminate(_) => Ok(()),
