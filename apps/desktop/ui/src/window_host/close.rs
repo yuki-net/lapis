@@ -155,6 +155,7 @@ impl DesktopRoot {
         cx.spawn(async move |this, cx| {
             let result: Result<Vec<ClosedGroup>, String> = async {
                 let mut plans = Vec::new();
+                let mut approvals = HashMap::new();
                 // 全グループの判断が揃うまで保存・破棄・closeを実行しない。
                 for mut request in requests {
                     let snapshot = wait_client(request.snapshot.take().unwrap()).await?;
@@ -163,7 +164,11 @@ impl DesktopRoot {
                     for tab in snapshot.tabs.iter().filter(|tab| request.document.as_ref().map_or_else(
                         || request.host == ROOT_HOST || request.placements.get(&tab.id).copied().or_else(|| snapshot.document_owners.get(&tab.id).copied()).unwrap_or(ROOT_HOST) == request.host, |id| id == &tab.id))
                     {
-                        let answer = if tab.dirty {
+                        let cache = snapshot.documents.iter().find(|cache| cache.id == tab.id).ok_or("文書の状態を取得できません")?;
+                        let answer = if let Some((answer, revision)) = approvals.get(&tab.id) {
+                            if *revision != cache.document.revision() { return Err("Windowの確認中に文書が変更されました".into()); }
+                            *answer
+                        } else if tab.dirty {
                             let title = format!("{} を閉じますか？", tab.display_name);
                             let receiver = this.update(cx, |_, cx| handle.update(cx, |_, window, cx| {
                                 window.prompt(gpui::PromptLevel::Warning, &title,
@@ -172,16 +177,17 @@ impl DesktopRoot {
                             })).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
                             receiver.await.map_err(|e| e.to_string())?
                         } else { 0 };
+                        approvals.insert(tab.id.clone(), (answer, cache.document.revision()));
                         if answer > 1 { return Err("終了をキャンセルしました".into()); }
                         if tab.dirty && answer == 0 { saves.push(tab.id.clone()); }
-                        let cache = snapshot.documents.iter().find(|cache| cache.id == tab.id).ok_or("文書の状態を取得できません")?;
                         decisions.push((tab.id.clone(), if answer == 1 { DocumentCloseDisposition::DiscardChanges } else { DocumentCloseDisposition::PreserveChanges }, cache.document.revision()));
                     }
                     plans.push(ClosePlan { request, decisions, saves });
                 }
+                let mut saved = std::collections::HashSet::new();
                 for plan in &plans {
                     let decisions = plan.decisions.clone();
-                    let saves = plan.saves.clone();
+                    let saves = plan.saves.iter().filter(|id| saved.insert((*id).clone())).cloned().collect::<Vec<_>>();
                     let receiver = plan.request.worker.try_request(move |client| {
                         for (id, _, revision) in &decisions {
                             if client.editor.document_connection().attach(id).map_err(|e| e.to_string())?.document.revision() != *revision {
@@ -199,15 +205,27 @@ impl DesktopRoot {
                     wait_client(receiver).await?;
                 }
                 let mut results = Vec::new();
+                let mut committed = std::collections::HashSet::new();
                 for plan in plans {
-                    let ClosePlan { request, decisions, .. } = plan;
+                    let ClosePlan { request, mut decisions, .. } = plan;
+                    let ids = decisions.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>();
+                    let previous = committed.clone();
                     let view = request.view;
                     let receiver = request.worker.try_request(move |client| {
+                        for (id, disposition, revision) in &mut decisions {
+                            if previous.contains(id) {
+                                // 別Rootと共有する正本の破棄は一度だけ。以降はcleanなattachmentだけを閉じる。
+                                *disposition = DocumentCloseDisposition::PreserveChanges;
+                                *revision = client.editor.document_connection().attach(id).map_err(|e| e.to_string())?.document.revision();
+                            }
+                        }
                         client.editor.close_documents(&decisions).map_err(|e| e.to_string())?;
                         client.persist_view(view)?;
                         client.snapshot()
                     })?;
-                    results.push((request.group, wait_client(receiver).await?, request.windows));
+                    let snapshot = wait_client(receiver).await?;
+                    committed.extend(ids);
+                    results.push((request.group, snapshot, request.windows));
                 }
                 Ok(results)
             }.await;

@@ -7,6 +7,7 @@ pub(crate) fn run_native_smoke(
     cx: &mut Context<DesktopRoot>,
 ) {
     let id = root.editor.read(cx).document_id().unwrap();
+    let shared_path = root.editor.read(cx).document().path().unwrap().to_owned();
     let expected_documents = root
         .group
         .read(cx)
@@ -306,13 +307,20 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         eprintln!("SMOKE independent group, foreign transfer rejection and root cascade OK");
+        let peer_path = shared_path.clone();
         peer.update(cx, |other, cx| {
             other.editor.update(cx, |editor, cx| {
                 editor.submit(
                     false,
-                    |client| {
-                        client.editor.new_document();
-                        Ok(())
+                    move |client| {
+                        client
+                            .editor
+                            .open_workspace(peer_path.parent().unwrap().to_owned())
+                            .map_err(|e| e.to_string())?;
+                        client
+                            .editor
+                            .open_path(peer_path)
+                            .map_err(|e| e.to_string())
                     },
                     cx,
                 );
@@ -330,6 +338,52 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         wait_for(&peer.downgrade(), cx, Some(3)).await;
+        let shared_peer = peer
+            .update(cx, |_, cx| {
+                let own = cx.entity_id();
+                cx.windows()
+                    .into_iter()
+                    .find_map(|window| {
+                        window
+                            .update(cx, |view, _, cx| {
+                                let entity = view.downcast::<DesktopRoot>().ok()?;
+                                if entity.entity_id() == own {
+                                    return None;
+                                }
+                                let path = shared_path.clone();
+                                entity.update(cx, |other, cx| {
+                                    other.editor.update(cx, |editor, cx| {
+                                        editor.submit(
+                                            false,
+                                            move |client| {
+                                                client
+                                                    .editor
+                                                    .open_workspace(
+                                                        path.parent().unwrap().to_owned(),
+                                                    )
+                                                    .map_err(|e| e.to_string())?;
+                                                client
+                                                    .editor
+                                                    .open_path(path)
+                                                    .map_err(|e| e.to_string())
+                                            },
+                                            cx,
+                                        );
+                                    })
+                                });
+                                Some(entity)
+                            })
+                            .unwrap()
+                    })
+                    .unwrap()
+            })
+            .unwrap();
+        wait_for(&shared_peer.downgrade(), cx, Some(3)).await;
+        shared_peer
+            .update(cx, |other, cx| {
+                assert_eq!(other.editor.read(cx).document_id(), Some(id.clone()))
+            })
+            .unwrap();
         handle
             .update(cx, |_, window, cx| {
                 peer.update(cx, |other, cx| other.close_application(window, cx))

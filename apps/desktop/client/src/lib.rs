@@ -1558,7 +1558,7 @@ impl EditorSession {
     }
 
     pub fn validate_document_closes(
-        &self,
+        &mut self,
         documents: &[(
             DocumentId,
             DocumentCloseDisposition,
@@ -1574,6 +1574,9 @@ impl EditorSession {
                 && *disposition == DocumentCloseDisposition::PreserveChanges
             {
                 return Err(DocumentError::conflict("未保存の文書を保持します"));
+            }
+            if let Some(open) = self.documents.iter_mut().find(|open| &open.id == id) {
+                open.update(current);
             }
         }
         Ok(())
