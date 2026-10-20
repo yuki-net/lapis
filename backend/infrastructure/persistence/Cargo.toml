@@ -1,0 +1,19 @@
+[package]
+name = "lapis-persistence"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+lapis-app-services = { path = "../../application/services" }
+lapis-editor-core = { path = "../../../shared/models/editor-core" }
+lapis-settings = { path = "../../../shared/models/settings" }
+lapis-workspace = { path = "../../../shared/models/workspace" }
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+lapis-localization = { path = "../../../shared/models/localization" }
+lapis-terminal = { path = "../../../shared/models/terminal" }

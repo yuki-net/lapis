@@ -1,11 +1,11 @@
 [package]
-name = "lapis-task-runner"
+name = "lapis-lsp"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-editor-core = { path = "../../backend/core/editor-core" }
+lapis-document = { path = "../document" }
 serde.workspace = true
 serde_json.workspace = true

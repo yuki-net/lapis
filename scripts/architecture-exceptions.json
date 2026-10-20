@@ -1,0 +1,4 @@
+{
+  "lapis-app-services -> lapis-task-runner": "移行中: Task 契約と CLI runner の分離は Backend 責務統合で行う。新規例外を追加しない。",
+  "lapis-desktop-ui -> lapis-task-runner": "移行中: 表示用 Task 型が runner と同一 crate に存在する。契約分離時に削除する。"
+}

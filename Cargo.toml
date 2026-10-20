@@ -1,11 +1,12 @@
 [workspace]
 members = [
     "apps/desktop/*",
-    "backend/core/*",
-    "backend/local",
-    "backend/persistence",
-    "backend/remote",
-    "features/*",
+    "backend/application/*",
+    "backend/runtime",
+    "backend/infrastructure/*",
+    "backend/transport/*",
+    "shared/models/*",
+    "shared/protocol",
 ]
 exclude = ["vendor/gpui"]
 resolver = "3"
