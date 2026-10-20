@@ -25,9 +25,9 @@ impl TerminalSessions {
         &mut self,
         conversation: ConversationId,
         summaries: &[RestoredTerminal],
-    ) {
+    ) -> Vec<lapis_terminal::TerminalSnapshot> {
         if self.active_conversation == conversation {
-            return;
+            return self.session.terminals().to_vec();
         }
         let next = self
             .inactive_sessions
@@ -40,6 +40,7 @@ impl TerminalSessions {
         let previous = std::mem::replace(&mut self.session, next);
         let previous_id = std::mem::replace(&mut self.active_conversation, conversation);
         self.inactive_sessions.insert(previous_id, previous);
+        self.session.terminals().to_vec()
     }
 
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
@@ -158,10 +159,27 @@ impl TerminalFeature {
             return;
         }
         let next = conversation.clone();
-        if let Err(error) = self.worker.try_request(move |sessions| {
-            sessions.switch_conversation(next, &summaries);
-            Ok(())
-        }) {
+        self.requests.gate.invalidate();
+        let token = self.requests.begin_action();
+        let admitted = self.worker.submit(
+            cx,
+            move |sessions| Ok(sessions.switch_conversation(next, &summaries)),
+            move |feature, result, cx| {
+                if !feature.requests.finish_action(token) {
+                    return;
+                }
+                match result {
+                    Ok(terminals) => feature.terminals = terminals,
+                    Err(error) => {
+                        feature.message = error;
+                        feature.message_from_poll = false;
+                    }
+                }
+                cx.notify();
+            },
+        );
+        if let Err(error) = admitted {
+            self.requests.finish_action(token);
             self.root = None;
             self.message = error;
             self.message_from_poll = false;
@@ -170,7 +188,6 @@ impl TerminalFeature {
         }
         self.root = root;
         self.conversation = conversation;
-        self.requests.gate.invalidate();
         self.terminals.clear();
         cx.notify();
     }
@@ -419,6 +436,77 @@ mod tests {
             ),
             backend,
         )
+    }
+
+    #[test]
+    fn conversation_switch_returns_idle_and_restored_terminals_without_new_events() {
+        let (mut sessions, backend) = feature();
+        let terminal = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        let summaries = [RestoredTerminal {
+            cwd: "saved".into(),
+            status: TerminalStatus::Running,
+            columns: 120,
+            rows: 30,
+        }];
+        let restored = sessions.switch_conversation(ConversationId::new("second"), &summaries);
+        assert!(!sessions.refresh().unwrap());
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].cwd, Path::new("saved"));
+        assert_eq!(restored[0].status, TerminalStatus::Exited);
+        let resumed = sessions.switch_conversation(ConversationId::new("first"), &[]);
+        assert!(!sessions.refresh().unwrap());
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].id, terminal);
+        assert_eq!(resumed[0].status, TerminalStatus::Running);
+        assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn rapid_conversation_switches_only_project_the_latest_snapshot() {
+        let (mut sessions, backend) = feature();
+        let terminal = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        let worker = crate::client_adapter::ClientWorker::new(sessions);
+        let mut requests = TerminalRequests::default();
+        requests.gate.invalidate();
+        let first = requests.begin_action();
+        let first_response = worker
+            .try_request(|sessions| {
+                Ok(sessions.switch_conversation(ConversationId::new("second"), &[]))
+            })
+            .unwrap();
+        requests.gate.invalidate();
+        let second = requests.begin_action();
+        let second_response = worker
+            .try_request(|sessions| {
+                Ok(sessions.switch_conversation(ConversationId::new("first"), &[]))
+            })
+            .unwrap();
+        assert!(requests.begin_poll().is_none());
+        assert!(
+            first_response
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(!requests.finish_action(first));
+        assert!(requests.begin_poll().is_none());
+        let terminals = second_response
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert!(requests.finish_action(second));
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals[0].id, terminal);
+        assert_eq!(terminals[0].status, TerminalStatus::Running);
+        assert!(requests.begin_poll().is_some());
+        assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);
     }
 
     #[test]
