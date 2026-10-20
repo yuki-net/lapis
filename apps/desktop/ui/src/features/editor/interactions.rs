@@ -202,8 +202,12 @@ impl Editor {
         let repository = self.session.repository();
         let file_dialog = self.session.file_dialog();
         let state_repository = self.session.state_repository();
-        let new_session =
-            lapis_app_services::EditorSession::new_empty(repository, file_dialog, state_repository);
+        let new_session = lapis_app_services::EditorSession::new_empty(
+            repository,
+            file_dialog,
+            state_repository,
+            self.session.document_connection(),
+        );
         let snapshot = new_session.snapshot();
         let task = lapis_app_services::TaskSession::new(self.tasks.session.backend());
         let git = lapis_app_services::GitSession::new(self.git.session.backend());

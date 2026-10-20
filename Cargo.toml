@@ -3,6 +3,7 @@ members = [
     "apps/desktop/*",
     "backend/application/*",
     "backend/runtime",
+    "backend/host",
     "backend/infrastructure/*",
     "backend/transport/*",
     "shared/models/*",

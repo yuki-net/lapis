@@ -6,6 +6,9 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+lapis-git = { path = "../models/git" }
+lapis-task = { path = "../models/task" }
+lapis-editor-core = { path = "../models/editor-core" }
 serde.workspace = true
 
 [dev-dependencies]

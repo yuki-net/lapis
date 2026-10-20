@@ -6,6 +6,8 @@ use std::{
 };
 
 pub use lapis_text::{Position, TextRange};
+mod connection;
+pub use connection::{DocumentCache, DocumentConnection};
 use lapis_text::{TextBuffer, TextEdit, TextError};
 
 /// Document内で単調増加する変更世代。
@@ -13,6 +15,9 @@ use lapis_text::{TextBuffer, TextEdit, TextError};
 pub struct Revision(u64);
 
 impl Revision {
+    pub const fn new(number: u64) -> Self {
+        Self(number)
+    }
     pub const fn number(self) -> u64 {
         self.0
     }
@@ -72,6 +77,49 @@ pub struct Document {
 }
 
 impl Document {
+    pub fn from_snapshot(
+        path: Option<PathBuf>,
+        content: String,
+        encoding: Encoding,
+        revision: Revision,
+        dirty: bool,
+    ) -> Self {
+        Self {
+            path,
+            text: TextBuffer::from_string(content),
+            encoding,
+            revision,
+            saved_revision: if dirty { Revision(u64::MAX) } else { revision },
+            saved_fingerprint: None,
+        }
+    }
+
+    pub fn reload(&mut self, data: FileData) -> Result<(), DocumentError> {
+        let (content, encoding) = decode_text(&data.bytes)?;
+        self.text = TextBuffer::from_string(content);
+        self.encoding = encoding;
+        self.revision = self.revision.next();
+        self.saved_revision = self.revision;
+        self.saved_fingerprint = Some(data.fingerprint);
+        Ok(())
+    }
+    pub fn discard(&mut self, saved: Option<FileData>) -> Result<(), DocumentError> {
+        if let Some(saved) = saved {
+            return self.reload(saved);
+        }
+        if self.saved_fingerprint.is_some() {
+            return Err(DocumentError::conflict(
+                "保存済み内容を読み込めないため未保存変更を保持します",
+            ));
+        }
+        self.path = None;
+        self.text = TextBuffer::new();
+        self.encoding = Encoding::Utf8;
+        self.revision = self.revision.next();
+        self.saved_revision = self.revision;
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             path: None,
@@ -429,6 +477,38 @@ mod tests {
         assert!(document.redo());
         assert_eq!(document.revision().number(), 3);
         assert_eq!(document.content_for_save(), "# Lapis");
+    }
+
+    #[test]
+    fn discard_preserves_encoding_or_resets_unsaved_state_and_never_undoes_discarded_edits() {
+        let bytes = encode_text("saved😀", Encoding::Utf16Le);
+        let saved = FileData {
+            fingerprint: fingerprint(&bytes),
+            bytes,
+        };
+        let mut document = Document::from_file(PathBuf::from("note.md"), saved.clone()).unwrap();
+        document.replace_char_range(0..6, "dirty").unwrap();
+        let dirty = document.clone();
+        assert!(document.discard(None).is_err());
+        assert_eq!(document, dirty);
+        document.discard(Some(saved)).unwrap();
+        assert_eq!(document.content_for_save(), "saved😀");
+        assert_eq!(document.encoding(), Encoding::Utf16Le);
+        assert!(document.revision() > dirty.revision());
+        assert!(!document.is_dirty());
+        assert!(!document.undo());
+        assert!(!document.redo());
+        let mut draft = Document::draft(
+            PathBuf::from("new.md"),
+            "never saved".to_owned(),
+            Encoding::Utf8Bom,
+        );
+        let revision = draft.revision();
+        draft.discard(None).unwrap();
+        assert!(draft.path().is_none());
+        assert!(draft.is_empty());
+        assert!(!draft.is_dirty());
+        assert!(draft.revision() > revision);
     }
 
     #[test]

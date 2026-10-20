@@ -10,6 +10,18 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum RequestBody {
+    #[serde(rename = "document.inspect")]
+    DocumentInspect(crate::DocumentInspectRequest),
+    #[serde(rename = "document.untitled")]
+    DocumentUntitled(crate::DocumentUntitledRequest),
+    #[serde(rename = "document.save_as")]
+    DocumentSaveAs(crate::DocumentSaveAsRequest),
+    #[serde(rename = "document.reload")]
+    DocumentReload(DocumentHistoryRequest),
+    #[serde(rename = "document.discard")]
+    DocumentDiscard(crate::DocumentDiscardRequest),
+    #[serde(rename = "workspace.execute")]
+    WorkspaceExecute(crate::WorkspaceOperationRequest),
     #[serde(rename = "workspace.list")]
     WorkspaceList(WorkspaceListRequest),
     #[serde(rename = "workspace.connect")]
@@ -47,6 +59,12 @@ pub enum RequestBody {
 impl RequestBody {
     pub const fn method(&self) -> &'static str {
         match self {
+            Self::DocumentInspect(_) => "document.inspect",
+            Self::DocumentUntitled(_) => "document.untitled",
+            Self::DocumentSaveAs(_) => "document.save_as",
+            Self::DocumentReload(_) => "document.reload",
+            Self::DocumentDiscard(_) => "document.discard",
+            Self::WorkspaceExecute(_) => "workspace.execute",
             Self::WorkspaceList(_) => "workspace.list",
             Self::WorkspaceConnect(_) => "workspace.connect",
             Self::WorkspaceClose(_) => "workspace.close",
@@ -68,6 +86,12 @@ impl RequestBody {
 
     pub const fn required_capability(&self) -> &'static str {
         match self {
+            Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
+            Self::DocumentUntitled(_)
+            | Self::DocumentSaveAs(_)
+            | Self::DocumentReload(_)
+            | Self::DocumentDiscard(_) => capability::DOCUMENTS_WRITE,
+            Self::WorkspaceExecute(request) => request.operation.required_capability(),
             Self::WorkspaceList(_) => capability::WORKSPACES,
             Self::WorkspaceConnect(_) | Self::WorkspaceClose(_) => capability::WORKSPACES_CONNECT,
             Self::FileTree(_) => capability::FILES_READ,
@@ -88,6 +112,12 @@ impl RequestBody {
     /// Request自身が明示するWorkspace。Resource ID経由のRequestはbackend所有権表で解決する。
     pub const fn workspace_id(&self) -> Option<&WorkspaceId> {
         match self {
+            Self::DocumentUntitled(request) => Some(&request.workspace_id),
+            Self::DocumentInspect(_)
+            | Self::DocumentSaveAs(_)
+            | Self::DocumentReload(_)
+            | Self::DocumentDiscard(_) => None,
+            Self::WorkspaceExecute(request) => Some(&request.workspace_id),
             Self::WorkspaceList(_) => None,
             Self::WorkspaceConnect(request) => Some(&request.workspace_id),
             Self::WorkspaceClose(request) => Some(&request.workspace_id),
@@ -112,6 +142,23 @@ impl RequestBody {
 mod tests {
     use super::*;
     use crate::{TerminalSize, WorkspaceId};
+
+    #[test]
+    fn document_discard_is_revision_checked_write_operation() {
+        let request = RequestBody::DocumentDiscard(crate::DocumentDiscardRequest {
+            document_id: crate::DocumentId::try_new("document-1").unwrap(),
+            base_revision: crate::Revision::new(12),
+        });
+        assert_eq!(request.method(), "document.discard");
+        assert_eq!(request.required_capability(), capability::DOCUMENTS_WRITE);
+        assert_eq!(request.workspace_id(), None);
+        let encoded = serde_json::to_string(&request).unwrap();
+        assert_eq!(
+            serde_json::from_str::<RequestBody>(&encoded).unwrap(),
+            request
+        );
+        assert!(encoded.contains("\"base_revision\":12"));
+    }
 
     #[test]
     fn terminal_start_and_control_have_distinct_capabilities() {

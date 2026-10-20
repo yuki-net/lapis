@@ -8,6 +8,7 @@ mod event;
 mod files;
 mod handshake;
 mod ids;
+mod operations;
 mod path;
 mod request;
 mod response;
@@ -23,10 +24,12 @@ pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCa
 pub use connection::ConnectionState;
 pub use document::{
     DocumentCloseRequest, DocumentCloseResponse, DocumentCreateRequest, DocumentCreateResponse,
-    DocumentEditRequest, DocumentEditResponse, DocumentEncoding, DocumentHistoryRequest,
-    DocumentHistoryResponse, DocumentOpenRequest, DocumentOpenResponse, DocumentSaveRequest,
-    DocumentSaveResponse, DocumentSnapshot, DocumentTextEdit, DocumentTransaction,
-    InvalidDocumentTextEdit, InvalidDocumentTransaction,
+    DocumentDiscardRequest, DocumentDiscardResponse, DocumentEditRequest, DocumentEditResponse,
+    DocumentEncoding, DocumentExternalChange, DocumentHistoryRequest, DocumentHistoryResponse,
+    DocumentInspectRequest, DocumentOpenRequest, DocumentOpenResponse, DocumentSaveAsRequest,
+    DocumentSaveRequest, DocumentSaveResponse, DocumentSnapshot, DocumentTextEdit,
+    DocumentTransaction, DocumentUntitledRequest, InvalidDocumentTextEdit,
+    InvalidDocumentTransaction,
 };
 pub use envelope::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
 pub use error::{
@@ -40,6 +43,7 @@ pub use handshake::{ClientHello, ClientKind, ServerHello};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };
+pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
 pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use request::RequestBody;
 pub use response::ResponseBody;

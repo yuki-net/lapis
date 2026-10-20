@@ -6,6 +6,9 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+lapis-git = { path = "../../shared/models/git" }
+lapis-task = { path = "../../shared/models/task" }
+lapis-editor-core = { path = "../../shared/models/editor-core" }
 lapis-client-api = { path = "../../shared/protocol" }
 lapis-document = { path = "../../shared/models/document" }
 lapis-text = { path = "../../shared/models/text" }

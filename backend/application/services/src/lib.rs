@@ -11,19 +11,16 @@ use std::{
 
 pub use lapis_document::Encoding;
 use lapis_document::{
-    Document, DocumentError, DocumentRepository, ExternalChange, Position, Revision,
+    Document, DocumentCache, DocumentConnection, DocumentError, ExternalChange, Position, Revision,
 };
 use lapis_editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
-use lapis_git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree};
+use lapis_git::GitError;
 use lapis_localization::LocaleId;
 use lapis_lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
-use lapis_task_runner::{
-    Execution, ExecutionStatus, Task, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord,
-    unix_time_ms,
-};
+use lapis_task_runner::{TaskControl, TaskError, TaskMode};
 use lapis_terminal::{
     TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus,
 };
@@ -94,10 +91,7 @@ pub trait WorkspaceDialog: Send + Sync {
     fn choose_save_path(&self, suggested_name: &str) -> Option<PathBuf>;
 }
 
-/// Workspaceの列挙とDocument I/Oをまとめるbackend契約。
-pub trait WorkspaceRepository: DocumentRepository {
-    fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError>;
-}
+pub use lapis_workspace::WorkspaceRepository;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentAction {
@@ -329,19 +323,19 @@ impl ConversationSession {
 }
 
 pub struct GitSession {
-    backend: Arc<dyn GitBackend>,
-    repository_root: Option<PathBuf>,
-    status: Option<RepositoryStatus>,
-    worktrees: Vec<TaskWorktree>,
-    worktree_statuses: Vec<(TaskId, RepositoryStatus)>,
-    selected_diff: Option<FileDiff>,
+    backend: Arc<dyn lapis_git::GitConnection>,
+    workspace_id: Option<WorkspaceId>,
+    status: Option<lapis_git::GitSnapshot>,
+    worktrees: Vec<lapis_git::WorktreeSnapshot>,
+    worktree_statuses: Vec<(TaskId, lapis_git::GitSnapshot)>,
+    selected_diff: Option<lapis_git::GitDiffSnapshot>,
 }
 
 impl GitSession {
-    pub fn new(backend: Arc<dyn GitBackend>) -> Self {
+    pub fn new(backend: Arc<dyn lapis_git::GitConnection>) -> Self {
         Self {
             backend,
-            repository_root: None,
+            workspace_id: None,
             status: None,
             worktrees: Vec::new(),
             worktree_statuses: Vec::new(),
@@ -349,106 +343,80 @@ impl GitSession {
         }
     }
 
-    pub fn status(&self) -> Option<&RepositoryStatus> {
+    pub fn status(&self) -> Option<&lapis_git::GitSnapshot> {
         self.status.as_ref()
     }
-
-    pub fn worktrees(&self) -> &[TaskWorktree] {
+    pub fn worktrees(&self) -> &[lapis_git::WorktreeSnapshot] {
         &self.worktrees
     }
-
-    pub fn selected_diff(&self) -> Option<&FileDiff> {
+    pub fn selected_diff(&self) -> Option<&lapis_git::GitDiffSnapshot> {
         self.selected_diff.as_ref()
     }
-
-    pub fn worktree_statuses(&self) -> &[(TaskId, RepositoryStatus)] {
+    pub fn worktree_statuses(&self) -> &[(TaskId, lapis_git::GitSnapshot)] {
         &self.worktree_statuses
     }
 
-    pub fn refresh(&mut self, repository: &Path) -> Result<bool, GitError> {
-        let status = self.backend.status(repository)?;
-        let worktrees = self.backend.worktrees(repository)?;
+    pub fn refresh(&mut self, workspace: &WorkspaceId) -> Result<bool, GitError> {
+        let status = self.backend.status(workspace, None)?;
+        let worktrees = self.backend.worktrees(workspace)?;
         let worktree_statuses = worktrees
             .iter()
-            .filter(|worktree| worktree.path.is_dir())
+            .filter(|worktree| worktree.state != lapis_git::WorktreeState::Discarded)
             .filter_map(|worktree| {
                 self.backend
-                    .status(&worktree.path)
+                    .status(workspace, Some(&worktree.worktree_id))
                     .ok()
-                    .map(|status| (worktree.task_id.clone(), status))
+                    .map(|status| (worktree.worktree_id.clone(), status))
             })
             .collect::<Vec<_>>();
-        let changed = self.status.as_ref() != Some(&status)
+        let changed = self.workspace_id.as_ref() != Some(workspace)
+            || self.status.as_ref() != Some(&status)
             || self.worktrees != worktrees
             || self.worktree_statuses != worktree_statuses;
-        self.repository_root = Some(status.root.clone());
+        if self.workspace_id.as_ref() != Some(workspace) {
+            self.selected_diff = None;
+        }
+        self.workspace_id = Some(workspace.clone());
         self.status = Some(status);
         self.worktrees = worktrees;
         self.worktree_statuses = worktree_statuses;
         Ok(changed)
     }
 
-    pub fn select_diff(&mut self, path: &Path) -> Result<(), GitError> {
-        let root = self.repository_root.as_deref().ok_or_else(|| {
+    fn workspace(&self) -> Result<&WorkspaceId, GitError> {
+        self.workspace_id.as_ref().ok_or_else(|| {
             GitError::new(
                 lapis_git::GitErrorKind::NotRepository,
-                "Git repository がありません",
+                "Workspace がありません",
             )
-        })?;
-        self.selected_diff = Some(self.backend.diff(root, path)?);
+        })
+    }
+
+    pub fn select_diff(&mut self, path: &str) -> Result<(), GitError> {
+        self.selected_diff = Some(self.backend.diff(self.workspace()?, None, path)?);
         Ok(())
     }
 
-    pub fn select_worktree_diff(&mut self, task_id: &TaskId, path: &Path) -> Result<(), GitError> {
-        let worktree = self
-            .worktrees
-            .iter()
-            .find(|worktree| &worktree.task_id == task_id)
-            .ok_or_else(|| {
-                GitError::new(lapis_git::GitErrorKind::Io, "Task worktree がありません")
-            })?;
-        self.selected_diff = Some(self.backend.diff(&worktree.path, path)?);
+    pub fn select_worktree_diff(&mut self, worktree: &TaskId, path: &str) -> Result<(), GitError> {
+        self.selected_diff = Some(self.backend.diff(self.workspace()?, Some(worktree), path)?);
         Ok(())
     }
 
-    pub fn create_task_worktree(
-        &mut self,
-        repository: &Path,
-        task_id: &TaskId,
-    ) -> Result<TaskWorktree, GitError> {
-        let worktree = self.backend.create_worktree(repository, task_id)?;
-        self.worktrees.push(worktree.clone());
-        Ok(worktree)
-    }
-
-    pub fn import_file(&mut self, task_id: &TaskId, path: &Path) -> Result<(), GitError> {
-        let index = self
-            .worktrees
-            .iter()
-            .position(|worktree| &worktree.task_id == task_id)
-            .ok_or_else(|| {
-                GitError::new(lapis_git::GitErrorKind::Io, "Task worktree がありません")
-            })?;
-        self.worktrees[index] = self.backend.import_file(&self.worktrees[index], path)?;
-        if let Some(root) = self.repository_root.clone() {
-            let _ = self.refresh(&root)?;
-        }
+    pub fn import_file(&mut self, worktree: &TaskId, path: &str) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        self.backend.import_file(&workspace, worktree, path)?;
+        self.refresh(&workspace)?;
         Ok(())
     }
 
-    pub fn discard_worktree(&mut self, task_id: &TaskId) -> Result<(), GitError> {
-        let index = self
-            .worktrees
-            .iter()
-            .position(|worktree| &worktree.task_id == task_id)
-            .ok_or_else(|| {
-                GitError::new(lapis_git::GitErrorKind::Io, "Task worktree がありません")
-            })?;
-        self.worktrees[index] = self.backend.discard_worktree(&self.worktrees[index])?;
+    pub fn discard_worktree(&mut self, worktree: &TaskId) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        self.backend.discard_worktree(&workspace, worktree)?;
+        self.refresh(&workspace)?;
         Ok(())
     }
 
-    pub fn backend(&self) -> Arc<dyn GitBackend> {
+    pub fn backend(&self) -> Arc<dyn lapis_git::GitConnection> {
         self.backend.clone()
     }
 }
@@ -555,6 +523,21 @@ impl TerminalSession {
             }
             for event in self.backend.poll(&terminal.id)? {
                 match event {
+                    TerminalEvent::Snapshot(mut snapshot) => {
+                        if snapshot.id != terminal.id
+                            || snapshot.output_sequence < terminal.output_sequence
+                        {
+                            continue;
+                        }
+                        const OUTPUT_LIMIT: usize = 256 * 1024;
+                        if snapshot.output.len() > OUTPUT_LIMIT {
+                            snapshot
+                                .output
+                                .drain(..snapshot.output.len() - OUTPUT_LIMIT);
+                            snapshot.output_truncated = true;
+                        }
+                        *terminal = snapshot;
+                    }
                     TerminalEvent::Output(output) => {
                         if output.sequence <= terminal.output_sequence {
                             continue;
@@ -891,159 +874,91 @@ impl WorkspaceSearchSession {
     }
 }
 
-/// UI と Task backend を分離する Command / Query 境界。
 pub struct TaskSession {
-    backend: Arc<dyn TaskBackend>,
-    records: Vec<TaskRecord>,
-    next_id: u64,
+    backend: Arc<dyn lapis_task_runner::TaskConnection>,
+    workspace_id: Option<WorkspaceId>,
+    records: Vec<lapis_task_runner::TaskSnapshot>,
     restore_warning: Option<String>,
 }
 
 impl TaskSession {
-    pub fn new(backend: Arc<dyn TaskBackend>) -> Self {
-        let (records, restore_warning) = match backend.load() {
-            Ok(records) => (records, None),
-            Err(error) => (Vec::new(), Some(error.to_string())),
-        };
+    pub fn new(backend: Arc<dyn lapis_task_runner::TaskConnection>) -> Self {
         Self {
             backend,
-            records,
-            next_id: 0,
-            restore_warning,
+            workspace_id: None,
+            records: Vec::new(),
+            restore_warning: None,
         }
     }
 
-    pub fn records(&self) -> &[TaskRecord] {
+    pub fn records(&self) -> &[lapis_task_runner::TaskSnapshot] {
         &self.records
     }
-
     pub fn restore_warning(&self) -> Option<&str> {
         self.restore_warning.as_deref()
     }
 
-    pub fn refresh(&mut self) -> Result<bool, TaskError> {
-        let records = self.backend.load()?;
-        let changed = records != self.records;
+    pub fn refresh(&mut self, workspace: &WorkspaceId) -> Result<bool, TaskError> {
+        let records = self.backend.load(workspace)?;
+        let changed = self.workspace_id.as_ref() != Some(workspace) || self.records != records;
+        self.workspace_id = Some(workspace.clone());
         self.records = records;
         Ok(changed)
     }
 
     pub fn start_codex(
         &mut self,
-        workspace_root: PathBuf,
+        workspace: WorkspaceId,
         prompt: impl Into<String>,
     ) -> Result<ExecutionId, TaskError> {
-        self.start_codex_with_mode(workspace_root, prompt, TaskMode::Default)
+        self.start_codex_with_mode(workspace, prompt, TaskMode::Default)
     }
 
     pub fn start_codex_with_mode(
         &mut self,
-        workspace_root: PathBuf,
+        workspace: WorkspaceId,
         prompt: impl Into<String>,
         mode: TaskMode,
     ) -> Result<ExecutionId, TaskError> {
-        let prompt = prompt.into();
-        if prompt.trim().is_empty() {
-            return Err(TaskError::new("Task の指示が空です"));
-        }
-        if !workspace_root.is_dir() {
-            return Err(TaskError::new(format!(
-                "Task の Workspace が存在しません: {}",
-                workspace_root.display()
-            )));
-        }
-        self.next_id = self.next_id.saturating_add(1);
-        let suffix = format!("{}-{}-{}", unix_time_ms(), std::process::id(), self.next_id);
-        let task_id = TaskId::new(format!("task-{suffix}"));
-        let execution_id = ExecutionId::new(format!("execution-{suffix}"));
-        let title = prompt
-            .lines()
-            .next()
-            .unwrap_or("Codex Task")
-            .chars()
-            .take(48)
-            .collect::<String>();
-        let record = TaskRecord::new(
-            Task {
-                id: task_id.clone(),
-                conversation_id: ConversationId::new("conversation-local"),
-                title,
-                prompt,
-                created_at_ms: unix_time_ms(),
-            },
-            Execution {
-                id: execution_id.clone(),
-                task_id,
-                workspace_id: WorkspaceId::new("workspace-local"),
-                workspace_root,
-                runner: "codex-app-server".to_owned(),
-                mode,
-                status: ExecutionStatus::Queued,
-                started_at_ms: None,
-                completed_at_ms: None,
-                external_thread_id: None,
-                failure: None,
-            },
-        );
-        self.backend.start(&record)?;
-        self.records.insert(0, record);
-        Ok(execution_id)
+        self.start(workspace, prompt.into(), mode, false)
     }
 
     pub fn start_codex_in_worktree(
         &mut self,
-        git: &mut GitSession,
-        repository_root: PathBuf,
+        workspace: WorkspaceId,
         prompt: impl Into<String>,
         mode: TaskMode,
     ) -> Result<ExecutionId, TaskError> {
-        let prompt = prompt.into();
-        if prompt.trim().is_empty() {
-            return Err(TaskError::new("Task の指示が空です"));
-        }
-        self.next_id = self.next_id.saturating_add(1);
-        let suffix = format!("{}-{}-{}", unix_time_ms(), std::process::id(), self.next_id);
-        let task_id = TaskId::new(format!("task-{suffix}"));
-        let execution_id = ExecutionId::new(format!("execution-{suffix}"));
-        let worktree = git
-            .create_task_worktree(&repository_root, &task_id)
-            .map_err(|error| TaskError::new(error.to_string()))?;
-        let title = prompt
-            .lines()
-            .next()
-            .unwrap_or("Codex Task")
-            .chars()
-            .take(48)
-            .collect();
-        let record = TaskRecord::new(
-            Task {
-                id: task_id.clone(),
-                conversation_id: ConversationId::new("conversation-local"),
-                title,
+        self.start(workspace, prompt.into(), mode, true)
+    }
+
+    fn start(
+        &mut self,
+        workspace: WorkspaceId,
+        prompt: String,
+        mode: TaskMode,
+        isolated: bool,
+    ) -> Result<ExecutionId, TaskError> {
+        let record = self.backend.start(
+            &workspace,
+            lapis_task_runner::TaskStart {
                 prompt,
-                created_at_ms: unix_time_ms(),
-            },
-            Execution {
-                id: execution_id.clone(),
-                task_id,
-                workspace_id: WorkspaceId::new(format!("worktree-{suffix}")),
-                workspace_root: worktree.path,
-                runner: "codex-app-server".to_owned(),
                 mode,
-                status: ExecutionStatus::Queued,
-                started_at_ms: None,
-                completed_at_ms: None,
-                external_thread_id: None,
-                failure: None,
+                isolated,
+                conversation_id: ConversationId::new("conversation-local"),
             },
-        );
-        self.backend.start(&record)?;
+        )?;
+        let execution_id = record.execution.id.clone();
+        if self.workspace_id.as_ref() != Some(&workspace) {
+            self.records.clear();
+        }
+        self.workspace_id = Some(workspace);
         self.records.insert(0, record);
         Ok(execution_id)
     }
 
     pub fn control(
-        &self,
+        &mut self,
         execution_id: &ExecutionId,
         control: TaskControl,
     ) -> Result<(), TaskError> {
@@ -1052,13 +967,11 @@ impl TaskSession {
             .iter()
             .find(|record| &record.execution.id == execution_id)
             .ok_or_else(|| TaskError::new("Task Execution が見つかりません"))?;
-        if record.execution.status.is_terminal() {
-            return Err(TaskError::new("終了済みの Task は操作できません"));
-        }
-        self.backend.control(execution_id, &control)
+        self.backend
+            .control(&record.execution.workspace_id, execution_id, &control)
     }
 
-    pub fn backend(&self) -> Arc<dyn TaskBackend> {
+    pub fn backend(&self) -> Arc<dyn lapis_task_runner::TaskConnection> {
         self.backend.clone()
     }
 }
@@ -1079,6 +992,28 @@ struct OpenDocument {
     document: Document,
     external_change: ExternalChange,
     view: DocumentViewState,
+    can_undo: bool,
+    can_redo: bool,
+}
+
+impl OpenDocument {
+    fn from_cache(cache: DocumentCache, view: DocumentViewState) -> Self {
+        Self {
+            id: cache.id,
+            document: cache.document,
+            external_change: cache.external_change,
+            can_undo: cache.can_undo,
+            can_redo: cache.can_redo,
+            view,
+        }
+    }
+
+    fn update(&mut self, cache: DocumentCache) {
+        self.document = cache.document;
+        self.external_change = cache.external_change;
+        self.can_undo = cache.can_undo;
+        self.can_redo = cache.can_redo;
+    }
 }
 
 /// UIからDocumentと外部I/Oを分離する、複数文書Workspace編集セッション。
@@ -1086,9 +1021,10 @@ pub struct EditorSession {
     documents: Vec<OpenDocument>,
     active: Option<usize>,
     workspace_root: Option<PathBuf>,
+    workspace_id: Option<WorkspaceId>,
     workspace_name: String,
     file_tree: Vec<FileEntry>,
-    next_document_id: u64,
+    document_connection: Arc<dyn DocumentConnection>,
     repository: Arc<dyn WorkspaceRepository>,
     file_dialog: Arc<dyn WorkspaceDialog>,
     state_repository: Arc<dyn WorkspaceStateRepository>,
@@ -1100,8 +1036,14 @@ impl EditorSession {
         repository: Arc<dyn WorkspaceRepository>,
         file_dialog: Arc<dyn WorkspaceDialog>,
         state_repository: Arc<dyn WorkspaceStateRepository>,
+        document_connection: Arc<dyn DocumentConnection>,
     ) -> Self {
-        let mut session = Self::new_empty(repository, file_dialog, state_repository);
+        let mut session = Self::new_empty(
+            repository,
+            file_dialog,
+            state_repository,
+            document_connection,
+        );
         if let Err(error) = session.restore() {
             session.restore_warning = Some(error.to_string());
         }
@@ -1116,14 +1058,16 @@ impl EditorSession {
         repository: Arc<dyn WorkspaceRepository>,
         file_dialog: Arc<dyn WorkspaceDialog>,
         state_repository: Arc<dyn WorkspaceStateRepository>,
+        document_connection: Arc<dyn DocumentConnection>,
     ) -> Self {
         Self {
             documents: Vec::new(),
             active: None,
             workspace_root: None,
+            workspace_id: None,
             workspace_name: "No Workspace".to_owned(),
             file_tree: Vec::new(),
-            next_document_id: 1,
+            document_connection: document_connection.fork(),
             repository,
             file_dialog,
             state_repository,
@@ -1137,6 +1081,10 @@ impl EditorSession {
 
     pub fn workspace_root(&self) -> Option<&Path> {
         self.workspace_root.as_deref()
+    }
+
+    pub fn workspace_id(&self) -> Option<&WorkspaceId> {
+        self.workspace_id.as_ref()
     }
 
     pub fn workspace_name(&self) -> &str {
@@ -1327,10 +1275,17 @@ impl EditorSession {
         range: Range<usize>,
         replacement: &str,
     ) -> Result<bool, DocumentError> {
-        let changed = self
-            .required_document_mut()?
-            .document
-            .replace_char_range(range, replacement)?;
+        let open = self.required_document()?;
+        if range.is_empty() && replacement.is_empty() {
+            return Ok(false);
+        }
+        let old_revision = open.document.revision();
+        let result = self
+            .document_connection
+            .edit(&open.id, old_revision, range, replacement);
+        let cache = self.refresh_after_error(result)?;
+        let changed = cache.document.revision() != old_revision;
+        self.required_document_mut()?.update(cache);
         if changed {
             self.persist_best_effort();
         }
@@ -1338,33 +1293,19 @@ impl EditorSession {
     }
 
     pub fn undo(&mut self) -> bool {
-        let changed = self
-            .active_document_mut()
-            .is_some_and(|open| open.document.undo());
-        if changed {
-            self.persist_best_effort();
-        }
-        changed
+        self.change_history(true)
     }
 
     pub fn redo(&mut self) -> bool {
-        let changed = self
-            .active_document_mut()
-            .is_some_and(|open| open.document.redo());
-        if changed {
-            self.persist_best_effort();
-        }
-        changed
+        self.change_history(false)
     }
 
     pub fn can_undo(&self) -> bool {
-        self.active_document()
-            .is_some_and(|open| open.document.can_undo())
+        self.active_document().is_some_and(|open| open.can_undo)
     }
 
     pub fn can_redo(&self) -> bool {
-        self.active_document()
-            .is_some_and(|open| open.document.can_redo())
+        self.active_document().is_some_and(|open| open.can_redo)
     }
 
     pub fn find(&self, query: &str, case_sensitive: bool) -> Vec<Range<usize>> {
@@ -1395,17 +1336,19 @@ impl EditorSession {
     }
 
     pub fn new_document(&mut self) {
-        let id = self.allocate_document_id();
+        let cache = match self.document_connection.create(self.workspace_root()) {
+            Ok(cache) => cache,
+            Err(error) => {
+                self.restore_warning = Some(error.to_string());
+                return;
+            }
+        };
+        let id = cache.id.clone();
         let view = DocumentViewState {
             document_id: Some(id.clone()),
             ..DocumentViewState::default()
         };
-        self.documents.push(OpenDocument {
-            id,
-            document: Document::new(),
-            external_change: ExternalChange::Unchanged,
-            view,
-        });
+        self.documents.push(OpenDocument::from_cache(cache, view));
         self.active = Some(self.documents.len() - 1);
         self.persist_best_effort();
     }
@@ -1427,13 +1370,19 @@ impl EditorSession {
     }
 
     pub fn open_workspace(&mut self, root: PathBuf) -> Result<(), WorkspaceError> {
+        let workspace_id = self
+            .document_connection
+            .workspace(&root)
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
         let tree = self.repository.list_tree(&root)?;
+        self.detach_documents();
         self.workspace_name = root
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or("Workspace")
             .to_owned();
         self.workspace_root = Some(root);
+        self.workspace_id = Some(workspace_id);
         self.file_tree = tree;
         self.documents.clear();
         self.active = None;
@@ -1442,7 +1391,9 @@ impl EditorSession {
     }
 
     pub fn close_workspace(&mut self) -> Result<(), WorkspaceError> {
+        self.detach_documents();
         self.workspace_root = None;
+        self.workspace_id = None;
         self.workspace_name = "No Workspace".to_owned();
         self.file_tree.clear();
         self.documents.clear();
@@ -1453,6 +1404,10 @@ impl EditorSession {
 
     pub fn repository(&self) -> Arc<dyn WorkspaceRepository> {
         self.repository.clone()
+    }
+
+    pub fn document_connection(&self) -> Arc<dyn DocumentConnection> {
+        self.document_connection.clone()
     }
 
     pub fn file_dialog(&self) -> Arc<dyn WorkspaceDialog> {
@@ -1481,19 +1436,22 @@ impl EditorSession {
             self.persist_best_effort();
             return Ok(());
         }
-        let data = self.repository.read_file(&path)?;
-        let document = Document::from_file(path.clone(), data)?;
-        let id = self.allocate_document_id();
-        self.documents.push(OpenDocument {
-            id: id.clone(),
-            document,
-            external_change: ExternalChange::Unchanged,
-            view: DocumentViewState {
+        let cache = self.document_connection.open(&path)?;
+        if let Some(index) = self.documents.iter().position(|open| open.id == cache.id) {
+            self.documents[index].update(cache);
+            self.active = Some(index);
+            self.persist_best_effort();
+            return Ok(());
+        }
+        let id = cache.id.clone();
+        self.documents.push(OpenDocument::from_cache(
+            cache,
+            DocumentViewState {
                 document_id: Some(id),
                 path,
                 ..DocumentViewState::default()
             },
-        });
+        ));
         self.active = Some(self.documents.len() - 1);
         self.persist_best_effort();
         Ok(())
@@ -1531,6 +1489,22 @@ impl EditorSession {
                 "未保存の文書は確認なしに閉じられません",
             ));
         }
+        if disposition == DocumentCloseDisposition::DiscardChanges {
+            match self
+                .document_connection
+                .discard(id, self.documents[index].document.revision())
+            {
+                Ok(cache) => self.documents[index].update(cache),
+                Err(error) => {
+                    if let Ok(cache) = self.document_connection.attach(id) {
+                        self.documents[index].update(cache);
+                        self.persist_best_effort();
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        self.document_connection.close(id)?;
         let was_active = self.active == Some(index);
         self.documents.remove(index);
         self.active = if self.documents.is_empty() {
@@ -1555,60 +1529,47 @@ impl EditorSession {
             path
         };
 
-        let (bytes, expected) = {
-            let open = self.required_document()?;
-            (
-                open.document.encoded_bytes(),
-                open.document.saved_fingerprint().cloned(),
-            )
+        let open = self.required_document()?;
+        let target = if open.document.path().is_none() {
+            Some(path)
+        } else {
+            None
         };
-        let fingerprint = self
-            .repository
-            .write_file(&path, &bytes, expected.as_ref())?;
-        let open = self.required_document_mut()?;
-        open.document.mark_saved(path, fingerprint);
-        open.external_change = ExternalChange::Unchanged;
+        let result = self
+            .document_connection
+            .save(&open.id, open.document.revision(), target);
+        let cache = self.refresh_after_error(result)?;
+        self.required_document_mut()?.update(cache);
         self.persist_best_effort();
         Ok(DocumentAction::Completed)
     }
 
     pub fn reload_active_from_disk(&mut self) -> Result<(), DocumentError> {
-        let path = self
-            .required_document()?
-            .document
-            .path()
-            .ok_or_else(|| DocumentError::io("未保存文書は再読み込みできません"))?
-            .to_owned();
-        if self.required_document()?.document.is_dirty() {
-            return Err(DocumentError::conflict(
-                "未保存変更がある文書は確認なしに再読み込みできません",
-            ));
-        }
-        let data = self.repository.read_file(&path)?;
-        let document = Document::from_file(path, data)?;
-        let open = self.required_document_mut()?;
-        open.document = document;
-        open.external_change = ExternalChange::Unchanged;
+        let open = self.required_document()?;
+        let result = self
+            .document_connection
+            .reload(&open.id, open.document.revision());
+        let cache = self.refresh_after_error(result)?;
+        self.required_document_mut()?.update(cache);
         self.persist_best_effort();
         Ok(())
     }
 
     pub fn poll_external_changes(&mut self) -> Vec<(DocumentId, ExternalChange)> {
-        let repository = self.repository.clone();
         let mut changes = Vec::new();
         for open in &mut self.documents {
-            let Some(path) = open.document.path() else {
-                continue;
-            };
-            let actual = match repository.fingerprint(path) {
+            let cache = match self.document_connection.attach(&open.id) {
                 Ok(value) => value,
                 Err(_) => continue,
             };
-            let state = open.document.external_change(actual.as_ref());
-            if state != open.external_change {
-                open.external_change = state;
-                changes.push((open.id.clone(), state));
+            if cache.external_change != open.external_change
+                || cache.document != open.document
+                || cache.can_undo != open.can_undo
+                || cache.can_redo != open.can_redo
+            {
+                changes.push((open.id.clone(), cache.external_change));
             }
+            open.update(cache);
         }
         changes
     }
@@ -1631,10 +1592,40 @@ impl EditorSession {
         self.active.and_then(|index| self.documents.get_mut(index))
     }
 
-    fn allocate_document_id(&mut self) -> DocumentId {
-        let id = DocumentId::new(format!("document-{}", self.next_document_id));
-        self.next_document_id = self.next_document_id.saturating_add(1);
-        id
+    fn change_history(&mut self, undo: bool) -> bool {
+        let Some(open) = self.active_document() else {
+            return false;
+        };
+        let revision = open.document.revision();
+        let result = self.document_connection.history(&open.id, revision, undo);
+        match self.refresh_after_error(result) {
+            Ok(cache) => {
+                let changed = cache.document.revision() != revision;
+                if let Some(open) = self.active_document_mut() {
+                    open.update(cache);
+                }
+                self.persist_best_effort();
+                changed
+            }
+            Err(error) => {
+                self.restore_warning = Some(error.to_string());
+                false
+            }
+        }
+    }
+
+    fn refresh_after_error(
+        &mut self,
+        result: Result<DocumentCache, DocumentError>,
+    ) -> Result<DocumentCache, DocumentError> {
+        if result.is_err()
+            && let Some(open) = self.active_document()
+            && let Ok(cache) = self.document_connection.attach(&open.id)
+            && let Some(open) = self.active_document_mut()
+        {
+            open.update(cache);
+        }
+        result
     }
 
     fn restore(&mut self) -> Result<(), WorkspaceError> {
@@ -1644,13 +1635,35 @@ impl EditorSession {
         self.restore_snapshot(snapshot)
     }
 
+    fn recover_document_draft(&self, draft: &str) -> Result<DocumentCache, WorkspaceError> {
+        let cache = self
+            .document_connection
+            .create(self.workspace_root())
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        self.document_connection
+            .edit(
+                &cache.id,
+                cache.document.revision(),
+                0..cache.document.len_chars(),
+                draft,
+            )
+            .map_err(|error| WorkspaceError::new(error.to_string()))
+    }
+
     pub fn restore_snapshot(&mut self, snapshot: WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+        self.detach_documents();
         self.documents.clear();
         self.active = None;
         self.workspace_root = None;
+        self.workspace_id = None;
         self.file_tree.clear();
         self.workspace_name = "No Workspace".to_owned();
         if let Some(root) = snapshot.root {
+            let workspace_id = self
+                .document_connection
+                .workspace(&root)
+                .map_err(|error| WorkspaceError::new(error.to_string()))?;
+            self.workspace_id = Some(workspace_id);
             self.workspace_name = root
                 .file_name()
                 .and_then(|name| name.to_str())
@@ -1660,33 +1673,74 @@ impl EditorSession {
             self.workspace_root = Some(root);
         }
         for view in snapshot.open_documents {
-            let mut document = if view.path.as_os_str().is_empty() {
-                Document::new()
-            } else {
-                let Ok(data) = self.repository.read_file(&view.path) else {
-                    continue;
-                };
-                let Ok(document) = Document::from_file(view.path.clone(), data) else {
-                    continue;
-                };
-                document
+            let attached = view
+                .document_id
+                .as_ref()
+                .and_then(|id| self.document_connection.attach(id).ok());
+            let recovered = attached.is_some();
+            let cache = attached.map(Ok).unwrap_or_else(|| {
+                if view.path.as_os_str().is_empty() {
+                    self.document_connection.create(self.workspace_root())
+                } else {
+                    self.document_connection.open(&view.path)
+                }
+            });
+            let mut cache = match cache {
+                Ok(cache) => cache,
+                Err(error) => {
+                    let Some(draft) = &view.draft_content else {
+                        continue;
+                    };
+                    let cache = self.recover_document_draft(draft)?;
+                    self.restore_warning = Some(format!(
+                        "元の文書を開けないため復元 draft を未保存文書として開きました: {error}"
+                    ));
+                    cache
+                }
             };
-            if let Some(draft) = &view.draft_content {
-                let len = document.len_chars();
-                if document.replace_char_range(0..len, draft).is_err() {
-                    continue;
+            if !recovered
+                && let Some(draft) = &view.draft_content
+                && cache.document.content_for_save() != *draft
+            {
+                if cache.reused {
+                    self.documents
+                        .push(OpenDocument::from_cache(cache, view.clone()));
+                    cache = self
+                        .document_connection
+                        .create(self.workspace_root())
+                        .map_err(|error| WorkspaceError::new(error.to_string()))?;
+                    self.restore_warning = Some(
+                        "復元 draft は共有文書を上書きせず未保存文書として開きました".to_owned(),
+                    );
+                }
+                match self.document_connection.edit(
+                    &cache.id,
+                    cache.document.revision(),
+                    0..cache.document.len_chars(),
+                    draft,
+                ) {
+                    Ok(updated) => cache = updated,
+                    Err(error) => {
+                        let current = self.document_connection.attach(&cache.id).ok();
+                        cache = self.recover_document_draft(draft)?;
+                        if let Some(current) = current {
+                            self.documents
+                                .push(OpenDocument::from_cache(current, view.clone()));
+                        }
+                        self.restore_warning = Some(format!(
+                            "復元 draft の適用に失敗したため未保存文書として開きました: {error}"
+                        ));
+                    }
                 }
             }
-            let id = self.allocate_document_id();
-            self.documents.push(OpenDocument {
-                id: id.clone(),
-                document,
-                external_change: ExternalChange::Unchanged,
-                view: DocumentViewState {
+            let id = cache.id.clone();
+            self.documents.push(OpenDocument::from_cache(
+                cache,
+                DocumentViewState {
                     document_id: Some(id),
                     ..view
                 },
-            });
+            ));
         }
         self.active = snapshot.active_path.and_then(|path| {
             self.documents
@@ -1705,6 +1759,14 @@ impl EditorSession {
         }
     }
 
+    fn detach_documents(&mut self) {
+        for open in &self.documents {
+            if let Err(error) = self.document_connection.close(&open.id) {
+                self.restore_warning = Some(error.to_string());
+            }
+        }
+    }
+
     fn persist(&self) -> Result<(), WorkspaceError> {
         self.state_repository.save(&self.snapshot())
     }
@@ -1712,10 +1774,14 @@ impl EditorSession {
 
 #[cfg(test)]
 mod tests {
+    include!("document_tests.rs");
     use std::{collections::HashMap, sync::Mutex};
 
-    use lapis_document::{DocumentErrorKind, FileData, FileFingerprint};
+    use lapis_document::{DocumentErrorKind, DocumentRepository, FileData, FileFingerprint};
     use lapis_lsp::{DiagnosticSeverity, LspRange};
+    use lapis_task_runner::{
+        ExecutionSnapshot, ExecutionStatus, Task, TaskSnapshot, TaskStart, unix_time_ms,
+    };
     use lapis_workspace::{FileEntryKind, WorkspaceStateRepository};
 
     use super::*;
@@ -1831,8 +1897,9 @@ mod tests {
 
     #[derive(Default)]
     struct MemoryTaskBackend {
-        records: Mutex<Vec<TaskRecord>>,
+        records: Mutex<Vec<TaskSnapshot>>,
         controls: Mutex<Vec<(ExecutionId, TaskControl)>>,
+        starts: Mutex<Vec<TaskStart>>,
     }
 
     struct UnavailableTerminalBackend;
@@ -1949,18 +2016,57 @@ mod tests {
         }
     }
 
-    impl TaskBackend for MemoryTaskBackend {
-        fn load(&self) -> Result<Vec<TaskRecord>, TaskError> {
-            Ok(self.records.lock().unwrap().clone())
+    impl lapis_task_runner::TaskConnection for MemoryTaskBackend {
+        fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
+            Ok(self
+                .records
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|record| &record.execution.workspace_id == workspace)
+                .cloned()
+                .collect())
         }
 
-        fn start(&self, record: &TaskRecord) -> Result<(), TaskError> {
-            self.records.lock().unwrap().insert(0, record.clone());
-            Ok(())
+        fn start(
+            &self,
+            workspace: &WorkspaceId,
+            input: TaskStart,
+        ) -> Result<TaskSnapshot, TaskError> {
+            let mut records = self.records.lock().unwrap();
+            let sequence = records.len() + 1;
+            let task_id = TaskId::new(format!("canonical-task-{sequence}"));
+            let record = TaskSnapshot {
+                task: Task {
+                    id: task_id.clone(),
+                    conversation_id: input.conversation_id.clone(),
+                    title: input.prompt.clone(),
+                    prompt: input.prompt.clone(),
+                    created_at_ms: unix_time_ms(),
+                },
+                execution: ExecutionSnapshot {
+                    id: ExecutionId::new(format!("canonical-execution-{sequence}")),
+                    task_id: task_id.clone(),
+                    workspace_id: workspace.clone(),
+                    worktree_id: input.isolated.then_some(task_id),
+                    runner: "test".to_owned(),
+                    mode: input.mode,
+                    status: ExecutionStatus::Queued,
+                    started_at_ms: None,
+                    completed_at_ms: None,
+                    external_thread_id: None,
+                    failure: None,
+                },
+                events: Vec::new(),
+            };
+            self.starts.lock().unwrap().push(input);
+            records.insert(0, record.clone());
+            Ok(record)
         }
 
         fn control(
             &self,
+            _workspace: &WorkspaceId,
             execution_id: &ExecutionId,
             control: &TaskControl,
         ) -> Result<(), TaskError> {
@@ -2017,6 +2123,7 @@ mod tests {
     }
 
     fn session(repository: Arc<MemoryRepository>, state: Arc<MemoryState>) -> EditorSession {
+        let documents = Arc::new(MemoryDocuments::new(repository.clone()));
         EditorSession::new(
             repository,
             Arc::new(FixedDialog {
@@ -2024,17 +2131,20 @@ mod tests {
                 save: None,
             }),
             state,
+            documents,
         )
     }
     #[test]
     fn new_empty_starts_without_workspace_or_document() {
+        let repository = Arc::new(MemoryRepository::default());
         let editor = EditorSession::new_empty(
-            Arc::new(MemoryRepository::default()),
+            repository.clone(),
             Arc::new(FixedDialog {
                 workspace: None,
                 save: None,
             }),
             Arc::new(MemoryState::default()),
+            Arc::new(MemoryDocuments::new(repository)),
         );
 
         assert!(editor.workspace_root().is_none());
@@ -2273,19 +2383,19 @@ mod tests {
 
     #[test]
     fn task_session_starts_plan_refreshes_and_routes_control() {
-        let workspace = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::new("canonical-workspace");
         let backend = Arc::new(MemoryTaskBackend::default());
         let mut tasks = TaskSession::new(backend.clone());
         let execution_id = tasks
-            .start_codex_with_mode(workspace.path().to_owned(), "質問する", TaskMode::Plan)
+            .start_codex_with_mode(workspace.clone(), "質問する", TaskMode::Plan)
             .unwrap();
 
         assert_eq!(tasks.records().len(), 1);
         assert_eq!(tasks.records()[0].execution.mode, TaskMode::Plan);
         assert_eq!(tasks.records()[0].execution.status, ExecutionStatus::Queued);
 
-        backend.records.lock().unwrap()[0].set_status(ExecutionStatus::WaitingForInput);
-        assert!(tasks.refresh().unwrap());
+        backend.records.lock().unwrap()[0].execution.status = ExecutionStatus::WaitingForInput;
+        assert!(tasks.refresh(&workspace).unwrap());
         tasks
             .control(
                 &execution_id,

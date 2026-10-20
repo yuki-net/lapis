@@ -121,11 +121,19 @@ mod tests {
         BackendState, WorkspaceEntry, WorkspaceFileBackend, WorkspaceRegistration,
     };
     use lapis_client_api::{
+        CapabilityId, WorkspaceOperation as Operation, WorkspaceOperationRequest,
+        WorkspaceOperationResult as Outcome,
+    };
+    use lapis_client_api::{
         CapabilitySet, DocumentCreateRequest, DocumentEncoding, EventBody, RequestBody, RequestId,
         ResponseBody, SessionId, SnapshotReason, SnapshotRequest, WorkspaceConnectRequest,
         WorkspaceId, WorkspaceRelativePath,
     };
     use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+    use lapis_editor_core::{ConversationId, ExecutionId, TaskId};
+    use lapis_task::{
+        ExecutionStatus, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord, TaskStart,
+    };
 
     use super::*;
 
@@ -238,6 +246,257 @@ mod tests {
             ),
         ));
         assert!(matches!(disconnected.body, ResponseBody::Error(_)));
+    }
+
+    #[derive(Default)]
+    struct FakeTasks {
+        records: Mutex<Vec<TaskRecord>>,
+        controls: Mutex<Vec<(ExecutionId, TaskControl)>>,
+    }
+
+    impl TaskBackend for FakeTasks {
+        fn load(&self) -> Result<Vec<TaskRecord>, TaskError> {
+            Ok(self.records.lock().unwrap().clone())
+        }
+
+        fn start(&self, record: &TaskRecord) -> Result<(), TaskError> {
+            self.records.lock().unwrap().push(record.clone());
+            Ok(())
+        }
+
+        fn control(&self, id: &ExecutionId, control: &TaskControl) -> Result<(), TaskError> {
+            self.controls
+                .lock()
+                .unwrap()
+                .push((id.clone(), control.clone()));
+            Ok(())
+        }
+    }
+
+    fn task_input() -> TaskStart {
+        TaskStart {
+            prompt: "契約テスト".into(),
+            mode: TaskMode::Plan,
+            isolated: false,
+            conversation_id: ConversationId::new("conversation-1"),
+        }
+    }
+
+    fn operation(workspace_id: &WorkspaceId, operation: Operation) -> RequestBody {
+        RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+            workspace_id: workspace_id.clone(),
+            operation,
+        })
+    }
+
+    fn grant(capabilities: &[&str]) -> SessionGrant {
+        SessionGrant::from_authenticated(
+            SessionId::try_new("remote-1").unwrap(),
+            WorkspaceId::try_new("workspace-1").unwrap(),
+            CapabilitySet::try_new(
+                capabilities
+                    .iter()
+                    .map(|value| CapabilityId::try_new(*value).unwrap()),
+            )
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn workspace_execute_grants_separate_every_git_and_task_capability() {
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let task_id = TaskId::new("task-1");
+        let path = WorkspaceRelativePath::parse("note.txt").unwrap();
+        let capabilities = [
+            "workspace.git.read",
+            "workspace.git.write",
+            "workspace.tasks.read",
+            "workspace.tasks.start",
+            "workspace.tasks.control",
+        ];
+        let operations = [
+            (Operation::GitStatus { worktree: None }, capabilities[0]),
+            (
+                Operation::GitDiff {
+                    path: path.clone(),
+                    worktree: None,
+                },
+                capabilities[0],
+            ),
+            (Operation::Worktrees, capabilities[0]),
+            (Operation::CreateWorktree, capabilities[1]),
+            (
+                Operation::ImportFile {
+                    worktree_id: task_id.clone(),
+                    path,
+                },
+                capabilities[1],
+            ),
+            (
+                Operation::DiscardWorktree {
+                    worktree_id: task_id,
+                },
+                capabilities[1],
+            ),
+            (Operation::Tasks, capabilities[2]),
+            (
+                Operation::StartTask {
+                    input: task_input(),
+                },
+                capabilities[3],
+            ),
+            (
+                Operation::ControlTask {
+                    execution_id: ExecutionId::new("execution-1"),
+                    control: TaskControl::Cancel,
+                },
+                capabilities[4],
+            ),
+        ];
+        for (command, expected) in operations {
+            let request = operation(&workspace_id, command);
+            assert_eq!(
+                grant(&[]).require_request(&request),
+                Err(crate::AuthorizationError::CapabilityDenied(expected.into()))
+            );
+            for capability in capabilities {
+                let result = grant(&[capability]).require_request(&request);
+                if capability == expected {
+                    assert_eq!(result, Ok(()));
+                } else {
+                    assert_eq!(
+                        result,
+                        Err(crate::AuthorizationError::CapabilityDenied(expected.into()))
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remote_and_embedded_clients_share_task_state_after_workspace_connect() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let tasks = Arc::new(FakeTasks::default());
+        let state = BackendState::new([WorkspaceRegistration::new(
+            workspace_id.clone(),
+            "Workspace",
+            root.path().to_owned(),
+            Arc::new(EmptyFiles),
+        )
+        .with_tasks(tasks.clone())])
+        .unwrap();
+        let backend = BackendService::start(state).unwrap();
+        let embedded = lapis_backend_state::EmbeddedClient::connect(
+            backend.clone(),
+            SessionId::try_new("embedded-1").unwrap(),
+            workspace_id.clone(),
+        )
+        .unwrap();
+        let handler = BackendRemoteHandler::new(backend);
+        let grant = grant(&[
+            "workspace.connect",
+            "workspace.tasks.read",
+            "workspace.tasks.start",
+            "workspace.tasks.control",
+        ]);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let dispatch = |number, body: RequestBody| {
+            grant.require_request(&body).unwrap();
+            runtime
+                .block_on(handler.handle(grant.clone(), request(number, body)))
+                .body
+        };
+        assert!(matches!(
+            dispatch(
+                1,
+                RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                    workspace_id: workspace_id.clone()
+                })
+            ),
+            ResponseBody::WorkspaceConnect(_)
+        ));
+        let ResponseBody::WorkspaceExecute(Outcome::TaskStarted(remote_record)) = dispatch(
+            2,
+            operation(
+                &workspace_id,
+                Operation::StartTask {
+                    input: task_input(),
+                },
+            ),
+        ) else {
+            panic!("Remote 開始結果が必要")
+        };
+        let remote_record = *remote_record;
+        assert_eq!(
+            remote_record.execution.workspace_id.as_str(),
+            workspace_id.as_str()
+        );
+        assert_eq!(remote_record.execution.status, ExecutionStatus::Queued);
+        let list = operation(&workspace_id, Operation::Tasks);
+        assert_eq!(
+            embedded.request(list.clone()).unwrap(),
+            ResponseBody::WorkspaceExecute(Outcome::Tasks(vec![remote_record.clone()]))
+        );
+        let ResponseBody::WorkspaceExecute(Outcome::TaskStarted(embedded_record)) = embedded
+            .request(operation(
+                &workspace_id,
+                Operation::StartTask {
+                    input: task_input(),
+                },
+            ))
+            .unwrap()
+        else {
+            panic!("Embedded 開始結果が必要")
+        };
+        let embedded_record = *embedded_record;
+        assert_ne!(embedded_record.task.id, remote_record.task.id);
+        assert_ne!(embedded_record.execution.id, remote_record.execution.id);
+        assert_eq!(
+            embedded_record.execution.workspace_id.as_str(),
+            workspace_id.as_str()
+        );
+        let expected = ResponseBody::WorkspaceExecute(Outcome::Tasks(vec![
+            remote_record.clone(),
+            embedded_record,
+        ]));
+        assert_eq!(dispatch(3, list.clone()), expected);
+        assert_eq!(embedded.request(list.clone()).unwrap(), expected);
+        assert_eq!(
+            dispatch(
+                4,
+                operation(
+                    &workspace_id,
+                    Operation::ControlTask {
+                        execution_id: remote_record.execution.id.clone(),
+                        control: TaskControl::Cancel
+                    }
+                )
+            ),
+            ResponseBody::WorkspaceExecute(Outcome::Completed)
+        );
+        assert_eq!(
+            *tasks.controls.lock().unwrap(),
+            vec![(remote_record.execution.id, TaskControl::Cancel)]
+        );
+        handler.disconnect(&grant);
+        assert_eq!(embedded.request(list.clone()).unwrap(), expected);
+        assert!(matches!(
+            dispatch(
+                5,
+                RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                    workspace_id: workspace_id.clone()
+                })
+            ),
+            ResponseBody::WorkspaceConnect(_)
+        ));
+        assert_eq!(dispatch(6, list), expected);
+        assert_eq!(tasks.load().unwrap().len(), 2);
+        assert_eq!(tasks.controls.lock().unwrap().len(), 1);
+        handler.disconnect(&grant);
     }
 
     fn request(number: u64, body: RequestBody) -> RequestEnvelope {

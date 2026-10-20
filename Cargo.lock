@@ -3080,14 +3080,13 @@ name = "lapis"
 version = "0.1.0"
 dependencies = [
  "lapis-app-services",
- "lapis-backend-state",
- "lapis-client-api",
  "lapis-desktop-ui",
+ "lapis-host",
  "lapis-persistence",
  "lapis-platform",
  "lapis-remote",
  "lapis-settings",
- "lapis-task-runner",
+ "lapis-task",
  "rfd",
 ]
 
@@ -3101,7 +3100,7 @@ dependencies = [
  "lapis-localization",
  "lapis-lsp",
  "lapis-settings",
- "lapis-task-runner",
+ "lapis-task",
  "lapis-terminal",
  "lapis-workspace",
  "serde",
@@ -3114,6 +3113,9 @@ version = "0.1.0"
 dependencies = [
  "lapis-client-api",
  "lapis-document",
+ "lapis-editor-core",
+ "lapis-git",
+ "lapis-task",
  "lapis-terminal",
  "lapis-text",
  "tempfile",
@@ -3123,6 +3125,9 @@ dependencies = [
 name = "lapis-client-api"
 version = "0.1.0"
 dependencies = [
+ "lapis-editor-core",
+ "lapis-git",
+ "lapis-task",
  "serde",
  "serde_json",
 ]
@@ -3139,7 +3144,7 @@ dependencies = [
  "lapis-localization",
  "lapis-lsp",
  "lapis-settings",
- "lapis-task-runner",
+ "lapis-task",
  "lapis-terminal",
  "lapis-workspace",
  "serde",
@@ -3150,6 +3155,7 @@ dependencies = [
 name = "lapis-document"
 version = "0.1.0"
 dependencies = [
+ "lapis-editor-core",
  "lapis-text",
 ]
 
@@ -3166,6 +3172,23 @@ version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
  "serde",
+]
+
+[[package]]
+name = "lapis-host"
+version = "0.1.0"
+dependencies = [
+ "lapis-app-services",
+ "lapis-backend-state",
+ "lapis-client-api",
+ "lapis-document",
+ "lapis-editor-core",
+ "lapis-git",
+ "lapis-platform",
+ "lapis-task",
+ "lapis-terminal",
+ "lapis-workspace",
+ "tempfile",
 ]
 
 [[package]]
@@ -3208,7 +3231,6 @@ dependencies = [
 name = "lapis-platform"
 version = "0.1.0"
 dependencies = [
- "lapis-app-services",
  "lapis-backend-state",
  "lapis-document",
  "lapis-editor-core",
@@ -3240,6 +3262,8 @@ dependencies = [
  "lapis-backend-state",
  "lapis-client-api",
  "lapis-document",
+ "lapis-editor-core",
+ "lapis-task",
  "rcgen",
  "rustls",
  "serde",
@@ -3261,10 +3285,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapis-task"
+version = "0.1.0"
+dependencies = [
+ "lapis-editor-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "lapis-task-runner"
 version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
+ "lapis-task",
  "serde",
  "serde_json",
 ]

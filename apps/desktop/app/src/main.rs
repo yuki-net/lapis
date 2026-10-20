@@ -7,11 +7,10 @@ use lapis_app_services::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
-use lapis_backend_state::{BackendService, BackendState, WorkspaceRegistration};
+use lapis_host::BackendHost;
 use lapis_persistence::{LocalConversationRepository, LocalGlobalSettingsRepository};
 use lapis_platform::{
-    ConnectionGate, LocalGitBackend, LocalLspBackend, LocalTaskBackend, LocalTerminalBackend,
-    LocalWorkspaceRepository, LocalWorkspaceSearchBackend, LocalWorkspaceStateRepository,
+    ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LocalWorkspaceStateRepository,
     LoopbackBackend, run_task_worker,
 };
 use lapis_remote::{
@@ -42,18 +41,12 @@ fn main() {
     }
     let use_loopback = arguments.iter().any(|value| value == "--loopback");
     let connection = ConnectionGate::connected();
-    let workspace_repository: Arc<dyn lapis_app_services::WorkspaceRepository> = if use_loopback {
-        Arc::new(LoopbackBackend::new(
-            Arc::new(LocalWorkspaceRepository),
-            connection.clone(),
-        ))
-    } else {
-        Arc::new(LocalWorkspaceRepository)
-    };
+    let host = BackendHost::start().expect("Backend Host must start");
     let mut session = EditorSession::new(
-        workspace_repository,
+        host.workspaces(),
         Arc::new(workspace_dialog::NativeWorkspaceDialog),
         Arc::new(LocalWorkspaceStateRepository::user_default()),
+        host.documents(),
     );
     if let Some(index) = arguments.iter().position(|value| value == "--workspace") {
         let Some(root) = arguments.get(index + 1).map(std::path::PathBuf::from) else {
@@ -99,22 +92,17 @@ fn main() {
     if let Err(error) = conversation_session.restore_matching_workspace(&mut session) {
         eprintln!("Conversation restore failed: {error}");
     }
-    let task_session = if use_loopback {
-        TaskSession::new(Arc::new(LoopbackBackend::new(
-            Arc::new(LocalTaskBackend::user_default()),
-            connection.clone(),
-        )))
-    } else {
-        TaskSession::new(Arc::new(LocalTaskBackend::user_default()))
-    };
-    let git_session = if use_loopback {
-        GitSession::new(Arc::new(LoopbackBackend::new(
-            Arc::new(LocalGitBackend::user_default()),
-            connection.clone(),
-        )))
-    } else {
-        GitSession::new(Arc::new(LocalGitBackend::user_default()))
-    };
+    if let Some(root) = session.workspace_root() {
+        host.register_workspace(root)
+            .expect("Workspace registration must succeed");
+    }
+    let mut task_session = TaskSession::new(host.tasks());
+    if let Some(workspace) = session.workspace_id()
+        && let Err(error) = task_session.refresh(workspace)
+    {
+        eprintln!("Task restore failed: {error}");
+    }
+    let git_session = GitSession::new(host.git());
     let lsp_session = if use_loopback {
         LspSession::new(Arc::new(LoopbackBackend::new(
             Arc::new(LocalLspBackend::default()),
@@ -123,14 +111,7 @@ fn main() {
     } else {
         LspSession::new(Arc::new(LocalLspBackend::default()))
     };
-    let mut terminal_session = if use_loopback {
-        TerminalSession::new(Arc::new(LoopbackBackend::new(
-            Arc::new(LocalTerminalBackend::default()),
-            connection.clone(),
-        )))
-    } else {
-        TerminalSession::new(Arc::new(LocalTerminalBackend::default()))
-    };
+    let mut terminal_session = TerminalSession::new(host.terminals());
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(
             Arc::new(LocalWorkspaceSearchBackend),
@@ -142,43 +123,29 @@ fn main() {
 
     let mut _remote_server: Option<RemoteServer> = None;
     if let Some(root) = session.workspace_root() {
-        let workspace_id = lapis_client_api::WorkspaceId::try_new("workspace-default")
-            .expect("default workspace id must be valid");
-        let local_files = Arc::new(LocalWorkspaceRepository);
-        let local_terminals = Arc::new(LocalTerminalBackend::default());
-        let registration = WorkspaceRegistration::new(
-            workspace_id,
-            session.workspace_name(),
-            root.to_owned(),
-            local_files,
-        )
-        .with_terminal(local_terminals);
-
-        if let Ok(state) = BackendState::new([registration])
-            && let Ok(backend_service) = BackendService::start(state)
-        {
-            let auth_config = AuthConfig::new(
-                PairingLifetime::new(300).expect("valid pairing lifetime"),
-                CredentialLifetime::new(86400).expect("valid credential lifetime"),
+        host.register_workspace(root)
+            .expect("Workspace registration must succeed");
+        let auth_config = AuthConfig::new(
+            PairingLifetime::new(300).expect("valid pairing lifetime"),
+            CredentialLifetime::new(86400).expect("valid credential lifetime"),
+        );
+        let mut auth = RemoteAuth::system(auth_config, AuthPolicy::new(Default::default()));
+        auth.enable();
+        let shared_auth = Arc::new(std::sync::Mutex::new(auth));
+        let handler = Arc::new(BackendRemoteHandler::new(host.service()));
+        if let Ok(tls) = Tls13ServerConfig::generate_self_signed(vec![
+            "localhost".to_owned(),
+            "127.0.0.1".to_owned(),
+        ]) {
+            let server_config = RemoteServerConfig::new(
+                "127.0.0.1:0"
+                    .parse()
+                    .expect("valid loopback socket address"),
+                tls,
+                RemoteLimits::default(),
             );
-            let mut auth = RemoteAuth::system(auth_config, AuthPolicy::new(Default::default()));
-            auth.enable();
-            let shared_auth = Arc::new(std::sync::Mutex::new(auth));
-            let handler = Arc::new(BackendRemoteHandler::new(backend_service));
-            if let Ok(tls) = Tls13ServerConfig::generate_self_signed(vec![
-                "localhost".to_owned(),
-                "127.0.0.1".to_owned(),
-            ]) {
-                let server_config = RemoteServerConfig::new(
-                    "127.0.0.1:0"
-                        .parse()
-                        .expect("valid loopback socket address"),
-                    tls,
-                    RemoteLimits::default(),
-                );
-                if let Ok(server) = RemoteServer::start(server_config, shared_auth, handler) {
-                    _remote_server = Some(server);
-                }
+            if let Ok(server) = RemoteServer::start(server_config, shared_auth, handler) {
+                _remote_server = Some(server);
             }
         }
     }
@@ -224,8 +191,13 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
     } else {
         lapis_task_runner::TaskMode::Default
     };
-    let mut session = TaskSession::new(Arc::new(LocalTaskBackend::user_default()));
-    let execution_id = match session.start_codex_with_mode(workspace_root, prompt, mode) {
+    let host = BackendHost::start().expect("Backend Host must start");
+    let workspace = host
+        .documents()
+        .workspace(&workspace_root)
+        .expect("Workspace must register");
+    let mut session = TaskSession::new(host.tasks());
+    let execution_id = match session.start_codex_with_mode(workspace.clone(), prompt, mode) {
         Ok(id) => id,
         Err(error) => {
             eprintln!("Task start failed: {error}");
@@ -237,7 +209,7 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
     let mut last_controlled_status = None;
     for _ in 0..900 {
         std::thread::sleep(Duration::from_millis(200));
-        if let Err(error) = session.refresh() {
+        if let Err(error) = session.refresh(&workspace) {
             eprintln!("Task refresh failed: {error}");
             std::process::exit(1);
         }
@@ -245,6 +217,7 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
             .records()
             .iter()
             .find(|record| record.execution.id == execution_id)
+            .cloned()
         else {
             continue;
         };

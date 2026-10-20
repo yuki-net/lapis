@@ -6,7 +6,6 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-app-services = { path = "../../application/services" }
 lapis-backend-state = { path = "../../runtime" }
 lapis-document = { path = "../../../shared/models/document" }
 lapis-editor-core = { path = "../../../shared/models/editor-core" }

@@ -6,13 +6,12 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+lapis-host = { path = "../../../backend/host" }
 lapis-app-services = { path = "../../../backend/application/services" }
-lapis-backend-state = { path = "../../../backend/runtime" }
-lapis-client-api = { path = "../../../shared/protocol" }
 lapis-desktop-ui = { path = "../ui" }
 lapis-platform = { path = "../../../backend/infrastructure/local" }
 lapis-persistence = { path = "../../../backend/infrastructure/persistence" }
 lapis-remote = { path = "../../../backend/transport/remote" }
 lapis-settings = { path = "../../../shared/models/settings" }
-lapis-task-runner = { path = "../../../backend/infrastructure/task-runner" }
+lapis-task-runner = { package = "lapis-task", path = "../../../shared/models/task" }
 rfd.workspace = true

@@ -14,7 +14,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lapis_app_services::WorkspaceRepository;
 use lapis_backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use lapis_editor_core::ExecutionId;
@@ -34,6 +33,7 @@ use lapis_terminal::{
     TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalOutput,
     TerminalOutputSequence,
 };
+use lapis_workspace::WorkspaceRepository;
 use lapis_workspace::{
     DocumentViewState, FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError,
     WorkspaceSearchBackend, WorkspaceSnapshot, WorkspaceStateRepository,

@@ -17,6 +17,6 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 - `runtime/`：Workspace 等の正規状態と実行リソースの寿命。
 - `infrastructure/`：ファイルシステム、Git CLI、PTY、Agent、永続化の具体実装。
 - `transport/`：認証と通信経路。独立した正規状態を作らない。
-- `host/`：起動・終了・依存注入（必要になったときに実装）。
+- `host/`：Runtime と具体実装の組み立て、埋め込み接続の生成、実行リソースの起動・終了。Desktop の接続を破棄しても Host 自体は終了しない。
 
 依存方向は [責務と依存方向](../docs/specs/architecture.md) を参照してください。
