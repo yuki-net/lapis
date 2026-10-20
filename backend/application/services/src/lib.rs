@@ -1489,6 +1489,20 @@ impl EditorSession {
                 "未保存の文書は確認なしに閉じられません",
             ));
         }
+        if disposition == DocumentCloseDisposition::DiscardChanges {
+            match self
+                .document_connection
+                .discard(id, self.documents[index].document.revision())
+            {
+                Ok(cache) => self.documents[index].update(cache),
+                Err(error) => {
+                    if let Ok(cache) = self.document_connection.attach(id) {
+                        self.documents[index].update(cache);
+                    }
+                    return Err(error);
+                }
+            }
+        }
         self.document_connection.close(id)?;
         let was_active = self.active == Some(index);
         self.documents.remove(index);

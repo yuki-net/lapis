@@ -375,6 +375,21 @@ impl DocumentConnection for HostDocuments {
         self.inspect(id)
     }
 
+    fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
+        let (client, root, document_id) = self.resource(id)?;
+        let response = Self::request(
+            &client,
+            wire::RequestBody::DocumentDiscard(wire::DocumentDiscardRequest {
+                document_id,
+                base_revision: wire::Revision::new(revision.number()),
+            }),
+        )?;
+        let wire::ResponseBody::DocumentDiscard(response) = response else {
+            return Err(DocumentError::io("Document 応答が不正です"));
+        };
+        self.cache(client, root, response.document)
+    }
+
     fn close(&self, id: &DocumentId) -> Result<(), DocumentError> {
         self.attach(id)?;
         let (client, _, document_id) = self.resource(id)?;

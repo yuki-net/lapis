@@ -24,11 +24,12 @@ pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCa
 pub use connection::ConnectionState;
 pub use document::{
     DocumentCloseRequest, DocumentCloseResponse, DocumentCreateRequest, DocumentCreateResponse,
-    DocumentEditRequest, DocumentEditResponse, DocumentEncoding, DocumentExternalChange,
-    DocumentHistoryRequest, DocumentHistoryResponse, DocumentInspectRequest, DocumentOpenRequest,
-    DocumentOpenResponse, DocumentSaveAsRequest, DocumentSaveRequest, DocumentSaveResponse,
-    DocumentSnapshot, DocumentTextEdit, DocumentTransaction, DocumentUntitledRequest,
-    InvalidDocumentTextEdit, InvalidDocumentTransaction,
+    DocumentDiscardRequest, DocumentDiscardResponse, DocumentEditRequest, DocumentEditResponse,
+    DocumentEncoding, DocumentExternalChange, DocumentHistoryRequest, DocumentHistoryResponse,
+    DocumentInspectRequest, DocumentOpenRequest, DocumentOpenResponse, DocumentSaveAsRequest,
+    DocumentSaveRequest, DocumentSaveResponse, DocumentSnapshot, DocumentTextEdit,
+    DocumentTransaction, DocumentUntitledRequest, InvalidDocumentTextEdit,
+    InvalidDocumentTransaction,
 };
 pub use envelope::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
 pub use error::{

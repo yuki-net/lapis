@@ -18,6 +18,8 @@ pub enum ResponseBody {
     DocumentSaveAs(DocumentHistoryResponse),
     #[serde(rename = "document.reload")]
     DocumentReload(DocumentHistoryResponse),
+    #[serde(rename = "document.discard")]
+    DocumentDiscard(crate::DocumentDiscardResponse),
     #[serde(rename = "workspace.execute")]
     WorkspaceExecute(crate::WorkspaceOperationResult),
     #[serde(rename = "workspace.list")]
@@ -63,6 +65,7 @@ impl ResponseBody {
             Self::DocumentUntitled(_) => Some("document.untitled"),
             Self::DocumentSaveAs(_) => Some("document.save_as"),
             Self::DocumentReload(_) => Some("document.reload"),
+            Self::DocumentDiscard(_) => Some("document.discard"),
             Self::WorkspaceExecute(_) => Some("workspace.execute"),
             Self::WorkspaceList(_) => Some("workspace.list"),
             Self::WorkspaceConnect(_) => Some("workspace.connect"),

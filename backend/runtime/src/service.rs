@@ -87,12 +87,50 @@ impl BackendService {
         session: BackendSession,
         request: RequestEnvelope,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
+        if let lapis_client_api::RequestBody::WorkspaceExecute(operation) = request.body {
+            return self.execute_workspace_operation(session, request.request_id, operation);
+        }
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
             .sender()?
             .send(Command::Dispatch {
                 session,
                 request,
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        receive.recv().map_err(|_| BackendServiceError::Unavailable)
+    }
+
+    fn execute_workspace_operation(
+        &self,
+        session: BackendSession,
+        request_id: lapis_client_api::RequestId,
+        request: lapis_client_api::WorkspaceOperationRequest,
+    ) -> Result<ResponseEnvelope, BackendServiceError> {
+        let changed = request.operation.is_mutation();
+        let workspace_id = session.workspace_id.clone();
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::PrepareWorkspaceOperation {
+                session,
+                request,
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        let prepared = receive
+            .recv()
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        let result = prepared.and_then(|operation| operation.execute());
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::CompleteWorkspaceOperation {
+                workspace_id,
+                changed,
+                request_id,
+                result,
                 respond,
             })
             .map_err(|_| BackendServiceError::Unavailable)?;
@@ -120,6 +158,12 @@ impl BackendService {
         request: RequestEnvelope,
         sink: Arc<dyn BackendEventSink>,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
+        if matches!(
+            request.body,
+            lapis_client_api::RequestBody::WorkspaceExecute(_)
+        ) {
+            return self.dispatch(session, request);
+        }
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
             .sender()?
@@ -173,6 +217,19 @@ impl Drop for ServiceInner {
 }
 
 enum Command {
+    PrepareWorkspaceOperation {
+        session: BackendSession,
+        request: lapis_client_api::WorkspaceOperationRequest,
+        respond:
+            mpsc::SyncSender<Result<crate::state::PreparedWorkspaceOperation, BackendStateError>>,
+    },
+    CompleteWorkspaceOperation {
+        workspace_id: WorkspaceId,
+        changed: bool,
+        request_id: lapis_client_api::RequestId,
+        result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
+        respond: mpsc::SyncSender<ResponseEnvelope>,
+    },
     RelocateDocument {
         source: WorkspaceId,
         destination: WorkspaceId,
@@ -223,6 +280,25 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
     loop {
         match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+            Ok(Command::PrepareWorkspaceOperation {
+                session,
+                request,
+                respond,
+            }) => {
+                let _ = respond.send(state.prepare_workspace_operation(&session, request));
+            }
+            Ok(Command::CompleteWorkspaceOperation {
+                workspace_id,
+                changed,
+                request_id,
+                result,
+                respond,
+            }) => {
+                let outcome =
+                    state.complete_workspace_operation(workspace_id, changed, request_id, result);
+                let _ = respond.send(outcome.response);
+                publish_events(&mut subscribers, outcome.events);
+            }
             Ok(Command::RelocateDocument {
                 source,
                 destination,

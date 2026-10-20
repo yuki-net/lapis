@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use lapis_client_api::{
@@ -101,7 +101,77 @@ pub(crate) struct PublishedEvent {
     pub(crate) event: EventEnvelope,
 }
 
+pub(crate) struct PreparedWorkspaceOperation {
+    operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
+    root: PathBuf,
+    operation: lapis_client_api::WorkspaceOperation,
+}
+
+impl PreparedWorkspaceOperation {
+    pub(crate) fn execute(
+        self,
+    ) -> Result<lapis_client_api::WorkspaceOperationResult, BackendStateError> {
+        self.operations
+            .lock()
+            .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
+            .execute(self.operation, &self.root)
+    }
+}
+
 impl BackendState {
+    pub(crate) fn prepare_workspace_operation(
+        &self,
+        session: &BackendSession,
+        request: lapis_client_api::WorkspaceOperationRequest,
+    ) -> Result<PreparedWorkspaceOperation, BackendStateError> {
+        self.require_workspace(session, &request.workspace_id)?;
+        self.require_connected(session)?;
+        let workspace = self
+            .workspaces
+            .get(&session.workspace_id)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        Ok(PreparedWorkspaceOperation {
+            operations: workspace.operations.clone(),
+            root: workspace.resolver.root().to_owned(),
+            operation: request.operation,
+        })
+    }
+
+    pub(crate) fn complete_workspace_operation(
+        &mut self,
+        workspace_id: WorkspaceId,
+        changed: bool,
+        request_id: lapis_client_api::RequestId,
+        result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
+    ) -> DispatchOutcome {
+        let result = result.and_then(|result| {
+            let events = if changed {
+                vec![
+                    self.workspaces
+                        .get_mut(&workspace_id)
+                        .ok_or(BackendStateError::WorkspaceNotFound)?
+                        .publish(EventBody::WorkspaceChanged { workspace_id })?,
+                ]
+            } else {
+                Vec::new()
+            };
+            Ok((ResponseBody::WorkspaceExecute(result), events))
+        });
+        match result {
+            Ok((body, events)) => DispatchOutcome {
+                response: ResponseEnvelope { request_id, body },
+                events,
+            },
+            Err(error) => DispatchOutcome {
+                response: ResponseEnvelope {
+                    request_id,
+                    body: ResponseBody::Error(protocol_error(error)),
+                },
+                events: Vec::new(),
+            },
+        }
+    }
+
     pub(crate) fn relocate_document(
         &mut self,
         source: WorkspaceId,
@@ -244,26 +314,7 @@ impl BackendState {
         request: RequestBody,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         match request {
-            RequestBody::WorkspaceExecute(request) => {
-                self.require_workspace(session, &request.workspace_id)?;
-                self.require_connected(session)?;
-                let workspace = self
-                    .workspaces
-                    .get_mut(&session.workspace_id)
-                    .ok_or(BackendStateError::WorkspaceNotFound)?;
-                let changed = request.operation.is_mutation();
-                let result = workspace
-                    .operations
-                    .execute(request.operation, workspace.resolver.root())?;
-                let events = if changed {
-                    vec![workspace.publish(EventBody::WorkspaceChanged {
-                        workspace_id: session.workspace_id.clone(),
-                    })?]
-                } else {
-                    Vec::new()
-                };
-                Ok((ResponseBody::WorkspaceExecute(result), events))
-            }
+            RequestBody::WorkspaceExecute(_) => Err(BackendStateError::Unsupported),
             RequestBody::DocumentUntitled(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
@@ -280,6 +331,10 @@ impl BackendState {
             RequestBody::DocumentReload(request) => {
                 self.require_connected(session)?;
                 self.document_reload(session, request.document_id, request.base_revision)
+            }
+            RequestBody::DocumentDiscard(request) => {
+                self.require_connected(session)?;
+                self.document_discard(session, request)
             }
             RequestBody::WorkspaceList(_) => self.workspace_list(session),
             RequestBody::WorkspaceConnect(request) => {
@@ -597,6 +652,60 @@ impl BackendState {
         })?;
         Ok((
             ResponseBody::DocumentReload(DocumentHistoryResponse { document: snapshot }),
+            vec![event],
+        ))
+    }
+
+    fn document_discard(
+        &mut self,
+        session: &BackendSession,
+        request: lapis_client_api::DocumentDiscardRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let workspace_id = workspace.summary.workspace_id.clone();
+        let resource = workspace.require_attached_document_mut(session, &request.document_id)?;
+        require_revision(
+            &request.document_id,
+            request.base_revision,
+            resource.revision(),
+        )?;
+        let previous_path = resource.document.path().map(ToOwned::to_owned);
+        let saved_path = resource
+            .document
+            .saved_fingerprint()
+            .and(resource.path.clone());
+        let saved = saved_path
+            .map(|path| {
+                let absolute = workspace.resolver.resolve_existing(&path).map_err(|_| {
+                    lapis_document::DocumentError::conflict(
+                        "保存済み内容を読み込めないため未保存変更を保持します",
+                    )
+                })?;
+                workspace.files.read_file(&absolute).map_err(|_| {
+                    lapis_document::DocumentError::conflict(
+                        "保存済み内容を読み込めないため未保存変更を保持します",
+                    )
+                })
+            })
+            .transpose()?;
+        let resource = workspace.require_attached_document_mut(session, &request.document_id)?;
+        resource.document.discard(saved)?;
+        if resource.document.path().is_none() {
+            resource.path = None;
+        }
+        let snapshot = resource.snapshot(&workspace_id)?;
+        if snapshot.path.is_none()
+            && let Some(previous) = previous_path
+        {
+            workspace.documents_by_path.remove(&previous);
+        }
+        let event = workspace.publish(EventBody::DocumentReplaced {
+            document: snapshot.clone(),
+        })?;
+        Ok((
+            ResponseBody::DocumentDiscard(lapis_client_api::DocumentDiscardResponse {
+                document: snapshot,
+            }),
             vec![event],
         ))
     }
@@ -1034,7 +1143,7 @@ struct WorkspaceState {
     documents: HashMap<DocumentId, DocumentResource>,
     documents_by_path: HashMap<PathBuf, DocumentId>,
     terminals: TerminalRegistry,
-    operations: crate::operations::WorkspaceOperations,
+    operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
 }
 
@@ -1050,11 +1159,11 @@ impl WorkspaceState {
             documents: HashMap::new(),
             documents_by_path: HashMap::new(),
             terminals: TerminalRegistry::new(registration.terminal),
-            operations: crate::operations::WorkspaceOperations::new(
+            operations: Arc::new(Mutex::new(crate::operations::WorkspaceOperations::new(
                 registration.git,
                 registration.tasks,
                 &registration.workspace_id,
-            ),
+            ))),
             events: EventJournal::default(),
         })
     }
@@ -1165,7 +1274,12 @@ fn require_revision(
     }
 }
 
-fn protocol_error(error: BackendStateError) -> ProtocolError {
+pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
+    if let BackendStateError::Operation(message) = &error {
+        let mut error = ProtocolError::new(ErrorCode::try_new(INTERNAL).expect("valid code"));
+        error.detail = Some(message.clone());
+        return error;
+    }
     if let BackendStateError::Document(ref document) = error
         && document.kind() == lapis_document::DocumentErrorKind::Conflict
     {

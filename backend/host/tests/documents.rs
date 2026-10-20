@@ -118,12 +118,8 @@ fn desktop_sessions_share_runtime_resources_across_close_restore_and_workspace_s
     second.replace_range(0..11, "newer remote draft").unwrap();
     first.restore_snapshot(old_view.clone()).unwrap();
     assert_eq!(first.active_text().unwrap(), "newer remote draft");
-    first
-        .close_document(
-            &id,
-            lapis_app_services::DocumentCloseDisposition::DiscardChanges,
-        )
-        .unwrap();
+    first.document_connection().close(&id).unwrap();
+    drop(first);
     second.replace_range(0..18, "still attached").unwrap();
     second.open_workspace(other.path().to_owned()).unwrap();
     second.restore_snapshot(old_view).unwrap();
@@ -134,7 +130,6 @@ fn desktop_sessions_share_runtime_resources_across_close_restore_and_workspace_s
     assert!(second.redo());
     second.save_document().unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "still attached");
-    drop(first);
     drop(second);
     let reopened = host.documents().open(&path).unwrap();
     assert_eq!(reopened.id, id);

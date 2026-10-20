@@ -239,6 +239,17 @@ pub struct DocumentCloseRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentDiscardRequest {
+    pub document_id: DocumentId,
+    pub base_revision: Revision,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentDiscardResponse {
+    pub document: DocumentSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentCloseResponse {
     pub document_id: DocumentId,
 }

@@ -155,6 +155,24 @@ impl DocumentConnection for MemoryDocuments {
             )
         })
     }
+    fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
+        self.mutate(id, revision, |document| {
+            let saved = if document.saved_fingerprint().is_some() {
+                let path = document
+                    .path()
+                    .ok_or_else(|| DocumentError::conflict("no saved path"))?;
+                Some(
+                    self.repository
+                        .read_file(path)
+                        .map_err(|_| DocumentError::conflict("saved file unavailable"))?,
+                )
+            } else {
+                None
+            };
+            document.discard(saved)
+        })
+    }
+
     fn close(&self, _: &DocumentId) -> Result<(), DocumentError> {
         Ok(())
     }
@@ -194,6 +212,75 @@ fn shared_clients_reject_stale_edits_and_refresh_canonical_history() {
     assert!(first.redo());
     second.poll_external_changes();
     assert_eq!(second.active_text().unwrap(), "shared😀");
+}
+
+#[test]
+fn discard_close_does_not_revive_dirty_content_on_reopen() {
+    let repository = Arc::new(MemoryRepository::default());
+    let path = PathBuf::from("discard.md");
+    insert_file(&repository, path.clone(), "saved");
+    let documents = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        Arc::new(MemoryState::default()),
+        documents.clone(),
+    );
+    editor.open_path(path.clone()).unwrap();
+    let id = editor.active_document_id().unwrap().clone();
+    editor.replace_range(0..5, "discarded draft").unwrap();
+    let revision = editor.active_revision();
+    assert!(
+        editor
+            .close_document(&id, DocumentCloseDisposition::DiscardChanges)
+            .unwrap()
+    );
+    editor.open_path(path).unwrap();
+    assert_eq!(editor.active_document_id(), Some(&id));
+    assert_eq!(editor.active_text().unwrap(), "saved");
+    assert!(editor.active_revision() > revision);
+    assert!(!editor.is_dirty());
+    assert!(!editor.can_undo());
+    assert!(!documents.attach(&id).unwrap().document.is_dirty());
+}
+
+#[test]
+fn stale_discard_close_keeps_tab_and_refreshes_newer_canonical_edits() {
+    let repository = Arc::new(MemoryRepository::default());
+    let path = PathBuf::from("discard.md");
+    insert_file(&repository, path.clone(), "saved");
+    let documents = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        Arc::new(MemoryState::default()),
+        documents.clone(),
+    );
+    editor.open_path(path).unwrap();
+    let id = editor.active_document_id().unwrap().clone();
+    let old_revision = editor.active_revision();
+    let updated = documents
+        .edit(&id, old_revision, 0..5, "other clients draft")
+        .unwrap();
+    assert_eq!(
+        editor
+            .close_document(&id, DocumentCloseDisposition::DiscardChanges)
+            .unwrap_err()
+            .kind(),
+        DocumentErrorKind::Conflict
+    );
+    assert_eq!(editor.tabs().len(), 1);
+    assert_eq!(editor.active_document_id(), Some(&id));
+    assert_eq!(editor.active_text().unwrap(), "other clients draft");
+    assert_eq!(editor.active_revision(), updated.document.revision());
+    assert!(editor.is_dirty());
+    assert_eq!(documents.attach(&id).unwrap().document, updated.document);
 }
 
 #[test]

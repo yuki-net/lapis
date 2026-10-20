@@ -323,8 +323,26 @@ impl WorkspaceOperations {
         }
     }
 }
-fn problem(_error: impl std::fmt::Display) -> BackendStateError {
-    BackendStateError::Operation("Workspace operation failed".to_owned())
+trait SafeOperationFailure {
+    fn message(&self) -> &'static str;
+}
+impl SafeOperationFailure for lapis_git::GitError {
+    fn message(&self) -> &'static str {
+        match self.kind() {
+            lapis_git::GitErrorKind::NotRepository => "Git repository not found",
+            lapis_git::GitErrorKind::Conflict => "Git operation conflicts with current state",
+            lapis_git::GitErrorKind::InvalidOutput => "Git returned invalid output",
+            lapis_git::GitErrorKind::Io => "Git command failed",
+        }
+    }
+}
+impl SafeOperationFailure for lapis_task::TaskError {
+    fn message(&self) -> &'static str {
+        "Task execution or persistence failed"
+    }
+}
+fn problem(error: impl SafeOperationFailure) -> BackendStateError {
+    BackendStateError::Operation(error.message().to_owned())
 }
 fn relative_path(path: &Path) -> Result<String, BackendStateError> {
     let text = path
@@ -351,4 +369,41 @@ fn path_matches(left: &Path, right: &Path) -> bool {
         || left
             .canonicalize()
             .is_ok_and(|left| right.canonicalize().is_ok_and(|right| left == right))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn operation_failure_messages_are_fixed_and_distinguishable() {
+        for (kind, expected) in [
+            (lapis_git::GitErrorKind::Io, "Git command failed"),
+            (
+                lapis_git::GitErrorKind::NotRepository,
+                "Git repository not found",
+            ),
+            (
+                lapis_git::GitErrorKind::Conflict,
+                "Git operation conflicts with current state",
+            ),
+            (
+                lapis_git::GitErrorKind::InvalidOutput,
+                "Git returned invalid output",
+            ),
+        ] {
+            let BackendStateError::Operation(message) =
+                problem(lapis_git::GitError::new(kind, "/private/path secret"))
+            else {
+                panic!("Expected safe operation failure");
+            };
+            assert_eq!(message, expected);
+        }
+        let BackendStateError::Operation(message) =
+            problem(lapis_task::TaskError::new("/private/path secret"))
+        else {
+            panic!("Expected safe task failure");
+        };
+        assert_eq!(message, "Task execution or persistence failed");
+    }
 }

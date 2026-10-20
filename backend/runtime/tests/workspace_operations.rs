@@ -69,9 +69,15 @@ struct FakeGit {
     fail_discovery: Mutex<bool>,
     unscoped_discovery: Mutex<bool>,
     status_files: Mutex<Vec<lapis_git::ChangedFile>>,
+    blocked_status: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 impl GitBackend for FakeGit {
     fn status(&self, repository: &Path) -> Result<RepositoryStatus, GitError> {
+        let blocked = self.blocked_status.lock().unwrap().take();
+        if let Some((entered, release)) = blocked {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
         self.calls.lock().unwrap().push(repository.to_owned());
         Ok(RepositoryStatus {
             root: self
@@ -679,4 +685,151 @@ fn git_snapshots_reject_absolute_backend_file_paths() {
             staged: false,
         });
     denied(execute(&client, Operation::GitStatus { worktree: None }));
+}
+
+#[test]
+fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
+    use std::sync::mpsc;
+    use std::time::Duration;
+    struct Terminal(mpsc::Sender<()>);
+    impl lapis_terminal::TerminalBackend for Terminal {
+        fn start(
+            &self,
+            _: &Path,
+            _: u16,
+            _: u16,
+        ) -> Result<lapis_terminal::TerminalId, lapis_terminal::TerminalError> {
+            Ok(lapis_terminal::TerminalId::new("native"))
+        }
+        fn input(
+            &self,
+            _: &lapis_terminal::TerminalId,
+            _: &[u8],
+        ) -> Result<(), lapis_terminal::TerminalError> {
+            Ok(())
+        }
+        fn resize(
+            &self,
+            _: &lapis_terminal::TerminalId,
+            _: u16,
+            _: u16,
+        ) -> Result<(), lapis_terminal::TerminalError> {
+            Ok(())
+        }
+        fn terminate(
+            &self,
+            _: &lapis_terminal::TerminalId,
+        ) -> Result<(), lapis_terminal::TerminalError> {
+            Ok(())
+        }
+        fn poll(
+            &self,
+            _: &lapis_terminal::TerminalId,
+        ) -> Result<Vec<lapis_terminal::TerminalEvent>, lapis_terminal::TerminalError> {
+            let _ = self.0.send(());
+            Ok(Vec::new())
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let git = Arc::new(FakeGit::default());
+    let (polled, polls) = mpsc::channel();
+    let terminal = Arc::new(Terminal(polled));
+    let registrations = [("first", &root), ("second", &other)].map(|(name, directory)| {
+        WorkspaceRegistration::new(
+            WorkspaceId::try_new(name).unwrap(),
+            name,
+            directory.path().to_owned(),
+            Arc::new(EmptyFiles),
+        )
+        .with_git(git.clone())
+        .with_terminal(terminal.clone())
+    });
+    let service = BackendService::start(BackendState::new(registrations).unwrap()).unwrap();
+    let connect = |name: &str, workspace: &str| {
+        EmbeddedClient::connect(
+            service.clone(),
+            SessionId::try_new(name).unwrap(),
+            WorkspaceId::try_new(workspace).unwrap(),
+        )
+        .unwrap()
+    };
+    let slow = connect("slow-git", "first");
+    let documents = connect("documents", "first");
+    let second = connect("other-workspace", "second");
+    assert!(matches!(
+        documents
+            .request(RequestBody::TerminalStart(
+                lapis_client_api::TerminalStartRequest {
+                    workspace_id: documents.workspace_id().clone(),
+                    cwd: None,
+                    command: None,
+                    size: lapis_client_api::TerminalSize {
+                        columns: 80,
+                        rows: 24
+                    },
+                }
+            ))
+            .unwrap(),
+        ResponseBody::TerminalStart(_)
+    ));
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    *git.blocked_status.lock().unwrap() = Some((entered, resume));
+    let slow_thread =
+        std::thread::spawn(move || execute(&slow, Operation::GitStatus { worktree: None }));
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    while polls.try_recv().is_ok() {}
+    let (respond, receive) = mpsc::channel();
+    let document_thread = std::thread::spawn(move || {
+        let document = documents
+            .request(RequestBody::DocumentUntitled(
+                lapis_client_api::DocumentUntitledRequest {
+                    workspace_id: documents.workspace_id().clone(),
+                },
+            ))
+            .unwrap();
+        let other = execute(&second, Operation::GitStatus { worktree: None });
+        respond.send((document, other)).unwrap();
+    });
+    let independent = receive.recv_timeout(Duration::from_secs(2));
+    let polling = polls.recv_timeout(Duration::from_secs(2));
+    release.send(()).unwrap();
+    assert!(matches!(
+        slow_thread.join().unwrap(),
+        ResponseBody::WorkspaceExecute(_)
+    ));
+    document_thread.join().unwrap();
+    let (document, other) = independent.expect("Git I/O must not hold the Runtime worker");
+    assert!(matches!(document, ResponseBody::DocumentUntitled(_)));
+    assert!(matches!(other, ResponseBody::WorkspaceExecute(_)));
+    polling.expect("Terminal polling must continue while Git is blocked");
+}
+
+#[test]
+fn operation_errors_are_distinguishable_without_exposing_native_details() {
+    let fixture = Fixture::new();
+    *fixture.git.status_root.lock().unwrap() = Some(fixture.other.path().canonicalize().unwrap());
+    let client = fixture.client("errors", "first");
+    assert!(matches!(
+        execute(&client, Operation::GitStatus { worktree: None }),
+        ResponseBody::Error(_)
+    ));
+    *fixture.git.fail_discovery.lock().unwrap() = true;
+    let response = execute(
+        &client,
+        Operation::GitStatus {
+            worktree: Some(TaskId::new("missing")),
+        },
+    );
+    let ResponseBody::Error(error) = response else {
+        panic!("Expected error")
+    };
+    assert_eq!(error.detail.as_deref(), Some("Git repository not found"));
+    assert!(
+        !error
+            .detail
+            .unwrap()
+            .contains(&fixture.root.path().to_string_lossy().to_string())
+    );
 }

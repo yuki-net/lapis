@@ -41,5 +41,6 @@ pub trait DocumentConnection: Send + Sync {
         path: Option<PathBuf>,
     ) -> Result<DocumentCache, DocumentError>;
     fn reload(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError>;
+    fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError>;
     fn close(&self, id: &DocumentId) -> Result<(), DocumentError>;
 }
