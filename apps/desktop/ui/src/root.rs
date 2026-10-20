@@ -41,7 +41,10 @@ pub(crate) struct DesktopRoot {
     conversation: Entity<ConversationFeature>,
     preview: Entity<PreviewFeature>,
     preview_revision: Option<(lapis_editor_core::DocumentId, lapis_document::Revision)>,
-    line_ending_cache: Option<((lapis_editor_core::DocumentId, lapis_document::Revision), &'static str)>,
+    line_ending_cache: Option<(
+        (lapis_editor_core::DocumentId, lapis_document::Revision),
+        &'static str,
+    )>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
     _subscriptions: Vec<Subscription>,
