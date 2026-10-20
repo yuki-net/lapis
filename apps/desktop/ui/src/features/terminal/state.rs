@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use lapis_desktop_client::{RestoredTerminal, TerminalSession};
 use lapis_editor_core::ConversationId;
@@ -8,38 +9,43 @@ use lapis_terminal::TerminalStatus;
 
 pub(crate) struct TerminalSessions {
     pub session: TerminalSession,
-    active_conversation: ConversationId,
-    inactive_sessions: HashMap<ConversationId, TerminalSession>,
+    active_context: (Option<PathBuf>, ConversationId),
+    inactive_sessions: HashMap<(Option<PathBuf>, ConversationId), TerminalSession>,
 }
 
 impl TerminalSessions {
-    pub fn new(session: TerminalSession, conversation: ConversationId) -> Self {
+    pub fn new(
+        session: TerminalSession,
+        root: Option<PathBuf>,
+        conversation: ConversationId,
+    ) -> Self {
         Self {
             session,
-            active_conversation: conversation,
+            active_context: (root, conversation),
             inactive_sessions: HashMap::new(),
         }
     }
 
-    pub fn switch_conversation(
+    pub fn switch_context(
         &mut self,
+        root: Option<PathBuf>,
         conversation: ConversationId,
         summaries: &[RestoredTerminal],
     ) -> Vec<lapis_terminal::TerminalSnapshot> {
-        if self.active_conversation == conversation {
+        let context = (root, conversation);
+        if self.active_context == context {
             return self.session.terminals().to_vec();
         }
-        let next = self
-            .inactive_sessions
-            .remove(&conversation)
-            .unwrap_or_else(|| {
-                let mut session = TerminalSession::new(self.session.backend());
+        let next = self.inactive_sessions.remove(&context).unwrap_or_else(|| {
+            let mut session = TerminalSession::new(self.session.backend());
+            if context.0.is_some() {
                 session.restore_summaries(summaries);
-                session
-            });
+            }
+            session
+        });
         let previous = std::mem::replace(&mut self.session, next);
-        let previous_id = std::mem::replace(&mut self.active_conversation, conversation);
-        self.inactive_sessions.insert(previous_id, previous);
+        let previous_context = std::mem::replace(&mut self.active_context, context);
+        self.inactive_sessions.insert(previous_context, previous);
         self.session.terminals().to_vec()
     }
 
@@ -79,6 +85,7 @@ struct TerminalRequests {
     gate: crate::client_adapter::ResponseGate,
     poll_pending: bool,
     pending_actions: usize,
+    context_unavailable: bool,
 }
 
 impl TerminalRequests {
@@ -93,7 +100,7 @@ impl TerminalRequests {
     }
 
     fn begin_poll(&mut self) -> Option<crate::client_worker::RequestToken> {
-        if self.poll_pending || self.pending_actions > 0 {
+        if self.context_unavailable || self.poll_pending || self.pending_actions > 0 {
             return None;
         }
         self.poll_pending = true;
@@ -122,14 +129,16 @@ impl TerminalFeature {
     }
     pub(crate) fn new(
         session: TerminalSession,
+        root: Option<PathBuf>,
         conversation: ConversationId,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
-        let sessions = TerminalSessions::new(session, conversation.clone());
+        let terminals = session.terminals().to_vec();
+        let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
-            terminals: Vec::new(),
-            root: None,
+            terminals,
+            root,
             conversation,
             requests: TerminalRequests::default(),
             message: String::new(),
@@ -154,16 +163,19 @@ impl TerminalFeature {
         summaries: Vec<RestoredTerminal>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.conversation == conversation {
-            self.root = root;
+        if !self.requests.context_unavailable
+            && self.conversation == conversation
+            && self.root == root
+        {
             return;
         }
         let next = conversation.clone();
+        let next_root = root.clone();
         self.requests.gate.invalidate();
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.switch_conversation(next, &summaries)),
+            move |sessions| Ok(sessions.switch_context(next_root, next, &summaries)),
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
@@ -171,6 +183,9 @@ impl TerminalFeature {
                 match result {
                     Ok(terminals) => feature.terminals = terminals,
                     Err(error) => {
+                        feature.requests.context_unavailable = true;
+                        feature.root = None;
+                        feature.terminals.clear();
                         feature.message = error;
                         feature.message_from_poll = false;
                     }
@@ -180,12 +195,15 @@ impl TerminalFeature {
         );
         if let Err(error) = admitted {
             self.requests.finish_action(token);
+            self.requests.context_unavailable = true;
             self.root = None;
+            self.terminals.clear();
             self.message = error;
             self.message_from_poll = false;
             cx.notify();
             return;
         }
+        self.requests.context_unavailable = false;
         self.root = root;
         self.conversation = conversation;
         self.terminals.clear();
@@ -317,6 +335,24 @@ mod tests {
     };
 
     #[test]
+    fn failed_context_admission_suppresses_polling_until_retry_is_admitted() {
+        let mut requests = TerminalRequests::default();
+        let previous_poll = requests.begin_poll().unwrap();
+        requests.gate.invalidate();
+        let rejected = requests.begin_action();
+        requests.finish_action(rejected);
+        requests.context_unavailable = true;
+        assert!(!requests.finish_poll(previous_poll));
+        assert!(requests.begin_poll().is_none());
+        requests.gate.invalidate();
+        let retry = requests.begin_action();
+        requests.context_unavailable = false;
+        assert!(requests.begin_poll().is_none());
+        assert!(requests.finish_action(retry));
+        assert!(requests.begin_poll().is_some());
+    }
+
+    #[test]
     fn pending_operation_errors_cannot_be_superseded_by_periodic_polling() {
         for message in ["PTY start failed", "terminal input failed"] {
             let worker = crate::client_adapter::ClientWorker::new(());
@@ -398,6 +434,7 @@ mod tests {
         next: AtomicUsize,
         terminated: AtomicUsize,
         events: Mutex<HashMap<String, Vec<TerminalEvent>>>,
+        inputs: Mutex<Vec<TerminalId>>,
     }
 
     impl TerminalBackend for Backend {
@@ -407,7 +444,8 @@ mod tests {
                 self.next.fetch_add(1, Ordering::Relaxed)
             )))
         }
-        fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+        fn input(&self, id: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+            self.inputs.lock().unwrap().push(id.clone());
             Ok(())
         }
         fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
@@ -432,10 +470,134 @@ mod tests {
         (
             TerminalSessions::new(
                 TerminalSession::new(backend.clone()),
+                Some("workspace".into()),
                 ConversationId::new("first"),
             ),
             backend,
         )
+    }
+
+    #[test]
+    fn workspace_switch_isolates_terminal_operations_without_terminating_previous_context() {
+        let (mut sessions, backend) = feature();
+        let original = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        let conversation = ConversationId::new("first");
+        assert!(
+            sessions
+                .switch_context(Some("other".into()), conversation.clone(), &[])
+                .is_empty()
+        );
+        backend.events.lock().unwrap().insert(
+            original.as_str().to_owned(),
+            vec![TerminalEvent::Output(TerminalOutput {
+                sequence: 1,
+                data: b"inactive output".to_vec(),
+            })],
+        );
+        assert!(sessions.refresh().unwrap());
+        assert!(sessions.session.terminals().is_empty());
+        let current = sessions.session.start(Path::new("other"), 80, 24).unwrap();
+        let (result, terminals) = sessions.action(|session| {
+            session.input(
+                &session.terminals().last().unwrap().id,
+                "new workspace input",
+            )
+        });
+        result.unwrap();
+        assert_eq!(terminals.len(), 1);
+        assert_eq!(terminals[0].id, current);
+        assert_eq!(terminals[0].cwd, Path::new("other"));
+        assert_eq!(*backend.inputs.lock().unwrap(), vec![current.clone()]);
+        assert!(
+            sessions
+                .switch_context(
+                    None,
+                    conversation.clone(),
+                    &[RestoredTerminal {
+                        cwd: "other".into(),
+                        status: TerminalStatus::Running,
+                        columns: 80,
+                        rows: 24,
+                    }]
+                )
+                .is_empty()
+        );
+        assert!(!sessions.refresh().unwrap());
+        let original_snapshot =
+            sessions.switch_context(Some("workspace".into()), conversation.clone(), &[]);
+        assert_eq!(original_snapshot.len(), 1);
+        assert_eq!(original_snapshot[0].id, original);
+        assert_eq!(original_snapshot[0].output, b"inactive output");
+        assert_eq!(original_snapshot[0].status, TerminalStatus::Running);
+        let current_snapshot = sessions.switch_context(Some("other".into()), conversation, &[]);
+        assert_eq!(current_snapshot.len(), 1);
+        assert_eq!(current_snapshot[0].id, current);
+        assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn workspace_change_rejects_previous_poll_and_switch_results() {
+        let (mut sessions, backend) = feature();
+        sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        let worker = crate::client_adapter::ClientWorker::new(sessions);
+        let mut requests = TerminalRequests::default();
+        let poll = requests.begin_poll().unwrap();
+        let old_snapshot = worker
+            .try_request(|sessions| Ok(sessions.session.terminals().to_vec()))
+            .unwrap();
+        requests.gate.invalidate();
+        let switched = requests.begin_action();
+        let next_snapshot =
+            worker
+                .try_request(|sessions| {
+                    Ok(sessions.switch_context(
+                        Some("other".into()),
+                        ConversationId::new("first"),
+                        &[],
+                    ))
+                })
+                .unwrap();
+        assert_eq!(
+            old_snapshot
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(!requests.finish_poll(poll));
+        assert!(requests.begin_poll().is_none());
+        assert!(
+            next_snapshot
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        requests.gate.invalidate();
+        let closed = requests.begin_action();
+        let closed_snapshot = worker
+            .try_request(|sessions| {
+                Ok(sessions.switch_context(None, ConversationId::new("first"), &[]))
+            })
+            .unwrap();
+        assert!(!requests.finish_action(switched));
+        assert!(
+            closed_snapshot
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+                .unwrap()
+                .is_empty()
+        );
+        assert!(requests.finish_action(closed));
+        assert!(requests.begin_poll().is_some());
+        assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);
     }
 
     #[test]
@@ -451,12 +613,17 @@ mod tests {
             columns: 120,
             rows: 30,
         }];
-        let restored = sessions.switch_conversation(ConversationId::new("second"), &summaries);
+        let restored = sessions.switch_context(
+            Some("workspace".into()),
+            ConversationId::new("second"),
+            &summaries,
+        );
         assert!(!sessions.refresh().unwrap());
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].cwd, Path::new("saved"));
         assert_eq!(restored[0].status, TerminalStatus::Exited);
-        let resumed = sessions.switch_conversation(ConversationId::new("first"), &[]);
+        let resumed =
+            sessions.switch_context(Some("workspace".into()), ConversationId::new("first"), &[]);
         assert!(!sessions.refresh().unwrap());
         assert_eq!(resumed.len(), 1);
         assert_eq!(resumed[0].id, terminal);
@@ -477,14 +644,22 @@ mod tests {
         let first = requests.begin_action();
         let first_response = worker
             .try_request(|sessions| {
-                Ok(sessions.switch_conversation(ConversationId::new("second"), &[]))
+                Ok(sessions.switch_context(
+                    Some("workspace".into()),
+                    ConversationId::new("second"),
+                    &[],
+                ))
             })
             .unwrap();
         requests.gate.invalidate();
         let second = requests.begin_action();
         let second_response = worker
             .try_request(|sessions| {
-                Ok(sessions.switch_conversation(ConversationId::new("first"), &[]))
+                Ok(sessions.switch_context(
+                    Some("workspace".into()),
+                    ConversationId::new("first"),
+                    &[],
+                ))
             })
             .unwrap();
         assert!(requests.begin_poll().is_none());
@@ -516,10 +691,10 @@ mod tests {
             .session
             .start(Path::new("workspace"), 80, 24)
             .unwrap();
-        feature.switch_conversation(ConversationId::new("second"), &[]);
+        feature.switch_context(Some("workspace".into()), ConversationId::new("second"), &[]);
         assert!(feature.session.terminals().is_empty());
         assert!(feature.has_running_process());
-        feature.switch_conversation(ConversationId::new("first"), &[]);
+        feature.switch_context(Some("workspace".into()), ConversationId::new("first"), &[]);
         assert_eq!(feature.session.terminals()[0].id, terminal);
         assert_eq!(
             feature.session.terminals()[0].status,
@@ -535,7 +710,7 @@ mod tests {
             .session
             .start(Path::new("workspace"), 80, 24)
             .unwrap();
-        feature.switch_conversation(ConversationId::new("second"), &[]);
+        feature.switch_context(Some("workspace".into()), ConversationId::new("second"), &[]);
         backend.events.lock().unwrap().insert(
             terminal.as_str().to_owned(),
             vec![
@@ -547,7 +722,7 @@ mod tests {
             ],
         );
         assert!(feature.refresh().unwrap());
-        feature.switch_conversation(ConversationId::new("first"), &[]);
+        feature.switch_context(Some("workspace".into()), ConversationId::new("first"), &[]);
         assert_eq!(feature.session.terminals()[0].output, b"background");
         assert_eq!(
             feature.session.terminals()[0].status,
@@ -568,12 +743,20 @@ mod tests {
             columns: 40,
             rows: 10,
         }];
-        feature.switch_conversation(ConversationId::new("second"), &summaries);
+        feature.switch_context(
+            Some("workspace".into()),
+            ConversationId::new("second"),
+            &summaries,
+        );
         assert_eq!(
             feature.session.terminals()[0].status,
             TerminalStatus::Exited
         );
-        feature.switch_conversation(ConversationId::new("first"), &summaries);
+        feature.switch_context(
+            Some("workspace".into()),
+            ConversationId::new("first"),
+            &summaries,
+        );
         assert_eq!(feature.session.terminals()[0].id, terminal);
         drop(feature);
         assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);

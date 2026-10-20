@@ -65,11 +65,13 @@ impl DesktopRoot {
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
         let conversation_id = services.conversation.active_id().clone();
+        let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale;
         if services.terminal.terminals().is_empty() {
             let summaries = services
                 .conversation
                 .active_record()
+                .filter(|record| record.workspace.root == terminal_root)
                 .map(|record| record.terminals.clone())
                 .unwrap_or_default();
             services.terminal.restore_summaries(&summaries);
@@ -84,7 +86,8 @@ impl DesktopRoot {
         let files = cx.new(|_| FilesFeature::new());
         let git = cx.new(|cx| GitFeature::new(services.git, cx));
         let tasks = cx.new(|cx| TasksFeature::new(services.task, cx));
-        let terminal = cx.new(|cx| TerminalFeature::new(services.terminal, conversation_id, cx));
+        let terminal = cx
+            .new(|cx| TerminalFeature::new(services.terminal, terminal_root, conversation_id, cx));
         let problems = cx.new(|cx| ProblemsFeature::new(worker.clone(), cx));
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
@@ -382,6 +385,7 @@ impl DesktopRoot {
                 snapshot.root.clone(),
                 snapshot.conversation.clone(),
                 record
+                    .filter(|record| record.workspace.root == snapshot.root)
                     .map(|record| record.terminals.clone())
                     .unwrap_or_default(),
                 cx,
