@@ -5,8 +5,7 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use lapis_editor_core::{DocumentId, ProjectId, WorkspaceId};
-use serde::{Deserialize, Serialize};
+use lapis_editor_core::{ProjectId, WorkspaceId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceLocation {
@@ -102,26 +101,6 @@ pub trait WorkspaceSearchBackend: Send + Sync {
     ) -> Result<Vec<SearchHit>, SearchError>;
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct DocumentViewState {
-    pub document_id: Option<DocumentId>,
-    pub path: PathBuf,
-    pub cursor_char: usize,
-    pub selection_start: usize,
-    pub selection_end: usize,
-    pub scroll_x: f32,
-    pub scroll_y: f32,
-    /// 未保存内容がある場合だけ保存する復元用スナップショット。
-    pub draft_content: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceSnapshot {
-    pub root: Option<PathBuf>,
-    pub open_documents: Vec<DocumentViewState>,
-    pub active_path: Option<PathBuf>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceError {
     message: String,
@@ -144,12 +123,8 @@ impl fmt::Display for WorkspaceError {
 impl Error for WorkspaceError {}
 
 pub trait WorkspaceRepository: Send + Sync {
+    fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError>;
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError>;
-}
-
-pub trait WorkspaceStateRepository: Send + Sync {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError>;
-    fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError>;
 }
 
 #[cfg(test)]

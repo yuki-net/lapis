@@ -1,11 +1,11 @@
 use super::*;
 use crate::tokens;
 
-impl Editor {
+impl FilesFeature {
     pub(super) fn render_files_content(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let workspace_name = self.session.workspace_name().to_owned();
+        let workspace_name = self.workspace_name.clone();
 
-        let active_path = self.session.active_path();
+        let active_path = self.active_path.as_deref();
 
         let mut content = div()
             .id("files-scroll")
@@ -27,7 +27,7 @@ impl Editor {
                     .child(workspace_name),
             );
 
-        for (index, entry) in self.session.file_tree().iter().enumerate() {
+        for (index, entry) in self.entries.iter().enumerate() {
             if index >= 500 || !self.file_entry_visible(entry) {
                 continue;
             }
@@ -39,15 +39,11 @@ impl Editor {
             let is_expanded = !is_file && self.expanded_directories.contains(&path);
             let has_children = !is_file
                 && self
-                    .session
-                    .file_tree()
+                    .entries
                     .iter()
                     .any(|candidate| candidate.path.parent() == Some(path.as_path()));
-            let file_info = crate::features::files::display_info(
-                &entry.path,
-                entry.kind,
-                &self.problems.languages,
-            );
+            let file_info =
+                crate::features::files::display_info(&entry.path, entry.kind, &self.languages);
             let label = entry
                 .relative_path
                 .file_name()
@@ -99,25 +95,13 @@ impl Editor {
                 .child(label);
 
             content = if is_file {
-                content.child(row.on_click(cx.listener(move |this, _, window, cx| {
-                    this.shell.focused_panel = crate::extension_ui::PanelPosition::Left;
-                    match this.session.open_path(file_path.clone()) {
-                        Ok(()) => {
-                            this.restore_active_view();
-                            this.shell.synchronize_documents(&this.session.tabs());
-                            this.status = "文書を開きました".to_owned();
-                            window.focus(&this.focus_handle);
-                            this.refresh_feature_activation();
-                        }
-                        Err(error) => {
-                            this.status = format!("読み込み失敗: {error}");
-                        }
-                    }
+                content.child(row.on_click(cx.listener(move |_, _, window, cx| {
+                    cx.emit(UiCommand::OpenPath(file_path.clone()));
+                    let _ = window;
                     cx.notify();
                 })))
             } else {
                 content.child(row.on_click(cx.listener(move |this, _, _, cx| {
-                    this.shell.focused_panel = crate::extension_ui::PanelPosition::Left;
                     if !this.expanded_directories.remove(&directory_path) {
                         this.expanded_directories.insert(directory_path.clone());
                     }
@@ -133,7 +117,7 @@ impl Editor {
         if entry.depth == 0 {
             return true;
         }
-        let Some(root) = self.session.workspace_root() else {
+        let Some(root) = self.root.as_deref() else {
             return false;
         };
         let mut relative = entry.relative_path.clone();

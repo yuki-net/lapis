@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(super) fn render_window_controls(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .h_full()
@@ -33,7 +33,7 @@ impl Editor {
                     WindowControlArea::Close,
                     true,
                 )
-                .on_click(cx.listener(|_, _, window, _| window.remove_window())),
+                .on_click(cx.listener(|_, _, _, cx| cx.emit(UiCommand::CloseWindow))),
             )
     }
 }

@@ -252,7 +252,7 @@ impl WorkspaceOperations {
                     .transpose()?
                     .unwrap_or_else(|| root.to_owned());
                 self.require_repository(&directory)?;
-                crate::WorkspacePathResolver::new(directory.clone())?.resolve_new_file(&path)?;
+                crate::WorkspacePathResolver::new(directory.clone())?.resolve_scoped_path(&path)?;
                 let diff = self
                     .git()?
                     .diff(&directory, Path::new(path.as_str()))

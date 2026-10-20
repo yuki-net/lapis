@@ -43,6 +43,9 @@ impl DocumentRepository for EmptyFiles {
 }
 
 impl WorkspaceFileBackend for EmptyFiles {
+    fn create_directory(&self, _: &std::path::Path) -> Result<(), lapis_document::DocumentError> {
+        Err(lapis_document::DocumentError::io("Unsupported"))
+    }
     fn list_children(&self, _directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
         Ok(Vec::new())
     }

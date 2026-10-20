@@ -314,6 +314,22 @@ impl BackendState {
         request: RequestBody,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         match request {
+            RequestBody::CreateDirectory(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let workspace = self.workspace_mut(session)?;
+                let directory = workspace.resolver.resolve_new_file(&request.path)?;
+                workspace.files.create_directory(&directory)?;
+                let event = workspace.publish(EventBody::WorkspaceChanged {
+                    workspace_id: request.workspace_id,
+                })?;
+                Ok((
+                    ResponseBody::CreateDirectory(lapis_client_api::CreateDirectoryResponse {
+                        path: request.path,
+                    }),
+                    vec![event],
+                ))
+            }
             RequestBody::WorkspaceExecute(_) => Err(BackendStateError::Unsupported),
             RequestBody::DocumentUntitled(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
@@ -534,8 +550,12 @@ impl BackendState {
             .attached_sessions
             .insert(session.session_id.clone());
         let mut snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
-        if let Some(path) = &resource.path {
-            let absolute = workspace.resolver.resolve_new_file(path)?;
+        let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+        if missing_root && resource.path.is_some() {
+            snapshot.external_change = lapis_client_api::DocumentExternalChange::Deleted;
+        } else if let Some(path) = &resource.path {
+            let absolute = workspace.resolver.resolve_scoped_path(path)?;
             snapshot.external_change = match resource
                 .document
                 .external_change(workspace.files.fingerprint(&absolute)?.as_ref())

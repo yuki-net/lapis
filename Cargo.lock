@@ -3079,7 +3079,7 @@ dependencies = [
 name = "lapis"
 version = "0.1.0"
 dependencies = [
- "lapis-app-services",
+ "lapis-desktop-client",
  "lapis-desktop-ui",
  "lapis-host",
  "lapis-persistence",
@@ -3087,23 +3087,8 @@ dependencies = [
  "lapis-remote",
  "lapis-settings",
  "lapis-task",
- "rfd",
-]
-
-[[package]]
-name = "lapis-app-services"
-version = "0.1.0"
-dependencies = [
- "lapis-document",
- "lapis-editor-core",
- "lapis-git",
- "lapis-localization",
- "lapis-lsp",
- "lapis-settings",
- "lapis-task",
- "lapis-terminal",
  "lapis-workspace",
- "serde",
+ "rfd",
  "tempfile",
 ]
 
@@ -3133,11 +3118,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "lapis-desktop-client"
+version = "0.1.0"
+dependencies = [
+ "lapis-document",
+ "lapis-editor-core",
+ "lapis-git",
+ "lapis-localization",
+ "lapis-lsp",
+ "lapis-settings",
+ "lapis-task",
+ "lapis-terminal",
+ "lapis-workspace",
+ "serde",
+ "tempfile",
+]
+
+[[package]]
 name = "lapis-desktop-ui"
 version = "0.1.0"
 dependencies = [
  "gpui",
- "lapis-app-services",
+ "lapis-desktop-client",
+ "lapis-document",
  "lapis-editor-core",
  "lapis-git",
  "lapis-language",
@@ -3178,7 +3181,6 @@ dependencies = [
 name = "lapis-host"
 version = "0.1.0"
 dependencies = [
- "lapis-app-services",
  "lapis-backend-state",
  "lapis-client-api",
  "lapis-document",
@@ -3216,7 +3218,7 @@ dependencies = [
 name = "lapis-persistence"
 version = "0.1.0"
 dependencies = [
- "lapis-app-services",
+ "lapis-desktop-client",
  "lapis-editor-core",
  "lapis-localization",
  "lapis-settings",
@@ -3324,7 +3326,6 @@ name = "lapis-workspace"
 version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
- "serde",
 ]
 
 [[package]]

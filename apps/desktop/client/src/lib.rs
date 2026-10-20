@@ -20,21 +20,22 @@ use lapis_lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
-use lapis_task_runner::{TaskControl, TaskError, TaskMode};
+use lapis_task::{TaskControl, TaskError, TaskMode};
 use lapis_terminal::{
     TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus,
 };
-use lapis_workspace::{
-    DocumentViewState, FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend,
-    WorkspaceSnapshot, WorkspaceStateRepository,
-};
+use lapis_workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 use serde::{Deserialize, Serialize};
+
+mod view_state;
+pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
 
 /// グローバル設定を UI に公開し、変更を永続化するアプリケーション境界。
 #[derive(Clone)]
 pub struct SettingsSession {
     repository: Arc<dyn GlobalSettingsRepository>,
     settings: Arc<std::sync::Mutex<GlobalSettings>>,
+    writer: Arc<std::sync::Mutex<()>>,
 }
 
 impl SettingsSession {
@@ -43,6 +44,7 @@ impl SettingsSession {
         Ok(Self {
             repository,
             settings: Arc::new(std::sync::Mutex::new(settings)),
+            writer: Arc::new(std::sync::Mutex::new(())),
         })
     }
 
@@ -54,30 +56,26 @@ impl SettingsSession {
     }
 
     pub fn set_locale(&self, locale: LocaleId) -> Result<(), SettingsError> {
-        let mut settings = self.settings.lock().expect("settings state lock failed");
+        let _writer = self.writer.lock().expect("settings writer lock failed");
+        let mut settings = self.settings();
         if settings.locale == locale {
             return Ok(());
         }
-        let previous = settings.clone();
         settings.locale = locale;
-        if let Err(error) = self.repository.save(&settings) {
-            *settings = previous;
-            return Err(error);
-        }
+        self.repository.save(&settings)?;
+        *self.settings.lock().expect("settings state lock failed") = settings;
         Ok(())
     }
 
     pub fn set_theme(&self, theme: String) -> Result<(), SettingsError> {
-        let mut settings = self.settings.lock().expect("settings state lock failed");
+        let _writer = self.writer.lock().expect("settings writer lock failed");
+        let mut settings = self.settings();
         if settings.theme == theme {
             return Ok(());
         }
-        let previous = settings.clone();
         settings.theme = theme;
-        if let Err(error) = self.repository.save(&settings) {
-            *settings = previous;
-            return Err(error);
-        }
+        self.repository.save(&settings)?;
+        *self.settings.lock().expect("settings state lock failed") = settings;
         Ok(())
     }
 }
@@ -875,23 +873,25 @@ impl WorkspaceSearchSession {
 }
 
 pub struct TaskSession {
-    backend: Arc<dyn lapis_task_runner::TaskConnection>,
+    backend: Arc<dyn lapis_task::TaskConnection>,
+    conversation: ConversationId,
     workspace_id: Option<WorkspaceId>,
-    records: Vec<lapis_task_runner::TaskSnapshot>,
+    records: Vec<lapis_task::TaskSnapshot>,
     restore_warning: Option<String>,
 }
 
 impl TaskSession {
-    pub fn new(backend: Arc<dyn lapis_task_runner::TaskConnection>) -> Self {
+    pub fn new(backend: Arc<dyn lapis_task::TaskConnection>) -> Self {
         Self {
             backend,
+            conversation: ConversationId::new("conversation-local"),
             workspace_id: None,
             records: Vec::new(),
             restore_warning: None,
         }
     }
 
-    pub fn records(&self) -> &[lapis_task_runner::TaskSnapshot] {
+    pub fn records(&self) -> &[lapis_task::TaskSnapshot] {
         &self.records
     }
     pub fn restore_warning(&self) -> Option<&str> {
@@ -941,11 +941,11 @@ impl TaskSession {
     ) -> Result<ExecutionId, TaskError> {
         let record = self.backend.start(
             &workspace,
-            lapis_task_runner::TaskStart {
+            lapis_task::TaskStart {
                 prompt,
                 mode,
                 isolated,
-                conversation_id: ConversationId::new("conversation-local"),
+                conversation_id: self.conversation.clone(),
             },
         )?;
         let execution_id = record.execution.id.clone();
@@ -971,8 +971,12 @@ impl TaskSession {
             .control(&record.execution.workspace_id, execution_id, &control)
     }
 
-    pub fn backend(&self) -> Arc<dyn lapis_task_runner::TaskConnection> {
+    pub fn backend(&self) -> Arc<dyn lapis_task::TaskConnection> {
         self.backend.clone()
+    }
+
+    pub fn set_conversation(&mut self, conversation: ConversationId) {
+        self.conversation = conversation;
     }
 }
 
@@ -1021,6 +1025,7 @@ pub struct EditorSession {
     documents: Vec<OpenDocument>,
     active: Option<usize>,
     workspace_root: Option<PathBuf>,
+    workspace_restore_root: Option<PathBuf>,
     workspace_id: Option<WorkspaceId>,
     workspace_name: String,
     file_tree: Vec<FileEntry>,
@@ -1064,6 +1069,7 @@ impl EditorSession {
             documents: Vec::new(),
             active: None,
             workspace_root: None,
+            workspace_restore_root: None,
             workspace_id: None,
             workspace_name: "No Workspace".to_owned(),
             file_tree: Vec::new(),
@@ -1093,7 +1099,10 @@ impl EditorSession {
 
     pub fn snapshot(&self) -> WorkspaceSnapshot {
         WorkspaceSnapshot {
-            root: self.workspace_root.clone(),
+            root: self
+                .workspace_root
+                .clone()
+                .or_else(|| self.workspace_restore_root.clone()),
             open_documents: self
                 .documents
                 .iter()
@@ -1114,6 +1123,7 @@ impl EditorSession {
             active_path: self
                 .active_document()
                 .and_then(|open| open.document.path().map(Path::to_owned)),
+            active_document_id: self.active_document_id().cloned(),
         }
     }
 
@@ -1382,6 +1392,7 @@ impl EditorSession {
             .unwrap_or("Workspace")
             .to_owned();
         self.workspace_root = Some(root);
+        self.workspace_restore_root = None;
         self.workspace_id = Some(workspace_id);
         self.file_tree = tree;
         self.documents.clear();
@@ -1393,6 +1404,7 @@ impl EditorSession {
     pub fn close_workspace(&mut self) -> Result<(), WorkspaceError> {
         self.detach_documents();
         self.workspace_root = None;
+        self.workspace_restore_root = None;
         self.workspace_id = None;
         self.workspace_name = "No Workspace".to_owned();
         self.file_tree.clear();
@@ -1416,6 +1428,16 @@ impl EditorSession {
 
     pub fn state_repository(&self) -> Arc<dyn WorkspaceStateRepository> {
         self.state_repository.clone()
+    }
+
+    pub fn new_folder(&mut self) -> Result<(), WorkspaceError> {
+        let root = self
+            .workspace_root()
+            .ok_or_else(|| WorkspaceError::new("Workspace を開いてください"))?;
+        let timestamp = lapis_task::unix_time_ms();
+        self.repository
+            .create_directory(root, &format!("new-folder-{timestamp}"))?;
+        self.refresh_file_tree()
     }
 
     pub fn refresh_file_tree(&mut self) -> Result<(), WorkspaceError> {
@@ -1650,7 +1672,26 @@ impl EditorSession {
             .map_err(|error| WorkspaceError::new(error.to_string()))
     }
 
+    pub fn recover_draft(&mut self, draft: &str) -> Result<(), DocumentError> {
+        let cache = self
+            .recover_document_draft(draft)
+            .map_err(|error| DocumentError::io(error.to_string()))?;
+        let id = cache.id.clone();
+        self.documents.push(OpenDocument::from_cache(
+            cache,
+            DocumentViewState {
+                document_id: Some(id),
+                ..Default::default()
+            },
+        ));
+        self.active = Some(self.documents.len() - 1);
+        // 文書復旧は成功している。表示状態の保存失敗は警告として保持する。
+        self.persist_best_effort();
+        Ok(())
+    }
+
     pub fn restore_snapshot(&mut self, snapshot: WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+        self.workspace_restore_root = snapshot.root.clone();
         self.detach_documents();
         self.documents.clear();
         self.active = None;
@@ -1659,20 +1700,32 @@ impl EditorSession {
         self.file_tree.clear();
         self.workspace_name = "No Workspace".to_owned();
         if let Some(root) = snapshot.root {
-            let workspace_id = self
+            let workspace = self
                 .document_connection
                 .workspace(&root)
-                .map_err(|error| WorkspaceError::new(error.to_string()))?;
-            self.workspace_id = Some(workspace_id);
-            self.workspace_name = root
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("Workspace")
-                .to_owned();
-            self.file_tree = self.repository.list_tree(&root)?;
-            self.workspace_root = Some(root);
+                .map_err(|error| WorkspaceError::new(error.to_string()))
+                .and_then(|id| self.repository.list_tree(&root).map(|tree| (id, tree)));
+            match workspace {
+                Ok((id, tree)) => {
+                    self.workspace_id = Some(id);
+                    self.workspace_name = root
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("Workspace")
+                        .to_owned();
+                    self.file_tree = tree;
+                    self.workspace_root = Some(root);
+                }
+                Err(error) => {
+                    self.restore_warning =
+                        Some(format!("Workspace を復元できませんでした: {error}"));
+                }
+            }
         }
+        let mut restored_active = None;
         for view in snapshot.open_documents {
+            let was_active = snapshot.active_document_id.is_some()
+                && view.document_id == snapshot.active_document_id;
             let attached = view
                 .document_id
                 .as_ref()
@@ -1734,6 +1787,9 @@ impl EditorSession {
                 }
             }
             let id = cache.id.clone();
+            if was_active {
+                restored_active = Some(self.documents.len());
+            }
             self.documents.push(OpenDocument::from_cache(
                 cache,
                 DocumentViewState {
@@ -1742,10 +1798,12 @@ impl EditorSession {
                 },
             ));
         }
-        self.active = snapshot.active_path.and_then(|path| {
-            self.documents
-                .iter()
-                .position(|open| open.document.path() == Some(path.as_path()))
+        self.active = restored_active.or_else(|| {
+            snapshot.active_path.and_then(|path| {
+                self.documents
+                    .iter()
+                    .position(|open| open.document.path() == Some(path.as_path()))
+            })
         });
         if self.active.is_none() && !self.documents.is_empty() {
             self.active = Some(0);
@@ -1779,12 +1837,51 @@ mod tests {
 
     use lapis_document::{DocumentErrorKind, DocumentRepository, FileData, FileFingerprint};
     use lapis_lsp::{DiagnosticSeverity, LspRange};
-    use lapis_task_runner::{
+    use lapis_task::{
         ExecutionSnapshot, ExecutionStatus, Task, TaskSnapshot, TaskStart, unix_time_ms,
     };
-    use lapis_workspace::{FileEntryKind, WorkspaceStateRepository};
+    use lapis_workspace::FileEntryKind;
 
     use super::*;
+
+    #[test]
+    fn settings_read_cache_does_not_wait_for_persistence_io() {
+        struct SlowSettings {
+            started: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl GlobalSettingsRepository for SlowSettings {
+            fn load(&self) -> Result<GlobalSettings, SettingsError> {
+                Ok(GlobalSettings::default())
+            }
+            fn save(&self, _: &GlobalSettings) -> Result<(), SettingsError> {
+                self.started.send(()).unwrap();
+                self.release.lock().unwrap().recv().unwrap();
+                Ok(())
+            }
+        }
+        let (started, receiver) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let session = SettingsSession::load(Arc::new(SlowSettings {
+            started,
+            release: Mutex::new(released),
+        }))
+        .unwrap();
+        let writer_session = session.clone();
+        let writer = thread::spawn(move || writer_session.set_theme("new-theme".into()));
+        receiver
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let (ready, read) = mpsc::channel();
+        let reader_session = session.clone();
+        let reader = thread::spawn(move || ready.send(reader_session.settings()).unwrap());
+        let cached = read.recv_timeout(std::time::Duration::from_secs(2));
+        release.send(()).unwrap();
+        writer.join().unwrap().unwrap();
+        reader.join().unwrap();
+        assert_eq!(cached.unwrap(), GlobalSettings::default());
+        assert_eq!(session.settings().theme, "new-theme");
+    }
 
     #[derive(Default)]
     struct MemoryRepository(Mutex<HashMap<PathBuf, FileData>>);
@@ -1845,6 +1942,9 @@ mod tests {
     }
 
     impl WorkspaceRepository for MemoryRepository {
+        fn create_directory(&self, _: &Path, _: &str) -> Result<(), WorkspaceError> {
+            Err(WorkspaceError::new("Unsupported"))
+        }
         fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
             Ok(self
                 .0
@@ -2016,7 +2116,7 @@ mod tests {
         }
     }
 
-    impl lapis_task_runner::TaskConnection for MemoryTaskBackend {
+    impl lapis_task::TaskConnection for MemoryTaskBackend {
         fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
             Ok(self
                 .records
@@ -2386,6 +2486,8 @@ mod tests {
         let workspace = WorkspaceId::new("canonical-workspace");
         let backend = Arc::new(MemoryTaskBackend::default());
         let mut tasks = TaskSession::new(backend.clone());
+        let conversation = ConversationId::new("active-conversation");
+        tasks.set_conversation(conversation.clone());
         let execution_id = tasks
             .start_codex_with_mode(workspace.clone(), "質問する", TaskMode::Plan)
             .unwrap();
@@ -2393,6 +2495,9 @@ mod tests {
         assert_eq!(tasks.records().len(), 1);
         assert_eq!(tasks.records()[0].execution.mode, TaskMode::Plan);
         assert_eq!(tasks.records()[0].execution.status, ExecutionStatus::Queued);
+        assert_eq!(tasks.records()[0].task.conversation_id, conversation);
+        tasks.set_conversation(ConversationId::new("another-conversation"));
+        assert_eq!(tasks.records()[0].task.conversation_id, conversation);
 
         backend.records.lock().unwrap()[0].execution.status = ExecutionStatus::WaitingForInput;
         assert!(tasks.refresh(&workspace).unwrap());

@@ -17,6 +17,8 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 ## ディレクトリの責務
 
 - `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
+- `client/` は Backend の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
+- `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
 - `ui/shell/` は Window・Panel・Tab・Layout、`ui/features/` は個別機能の表示・入力・描画を担当します。
-- UI に Backend の正規状態や実行ロジックを移さず、既存の機能横断的な `#[path]` 取り込みを増やさないでください。
+- UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。

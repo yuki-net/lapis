@@ -4,6 +4,7 @@ use crate::{
 };
 
 mod state;
+mod view;
 
 pub(crate) use state::TasksFeature;
 

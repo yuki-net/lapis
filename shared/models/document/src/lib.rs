@@ -168,6 +168,10 @@ impl Document {
         self.text.len_lines()
     }
 
+    pub fn contains_crlf(&self) -> bool {
+        self.text.contains_crlf()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.text.is_empty()
     }

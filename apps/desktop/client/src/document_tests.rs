@@ -2,6 +2,90 @@ struct MemoryDocuments {
     repository: Arc<MemoryRepository>,
     documents: Arc<Mutex<HashMap<DocumentId, Document>>>,
     concurrent_edit: Arc<Mutex<Option<String>>>,
+    workspace_failure: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[test]
+fn rejected_optimistic_input_can_be_recovered_without_overwriting_the_shared_document() {
+    let repository = Arc::new(MemoryRepository::default());
+    let path = PathBuf::from("shared.md");
+    insert_file(&repository, path.clone(), "newer remote content");
+    let documents = Arc::new(MemoryDocuments::new(repository.clone()));
+    let state = Arc::new(MemoryState::default());
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        state.clone(),
+        documents.clone(),
+    );
+    editor.open_path(path.clone()).unwrap();
+    let original = editor.active_document_id().unwrap().clone();
+    editor.recover_draft("all optimistic input 😀").unwrap();
+    assert_ne!(editor.active_document_id(), Some(&original));
+    assert!(editor.active_path().is_none());
+    assert!(editor.is_dirty());
+    assert_eq!(editor.active_text().unwrap(), "all optimistic input 😀");
+    assert_eq!(
+        documents
+            .attach(&original)
+            .unwrap()
+            .document
+            .content_for_save(),
+        "newer remote content"
+    );
+    let persisted = state.load().unwrap().unwrap();
+    assert_eq!(persisted.open_documents.len(), 2);
+    assert_eq!(
+        persisted.open_documents[1].draft_content.as_deref(),
+        Some("all optimistic input 😀")
+    );
+    editor.restore_snapshot(persisted).unwrap();
+    let recovered = editor
+        .tabs()
+        .into_iter()
+        .find(|tab| tab.path.is_none())
+        .unwrap();
+    assert_eq!(editor.active_document_id(), Some(&recovered.id));
+    assert_eq!(editor.active_text().unwrap(), "all optimistic input 😀");
+}
+
+
+#[test]
+fn recovered_document_survives_view_state_persistence_failure() {
+    struct FailingState;
+    impl WorkspaceStateRepository for FailingState {
+        fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+            Ok(None)
+        }
+        fn save(&self, _: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+            Err(WorkspaceError::new("disk full"))
+        }
+    }
+
+    let repository = Arc::new(MemoryRepository::default());
+    let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        Arc::new(FailingState),
+        connection.clone(),
+    );
+    editor.recover_draft("locally recovered input").unwrap();
+    assert_eq!(editor.tabs().len(), 1);
+    assert_eq!(editor.active_text().unwrap(), "locally recovered input");
+    assert!(editor.is_dirty());
+    assert!(editor.restore_warning().unwrap().contains("disk full"));
+    let document = editor.active_document_id().unwrap();
+    assert_eq!(
+        connection.attach(document).unwrap().document.content_for_save(),
+        "locally recovered input"
+    );
 }
 
 impl MemoryDocuments {
@@ -10,6 +94,7 @@ impl MemoryDocuments {
             repository,
             documents: Arc::new(Mutex::new(HashMap::new())),
             concurrent_edit: Arc::new(Mutex::new(None)),
+            workspace_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -51,9 +136,13 @@ impl DocumentConnection for MemoryDocuments {
             repository: self.repository.clone(),
             documents: self.documents.clone(),
             concurrent_edit: self.concurrent_edit.clone(),
+            workspace_failure: self.workspace_failure.clone(),
         })
     }
     fn workspace(&self, _: &Path) -> Result<WorkspaceId, DocumentError> {
+        if self.workspace_failure.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(DocumentError::io("workspace temporarily unavailable"));
+        }
         Ok(WorkspaceId::new("test-workspace"))
     }
     fn create(&self, _: Option<&Path>) -> Result<DocumentCache, DocumentError> {
@@ -346,6 +435,7 @@ fn persisted_draft_without_live_id_never_overwrites_an_existing_canonical_resour
                 ..DocumentViewState::default()
             }],
             active_path: Some(path),
+            active_document_id: None,
         })
         .unwrap();
     assert_eq!(
@@ -395,6 +485,7 @@ fn restore_missing_file_recovers_draft_as_canonical_untitled_and_persists_it() {
                 ..DocumentViewState::default()
             }],
             active_path: Some(path.clone()),
+            active_document_id: None,
         })
         .unwrap();
     assert_eq!(editor.tabs().len(), 1);
@@ -447,6 +538,7 @@ fn restore_revision_conflict_preserves_both_concurrent_content_and_backup_draft(
                 ..DocumentViewState::default()
             }],
             active_path: Some(path.clone()),
+            active_document_id: None,
         })
         .unwrap();
     assert_eq!(editor.tabs().len(), 2);
@@ -563,4 +655,124 @@ fn terminal_snapshot_atomically_replaces_cache_and_rejects_wrong_or_stale_resour
     assert_eq!(session.terminals()[0].output, b"recovered");
     assert_eq!(session.terminals()[0].status, TerminalStatus::Exited);
     assert_eq!(session.terminals()[0].output_sequence, 11);
+}
+
+#[test]
+fn failed_workspace_restore_retains_saved_root_without_authorizing_operations() {
+    struct UnavailableTree {
+        fail: std::sync::atomic::AtomicBool,
+    }
+    impl WorkspaceRepository for UnavailableTree {
+        fn create_directory(&self, _: &Path, _: &str) -> Result<(), WorkspaceError> {
+            panic!("Unavailable Workspace must not receive filesystem operations")
+        }
+        fn list_tree(&self, _: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                Err(WorkspaceError::new("tree temporarily unavailable"))
+            } else {
+                Ok(Vec::new())
+            }
+        }
+    }
+    for registration_fails in [true, false] {
+        let files = Arc::new(MemoryRepository::default());
+        let connection = Arc::new(MemoryDocuments::new(files));
+        connection.workspace_failure.store(registration_fails, std::sync::atomic::Ordering::SeqCst);
+        let repository = Arc::new(UnavailableTree { fail: std::sync::atomic::AtomicBool::new(!registration_fails) });
+        let state = Arc::new(MemoryState::default());
+        let mut editor = EditorSession::new_empty(
+            repository.clone(), Arc::new(FixedDialog { workspace: None, save: None }),
+            state.clone(), connection.clone(),
+        );
+        let root = PathBuf::from("temporarily-offline");
+        editor.restore_snapshot(WorkspaceSnapshot {
+            root: Some(root.clone()),
+            open_documents: vec![DocumentViewState {
+                draft_content: Some("recovered input".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }).unwrap();
+        assert!(editor.workspace_root().is_none());
+        assert!(editor.workspace_id().is_none());
+        assert!(editor.new_folder().is_err());
+        assert!(editor.restore_warning().is_some());
+        assert_eq!(editor.active_text().unwrap(), "recovered input");
+        editor.persist().unwrap();
+        let saved = state.load().unwrap().unwrap();
+        assert_eq!(saved.root, Some(root.clone()));
+        editor.restore_snapshot(saved.clone()).unwrap();
+        assert_eq!(editor.snapshot().root, Some(root.clone()));
+        connection.workspace_failure.store(false, std::sync::atomic::Ordering::SeqCst);
+        repository.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+        editor.restore_snapshot(saved).unwrap();
+        assert_eq!(editor.workspace_root(), Some(root.as_path()));
+        let replacement = PathBuf::from("explicitly-opened");
+        editor.open_workspace(replacement.clone()).unwrap();
+        assert_eq!(state.load().unwrap().unwrap().root, Some(replacement));
+        editor.close_workspace().unwrap();
+        assert!(state.load().unwrap().unwrap().root.is_none());
+        assert!(editor.snapshot().root.is_none());
+    }
+}
+
+#[test]
+fn explicit_workspace_close_clears_a_root_retained_after_restore_failure() {
+    let repository = Arc::new(MemoryRepository::default());
+    let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+    connection.workspace_failure.store(true, std::sync::atomic::Ordering::SeqCst);
+    let state = Arc::new(MemoryState::default());
+    let mut editor = EditorSession::new_empty(
+        repository, Arc::new(FixedDialog { workspace: None, save: None }), state.clone(), connection,
+    );
+    editor.restore_snapshot(WorkspaceSnapshot {
+        root: Some(PathBuf::from("offline")), ..Default::default()
+    }).unwrap();
+    editor.persist().unwrap();
+    assert!(state.load().unwrap().unwrap().root.is_some());
+    editor.close_workspace().unwrap();
+    assert!(state.load().unwrap().unwrap().root.is_none());
+}
+
+#[test]
+fn untitled_selection_survives_conversation_switching() {
+    let repository = Arc::new(MemoryRepository::default());
+    let path = PathBuf::from("original.txt");
+    insert_file(&repository, path.clone(), "saved");
+    let mut editor = session(repository, Arc::new(MemoryState::default()));
+    editor.open_path(path).unwrap();
+    editor.recover_draft("selected recovery").unwrap();
+    let selected = editor.active_document_id().unwrap().clone();
+    let mut conversations = ConversationSession::new(
+        Arc::new(MemoryConversationState::default()), editor.snapshot(),
+    );
+    let first = conversations.active_id().clone();
+    conversations.capture(&editor, ConversationViewState::default(), None, &[]).unwrap();
+    conversations.create(&editor, ConversationViewState::default()).unwrap();
+    editor.new_document();
+    conversations.capture(&editor, ConversationViewState::default(), None, &[]).unwrap();
+    conversations.switch(&first, &mut editor).unwrap();
+    assert_eq!(editor.active_document_id(), Some(&selected));
+    assert_eq!(editor.active_text().unwrap(), "selected recovery");
+}
+
+#[test]
+fn selected_document_identity_takes_precedence_with_legacy_path_fallback() {
+    let repository = Arc::new(MemoryRepository::default());
+    let first_path = PathBuf::from("first.txt");
+    let second_path = PathBuf::from("second.txt");
+    insert_file(&repository, first_path.clone(), "first");
+    insert_file(&repository, second_path.clone(), "second");
+    let mut editor = session(repository, Arc::new(MemoryState::default()));
+    editor.open_path(first_path.clone()).unwrap();
+    let first = editor.active_document_id().unwrap().clone();
+    editor.open_path(second_path.clone()).unwrap();
+    let mut snapshot = editor.snapshot();
+    snapshot.active_document_id = Some(first.clone());
+    editor.restore_snapshot(snapshot.clone()).unwrap();
+    assert_eq!(editor.active_document_id(), Some(&first));
+    assert_eq!(editor.active_path(), Some(first_path.as_path()));
+    snapshot.active_document_id = None;
+    editor.restore_snapshot(snapshot).unwrap();
+    assert_eq!(editor.active_path(), Some(second_path.as_path()));
 }

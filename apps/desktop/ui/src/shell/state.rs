@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use lapis_app_services::DocumentTab;
+use lapis_desktop_client::DocumentTab;
 
 use crate::{
-    extension_ui::{FeatureRegistry, PanelPosition, ThemeId, ViewId},
+    extension_ui::{FeatureRegistry, PanelPosition},
     features::id,
     tokens,
 };
@@ -159,7 +159,6 @@ pub(crate) struct ShellState {
     pub header_menu_section: Option<HeaderMenuSection>,
     pub theme_picker_open: bool,
     pub theme_save_in_flight: bool,
-    pub theme_before_save: Option<ThemeId>,
     pub resizing: Option<ResizeTarget>,
     pub resize_start_pos: Option<gpui::Point<gpui::Pixels>>,
     pub resize_mode: Option<ResizeMode>,
@@ -203,7 +202,6 @@ impl Default for ShellState {
             header_menu_section: None,
             theme_picker_open: false,
             theme_save_in_flight: false,
-            theme_before_save: None,
             resizing: None,
             resize_start_pos: None,
             resize_mode: None,
@@ -299,10 +297,6 @@ impl ShellState {
         ]
     }
 
-    pub fn activate_view(&mut self, position: PanelPosition, view: ViewId) {
-        self.panel_mut(position).activate_tool(view);
-    }
-
     pub fn set_tool_picker_query(&mut self, query: impl Into<String>) {
         self.tool_picker_query = query.into();
     }
@@ -362,6 +356,7 @@ impl ShellState {
 
 #[cfg(test)]
 mod tests {
+    use crate::extension_ui::ViewId;
     use std::time::{Duration, Instant};
 
     use super::*;

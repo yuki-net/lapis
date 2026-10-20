@@ -19,7 +19,7 @@ impl Render for PanelTabDragPreview {
     }
 }
 
-impl Editor {
+impl Shell {
     pub(super) fn render_tool_panel_header(
         &self,
         panel: &PanelHost,
@@ -96,7 +96,7 @@ impl Editor {
                                     .as_deref()
                                     .unwrap_or_else(|| std::path::Path::new("")),
                                 FileEntryKind::File,
-                                &self.problems.languages,
+                                &self.languages,
                             )
                             .icon
                         }),
@@ -167,12 +167,8 @@ impl Editor {
                                     PanelTab::Document(document_id.clone()),
                                     cx,
                                 );
-                                this.persist_active_view();
-                                if this.session.activate_document(&document_id) {
-                                    this.restore_active_view();
-                                    window.focus(&this.focus_handle);
-                                    cx.notify();
-                                }
+                                cx.emit(UiCommand::ActivateDocument(document_id));
+                                let _ = window;
                             }
                         }
                     }))
@@ -268,22 +264,6 @@ impl Editor {
             .items_center()
             .gap(tokens::spacing::XS)
             .child(tab_container)
-            .when(
-                panel
-                    .active_tool()
-                    .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL),
-                |bar| {
-                    bar.child(
-                        task_action_button("Start", false)
-                            .on_click(cx.listener(|this, _, _, cx| this.start_terminal(cx))),
-                    )
-                    .child(
-                        task_action_button("Send clipboard", false).on_click(
-                            cx.listener(|this, _, _, cx| this.send_terminal_clipboard(cx)),
-                        ),
-                    )
-                },
-            )
             .when(has_tabs && has_overflow, |bar| {
                 bar.child(add_button("fixed"))
             })

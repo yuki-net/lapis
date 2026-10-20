@@ -12,7 +12,7 @@ use drag::apply_drag_region;
 
 use super::*;
 
-impl Editor {
+impl Shell {
     /// Composes the persistent application header, separating app content (left/center/right)
     /// from OS window controls (minimize/maximize/close).
     pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {

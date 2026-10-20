@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(crate) fn render_main(
         &self,
         window: &mut Window,

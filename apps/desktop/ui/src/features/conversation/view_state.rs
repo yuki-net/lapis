@@ -3,7 +3,7 @@ use crate::{
     features::id,
     shell::{PanelTab, ShellState},
 };
-use lapis_app_services::{ConversationViewState, DocumentTab, PanelViewState};
+use lapis_desktop_client::{ConversationViewState, DocumentTab, PanelViewState};
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {

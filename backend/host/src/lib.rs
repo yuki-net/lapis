@@ -84,6 +84,13 @@ impl BackendHost {
 
     pub fn connect(&self, root: &Path) -> Result<EmbeddedClient, BackendServiceError> {
         let workspace_id = self.register_workspace(root)?;
+        self.connect_workspace(workspace_id)
+    }
+
+    pub(crate) fn connect_workspace(
+        &self,
+        workspace_id: WorkspaceId,
+    ) -> Result<EmbeddedClient, BackendServiceError> {
         let sequence = self.inner.next_session.fetch_add(1, Ordering::Relaxed);
         let session_id =
             SessionId::try_new(format!("desktop-{sequence}")).expect("bounded session id");

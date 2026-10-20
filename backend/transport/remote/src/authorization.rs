@@ -191,6 +191,25 @@ mod tests {
             },
         });
         assert_eq!(grant.require_request(&file_tree), Ok(()));
+        let create_directory =
+            RequestBody::CreateDirectory(lapis_client_api::CreateDirectoryRequest {
+                workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
+                path: lapis_client_api::WorkspaceRelativePath::parse("new-folder").unwrap(),
+            });
+        assert!(matches!(
+            grant.require_request(&create_directory),
+            Err(AuthorizationError::CapabilityDenied(_))
+        ));
+        let write_grant = SessionGrant::from_authenticated(
+            SessionId::try_new("writer").unwrap(),
+            WorkspaceId::try_new("workspace-1").unwrap(),
+            CapabilitySet::try_new([CapabilityId::try_new(
+                lapis_client_api::capability::FILES_WRITE,
+            )
+            .unwrap()])
+            .unwrap(),
+        );
+        assert_eq!(write_grant.require_request(&create_directory), Ok(()));
         assert!(matches!(
             grant.require_request(&terminal_start),
             Err(AuthorizationError::CapabilityDenied(_))

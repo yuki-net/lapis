@@ -6,11 +6,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lapis_app_services::{ConversationRecord, ConversationRepository};
+use lapis_desktop_client::{ConversationRecord, ConversationRepository};
 use lapis_editor_core::ConversationId;
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_workspace::WorkspaceError;
 use serde::{Deserialize, Serialize};
+
+mod workspace;
+pub use workspace::LocalWorkspaceStateRepository;
 
 #[derive(Clone)]
 pub struct LocalConversationRepository {
@@ -135,12 +138,13 @@ fn atomic_json_write(path: &Path, value: &impl Serialize) -> Result<(), Workspac
 
 #[cfg(test)]
 mod tests {
-    use lapis_app_services::{ConversationViewState, RestoredTerminal};
+    use lapis_desktop_client::{
+        ConversationViewState, DocumentViewState, RestoredTerminal, WorkspaceSnapshot,
+    };
     use lapis_editor_core::ExecutionId;
     use lapis_localization::LocaleId;
     use lapis_settings::GlobalSettingsRepository;
     use lapis_terminal::TerminalStatus;
-    use lapis_workspace::{DocumentViewState, WorkspaceSnapshot};
 
     use super::*;
 
@@ -171,6 +175,7 @@ mod tests {
             workspace: WorkspaceSnapshot {
                 root: Some(PathBuf::from("C:/作業/lapis")),
                 active_path: Some(PathBuf::from("C:/作業/lapis/メモ.md")),
+                active_document_id: None,
                 open_documents: vec![DocumentViewState {
                     path: PathBuf::from("C:/作業/lapis/メモ.md"),
                     cursor_char: 7,

@@ -56,6 +56,9 @@ impl DocumentRepository for TestFiles {
 }
 
 impl WorkspaceFileBackend for TestFiles {
+    fn create_directory(&self, _: &std::path::Path) -> Result<(), lapis_document::DocumentError> {
+        Err(lapis_document::DocumentError::io("Unsupported"))
+    }
     fn list_children(&self, directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
         let mut entries = fs::read_dir(directory)
             .map_err(|error| DocumentError::io(error.to_string()))?

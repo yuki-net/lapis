@@ -1,3 +1,4 @@
+pub(crate) mod main;
 mod panel;
 pub(crate) mod panel_transition;
 mod state;

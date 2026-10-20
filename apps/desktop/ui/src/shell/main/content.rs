@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(super) fn render_empty_panel(
         &self,
         position: PanelPosition,
@@ -40,114 +40,21 @@ impl Editor {
 
     pub(super) fn render_document_content(
         &self,
-        document_id: &lapis_editor_core::DocumentId,
-        cx: &mut Context<Self>,
+        document: &lapis_editor_core::DocumentId,
+        _: &mut Context<Self>,
     ) -> gpui::Div {
-        let active = self.session.active_document_id() == Some(document_id);
-        if active {
-            let line_count = self.session.len_lines().max(1);
-            let max_visual_width = (0..line_count)
-                .filter_map(|line| self.session.line(line))
-                .map(|line| {
-                    line.trim_end_matches(['\r', '\n'])
-                        .chars()
-                        .map(|c| if c.is_ascii() { 9.0 } else { 18.0 })
-                        .sum::<f32>()
-                })
-                .fold(0.0f32, f32::max);
-            let content_width = px((max_visual_width + 80.0).max(600.0));
-
-            let editor_content = div()
-                .relative()
-                .flex_none()
-                .w(content_width)
-                .min_w_full()
-                .min_h_full()
-                .px(px(18.0))
-                .py(px(10.0))
-                .cursor(CursorStyle::IBeam)
-                .text_size(px(14.0))
-                .text_color(theme::colors().text_primary)
-                .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
-                .on_mouse_move(cx.listener(Self::editor_mouse_move))
-                .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
-                .child(EditorElement { editor: cx.entity() })
-                .when(self.session.is_empty(), |canvas| {
-                    canvas.child(
-                        div()
-                            .absolute()
-                            .top(px(72.0))
-                            .left(px(54.0))
-                            .w(px(330.0))
-                            .flex()
-                            .flex_col()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .text_size(px(18.0))
-                                    .text_color(theme::colors().text_primary)
-                                    .child("Open a file or project"),
-                            )
-                            .child(
-                                div()
-                                    .mb_1()
-                                    .text_size(px(12.0))
-                                    .text_color(theme::colors().text_tertiary)
-                                    .child("Choose a project to restore its last workspace, or open a file to start here."),
-                            )
-                            .child(
-                                quick_action("Open file", "Ctrl O")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_file(window, cx)
-                                    })),
-                            )
-                            .child(
-                                quick_action("Open project", "")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.open_project(window, cx)
-                                    })),
-                            )
-                            .child(
-                                quick_action("New file", "Ctrl N")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.new_document(&New, window, cx)
-                                    })),
-                            ),
-                    )
-                });
-
-            scroll_viewport(
-                "source-scroll",
-                ScrollAxis::Both,
-                &self.editor_scroll,
-                editor_content,
-            )
-            .size_full()
-            .flex_1()
+        if self.session.active_document_id() == Some(document) {
+            div().size_full().child(self.document_view.clone())
         } else {
             panel_empty_state("F", "Document", "Select the document tab to edit")
         }
     }
-    pub(super) fn render_tool_content(&self, view: &ViewId, cx: &mut Context<Self>) -> gpui::Div {
-        match view.as_str() {
-            id::VIEW_FILES => self.render_files_content(cx),
-            id::VIEW_SEARCH => self.render_search_content(cx),
-            id::VIEW_GIT => self.render_git_content(cx),
-            id::VIEW_HISTORY => self.render_history_content(),
-            id::VIEW_PREVIEW => self.render_preview_content(),
-            id::VIEW_ASSISTANT => self.render_assistant_content(cx),
-            id::VIEW_TERMINAL => crate::features::terminal::render_content(
-                &self.terminal,
-                &self.scroll_states.terminal,
-            ),
-            id::VIEW_PROBLEMS => crate::features::problems::render_content(&self.problems),
-            id::VIEW_OUTPUT => crate::features::problems::render_output(&self.status),
-            id::VIEW_COMMAND_SEARCH => div().flex_1().child(self.quick_search.clone()),
-            id::VIEW_SETTINGS => self.render_settings_content(cx),
-            _ => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
+    pub(super) fn render_tool_content(&self, view: &ViewId, _: &mut Context<Self>) -> gpui::Div {
+        match self.views.get(view) {
+            Some(view) => div().flex().flex_1().min_h(px(0.0)).child(view.clone()),
+            None => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
         }
     }
-
     pub(super) fn render_main_empty_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         // TODO: Workspaceを開いている状態と、作業中の状態で開始画面を分ける。
         // 現在はどちらも同じWorkspace一覧を表示する。
@@ -160,11 +67,8 @@ impl Editor {
         if let Some(root) = current_workspace.clone() {
             recent_workspaces.push(root);
         }
-        for record in self.conversation.session.records().iter().rev() {
-            let Some(root) = record.workspace.root.as_ref() else {
-                continue;
-            };
-            if !recent_workspaces.iter().any(|recent| recent == root) {
+        for root in &self.session.recent_workspaces {
+            if !recent_workspaces.contains(root) {
                 recent_workspaces.push(root.clone());
             }
         }
@@ -269,246 +173,6 @@ impl Editor {
                     )
                 }),
         )
-    }
-    pub(super) fn render_settings_content(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let active_theme = theme::active_id();
-        let current_locale = self.settings.settings().locale;
-        let workspace_info = self
-            .session
-            .workspace_root()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| self.t("settings.no-workspace"));
-
-        div().flex_1().w_full().h_full().child(
-            div()
-                .id("main-settings-content")
-                .flex_1()
-                .w_full()
-                .h_full()
-                .flex()
-                .flex_col()
-                .p_8()
-                .gap_6()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(Icon::new(IconName::Settings))
-                        .child(
-                            div()
-                                .text_size(px(22.0))
-                                .font_weight(gpui::FontWeight::BOLD)
-                                .text_color(theme::colors().text_primary)
-                                .child(self.t("settings.title")),
-                        ),
-                )
-                .child(
-                    div()
-                        .w(px(600.0))
-                        .max_w_full()
-                        .flex()
-                        .flex_col()
-                        .gap_4()
-                        .child(
-                            div()
-                                .p_4()
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(theme::colors().border_default)
-                                .bg(theme::colors().background_tertiary)
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(theme::colors().text_primary)
-                                        .child(self.t("settings.appearance")),
-                                )
-                                .child(div().flex().flex_wrap().gap_2().children(
-                                    theme::available().into_iter().map(|(id, name)| {
-                                        let is_selected = active_theme == id;
-                                        let theme_id = id.clone();
-                                        div()
-                                            .id(gpui::SharedString::from(format!(
-                                                "setting-theme-{}",
-                                                id.as_str()
-                                            )))
-                                            .px_3()
-                                            .py_2()
-                                            .rounded(px(6.0))
-                                            .border_1()
-                                            .border_color(if is_selected {
-                                                theme::colors().text_accent
-                                            } else {
-                                                theme::colors().border_default
-                                            })
-                                            .bg(if is_selected {
-                                                theme::colors().button_background_selected
-                                            } else {
-                                                theme::colors().background_tertiary
-                                            })
-                                            .hover(|style| {
-                                                style.bg(theme::colors().button_background_hover)
-                                            })
-                                            .text_size(px(12.0))
-                                            .text_color(theme::colors().text_primary)
-                                            .child(format!(
-                                                "{} {}",
-                                                if is_selected { "✓" } else { "" },
-                                                name
-                                            ))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.select_theme(theme_id.clone(), cx);
-                                            }))
-                                    }),
-                                )),
-                        )
-                        .child(
-                            div()
-                                .p_4()
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(theme::colors().border_default)
-                                .bg(theme::colors().background_tertiary)
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(theme::colors().text_primary)
-                                        .child(self.t("settings.language")),
-                                )
-                                .child(
-                                    div()
-                                        .flex()
-                                        .gap_2()
-                                        .child(self.render_locale_button(
-                                            "日本語 (Japanese)",
-                                            "ja-JP",
-                                            current_locale.as_str() == "ja-JP",
-                                            cx,
-                                        ))
-                                        .child(self.render_locale_button(
-                                            "English (英語)",
-                                            "en-US",
-                                            current_locale.as_str() == "en-US",
-                                            cx,
-                                        )),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .p_4()
-                                .rounded(px(8.0))
-                                .border_1()
-                                .border_color(theme::colors().border_default)
-                                .bg(theme::colors().background_tertiary)
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .text_size(px(14.0))
-                                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .text_color(theme::colors().text_primary)
-                                        .child(self.t("settings.workspace-info")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(theme::colors().text_tertiary)
-                                        .child(format!("Workspace Root: {workspace_info}")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(theme::colors().text_tertiary)
-                                        .child("Version: 0.1.0"),
-                                ),
-                        ),
-                ),
-        )
-    }
-
-    fn render_locale_button(
-        &self,
-        label: &'static str,
-        locale_code: &'static str,
-        is_selected: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(label)
-            .px_3()
-            .py_2()
-            .rounded(px(6.0))
-            .border_1()
-            .border_color(if is_selected {
-                theme::colors().text_accent
-            } else {
-                theme::colors().border_default
-            })
-            .bg(if is_selected {
-                theme::colors().button_background_selected
-            } else {
-                theme::colors().background_tertiary
-            })
-            .hover(|style| style.bg(theme::colors().button_background_hover))
-            .text_size(px(12.0))
-            .text_color(theme::colors().text_primary)
-            .child(format!("{} {}", if is_selected { "✓" } else { "" }, label))
-            .on_click(cx.listener(move |this, _, _, cx| {
-                this.select_locale(lapis_localization::LocaleId::new(locale_code), cx);
-            }))
-    }
-
-    pub(super) fn render_history_content(&self) -> gpui::Div {
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .p(px(10.0))
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(10.0))
-                    .text_color(theme::colors().text_tertiary)
-                    .child("DOCUMENT HISTORY"),
-            )
-            .child(
-                div()
-                    .p_2()
-                    .rounded(px(6.0))
-                    .bg(theme::colors().background_tertiary)
-                    .text_size(px(12.0))
-                    .child(format!("Revision {}", self.session.revision())),
-            )
-    }
-
-    pub(super) fn render_preview_content(&self) -> gpui::Div {
-        div()
-            .h(px(0.0))
-            .min_h(px(0.0))
-            .flex_1()
-            .overflow_hidden()
-            .p_4()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(if self.session.is_empty() {
-                panel_empty_state(
-                    "▱",
-                    "No preview available",
-                    "Open a Markdown document to preview it",
-                )
-            } else {
-                div().children(crate::features::preview::preview_lines(&self.session))
-            })
     }
 }
 

@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(crate) fn render_command_palette(
         &self,
         cx: &mut Context<Self>,

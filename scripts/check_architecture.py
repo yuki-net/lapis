@@ -13,8 +13,10 @@ ALLOWED = {
     "infrastructure": {"infrastructure", "application", "runtime", "models"},
     "transport": {"transport", "runtime", "protocol", "models"},
     "host": {"host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
-    "ui": {"ui", "application", "models", "protocol"},
-    "desktop_entry": {"desktop_entry", "ui", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
+    "ui": {"ui", "desktop_client", "models", "protocol"},
+    "desktop_client": {"desktop_client", "models", "protocol"},
+    "desktop_persistence": {"desktop_persistence", "desktop_client", "models"},
+    "desktop_entry": {"desktop_entry", "ui", "desktop_client", "desktop_persistence", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
     "client": {"client", "models", "protocol"},
 }
 
@@ -26,6 +28,8 @@ def layer(manifest, root):
         ("backend/application/", "application"), ("backend/runtime/", "runtime"),
         ("backend/infrastructure/", "infrastructure"), ("backend/transport/", "transport"),
         ("backend/host/", "host"), ("apps/desktop/ui/", "ui"),
+        ("apps/desktop/client/", "desktop_client"),
+        ("apps/desktop/persistence/", "desktop_persistence"),
         ("apps/desktop/app/", "desktop_entry"), ("apps/", "client"),
     ]:
         if relative.startswith(prefix):
@@ -48,7 +52,7 @@ def check(metadata, exceptions, root=ROOT):
         for dependency in package["dependencies"]:
             target = dependency["name"]
             if target not in packages:
-                if layers.get(name) in {"models", "protocol", "application", "runtime", "infrastructure", "transport", "host"} and target in {"gpui", "rfd"}:
+                if layers.get(name) in {"models", "protocol", "application", "runtime", "infrastructure", "transport", "host", "desktop_client", "desktop_persistence"} and target in {"gpui", "rfd"}:
                     errors.append(f"{name} -> {target}: Client 固有依存")
                 continue
             if name not in layers or target not in layers:

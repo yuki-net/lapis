@@ -7,7 +7,6 @@ mod state;
 mod view;
 
 pub(crate) use state::TerminalFeature;
-pub(crate) use view::render_content;
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(

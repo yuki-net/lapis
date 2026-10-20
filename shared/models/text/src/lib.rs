@@ -118,6 +118,18 @@ impl TextBuffer {
         self.text.len_lines()
     }
 
+    /// 全文を連続領域へ複製せず、改行コードの存在を調べる。
+    pub fn contains_crlf(&self) -> bool {
+        let mut previous_cr = false;
+        for ch in self.text.chars() {
+            if previous_cr && ch == '\n' {
+                return true;
+            }
+            previous_cr = ch == '\r';
+        }
+        false
+    }
+
     pub fn is_empty(&self) -> bool {
         self.text.len_chars() == 0
     }
@@ -402,6 +414,14 @@ mod tests {
         assert_eq!(buffer.to_contiguous_string(), "a日本😀z");
         assert!(buffer.redo());
         assert_eq!(buffer.to_contiguous_string(), "a🦀z");
+    }
+
+    #[test]
+    fn crlf_detection_uses_rope_without_concatenating() {
+        assert!(!TextBuffer::from_string("a\nb".into()).contains_crlf());
+        assert!(!TextBuffer::from_string("a\rb".into()).contains_crlf());
+        assert!(TextBuffer::from_string("a".repeat(4096) + "\r\nb").contains_crlf());
+        assert!(TextBuffer::from_string("a\nb\r\n".into()).contains_crlf());
     }
 
     #[test]

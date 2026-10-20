@@ -1,5 +1,5 @@
 [package]
-name = "lapis-app-services"
+name = "lapis-desktop-client"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -12,7 +12,7 @@ lapis-git = { path = "../../../shared/models/git" }
 lapis-lsp = { path = "../../../shared/models/lsp" }
 lapis-localization = { path = "../../../shared/models/localization" }
 lapis-settings = { path = "../../../shared/models/settings" }
-lapis-task-runner = { package = "lapis-task", path = "../../../shared/models/task" }
+lapis-task = { path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 serde.workspace = true

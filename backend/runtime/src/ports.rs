@@ -17,5 +17,6 @@ pub enum WorkspaceEntryKind {
 
 /// Workspace内のDocument I/Oと直下一覧だけをbackend stateへ公開するport。
 pub trait WorkspaceFileBackend: DocumentRepository {
+    fn create_directory(&self, directory: &Path) -> Result<(), DocumentError>;
     fn list_children(&self, directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError>;
 }

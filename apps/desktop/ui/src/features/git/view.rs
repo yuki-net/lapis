@@ -1,7 +1,13 @@
-use super::*;
+use super::state::GitOperation;
+use super::{GitFeature, change_color, change_label};
+use crate::{
+    components::{action_button, panel_empty_state},
+    theme,
+};
+use gpui::{Context, Render, Window, div, prelude::*, px};
 
-impl Editor {
-    pub(super) fn render_git_content(&self, cx: &mut Context<Self>) -> gpui::Div {
+impl Render for GitFeature {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut content = div()
             .id("git-scroll")
             .flex()
@@ -10,7 +16,7 @@ impl Editor {
             .min_h(px(0.0))
             .p_2()
             .gap_2();
-        if let Some(status) = self.git.session.status() {
+        if let Some(status) = self.snapshot.status.as_ref() {
             content = content.child(
                 div()
                     .text_size(px(10.0))
@@ -34,7 +40,7 @@ impl Editor {
                         .gap_2()
                         .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.select_git_diff(path.clone(), cx);
+                            this.submit(GitOperation::Diff(path.clone()), cx);
                         }))
                         .child(
                             div()
@@ -58,7 +64,7 @@ impl Editor {
             ));
         }
         for (worktree_index, (task_id, status)) in
-            self.git.session.worktree_statuses().iter().enumerate()
+            self.snapshot.worktree_statuses.iter().enumerate()
         {
             let discard_task = task_id.clone();
             content = content.child(
@@ -73,8 +79,10 @@ impl Editor {
                             .child(format!("WORKTREE · {} changes", status.files.len())),
                     )
                     .child(div().flex_1())
-                    .child(task_action_button("破棄", false).on_click(cx.listener(
-                        move |this, _, _, cx| this.discard_worktree(discard_task.clone(), cx),
+                    .child(action_button("破棄", false).on_click(cx.listener(
+                        move |this, _, _, cx| {
+                            this.submit(GitOperation::Discard(discard_task.clone()), cx)
+                        },
                     ))),
             );
             for (file_index, file) in status.files.iter().take(30).enumerate() {
@@ -93,7 +101,13 @@ impl Editor {
                         .gap_2()
                         .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, _, cx| {
-                            this.select_worktree_diff(task_for_diff.clone(), diff_path.clone(), cx);
+                            this.submit(
+                                GitOperation::WorktreeDiff(
+                                    task_for_diff.clone(),
+                                    diff_path.clone(),
+                                ),
+                                cx,
+                            );
                         }))
                         .child(
                             div()
@@ -102,11 +116,13 @@ impl Editor {
                                 .text_color(theme::colors().text_secondary)
                                 .child(file.path.clone()),
                         )
-                        .child(task_action_button("取込", true).on_click(cx.listener(
+                        .child(action_button("取込", true).on_click(cx.listener(
                             move |this, _, _, cx| {
-                                this.import_worktree_file(
-                                    task_for_import.clone(),
-                                    import_path.clone(),
+                                this.submit(
+                                    GitOperation::Import(
+                                        task_for_import.clone(),
+                                        import_path.clone(),
+                                    ),
                                     cx,
                                 );
                             },
@@ -114,7 +130,7 @@ impl Editor {
                 );
             }
         }
-        if let Some(diff) = self.git.session.selected_diff() {
+        if let Some(diff) = self.snapshot.selected_diff.as_ref() {
             content = content
                 .child(
                     div()
@@ -139,6 +155,12 @@ impl Editor {
                         .child(line.to_owned())
                 }));
         }
-        div().flex().flex_1().min_h(px(0.0)).child(content)
+        div()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
+            .child(self.message.clone())
+            .child(content)
     }
 }

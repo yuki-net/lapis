@@ -1,35 +1,38 @@
-use gpui::{div, prelude::*, px};
-use lapis_app_services::EditorSession;
-
 use crate::theme;
-
-pub(crate) fn preview_lines(session: &EditorSession) -> Vec<gpui::Div> {
-    (0..session.len_lines())
-        .filter_map(|line_index| session.line(line_index))
-        .map(|line| {
-            let line = line.trim_end_matches(['\r', '\n']);
-            let (text, size, color) = if let Some(value) = line.strip_prefix("# ") {
-                (value.to_owned(), px(24.0), theme::colors().text_primary)
-            } else if let Some(value) = line.strip_prefix("## ") {
-                (value.to_owned(), px(19.0), theme::colors().text_primary)
-            } else if let Some(value) = line.strip_prefix("### ") {
-                (value.to_owned(), px(16.0), theme::colors().text_primary)
-            } else if let Some(value) = line.strip_prefix("- ") {
-                (
-                    format!("• {value}"),
-                    px(13.0),
-                    theme::colors().text_secondary,
-                )
-            } else if let Some(value) = line.strip_prefix("> ") {
-                (format!("│ {value}"), px(13.0), theme::colors().text_accent)
-            } else {
-                (line.to_owned(), px(13.0), theme::colors().text_secondary)
-            };
-            div()
-                .min_h(px(22.0))
-                .text_size(size)
-                .text_color(color)
-                .child(text)
-        })
-        .collect()
+use gpui::{Context, Render, Window, div, prelude::*, px};
+pub(crate) struct PreviewFeature {
+    text: String,
+}
+impl PreviewFeature {
+    pub(crate) fn new() -> Self {
+        Self {
+            text: String::new(),
+        }
+    }
+    pub(crate) fn update(&mut self, text: String, cx: &mut Context<Self>) {
+        self.text = text;
+        cx.notify();
+    }
+}
+impl Render for PreviewFeature {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .p_3()
+            .children(self.text.lines().map(|line| {
+                let (text, size) = if let Some(text) = line.strip_prefix("# ") {
+                    (text, 24.0)
+                } else if let Some(text) = line.strip_prefix("## ") {
+                    (text, 19.0)
+                } else {
+                    (line, 13.0)
+                };
+                div()
+                    .min_h(px(22.0))
+                    .text_size(px(size))
+                    .text_color(theme::colors().text_primary)
+                    .child(text.to_owned())
+            }))
+    }
 }
