@@ -48,7 +48,7 @@ def check(metadata, exceptions, root=ROOT):
         for dependency in package["dependencies"]:
             target = dependency["name"]
             if target not in packages:
-                if layers.get(name) in {"models", "protocol", "application", "runtime", "infrastructure", "transport"} and target in {"gpui", "rfd"}:
+                if layers.get(name) in {"models", "protocol", "application", "runtime", "infrastructure", "transport", "host"} and target in {"gpui", "rfd"}:
                     errors.append(f"{name} -> {target}: Client 固有依存")
                 continue
             if name not in layers or target not in layers:
