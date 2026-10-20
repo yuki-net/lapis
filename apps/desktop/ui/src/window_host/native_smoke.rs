@@ -24,19 +24,35 @@ pub(crate) fn run_native_smoke(
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
-        handle
-            .update(cx, |_, _, cx| {
-                this.update(cx, |root, cx| {
-                    root.detach_tab(0, PanelTab::Document(id.clone()), cx);
-                    eprintln!("SMOKE detached native windows={}", cx.windows().len());
-                })
+        // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
+        #[cfg(target_os = "windows")]
+        {
+            let shell = this.update(cx, |root, _| root.shell.clone()).unwrap();
+            simulate_tab_drag(&shell, handle, true, None, cx).await;
+            this.update(cx, |root, cx| {
+                assert_eq!(root.group.read(cx).members.len(), 1);
+                assert!(root.group.read(cx).documents(ROOT_HOST).contains(&id));
+                eprintln!("SMOKE Escape keeps source tab OK");
             })
-            .unwrap()
             .unwrap();
+            simulate_tab_drag(&shell, handle, false, None, cx).await;
+        }
+        #[cfg(not(target_os = "windows"))]
+        this.update(cx, |root, cx| {
+            root.detach_tab(0, PanelTab::Document(id.clone()), cx)
+        })
+        .unwrap();
         wait_for(&this, cx, None).await;
+        this.update(cx, |root, cx| {
+            assert_eq!(root.group.read(cx).members.len(), 2);
+            eprintln!("SMOKE drag outside creates native window OK");
+        })
+        .unwrap();
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE idle sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
+        #[cfg(target_os = "windows")]
+        verify_drag_routes(&this, handle, &id, cx).await;
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| {
@@ -292,6 +308,36 @@ pub(crate) fn run_native_smoke(
                 )
             })
             .unwrap();
+        #[cfg(target_os = "windows")]
+        {
+            let (source, source_shell, owner) = this
+                .update(cx, |root, cx| {
+                    let owner = root.group.read(cx).layout.tabs[&PanelTab::Document(id.clone())].0;
+                    let member = &root.group.read(cx).members[&owner];
+                    (member.handle, member.shell.clone(), owner)
+                })
+                .unwrap();
+            let (target, target_shell) = peer
+                .update(cx, |root, cx| {
+                    (
+                        root.group.read(cx).members[&ROOT_HOST].handle,
+                        root.shell.clone(),
+                    )
+                })
+                .unwrap();
+            let point = show_drop_target(target, &target_shell, cx);
+            simulate_tab_drag(&source_shell, source, false, Some(point), cx).await;
+            wait_for(&this, cx, None).await;
+            this.update(cx, |root, cx| {
+                assert_eq!(
+                    root.group.read(cx).layout.tabs[&PanelTab::Document(id.clone())].0,
+                    owner
+                );
+                assert_eq!(root.group.read(cx).members.len(), 2);
+                eprintln!("SMOKE native foreign Window drop keeps source tab OK");
+            })
+            .unwrap();
+        }
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(0, None, window, cx))
@@ -393,6 +439,199 @@ pub(crate) fn run_native_smoke(
         eprintln!("WINDOW_HOST_SMOKE_PASS");
     })
     .detach();
+}
+
+#[cfg(target_os = "windows")]
+async fn simulate_tab_drag(
+    shell: &Entity<Shell>,
+    handle: gpui::AnyWindowHandle,
+    cancel: bool,
+    destination: Option<drag::ScreenPoint>,
+    cx: &mut gpui::AsyncApp,
+) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        Graphics::Gdi::ScreenToClient,
+        UI::WindowsAndMessaging::{
+            PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        },
+    };
+    let (hwnd, start, mut end) = handle
+        .update(cx, |_, window, cx| {
+            window.draw(cx).clear();
+            let bounds = shell.read(cx).panel_bounds.borrow()[&PanelPosition::Main];
+            if shell.read(cx).detached {
+                assert!(
+                    bounds.size.height > window.viewport_size().height - gpui::px(100.),
+                    "Detached panel must fill its Window"
+                );
+            }
+            let scale = window.scale_factor();
+            let start = bounds.origin + gpui::point(gpui::px(50.), gpui::px(17.));
+            let pack = |x: f32, y: f32| {
+                LPARAM(
+                    (((y * scale).round() as i16 as u16 as u32) << 16
+                        | (x * scale).round() as i16 as u16 as u32) as isize,
+                )
+            };
+            let raw = HasWindowHandle::window_handle(window).unwrap().as_raw();
+            let RawWindowHandle::Win32(raw) = raw else {
+                panic!("Windows handle required");
+            };
+            (
+                raw.hwnd.get(),
+                pack(f32::from(start.x), f32::from(start.y)),
+                pack(f32::from(window.viewport_size().width) + 60., 80.),
+            )
+        })
+        .unwrap();
+    let hwnd = HWND(hwnd as *mut _);
+    if let Some(destination) = destination {
+        let mut point = windows::Win32::Foundation::POINT {
+            x: destination.x,
+            y: destination.y,
+        };
+        assert!(unsafe { ScreenToClient(hwnd, &mut point) }.as_bool());
+        end =
+            LPARAM(((point.y as i16 as u16 as u32) << 16 | point.x as i16 as u16 as u32) as isize);
+    }
+    // smoke モードの自プロセス Window のみにイベントを送る。
+    unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), start) }.unwrap();
+    gpui::Timer::after(std::time::Duration::from_millis(60)).await;
+    let moved = LPARAM(start.0 + 20);
+    unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), moved) }.unwrap();
+    gpui::Timer::after(std::time::Duration::from_millis(60)).await;
+    cx.update(|cx| assert!(cx.has_active_drag(), "Tab header did not start a drag"))
+        .unwrap();
+    if cancel {
+        unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(0x1b), LPARAM(1)) }.unwrap();
+        unsafe {
+            PostMessageW(
+                Some(hwnd),
+                WM_KEYUP,
+                WPARAM(0x1b),
+                LPARAM(0xc0000001_u32 as isize),
+            )
+        }
+        .unwrap();
+        gpui::Timer::after(std::time::Duration::from_millis(60)).await;
+        cx.update(|cx| assert!(!cx.has_active_drag())).unwrap();
+    }
+    unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
+    gpui::Timer::after(std::time::Duration::from_millis(100)).await;
+    cx.update(|cx| assert!(!cx.has_active_drag())).unwrap();
+}
+
+#[cfg(target_os = "windows")]
+fn show_drop_target(
+    handle: gpui::AnyWindowHandle,
+    shell: &Entity<Shell>,
+    cx: &mut gpui::AsyncApp,
+) -> drag::ScreenPoint {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::HWND,
+        UI::WindowsAndMessaging::{
+            HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
+            ShowWindow,
+        },
+    };
+    handle
+        .update(cx, |_, window, cx| {
+            window.draw(cx).clear();
+            let position = shell.read(cx).panel_bounds.borrow()[&PanelPosition::Main].center();
+            let RawWindowHandle::Win32(raw) =
+                HasWindowHandle::window_handle(window).unwrap().as_raw()
+            else {
+                panic!("Windows handle required")
+            };
+            let hwnd = HWND(raw.hwnd.get() as *mut _);
+            let _ = unsafe { ShowWindow(hwnd, SW_SHOWNOACTIVATE) };
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOP),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                )
+            }
+            .unwrap();
+            let point = drag::screen_position(position, window).unwrap();
+            assert!(
+                drag::is_source_window(window, point),
+                "Native hit test did not select the fixture window"
+            );
+            point
+        })
+        .unwrap()
+}
+
+#[cfg(target_os = "windows")]
+async fn verify_drag_routes(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    id: &DocumentId,
+    cx: &mut gpui::AsyncApp,
+) {
+    let (first, second, first_handle, first_shell, second_handle, second_shell, root_shell) = root
+        .update(cx, |root, cx| {
+            let first = root.group.read(cx).layout.tabs[&PanelTab::Document(id.clone())].0;
+            let second = root.group.update(cx, |group, _| group.layout.add_window());
+            let group = root.group.clone();
+            let weak_root = cx.entity().downgrade();
+            let worker = root.worker.clone();
+            let options = crate::app::window_options(cx);
+            cx.open_window(options, move |window, cx| {
+                cx.new(|cx| WindowHost::new(group, second, weak_root, worker, window, cx))
+            })
+            .unwrap();
+            let members = &root.group.read(cx).members;
+            (
+                first,
+                second,
+                members[&first].handle,
+                members[&first].shell.clone(),
+                members[&second].handle,
+                members[&second].shell.clone(),
+                root.shell.clone(),
+            )
+        })
+        .unwrap();
+    let point = show_drop_target(second_handle, &second_shell, cx);
+    simulate_tab_drag(&first_shell, first_handle, false, Some(point), cx).await;
+    wait_for(root, cx, None).await;
+    root.update(cx, |root, cx| {
+        assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);
+        assert!(root.group.read(cx).documents(first).is_empty());
+    })
+    .unwrap();
+    let point = show_drop_target(handle, &root_shell, cx);
+    simulate_tab_drag(&second_shell, second_handle, false, Some(point), cx).await;
+    wait_for(root, cx, None).await;
+    root.update(cx, |root, cx| {
+        assert!(root.group.read(cx).documents(ROOT_HOST).contains(id));
+        assert_eq!(root.editor.read(cx).document_id().as_ref(), Some(id));
+    })
+    .unwrap();
+    let point = show_drop_target(second_handle, &second_shell, cx);
+    simulate_tab_drag(&root_shell, handle, false, Some(point), cx).await;
+    wait_for(root, cx, None).await;
+    root.update(cx, |root, cx| {
+        assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);
+        eprintln!("SMOKE sibling and overlapping Root/child drag redock OK");
+    })
+    .unwrap();
+    first_handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| root.close_hosts(first, None, window, cx))
+                .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(2)).await;
 }
 
 async fn wait_for(root: &WeakEntity<DesktopRoot>, cx: &mut gpui::AsyncApp, windows: Option<usize>) {

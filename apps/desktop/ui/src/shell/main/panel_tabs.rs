@@ -106,6 +106,8 @@ impl Shell {
                 let close_tab = tab.clone();
                 let detach_tab = tab.clone();
                 let movable = matches!(tab, PanelTab::Document(_));
+                let drag_shell = cx.entity().downgrade();
+                let drag_label = label.clone();
                 let drag = DraggedPanelTab {
                     group: self.group,
                     source_host: self.host,
@@ -156,9 +158,11 @@ impl Shell {
                         }
                     })
                     .cursor(CursorStyle::PointingHand)
-                    .on_drag(drag, |drag: &DraggedPanelTab, _, _, cx| {
+                    .on_drag(drag, move |drag: &DraggedPanelTab, _, _, cx| {
+                        let _ =
+                            drag_shell.update(cx, |shell, _| shell.tab_drag.begin(drag.clone()));
                         cx.new(|_| PanelTabDragPreview {
-                            label: format!("{:?}", drag.tab),
+                            label: drag_label.clone(),
                         })
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {

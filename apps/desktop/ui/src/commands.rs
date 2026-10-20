@@ -21,6 +21,10 @@ pub(crate) enum UiCommand {
         crate::shell::DraggedPanelTab,
         crate::extension_ui::PanelPosition,
     ),
+    ReleaseTab(
+        crate::shell::DraggedPanelTab,
+        crate::window_host::drag::ScreenPoint,
+    ),
     Undo,
     Redo,
     Cut,

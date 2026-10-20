@@ -21,6 +21,24 @@ impl DraggedPanelTab {
     }
 }
 
+/// ドラッグ開始だけでは配置を変えない。取消後の MouseUp も移動に使わない。
+#[derive(Default)]
+pub(super) struct TabDragState(Option<DraggedPanelTab>);
+
+impl TabDragState {
+    pub fn begin(&mut self, drag: DraggedPanelTab) {
+        self.0 = Some(drag);
+    }
+
+    pub fn cancel(&mut self) -> bool {
+        self.0.take().is_some()
+    }
+
+    pub fn release(&mut self, active: bool) -> Option<DraggedPanelTab> {
+        self.0.take().filter(|_| active)
+    }
+}
+
 impl PanelTab {
     pub(crate) fn tool(view: impl Into<ViewId>) -> Self {
         Self::Tool(view.into())
@@ -49,5 +67,25 @@ mod tests {
         assert!(drag.belongs_to(Some(1.into())));
         assert!(!drag.belongs_to(Some(2.into())));
         assert!(!drag.belongs_to(None));
+    }
+
+    #[test]
+    fn cancelled_or_expired_drag_cannot_move_on_late_mouse_up() {
+        let mut state = TabDragState::default();
+        let drag = DraggedPanelTab {
+            group: Some(1.into()),
+            source_host: 0,
+            source_panel: PanelPosition::Main,
+            tab: PanelTab::tool("terminal"),
+        };
+        state.begin(drag.clone());
+        state.cancel();
+        assert!(state.release(true).is_none());
+        state.begin(drag.clone());
+        assert!(state.release(false).is_none());
+        assert!(state.release(true).is_none());
+        state.begin(drag);
+        assert!(state.release(true).is_some());
+        assert!(state.release(true).is_none());
     }
 }

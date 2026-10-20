@@ -2,6 +2,7 @@
 use std::collections::HashMap;
 
 mod close;
+pub(crate) mod drag;
 mod native_smoke;
 pub(crate) use native_smoke::run_native_smoke;
 
@@ -26,6 +27,7 @@ use crate::{
 pub(crate) struct HostMember {
     pub handle: gpui::AnyWindowHandle,
     pub editor: Entity<Editor>,
+    pub shell: Entity<Shell>,
     pub bounds: gpui::WindowBounds,
 }
 
@@ -42,6 +44,7 @@ impl WindowGroup {
     pub(crate) fn new(
         window: &Window,
         editor: Entity<Editor>,
+        shell: Entity<Shell>,
         locale: lapis_localization::LocaleId,
     ) -> Self {
         Self {
@@ -51,6 +54,7 @@ impl WindowGroup {
                 HostMember {
                     handle: window.window_handle(),
                     editor,
+                    shell,
                     bounds: window.window_bounds(),
                 },
             )]),
@@ -170,6 +174,7 @@ impl WindowHost {
                 HostMember {
                     handle: window.window_handle(),
                     editor: editor.clone(),
+                    shell: shell.clone(),
                     bounds: window.window_bounds(),
                 },
             );
@@ -177,6 +182,12 @@ impl WindowHost {
         let command_root = root.clone();
         let editor_group = group.clone();
         let mut subscriptions = vec![
+            cx.observe_window_activation(window, |this, window, cx| {
+                if !window.is_window_active() {
+                    this.shell
+                        .update(cx, |shell, cx| shell.cancel_tab_drag(window, cx));
+                }
+            }),
             cx.observe_window_bounds(window, |this, window, cx| {
                 this.group.update(cx, |group, _| {
                     if let Some(member) = group.members.get_mut(&this.host) {
@@ -343,6 +354,7 @@ impl DesktopRoot {
             return;
         }
         match command {
+            UiCommand::ReleaseTab(drag, point) => self.release_tab(host, drag, point, window, cx),
             UiCommand::DetachTab(tab) => self.detach_tab(host, tab, cx),
             UiCommand::DockTab(tab) => {
                 self.transfer_tab(host, ROOT_HOST, PanelPosition::Main, tab, cx)
@@ -389,13 +401,8 @@ impl DesktopRoot {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(tab, PanelTab::Document(_))
-            || self
-                .group
-                .read(cx)
-                .members
-                .values()
-                .any(|member| member.editor.read(cx).has_pending())
+        if !self.can_move_tab(source, &tab, cx)
+            || !self.group.read(cx).members.contains_key(&target)
         {
             return;
         }
@@ -416,6 +423,17 @@ impl DesktopRoot {
         }
         self.group.update(cx, |group, cx| {
             if group.layout.move_tab(source, target, panel, &tab) {
+                group.members[&target].shell.update(cx, |shell, cx| {
+                    shell.shell.focused_panel = panel;
+                    cx.notify();
+                });
+                let editor = group.members[&target].editor.clone();
+                group.configure_editor(target, &editor, cx);
+                if let (Some(snapshot), PanelTab::Document(id)) = (&group.latest, &tab) {
+                    editor.update(cx, |editor, cx| {
+                        editor.select_transferred(snapshot, id.clone(), cx)
+                    });
+                }
                 cx.notify();
             }
         });
@@ -426,24 +444,17 @@ impl DesktopRoot {
     }
 
     fn detach_tab(&mut self, host: HostId, tab: PanelTab, cx: &mut Context<Self>) {
-        if !matches!(tab, PanelTab::Document(_))
-            || self
-                .group
-                .read(cx)
-                .members
-                .values()
-                .any(|member| member.editor.read(cx).has_pending())
-        {
-            return;
-        }
-        if self
-            .group
-            .read(cx)
-            .layout
-            .tabs
-            .get(&tab)
-            .is_none_or(|(owner, _)| *owner != host)
-        {
+        self.detach_tab_at(host, tab, None, cx);
+    }
+
+    fn detach_tab_at(
+        &mut self,
+        host: HostId,
+        tab: PanelTab,
+        point: Option<drag::ScreenPoint>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.can_move_tab(host, &tab, cx) {
             return;
         }
         let id = self.group.update(cx, |group, _| group.layout.add_window());
@@ -455,7 +466,12 @@ impl DesktopRoot {
             cx.new(|cx| WindowHost::new(group, id, root, worker, window, cx))
         });
         match result {
-            Ok(_) => self.transfer_tab(host, id, PanelPosition::Main, tab, cx),
+            Ok(handle) => {
+                if let Some(point) = point {
+                    let _ = handle.update(cx, |_, window, _| drag::position_window(window, point));
+                }
+                self.transfer_tab(host, id, PanelPosition::Main, tab, cx);
+            }
             Err(error) => {
                 self.group
                     .update(cx, |group, _| group.layout.remove_window(id));

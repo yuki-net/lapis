@@ -159,10 +159,22 @@ impl DesktopRoot {
                 );
             }
         });
-        let group = cx
-            .new(|_| crate::window_host::WindowGroup::new(window, editor.clone(), initial_locale));
+        let group = cx.new(|_| {
+            crate::window_host::WindowGroup::new(
+                window,
+                editor.clone(),
+                shell.clone(),
+                initial_locale,
+            )
+        });
         shell.update(cx, |shell, _| shell.group = Some(group.entity_id()));
         let mut subscriptions = vec![
+            cx.observe_window_activation(window, |root, window, cx| {
+                if !window.is_window_active() {
+                    root.shell
+                        .update(cx, |shell, cx| shell.cancel_tab_drag(window, cx));
+                }
+            }),
             cx.observe_window_bounds(window, |root, window, cx| {
                 root.group.update(cx, |group, _| {
                     if let Some(member) = group.members.get_mut(&0) {
@@ -570,7 +582,8 @@ impl DesktopRoot {
             UiCommand::Save if self.editor.read(cx).document_id().is_none() => {}
             command @ (UiCommand::DetachTab(_)
             | UiCommand::DockTab(_)
-            | UiCommand::MoveTab(_, _)) => self.host_command(0, command, window, cx),
+            | UiCommand::MoveTab(_, _)
+            | UiCommand::ReleaseTab(_, _)) => self.host_command(0, command, window, cx),
             UiCommand::Theme(theme) => self
                 .settings
                 .update(cx, |settings, cx| settings.select_theme(theme, cx)),

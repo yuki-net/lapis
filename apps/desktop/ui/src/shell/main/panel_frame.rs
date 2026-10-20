@@ -45,6 +45,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let position = panel.position;
+        let shell = cx.entity().downgrade();
         let is_bottom = panel.position == PanelPosition::Bottom;
         let panel_size = animated_size.unwrap_or(panel.size);
         let size = if panel.position == PanelPosition::Main {
@@ -109,6 +110,7 @@ impl Shell {
 
         size.flex_shrink_0().overflow_hidden().child(
             surface(SurfaceVariant::Panel)
+                .relative()
                 .size_full()
                 .flex()
                 .flex_col()
@@ -122,6 +124,18 @@ impl Shell {
                         cx.emit(UiCommand::MoveTab(drag.clone(), position));
                     }
                 }))
+                .child(
+                    gpui::canvas(
+                        move |bounds, _, cx| {
+                            let _ = shell.update(cx, |shell, _| {
+                                shell.panel_bounds.borrow_mut().insert(position, bounds);
+                            });
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
                 .child(self.render_tool_panel_header(panel, cx))
                 .child(body),
         )

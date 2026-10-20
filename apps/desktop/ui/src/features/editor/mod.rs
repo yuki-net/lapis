@@ -527,6 +527,18 @@ impl Editor {
             .insert(id.clone(), (selection.clone(), cursor == selection.start));
         self.scroll_positions.insert(id, gpui::point(px(x), px(y)));
     }
+
+    pub(crate) fn select_transferred(
+        &mut self,
+        snapshot: &ClientSnapshot,
+        id: DocumentId,
+        cx: &mut Context<Self>,
+    ) {
+        let mut snapshot = self.local_snapshot(snapshot);
+        snapshot.active = Some(id);
+        self.accept_snapshot(&snapshot, false, cx);
+        cx.notify();
+    }
     pub(crate) fn has_pending(&self) -> bool {
         self.in_flight > 0 || self.recovery
     }

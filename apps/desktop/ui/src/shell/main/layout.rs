@@ -8,6 +8,8 @@ impl Shell {
     ) -> impl IntoElement {
         if self.detached {
             return div()
+                .flex()
+                .flex_col()
                 .flex_1()
                 .min_h(px(0.0))
                 .p(tokens::spacing::GAP)
