@@ -6,6 +6,7 @@ pub const WORKSPACES: &str = "workspace.list";
 pub const WORKSPACES_CONNECT: &str = "workspace.connect";
 pub const WORKSPACE_SYNC: &str = "workspace.sync";
 pub const FILES_READ: &str = "workspace.files.read";
+pub const FILES_WRITE: &str = "workspace.files.write";
 pub const DOCUMENTS_READ: &str = "workspace.documents.read";
 pub const DOCUMENTS_WRITE: &str = "workspace.documents.write";
 pub const TERMINAL_START: &str = "workspace.terminal.start";

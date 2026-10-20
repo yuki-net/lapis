@@ -34,6 +34,17 @@ pub struct FileTreeResponse {
     pub entries: Vec<FileTreeEntry>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateDirectoryRequest {
+    pub workspace_id: WorkspaceId,
+    pub path: WorkspaceRelativePath,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CreateDirectoryResponse {
+    pub path: WorkspaceRelativePath,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

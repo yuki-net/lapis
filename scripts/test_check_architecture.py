@@ -1,4 +1,5 @@
 import copy
+import re
 from pathlib import Path
 import unittest
 
@@ -43,9 +44,15 @@ class ArchitectureTests(unittest.TestCase):
         self.assertTrue(check(self.metadata, {}))
 
     def test_backend_platform_dependency_fails(self):
-        metadata = copy.deepcopy(self.metadata)
-        metadata["packages"][1]["dependencies"].append({"name": "gpui"})
-        self.assertTrue(check(metadata, {}))
+        for path in ("backend/runtime", "backend/host"):
+            for dependency in ("gpui", "rfd"):
+                with self.subTest(path=path, dependency=dependency):
+                    metadata = copy.deepcopy(self.metadata)
+                    metadata["packages"][1]["manifest_path"] = str(ROOT / path / "Cargo.toml")
+                    metadata["packages"][1]["dependencies"].append({
+                        "name": dependency, "kind": "dev", "target": "cfg(windows)",
+                    })
+                    self.assertTrue(check(metadata, {}))
 
     def test_regular_client_cannot_depend_on_backend_implementation(self):
         self.metadata["workspace_members"].extend(["cli", "infra"])
@@ -93,6 +100,41 @@ class ArchitectureTests(unittest.TestCase):
                 errors = check(metadata, {})
                 self.assertEqual(len(errors), 1)
                 self.assertIn(f"{client} -> host", errors[0])
+
+    def test_desktop_client_and_persistence_are_not_backend_or_ui(self):
+        self.metadata["workspace_members"].extend(["desktop", "adapter", "store", "infra"])
+        self.metadata["packages"].extend([
+            package("desktop", "apps/desktop/app", ["ui", "adapter", "store"]),
+            package("adapter", "apps/desktop/client", ["model"]),
+            package("store", "apps/desktop/persistence", ["adapter", "model"]),
+            package("infra", "backend/infrastructure/local", ["runtime"]),
+        ])
+        self.metadata["packages"][2]["dependencies"].append({"name": "adapter"})
+        self.assertEqual(check(self.metadata, {}), [])
+        for source, target in [("runtime", "adapter"), ("infra", "store"), ("adapter", "infra"),
+                               ("adapter", "ui"), ("ui", "store"), ("store", "runtime")]:
+            with self.subTest(source=source, target=target):
+                metadata = copy.deepcopy(self.metadata)
+                package_source = next(item for item in metadata["packages"] if item["name"] == source)
+                package_source["dependencies"].append({"name": target, "kind": "dev", "target": "cfg(windows)"})
+                self.assertIn(f"{source} -> {target}", "\n".join(check(metadata, {})))
+
+    def test_client_adapter_and_store_cannot_import_gpui_or_native_dialog(self):
+        for path in ("apps/desktop/client", "apps/desktop/persistence"):
+            for dependency in ("gpui", "rfd"):
+                with self.subTest(path=path, dependency=dependency):
+                    metadata = copy.deepcopy(self.metadata)
+                    metadata["workspace_members"].append("native")
+                    metadata["packages"].append(package("native", path, [dependency]))
+                    self.assertIn("Client 固有依存", "\n".join(check(metadata, {})))
+
+    def test_desktop_modules_do_not_import_other_features_by_path(self):
+        violations = [
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "apps/desktop/ui/src").rglob("*.rs")
+            if re.search(r"#\s*\[\s*path\s*=", path.read_text(encoding="utf-8"))
+        ]
+        self.assertEqual(violations, [], "通常の module 境界で Feature を接続してください")
 
 
 if __name__ == "__main__":

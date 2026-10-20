@@ -35,8 +35,7 @@ use lapis_terminal::{
 };
 use lapis_workspace::WorkspaceRepository;
 use lapis_workspace::{
-    DocumentViewState, FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError,
-    WorkspaceSearchBackend, WorkspaceSnapshot, WorkspaceStateRepository,
+    FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend,
 };
 use serde::{Deserialize, Serialize};
 
@@ -939,6 +938,9 @@ impl DocumentRepository for LocalWorkspaceRepository {
 }
 
 impl WorkspaceFileBackend for LocalWorkspaceRepository {
+    fn create_directory(&self, directory: &Path) -> Result<(), DocumentError> {
+        fs::create_dir(directory).map_err(|error| DocumentError::io(error.to_string()))
+    }
     fn list_children(&self, directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
         let entries = fs::read_dir(directory).map_err(|error| {
             DocumentError::io(format!(
@@ -990,6 +992,18 @@ impl WorkspaceFileBackend for LocalWorkspaceRepository {
 }
 
 impl WorkspaceRepository for LocalWorkspaceRepository {
+    fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError> {
+        let mut components = Path::new(name).components();
+        if !matches!(components.next(), Some(std::path::Component::Normal(_)))
+            || components.next().is_some()
+        {
+            return Err(WorkspaceError::new("フォルダ名が不正です"));
+        }
+        let root = root
+            .canonicalize()
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        fs::create_dir(root.join(name)).map_err(|error| WorkspaceError::new(error.to_string()))
+    }
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
         if !root.is_dir() {
             return Err(WorkspaceError::new(format!(
@@ -1032,27 +1046,17 @@ impl<T: DocumentRepository> DocumentRepository for LoopbackBackend<T> {
 }
 
 impl<T: WorkspaceRepository> WorkspaceRepository for LoopbackBackend<T> {
+    fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError> {
+        if !self.gate.is_connected() {
+            return Err(WorkspaceError::new("loopback workspace is disconnected"));
+        }
+        self.inner.create_directory(root, name)
+    }
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
         if !self.gate.is_connected() {
             return Err(WorkspaceError::new("loopback workspace is disconnected"));
         }
         self.inner.list_tree(root)
-    }
-}
-
-impl<T: WorkspaceStateRepository> WorkspaceStateRepository for LoopbackBackend<T> {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
-        if !self.gate.is_connected() {
-            return Err(WorkspaceError::new("loopback workspace is disconnected"));
-        }
-        self.inner.load()
-    }
-
-    fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
-        if !self.gate.is_connected() {
-            return Err(WorkspaceError::new("loopback workspace is disconnected"));
-        }
-        self.inner.save(snapshot)
     }
 }
 
@@ -1203,53 +1207,6 @@ fn fingerprint_for(path: &Path, bytes: &[u8]) -> Result<FileFingerprint, Documen
         hash = hash.wrapping_mul(0x100000001b3);
     }
     Ok(FileFingerprint::new(metadata.len(), modified_nanos, hash))
-}
-
-pub struct LocalWorkspaceStateRepository {
-    path: PathBuf,
-}
-
-impl LocalWorkspaceStateRepository {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    pub fn user_default() -> Self {
-        let base = env::var_os("LOCALAPPDATA")
-            .map(PathBuf::from)
-            .unwrap_or_else(env::temp_dir);
-        Self::new(base.join("Lapis").join("session-v1.txt"))
-    }
-}
-
-impl WorkspaceStateRepository for LocalWorkspaceStateRepository {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
-        let mut input = match fs::File::open(&self.path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(WorkspaceError::new(error.to_string())),
-        };
-        let mut text = String::new();
-        input
-            .read_to_string(&mut text)
-            .map_err(|error| WorkspaceError::new(error.to_string()))?;
-        parse_snapshot(&text).map(Some)
-    }
-
-    fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent).map_err(|error| WorkspaceError::new(error.to_string()))?;
-        let mut temporary = tempfile::NamedTempFile::new_in(parent)
-            .map_err(|error| WorkspaceError::new(error.to_string()))?;
-        temporary
-            .write_all(format_snapshot(snapshot).as_bytes())
-            .and_then(|()| temporary.as_file().sync_all())
-            .map_err(|error| WorkspaceError::new(error.to_string()))?;
-        temporary
-            .persist(&self.path)
-            .map_err(|error| WorkspaceError::new(error.error.to_string()))?;
-        Ok(())
-    }
 }
 
 #[derive(Clone)]
@@ -1812,123 +1769,6 @@ fn stable_path_hash(path: &Path) -> u64 {
         })
 }
 
-fn format_snapshot(snapshot: &WorkspaceSnapshot) -> String {
-    let mut lines = vec!["LAPIS_SESSION_V1".to_owned()];
-    if let Some(root) = &snapshot.root {
-        lines.push(format!(
-            "root\t{}",
-            encode_bytes(root.to_string_lossy().as_bytes())
-        ));
-    }
-    if let Some(active) = &snapshot.active_path {
-        lines.push(format!(
-            "active\t{}",
-            encode_bytes(active.to_string_lossy().as_bytes())
-        ));
-    }
-    for view in &snapshot.open_documents {
-        lines.push(format!(
-            "doc\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            encode_bytes(view.path.to_string_lossy().as_bytes()),
-            view.cursor_char,
-            view.selection_start,
-            view.selection_end,
-            view.scroll_x,
-            view.scroll_y,
-            view.draft_content
-                .as_deref()
-                .map(|draft| encode_bytes(draft.as_bytes()))
-                .unwrap_or_else(|| "-".to_owned())
-        ));
-    }
-    lines.push(String::new());
-    lines.join("\n")
-}
-
-fn parse_snapshot(text: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
-    let mut lines = text.lines();
-    if lines.next() != Some("LAPIS_SESSION_V1") {
-        return Err(WorkspaceError::new("未対応のWorkspace復元形式です"));
-    }
-    let mut snapshot = WorkspaceSnapshot::default();
-    for line in lines {
-        let fields = line.split('\t').collect::<Vec<_>>();
-        match fields.as_slice() {
-            ["root", value] => snapshot.root = Some(decode_path(value)?),
-            ["active", value] => snapshot.active_path = Some(decode_path(value)?),
-            ["doc", path, cursor, start, end, scroll_x, scroll_y, draft] => {
-                snapshot.open_documents.push(DocumentViewState {
-                    document_id: None,
-                    path: decode_path(path)?,
-                    cursor_char: parse_number(cursor, "cursor")?,
-                    selection_start: parse_number(start, "selection start")?,
-                    selection_end: parse_number(end, "selection end")?,
-                    scroll_x: parse_number(scroll_x, "scroll x")?,
-                    scroll_y: parse_number(scroll_y, "scroll y")?,
-                    draft_content: if *draft == "-" {
-                        None
-                    } else {
-                        Some(
-                            String::from_utf8(decode_bytes(draft)?)
-                                .map_err(|error| WorkspaceError::new(error.to_string()))?,
-                        )
-                    },
-                });
-            }
-            [] | [""] => {}
-            _ => return Err(WorkspaceError::new("Workspace復元データが壊れています")),
-        }
-    }
-    Ok(snapshot)
-}
-
-fn parse_number<T: std::str::FromStr>(value: &str, label: &str) -> Result<T, WorkspaceError> {
-    value
-        .parse()
-        .map_err(|_| WorkspaceError::new(format!("{label}を復元できません")))
-}
-
-fn decode_path(value: &str) -> Result<PathBuf, WorkspaceError> {
-    let bytes = decode_bytes(value)?;
-    String::from_utf8(bytes)
-        .map(PathBuf::from)
-        .map_err(|error| WorkspaceError::new(error.to_string()))
-}
-
-fn encode_bytes(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
-        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
-    }
-    encoded
-}
-
-fn decode_bytes(value: &str) -> Result<Vec<u8>, WorkspaceError> {
-    if !value.len().is_multiple_of(2) {
-        return Err(WorkspaceError::new("16進復元データの長さが不正です"));
-    }
-    value
-        .as_bytes()
-        .chunks_exact(2)
-        .map(|pair| {
-            let high = decode_hex(pair[0])?;
-            let low = decode_hex(pair[1])?;
-            Ok((high << 4) | low)
-        })
-        .collect()
-}
-
-fn decode_hex(value: u8) -> Result<u8, WorkspaceError> {
-    match value {
-        b'0'..=b'9' => Ok(value - b'0'),
-        b'a'..=b'f' => Ok(value - b'a' + 10),
-        b'A'..=b'F' => Ok(value - b'A' + 10),
-        _ => Err(WorkspaceError::new("16進復元データが不正です")),
-    }
-}
-
 impl<T: TaskBackend> TaskBackend for LoopbackBackend<T> {
     fn load(&self) -> Result<Vec<TaskRecord>, TaskError> {
         if !self.gate.is_connected() {
@@ -2307,28 +2147,6 @@ mod tests {
                 .iter()
                 .any(|entry| entry.relative_path.starts_with("target"))
         );
-    }
-
-    #[test]
-    fn snapshot_round_trip_preserves_unicode_draft_and_view() {
-        let directory = tempfile::tempdir().unwrap();
-        let state = LocalWorkspaceStateRepository::new(directory.path().join("session.txt"));
-        let snapshot = WorkspaceSnapshot {
-            root: Some(PathBuf::from("C:/作業/lapis")),
-            active_path: Some(PathBuf::from("C:/作業/lapis/メモ.md")),
-            open_documents: vec![DocumentViewState {
-                path: PathBuf::from("C:/作業/lapis/メモ.md"),
-                cursor_char: 4,
-                selection_start: 1,
-                selection_end: 4,
-                scroll_x: 12.5,
-                scroll_y: 33.0,
-                draft_content: Some("日本😀\n".to_owned()),
-                ..DocumentViewState::default()
-            }],
-        };
-        state.save(&snapshot).unwrap();
-        assert_eq!(state.load().unwrap(), Some(snapshot));
     }
 
     #[test]

@@ -2,7 +2,7 @@ use gpui::{
     App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
     actions, px, size,
 };
-use lapis_app_services::{
+use lapis_desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
@@ -11,7 +11,7 @@ use crate::features::command_search::{
     SearchBackspace, SearchConfirm, SearchDelete, SearchDismiss, SearchEnd, SearchHome, SearchLeft,
     SearchNext, SearchPrevious, SearchRight, SearchSelectAll,
 };
-use crate::features::editor::Editor;
+use crate::root::DesktopRoot;
 
 actions!(
     editor,
@@ -107,14 +107,82 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
                     ..Default::default()
                 },
                 move |window, cx| {
-                    let editor = cx.new(|cx| Editor::new(session, services, initial_view, cx));
-                    window.focus(&editor.read(cx).editor_focus_handle());
-                    editor
+                    cx.new(|cx| DesktopRoot::new(session, services, initial_view, window, cx))
                 },
             )
             .expect("Lapis window should open");
             cx.on_action(|_: &Quit, cx| cx.quit());
         });
+}
+
+#[derive(Clone)]
+pub(crate) struct WindowFactory {
+    repository: std::sync::Arc<dyn lapis_workspace::WorkspaceRepository>,
+    dialog: std::sync::Arc<dyn lapis_desktop_client::WorkspaceDialog>,
+    state: std::sync::Arc<dyn lapis_desktop_client::WorkspaceStateRepository>,
+    documents: std::sync::Arc<dyn lapis_document::DocumentConnection>,
+    task: std::sync::Arc<dyn lapis_task::TaskConnection>,
+    git: std::sync::Arc<dyn lapis_git::GitConnection>,
+    lsp: std::sync::Arc<dyn lapis_lsp::LanguageServerBackend>,
+    terminal: std::sync::Arc<dyn lapis_terminal::TerminalBackend>,
+    search: std::sync::Arc<dyn lapis_workspace::WorkspaceSearchBackend>,
+    conversation: std::sync::Arc<dyn lapis_desktop_client::ConversationRepository>,
+    settings: SettingsSession,
+}
+impl WindowFactory {
+    pub(crate) fn new(editor: &EditorSession, services: &DesktopServices) -> Self {
+        Self {
+            repository: editor.repository(),
+            dialog: editor.file_dialog(),
+            state: editor.state_repository(),
+            documents: editor.document_connection(),
+            task: services.task.backend(),
+            git: services.git.backend(),
+            lsp: services.lsp.backend(),
+            terminal: services.terminal.backend(),
+            search: services.search.backend(),
+            conversation: services.conversation.repository(),
+            settings: services.settings.clone(),
+        }
+    }
+    pub(crate) fn build(self) -> (EditorSession, DesktopServices) {
+        let editor =
+            EditorSession::new_empty(self.repository, self.dialog, self.state, self.documents);
+        let conversation = ConversationSession::new(self.conversation, editor.snapshot());
+        let services = DesktopServices::new(
+            TaskSession::new(self.task),
+            GitSession::new(self.git),
+            LspSession::new(self.lsp),
+            TerminalSession::new(self.terminal),
+            WorkspaceSearchSession::new(self.search),
+            conversation,
+            self.settings,
+        );
+        (editor, services)
+    }
+}
+pub(crate) fn open_desktop_window(
+    editor: EditorSession,
+    services: DesktopServices,
+    initial: InitialView,
+    cx: &mut App,
+) {
+    let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+    let result = cx.open_window(
+        WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some("Lapis".into()),
+                appears_transparent: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        move |window, cx| cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx)),
+    );
+    if let Err(error) = result {
+        eprintln!("Windowを開けませんでした: {error}");
+    }
 }
 
 fn bind_keys(cx: &mut App) {

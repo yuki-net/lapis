@@ -8,14 +8,15 @@ license.workspace = true
 [dependencies]
 gpui.workspace = true
 serde.workspace = true
-lapis-app-services = { path = "../../../backend/application/services" }
+lapis-desktop-client = { path = "../client" }
+lapis-document = { path = "../../../shared/models/document" }
 lapis-editor-core = { path = "../../../shared/models/editor-core" }
 lapis-git = { path = "../../../shared/models/git" }
 lapis-language = { path = "../../../shared/models/language" }
 lapis-localization = { path = "../../../shared/models/localization" }
 lapis-lsp = { path = "../../../shared/models/lsp" }
 lapis-settings = { path = "../../../shared/models/settings" }
-lapis-task-runner = { package = "lapis-task", path = "../../../shared/models/task" }
+lapis-task = { path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true

@@ -1,31 +1,49 @@
+use super::TerminalFeature;
 use crate::{
-    components::{ScrollAxis, ScrollState, panel_empty_state, scroll_viewport},
-    features::terminal::TerminalFeature,
+    components::{ScrollAxis, action_button, scroll_viewport},
     theme,
 };
-use gpui::{div, prelude::*, px};
-
-pub(crate) fn render_content(terminal: &TerminalFeature, scroll_state: &ScrollState) -> gpui::Div {
-    if let Some(terminal) = terminal.session.terminals().last() {
-        div().flex_1().min_h(px(0.0)).child(
-            scroll_viewport(
-                "terminal-output-scroll",
-                ScrollAxis::Vertical,
-                scroll_state,
+use gpui::{Context, Render, Window, div, prelude::*, px};
+impl Render for TerminalFeature {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .child(
                 div()
-                    .p_2()
-                    .font_family("Cascadia Mono")
-                    .text_size(px(11.0))
-                    .text_color(theme::colors().text_primary)
-                    .child(String::from_utf8_lossy(&terminal.output).into_owned()),
+                    .flex()
+                    .gap_1()
+                    .child(
+                        action_button("Start", true)
+                            .on_click(cx.listener(|this, _, _, cx| this.start(cx))),
+                    )
+                    .child(
+                        action_button("Clipboard", false)
+                            .on_click(cx.listener(|this, _, _, cx| this.send_clipboard(cx))),
+                    ),
             )
-            .size_full(),
-        )
-    } else {
-        panel_empty_state(
-            ">_",
-            "Terminal は停止中です",
-            "Start で Workspace の PTY を起動します",
-        )
+            .child(self.message.clone())
+            .child(
+                scroll_viewport(
+                    "terminal-output",
+                    ScrollAxis::Vertical,
+                    &self.scroll,
+                    div()
+                        .p_2()
+                        .font_family("Cascadia Mono")
+                        .text_size(px(11.0))
+                        .text_color(theme::colors().text_primary)
+                        .child(
+                            self.terminals
+                                .last()
+                                .map(|terminal| {
+                                    String::from_utf8_lossy(&terminal.output).into_owned()
+                                })
+                                .unwrap_or_default(),
+                        ),
+                )
+                .flex_1(),
+            )
     }
 }

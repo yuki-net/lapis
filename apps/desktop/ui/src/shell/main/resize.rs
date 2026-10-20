@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(super) fn start_resize(
         &mut self,
         target: ResizeTarget,

@@ -93,7 +93,7 @@ impl Element for EditorElement {
         } else {
             (0, line_count)
         };
-        let mut offset = editor.session.line_start_char(first_line).unwrap_or(0);
+        let mut offset = editor.line_start_char(first_line).unwrap_or(0);
         let cursor = editor.cursor_offset();
         let cursor_line = editor
             .session
@@ -133,7 +133,7 @@ impl Element for EditorElement {
                 &editor.selected_range,
                 selection_color,
             );
-            for range in &editor.search.matches {
+            for range in &editor.search_matches {
                 push_range_quad(
                     &mut search_highlights,
                     &shaped,
@@ -315,7 +315,7 @@ impl EntityInputHandler for Editor {
             .or_else(|| self.marked_range.clone())
             .unwrap_or_else(|| self.selected_range.clone());
         let start = target.start;
-        if let Err(error) = self.session.replace_range(target, new_text) {
+        if let Err(error) = self.edit(target, new_text, cx) {
             self.status = format!("入力失敗: {error}");
             cx.notify();
             return;

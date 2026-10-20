@@ -1,7 +1,7 @@
 use super::*;
 use crate::extension_ui::PanelPosition;
 
-impl Editor {
+impl Shell {
     pub(crate) fn toggle_preview(
         &mut self,
         _: &TogglePreview,
@@ -44,10 +44,6 @@ impl Editor {
         self.shell.command_palette_open = false;
         self.refresh_feature_activation();
         cx.notify();
-    }
-
-    pub(crate) fn select_tool(&mut self, view: ViewId, cx: &mut Context<Self>) {
-        self.select_view(PanelPosition::Left, view, cx);
     }
 
     pub(crate) fn select_view(
@@ -243,68 +239,12 @@ impl Editor {
         cx.notify();
     }
 
-    pub(crate) fn select_theme(&mut self, theme_id: ThemeId, cx: &mut Context<Self>) {
-        if self.shell.theme_save_in_flight || theme::active_id() == theme_id {
-            return;
-        }
-        let previous = theme::active_id();
-        if !theme::set_active(&theme_id) {
-            self.status = format!("未登録のテーマです: {}", theme_id.as_str());
-            cx.notify();
-            return;
-        }
-
-        self.shell.theme_before_save = Some(previous);
-        self.shell.theme_save_in_flight = true;
+    pub(crate) fn select_theme(&mut self, theme: ThemeId, cx: &mut Context<Self>) {
         self.shell.theme_picker_open = false;
         self.shell.settings_menu_open = false;
+        cx.emit(UiCommand::Theme(theme));
         cx.notify();
-
-        let settings = self.settings.clone();
-        let theme_value = theme_id.as_str().to_owned();
-        let save = cx.background_spawn(async move { settings.set_theme(theme_value) });
-        cx.spawn(async move |this, cx| {
-            let result = save.await;
-            let _ = this.update(cx, |editor, cx| {
-                if let Err(error) = result {
-                    if let Some(previous) = editor.shell.theme_before_save.take() {
-                        let _ = theme::set_active(&previous);
-                    }
-                    editor.status = format!("テーマ保存失敗: {error}");
-                } else {
-                    editor.shell.theme_before_save = None;
-                }
-                editor.shell.theme_save_in_flight = false;
-                cx.notify();
-            });
-        })
-        .detach();
     }
-
-    pub(crate) fn select_locale(
-        &mut self,
-        locale: lapis_localization::LocaleId,
-        cx: &mut Context<Self>,
-    ) {
-        self.locale.set_active(&locale);
-        cx.notify();
-        let settings = self.settings.clone();
-        let locale_clone = locale.clone();
-        let save = cx.background_spawn(async move { settings.set_locale(locale) });
-        cx.spawn(async move |this, cx| {
-            let result = save.await;
-            let _ = this.update(cx, |editor, cx| {
-                if let Err(error) = result {
-                    editor.status = format!("言語設定保存失敗: {error}");
-                } else {
-                    editor.status = format!("言語を変更しました: {}", locale_clone.as_str());
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
     pub(crate) fn select_panel_tab(
         &mut self,
         position: PanelPosition,

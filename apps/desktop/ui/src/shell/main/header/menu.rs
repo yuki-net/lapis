@@ -7,7 +7,7 @@ use gpui::ElementId;
 use super::*;
 use menu_definition::{MenuItemDefinition, ROOT_MENUS, items};
 
-impl Editor {
+impl Shell {
     pub(crate) fn render_header_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.shell.header_menu_section;
         floating_tree(self.shell.header_menu_anchor, point(px(-8.0), px(8.0))).child(

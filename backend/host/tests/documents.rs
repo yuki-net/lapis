@@ -5,8 +5,78 @@ use lapis_client_api::{
 use lapis_document::{DocumentErrorKind, ExternalChange};
 use lapis_host::BackendHost;
 
-#[derive(Default)]
-struct ViewStore(std::sync::Mutex<Option<lapis_workspace::WorkspaceSnapshot>>);
+#[test]
+fn dirty_document_can_reconnect_after_the_entire_workspace_directory_is_deleted() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("draft.md");
+    std::fs::write(&path, "base").unwrap();
+    let host = BackendHost::start().unwrap();
+    let first = host.documents();
+    let opened = first.open(&path).unwrap();
+    let dirty = first
+        .edit(&opened.id, opened.document.revision(), 0..4, "unsaved")
+        .unwrap();
+    drop(first);
+    root.close().unwrap();
+    let second = host.documents();
+    let restored = second.attach(&opened.id).unwrap();
+    assert_eq!(restored.document, dirty.document);
+    assert_eq!(restored.external_change, ExternalChange::Deleted);
+    let edited = second
+        .edit(
+            &opened.id,
+            restored.document.revision(),
+            0..7,
+            "reconnected",
+        )
+        .unwrap();
+    assert_eq!(edited.document.content_for_save(), "reconnected");
+    assert!(
+        second
+            .save(&opened.id, edited.document.revision(), None)
+            .is_err()
+    );
+    assert_eq!(
+        second
+            .attach(&opened.id)
+            .unwrap()
+            .document
+            .content_for_save(),
+        "reconnected"
+    );
+}
+
+#[test]
+fn deleting_the_parent_directory_does_not_hide_the_canonical_dirty_document() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join("deleted");
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("draft.md");
+    std::fs::write(&path, "base").unwrap();
+    let host = BackendHost::start().unwrap();
+    host.register_workspace(root.path()).unwrap();
+    let documents = host.documents();
+    let opened = documents.open(&path).unwrap();
+    let dirty = documents
+        .edit(&opened.id, opened.document.revision(), 0..4, "unsaved")
+        .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_dir(&directory).unwrap();
+    let current = documents.attach(&opened.id).unwrap();
+    assert_eq!(current.document.content_for_save(), "unsaved");
+    assert_eq!(current.external_change, ExternalChange::Deleted);
+    let edited = documents
+        .edit(
+            &opened.id,
+            dirty.document.revision(),
+            0..7,
+            "still editable",
+        )
+        .unwrap();
+    assert_eq!(edited.document.content_for_save(), "still editable");
+    assert_eq!(edited.external_change, ExternalChange::Deleted);
+    assert!(edited.document.is_dirty());
+}
 
 #[test]
 fn overlapping_workspace_grants_cannot_create_a_second_document_owner() {
@@ -60,81 +130,6 @@ fn attaching_a_document_skips_deleted_unrelated_workspace_roots() {
     let attached = host.documents().attach(&opened.id).unwrap();
     assert_eq!(attached.id, opened.id);
     assert_eq!(attached.document.content_for_save(), "base");
-}
-
-impl lapis_workspace::WorkspaceStateRepository for ViewStore {
-    fn load(
-        &self,
-    ) -> Result<Option<lapis_workspace::WorkspaceSnapshot>, lapis_workspace::WorkspaceError> {
-        Ok(self.0.lock().unwrap().clone())
-    }
-    fn save(
-        &self,
-        snapshot: &lapis_workspace::WorkspaceSnapshot,
-    ) -> Result<(), lapis_workspace::WorkspaceError> {
-        *self.0.lock().unwrap() = Some(snapshot.clone());
-        Ok(())
-    }
-}
-
-struct NoDialog;
-
-impl lapis_app_services::WorkspaceDialog for NoDialog {
-    fn choose_workspace_path(&self) -> Option<std::path::PathBuf> {
-        None
-    }
-    fn choose_save_path(&self, _: &str) -> Option<std::path::PathBuf> {
-        None
-    }
-}
-
-#[test]
-fn desktop_sessions_share_runtime_resources_across_close_restore_and_workspace_switches() {
-    let root = tempfile::tempdir().unwrap();
-    let other = tempfile::tempdir().unwrap();
-    let path = root.path().join("shared.md");
-    std::fs::write(&path, "base").unwrap();
-    let host = BackendHost::start().unwrap();
-    let documents = host.documents();
-    let make_editor = || {
-        lapis_app_services::EditorSession::new_empty(
-            host.workspaces(),
-            std::sync::Arc::new(NoDialog),
-            std::sync::Arc::new(ViewStore::default()),
-            documents.clone(),
-        )
-    };
-    let mut first = make_editor();
-    let mut second = make_editor();
-    first.open_workspace(root.path().to_owned()).unwrap();
-    second.open_workspace(root.path().to_owned()).unwrap();
-    first.open_path(path.clone()).unwrap();
-    second.open_path(path.clone()).unwrap();
-    let id = first.active_document_id().unwrap().clone();
-    assert_eq!(second.active_document_id(), Some(&id));
-    first.replace_range(0..4, "first draft").unwrap();
-    let old_view = first.snapshot();
-    second.poll_external_changes();
-    second.replace_range(0..11, "newer remote draft").unwrap();
-    first.restore_snapshot(old_view.clone()).unwrap();
-    assert_eq!(first.active_text().unwrap(), "newer remote draft");
-    first.document_connection().close(&id).unwrap();
-    drop(first);
-    second.replace_range(0..18, "still attached").unwrap();
-    second.open_workspace(other.path().to_owned()).unwrap();
-    second.restore_snapshot(old_view).unwrap();
-    assert_eq!(second.active_document_id(), Some(&id));
-    assert_eq!(second.active_text().unwrap(), "still attached");
-    assert!(second.undo());
-    assert_eq!(second.active_text().unwrap(), "newer remote draft");
-    assert!(second.redo());
-    second.save_document().unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "still attached");
-    drop(second);
-    let reopened = host.documents().open(&path).unwrap();
-    assert_eq!(reopened.id, id);
-    assert!(reopened.can_undo);
-    assert!(!reopened.document.is_dirty());
 }
 
 #[test]

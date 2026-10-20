@@ -10,6 +10,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum RequestBody {
+    #[serde(rename = "files.create_directory")]
+    CreateDirectory(crate::CreateDirectoryRequest),
     #[serde(rename = "document.inspect")]
     DocumentInspect(crate::DocumentInspectRequest),
     #[serde(rename = "document.untitled")]
@@ -59,6 +61,7 @@ pub enum RequestBody {
 impl RequestBody {
     pub const fn method(&self) -> &'static str {
         match self {
+            Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
             Self::DocumentUntitled(_) => "document.untitled",
             Self::DocumentSaveAs(_) => "document.save_as",
@@ -86,6 +89,7 @@ impl RequestBody {
 
     pub const fn required_capability(&self) -> &'static str {
         match self {
+            Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)
             | Self::DocumentSaveAs(_)
@@ -112,6 +116,7 @@ impl RequestBody {
     /// Request自身が明示するWorkspace。Resource ID経由のRequestはbackend所有権表で解決する。
     pub const fn workspace_id(&self) -> Option<&WorkspaceId> {
         match self {
+            Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),
             Self::DocumentInspect(_)
             | Self::DocumentSaveAs(_)

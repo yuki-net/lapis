@@ -218,12 +218,12 @@ impl DocumentConnection for HostDocuments {
             .workspaces
             .lock()
             .map_err(|_| DocumentError::io("Workspace lock に失敗しました"))?
-            .keys()
-            .cloned()
+            .iter()
+            .map(|(root, id)| (root.clone(), id.clone()))
             .collect::<Vec<_>>();
-        roots.sort();
-        for root in roots {
-            let Ok(client) = self.host.connect(&root) else {
+        roots.sort_by(|left, right| left.0.cmp(&right.0));
+        for (root, workspace_id) in roots {
+            let Ok(client) = self.host.connect_workspace(workspace_id) else {
                 continue;
             };
             let document_id = wire::DocumentId::try_new(id.as_str())

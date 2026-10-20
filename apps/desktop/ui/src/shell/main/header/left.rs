@@ -1,7 +1,7 @@
 use super::*;
 use crate::components::{header_button, icon_button};
 
-impl Editor {
+impl Shell {
     pub(super) fn render_header_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_shrink_0()

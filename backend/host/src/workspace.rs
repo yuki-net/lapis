@@ -59,6 +59,24 @@ impl HostWorkspaces {
     }
 }
 impl WorkspaceRepository for HostWorkspaces {
+    fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError> {
+        let client = self.host.connect(root).map_err(problem)?;
+        let path = WorkspaceRelativePath::parse(name).map_err(problem)?;
+        let response = client
+            .request(RequestBody::CreateDirectory(
+                lapis_client_api::CreateDirectoryRequest {
+                    workspace_id: client.workspace_id().clone(),
+                    path,
+                },
+            ))
+            .map_err(problem)?;
+        match response {
+            ResponseBody::CreateDirectory(_) => Ok(()),
+            ResponseBody::Error(error) => Err(problem(error.code.as_str())),
+            _ => Err(problem("Unexpected directory response")),
+        }
+    }
+
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
         let root = root.canonicalize().map_err(problem)?;
         let client = self.host.connect(&root).map_err(problem)?;

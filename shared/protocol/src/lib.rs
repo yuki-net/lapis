@@ -38,7 +38,10 @@ pub use error::{
     UNSUPPORTED,
 };
 pub use event::EventBody;
-pub use files::{FileTreeEntry, FileTreeKind, FileTreeRequest, FileTreeResponse};
+pub use files::{
+    CreateDirectoryRequest, CreateDirectoryResponse, FileTreeEntry, FileTreeKind, FileTreeRequest,
+    FileTreeResponse,
+};
 pub use handshake::{ClientHello, ClientKind, ServerHello};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,

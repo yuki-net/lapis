@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(super) fn render_header_center(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .w(px(0.0))

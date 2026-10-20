@@ -4,6 +4,53 @@ struct MemoryDocuments {
     concurrent_edit: Arc<Mutex<Option<String>>>,
 }
 
+#[test]
+fn rejected_optimistic_input_can_be_recovered_without_overwriting_the_shared_document() {
+    let repository = Arc::new(MemoryRepository::default());
+    let path = PathBuf::from("shared.md");
+    insert_file(&repository, path.clone(), "newer remote content");
+    let documents = Arc::new(MemoryDocuments::new(repository.clone()));
+    let state = Arc::new(MemoryState::default());
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        state.clone(),
+        documents.clone(),
+    );
+    editor.open_path(path.clone()).unwrap();
+    let original = editor.active_document_id().unwrap().clone();
+    editor.recover_draft("all optimistic input 😀").unwrap();
+    assert_ne!(editor.active_document_id(), Some(&original));
+    assert!(editor.active_path().is_none());
+    assert!(editor.is_dirty());
+    assert_eq!(editor.active_text().unwrap(), "all optimistic input 😀");
+    assert_eq!(
+        documents
+            .attach(&original)
+            .unwrap()
+            .document
+            .content_for_save(),
+        "newer remote content"
+    );
+    let persisted = state.load().unwrap().unwrap();
+    assert_eq!(persisted.open_documents.len(), 2);
+    assert_eq!(
+        persisted.open_documents[1].draft_content.as_deref(),
+        Some("all optimistic input 😀")
+    );
+    editor.restore_snapshot(persisted).unwrap();
+    let recovered = editor
+        .tabs()
+        .into_iter()
+        .find(|tab| tab.path.is_none())
+        .unwrap();
+    editor.activate_document(&recovered.id);
+    assert_eq!(editor.active_text().unwrap(), "all optimistic input 😀");
+}
+
 impl MemoryDocuments {
     fn new(repository: Arc<MemoryRepository>) -> Self {
         Self {

@@ -17,5 +17,4 @@ lapis-platform = { path = "../infrastructure/local" }
 lapis-terminal = { path = "../../shared/models/terminal" }
 
 [dev-dependencies]
-lapis-app-services = { path = "../application/services" }
 tempfile.workspace = true

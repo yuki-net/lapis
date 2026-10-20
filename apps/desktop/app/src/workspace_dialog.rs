@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use lapis_app_services::WorkspaceDialog;
+use lapis_desktop_client::WorkspaceDialog;
 
 #[derive(Default)]
 pub(super) struct NativeWorkspaceDialog;

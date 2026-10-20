@@ -32,11 +32,18 @@
 - 重なる Workspace grant から同じ canonical path を別の Document として開く操作は競合として拒否する。別 Workspace の内容を暗黙に共有して認可範囲を広げない。
 - Terminal の購読欠落は snapshot と sequence で回復する。一時的な poll・通信失敗を実行終了とみなさず、出力の置換 snapshot と追記イベントを区別する。
 
+## Desktop の更新境界
+
+- Root は Entity の組み立てと機能間イベントの接続を担当する。Shell は Window・Panel・Tab・Layout を所有し、各 Feature の Backend 操作や表示 cache を集約しない。
+- Feature は自身の入力・表示 cache・更新周期を所有する。共通 Client Adapter の worker で操作を直列化し、描画・入力処理から FS・Git・PTY や同期 port を直接呼び出さない。
+- 応答の適用には要求順序と対象の世代を検証する。楽観編集の先行操作が失敗したら、数値 revision が偶然一致しても依存する後続編集を適用しない。未確定入力は明示的な復旧まで保持する。
+- Window 終了時は受付済み入力と表示状態の保存を完了させる。購読・表示 worker の破棄によって Host の Terminal・Agent を終了しない。保存先や Workspace が失われても、復元用 draft を無言で破棄しない。
+
 ## 依存の検査
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。
 許可行列は `scripts/check_architecture.py` が実行上の正本。models は models のみ、protocol は models、application は models、runtime は application/models/protocol、infrastructure は application/runtime/models、transport は runtime/protocol/models へ依存できる。各層内の依存も許可する。
-Host と Desktop の `apps/desktop/app/` は Composition Root として具体実装を組み立てる。通常の Client (`apps/cli/` 等) は models/protocol への依存に限定し、Backend の実装に直接依存させない。Desktop UI は移行中のため application/models/protocol に依存できるが、具体実装や transport を直接操作しない。
+Host と Desktop の `apps/desktop/app/` は Composition Root として具体実装を組み立てる。通常の Client (`apps/cli/` 等) は models/protocol への依存に限定し、Backend の実装に直接依存させない。Desktop UI は `apps/desktop/client/` と models/protocol のみへ依存できる。client は models/protocol、Desktop 表示状態を保存する persistence は client/models のみへ依存できる。Backend からこれらの Client 実装への依存は dev-dependency も禁止する。
 Backend と共通契約から GPUI/native dialog への依存は禁止。
 
 既存違反は `scripts/architecture-exceptions.json` の完全一致した crate 対と理由に限定する。未使用例外も失敗するため、削除した違反を再導入する余地を残さない。新規違反を「移行中」として追加しない。

@@ -1,6 +1,6 @@
 use super::*;
 
-impl Editor {
+impl Shell {
     pub(super) fn render_panel_window(
         &self,
         panel: &PanelHost,

@@ -3,7 +3,7 @@ use super::*;
 use super::menu_definition::MenuAction;
 use crate::shell::HeaderMenuSection as MenuId;
 
-impl Editor {
+impl Shell {
     pub(super) fn toggle_header_menu(
         &mut self,
         position: gpui::Point<gpui::Pixels>,
@@ -63,7 +63,7 @@ impl Editor {
             MenuAction::OpenProject => self.open_project(window, cx),
             MenuAction::OpenFile => self.open_file(window, cx),
             MenuAction::CloseProject => self.close_project(window, cx),
-            MenuAction::CloseWindow => window.remove_window(),
+            MenuAction::CloseWindow => cx.emit(UiCommand::CloseWindow),
             MenuAction::Undo => self.undo(&Undo, window, cx),
             MenuAction::Redo => self.redo(&Redo, window, cx),
             MenuAction::Cut => self.cut(&Cut, window, cx),

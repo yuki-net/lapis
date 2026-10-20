@@ -1,10 +1,10 @@
 use super::*;
 use crate::components::{ButtonSize, button};
 
-impl Editor {
+impl Shell {
     /// フッター（ステータスバー）を描画する。
     pub(super) fn render_footer(&self, _cx: &mut Context<Self>) -> impl IntoElement {
-        let (line, column) = self.cursor_line_column();
+        let (line, column) = self.session.cursor;
         let mut path = div()
             .flex()
             .flex_1()
@@ -75,24 +75,16 @@ impl Editor {
     }
 
     fn footer_line_ending(&self) -> &'static str {
-        self.session
-            .active_text()
-            .ok()
-            .filter(|text| {
-                text.contains(
-                    "
-",
-                )
-            })
-            .map(|_| "CRLF")
-            .unwrap_or("LF")
+        self.session.line_ending
     }
 
     fn footer_encoding(&self) -> &'static str {
         match self.session.encoding() {
-            lapis_app_services::Encoding::Utf8 | lapis_app_services::Encoding::Utf8Bom => "UTF-8",
-            lapis_app_services::Encoding::Utf16Le => "UTF-16 LE",
-            lapis_app_services::Encoding::Utf16Be => "UTF-16 BE",
+            lapis_desktop_client::Encoding::Utf8 | lapis_desktop_client::Encoding::Utf8Bom => {
+                "UTF-8"
+            }
+            lapis_desktop_client::Encoding::Utf16Le => "UTF-16 LE",
+            lapis_desktop_client::Encoding::Utf16Be => "UTF-16 BE",
         }
     }
 }

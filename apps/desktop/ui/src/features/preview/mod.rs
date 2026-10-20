@@ -5,7 +5,7 @@ use crate::{
 
 mod view;
 
-pub(crate) use view::preview_lines;
+pub(crate) use view::PreviewFeature;
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(

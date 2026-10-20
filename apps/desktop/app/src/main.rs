@@ -3,15 +3,16 @@ mod workspace_dialog;
 use std::sync::Arc;
 use std::time::Duration;
 
-use lapis_app_services::{
+use lapis_desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
 use lapis_host::BackendHost;
-use lapis_persistence::{LocalConversationRepository, LocalGlobalSettingsRepository};
+use lapis_persistence::{
+    LocalConversationRepository, LocalGlobalSettingsRepository, LocalWorkspaceStateRepository,
+};
 use lapis_platform::{
-    ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LocalWorkspaceStateRepository,
-    LoopbackBackend, run_task_worker,
+    ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend, run_task_worker,
 };
 use lapis_remote::{
     AuthConfig, AuthPolicy, BackendRemoteHandler, CredentialLifetime, PairingLifetime, RemoteAuth,
@@ -187,9 +188,9 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
     let auto_interact = arguments.iter().any(|value| value == "--auto-interact");
     let cancel_on_running = arguments.iter().any(|value| value == "--cancel-on-running");
     let mode = if arguments.iter().any(|value| value == "--plan") {
-        lapis_task_runner::TaskMode::Plan
+        lapis_task::TaskMode::Plan
     } else {
-        lapis_task_runner::TaskMode::Default
+        lapis_task::TaskMode::Default
     };
     let host = BackendHost::start().expect("Backend Host must start");
     let workspace = host
@@ -232,16 +233,16 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
         if (auto_interact || cancel_on_running) && last_controlled_status != Some(execution_status)
         {
             let control = match execution_status {
-                lapis_task_runner::ExecutionStatus::Running if cancel_on_running => {
-                    Some(lapis_task_runner::TaskControl::Cancel)
+                lapis_task::ExecutionStatus::Running if cancel_on_running => {
+                    Some(lapis_task::TaskControl::Cancel)
                 }
-                lapis_task_runner::ExecutionStatus::WaitingForInput => {
-                    auto_interact.then(|| lapis_task_runner::TaskControl::Reply {
+                lapis_task::ExecutionStatus::WaitingForInput => {
+                    auto_interact.then(|| lapis_task::TaskControl::Reply {
                         text: "青".to_owned(),
                     })
                 }
-                lapis_task_runner::ExecutionStatus::WaitingForApproval => {
-                    auto_interact.then_some(lapis_task_runner::TaskControl::Decline)
+                lapis_task::ExecutionStatus::WaitingForApproval => {
+                    auto_interact.then_some(lapis_task::TaskControl::Decline)
                 }
                 _ => None,
             };
@@ -256,9 +257,9 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
         if record.execution.status.is_terminal() {
             println!("status={}", record.execution.status.label());
             let expected = if cancel_on_running {
-                lapis_task_runner::ExecutionStatus::Cancelled
+                lapis_task::ExecutionStatus::Cancelled
             } else {
-                lapis_task_runner::ExecutionStatus::Succeeded
+                lapis_task::ExecutionStatus::Succeeded
             };
             if record.execution.status != expected {
                 std::process::exit(1);

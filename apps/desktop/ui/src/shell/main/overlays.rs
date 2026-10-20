@@ -1,7 +1,7 @@
 use super::*;
 use crate::components::{MenuItemSpec, floating_panel, floating_tree, menu_item};
 
-impl Editor {
+impl Shell {
     pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let anchor = self.shell.settings_menu_anchor;
         floating_tree(anchor, point(px(-250.0), px(8.0))).child(

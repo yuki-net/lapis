@@ -3,13 +3,14 @@ use crate::extension_ui::{FeatureDescriptor, FeatureRegistry};
 pub(crate) mod command_search;
 pub(crate) mod conversation;
 pub(crate) mod editor;
-mod files;
-mod git;
-mod preview;
-mod problems;
-mod search;
-mod tasks;
-mod terminal;
+pub(crate) mod files;
+pub(crate) mod git;
+pub(crate) mod preview;
+pub(crate) mod problems;
+pub(crate) mod search;
+pub(crate) mod settings;
+pub(crate) mod tasks;
+pub(crate) mod terminal;
 
 pub mod id {
     pub const FEATURE_SHELL: &str = "core.shell";
