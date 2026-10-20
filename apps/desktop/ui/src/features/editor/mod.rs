@@ -139,7 +139,7 @@ impl Editor {
                 if this
                     .update(cx, |editor, cx| {
                         if editor.in_flight == 0 && !editor.recovery {
-                            editor.submit(true, |_| Ok(()), cx);
+                            editor.submit_with_recovery(true, false, |_| Ok(()), cx);
                         }
                     })
                     .is_err()
@@ -155,6 +155,16 @@ impl Editor {
     pub(crate) fn submit(
         &mut self,
         preserve_input: bool,
+        operation: impl FnOnce(&mut DocumentClient) -> Result<(), String> + Send + 'static,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.submit_with_recovery(preserve_input, preserve_input, operation, cx)
+    }
+
+    fn submit_with_recovery(
+        &mut self,
+        preserve_input: bool,
+        recover_on_error: bool,
         operation: impl FnOnce(&mut DocumentClient) -> Result<(), String> + Send + 'static,
         cx: &mut Context<Self>,
     ) -> bool {
@@ -204,7 +214,7 @@ impl Editor {
                     Ok(snapshot) => snapshot,
                     Err(error) => {
                         editor.status = error.clone();
-                        editor.recovery |= preserve_input || recovering;
+                        editor.recovery |= recover_on_error || recovering;
                         cx.emit(EditorEvent::Status(error));
                         cx.notify();
                         return;
@@ -261,6 +271,16 @@ impl Editor {
                         ..range.end.min(editor.session.len_chars());
                     editor.selection_reversed = reversed;
                     editor.marked_range = None;
+                    editor.last_line_layouts.clear();
+                } else {
+                    // Undo・Remote 短縮更新後に範囲外カーソルを残さない。
+                    let len = editor.session.len_chars();
+                    editor.selected_range = editor.selected_range.start.min(len)
+                        ..editor.selected_range.end.min(len);
+                    editor.marked_range = editor
+                        .marked_range
+                        .take()
+                        .filter(|range| range.end <= len);
                     editor.last_line_layouts.clear();
                 }
                 cx.emit(EditorEvent::Snapshot(Box::new(snapshot)));

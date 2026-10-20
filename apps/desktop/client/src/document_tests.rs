@@ -51,6 +51,42 @@ fn rejected_optimistic_input_can_be_recovered_without_overwriting_the_shared_doc
     assert_eq!(editor.active_text().unwrap(), "all optimistic input 😀");
 }
 
+
+#[test]
+fn recovered_document_survives_view_state_persistence_failure() {
+    struct FailingState;
+    impl WorkspaceStateRepository for FailingState {
+        fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+            Ok(None)
+        }
+        fn save(&self, _: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+            Err(WorkspaceError::new("disk full"))
+        }
+    }
+
+    let repository = Arc::new(MemoryRepository::default());
+    let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        Arc::new(FailingState),
+        connection.clone(),
+    );
+    editor.recover_draft("locally recovered input").unwrap();
+    assert_eq!(editor.tabs().len(), 1);
+    assert_eq!(editor.active_text().unwrap(), "locally recovered input");
+    assert!(editor.is_dirty());
+    assert!(editor.restore_warning().unwrap().contains("disk full"));
+    let document = editor.active_document_id().unwrap();
+    assert_eq!(
+        connection.attach(document).unwrap().document.content_for_save(),
+        "locally recovered input"
+    );
+}
+
 impl MemoryDocuments {
     fn new(repository: Arc<MemoryRepository>) -> Self {
         Self {

@@ -1676,8 +1676,9 @@ impl EditorSession {
             },
         ));
         self.active = Some(self.documents.len() - 1);
-        self.persist()
-            .map_err(|error| DocumentError::io(error.to_string()))
+        // 文書復旧は成功している。表示状態の保存失敗は警告として保持する。
+        self.persist_best_effort();
+        Ok(())
     }
 
     pub fn restore_snapshot(&mut self, snapshot: WorkspaceSnapshot) -> Result<(), WorkspaceError> {
