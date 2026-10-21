@@ -168,13 +168,16 @@ impl TerminalBackend for LocalTerminalBackend {
             .slave
             .spawn_command(command)
             .map_err(|error| TerminalError::new(error.to_string()))?;
-        let mut writer = pair
+        let writer = pair
             .master
             .take_writer()
             .map_err(|error| TerminalError::new(error.to_string()))?;
+        #[cfg(windows)]
+        let mut writer = writer;
         // ConPTY asks the terminal emulator for its initial cursor position.  The
         // current UI renders the byte stream directly, so answer this standard
         // query here instead of exposing it as command input.
+        #[cfg(windows)]
         writer
             .write_all(b"\x1b[1;1R")
             .and_then(|()| writer.flush())

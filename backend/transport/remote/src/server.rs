@@ -11,7 +11,7 @@ use axum::{
     Router,
     extract::{
         ConnectInfo, State,
-        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade, close_code},
+        ws::{CloseFrame, Message, WebSocketUpgrade, close_code},
     },
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -28,6 +28,7 @@ use crate::{
     RemoteEventReceiver, RemoteLimits, RemoteRequestHandler, Tls13ServerConfig,
     rate_limit::AuthenticationAttemptLimiter,
     session::{ConnectionSession, SharedRemoteAuth},
+    socket::RemoteSocket,
     wire::{
         ClientMessage, REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL, ServerMessage,
         protocol_error,
@@ -185,11 +186,11 @@ impl Error for RemoteServerError {
 }
 
 #[derive(Clone)]
-struct EndpointState {
-    auth: SharedRemoteAuth,
-    handler: Arc<dyn RemoteRequestHandler>,
-    limits: RemoteLimits,
-    authentication_attempts: AuthenticationAttemptLimiter,
+pub(crate) struct EndpointState {
+    pub(crate) auth: SharedRemoteAuth,
+    pub(crate) handler: Arc<dyn RemoteRequestHandler>,
+    pub(crate) limits: RemoteLimits,
+    pub(crate) authentication_attempts: AuthenticationAttemptLimiter,
 }
 
 async fn run_server(
@@ -254,10 +255,14 @@ async fn upgrade_websocket(
     websocket
         .max_frame_size(state.limits.max_frame_size().bytes())
         .max_message_size(state.limits.max_message_size().bytes())
-        .on_upgrade(move |socket| handle_socket(socket, state, peer))
+        .on_upgrade(move |socket| handle_socket(RemoteSocket::WebSocket(socket), state, peer))
 }
 
-async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: SocketAddr) {
+pub(crate) async fn handle_socket(
+    mut socket: RemoteSocket,
+    state: EndpointState,
+    peer: SocketAddr,
+) {
     let mut connection = ConnectionGuard::new(
         ConnectionSession::new(),
         state.auth.clone(),
@@ -300,6 +305,27 @@ async fn handle_socket(mut socket: WebSocket, state: EndpointState, peer: Socket
                 message
             }
             ConnectionInput::Event(event) => {
+                let authorized = connection.session.grant().is_some_and(|grant| {
+                    state
+                        .auth
+                        .lock()
+                        .is_ok_and(|auth| auth.require_active_session(grant).is_ok())
+                });
+                if !authorized {
+                    let _ = send_message(
+                        &mut socket,
+                        protocol_error(UNAUTHORIZED),
+                        state.limits.request_timeout().duration(),
+                    )
+                    .await;
+                    let _ = close_socket(
+                        &mut socket,
+                        "session expired or revoked",
+                        state.limits.request_timeout().duration(),
+                    )
+                    .await;
+                    break;
+                }
                 if send_message(
                     &mut socket,
                     ServerMessage::Event(event),
@@ -481,7 +507,7 @@ fn subscription_error(message: &ServerMessage) -> ServerMessage {
 }
 
 async fn send_message(
-    socket: &mut WebSocket,
+    socket: &mut RemoteSocket,
     message: ServerMessage,
     send_timeout: Duration,
 ) -> Result<(), ()> {
@@ -493,7 +519,7 @@ async fn send_message(
 }
 
 async fn close_socket(
-    socket: &mut WebSocket,
+    socket: &mut RemoteSocket,
     reason: &'static str,
     send_timeout: Duration,
 ) -> Result<(), ()> {

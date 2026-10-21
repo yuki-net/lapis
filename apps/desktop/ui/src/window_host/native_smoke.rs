@@ -28,14 +28,14 @@ pub(crate) fn run_native_smoke(
         #[cfg(target_os = "windows")]
         {
             let shell = this.update(cx, |root, _| root.shell.clone()).unwrap();
-            simulate_tab_drag(&shell, handle, true, None, cx).await;
+            simulate_tab_drag(&this, &shell, handle, true, None, cx).await;
             this.update(cx, |root, cx| {
                 assert_eq!(root.group.read(cx).members.len(), 1);
                 assert!(root.group.read(cx).documents(ROOT_HOST).contains(&id));
                 eprintln!("SMOKE Escape keeps source tab OK");
             })
             .unwrap();
-            simulate_tab_drag(&shell, handle, false, None, cx).await;
+            simulate_tab_drag(&this, &shell, handle, false, None, cx).await;
         }
         #[cfg(not(target_os = "windows"))]
         this.update(cx, |root, cx| {
@@ -326,7 +326,7 @@ pub(crate) fn run_native_smoke(
                 })
                 .unwrap();
             let point = show_drop_target(target, &target_shell, cx);
-            simulate_tab_drag(&source_shell, source, false, Some(point), cx).await;
+            simulate_tab_drag(&this, &source_shell, source, false, Some(point), cx).await;
             wait_for(&this, cx, None).await;
             this.update(cx, |root, cx| {
                 assert_eq!(
@@ -443,6 +443,7 @@ pub(crate) fn run_native_smoke(
 
 #[cfg(target_os = "windows")]
 async fn simulate_tab_drag(
+    root: &WeakEntity<DesktopRoot>,
     shell: &Entity<Shell>,
     handle: gpui::AnyWindowHandle,
     cancel: bool,
@@ -502,6 +503,8 @@ async fn simulate_tab_drag(
     let moved = LPARAM(start.0 + 20);
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), moved) }.unwrap();
     wait_for_drag_state(cx, true, original_window_count + 1).await;
+    // MouseDownによる文書選択のworker応答を待つ。未完了操作中は製品側が移動を拒否する。
+    wait_for(root, cx, None).await;
     if cancel {
         unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(0x1b), LPARAM(1)) }.unwrap();
         unsafe {
@@ -617,7 +620,7 @@ async fn verify_drag_routes(
         })
         .unwrap();
     let point = show_drop_target(second_handle, &second_shell, cx);
-    simulate_tab_drag(&first_shell, first_handle, false, Some(point), cx).await;
+    simulate_tab_drag(root, &first_shell, first_handle, false, Some(point), cx).await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);
@@ -625,7 +628,7 @@ async fn verify_drag_routes(
     })
     .unwrap();
     let point = show_drop_target(handle, &root_shell, cx);
-    simulate_tab_drag(&second_shell, second_handle, false, Some(point), cx).await;
+    simulate_tab_drag(root, &second_shell, second_handle, false, Some(point), cx).await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert!(root.group.read(cx).documents(ROOT_HOST).contains(id));
@@ -633,7 +636,7 @@ async fn verify_drag_routes(
     })
     .unwrap();
     let point = show_drop_target(second_handle, &second_shell, cx);
-    simulate_tab_drag(&root_shell, handle, false, Some(point), cx).await;
+    simulate_tab_drag(root, &root_shell, handle, false, Some(point), cx).await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);

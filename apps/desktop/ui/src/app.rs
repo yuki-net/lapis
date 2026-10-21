@@ -49,6 +49,7 @@ actions!(
 );
 
 pub struct DesktopServices {
+    pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) task: TaskSession,
     pub(crate) git: GitSession,
     pub(crate) lsp: LspSession,
@@ -69,6 +70,7 @@ impl DesktopServices {
         settings: SettingsSession,
     ) -> Self {
         Self {
+            connect_host: None,
             task,
             git,
             lsp,
@@ -77,6 +79,13 @@ impl DesktopServices {
             conversation,
             settings,
         }
+    }
+    pub fn with_host_connector(
+        mut self,
+        connector: impl Fn() -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.connect_host = Some(std::sync::Arc::new(connector));
+        self
     }
 }
 
@@ -110,6 +119,7 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
 
 #[derive(Clone)]
 pub(crate) struct WindowFactory {
+    connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     repository: std::sync::Arc<dyn lapis_workspace::WorkspaceRepository>,
     dialog: std::sync::Arc<dyn lapis_desktop_client::WorkspaceDialog>,
     state: std::sync::Arc<dyn lapis_desktop_client::WorkspaceStateRepository>,
@@ -125,6 +135,7 @@ pub(crate) struct WindowFactory {
 impl WindowFactory {
     pub(crate) fn new(editor: &EditorSession, services: &DesktopServices) -> Self {
         Self {
+            connect_host: services.connect_host.clone(),
             repository: editor.repository(),
             dialog: editor.file_dialog(),
             state: editor.state_repository(),
@@ -142,7 +153,7 @@ impl WindowFactory {
         let editor =
             EditorSession::new_empty(self.repository, self.dialog, self.state, self.documents);
         let conversation = ConversationSession::new(self.conversation, editor.snapshot());
-        let services = DesktopServices::new(
+        let mut services = DesktopServices::new(
             TaskSession::new(self.task),
             GitSession::new(self.git),
             LspSession::new(self.lsp),
@@ -151,7 +162,12 @@ impl WindowFactory {
             conversation,
             self.settings,
         );
+        services.connect_host = self.connect_host;
         (editor, services)
+    }
+    pub(crate) fn open_host(self) -> Result<(), String> {
+        self.connect_host
+            .ok_or_else(|| "この起動構成ではHost接続を開けません".to_owned())?()
     }
 }
 /// Opens an independent root window; an opening failure leaves no new window and is not returned.
