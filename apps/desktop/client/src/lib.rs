@@ -79,7 +79,10 @@ impl SettingsSession {
         Ok(())
     }
 
-    pub fn set_syntax_theme(&self, theme: String) -> Result<(), SettingsError> {
+    pub fn set_syntax_theme(
+        &self,
+        theme: lapis_settings::SyntaxTheme,
+    ) -> Result<(), SettingsError> {
         let _writer = self.writer.lock().expect("settings writer lock failed");
         let mut settings = self.settings();
         if settings.syntax_theme.as_ref() == Some(&theme) {
@@ -2291,7 +2294,11 @@ mod tests {
 
         assert!(settings.set_theme("lapis.white".to_owned()).is_err());
         assert_eq!(settings.settings().theme, "lapis.dark");
-        assert!(settings.set_syntax_theme("zed.one-dark".into()).is_err());
+        assert!(
+            settings
+                .set_syntax_theme(lapis_settings::SyntaxTheme::Zed)
+                .is_err()
+        );
         assert_eq!(settings.settings().syntax_theme, None);
     }
 

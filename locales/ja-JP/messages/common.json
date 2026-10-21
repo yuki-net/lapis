@@ -65,6 +65,7 @@
   "settings.title": "設定",
   "settings.appearance": "外観 / テーマ",
   "settings.syntax-theme": "コードの構文配色",
+  "settings.syntax-theme-follows-ui": "明暗はアプリのテーマに自動で追従します。",
   "settings.language": "言語 / Language",
   "settings.workspace-info": "ワークスペース情報とバージョン",
   "settings.no-workspace": "ワークスペースが開かれていません"
