@@ -65,6 +65,7 @@ impl Element for EditorElement {
     ) -> Self::PrepaintState {
         let editor = self.editor.read(cx);
         let text_style = window.text_style();
+        let syntax_theme = theme::syntax::active();
         let mut lines = Vec::new();
         let mut selection = Vec::new();
         let mut search_highlights = Vec::new();
@@ -103,7 +104,7 @@ impl Element for EditorElement {
             let run = TextRun {
                 len: text.len(),
                 font: text_style.font(),
-                color: text_style.color,
+                color: syntax_theme.foreground(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
@@ -120,7 +121,7 @@ impl Element for EditorElement {
                     if start < end {
                         runs.push(TextRun {
                             len: end - start,
-                            color: theme::syntax::color(&span.scopes, text_style.color),
+                            color: syntax_theme.color(&span.scopes),
                             ..run.clone()
                         });
                     }
