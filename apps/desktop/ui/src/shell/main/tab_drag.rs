@@ -58,12 +58,9 @@ impl Shell {
                         }
                     });
                 });
-                window.on_mouse_event(move |_: &MouseDownEvent, phase, _, cx| {
+                window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
                     if phase == gpui::DispatchPhase::Capture {
-                        let _ = shell.update(cx, |shell, cx| {
-                            shell.tab_drag.cancel();
-                            shell.close_drag_preview(cx);
-                        });
+                        let _ = shell.update(cx, |shell, cx| shell.cancel_tab_drag(window, cx));
                     }
                 });
             },
