@@ -12,7 +12,7 @@ impl Shell {
                 let moving = shell.clone();
                 // SetCapture 中は、Window 外の MouseUp も元 Window で受け取る。
                 window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
-                    if phase != gpui::DispatchPhase::Capture {
+                    if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
                         return;
                     }
                     let active = cx.has_active_drag() && event.button == MouseButton::Left;

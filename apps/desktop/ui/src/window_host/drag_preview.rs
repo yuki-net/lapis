@@ -18,8 +18,11 @@ impl Render for DragPreview {
             return div().size(px(0.0));
         }
         div()
+            .w(px(280.0))
+            .h(px(32.0))
+            .flex()
+            .items_center()
             .px(crate::tokens::spacing::XS)
-            .py(px(2.0))
             .rounded(crate::tokens::radius::CONTROL)
             .bg(crate::theme::colors().button_background_focused)
             .border_1()
@@ -93,8 +96,7 @@ mod platform {
     use windows::Win32::{
         Foundation::HWND,
         UI::WindowsAndMessaging::{
-            SW_HIDE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
-            ShowWindow,
+            SW_HIDE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
         },
     };
 
@@ -114,9 +116,9 @@ mod platform {
                 None,
                 point.x + 14,
                 point.y + 18,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                (280.0 * window.scale_factor()).round() as i32,
+                (32.0 * window.scale_factor()).round() as i32,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         };
     }

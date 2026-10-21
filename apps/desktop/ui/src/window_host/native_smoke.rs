@@ -499,19 +499,9 @@ async fn simulate_tab_drag(
     }
     // smoke モードの自プロセス Window のみにイベントを送る。
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), start) }.unwrap();
-    gpui::Timer::after(std::time::Duration::from_millis(60)).await;
     let moved = LPARAM(start.0 + 20);
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), moved) }.unwrap();
-    gpui::Timer::after(std::time::Duration::from_millis(60)).await;
-    cx.update(|cx| {
-        assert!(cx.has_active_drag(), "Tab header did not start a drag");
-        assert_eq!(
-            cx.windows().len(),
-            original_window_count + 1,
-            "Native drag preview window was not opened"
-        );
-    })
-    .unwrap();
+    wait_for_drag_state(cx, true, original_window_count + 1).await;
     if cancel {
         unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(0x1b), LPARAM(1)) }.unwrap();
         unsafe {
@@ -523,24 +513,29 @@ async fn simulate_tab_drag(
             )
         }
         .unwrap();
-        gpui::Timer::after(std::time::Duration::from_millis(60)).await;
-        cx.update(|cx| {
-            assert!(!cx.has_active_drag());
-            assert_eq!(cx.windows().len(), original_window_count);
-        })
-        .unwrap();
+        wait_for_drag_state(cx, false, original_window_count).await;
     }
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
-    gpui::Timer::after(std::time::Duration::from_millis(100)).await;
-    cx.update(|cx| {
-        assert!(!cx.has_active_drag());
-        assert_eq!(
-            cx.windows().len(),
-            original_window_count + usize::from(!cancel && destination.is_none()),
-            "Preview was not closed when the drag ended"
-        );
-    })
-    .unwrap();
+    wait_for_drag_state(
+        cx,
+        false,
+        original_window_count + usize::from(!cancel && destination.is_none()),
+    )
+    .await;
+}
+
+#[cfg(target_os = "windows")]
+async fn wait_for_drag_state(cx: &mut gpui::AsyncApp, dragging: bool, window_count: usize) {
+    for _ in 0..125 {
+        if cx
+            .update(|cx| cx.has_active_drag() == dragging && cx.windows().len() == window_count)
+            .unwrap()
+        {
+            return;
+        }
+        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+    }
+    panic!("Native drag state did not settle (dragging={dragging}, windows={window_count})");
 }
 
 #[cfg(target_os = "windows")]
