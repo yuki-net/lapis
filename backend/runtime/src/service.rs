@@ -485,6 +485,7 @@ pub enum BackendServiceError {
     ThreadSpawn(std::io::Error),
     State(BackendStateError),
     Rejected(lapis_client_api::ProtocolError),
+    Connection(String),
     Unavailable,
 }
 
@@ -503,6 +504,7 @@ impl fmt::Display for BackendServiceError {
                 )
             }
             Self::Unavailable => formatter.write_str("backend worker is unavailable"),
+            Self::Connection(detail) => write!(formatter, "Host接続: {detail}"),
         }
     }
 }
@@ -512,7 +514,7 @@ impl Error for BackendServiceError {
         match self {
             Self::ThreadSpawn(error) => Some(error),
             Self::State(error) => Some(error),
-            Self::Unavailable | Self::Rejected(_) => None,
+            Self::Unavailable | Self::Rejected(_) | Self::Connection(_) => None,
         }
     }
 }

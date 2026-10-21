@@ -13,6 +13,7 @@ impl Render for Shell {
             .key_context("Shell")
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
+            .on_action(cx.listener(Self::save_as))
             .on_action(cx.listener(Self::new_document))
             .on_action(cx.listener(Self::show_commands))
             .on_action(cx.listener(Self::dismiss))

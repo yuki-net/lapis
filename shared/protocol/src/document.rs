@@ -41,6 +41,14 @@ pub struct DocumentInspectRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentRelocateRequest {
+    pub document_id: DocumentId,
+    pub destination_workspace: WorkspaceId,
+    pub base_revision: Revision,
+    pub path: WorkspaceRelativePath,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentUntitledRequest {
     pub workspace_id: WorkspaceId,
 }

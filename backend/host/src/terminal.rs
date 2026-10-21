@@ -1,5 +1,6 @@
-use crate::BackendHost;
-use lapis_backend_state::{BackendEventReceiver, EmbeddedClient};
+use crate::BackendClient;
+use crate::client::Client;
+use lapis_backend_state::BackendEventReceiver;
 use lapis_client_api::{
     EventBody, RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalInputRequest,
     TerminalResizeRequest, TerminalSize, TerminalStartRequest, TerminalStatus,
@@ -21,12 +22,12 @@ use std::{
 };
 
 pub(super) struct HostTerminals {
-    host: BackendHost,
+    host: BackendClient,
     attachments: Mutex<HashMap<String, Attachment>>,
 }
 
 struct Attachment {
-    client: Option<EmbeddedClient>,
+    client: Option<Client>,
     receiver: Option<BackendEventReceiver>,
     terminal_id: lapis_client_api::TerminalId,
     cwd: PathBuf,
@@ -119,6 +120,7 @@ impl Attachment {
 
     fn restore(&mut self, recovery: Recovery) -> Result<Vec<TerminalEvent>, TerminalError> {
         let terminal = recovery.terminal;
+        validate_snapshot(&terminal)?;
         if terminal.terminal_id != self.terminal_id
             || self
                 .client
@@ -152,6 +154,8 @@ impl Attachment {
             output: terminal.buffered_output,
             output_sequence: watermark,
             output_truncated: terminal.output_truncated,
+            output_offset: terminal.output_offset,
+            screen: terminal.screen,
         };
         self.output_watermark = watermark;
         self.event_watermark = Some(recovery.event_watermark);
@@ -249,7 +253,7 @@ impl Attachment {
 }
 
 impl HostTerminals {
-    pub(super) fn new(host: BackendHost) -> Self {
+    pub(super) fn new(host: BackendClient) -> Self {
         Self {
             host,
             attachments: Mutex::new(HashMap::new()),
@@ -318,6 +322,16 @@ impl HostTerminals {
 
 impl TerminalBackend for HostTerminals {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+    }
+
+    fn start_with_shell(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
         let (client, relative_cwd) = self.host.connect_directory(cwd).map_err(error)?;
         let receiver = client.subscribe().map_err(error)?;
         let response = client
@@ -325,6 +339,7 @@ impl TerminalBackend for HostTerminals {
                 workspace_id: client.workspace_id().clone(),
                 cwd: relative_cwd,
                 command: None,
+                shell,
                 size: TerminalSize { columns, rows },
             }))
             .map_err(error)?;
@@ -348,6 +363,71 @@ impl TerminalBackend for HostTerminals {
             },
         );
         Ok(id)
+    }
+
+    fn list(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        let (client, _) = self.host.connect_directory(cwd).map_err(error)?;
+        let root = self.host.root_for(client.workspace_id()).map_err(error)?;
+        let ResponseBody::SnapshotResync(response) = client
+            .request(RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: client.workspace_id().clone(),
+                reason: SnapshotReason::Reconnect,
+            }))
+            .map_err(error)?
+        else {
+            return Err(error("Terminal一覧を取得できません"));
+        };
+        response
+            .snapshot
+            .terminals
+            .into_iter()
+            .map(|terminal| model_snapshot(&root, terminal))
+            .collect::<Result<Vec<_>, _>>()
+    }
+
+    fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+        let (client, _) = self.host.connect_directory(cwd).map_err(error)?;
+        let root = self.host.root_for(client.workspace_id()).map_err(error)?;
+        let receiver = client.subscribe().map_err(error)?;
+        let ResponseBody::SnapshotResync(response) = client
+            .request(RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: client.workspace_id().clone(),
+                reason: SnapshotReason::Reconnect,
+            }))
+            .map_err(error)?
+        else {
+            return Err(error("Terminalを再アタッチできません"));
+        };
+        let terminal = response
+            .snapshot
+            .terminals
+            .into_iter()
+            .find(|terminal| terminal.terminal_id.as_str() == id.as_str())
+            .ok_or_else(|| error("指定したTerminalはHost上に存在しません"))?;
+        let snapshot = model_snapshot(&root, terminal.clone())?;
+        let mut attachment = Attachment {
+            client: Some(client),
+            receiver: None,
+            terminal_id: terminal.terminal_id.clone(),
+            cwd: snapshot.cwd.clone(),
+            event_watermark: None,
+            output_watermark: 0,
+            recovery: None,
+            retry_at: Instant::now(),
+            finished: false,
+        };
+        attachment.restore(Recovery {
+            receiver,
+            event_watermark: response.snapshot.event_watermark.value(),
+            terminal,
+        })?;
+        if !attachment.finished {
+            self.attachments
+                .lock()
+                .map_err(error)?
+                .insert(id.as_str().to_owned(), attachment);
+        }
+        Ok(snapshot)
     }
 
     fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
@@ -394,6 +474,54 @@ impl TerminalBackend for HostTerminals {
         self.attachments.lock().map_err(error)?.remove(id.as_str());
         Ok(())
     }
+}
+
+fn model_snapshot(
+    root: &Path,
+    terminal: lapis_client_api::TerminalSnapshot,
+) -> Result<TerminalSnapshot, TerminalError> {
+    validate_snapshot(&terminal)?;
+    Ok(TerminalSnapshot {
+        id: TerminalId::new(terminal.terminal_id.as_str()),
+        cwd: terminal
+            .cwd
+            .as_ref()
+            .map_or_else(|| root.to_owned(), |cwd| root.join(cwd.as_str())),
+        status: match terminal.status {
+            TerminalStatus::Exited | TerminalStatus::Terminated => ModelTerminalStatus::Exited,
+            TerminalStatus::Failed => ModelTerminalStatus::Failed,
+            _ => ModelTerminalStatus::Running,
+        },
+        columns: terminal.size.columns,
+        rows: terminal.size.rows,
+        output: terminal.buffered_output,
+        output_sequence: terminal
+            .output_watermark
+            .map_or(0, |sequence| sequence.value()),
+        output_truncated: terminal.output_truncated,
+        output_offset: terminal.output_offset,
+        screen: terminal.screen,
+    })
+}
+
+fn validate_snapshot(terminal: &lapis_client_api::TerminalSnapshot) -> Result<(), TerminalError> {
+    let end = terminal
+        .output_offset
+        .checked_add(terminal.buffered_output.len() as u64)
+        .ok_or_else(|| error("Terminal output位置が不正です"))?;
+    if terminal.size.columns == 0
+        || terminal.size.columns > 512
+        || terminal.size.rows == 0
+        || terminal.size.rows > 256
+        || terminal.buffered_output.len() > 256 * 1024
+        || terminal
+            .screen
+            .as_ref()
+            .is_some_and(|screen| !(terminal.output_offset..=end).contains(&screen.output_end))
+    {
+        return Err(error("Terminal snapshotが不正です"));
+    }
+    Ok(())
 }
 
 fn error(value: impl std::fmt::Display) -> TerminalError {

@@ -26,9 +26,9 @@ pub use document::{
     DocumentCloseRequest, DocumentCloseResponse, DocumentCreateRequest, DocumentCreateResponse,
     DocumentDiscardRequest, DocumentDiscardResponse, DocumentEditRequest, DocumentEditResponse,
     DocumentEncoding, DocumentExternalChange, DocumentHistoryRequest, DocumentHistoryResponse,
-    DocumentInspectRequest, DocumentOpenRequest, DocumentOpenResponse, DocumentSaveAsRequest,
-    DocumentSaveRequest, DocumentSaveResponse, DocumentSnapshot, DocumentTextEdit,
-    DocumentTransaction, DocumentUntitledRequest, InvalidDocumentTextEdit,
+    DocumentInspectRequest, DocumentOpenRequest, DocumentOpenResponse, DocumentRelocateRequest,
+    DocumentSaveAsRequest, DocumentSaveRequest, DocumentSaveResponse, DocumentSnapshot,
+    DocumentTextEdit, DocumentTransaction, DocumentUntitledRequest, InvalidDocumentTextEdit,
     InvalidDocumentTransaction,
 };
 pub use envelope::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
@@ -53,14 +53,14 @@ pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision, TerminalOutputSequence};
 pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot};
 pub use terminal::{
-    TerminalCommandResponse, TerminalInputRequest, TerminalResizeRequest, TerminalSize,
-    TerminalSnapshot, TerminalStartRequest, TerminalStartResponse, TerminalStatus,
+    TerminalCommandResponse, TerminalInputRequest, TerminalResizeRequest, TerminalShell,
+    TerminalSize, TerminalSnapshot, TerminalStartRequest, TerminalStartResponse, TerminalStatus,
     TerminalTerminateRequest,
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
 };
 pub use workspace::{
-    WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,
+    HostRegisterRequest, WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,
     WorkspaceConnectResponse, WorkspaceListRequest, WorkspaceListResponse, WorkspaceSummary,
 };

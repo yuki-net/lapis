@@ -31,6 +31,7 @@ actions!(
         Copy,
         Open,
         Save,
+        SaveAs,
         New,
         Undo,
         Redo,
@@ -49,6 +50,7 @@ actions!(
 );
 
 pub struct DesktopServices {
+    pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) task: TaskSession,
     pub(crate) git: GitSession,
     pub(crate) lsp: LspSession,
@@ -69,6 +71,7 @@ impl DesktopServices {
         settings: SettingsSession,
     ) -> Self {
         Self {
+            connect_host: None,
             task,
             git,
             lsp,
@@ -77,6 +80,13 @@ impl DesktopServices {
             conversation,
             settings,
         }
+    }
+    pub fn with_host_connector(
+        mut self,
+        connector: impl Fn() -> Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        self.connect_host = Some(std::sync::Arc::new(connector));
+        self
     }
 }
 
@@ -117,6 +127,7 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
 
 #[derive(Clone)]
 pub(crate) struct WindowFactory {
+    connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     repository: std::sync::Arc<dyn lapis_workspace::WorkspaceRepository>,
     dialog: std::sync::Arc<dyn lapis_desktop_client::WorkspaceDialog>,
     state: std::sync::Arc<dyn lapis_desktop_client::WorkspaceStateRepository>,
@@ -130,8 +141,12 @@ pub(crate) struct WindowFactory {
     settings: SettingsSession,
 }
 impl WindowFactory {
+    pub(crate) fn path_scope(&self) -> Option<std::path::PathBuf> {
+        self.dialog.path_scope()
+    }
     pub(crate) fn new(editor: &EditorSession, services: &DesktopServices) -> Self {
         Self {
+            connect_host: services.connect_host.clone(),
             repository: editor.repository(),
             dialog: editor.file_dialog(),
             state: editor.state_repository(),
@@ -149,7 +164,7 @@ impl WindowFactory {
         let editor =
             EditorSession::new_empty(self.repository, self.dialog, self.state, self.documents);
         let conversation = ConversationSession::new(self.conversation, editor.snapshot());
-        let services = DesktopServices::new(
+        let mut services = DesktopServices::new(
             TaskSession::new(self.task),
             GitSession::new(self.git),
             LspSession::new(self.lsp),
@@ -158,7 +173,12 @@ impl WindowFactory {
             conversation,
             self.settings,
         );
+        services.connect_host = self.connect_host;
         (editor, services)
+    }
+    pub(crate) fn open_host(self) -> Result<(), String> {
+        self.connect_host
+            .ok_or_else(|| "この起動構成ではHost接続を開けません".to_owned())?()
     }
 }
 pub(crate) fn open_desktop_window(
@@ -205,24 +225,25 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("end", End, Some("Editor")),
         KeyBinding::new("enter", Enter, Some("Editor")),
         KeyBinding::new("cmd-o", Open, None),
-        KeyBinding::new("ctrl-o", Open, None),
+        KeyBinding::new("ctrl-o", Open, Some("!Terminal")),
         KeyBinding::new("cmd-s", Save, None),
-        KeyBinding::new("ctrl-s", Save, None),
+        KeyBinding::new("ctrl-s", Save, Some("!Terminal")),
+        KeyBinding::new("ctrl-shift-s", SaveAs, Some("!Terminal")),
         KeyBinding::new("cmd-n", New, None),
-        KeyBinding::new("ctrl-n", New, None),
+        KeyBinding::new("ctrl-n", New, Some("!Terminal")),
         KeyBinding::new("cmd-z", Undo, Some("Editor")),
         KeyBinding::new("ctrl-z", Undo, Some("Editor")),
         KeyBinding::new("cmd-shift-z", Redo, Some("Editor")),
         KeyBinding::new("ctrl-y", Redo, Some("Editor")),
         KeyBinding::new("cmd-f", Find, Some("Editor")),
         KeyBinding::new("ctrl-f", Find, Some("Editor")),
-        KeyBinding::new("ctrl-shift-f", FindWorkspace, None),
+        KeyBinding::new("ctrl-shift-f", FindWorkspace, Some("!Terminal")),
         KeyBinding::new("cmd-g", FindNext, Some("Editor")),
         KeyBinding::new("f3", FindNext, Some("Editor")),
         KeyBinding::new("ctrl-space", Complete, Some("Editor")),
         KeyBinding::new("f12", GoToDefinition, Some("Editor")),
         KeyBinding::new("cmd-shift-k", ShowCommands, None),
-        KeyBinding::new("ctrl-shift-k", ShowCommands, None),
+        KeyBinding::new("ctrl-shift-k", ShowCommands, Some("!Terminal")),
         KeyBinding::new("backspace", SearchBackspace, Some("QuickSearch")),
         KeyBinding::new("delete", SearchDelete, Some("QuickSearch")),
         KeyBinding::new("left", SearchLeft, Some("QuickSearch")),
@@ -235,11 +256,11 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("down", SearchNext, Some("QuickSearch")),
         KeyBinding::new("enter", SearchConfirm, Some("QuickSearch")),
         KeyBinding::new("escape", SearchDismiss, Some("QuickSearch")),
-        KeyBinding::new("escape", Dismiss, None),
-        KeyBinding::new("ctrl-alt-p", TogglePreview, None),
-        KeyBinding::new("ctrl-j", ToggleBottomPanel, None),
-        KeyBinding::new("ctrl-shift-a", ToggleAssistant, None),
+        KeyBinding::new("escape", Dismiss, Some("!Terminal")),
+        KeyBinding::new("ctrl-alt-p", TogglePreview, Some("!Terminal")),
+        KeyBinding::new("ctrl-j", ToggleBottomPanel, Some("!Terminal")),
+        KeyBinding::new("ctrl-shift-a", ToggleAssistant, Some("!Terminal")),
         KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("ctrl-q", Quit, None),
+        KeyBinding::new("ctrl-q", Quit, Some("!Terminal")),
     ]);
 }

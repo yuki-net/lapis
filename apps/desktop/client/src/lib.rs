@@ -82,6 +82,10 @@ impl SettingsSession {
 
 /// ネイティブダイアログを利用するユースケース側の契約。
 pub trait WorkspaceDialog: Send + Sync {
+    /// Remoteではnative pickerを使わず、この名前空間内の相対pathを入力する。
+    fn path_scope(&self) -> Option<PathBuf> {
+        None
+    }
     fn choose_workspace_path(&self) -> Option<PathBuf>;
     fn choose_file_path(&self) -> Option<PathBuf> {
         None
@@ -142,6 +146,8 @@ impl Default for ConversationViewState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoredTerminal {
+    #[serde(default)]
+    pub id: Option<TerminalId>,
     pub cwd: PathBuf,
     pub status: TerminalStatus,
     pub columns: u16,
@@ -362,20 +368,29 @@ impl TerminalSession {
         &self.terminals
     }
 
-    /// 前回終了時の端末一覧を、再実行せず参照専用の要約として復元する。
+    /// 保存済みidentityだけを再アタッチする。shellやCLIを再実行しない。
     pub fn restore_summaries(&mut self, terminals: &[RestoredTerminal]) {
         self.terminals = terminals
             .iter()
             .enumerate()
             .map(|(index, terminal)| TerminalSnapshot {
-                id: TerminalId::new(format!("restored-terminal-{}", index + 1)),
+                id: terminal
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| TerminalId::new(format!("restored-terminal-{}", index + 1))),
                 cwd: terminal.cwd.clone(),
-                status: TerminalStatus::Exited,
+                status: if terminal.id.is_some() {
+                    TerminalStatus::Disconnected
+                } else {
+                    TerminalStatus::Exited
+                },
                 columns: terminal.columns,
                 rows: terminal.rows,
                 output: Vec::new(),
                 output_sequence: 0,
                 output_truncated: false,
+                output_offset: 0,
+                screen: None,
             })
             .collect();
     }
@@ -399,7 +414,21 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError> {
-        let id = self.backend.start(cwd, columns, rows)?;
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+    }
+
+    pub fn start_with_shell(
+        &mut self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        let id = self.backend.start_with_shell(cwd, columns, rows, shell)?;
+        if let Ok(snapshot) = self.backend.attach(cwd, &id) {
+            self.terminals.push(snapshot);
+            return Ok(id);
+        }
         self.terminals.push(TerminalSnapshot {
             id: id.clone(),
             cwd: cwd.to_owned(),
@@ -409,8 +438,28 @@ impl TerminalSession {
             output: Vec::new(),
             output_sequence: 0,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         });
         Ok(id)
+    }
+
+    pub fn discover(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        self.backend.list(cwd)
+    }
+
+    pub fn attach(&mut self, cwd: &Path, id: &TerminalId) -> Result<(), TerminalError> {
+        let snapshot = self.backend.attach(cwd, id)?;
+        if let Some(existing) = self
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.id == *id)
+        {
+            *existing = snapshot;
+        } else {
+            self.terminals.push(snapshot);
+        }
+        Ok(())
     }
 
     pub fn input(&self, id: &TerminalId, text: &str) -> Result<(), TerminalError> {
@@ -442,6 +491,10 @@ impl TerminalSession {
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
         for terminal in &mut self.terminals {
+            if terminal.status == TerminalStatus::Disconnected {
+                *terminal = self.backend.attach(&terminal.cwd, &terminal.id)?;
+                changed = true;
+            }
             if terminal.status != TerminalStatus::Running {
                 continue;
             }
@@ -455,6 +508,9 @@ impl TerminalSession {
                         }
                         const OUTPUT_LIMIT: usize = 256 * 1024;
                         if snapshot.output.len() > OUTPUT_LIMIT {
+                            snapshot.output_offset = snapshot
+                                .output_offset
+                                .saturating_add((snapshot.output.len() - OUTPUT_LIMIT) as u64);
                             snapshot
                                 .output
                                 .drain(..snapshot.output.len() - OUTPUT_LIMIT);
@@ -472,6 +528,8 @@ impl TerminalSession {
                         if terminal.output.len() > OUTPUT_LIMIT {
                             let start = terminal.output.len() - OUTPUT_LIMIT;
                             terminal.output.drain(..start);
+                            terminal.output_offset =
+                                terminal.output_offset.saturating_add(start as u64);
                             terminal.output_truncated = true;
                         }
                     }
@@ -480,6 +538,22 @@ impl TerminalSession {
                         terminal.status = TerminalStatus::Failed;
                     }
                 }
+                changed = true;
+            }
+            if terminal.screen.as_ref().is_some_and(|screen| {
+                if screen.output_end < terminal.output_offset {
+                    return true;
+                }
+                let suffix = (screen.output_end - terminal.output_offset) as usize;
+                terminal.output.get(suffix..).is_some_and(|bytes| {
+                    bytes
+                        .windows(7)
+                        .any(|window| window == b"\x1b[?1049" || window == b"\x1b[?1047")
+                        || bytes.windows(5).any(|window| window == b"\x1b[?47")
+                })
+            }) {
+                // buffer欠落や通常/代替画面の切替時は、Hostの現在画面を取り直す。
+                *terminal = self.backend.attach(&terminal.cwd, &terminal.id)?;
                 changed = true;
             }
         }
@@ -1492,6 +1566,25 @@ impl EditorSession {
         Ok(DocumentAction::Completed)
     }
 
+    pub fn save_document_to(&mut self, path: PathBuf) -> Result<(), DocumentError> {
+        let open = self.required_document()?;
+        let result = self
+            .document_connection
+            .save(&open.id, open.document.revision(), Some(path));
+        let cache = self.refresh_after_error(result)?;
+        self.required_document_mut()?.update(cache);
+        self.persist_best_effort();
+        Ok(())
+    }
+
+    pub fn save_document_as(&mut self) -> Result<DocumentAction, DocumentError> {
+        let Some(path) = self.file_dialog.choose_save_path(&self.display_name()) else {
+            return Ok(DocumentAction::Cancelled);
+        };
+        self.save_document_to(path)?;
+        Ok(DocumentAction::Completed)
+    }
+
     pub fn reload_active_from_disk(&mut self) -> Result<(), DocumentError> {
         let open = self.required_document()?;
         let result = self
@@ -2357,6 +2450,7 @@ mod tests {
         let backend = Arc::new(UnavailableTerminalBackend);
         let mut terminals = TerminalSession::new(backend);
         terminals.restore_summaries(&[RestoredTerminal {
+            id: None,
             cwd: PathBuf::from("repo"),
             status: TerminalStatus::Running,
             columns: 120,
@@ -2367,6 +2461,78 @@ mod tests {
         assert_eq!(terminals.terminals()[0].status, TerminalStatus::Exited);
         assert!(terminals.terminals()[0].output.is_empty());
         assert!(!terminals.refresh().unwrap());
+
+        terminals.restore_summaries(&[RestoredTerminal {
+            id: Some(TerminalId::new("live-host-terminal")),
+            cwd: PathBuf::from("repo"),
+            status: TerminalStatus::Running,
+            columns: 80,
+            rows: 24,
+        }]);
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+        assert!(terminals.refresh().is_err());
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn saved_terminal_identity_reattaches_without_starting_a_shell() {
+        struct AttachOnly;
+        impl TerminalBackend for AttachOnly {
+            fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+                panic!("restore must never start a process")
+            }
+            fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+                Ok(Vec::new())
+            }
+            fn terminate(&self, _: &TerminalId) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn attach(
+                &self,
+                cwd: &Path,
+                id: &TerminalId,
+            ) -> Result<TerminalSnapshot, TerminalError> {
+                assert_eq!(id.as_str(), "host-terminal");
+                Ok(TerminalSnapshot {
+                    id: id.clone(),
+                    cwd: cwd.to_owned(),
+                    status: TerminalStatus::Running,
+                    columns: 100,
+                    rows: 28,
+                    output: b"already running".to_vec(),
+                    output_sequence: 7,
+                    output_truncated: false,
+                    output_offset: 0,
+                    screen: None,
+                })
+            }
+        }
+        let mut session = TerminalSession::new(Arc::new(AttachOnly));
+        session.restore_summaries(&[RestoredTerminal {
+            id: Some(TerminalId::new("host-terminal")),
+            cwd: "repo".into(),
+            status: TerminalStatus::Running,
+            columns: 80,
+            rows: 24,
+        }]);
+        assert_eq!(session.terminals()[0].status, TerminalStatus::Disconnected);
+        session.refresh().unwrap();
+        assert_eq!(session.terminals()[0].id.as_str(), "host-terminal");
+        assert_eq!(session.terminals()[0].output, b"already running");
+        assert_eq!(session.terminals()[0].output_sequence, 7);
+        assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
     }
 
     #[test]

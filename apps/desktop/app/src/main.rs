@@ -1,3 +1,4 @@
+mod connection;
 mod workspace_dialog;
 
 use std::sync::Arc;
@@ -14,13 +15,23 @@ use lapis_persistence::{
 use lapis_platform::{
     ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend, run_task_worker,
 };
-use lapis_remote::{
-    AuthConfig, AuthPolicy, BackendRemoteHandler, CredentialLifetime, PairingLifetime, RemoteAuth,
-    RemoteLimits, RemoteServer, RemoteServerConfig, Tls13ServerConfig,
-};
 
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
+    if arguments
+        .get(1)
+        .is_some_and(|value| value == "--managed-host")
+    {
+        let result = arguments
+            .get(2)
+            .ok_or("Workspaceがありません")
+            .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })
+            .and_then(|root| lapis_host::run_managed_host(std::path::Path::new(root)));
+        if result.is_err() {
+            std::process::exit(1);
+        }
+        return;
+    }
     if arguments.get(1).map(std::ffi::OsString::as_os_str)
         == Some(std::ffi::OsStr::new("--task-worker"))
     {
@@ -40,15 +51,67 @@ fn main() {
         run_task_smoke(&arguments);
         return;
     }
-    let use_loopback = arguments.iter().any(|value| value == "--loopback");
-    let connection = ConnectionGate::connected();
-    let host = BackendHost::start().expect("Backend Host must start");
-    let mut session = EditorSession::new(
-        host.workspaces(),
-        Arc::new(workspace_dialog::NativeWorkspaceDialog),
-        Arc::new(LocalWorkspaceStateRepository::user_default()),
-        host.documents(),
-    );
+    let Some(startup) = connection::Startup::open(&arguments).unwrap_or_else(|error| {
+        if arguments
+            .iter()
+            .any(|argument| argument == "--connect-host")
+        {
+            rfd::MessageDialog::new()
+                .set_title("Hostに接続できません")
+                .set_description(error.to_string())
+                .set_level(rfd::MessageLevel::Error)
+                .show();
+        }
+        eprintln!("Host接続に失敗しました: {error}");
+        std::process::exit(1);
+    }) else {
+        return;
+    };
+    let is_remote = startup.root.is_some();
+    let use_loopback = is_remote || arguments.iter().any(|value| value == "--loopback");
+    let connection = if is_remote {
+        ConnectionGate::default()
+    } else {
+        ConnectionGate::connected()
+    };
+    let host = startup.backend;
+    let state = Arc::new(LocalWorkspaceStateRepository::new(
+        startup.directory.join("session-v1.txt"),
+    ));
+    let mut session = if let Some(root) = startup.root.as_ref() {
+        use lapis_desktop_client::WorkspaceStateRepository;
+        let mut session = EditorSession::new_empty(
+            host.workspaces(),
+            Arc::new(workspace_dialog::RemoteWorkspaceDialog(root.clone())),
+            state.clone(),
+            host.documents(),
+        );
+        let restored = state.load().unwrap_or_else(|error| {
+            eprintln!("復元状態を読み込めません: {error}");
+            std::process::exit(1);
+        });
+        if let Some(snapshot) = restored {
+            session.restore_snapshot(snapshot).unwrap_or_else(|error| {
+                eprintln!("Remoteの復元に失敗しました: {error}");
+                std::process::exit(1);
+            });
+        } else {
+            session
+                .open_workspace(root.clone())
+                .unwrap_or_else(|error| {
+                    eprintln!("Remoteを開けません: {error}");
+                    std::process::exit(1);
+                });
+        }
+        session
+    } else {
+        EditorSession::new(
+            host.workspaces(),
+            Arc::new(workspace_dialog::NativeWorkspaceDialog),
+            state,
+            host.documents(),
+        )
+    };
     if let Some(index) = arguments.iter().position(|value| value == "--workspace") {
         let Some(root) = arguments.get(index + 1).map(std::path::PathBuf::from) else {
             eprintln!("Usage: lapis --workspace <directory>");
@@ -78,7 +141,9 @@ fn main() {
         }
     }
     let mut conversation_session = ConversationSession::new(
-        Arc::new(LocalConversationRepository::user_default()),
+        Arc::new(LocalConversationRepository::new(
+            startup.directory.join("conversations-v1.json"),
+        )),
         session.snapshot(),
     );
     if let Some(root) = session.workspace_root().map(ToOwned::to_owned)
@@ -97,17 +162,21 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let settings_session =
-        SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::user_default()))
-            .unwrap_or_else(|error| {
-                eprintln!("Global settings load failed: {error}");
-                SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
-                    std::env::temp_dir().join("lapis-settings-fallback.json"),
-                )))
-                .expect("temporary global settings must be available")
-            });
+    let settings_session = SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
+        startup.directory.join("settings-v1.json"),
+    )))
+    .unwrap_or_else(|error| {
+        eprintln!("Global settings load failed: {error}");
+        SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
+            std::env::temp_dir().join("lapis-settings-fallback.json"),
+        )))
+        .expect("temporary global settings must be available")
+    });
     if let Err(error) = conversation_session.restore_matching_workspace(&mut session) {
         eprintln!("Conversation restore failed: {error}");
+    }
+    if let Some(warning) = session.restore_warning() {
+        eprintln!("{warning}");
     }
     if let Some(root) = session.workspace_root() {
         host.register_workspace(root)
@@ -138,35 +207,6 @@ fn main() {
         WorkspaceSearchSession::new(Arc::new(LocalWorkspaceSearchBackend))
     };
 
-    let mut _remote_server: Option<RemoteServer> = None;
-    if let Some(root) = session.workspace_root() {
-        host.register_workspace(root)
-            .expect("Workspace registration must succeed");
-        let auth_config = AuthConfig::new(
-            PairingLifetime::new(300).expect("valid pairing lifetime"),
-            CredentialLifetime::new(86400).expect("valid credential lifetime"),
-        );
-        let mut auth = RemoteAuth::system(auth_config, AuthPolicy::new(Default::default()));
-        auth.enable();
-        let shared_auth = Arc::new(std::sync::Mutex::new(auth));
-        let handler = Arc::new(BackendRemoteHandler::new(host.service()));
-        if let Ok(tls) = Tls13ServerConfig::generate_self_signed(vec![
-            "localhost".to_owned(),
-            "127.0.0.1".to_owned(),
-        ]) {
-            let server_config = RemoteServerConfig::new(
-                "127.0.0.1:0"
-                    .parse()
-                    .expect("valid loopback socket address"),
-                tls,
-                RemoteLimits::default(),
-            );
-            if let Ok(server) = RemoteServer::start(server_config, shared_auth, handler) {
-                _remote_server = Some(server);
-            }
-        }
-    }
-
     let show_terminal = arguments.iter().any(|value| value == "--show-terminal");
     if show_terminal
         && let Some(root) = session.workspace_root()
@@ -188,7 +228,8 @@ fn main() {
         search_session,
         conversation_session,
         settings_session,
-    );
+    )
+    .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
     lapis_desktop_ui::run(session, desktop_services, initial_view);
 }
 

@@ -29,6 +29,11 @@ use gpui::{
 use lapis_desktop_client::{DocumentCloseDisposition, EditorSession};
 use std::collections::HashMap;
 
+enum PathRequest {
+    Open(std::path::PathBuf),
+    Save(std::path::PathBuf, lapis_editor_core::DocumentId, bool),
+}
+
 pub(crate) struct DesktopRoot {
     shell: Entity<Shell>,
     editor: Entity<Editor>,
@@ -47,6 +52,7 @@ pub(crate) struct DesktopRoot {
     )>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
+    path_request: Option<PathRequest>,
     git_input: Option<GitInputRequest>,
     _subscriptions: Vec<Subscription>,
     double_shift: DoubleShiftDetector,
@@ -104,6 +110,7 @@ impl DesktopRoot {
                             .shell
                             .update(cx, |shell, cx| shell.execute_command(command, window, cx)),
                         QuickSearchEvent::Dismiss => {
+                            root.path_request = None;
                             root.git_input = None;
                             root.shell.update(cx, |shell, cx| {
                                 shell.close_panel(PanelPosition::Right, cx)
@@ -114,6 +121,8 @@ impl DesktopRoot {
                                 root.git.update(cx, |git, cx| {
                                     git.complete_input(request, text, window, cx)
                                 });
+                            } else {
+                                root.submit_path(text, cx);
                             }
                             root.shell.update(cx, |shell, cx| {
                                 shell.close_panel(PanelPosition::Right, cx)
@@ -206,6 +215,7 @@ impl DesktopRoot {
                     });
                 }
                 GitEvent::Input(request) => {
+                    root.path_request = None;
                     root.git_input = Some(request.clone());
                     root.quick_search
                         .update(cx, |search, cx| search.open_input(request.title(), "", cx));
@@ -415,6 +425,7 @@ impl DesktopRoot {
             line_ending_cache: None,
             settings,
             quick_search,
+            path_request: None,
             git_input: None,
             _subscriptions: subscriptions,
             double_shift: DoubleShiftDetector::default(),
@@ -736,6 +747,78 @@ impl DesktopRoot {
             .update(cx, |shell, cx| shell.set_status(status, cx));
     }
 
+    fn submit_path(&mut self, input: String, cx: &mut Context<Self>) {
+        let Some(request) = self.path_request.take() else {
+            return;
+        };
+        let (root, document) = match request {
+            PathRequest::Open(root) => (root, None),
+            PathRequest::Save(root, document, close_after) => (root, Some((document, close_after))),
+        };
+        let path = std::path::Path::new(&input);
+        if input.is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            self.set_status("Workspace内の相対pathを指定してください".to_owned(), cx);
+            return;
+        }
+        let target = root.join(path);
+        self.editor.update(cx, |editor, cx| {
+            editor.submit(
+                false,
+                move |client| {
+                    if let Some((document, close_after)) = document {
+                        if client.editor.active_document_id() != Some(&document) {
+                            return Err(
+                                "保存対象が切り替わりました。保存をやり直してください".to_owned()
+                            );
+                        }
+                        client
+                            .editor
+                            .save_document_to(target)
+                            .map_err(|error| error.to_string())?;
+                        if close_after {
+                            client
+                                .editor
+                                .close_document(
+                                    &document,
+                                    DocumentCloseDisposition::PreserveChanges,
+                                )
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Ok(())
+                    } else {
+                        client
+                            .editor
+                            .open_path(target)
+                            .map_err(|error| error.to_string())
+                    }
+                },
+                cx,
+            );
+        });
+    }
+
+    fn show_path_request(
+        &mut self,
+        request: PathRequest,
+        title: &'static str,
+        suggested: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.git_input = None;
+        self.path_request = Some(request);
+        self.quick_search
+            .update(cx, |search, cx| search.open_input(title, suggested, cx));
+        self.shell.update(cx, |shell, cx| {
+            shell.activate_panel_view(PanelPosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
+        });
+        window.focus(&self.quick_search.read(cx).focus_handle());
+    }
+
     fn command(&mut self, command: UiCommand, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
             return;
@@ -777,11 +860,46 @@ impl DesktopRoot {
             });
             return;
         }
+        if let Some(root) = self.factory.path_scope() {
+            let request = match &command {
+                UiCommand::OpenFile => Some(PathRequest::Open(root)),
+                UiCommand::SaveAs => self
+                    .editor
+                    .read(cx)
+                    .document_id()
+                    .map(|id| PathRequest::Save(root, id, false)),
+                UiCommand::Save if self.editor.read(cx).document().path().is_none() => self
+                    .editor
+                    .read(cx)
+                    .document_id()
+                    .map(|id| PathRequest::Save(root, id, false)),
+                _ => None,
+            };
+            if let Some(request) = request {
+                let (title, suggested) = match &request {
+                    PathRequest::Open(_) => ("Hostのファイルを開く", String::new()),
+                    PathRequest::Save(_, _, _) => (
+                        "Hostに名前を付けて保存",
+                        self.editor
+                            .read(cx)
+                            .document()
+                            .path()
+                            .and_then(|path| path.file_name())
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("new-file.txt")
+                            .to_owned(),
+                    ),
+                };
+                self.show_path_request(request, title, &suggested, window, cx);
+                return;
+            }
+        }
         match command {
             UiCommand::Theme(theme) => self
                 .settings
                 .update(cx, |settings, cx| settings.select_theme(theme, cx)),
             UiCommand::QuickSearch => {
+                self.path_request = None;
                 self.git_input = None;
                 self.double_shift.reset();
                 let provider = CommandSearchProvider::from_registry(
@@ -822,6 +940,21 @@ impl DesktopRoot {
             }),
             UiCommand::CloneRepository => self.set_status("Clone from Git は準備中です".into(), cx),
 
+            UiCommand::ConnectHost => {
+                let factory = self.factory.clone();
+                let admitted = self.worker.submit(
+                    cx,
+                    move |_| factory.open_host(),
+                    |root, result, cx| {
+                        if let Err(error) = result {
+                            root.set_status(error, cx);
+                        }
+                    },
+                );
+                if let Err(error) = admitted {
+                    self.set_status(error, cx);
+                }
+            }
             UiCommand::NewWindow => {
                 let factory = self.factory.clone();
                 let admitted = self.worker.submit(
@@ -879,6 +1012,11 @@ impl DesktopRoot {
                                 .save_document()
                                 .map(|_| ())
                                 .map_err(|error| error.to_string()),
+                            UiCommand::SaveAs => client
+                                .editor
+                                .save_document_as()
+                                .map(|_| ())
+                                .map_err(|error| error.to_string()),
                             UiCommand::CloseWorkspace => client
                                 .editor
                                 .close_workspace()
@@ -927,6 +1065,15 @@ impl DesktopRoot {
             });
             return;
         }
+        let remote_save_root = self.factory.path_scope().filter(|_| {
+            self.shell
+                .read(cx)
+                .session
+                .documents
+                .iter()
+                .any(|tab| tab.id == id && tab.path.is_none())
+        });
+        let handle = window.window_handle();
         let receiver = window.prompt(
             PromptLevel::Warning,
             "文書を閉じますか？",
@@ -943,6 +1090,24 @@ impl DesktopRoot {
                 return;
             };
             if answer > 1 {
+                return;
+            }
+            if answer == 0
+                && let Some(root_path) = remote_save_root
+            {
+                let _ = handle.update(cx, |_, window, cx| {
+                    let _ = this.update(cx, |root, cx| {
+                        root.editor
+                            .update(cx, |editor, cx| editor.activate(id.clone(), cx));
+                        root.show_path_request(
+                            PathRequest::Save(root_path, id, true),
+                            "Hostに保存して閉じる",
+                            "new-file.txt",
+                            window,
+                            cx,
+                        );
+                    });
+                });
                 return;
             }
             let _ = this.update(cx, |root, cx| {

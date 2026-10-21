@@ -3,6 +3,8 @@ use std::{collections::BTreeSet, error::Error, fmt};
 use serde::{Deserialize, Serialize};
 
 pub const WORKSPACES: &str = "workspace.list";
+/// Hostを起動した所有者だけに与える管理権限。通常のペアリングでは付与しない。
+pub const HOST_MANAGE: &str = "host.manage";
 pub const WORKSPACES_CONNECT: &str = "workspace.connect";
 pub const WORKSPACE_SYNC: &str = "workspace.sync";
 pub const FILES_READ: &str = "workspace.files.read";

@@ -75,7 +75,7 @@ impl Fixture {
             .lock()
             .unwrap()
             .insert(root.path().canonicalize().unwrap(), workspace_id);
-        let terminals = HostTerminals::new(host.clone());
+        let terminals = HostTerminals::new(host.clone().into());
         let id = terminals.start(root.path(), 80, 24).unwrap();
         let observer = host.connect(root.path()).unwrap();
         let cache = Mutex::new(TerminalSnapshot {
@@ -87,6 +87,8 @@ impl Fixture {
             output: Vec::new(),
             output_sequence: 0,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         });
         let fixture = Self {
             root,
@@ -557,3 +559,5 @@ fn commands_reattach_after_disconnect_without_waiting_for_ui_poll_or_resync_comp
     assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.snapshot().status, TerminalStatus::Terminated);
 }
+use crate::BackendHost;
+use lapis_backend_state::EmbeddedClient;

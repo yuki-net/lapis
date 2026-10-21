@@ -147,6 +147,43 @@ fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminal
 
 impl TerminalBackend for LocalTerminalBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+    }
+
+    fn start_with_shell(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        use lapis_terminal::TerminalShell;
+        let cwd = shell_directory(cwd, shell)?;
+        let mut command = match shell {
+            #[cfg(windows)]
+            TerminalShell::Default | TerminalShell::PowerShell => {
+                let mut command = portable_pty::CommandBuilder::new("powershell.exe");
+                command.arg("-NoLogo");
+                command
+            }
+            #[cfg(windows)]
+            TerminalShell::Cmd => {
+                let mut command = portable_pty::CommandBuilder::new("cmd.exe");
+                command.arg("/D");
+                command
+            }
+            #[cfg(not(windows))]
+            TerminalShell::Default => portable_pty::CommandBuilder::new(
+                env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
+            ),
+            #[cfg(not(windows))]
+            TerminalShell::PowerShell => portable_pty::CommandBuilder::new("pwsh"),
+            #[cfg(not(windows))]
+            TerminalShell::Cmd => {
+                return Err(TerminalError::new("cmdはWindows Hostでのみ利用できます"));
+            }
+        };
+        command.cwd(cwd);
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
@@ -156,29 +193,13 @@ impl TerminalBackend for LocalTerminalBackend {
                 pixel_height: 0,
             })
             .map_err(|error| TerminalError::new(error.to_string()))?;
-        #[cfg(windows)]
-        let mut command = portable_pty::CommandBuilder::new("powershell.exe");
-        #[cfg(not(windows))]
-        let mut command = portable_pty::CommandBuilder::new(
-            env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
-        );
-        #[cfg(windows)]
-        command.args(["-NoLogo"]);
-        command.cwd(cwd);
         let child = pair
             .slave
             .spawn_command(command)
             .map_err(|error| TerminalError::new(error.to_string()))?;
-        let mut writer = pair
+        let writer = pair
             .master
             .take_writer()
-            .map_err(|error| TerminalError::new(error.to_string()))?;
-        // ConPTY asks the terminal emulator for its initial cursor position.  The
-        // current UI renders the byte stream directly, so answer this standard
-        // query here instead of exposing it as command input.
-        writer
-            .write_all(b"\x1b[1;1R")
-            .and_then(|()| writer.flush())
             .map_err(|error| TerminalError::new(error.to_string()))?;
         let reader = pair
             .master
@@ -287,6 +308,34 @@ impl TerminalBackend for LocalTerminalBackend {
         terminal.exited = true;
         Ok(())
     }
+}
+
+fn shell_directory(
+    cwd: &Path,
+    shell: lapis_terminal::TerminalShell,
+) -> Result<PathBuf, TerminalError> {
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(prefix)) = cwd.components().next() {
+        use std::path::Prefix;
+        match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => {
+                // cmdはcanonicalizeのverbatim prefixをUNCと誤認し、別cwdへ移る。
+                let mut path = PathBuf::from(format!("{}:", char::from(drive)));
+                path.extend(cwd.components().skip(1));
+                return Ok(path);
+            }
+            Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _)
+                if shell == lapis_terminal::TerminalShell::Cmd =>
+            {
+                return Err(TerminalError::new(
+                    "cmdはUNC作業フォルダを使用できません。PowerShellを選択してください",
+                ));
+            }
+            _ => {}
+        }
+    }
+    let _ = shell;
+    Ok(cwd.to_owned())
 }
 
 struct LspProcess {
@@ -1973,6 +2022,19 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
         self.inner.start(cwd, columns, rows)
     }
 
+    fn start_with_shell(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        if !self.gate.is_connected() {
+            return Err(TerminalError::new("loopback workspace is disconnected"));
+        }
+        self.inner.start_with_shell(cwd, columns, rows, shell)
+    }
+
     fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
         if !self.gate.is_connected() {
             return Err(TerminalError::new("loopback workspace is disconnected"));
@@ -2391,9 +2453,15 @@ mod tests {
         let backend = LocalTerminalBackend::default();
         let id = backend.start(Path::new("."), 100, 30).unwrap();
         backend.resize(&id, 120, 32).unwrap();
-        backend
-            .input(&id, b"Write-Output lapis-terminal-smoke\r")
-            .unwrap();
+        let command = if cfg!(windows) {
+            "Write-Output ('lapis-terminal-' + 'smoke')\r"
+        } else {
+            "printf 'lapis-terminal-%s\\n' smoke\n"
+        };
+        let mut command_sent = !cfg!(windows);
+        if command_sent {
+            backend.input(&id, command.as_bytes()).unwrap();
+        }
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut output = Vec::new();
         let mut sequences = Vec::new();
@@ -2403,6 +2471,13 @@ mod tests {
                     sequences.push(chunk.sequence);
                     output.extend(chunk.data);
                 }
+            }
+            // この低水準テストではClient役がConPTYの問い合わせへ応答する。
+            // 通常接続ではRuntimeが一度だけ応答する。
+            if !command_sent && output.windows(4).any(|bytes| bytes == b"\x1b[6n") {
+                backend.input(&id, b"\x1b[1;1R").unwrap();
+                backend.input(&id, command.as_bytes()).unwrap();
+                command_sent = true;
             }
             if String::from_utf8_lossy(&output).contains("lapis-terminal-smoke") {
                 break;
