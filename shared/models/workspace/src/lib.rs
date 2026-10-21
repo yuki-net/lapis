@@ -123,6 +123,10 @@ impl fmt::Display for WorkspaceError {
 impl Error for WorkspaceError {}
 
 pub trait WorkspaceRepository: Send + Sync {
+    /// RemoteのHost所有者が公開したソース。Localでは通常のfolder pickerを使う。
+    fn available_sources(&self) -> Result<Vec<(PathBuf, String)>, WorkspaceError> {
+        Ok(Vec::new())
+    }
     fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError>;
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError>;
 }

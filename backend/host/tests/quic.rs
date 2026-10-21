@@ -19,7 +19,14 @@ struct Fixture {
 
 impl Fixture {
     async fn config(&self, id: &str) -> QuicConnectionConfig {
-        let (client, mut paired) = self.pair(id).await;
+        self.config_for_sources(id, Vec::new()).await
+    }
+    async fn config_for_sources(
+        &self,
+        id: &str,
+        sources: Vec<WorkspaceId>,
+    ) -> QuicConnectionConfig {
+        let (client, mut paired) = self.pair_project(id, sources).await;
         drop(client);
         QuicConnectionConfig {
             address: self.address(),
@@ -56,7 +63,7 @@ impl Fixture {
             "127.0.0.1:0".parse().unwrap(),
             tls,
             auth.clone(),
-            Arc::new(BackendRemoteHandler::new(host.service())),
+            Arc::new(lapis_host::HostRemoteHandler::new(host.clone()).with_auth(auth.clone())),
             RemoteLimits::default(),
         )
         .await
@@ -84,12 +91,19 @@ impl Fixture {
         .unwrap()
     }
     async fn pair(&self, id: &str) -> (QuicClient, PairedResponse) {
+        self.pair_project(id, Vec::new()).await
+    }
+    async fn pair_project(
+        &self,
+        id: &str,
+        sources: Vec<WorkspaceId>,
+    ) -> (QuicClient, PairedResponse) {
         let mut client = self.connect().await;
         let token = self
             .auth
             .lock()
             .unwrap()
-            .begin_pairing(self.workspace.clone())
+            .begin_project_pairing(self.workspace.clone(), sources)
             .unwrap();
         client
             .send(&ClientMessage::Pair(PairRequest::new(
@@ -103,6 +117,192 @@ impl Fixture {
         };
         (client, paired)
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_project_catalog_exposes_only_owner_selected_sources() {
+    let fixture = Fixture::new().await;
+    let sub = tempfile::tempdir().unwrap();
+    let unrelated = tempfile::tempdir().unwrap();
+    std::fs::write(fixture._root.path().join("note.ts"), "primary").unwrap();
+    std::fs::write(sub.path().join("note.ts"), "sub").unwrap();
+    let sub_id = fixture.host.register_workspace(sub.path()).unwrap();
+    let unrelated_id = fixture.host.register_workspace(unrelated.path()).unwrap();
+    let config = fixture
+        .config_for_sources("project-sources", vec![sub_id.clone()])
+        .await;
+    tokio::task::spawn_blocking(move || {
+        let virtual_root = unrelated.path().join("virtual-source-namespace");
+        let backend =
+            lapis_host::BackendClient::remote(virtual_root.clone(), config.clone()).unwrap();
+        let catalog = backend.workspaces().available_sources().unwrap();
+        assert_eq!(catalog.len(), 2);
+        let alias = catalog
+            .iter()
+            .find(|(root, _)| root != &virtual_root)
+            .unwrap()
+            .0
+            .clone();
+        assert!(alias.starts_with(&virtual_root));
+        assert!(!alias.exists());
+        assert_eq!(backend.register_workspace(&alias).unwrap(), sub_id);
+        let documents = backend.documents();
+        let primary = documents.open(&virtual_root.join("note.ts")).unwrap();
+        let secondary = documents.open(&alias.join("note.ts")).unwrap();
+        assert_ne!(primary.id, secondary.id);
+        assert_eq!(primary.document.content_for_save(), "primary");
+        assert_eq!(secondary.document.content_for_save(), "sub");
+        let draft = documents
+            .edit(
+                &secondary.id,
+                secondary.document.revision(),
+                0..3,
+                "sub draft",
+            )
+            .unwrap();
+        let fresh =
+            lapis_host::BackendClient::remote(virtual_root.clone(), config.clone()).unwrap();
+        assert_eq!(fresh.register_workspace(&alias).unwrap(), sub_id);
+        let restored = fresh.documents().open(&alias.join("note.ts")).unwrap();
+        assert_eq!(restored.id, draft.id);
+        assert_eq!(restored.document.content_for_save(), "sub draft");
+        let outside = virtual_root
+            .join(".lapis-sources")
+            .join(unrelated_id.as_str());
+        assert!(backend.register_workspace(&outside).is_err());
+        let mut forbidden = config;
+        forbidden.workspace_id = unrelated_id;
+        assert!(QuicConnection::connect(forbidden).is_err());
+        assert_eq!(
+            std::fs::read_to_string(sub.path().join("note.ts")).unwrap(),
+            "sub"
+        );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_worktree_ports_use_virtual_paths_and_restore_scoped_bindings() {
+    let fixture = Fixture::new().await;
+    let sibling = tempfile::tempdir().unwrap();
+    let worktree_path = sibling.path().join("topic");
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .current_dir(fixture._root.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Lapis Test"]);
+    git(&["config", "user.email", "test@example.invalid"]);
+    git(&["config", "core.autocrlf", "false"]);
+    git(&[
+        "config",
+        "core.hooksPath",
+        sibling.path().join("no-hooks").to_str().unwrap(),
+    ]);
+    std::fs::write(fixture._root.path().join("note.ts"), "base").unwrap();
+    git(&["add", "note.ts"]);
+    git(&["commit", "-m", "initial"]);
+    git(&[
+        "worktree",
+        "add",
+        "-b",
+        "topic",
+        worktree_path.to_str().unwrap(),
+    ]);
+    let config = fixture.config("remote-worktree").await;
+    let auth = fixture.auth.clone();
+    let host = fixture.host.clone();
+    let root_id = fixture.workspace.clone();
+    let original = fixture._root.path().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let virtual_root = sibling.path().join("client-namespace");
+        let backend =
+            lapis_host::BackendClient::remote(virtual_root.clone(), config.clone()).unwrap();
+        let source = lapis_editor_core::WorkspaceId::new(root_id.as_str());
+        let git = backend.git();
+        let trees = git.worktrees(&source).unwrap();
+        assert_eq!(trees.len(), 1);
+        let tree = &trees[0].worktree_id;
+        assert!(
+            git.open_worktree(&source, &lapis_editor_core::TaskId::new("foreign-worktree"))
+                .is_err()
+        );
+        let mut ungranted = config.clone();
+        ungranted.workspace_id = host.register_workspace(sibling.path()).unwrap();
+        assert!(QuicConnection::connect(ungranted).is_err());
+        let alias = git.open_worktree(&source, tree).unwrap();
+        assert!(alias.starts_with(&virtual_root));
+        assert!(!alias.exists());
+        assert_ne!(alias, worktree_path);
+        let documents = backend.documents();
+        let opened = documents.open(&alias.join("note.ts")).unwrap();
+        let edited = documents
+            .edit(&opened.id, opened.document.revision(), 0..4, "remote edit")
+            .unwrap();
+        documents
+            .save(&edited.id, edited.document.revision(), None)
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(worktree_path.join("note.ts")).unwrap(),
+            "remote edit"
+        );
+        assert_eq!(
+            std::fs::read_to_string(original.join("note.ts")).unwrap(),
+            "base"
+        );
+        let terminals = backend.terminals();
+        let terminal = terminals.start(&alias, 80, 24).unwrap();
+        terminals
+            .input(
+                &terminal,
+                if cfg!(windows) {
+                    b"Write-Output ('REMOTE_TREE_' + 'ALIVE')\r"
+                } else {
+                    b"printf 'REMOTE_TREE_%s\\n' ALIVE\r"
+                },
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut output = Vec::new();
+        loop {
+            for event in terminals.poll(&terminal).unwrap() {
+                if let lapis_terminal::TerminalEvent::Output(data) = event {
+                    output.extend(data.data);
+                }
+            }
+            if output
+                .windows(b"REMOTE_TREE_ALIVE".len())
+                .any(|bytes| bytes == b"REMOTE_TREE_ALIVE")
+            {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Remote Worktree PTY did not respond"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        terminals.terminate(&terminal).unwrap();
+        let fresh = lapis_host::BackendClient::remote(virtual_root, config.clone()).unwrap();
+        let id = fresh.register_workspace(&alias).unwrap();
+        assert_ne!(id, root_id);
+        let restored = fresh.documents().open(&alias.join("note.ts")).unwrap();
+        assert_eq!(restored.id, opened.id);
+        assert_eq!(restored.document.content_for_save(), "remote edit");
+        auth.lock().unwrap().revoke(config.credential.id());
+        assert!(fresh.documents().open(&alias.join("note.ts")).is_err());
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -278,6 +278,8 @@ impl BackendState {
         revision: Revision,
         path: WorkspaceRelativePath,
     ) -> Result<Vec<PublishedEvent>, BackendStateError> {
+        self.require_available_workspace(&source)?;
+        self.require_available_workspace(&destination)?;
         if source == destination {
             return Err(BackendStateError::WorkspaceDenied);
         }
@@ -440,6 +442,7 @@ impl BackendState {
             }
             RequestBody::WorkspaceExecute(_)
             | RequestBody::HostRegister(_)
+            | RequestBody::WorktreeOpen(_)
             | RequestBody::DocumentRelocate(_) => Err(BackendStateError::Unsupported),
             RequestBody::DocumentUntitled(request) => {
                 self.require_workspace(session, &request.workspace_id)?;

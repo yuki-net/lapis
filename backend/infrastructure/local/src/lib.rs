@@ -1530,6 +1530,10 @@ impl GitBackend for LocalGitBackend {
         repository: &Path,
         request: lapis_git::GitActionRequest,
     ) -> Result<lapis_git::GitActionResult, GitError> {
+        let gate = git_repository_gate(repository)?;
+        let _guard = gate
+            .lock()
+            .map_err(|_| GitError::new(GitErrorKind::Io, "Repositoryの操作lockが利用できません"))?;
         self.execute_action(repository, request)
     }
     fn status(&self, repository: &Path) -> Result<RepositoryStatus, GitError> {
@@ -1715,6 +1719,7 @@ impl GitBackend for LocalGitBackend {
 
     fn worktrees(&self, repository: &Path) -> Result<Vec<TaskWorktree>, GitError> {
         let canonical = self.status(repository)?.root;
+        let common = git_common_directory(repository)?;
         let entries = match fs::read_dir(&self.state_root) {
             Ok(entries) => Some(entries),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
@@ -1753,6 +1758,9 @@ impl GitBackend for LocalGitBackend {
                         .canonicalize()
                         .unwrap_or_else(|_| canonical.clone())
             {
+                if git_common_directory(&path).ok().as_ref() != Some(&common) {
+                    continue;
+                }
                 let mut record = records
                     .iter()
                     .find(|record| {
@@ -1902,6 +1910,33 @@ fn git_bytes_allow_exit_code(
 
 fn git_text(repository: &Path, arguments: &[&str]) -> Result<String, GitError> {
     Ok(String::from_utf8_lossy(&git_bytes(repository, arguments)?).into_owned())
+}
+
+fn git_common_directory(repository: &Path) -> Result<PathBuf, GitError> {
+    let path = git_text(
+        repository,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    PathBuf::from(path.trim())
+        .canonicalize()
+        .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))
+}
+
+fn git_repository_gate(repository: &Path) -> Result<Arc<Mutex<()>>, GitError> {
+    type Gates = std::collections::HashMap<PathBuf, std::sync::Weak<Mutex<()>>>;
+    static GATES: std::sync::OnceLock<Mutex<Gates>> = std::sync::OnceLock::new();
+    let directory = git_common_directory(repository)?;
+    let mut gates = GATES
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| GitError::new(GitErrorKind::Io, "Repositoryの操作lockが利用できません"))?;
+    gates.retain(|_, gate| gate.strong_count() != 0);
+    if let Some(gate) = gates.get(&directory).and_then(std::sync::Weak::upgrade) {
+        return Ok(gate);
+    }
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(directory, Arc::downgrade(&gate));
+    Ok(gate)
 }
 
 fn stable_path_hash(path: &Path) -> u64 {

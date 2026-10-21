@@ -20,6 +20,7 @@ pub(crate) struct DocumentClient {
 
 #[derive(Clone)]
 pub(crate) struct ClientSnapshot {
+    pub available_sources: Vec<(PathBuf, String)>,
     pub tabs: Vec<DocumentTab>,
     pub documents: Vec<DocumentCache>,
     pub active: Option<DocumentId>,
@@ -47,6 +48,11 @@ impl DocumentClient {
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
         Ok(ClientSnapshot {
+            available_sources: self
+                .editor
+                .repository()
+                .available_sources()
+                .map_err(|error| error.to_string())?,
             tabs,
             documents,
             active: self.editor.active_document_id().cloned(),

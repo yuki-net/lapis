@@ -34,4 +34,6 @@ Remoteのファイル操作はHostのWorkspaceを使用し、Client上に同じs
 
 Remoteの「Open」「Save As」と未保存文書の保存は、Workspaceからの相対pathを入力します。保存先が競合すると変更を保持したまま拒否します。ファイルの通常保存はCtrl+S、名前を付けて保存はCtrl+Shift+Sです。
 
+Project画面の「Host環境を追加」では、Host所有者が招待へ含めた既存環境を登録し、TaskのPrimary/Subとして選択できます。Git画面の「このTaskで作業」は選択したWorktreeへEditor・Terminal・Gitを切り替え、「Taskを登録環境へ戻す」で元に戻します。切替前の未保存文書とTerminalの参照は保持します。Remoteの表示用pathはClient内の名前空間で、Hostの実パスではありません。
+
 Terminalの「Host Terminals」は既存端末を一覧し、「Attach」で同じprocessへ接続します。Shell / PowerShell / cmdから起動でき、入力・Ctrl+C・矢印・貼り付けを送れます。サイズ変更は共有端末全体へ反映され、終了は確認後に全Clientへ反映されます。Task切替・画面終了ではprocessを終了しません。前回保存したTerminal IDはworkerから再アタッチし、shellを再実行しません。

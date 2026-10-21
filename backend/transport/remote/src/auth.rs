@@ -161,6 +161,7 @@ impl Error for AuthError {
 }
 
 struct PendingPairing {
+    source_workspaces: std::collections::HashSet<WorkspaceId>,
     workspace_id: WorkspaceId,
     expires_at: u64,
 }
@@ -215,7 +216,22 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     }
 
     pub fn begin_pairing(&mut self, workspace_id: WorkspaceId) -> Result<PairingToken, AuthError> {
+        self.begin_project_pairing(workspace_id, [])
+    }
+
+    /// Host所有者が明示したProjectのソースだけを、一回限りの招待へ結び付ける。
+    pub fn begin_project_pairing(
+        &mut self,
+        workspace_id: WorkspaceId,
+        sources: impl IntoIterator<Item = WorkspaceId>,
+    ) -> Result<PairingToken, AuthError> {
         self.require_enabled()?;
+        let source_workspaces = sources
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
+        if source_workspaces.len() > 64 {
+            return Err(AuthError::CapacityReached);
+        }
         let now = self.clock.now_unix_seconds();
         self.pairings.retain(|_, pairing| pairing.expires_at > now);
         if self.pairings.len() >= MAX_PENDING_PAIRINGS {
@@ -230,6 +246,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             self.pairings.insert(
                 token_digest,
                 PendingPairing {
+                    source_workspaces,
                     workspace_id,
                     expires_at: self.expiry(self.config.pairing_lifetime.seconds()),
                 },
@@ -264,6 +281,8 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             .fill_bytes(&mut secret)
             .map_err(AuthError::Random)?;
         let record = CredentialRecord {
+            source_workspaces: pairing.source_workspaces,
+            derived_workspaces: Default::default(),
             client_id: client_id.clone(),
             workspace_id: pairing.workspace_id,
             capabilities: requested_capabilities.intersection(self.policy.allowed_capabilities()),
@@ -315,7 +334,12 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             .capabilities
             .iter()
             .any(|capability| capability.as_str() == lapis_client_api::capability::HOST_MANAGE);
-        if &record.client_id != client_id || (!owner && &record.workspace_id != workspace_id) {
+        if &record.client_id != client_id
+            || (!owner
+                && &record.workspace_id != workspace_id
+                && !record.source_workspaces.contains(workspace_id)
+                && !record.derived_workspaces.contains(workspace_id))
+        {
             return Err(AuthError::CredentialBindingMismatch);
         }
         let now = self.clock.now_unix_seconds();
@@ -332,6 +356,47 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         );
         self.sessions.insert(session_id, credential.id().clone());
         Ok(grant)
+    }
+
+    pub fn project_workspaces(&self, grant: &SessionGrant) -> Result<Vec<WorkspaceId>, AuthError> {
+        self.require_active_session(grant)?;
+        let credential_id = self
+            .sessions
+            .get(grant.session_id())
+            .ok_or(AuthError::CredentialUnavailable)?;
+        let record = self
+            .credentials
+            .get(credential_id)
+            .ok_or(AuthError::CredentialUnavailable)?;
+        let mut ids = record.source_workspaces.iter().cloned().collect::<Vec<_>>();
+        if !ids.contains(&record.workspace_id) {
+            ids.push(record.workspace_id.clone());
+        }
+        Ok(ids)
+    }
+
+    /// Hostが所属を検証したWorktreeだけを、同じcredentialの認可先へ追加する。
+    /// capability・期限・端末bindingは元のcredentialから変更しない。
+    pub fn grant_worktree_workspace(
+        &mut self,
+        grant: &SessionGrant,
+        workspace: WorkspaceId,
+    ) -> Result<(), AuthError> {
+        self.require_active_session(grant)?;
+        let credential_id = self
+            .sessions
+            .get(grant.session_id())
+            .ok_or(AuthError::CredentialUnavailable)?;
+        let record = self
+            .credentials
+            .get_mut(credential_id)
+            .ok_or(AuthError::CredentialUnavailable)?;
+        if record.derived_workspaces.len() >= 64 && !record.derived_workspaces.contains(&workspace)
+        {
+            return Err(AuthError::CapacityReached);
+        }
+        record.derived_workspaces.insert(workspace);
+        Ok(())
     }
 
     pub fn revoke(&mut self, credential_id: &CredentialId) -> bool {
@@ -492,6 +557,89 @@ mod tests {
             Err(AuthError::CredentialUnavailable)
         ));
         assert!(auth.authenticate(&credential, &client, &workspace).is_ok());
+    }
+
+    #[test]
+    fn project_invitation_only_grants_explicit_sources() {
+        let mut auth = setup();
+        auth.enable();
+        let (client, root) = ids();
+        let sub = WorkspaceId::try_new("sub").unwrap();
+        let token = auth
+            .begin_project_pairing(root.clone(), [sub.clone()])
+            .unwrap();
+        let credential = auth
+            .complete_pairing(&token, &client, &CapabilitySet::default())
+            .unwrap();
+        let primary = auth.authenticate(&credential, &client, &root).unwrap();
+        let secondary = auth.authenticate(&credential, &client, &sub).unwrap();
+        assert!(secondary.require_workspace(&root).is_err());
+        let scopes = auth.project_workspaces(&primary).unwrap();
+        assert_eq!(scopes.len(), 2);
+        assert!(scopes.contains(&root) && scopes.contains(&sub));
+        assert!(
+            auth.authenticate(
+                &credential,
+                &client,
+                &WorkspaceId::try_new("other-source").unwrap()
+            )
+            .is_err()
+        );
+        auth.revoke(credential.id());
+        assert!(auth.project_workspaces(&primary).is_err());
+        assert!(auth.require_active_session(&secondary).is_err());
+    }
+
+    #[test]
+    fn derived_workspaces_keep_capabilities_binding_expiry_and_revocation() {
+        let mut auth = setup();
+        auth.enable();
+        let (client, root) = ids();
+        let capabilities = auth.policy.allowed_capabilities().clone();
+        let token = auth.begin_pairing(root.clone()).unwrap();
+        let credential = auth
+            .complete_pairing(&token, &client, &capabilities)
+            .unwrap();
+        let grant = auth.authenticate(&credential, &client, &root).unwrap();
+        let child = WorkspaceId::try_new("worktree-workspace").unwrap();
+        assert!(matches!(
+            auth.authenticate(&credential, &client, &child),
+            Err(AuthError::CredentialBindingMismatch)
+        ));
+        auth.grant_worktree_workspace(&grant, child.clone())
+            .unwrap();
+        let derived = auth.authenticate(&credential, &client, &child).unwrap();
+        assert_eq!(derived.capabilities(), &capabilities);
+        assert!(derived.require_workspace(&root).is_err());
+        assert!(
+            auth.authenticate(
+                &credential,
+                &ClientId::try_new("other-client").unwrap(),
+                &child
+            )
+            .is_err()
+        );
+        assert!(
+            auth.authenticate(
+                &credential,
+                &client,
+                &WorkspaceId::try_new("unrelated").unwrap()
+            )
+            .is_err()
+        );
+        auth.clock.0 = 120;
+        assert!(matches!(
+            auth.authenticate(&credential, &client, &child),
+            Err(AuthError::CredentialExpired)
+        ));
+        assert!(matches!(
+            auth.grant_worktree_workspace(&grant, child.clone()),
+            Err(AuthError::CredentialExpired)
+        ));
+        auth.clock.0 = 100;
+        assert!(auth.revoke(credential.id()));
+        assert!(auth.require_active_session(&derived).is_err());
+        assert!(auth.grant_worktree_workspace(&grant, child).is_err());
     }
 
     #[test]

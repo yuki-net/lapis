@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::WorkspaceId;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeOpenRequest {
+    pub workspace_id: WorkspaceId,
+    pub worktree_id: lapis_editor_core::TaskId,
+}
+
 /// Host所有者による登録要求。通常のWorkspace操作にはOSの絶対pathを渡さない。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostRegisterRequest {

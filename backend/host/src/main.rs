@@ -1,7 +1,7 @@
 use lapis_host::BackendHost;
 use lapis_remote::{
-    AuthConfig, AuthPolicy, BackendRemoteHandler, CredentialId, CredentialLifetime,
-    PairingLifetime, QuicServer, RemoteAuth, RemoteLimits, tls13_server_config,
+    AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
+    RemoteAuth, RemoteLimits, tls13_server_config,
 };
 use rustls::pki_types::PrivateKeyDer;
 use std::{
@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 struct Options {
+    sources: Vec<PathBuf>,
     workspace: PathBuf,
     certificate: PathBuf,
     listen: SocketAddr,
@@ -24,18 +25,21 @@ impl Options {
     fn parse(arguments: impl Iterator<Item = std::ffi::OsString>) -> Result<Self, Error> {
         let mut arguments = arguments;
         let mut workspace = None;
+        let mut sources = Vec::new();
         let mut certificate = None;
         let mut listen = "127.0.0.1:0".parse()?;
         while let Some(argument) = arguments.next() {
             let value = arguments.next().ok_or("option requires a value")?;
             match argument.to_str() {
                 Some("--workspace") => workspace = Some(PathBuf::from(value)),
+                Some("--source") => sources.push(PathBuf::from(value)),
                 Some("--certificate") => certificate = Some(PathBuf::from(value)),
                 Some("--listen") => listen = value.to_str().ok_or("invalid address")?.parse()?,
                 _ => return Err("unknown option".into()),
             }
         }
         Ok(Self {
+            sources,
             workspace: workspace.ok_or("--workspace is required")?,
             certificate: certificate.ok_or("--certificate is required")?,
             listen,
@@ -79,7 +83,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <new-public.der> [--listen <ip:port>]"
+            "Usage: lapis-host --workspace <directory> --certificate <new-public.der> [--source <directory>]... [--listen <ip:port>]"
         );
         std::process::exit(1);
     }
@@ -89,6 +93,11 @@ fn run() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
     let host = BackendHost::start()?;
     let workspace = host.register_workspace(&options.workspace)?;
+    let sources = options
+        .sources
+        .iter()
+        .map(|source| host.register_workspace(source))
+        .collect::<Result<Vec<_>, _>>()?;
     // 秘密鍵はHostのメモリ内だけに保持する。公開証明書は明示した新規ファイルへ出力。
     let certified =
         rcgen::generate_simple_self_signed(vec!["localhost".to_owned(), "lapis-host".to_owned()])?;
@@ -127,7 +136,7 @@ fn run() -> Result<(), Error> {
         })?;
     runtime.block_on(async {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
-            Arc::new(BackendRemoteHandler::new(host.service())), RemoteLimits::default()).await?;
+            Arc::new(lapis_host::HostRemoteHandler::new(host.clone()).with_auth(auth.clone())), RemoteLimits::default()).await?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
         println!("Commands: pair / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
@@ -141,7 +150,7 @@ fn run() -> Result<(), Error> {
                     let line = line.trim();
                     if line == "quit" { break; }
                     if line == "pair" {
-                        let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
+                        let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_project_pairing(workspace.clone(), sources.clone())?;
                         // 利用者が要求したローカル招待だけを表示し、ログへ自動出力しない。
                         let mut invitation = Zeroizing::new(String::with_capacity(64));
                         for byte in token.secret_bytes() {
@@ -154,7 +163,7 @@ fn run() -> Result<(), Error> {
                         let address = parts.next().and_then(|value| value.parse().ok());
                         let path = parts.next().map(str::trim).filter(|path| !path.is_empty());
                         if let (Some(address), Some(path)) = (address, path) {
-                            let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
+                            let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_project_pairing(workspace.clone(), sources.clone())?;
                             let invitation = lapis_host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
                                 workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: token.secret_bytes().to_vec() };
                             match lapis_host::write_invitation(std::path::Path::new(path), &invitation) {

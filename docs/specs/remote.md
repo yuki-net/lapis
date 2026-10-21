@@ -14,7 +14,8 @@
 ## Server側で実装済みの制御
 
 - `server.rs`・`quic.rs` と `tls.rs`: Remoteが有効化されていなければlistenしません。WebSocketとQUICはTLS 1.3のみを許可し、TLS early dataを無効にしています。認証・認可・イベント配信は同じSession処理を使用します。
-- `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・Workspace・許可capability・期限に結び付き、失効させると関連sessionも無効になります。Local所有者credentialのみHost内の別Workspaceへ認証できますが、Client bindingは維持します。
+- `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・明示したProjectソース・許可capability・期限に結び付き、失効させると関連sessionも無効になります。各sessionは単一Workspaceに限定します。Local所有者credentialはHost内の別Workspaceへ認証できますが、Client bindingは維持します。
+- `worktree.open` はGitの読取権限と所属Workspaceを検証し、Gitの登録と共通Gitディレクトリが一致するWorktreeだけを新しい接続先へ追加します。返すのはWorkspace IDと表示名だけで、Hostの実パスは公開しません。派生先も元credentialのcapability・期限・失効に従います。
 - `auth.rs`: 認証済みsessionの有効性と、requestが要求するWorkspace・capabilityを検証します。
 - 購読イベントを送る前にもsessionの失効・期限を確認します。失効したClientへ新しいDocumentやTerminalの内容を配信しません。
 

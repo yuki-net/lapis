@@ -25,6 +25,8 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 
 `cargo run -p lapis-host -- --workspace <既存フォルダ> --certificate <新規の公開証明書.der>`
 
+Projectへ複数のRepositoryや既存ソースフォルダを公開する場合は `--source <既存フォルダ>` を必要な数だけ追加します。招待はこの明示した環境だけを許可し、ClientのProject画面に「Host環境を追加」として表示します。Host上の他の登録先を自動で公開しません。
+
 既定ではloopbackの空きUDP portでQUICを受け付けます。別端末から接続する場合は `--listen <ip:port>` を明示します。表示されたaddress・server_name・Workspace IDと、信頼できる経路で渡した公開証明書をClientで使用します。既存の証明書ファイルは上書きしません。
 
 Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の招待.json>` を実行すると、公開証明書・Workspace・5分間で一回限りの招待をファイルにまとめます。信頼できる経路でClientごとに渡してください。`pair` は招待tokenをconsoleへ表示する低水準の操作です。`revoke <credential-id>` は資格情報を失効させ、`quit` またはCtrl+CはHost自体を終了します。Client切断や標準入力のEOFではHostを終了しません。

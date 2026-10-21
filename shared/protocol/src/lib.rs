@@ -63,4 +63,5 @@ pub use version::{
 pub use workspace::{
     HostRegisterRequest, WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,
     WorkspaceConnectResponse, WorkspaceListRequest, WorkspaceListResponse, WorkspaceSummary,
+    WorktreeOpenRequest,
 };

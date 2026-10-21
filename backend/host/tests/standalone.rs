@@ -52,11 +52,14 @@ async fn request(client: &mut QuicClient, id: &str, body: RequestBody) -> Respon
 #[test]
 fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificate_overwrite() {
     let directory = tempfile::tempdir().unwrap();
+    let sub = tempfile::tempdir().unwrap();
     let certificate = directory.path().join("host.der");
     let mut command = Command::new(env!("CARGO_BIN_EXE_lapis-host"));
     command
         .arg("--workspace")
         .arg(directory.path())
+        .arg("--source")
+        .arg(sub.path())
         .arg("--certificate")
         .arg(&certificate)
         .stdin(Stdio::piped())
@@ -134,6 +137,28 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
             .await,
             ResponseBody::WorkspaceConnect(_)
         ));
+        let ResponseBody::WorkspaceList(catalog) = request(
+            &mut client,
+            "sources",
+            RequestBody::WorkspaceList(Default::default()),
+        )
+        .await
+        else {
+            panic!("source catalog required")
+        };
+        assert_eq!(catalog.workspaces.len(), 2);
+        assert!(
+            catalog
+                .workspaces
+                .iter()
+                .any(|source| source.workspace_id == workspace)
+        );
+        assert!(
+            catalog
+                .workspaces
+                .iter()
+                .any(|source| source.name == sub.path().file_name().unwrap().to_string_lossy())
+        );
         let ResponseBody::TerminalStart(started) = request(
             &mut client,
             "start",

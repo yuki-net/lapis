@@ -10,6 +10,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum RequestBody {
+    #[serde(rename = "worktree.open")]
+    WorktreeOpen(crate::WorktreeOpenRequest),
     #[serde(rename = "host.register_workspace")]
     HostRegister(crate::HostRegisterRequest),
     #[serde(rename = "document.relocate")]
@@ -65,6 +67,7 @@ pub enum RequestBody {
 impl RequestBody {
     pub const fn method(&self) -> &'static str {
         match self {
+            Self::WorktreeOpen(_) => "worktree.open",
             Self::HostRegister(_) => "host.register_workspace",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
@@ -95,6 +98,7 @@ impl RequestBody {
 
     pub const fn required_capability(&self) -> &'static str {
         match self {
+            Self::WorktreeOpen(_) => "workspace.git.read",
             Self::HostRegister(_) | Self::DocumentRelocate(_) => capability::HOST_MANAGE,
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
@@ -123,6 +127,7 @@ impl RequestBody {
     /// Request自身が明示するWorkspace。Resource ID経由のRequestはbackend所有権表で解決する。
     pub const fn workspace_id(&self) -> Option<&WorkspaceId> {
         match self {
+            Self::WorktreeOpen(request) => Some(&request.workspace_id),
             Self::HostRegister(_) | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),

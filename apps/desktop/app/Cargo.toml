@@ -17,5 +17,9 @@ lapis-task = { path = "../../../shared/models/task" }
 rfd.workspace = true
 
 [dev-dependencies]
+lapis-client-api = { path = "../../../shared/protocol" }
+tokio.workspace = true
+rustls.workspace = true
+rcgen.workspace = true
 lapis-workspace = { path = "../../../shared/models/workspace" }
 tempfile.workspace = true

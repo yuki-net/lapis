@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 #[derive(Clone)]
 pub(crate) enum ConversationEvent {
+    RegisterKnownSource(ProjectId, PathBuf),
     RegisterProject,
     RegisterSource(ProjectId),
     Create {
@@ -18,6 +19,7 @@ pub(crate) enum ConversationEvent {
 }
 
 pub(crate) struct ConversationFeature {
+    available_sources: Vec<(PathBuf, String)>,
     pub(crate) records: Vec<ConversationRecord>,
     pub(crate) active: Option<ConversationId>,
     projects: Vec<Project>,
@@ -30,6 +32,7 @@ impl gpui::EventEmitter<ConversationEvent> for ConversationFeature {}
 impl ConversationFeature {
     pub(crate) fn new() -> Self {
         Self {
+            available_sources: Vec::new(),
             records: Vec::new(),
             active: None,
             projects: Vec::new(),
@@ -50,12 +53,14 @@ impl ConversationFeature {
     }
     pub(crate) fn update(
         &mut self,
+        available_sources: Vec<(PathBuf, String)>,
         records: Vec<ConversationRecord>,
         projects: Vec<Project>,
         error: Option<String>,
         active: ConversationId,
         cx: &mut Context<Self>,
     ) {
+        self.available_sources = available_sources;
         let switched = self.active.as_ref() != Some(&active);
         self.records = records;
         self.projects = projects;
@@ -108,6 +113,23 @@ impl Render for ConversationFeature {
                     )
                 }));
         if let Some(project) = self.selected_project.clone() {
+            for (index, (root, name)) in self.available_sources.iter().enumerate() {
+                if sources.contains(root) {
+                    continue;
+                }
+                let root = root.clone();
+                let project = project.clone();
+                view = view.child(div().id(("host-source", index)).child(
+                    action_button(format!("Host環境を追加: {name}"), false).on_click(cx.listener(
+                        move |_, _, _, cx| {
+                            cx.emit(ConversationEvent::RegisterKnownSource(
+                                project.clone(),
+                                root.clone(),
+                            ))
+                        },
+                    )),
+                ));
+            }
             view = view.child(
                 action_button("既存Repository / フォルダを追加…", false).on_click(cx.listener(
                     move |_, _, _, cx| cx.emit(ConversationEvent::RegisterSource(project.clone())),

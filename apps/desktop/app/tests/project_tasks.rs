@@ -160,6 +160,32 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
         .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
         .unwrap();
     assert_eq!(editor.active_document_id(), tree_document.as_ref());
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    let original_tree = connection
+        .worktrees(editor.workspace_id().unwrap())
+        .unwrap()
+        .remove(0)
+        .worktree_id;
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&original_tree))
+        .unwrap();
+    assert_eq!(editor.workspace_root(), Some(primary.as_path()));
+    assert!(
+        tasks
+            .active_record()
+            .unwrap()
+            .environment
+            .as_ref()
+            .unwrap()
+            .worktree(SourceRole::Primary)
+            .is_none()
+    );
+    assert_eq!(editor.active_text().unwrap(), "primary draft");
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
     let reloaded = ConversationSession::new(repository, Default::default());
     assert!(reloaded.load_error().is_none());
     reloaded.restore_active(&mut editor).unwrap();

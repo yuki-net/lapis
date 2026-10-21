@@ -75,6 +75,13 @@ pub(crate) struct LocalHosts {
     configs: Mutex<HashMap<PathBuf, QuicConnectionConfig>>,
 }
 impl LocalHosts {
+    pub(crate) fn bind(&self, root: PathBuf, config: QuicConnectionConfig) -> Result<(), Error> {
+        self.configs
+            .lock()
+            .map_err(|_| "Host一覧が利用できません")?
+            .insert(root, config);
+        Ok(())
+    }
     pub(crate) fn new(executable: PathBuf, directory: PathBuf) -> Self {
         Self {
             executable,
@@ -324,8 +331,8 @@ pub fn run_managed_host(root: &Path) -> Result<(), Error> {
             let server = QuicServer::bind(
                 "127.0.0.1:0".parse()?,
                 tls,
-                auth,
-                Arc::new(crate::HostRemoteHandler::new(host.clone())),
+                auth.clone(),
+                Arc::new(crate::HostRemoteHandler::new(host.clone()).with_auth(auth)),
                 RemoteLimits::default(),
             )
             .await?;

@@ -10,6 +10,8 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ResponseBody {
+    #[serde(rename = "worktree.open")]
+    WorktreeOpen(crate::WorkspaceSummary),
     #[serde(rename = "host.register_workspace")]
     HostRegister(crate::WorkspaceSummary),
     #[serde(rename = "document.relocate")]
@@ -67,6 +69,7 @@ pub enum ResponseBody {
 impl ResponseBody {
     pub const fn method(&self) -> Option<&'static str> {
         match self {
+            Self::WorktreeOpen(_) => Some("worktree.open"),
             Self::HostRegister(_) => Some("host.register_workspace"),
             Self::DocumentRelocate(_) => Some("document.relocate"),
             Self::CreateDirectory(_) => Some("files.create_directory"),

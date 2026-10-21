@@ -95,6 +95,8 @@ impl fmt::Debug for CredentialHandle {
 }
 
 pub(crate) struct CredentialRecord {
+    pub(crate) derived_workspaces: std::collections::HashSet<WorkspaceId>,
+    pub(crate) source_workspaces: std::collections::HashSet<WorkspaceId>,
     pub(crate) client_id: ClientId,
     pub(crate) workspace_id: WorkspaceId,
     pub(crate) capabilities: lapis_client_api::CapabilitySet,

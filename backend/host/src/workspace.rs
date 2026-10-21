@@ -59,6 +59,9 @@ impl HostWorkspaces {
     }
 }
 impl WorkspaceRepository for HostWorkspaces {
+    fn available_sources(&self) -> Result<Vec<(std::path::PathBuf, String)>, WorkspaceError> {
+        self.host.project_sources().map_err(problem)
+    }
     fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError> {
         let client = self.host.connect(root).map_err(problem)?;
         let path = WorkspaceRelativePath::parse(name).map_err(problem)?;

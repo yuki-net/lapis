@@ -263,6 +263,10 @@ impl DesktopRoot {
                         move |client| {
                             client.persist_view(view)?;
                             match event {
+                                ConversationEvent::RegisterKnownSource(project, root) => client
+                                    .conversation
+                                    .register_source(&client.editor, &project, root)
+                                    .map_err(|error| error.to_string()),
                                 ConversationEvent::RegisterProject => {
                                     if let Some(path) =
                                         client.editor.file_dialog().choose_workspace_path()
@@ -508,6 +512,7 @@ impl DesktopRoot {
         });
         self.conversation.update(cx, |conversation, cx| {
             conversation.update(
+                snapshot.available_sources.clone(),
                 snapshot.conversations.clone(),
                 snapshot.projects.clone(),
                 snapshot.project_error.clone(),
@@ -755,20 +760,14 @@ impl DesktopRoot {
             PathRequest::Open(root) => (root, None),
             PathRequest::Save(root, document, close_after) => (root, Some((document, close_after))),
         };
-        let path = std::path::Path::new(&input);
-        if input.is_empty()
-            || path
-                .components()
-                .any(|part| !matches!(part, std::path::Component::Normal(_)))
-        {
-            self.set_status("Workspace内の相対pathを指定してください".to_owned(), cx);
-            return;
-        }
-        let target = root.join(path);
         self.editor.update(cx, |editor, cx| {
             editor.submit(
                 false,
                 move |client| {
+                    let target = client
+                        .editor
+                        .workspace_path(&root, &input)
+                        .map_err(|error| error.to_string())?;
                     if let Some((document, close_after)) = document {
                         if client.editor.active_document_id() != Some(&document) {
                             return Err(
@@ -799,6 +798,12 @@ impl DesktopRoot {
                 cx,
             );
         });
+    }
+
+    fn remote_path_scope(&self, cx: &Context<Self>) -> Option<std::path::PathBuf> {
+        self.factory
+            .path_scope()
+            .map(|initial| self.shell.read(cx).session.root.clone().unwrap_or(initial))
     }
 
     fn show_path_request(
@@ -860,7 +865,7 @@ impl DesktopRoot {
             });
             return;
         }
-        if let Some(root) = self.factory.path_scope() {
+        if let Some(root) = self.remote_path_scope(cx) {
             let request = match &command {
                 UiCommand::OpenFile => Some(PathRequest::Open(root)),
                 UiCommand::SaveAs => self
@@ -1065,7 +1070,7 @@ impl DesktopRoot {
             });
             return;
         }
-        let remote_save_root = self.factory.path_scope().filter(|_| {
+        let remote_save_root = self.remote_path_scope(cx).filter(|_| {
             self.shell
                 .read(cx)
                 .session

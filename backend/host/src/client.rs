@@ -3,8 +3,9 @@ use lapis_backend_state::{BackendEventReceiver, BackendServiceError, EmbeddedCli
 use lapis_client_api::{RequestBody, ResponseBody, WorkspaceId, WorkspaceRelativePath};
 use lapis_remote::{QuicConnection, QuicConnectionConfig};
 use std::{
+    collections::HashMap,
     path::{Component, Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 /// Desktop向けportの変換を共有し、資源の所有者と接続先を分離する。
@@ -19,6 +20,8 @@ enum Source {
     Quic {
         root: PathBuf,
         config: Arc<QuicConnectionConfig>,
+        bindings: Arc<Mutex<HashMap<PathBuf, QuicConnectionConfig>>>,
+        sources: Arc<std::sync::OnceLock<Vec<(PathBuf, String)>>>,
     },
 }
 
@@ -70,7 +73,60 @@ impl BackendClient {
                 host.register_workspace(&path)?;
                 Ok(path)
             }
-            _ => Err(BackendServiceError::Unavailable),
+            source => {
+                let id = WorkspaceId::try_new(workspace.as_str())
+                    .map_err(|_| BackendServiceError::Unavailable)?;
+                let root = self.root_for(&id)?;
+                let mut config = match source {
+                    Source::Local(hosts) => hosts
+                        .by_id(&id)
+                        .map_err(|_| BackendServiceError::Unavailable)?,
+                    Source::Quic {
+                        config, bindings, ..
+                    } => {
+                        if config.workspace_id == id {
+                            config.as_ref().clone()
+                        } else {
+                            bindings
+                                .lock()
+                                .map_err(|_| BackendServiceError::Unavailable)?
+                                .values()
+                                .find(|config| config.workspace_id == id)
+                                .cloned()
+                                .ok_or(BackendServiceError::Unavailable)?
+                        }
+                    }
+                    Source::Embedded(_) => unreachable!(),
+                };
+                let connection = QuicConnection::connect(config.clone())?;
+                let response = connection.request(RequestBody::WorktreeOpen(
+                    lapis_client_api::WorktreeOpenRequest {
+                        workspace_id: id,
+                        worktree_id: worktree.clone(),
+                    },
+                ))?;
+                let ResponseBody::WorktreeOpen(opened) = response else {
+                    return Err(match response {
+                        ResponseBody::Error(error) => BackendServiceError::Rejected(error),
+                        _ => BackendServiceError::Unavailable,
+                    });
+                };
+                config.workspace_id = opened.workspace_id;
+                let alias = root.join(".lapis-worktrees").join(worktree.as_str());
+                match source {
+                    Source::Local(hosts) => hosts
+                        .bind(alias.clone(), config)
+                        .map_err(|_| BackendServiceError::Unavailable)?,
+                    Source::Quic { bindings, .. } => {
+                        bindings
+                            .lock()
+                            .map_err(|_| BackendServiceError::Unavailable)?
+                            .insert(alias.clone(), config);
+                    }
+                    Source::Embedded(_) => unreachable!(),
+                }
+                Ok(alias)
+            }
         }
     }
     pub fn local(executable: PathBuf, directory: PathBuf) -> Self {
@@ -120,6 +176,8 @@ impl BackendClient {
             source: Source::Quic {
                 root,
                 config: Arc::new(config),
+                bindings: Default::default(),
+                sources: Default::default(),
             },
         })
     }
@@ -140,6 +198,45 @@ impl BackendClient {
     }
 
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
+        if !matches!(&self.source, Source::Embedded(_)) {
+            if let Some((_, id)) = self.roots()?.into_iter().find(|(known, _)| known == root) {
+                return Ok(id);
+            }
+            if root
+                .parent()
+                .and_then(Path::file_name)
+                .is_some_and(|name| name == ".lapis-sources")
+            {
+                self.project_sources()?;
+                return self
+                    .roots()?
+                    .into_iter()
+                    .find(|(known, _)| known == root)
+                    .map(|(_, id)| id)
+                    .ok_or(BackendServiceError::Unavailable);
+            }
+            if let Some(parent) = root.parent()
+                && parent
+                    .file_name()
+                    .is_some_and(|name| name == ".lapis-worktrees")
+                && let (Some(source), Some(id)) = (
+                    parent.parent(),
+                    root.file_name().and_then(|name| name.to_str()),
+                )
+            {
+                let workspace = self.register_workspace(source)?;
+                let opened = self.open_worktree(
+                    &lapis_editor_core::WorkspaceId::new(workspace.as_str()),
+                    &lapis_editor_core::TaskId::new(id),
+                )?;
+                return self
+                    .roots()?
+                    .into_iter()
+                    .find(|(known, _)| known == &opened)
+                    .map(|(_, id)| id)
+                    .ok_or(BackendServiceError::Unavailable);
+            }
+        }
         match &self.source {
             Source::Embedded(host) => host.register_workspace(root),
             Source::Local(hosts) => hosts
@@ -149,6 +246,7 @@ impl BackendClient {
             Source::Quic {
                 root: expected,
                 config,
+                ..
             } if root == expected => Ok(config.workspace_id.clone()),
             _ => Err(BackendServiceError::Unavailable),
         }
@@ -163,7 +261,22 @@ impl BackendClient {
                 .iter()
                 .map(|(root, id)| (root.clone(), id.clone()))
                 .collect()),
-            Source::Quic { root, config } => Ok(vec![(root.clone(), config.workspace_id.clone())]),
+            Source::Quic {
+                root,
+                config,
+                bindings,
+                ..
+            } => {
+                let mut roots = vec![(root.clone(), config.workspace_id.clone())];
+                roots.extend(
+                    bindings
+                        .lock()
+                        .map_err(|_| BackendServiceError::Unavailable)?
+                        .iter()
+                        .map(|(root, config)| (root.clone(), config.workspace_id.clone())),
+                );
+                Ok(roots)
+            }
             Source::Local(hosts) => hosts.roots().map_err(|_| BackendServiceError::Unavailable),
         }
     }
@@ -173,6 +286,48 @@ impl BackendClient {
             .find(|(_, id)| id == workspace)
             .map(|(root, _)| root)
             .ok_or(BackendServiceError::Unavailable)
+    }
+
+    pub(crate) fn project_sources(&self) -> Result<Vec<(PathBuf, String)>, BackendServiceError> {
+        let Source::Quic {
+            root,
+            config,
+            bindings,
+            sources,
+        } = &self.source
+        else {
+            return Ok(Vec::new());
+        };
+        if let Some(sources) = sources.get() {
+            return Ok(sources.clone());
+        }
+        let connection = QuicConnection::connect(config.as_ref().clone())?;
+        let response = connection.request(RequestBody::WorkspaceList(Default::default()))?;
+        let ResponseBody::WorkspaceList(catalog) = response else {
+            return Err(match response {
+                ResponseBody::Error(error) => BackendServiceError::Rejected(error),
+                _ => BackendServiceError::Unavailable,
+            });
+        };
+        let mut available = Vec::new();
+        let mut bindings = bindings
+            .lock()
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        for source in catalog.workspaces {
+            let alias = if source.workspace_id == config.workspace_id {
+                root.clone()
+            } else {
+                root.join(".lapis-sources")
+                    .join(source.workspace_id.as_str())
+            };
+            let mut binding = config.as_ref().clone();
+            binding.workspace_id = source.workspace_id;
+            bindings.insert(alias.clone(), binding);
+            available.push((alias, source.name));
+        }
+        available.sort_by(|left, right| left.0.cmp(&right.0));
+        let _ = sources.set(available.clone());
+        Ok(available)
     }
     pub(crate) fn connect(&self, root: &Path) -> Result<Client, BackendServiceError> {
         self.connect_workspace(self.register_workspace(root)?)
@@ -192,7 +347,16 @@ impl BackendClient {
             Source::Quic { config, .. } if config.workspace_id == workspace => {
                 QuicConnection::connect(config.as_ref().clone()).map(Client::Quic)
             }
-            _ => Err(BackendServiceError::Unavailable),
+            Source::Quic { bindings, .. } => {
+                let config = bindings
+                    .lock()
+                    .map_err(|_| BackendServiceError::Unavailable)?
+                    .values()
+                    .find(|config| config.workspace_id == workspace)
+                    .cloned()
+                    .ok_or(BackendServiceError::Unavailable)?;
+                QuicConnection::connect(config).map(Client::Quic)
+            }
         }
     }
     pub(crate) fn directory(

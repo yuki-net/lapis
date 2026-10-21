@@ -3079,6 +3079,7 @@ dependencies = [
 name = "lapis"
 version = "0.1.0"
 dependencies = [
+ "lapis-client-api",
  "lapis-desktop-client",
  "lapis-desktop-ui",
  "lapis-host",
@@ -3088,8 +3089,11 @@ dependencies = [
  "lapis-settings",
  "lapis-task",
  "lapis-workspace",
+ "rcgen",
  "rfd",
+ "rustls",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]
