@@ -124,7 +124,7 @@ impl QuicConnection {
                 {
                     Ok(runtime) => runtime,
                     Err(_) => {
-                        let _ = started_tx.send(false);
+                        let _ = started_tx.send(Err(BackendServiceError::Unavailable));
                         return;
                     }
                 };
@@ -132,10 +132,13 @@ impl QuicConnection {
             })
             .map_err(BackendServiceError::ThreadSpawn)?;
         match started_rx.recv_timeout(Duration::from_secs(45)) {
-            Ok(true) => Ok(Self {
+            Ok(Ok(())) => Ok(Self {
                 inner: Arc::new(ConnectionInner { workspace, sender }),
             }),
-            _ => Err(BackendServiceError::Unavailable),
+            Ok(Err(error)) => Err(error),
+            _ => Err(BackendServiceError::Connection(
+                "接続開始がtimeoutしました".to_owned(),
+            )),
         }
     }
     pub fn workspace_id(&self) -> &WorkspaceId {
@@ -181,12 +184,19 @@ impl QuicConnection {
 async fn run(
     config: QuicConnectionConfig,
     mut commands: tokio::sync::mpsc::Receiver<Command>,
-    started: mpsc::SyncSender<bool>,
+    started: mpsc::SyncSender<Result<(), BackendServiceError>>,
 ) {
     let mut sequence = 0u64;
     let mut subscribers = Vec::new();
-    let mut socket = restore(&config, &mut sequence, &mut subscribers).await.ok();
-    if started.send(socket.is_some()).is_err() || socket.is_none() {
+    let mut socket = match restore(&config, &mut sequence, &mut subscribers).await {
+        Ok(client) => Some(client),
+        Err(error) => {
+            let _ = started.send(Err(error));
+            return;
+        }
+    };
+    if started.send(Ok(())).is_err() {
+        close(&mut socket).await;
         return;
     }
     loop {
@@ -207,7 +217,7 @@ async fn run(
         let Some(command) = command else { break };
         match command {
             Command::Disconnect(reply) => {
-                socket = None;
+                close(&mut socket).await;
                 subscribers.clear();
                 let _ = reply.send(());
             }
@@ -224,7 +234,7 @@ async fn run(
                 let result =
                     tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
                         if socket.is_none() {
-                            socket = restore(&config, &mut sequence, &mut subscribers).await.ok();
+                            socket = Some(restore(&config, &mut sequence, &mut subscribers).await?);
                         }
                         if let Some(client) = socket.as_mut() {
                             exchange(client, body, &mut sequence, &mut subscribers).await
@@ -235,12 +245,19 @@ async fn run(
                     .await
                     .unwrap_or(Err(BackendServiceError::Unavailable));
                 if result.is_err() {
-                    socket = None;
+                    close(&mut socket).await;
                     subscribers.clear();
                 }
                 let _ = reply.send(result);
             }
         }
+    }
+    close(&mut socket).await;
+}
+
+async fn close(socket: &mut Option<QuicClient>) {
+    if let Some(client) = socket.take() {
+        client.shutdown().await;
     }
 }
 
@@ -265,7 +282,7 @@ async fn restore_inner(
     let mut client = config
         .authenticate()
         .await
-        .map_err(|_| BackendServiceError::Unavailable)?;
+        .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
     let connected = exchange(
         &mut client,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
@@ -276,7 +293,9 @@ async fn restore_inner(
     )
     .await?;
     if !matches!(connected, ResponseBody::WorkspaceConnect(_)) {
-        return Err(BackendServiceError::Unavailable);
+        return Err(BackendServiceError::Connection(
+            "Workspace接続が拒否されました".to_owned(),
+        ));
     }
     // 再接続時は資源へのattachmentを復元する。更新要求の再送はしない。
     let snapshot = exchange(
@@ -290,7 +309,9 @@ async fn restore_inner(
     )
     .await?;
     if !matches!(snapshot, ResponseBody::SnapshotResync(_)) {
-        return Err(BackendServiceError::Unavailable);
+        return Err(BackendServiceError::Connection(
+            "snapshot取得が拒否されました".to_owned(),
+        ));
     }
     Ok(client)
 }
@@ -317,12 +338,12 @@ async fn exchange(
         client
             .send(&ClientMessage::Request(request.clone()))
             .await
-            .map_err(|_| BackendServiceError::Unavailable)?;
+            .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
         loop {
             match client
                 .recv()
                 .await
-                .map_err(|_| BackendServiceError::Unavailable)?
+                .map_err(|error| BackendServiceError::Connection(error.to_string()))?
             {
                 ServerMessage::Event(event) => publish(subscribers, event),
                 ServerMessage::Response(response) if response.matches_request(&request) => {

@@ -10,14 +10,41 @@ use lapis_git::{
 };
 use lapis_task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 
-fn client(host: &BackendClient, workspace: &WorkspaceId) -> Result<Client, String> {
+struct Connections {
+    host: BackendClient,
+    clients: std::sync::Mutex<std::collections::HashMap<lapis_client_api::WorkspaceId, Client>>,
+}
+impl Connections {
+    fn new(host: BackendClient) -> Self {
+        Self {
+            host,
+            clients: Default::default(),
+        }
+    }
+    fn connect(&self, workspace: lapis_client_api::WorkspaceId) -> Result<Client, String> {
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| "Workspace接続を取得できません")?;
+        if let Some(client) = clients.get(&workspace) {
+            return Ok(client.clone());
+        }
+        let client = self
+            .host
+            .connect_workspace(workspace.clone())
+            .map_err(|error| error.to_string())?;
+        clients.insert(workspace, client.clone());
+        Ok(client)
+    }
+}
+
+fn client(host: &Connections, workspace: &WorkspaceId) -> Result<Client, String> {
     let workspace = lapis_client_api::WorkspaceId::try_new(workspace.as_str())
         .map_err(|error| error.to_string())?;
-    host.connect_workspace(workspace)
-        .map_err(|error| error.to_string())
+    host.connect(workspace)
 }
 fn execute(
-    host: &BackendClient,
+    host: &Connections,
     workspace: &WorkspaceId,
     operation: Operation,
 ) -> Result<Outcome, String> {
@@ -44,11 +71,13 @@ fn relative(path: &str) -> Result<WorkspaceRelativePath, GitError> {
 }
 
 pub(super) struct HostGit {
-    host: BackendClient,
+    host: Connections,
 }
 impl HostGit {
     pub fn new(host: BackendClient) -> Self {
-        Self { host }
+        Self {
+            host: Connections::new(host),
+        }
     }
 }
 impl GitConnection for HostGit {
@@ -143,11 +172,13 @@ impl GitConnection for HostGit {
 }
 
 pub(super) struct HostTasks {
-    host: BackendClient,
+    host: Connections,
 }
 impl HostTasks {
     pub fn new(host: BackendClient) -> Self {
-        Self { host }
+        Self {
+            host: Connections::new(host),
+        }
     }
 }
 impl TaskConnection for HostTasks {

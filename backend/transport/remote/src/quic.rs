@@ -201,6 +201,13 @@ impl QuicClient {
         let bytes = self.reader.next().await.ok_or("connection closed")??;
         Ok(serde_json::from_slice(&bytes)?)
     }
+
+    pub async fn shutdown(self) {
+        self.connection.close(0u32.into(), b"client disconnected");
+        self.endpoint.close(0u32.into(), b"client disconnected");
+        // 独立runtimeを破棄する前にclose packetを送る時間を確保する。
+        let _ = timeout(Duration::from_secs(1), self.endpoint.wait_idle()).await;
+    }
 }
 
 impl Drop for QuicClient {
