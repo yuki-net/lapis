@@ -37,11 +37,12 @@ use crate::{
     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Asset,
     AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle, DispatchPhase, DisplayId,
     EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global, KeyBinding, KeyContext,
-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, PromptBuilder,
-    PromptButton, PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle,
-    Reservation, ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer, Task,
-    TextSystem, Window, WindowAppearance, WindowHandle, WindowId, WindowInvalidator,
+    Keymap, Keystroke, LayoutId, Menu, MenuItem, MouseButton, OwnedMenu, PathPromptOptions, Pixels,
+    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point,
+    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
+    RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
+    Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
+    WindowInvalidator,
     colors::{Colors, GlobalColors},
     current_platform, hash, init_app_menus,
 };
@@ -2303,12 +2304,19 @@ pub struct AnyDrag {
     /// The value of the dragged item, to be dropped
     pub value: Arc<dyn Any>,
 
+    /// The mouse button that initiated this drag.
+    pub button: MouseButton,
+
     /// This is used to render the dragged item in the same place
     /// on the original element that the drag was initiated
     pub cursor_offset: Point<Pixels>,
 
     /// The cursor style to use while dragging
     pub cursor_style: Option<CursorStyle>,
+}
+
+pub(crate) fn drag_ends_on_mouse_up(drag_button: MouseButton, button: MouseButton) -> bool {
+    drag_button == button
 }
 
 /// Contains state associated with a tooltip. You'll only need this struct if you're implementing
@@ -2426,6 +2434,18 @@ mod test {
     use std::{cell::RefCell, rc::Rc};
 
     use crate::{AppContext, TestAppContext};
+
+    #[test]
+    fn drag_ends_only_when_its_start_button_is_released() {
+        assert!(!crate::drag_ends_on_mouse_up(
+            crate::MouseButton::Left,
+            crate::MouseButton::Right
+        ));
+        assert!(crate::drag_ends_on_mouse_up(
+            crate::MouseButton::Left,
+            crate::MouseButton::Left
+        ));
+    }
 
     #[test]
     fn test_gpui_borrow() {

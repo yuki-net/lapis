@@ -13,5 +13,6 @@ mod root;
 mod shell;
 pub mod theme;
 pub mod tokens;
+mod window_host;
 
 pub use app::{DesktopServices, InitialView, run};

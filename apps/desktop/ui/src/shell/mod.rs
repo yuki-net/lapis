@@ -3,6 +3,7 @@ mod panel;
 pub(crate) mod panel_transition;
 mod state;
 mod tab_state;
+pub(crate) mod window_group;
 
 pub(crate) use panel::PanelHost;
 pub(crate) use state::{

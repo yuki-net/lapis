@@ -1,7 +1,9 @@
 use super::*;
 
 impl Render for Shell {
+    /// Builds the window shell and input handlers, clearing panel drop bounds for the new layout pass.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.panel_bounds.borrow_mut().clear();
         div()
             .size_full()
             .relative()
@@ -27,6 +29,7 @@ impl Render for Shell {
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.stop_resize(cx)),
             )
+            .child(self.tab_drag_events(cx))
             .child(self.render_header(cx))
             .child(self.render_main(window, cx))
             .child(self.render_footer(cx))
