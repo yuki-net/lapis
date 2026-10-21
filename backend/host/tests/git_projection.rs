@@ -21,6 +21,99 @@ fn git(root: &Path, arguments: &[&str]) {
 }
 
 #[test]
+fn worktree_removal_preserves_detached_dirty_documents_and_running_terminals() {
+    let root = tempfile::tempdir().unwrap();
+    let sibling = tempfile::tempdir().unwrap();
+    let tree = sibling.path().join("topic");
+    git(root.path(), &["init", "-b", "main"]);
+    git(root.path(), &["config", "user.name", "Lapis Test"]);
+    git(
+        root.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    git(root.path(), &["config", "core.autocrlf", "false"]);
+    git(
+        root.path(),
+        &[
+            "config",
+            "core.hooksPath",
+            sibling.path().join("no-hooks").to_str().unwrap(),
+        ],
+    );
+    std::fs::write(root.path().join("note.txt"), "base").unwrap();
+    git(root.path(), &["add", "note.txt"]);
+    git(root.path(), &["commit", "-m", "initial"]);
+    git(
+        root.path(),
+        &["worktree", "add", "-b", "topic", tree.to_str().unwrap()],
+    );
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let workspace = WorkspaceId::new(workspace.as_str());
+    let git = host.git();
+    let id = git.worktrees(&workspace).unwrap().remove(0).worktree_id;
+    let tree = git.open_worktree(&workspace, &id).unwrap();
+    let documents = host.documents();
+    let opened = documents.open(&tree.join("note.txt")).unwrap();
+    let dirty = documents
+        .edit(
+            &opened.id,
+            opened.document.revision(),
+            0..4,
+            "unsaved draft",
+        )
+        .unwrap();
+    documents.close(&dirty.id).unwrap();
+    drop(documents);
+    assert!(git.discard_worktree(&workspace, &id).is_err());
+    assert!(tree.exists());
+    assert_eq!(
+        std::fs::read_to_string(tree.join("note.txt")).unwrap(),
+        "base"
+    );
+    let documents = host.documents();
+    let restored = documents.attach(&dirty.id).unwrap();
+    assert_eq!(restored.document.content_for_save(), "unsaved draft");
+    documents
+        .discard(&restored.id, restored.document.revision())
+        .unwrap();
+    documents.close(&restored.id).unwrap();
+    drop(documents);
+    let terminals = host.terminals();
+    let terminal = terminals.start(&tree, 80, 24).unwrap();
+    drop(terminals);
+    assert!(git.discard_worktree(&workspace, &id).is_err());
+    assert!(tree.exists());
+    let reconnect = host.connect(&tree).unwrap();
+    let response = reconnect
+        .request(RequestBody::SnapshotResync(
+            lapis_client_api::SnapshotRequest {
+                workspace_id: reconnect.workspace_id().clone(),
+                reason: lapis_client_api::SnapshotReason::Reconnect,
+            },
+        ))
+        .unwrap();
+    let ResponseBody::SnapshotResync(snapshot) = response else {
+        panic!("snapshot required")
+    };
+    assert_eq!(snapshot.snapshot.terminals.len(), 1);
+    assert_eq!(
+        snapshot.snapshot.terminals[0].terminal_id.as_str(),
+        terminal.as_str()
+    );
+    assert!(matches!(
+        reconnect
+            .request(RequestBody::TerminalTerminate(
+                lapis_client_api::TerminalTerminateRequest {
+                    terminal_id: snapshot.snapshot.terminals[0].terminal_id.clone(),
+                }
+            ))
+            .unwrap(),
+        ResponseBody::TerminalTerminate(_)
+    ));
+}
+
+#[test]
 fn desktop_and_wire_project_the_same_real_git_status_without_host_paths() {
     let root = tempfile::tempdir().unwrap();
     git(root.path(), &["init", "--initial-branch=main"]);

@@ -335,6 +335,88 @@ fn branch_stash_and_merge_conflicts_can_be_resolved_explicitly() {
 }
 
 #[test]
+fn concurrent_clients_in_different_worktrees_cannot_drop_the_next_stash() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "base\n");
+    commit(&backend, root, "base");
+    let sibling = tempfile::tempdir().unwrap();
+    let tree = sibling.path().join("topic");
+    git(
+        root,
+        &["worktree", "add", "--detach", tree.to_str().unwrap()],
+    );
+    save(root, "first\n");
+    act(
+        &backend,
+        root,
+        GitAction::StashPush {
+            message: "first".into(),
+        },
+    );
+    let first = git(root, &["rev-parse", "stash@{0}"]).trim().to_owned();
+    save(root, "second\n");
+    act(
+        &backend,
+        root,
+        GitAction::StashPush {
+            message: "second".into(),
+        },
+    );
+    let selected = git(root, &["rev-parse", "stash@{0}"]).trim().to_owned();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let handles = [root.to_owned(), tree]
+        .into_iter()
+        .map(|path| {
+            let backend =
+                LocalGitBackend::new(sibling.path().join("state"), sibling.path().join("trees"));
+            let request = GitActionRequest {
+                expected_head: Some(backend.status(&path).unwrap().head),
+                action: GitAction::StashDrop {
+                    index: 0,
+                    expected_oid: selected.clone(),
+                },
+            };
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                backend.execute(&path, request)
+            })
+        })
+        .collect::<Vec<_>>();
+    let succeeded = handles
+        .into_iter()
+        .map(|handle| handle.join().unwrap())
+        .filter(Result::is_ok)
+        .count();
+    assert_eq!(succeeded, 1);
+    assert_eq!(git(root, &["stash", "list", "--format=%H"]).trim(), first);
+}
+
+#[test]
+fn worktree_discovery_rejects_a_directory_rebound_to_an_unrelated_repository() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "base\n");
+    commit(&backend, root, "base");
+    let sibling = tempfile::tempdir().unwrap();
+    let tree = sibling.path().join("topic");
+    git(
+        root,
+        &["worktree", "add", "--detach", tree.to_str().unwrap()],
+    );
+    assert_eq!(backend.worktrees(root).unwrap().len(), 1);
+    let unrelated = tempfile::tempdir().unwrap();
+    git(unrelated.path(), &["init", "-b", "main"]);
+    std::fs::write(
+        tree.join(".git"),
+        format!("gitdir: {}\n", unrelated.path().join(".git").display()),
+    )
+    .unwrap();
+    assert!(backend.worktrees(root).unwrap().is_empty());
+}
+
+#[test]
 fn literal_paths_do_not_stage_other_files_matching_git_pathspecs() {
     let (directory, backend) = setup();
     let root = directory.path();

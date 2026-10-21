@@ -278,6 +278,8 @@ impl BackendState {
         revision: Revision,
         path: WorkspaceRelativePath,
     ) -> Result<Vec<PublishedEvent>, BackendStateError> {
+        self.require_available_workspace(&source)?;
+        self.require_available_workspace(&destination)?;
         if source == destination {
             return Err(BackendStateError::WorkspaceDenied);
         }
