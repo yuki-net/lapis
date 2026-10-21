@@ -16,6 +16,7 @@ use lapis_platform::{
     ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend, run_task_worker,
 };
 
+/// Dispatches worker and task smoke modes, or starts the desktop with command-line options.
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if arguments
@@ -197,6 +198,7 @@ fn main() {
     }
     let initial_view = lapis_desktop_ui::InitialView {
         empty_window: false,
+        native_window_smoke: arguments.iter().any(|value| value == "--window-host-smoke"),
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),

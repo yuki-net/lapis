@@ -55,7 +55,13 @@ impl Shell {
             None => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
         }
     }
+    /// Renders a no-tabs placeholder for detached windows, or workspace actions and recent roots.
     pub(super) fn render_main_empty_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if self.detached {
+            return div()
+                .size_full()
+                .child(panel_empty_state("", "Lapis", "タブはありません"));
+        }
         // TODO: Workspaceを開いている状態と、作業中の状態で開始画面を分ける。
         // 現在はどちらも同じWorkspace一覧を表示する。
         let current_workspace = if self.session.workspace_root().is_some() {

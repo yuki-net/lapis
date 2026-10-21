@@ -38,7 +38,7 @@ impl Shell {
         )
     }
 
-    /// Composes the 3-section application header (Left, Center, Right) with consistent padding.
+    /// Renders the application header sections, or only the workspace title in detached windows.
     fn render_app_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()
@@ -48,8 +48,14 @@ impl Shell {
             .items_center()
             .justify_between()
             .p(tokens::spacing::GAP)
-            .child(self.render_header_left(cx))
-            .child(self.render_header_center(cx))
-            .child(self.render_header_right(cx))
+            .when(self.detached, |header| {
+                header.child(format!("Lapis — {}", self.session.display_name()))
+            })
+            .when(!self.detached, |header| {
+                header
+                    .child(self.render_header_left(cx))
+                    .child(self.render_header_center(cx))
+                    .child(self.render_header_right(cx))
+            })
     }
 }

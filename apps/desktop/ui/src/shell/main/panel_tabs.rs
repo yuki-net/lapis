@@ -1,25 +1,8 @@
 use super::*;
 
-struct PanelTabDragPreview {
-    label: String,
-}
-
-impl Render for PanelTabDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(tokens::spacing::XS)
-            .py(px(2.0))
-            .rounded(tokens::radius::CONTROL)
-            .bg(theme::colors().button_background_focused)
-            .border_1()
-            .border_color(theme::colors().button_border_focused)
-            .text_color(theme::colors().text_primary)
-            .text_size(tokens::typography::FONT_XS)
-            .child(self.label.clone())
-    }
-}
-
 impl Shell {
+    /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
+    /// Detached windows omit the tool-add button.
     pub(super) fn render_tool_panel_header(
         &self,
         panel: &PanelHost,
@@ -104,7 +87,13 @@ impl Shell {
                 };
                 let tab = tab.clone();
                 let close_tab = tab.clone();
+                let detach_tab = tab.clone();
+                let movable = matches!(tab, PanelTab::Document(_));
+                let drag_shell = cx.entity().downgrade();
+                let drag_label = label.clone();
                 let drag = DraggedPanelTab {
+                    group: self.group,
+                    source_host: self.host,
                     source_panel: position,
                     tab: tab.clone(),
                 };
@@ -152,9 +141,22 @@ impl Shell {
                         }
                     })
                     .cursor(CursorStyle::PointingHand)
-                    .on_drag(drag, |drag: &DraggedPanelTab, _, _, cx| {
-                        cx.new(|_| PanelTabDragPreview {
-                            label: format!("{:?}", drag.tab),
+                    .on_drag(drag, move |drag: &DraggedPanelTab, position, window, cx| {
+                        let preview = crate::window_host::drag_preview::open(
+                            &drag_label,
+                            position,
+                            window,
+                            cx,
+                        );
+                        let _ = drag_shell.update(cx, |shell, _| {
+                            shell.tab_drag.begin(drag.clone());
+                            shell.drag_preview = preview;
+                        });
+                        cx.new(|_| {
+                            crate::window_host::drag_preview::DragPreview::new(
+                                drag_label.clone(),
+                                !cfg!(target_os = "windows"),
+                            )
                         })
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {
@@ -176,6 +178,26 @@ impl Shell {
                         tab_el.child(crate::components::FileIcon::new(icon).size(px(12.0)))
                     })
                     .child(label)
+                    .when(movable, |element| {
+                        element.child(
+                            div()
+                                .id(("detach-tab", panel_key(position) * 100 + index as u32))
+                                .px(px(3.0))
+                                .child(if self.detached { "↩" } else { "↗" })
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                )
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.stop_propagation();
+                                    cx.emit(if this.detached {
+                                        UiCommand::DockTab(detach_tab.clone())
+                                    } else {
+                                        UiCommand::DetachTab(detach_tab.clone())
+                                    });
+                                })),
+                        )
+                    })
                     .child(
                         div()
                             .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
@@ -202,7 +224,7 @@ impl Shell {
             })
             .collect();
 
-        if has_tabs && !has_overflow {
+        if has_tabs && !has_overflow && !self.detached {
             tab_items.push(add_button("inline").into_any_element());
         }
 
@@ -264,7 +286,7 @@ impl Shell {
             .items_center()
             .gap(tokens::spacing::XS)
             .child(tab_container)
-            .when(has_tabs && has_overflow, |bar| {
+            .when(has_tabs && has_overflow && !self.detached, |bar| {
                 bar.child(add_button("fixed"))
             })
     }

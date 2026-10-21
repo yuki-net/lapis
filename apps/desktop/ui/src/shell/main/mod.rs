@@ -36,6 +36,7 @@ mod panel_frame;
 mod panel_tabs;
 mod render;
 mod resize;
+mod tab_drag;
 mod tool_picker;
 
 const fn panel_key(position: PanelPosition) -> u32 {
@@ -49,6 +50,13 @@ const fn panel_key(position: PanelPosition) -> u32 {
 
 pub(crate) struct Shell {
     pub(crate) shell: ShellState,
+    pub(crate) host: super::window_group::HostId,
+    pub(crate) group: Option<gpui::EntityId>,
+    pub(crate) detached: bool,
+    tab_drag: super::tab_state::TabDragState,
+    drag_preview: Option<gpui::AnyWindowHandle>,
+    _drag_keys: gpui::Subscription,
+    pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
     views: HashMap<ViewId, AnyView>,
@@ -149,13 +157,34 @@ impl Focusable for Shell {
     }
 }
 impl Shell {
+    /// Creates a shell around supplied feature views and intercepts Escape to cancel tab drags.
     pub(crate) fn new(
         document_view: AnyView,
         views: HashMap<ViewId, AnyView>,
         cx: &mut Context<Self>,
     ) -> Self {
+        let shell = cx.entity().downgrade();
+        // Escape は通常の key binding / Tool の action より先に取り消す。
+        let drag_keys = cx.intercept_keystrokes(move |event, window, cx| {
+            if event.keystroke.key == "escape" {
+                let _ = shell.update(cx, |shell, cx| {
+                    if shell.tab_drag.cancel() {
+                        shell.close_drag_preview(cx);
+                        cx.stop_active_drag(window);
+                        cx.stop_propagation();
+                    }
+                });
+            }
+        });
         Self {
             shell: ShellState::default(),
+            host: 0,
+            group: None,
+            detached: false,
+            tab_drag: Default::default(),
+            drag_preview: None,
+            _drag_keys: drag_keys,
+            panel_bounds: Default::default(),
             session: ShellPresentation::default(),
             document_view,
             views,
