@@ -15,7 +15,6 @@ pub(crate) struct SettingsFeature {
     locale: Localizer,
     message: String,
     generation: u64,
-    scroll: crate::components::ScrollState,
 }
 impl gpui::EventEmitter<lapis_settings::GlobalSettings> for SettingsFeature {}
 
@@ -34,7 +33,6 @@ impl SettingsFeature {
             locale,
             message: String::new(),
             generation: 0,
-            scroll: crate::components::ScrollState::new(),
         }
     }
     pub(crate) fn set_workspace(
@@ -357,21 +355,11 @@ impl SettingsFeature {
 }
 impl Render for SettingsFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let content = self.render_settings_content(cx);
         div()
-            .size_full()
+            .w_full()
             .flex()
             .flex_col()
             .child(self.message.clone())
-            .child(
-                crate::components::scroll_viewport(
-                    "settings-scroll",
-                    crate::components::ScrollAxis::Vertical,
-                    &self.scroll,
-                    content,
-                )
-                .flex_1()
-                .min_h_0(),
-            )
+            .child(self.render_settings_content(cx))
     }
 }
