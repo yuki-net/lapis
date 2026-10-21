@@ -505,23 +505,30 @@ impl ConversationSession {
         if environment.root(role) != editor.workspace_root() {
             return Err(WorkspaceError::new("Taskの操作対象が変わっています"));
         }
+        if worktree.is_some() && environment.worktree(role).map(|binding| &binding.id) == worktree {
+            return Ok(());
+        }
         let source = environment
             .source_root(role)
             .ok_or_else(|| WorkspaceError::new("Taskの作業環境がありません"))?
             .to_owned();
         let binding = worktree
             .map(|id| {
-                let workspace = Self::validate_source(editor, &source)?;
+                let source_id = Self::validate_source(editor, &source)?;
+                let workspace = Self::validate_source(editor, editor.workspace_root().unwrap())?;
                 let root = git
                     .open_worktree(&workspace, id)
                     .map_err(|error| WorkspaceError::new(error.to_string()))?;
-                Self::validate_source(editor, &root)?;
-                Ok::<_, WorkspaceError>(lapis_project::WorktreeBinding {
+                if Self::validate_source(editor, &root)? == source_id {
+                    return Ok(None);
+                }
+                Ok::<_, WorkspaceError>(Some(lapis_project::WorktreeBinding {
                     id: id.clone(),
                     root,
-                })
+                }))
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
         let mut environment = environment.clone();
         environment
             .set_worktree(role, binding)
