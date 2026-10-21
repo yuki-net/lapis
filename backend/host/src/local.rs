@@ -26,6 +26,8 @@ pub(super) struct Record {
     pub(super) pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) started_at: Option<String>,
+    #[serde(default)]
+    pub(super) managed_lease: bool,
     pub(super) address: std::net::SocketAddr,
     pub(super) server_name: String,
     pub(super) label: String,
@@ -154,7 +156,7 @@ impl LocalHosts {
                 return Err("Host情報がWorkspaceと一致しません".into());
             }
             // 通信失敗だけではHost停止とみなさない。生存中のHostを二重起動しない。
-            if record_process_matches(&record)? {
+            if host_record_active(&record, &self.directory)? {
                 let config = register(record.config()?, &root)?;
                 configs.insert(root, config.clone());
                 return Ok(config);
@@ -167,6 +169,7 @@ impl LocalHosts {
         command
             .arg("--managed-host")
             .arg(&root)
+            .arg(&self.directory)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -200,7 +203,10 @@ impl LocalHosts {
             if record.pid != pid || record.key != key || !record.address.ip().is_loopback() {
                 return Err::<Record, Error>("Hostの起動情報が一致しません".into());
             }
-            if record.started_at.is_none() || !record_process_matches(&record)? {
+            if !record.managed_lease
+                || record.started_at.is_none()
+                || !record_process_matches(&record)?
+            {
                 return Err("Hostのprocess開始情報が一致しません".into());
             }
             record.config()?;
@@ -255,6 +261,21 @@ fn record_process_matches(record: &Record) -> io::Result<bool> {
         None => Err(io::Error::other(
             "旧Local Hostの開始情報がありません。Hostを終了してから再起動してください",
         )),
+    }
+}
+
+fn host_record_active(record: &Record, directory: &Path) -> io::Result<bool> {
+    if !record.managed_lease {
+        return record_process_matches(record);
+    }
+    let lease = private_options()
+        .read(true)
+        .write(true)
+        .open(directory.join("local-v1.lease"))?;
+    match lease.try_lock() {
+        Ok(()) => Ok(false),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(true),
+        Err(std::fs::TryLockError::Error(error)) => Err(error),
     }
 }
 
@@ -359,7 +380,15 @@ fn process_started_at(pid: u32) -> io::Result<Option<String>> {
 }
 
 /// 親が作った匿名pipeだけへbootstrap情報を返す。secretを引数・ログへ渡さない。
-pub fn run_managed_host(root: &Path) -> Result<(), Error> {
+pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
+    // Host自身が終了まで所有する。PIDが他ユーザーへ再利用されても、このleaseはOSが解放する。
+    let lease = private_options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join("local-v1.lease"))?;
+    lease.try_lock()?;
     let root = root.canonicalize()?;
     let host = BackendHost::start()?;
     let workspace = host.register_workspace(&root)?;
@@ -414,6 +443,7 @@ pub fn run_managed_host(root: &Path) -> Result<(), Error> {
                 started_at: Some(
                     process_started_at(std::process::id())?.ok_or("Host processが存在しません")?,
                 ),
+                managed_lease: true,
                 address: server.listening_address()?,
                 server_name: "lapis-host".to_owned(),
                 label: root
@@ -462,6 +492,7 @@ mod tests {
             key: LOCAL_KEY.to_owned(),
             pid: std::process::id(),
             started_at: process_started_at(std::process::id()).unwrap(),
+            managed_lease: false,
             address: "127.0.0.1:1".parse().unwrap(),
             server_name: "lapis-host".to_owned(),
             label: "test".to_owned(),
@@ -482,6 +513,24 @@ mod tests {
         assert!(!record_process_matches(&record).unwrap());
         record.started_at = None;
         assert!(record_process_matches(&record).is_err());
+    }
+
+    #[test]
+    fn process_owned_lease_recovers_without_querying_a_reused_pid() {
+        let directory = tempfile::tempdir().unwrap();
+        let lease = private_options()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(directory.path().join("local-v1.lease"))
+            .unwrap();
+        let mut record = record();
+        record.managed_lease = true;
+        record.pid = u32::MAX;
+        lease.lock().unwrap();
+        assert!(host_record_active(&record, directory.path()).unwrap());
+        drop(lease);
+        assert!(!host_record_active(&record, directory.path()).unwrap());
     }
 
     #[test]
