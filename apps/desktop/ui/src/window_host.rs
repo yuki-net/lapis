@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 mod close;
 pub(crate) mod drag;
+pub(crate) mod drag_preview;
 mod native_smoke;
 pub(crate) use native_smoke::run_native_smoke;
 

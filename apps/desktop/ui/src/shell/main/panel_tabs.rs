@@ -1,24 +1,5 @@
 use super::*;
 
-struct PanelTabDragPreview {
-    label: String,
-}
-
-impl Render for PanelTabDragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px(tokens::spacing::XS)
-            .py(px(2.0))
-            .rounded(tokens::radius::CONTROL)
-            .bg(theme::colors().button_background_focused)
-            .border_1()
-            .border_color(theme::colors().button_border_focused)
-            .text_color(theme::colors().text_primary)
-            .text_size(tokens::typography::FONT_XS)
-            .child(self.label.clone())
-    }
-}
-
 impl Shell {
     /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
     /// Detached windows omit the tool-add button.
@@ -160,11 +141,22 @@ impl Shell {
                         }
                     })
                     .cursor(CursorStyle::PointingHand)
-                    .on_drag(drag, move |drag: &DraggedPanelTab, _, _, cx| {
-                        let _ =
-                            drag_shell.update(cx, |shell, _| shell.tab_drag.begin(drag.clone()));
-                        cx.new(|_| PanelTabDragPreview {
-                            label: drag_label.clone(),
+                    .on_drag(drag, move |drag: &DraggedPanelTab, position, window, cx| {
+                        let preview = crate::window_host::drag_preview::open(
+                            &drag_label,
+                            position,
+                            window,
+                            cx,
+                        );
+                        let _ = drag_shell.update(cx, |shell, _| {
+                            shell.tab_drag.begin(drag.clone());
+                            shell.drag_preview = preview;
+                        });
+                        cx.new(|_| {
+                            crate::window_host::drag_preview::DragPreview::new(
+                                drag_label.clone(),
+                                !cfg!(target_os = "windows"),
+                            )
                         })
                     })
                     .on_click(cx.listener(move |this, _, window, cx| {

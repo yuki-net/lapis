@@ -54,6 +54,7 @@ pub(crate) struct Shell {
     pub(crate) group: Option<gpui::EntityId>,
     pub(crate) detached: bool,
     tab_drag: super::tab_state::TabDragState,
+    drag_preview: Option<gpui::AnyWindowHandle>,
     _drag_keys: gpui::Subscription,
     pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
     pub(crate) session: ShellPresentation,
@@ -168,6 +169,7 @@ impl Shell {
             if event.keystroke.key == "escape" {
                 let _ = shell.update(cx, |shell, cx| {
                     if shell.tab_drag.cancel() {
+                        shell.close_drag_preview(cx);
                         cx.stop_active_drag(window);
                         cx.stop_propagation();
                     }
@@ -180,6 +182,7 @@ impl Shell {
             group: None,
             detached: false,
             tab_drag: Default::default(),
+            drag_preview: None,
             _drag_keys: drag_keys,
             panel_bounds: Default::default(),
             session: ShellPresentation::default(),

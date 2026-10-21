@@ -457,6 +457,7 @@ async fn simulate_tab_drag(
             PostMessageW, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
         },
     };
+    let original_window_count = cx.update(|cx| cx.windows().len()).unwrap();
     let (hwnd, start, mut end) = handle
         .update(cx, |_, window, cx| {
             window.draw(cx).clear();
@@ -502,8 +503,15 @@ async fn simulate_tab_drag(
     let moved = LPARAM(start.0 + 20);
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), moved) }.unwrap();
     gpui::Timer::after(std::time::Duration::from_millis(60)).await;
-    cx.update(|cx| assert!(cx.has_active_drag(), "Tab header did not start a drag"))
-        .unwrap();
+    cx.update(|cx| {
+        assert!(cx.has_active_drag(), "Tab header did not start a drag");
+        assert_eq!(
+            cx.windows().len(),
+            original_window_count + 1,
+            "Native drag preview window was not opened"
+        );
+    })
+    .unwrap();
     if cancel {
         unsafe { PostMessageW(Some(hwnd), WM_KEYDOWN, WPARAM(0x1b), LPARAM(1)) }.unwrap();
         unsafe {
@@ -516,11 +524,23 @@ async fn simulate_tab_drag(
         }
         .unwrap();
         gpui::Timer::after(std::time::Duration::from_millis(60)).await;
-        cx.update(|cx| assert!(!cx.has_active_drag())).unwrap();
+        cx.update(|cx| {
+            assert!(!cx.has_active_drag());
+            assert_eq!(cx.windows().len(), original_window_count);
+        })
+        .unwrap();
     }
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
     gpui::Timer::after(std::time::Duration::from_millis(100)).await;
-    cx.update(|cx| assert!(!cx.has_active_drag())).unwrap();
+    cx.update(|cx| {
+        assert!(!cx.has_active_drag());
+        assert_eq!(
+            cx.windows().len(),
+            original_window_count + usize::from(!cancel && destination.is_none()),
+            "Preview was not closed when the drag ended"
+        );
+    })
+    .unwrap();
 }
 
 #[cfg(target_os = "windows")]
