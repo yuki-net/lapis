@@ -24,6 +24,8 @@ pub(super) struct Record {
     pub(super) version: u32,
     pub(super) key: String,
     pub(super) pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) started_at: Option<String>,
     pub(super) address: std::net::SocketAddr,
     pub(super) server_name: String,
     pub(super) label: String,
@@ -152,7 +154,7 @@ impl LocalHosts {
                 return Err("Host情報がWorkspaceと一致しません".into());
             }
             // 通信失敗だけではHost停止とみなさない。生存中のHostを二重起動しない。
-            if process_alive(record.pid)? {
+            if record_process_matches(&record)? {
                 let config = register(record.config()?, &root)?;
                 configs.insert(root, config.clone());
                 return Ok(config);
@@ -198,6 +200,9 @@ impl LocalHosts {
             if record.pid != pid || record.key != key || !record.address.ip().is_loopback() {
                 return Err::<Record, Error>("Hostの起動情報が一致しません".into());
             }
+            if record.started_at.is_none() || !record_process_matches(&record)? {
+                return Err("Hostのprocess開始情報が一致しません".into());
+            }
             record.config()?;
             let plaintext = Zeroizing::new(serde_json::to_vec(&record)?);
             let encrypted = protect(&plaintext, key.as_bytes(), false)?;
@@ -240,41 +245,114 @@ fn private_options() -> OpenOptions {
     options
 }
 
+fn record_process_matches(record: &Record) -> io::Result<bool> {
+    let Some(actual) = process_started_at(record.pid)? else {
+        return Ok(false);
+    };
+    // 旧形式は同一性を証明できないため、通信失敗を理由に置換しない。
+    match &record.started_at {
+        Some(expected) => Ok(expected == &actual),
+        None => Err(io::Error::other(
+            "旧Local Hostの開始情報がありません。Hostを終了してから再起動してください",
+        )),
+    }
+}
+
 #[cfg(windows)]
-fn process_alive(pid: u32) -> io::Result<bool> {
+fn process_started_at(pid: u32) -> io::Result<Option<String>> {
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, GetLastError, STILL_ACTIVE},
-        System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+        Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, STILL_ACTIVE},
+        System::Threading::{
+            GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        },
     };
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     if process.is_null() {
         if unsafe { GetLastError() } == ERROR_INVALID_PARAMETER {
-            return Ok(false);
+            return Ok(None);
         }
         return Err(io::Error::last_os_error());
     }
     let mut code = 0;
-    let success = unsafe { GetExitCodeProcess(process, &mut code) };
+    let mut started: FILETIME = unsafe { std::mem::zeroed() };
+    let mut exited = started;
+    let mut kernel = started;
+    let mut user = started;
+    let result = (|| {
+        if unsafe { GetExitCodeProcess(process, &mut code) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if code != STILL_ACTIVE as u32 {
+            return Ok(None);
+        }
+        if unsafe { GetProcessTimes(process, &mut started, &mut exited, &mut kernel, &mut user) }
+            == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        if exited.dwHighDateTime != 0 || exited.dwLowDateTime != 0 {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "{}",
+            (u64::from(started.dwHighDateTime) << 32) | u64::from(started.dwLowDateTime)
+        )))
+    })();
     unsafe {
         CloseHandle(process);
     }
-    if success == 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(code == STILL_ACTIVE as u32)
+    result
 }
-#[cfg(unix)]
-fn process_alive(pid: u32) -> io::Result<bool> {
+#[cfg(target_os = "linux")]
+fn process_started_at(pid: u32) -> io::Result<Option<String>> {
+    if pid == 0 {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(stat) => stat,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    // commには空白や括弧を含められるため、最後の閉じ括弧以降のfieldを読む。
+    let fields = stat.rsplit_once(')').ok_or(io::ErrorKind::InvalidData)?.1;
+    if matches!(fields.split_whitespace().next(), Some("Z" | "X" | "x")) {
+        return Ok(None);
+    }
+    let start = fields
+        .split_whitespace()
+        .nth(19)
+        .ok_or(io::ErrorKind::InvalidData)?;
+    let start: u64 = start.parse().map_err(|_| io::ErrorKind::InvalidData)?;
+    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id")?;
+    Ok(Some(format!("{}:{start}", boot.trim())))
+}
+
+#[cfg(target_os = "macos")]
+fn process_started_at(pid: u32) -> io::Result<Option<String>> {
     let pid: libc::pid_t = pid.try_into().map_err(|_| io::ErrorKind::InvalidInput)?;
     if pid <= 0 {
         return Err(io::ErrorKind::InvalidInput.into());
     }
-    if unsafe { libc::kill(pid, 0) } == 0 {
-        return Ok(true);
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of_val(&info) as i32;
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    if read == size {
+        return Ok(Some(format!(
+            "{}:{}",
+            info.pbi_start_tvsec, info.pbi_start_tvusec
+        )));
     }
     let error = io::Error::last_os_error();
     if error.raw_os_error() == Some(libc::ESRCH) {
-        Ok(false)
+        Ok(None)
     } else {
         Err(error)
     }
@@ -333,6 +411,9 @@ pub fn run_managed_host(root: &Path) -> Result<(), Error> {
                 version: 1,
                 key: LOCAL_KEY.to_owned(),
                 pid: std::process::id(),
+                started_at: Some(
+                    process_started_at(std::process::id())?.ok_or("Host processが存在しません")?,
+                ),
                 address: server.listening_address()?,
                 server_name: "lapis-host".to_owned(),
                 label: root
@@ -369,4 +450,79 @@ fn register(mut config: QuicConnectionConfig, root: &Path) -> Result<QuicConnect
     };
     config.workspace_id = workspace.workspace_id;
     Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn record() -> Record {
+        Record {
+            version: 1,
+            key: LOCAL_KEY.to_owned(),
+            pid: std::process::id(),
+            started_at: process_started_at(std::process::id()).unwrap(),
+            address: "127.0.0.1:1".parse().unwrap(),
+            server_name: "lapis-host".to_owned(),
+            label: "test".to_owned(),
+            certificate: Vec::new(),
+            workspace: "test".to_owned(),
+            client: "test".to_owned(),
+            credential: "00000000000000000000000000000000".to_owned(),
+            secret: vec![0; 32],
+        }
+    }
+
+    #[test]
+    fn reused_pid_is_not_the_recorded_host() {
+        let mut record = record();
+        assert!(record.started_at.is_some());
+        assert!(record_process_matches(&record).unwrap());
+        record.started_at = Some("previous-process".to_owned());
+        assert!(!record_process_matches(&record).unwrap());
+        record.started_at = None;
+        assert!(record_process_matches(&record).is_err());
+    }
+
+    #[test]
+    fn only_a_stale_process_identity_allows_bootstrap() {
+        let state = tempfile::tempdir().unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = state.path().join("local-v1.host");
+        let mut record = record();
+        let hosts = LocalHosts::new(
+            state.path().join("missing-executable"),
+            state.path().to_owned(),
+        );
+        record.config().unwrap();
+        let save = |record: &Record| {
+            let plaintext = Zeroizing::new(serde_json::to_vec(record).unwrap());
+            let encrypted = protect(&plaintext, LOCAL_KEY.as_bytes(), false).unwrap();
+            fs::write(&path, &encrypted).unwrap();
+            encrypted
+        };
+        let original = save(&record);
+        assert!(hosts.config(root.path()).is_err());
+        assert_eq!(fs::read(&path).unwrap().as_slice(), original.as_slice());
+        record.started_at = Some("previous-process".to_owned());
+        let stale = save(&record);
+        let error = hosts.config(root.path()).err().unwrap();
+        assert_eq!(
+            error.downcast_ref::<io::Error>().unwrap().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(fs::read(&path).unwrap().as_slice(), stale.as_slice());
+    }
+
+    #[test]
+    fn terminated_process_has_no_live_identity() {
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .arg("--list")
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(process_started_at(pid).unwrap().is_none());
+    }
 }

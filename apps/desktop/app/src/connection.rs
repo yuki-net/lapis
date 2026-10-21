@@ -1,5 +1,8 @@
 use lapis_host::BackendClient;
-use std::{ffi::OsString, path::PathBuf};
+use std::{
+    ffi::OsString,
+    path::{Path, PathBuf},
+};
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 pub(super) fn open_picker(directory: PathBuf) -> Result<(), String> {
@@ -29,7 +32,7 @@ impl Startup {
         let directory = option(arguments, "--state-directory")?
             .map(PathBuf::from)
             .map(Ok)
-            .unwrap_or_else(BackendClient::user_directory)?;
+            .unwrap_or_else(default_state_directory)?;
         let directory = if directory.is_absolute() {
             directory
         } else {
@@ -74,6 +77,49 @@ impl Startup {
         }
     }
 }
+fn default_state_directory() -> Result<PathBuf, Error> {
+    let preferred = BackendClient::user_directory()?;
+    let legacy = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Lapis");
+    select_state_directory(&preferred, &legacy)
+}
+
+fn select_state_directory(preferred: &Path, legacy: &Path) -> Result<PathBuf, Error> {
+    const FILES: [&str; 3] = [
+        "session-v1.txt",
+        "conversations-v1.json",
+        "settings-v1.json",
+    ];
+    let has_state = |directory: &Path| -> Result<bool, std::io::Error> {
+        for name in FILES {
+            if directory.join(name).try_exists()? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    if preferred != legacy && has_state(legacy)? {
+        if has_state(preferred)? {
+            // 両方に状態がある場合、別のdraftや会話を自動的に混ぜない。
+            eprintln!(
+                "旧保存先にも状態があります: {}。必要なら --state-directory で指定してください。現在の保存先: {}",
+                legacy.display(),
+                preferred.display()
+            );
+        } else {
+            // 一式を元の場所で読むことで、部分移行や上書きを避ける。
+            eprintln!(
+                "既存のdraft・会話・設定を旧保存先から復元します: {}",
+                legacy.display()
+            );
+            return Ok(legacy.to_owned());
+        }
+    }
+    Ok(preferred.to_owned())
+}
+
 fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsString>, Error> {
     match arguments.iter().position(|value| value == name) {
         Some(index) => Ok(Some(
@@ -89,6 +135,45 @@ fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsStri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_drafts_conversations_and_settings_keep_their_original_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let preferred = temp.path().join("state");
+        let legacy = temp.path().join("legacy");
+        assert_eq!(
+            select_state_directory(&preferred, &legacy).unwrap(),
+            preferred
+        );
+        std::fs::create_dir(&legacy).unwrap();
+        for name in [
+            "session-v1.txt",
+            "conversations-v1.json",
+            "settings-v1.json",
+        ] {
+            let file = legacy.join(name);
+            std::fs::write(&file, "unsaved state").unwrap();
+            assert_eq!(select_state_directory(&preferred, &legacy).unwrap(), legacy);
+            assert_eq!(std::fs::read_to_string(&file).unwrap(), "unsaved state");
+            assert!(!preferred.exists());
+            std::fs::remove_file(file).unwrap();
+        }
+        std::fs::write(legacy.join("session-v1.txt"), "old draft").unwrap();
+        std::fs::create_dir(&preferred).unwrap();
+        std::fs::write(preferred.join("session-v1.txt"), "new draft").unwrap();
+        assert_eq!(
+            select_state_directory(&preferred, &legacy).unwrap(),
+            preferred
+        );
+        assert_eq!(
+            std::fs::read_to_string(legacy.join("session-v1.txt")).unwrap(),
+            "old draft"
+        );
+        assert_eq!(
+            std::fs::read_to_string(preferred.join("session-v1.txt")).unwrap(),
+            "new draft"
+        );
+        assert_eq!(select_state_directory(&legacy, &legacy).unwrap(), legacy);
+    }
     #[test]
     fn missing_connection_paths_are_rejected() {
         let arguments = ["lapis", "--host", "--workspace", "repo"].map(OsString::from);
