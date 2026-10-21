@@ -82,7 +82,7 @@ fn main() {
         use lapis_desktop_client::WorkspaceStateRepository;
         let mut session = EditorSession::new_empty(
             host.workspaces(),
-            Arc::new(workspace_dialog::NativeWorkspaceDialog),
+            Arc::new(workspace_dialog::RemoteWorkspaceDialog(root.clone())),
             state.clone(),
             host.documents(),
         );
@@ -158,6 +158,9 @@ fn main() {
     });
     if let Err(error) = conversation_session.restore_matching_workspace(&mut session) {
         eprintln!("Conversation restore failed: {error}");
+    }
+    if let Some(warning) = session.restore_warning() {
+        eprintln!("{warning}");
     }
     if let Some(root) = session.workspace_root() {
         host.register_workspace(root)

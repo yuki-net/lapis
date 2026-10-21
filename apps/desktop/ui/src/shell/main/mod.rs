@@ -322,6 +322,9 @@ impl Shell {
     pub(crate) fn save(&mut self, _: &Save, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(UiCommand::Save);
     }
+    pub(crate) fn save_as(&mut self, _: &SaveAs, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(UiCommand::SaveAs);
+    }
 }
 impl Shell {
     pub(crate) fn show_commands(

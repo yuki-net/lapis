@@ -190,6 +190,7 @@ mod tests {
             },
             selected_execution: Some(ExecutionId::new("execution-1")),
             terminals: vec![RestoredTerminal {
+                id: None,
                 cwd: PathBuf::from("C:/作業/lapis"),
                 status: TerminalStatus::Running,
                 columns: 132,

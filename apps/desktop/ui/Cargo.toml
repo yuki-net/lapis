@@ -20,3 +20,4 @@ lapis-task = { path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true
+vt100 = "0.16.2"

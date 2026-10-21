@@ -105,6 +105,85 @@ impl Fixture {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd() {
+    use lapis_terminal::{TerminalShell, TerminalStatus as ModelStatus};
+    let fixture = Fixture::new().await;
+    std::fs::create_dir(fixture._root.path().join("sub")).unwrap();
+    std::fs::write(
+        fixture._root.path().join("sub/cwd-proof.txt"),
+        "LAPIS_ACTUAL_CWD\n",
+    )
+    .unwrap();
+    let first = fixture.config("port-terminal-first").await;
+    let second = fixture.config("port-terminal-second").await;
+    tokio::task::spawn_blocking(move || {
+        let virtual_root = std::env::temp_dir().join("lapis-virtual-terminal-test");
+        let first = lapis_host::BackendClient::remote(virtual_root.clone(), first).unwrap();
+        let second = lapis_host::BackendClient::remote(virtual_root.clone(), second).unwrap();
+        let terminals = first.terminals();
+        let shell = if cfg!(windows) {
+            TerminalShell::Cmd
+        } else {
+            TerminalShell::Default
+        };
+        let id = terminals
+            .start_with_shell(&virtual_root.join("sub"), 80, 24, shell)
+            .unwrap();
+        let observer = second.terminals();
+        let found = observer
+            .list(&virtual_root)
+            .unwrap()
+            .into_iter()
+            .find(|terminal| terminal.id == id)
+            .unwrap();
+        assert_eq!(found.cwd, virtual_root.join("sub"));
+        assert_eq!(found.status, ModelStatus::Running);
+        let attached = observer.attach(&virtual_root, &id).unwrap();
+        assert_eq!(attached.id, id);
+        drop(terminals);
+        let command = if cfg!(windows) {
+            "set LAPIS_PART=SHARED\r\necho LAPIS_PORT_%LAPIS_PART%\r\ntype cwd-proof.txt\r\n"
+        } else {
+            "printf 'LAPIS_PORT_%s\\n' SHARED\ncat cwd-proof.txt\n"
+        };
+        observer.input(&id, command.as_bytes()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(15);
+        loop {
+            let snapshot = observer
+                .list(&virtual_root)
+                .unwrap()
+                .into_iter()
+                .find(|terminal| terminal.id == id)
+                .unwrap();
+            let output = String::from_utf8_lossy(&snapshot.output);
+            let succeeded =
+                output.contains("LAPIS_PORT_SHARED") && output.contains("LAPIS_ACTUAL_CWD");
+            if succeeded {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "shell did not execute: {output}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        observer.terminate(&id).unwrap();
+        assert_eq!(
+            observer
+                .list(&virtual_root)
+                .unwrap()
+                .into_iter()
+                .find(|terminal| terminal.id == id)
+                .unwrap()
+                .status,
+            ModelStatus::Exited
+        );
+    })
+    .await
+    .unwrap();
+}
+
 fn hello(id: &str) -> ClientHello {
     ClientHello {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
@@ -273,6 +352,55 @@ fn remote_desktop_ports_edit_and_save_without_accessing_client_filesystem() {
         assert_eq!(
             std::fs::read_to_string(fixture._root.path().join("remote.ts")).unwrap(),
             "let value = 42;"
+        );
+        assert!(!namespace.exists());
+        let draft = documents.create(Some(&namespace)).unwrap();
+        let draft = documents
+            .edit(
+                &draft.id,
+                draft.document.revision(),
+                0..0,
+                "const remote = true;",
+            )
+            .unwrap();
+        let saved_as = documents
+            .save(
+                &draft.id,
+                draft.document.revision(),
+                Some(namespace.join("created.ts")),
+            )
+            .unwrap();
+        assert_eq!(saved_as.id, draft.id);
+        assert!(!saved_as.document.is_dirty());
+        assert_eq!(
+            std::fs::read_to_string(fixture._root.path().join("created.ts")).unwrap(),
+            "const remote = true;"
+        );
+        let dirty = documents
+            .edit(
+                &saved_as.id,
+                saved_as.document.revision(),
+                0..0,
+                "// local draft\n",
+            )
+            .unwrap();
+        std::fs::write(fixture._root.path().join("created.ts"), "external change").unwrap();
+        assert!(
+            documents
+                .save(&dirty.id, dirty.document.revision(), None)
+                .is_err()
+        );
+        let retained = documents.attach(&dirty.id).unwrap();
+        assert!(retained.document.is_dirty());
+        assert!(
+            retained
+                .document
+                .content_for_save()
+                .starts_with("// local draft")
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture._root.path().join("created.ts")).unwrap(),
+            "external change"
         );
         assert!(!namespace.exists());
         assert!(
@@ -739,6 +867,7 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                 workspace_id: fixture.workspace.clone(),
                 cwd: None,
                 command: None,
+                shell: Default::default(),
                 size: TerminalSize {
                     columns: 80,
                     rows: 24,

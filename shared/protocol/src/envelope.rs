@@ -173,6 +173,7 @@ mod tests {
                 terminal: crate::TerminalSnapshot {
                     terminal_id: TerminalId::try_new("terminal-1").unwrap(),
                     workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
+                    cwd: None,
                     status: crate::TerminalStatus::Running,
                     size: crate::TerminalSize {
                         columns: 80,
@@ -181,6 +182,8 @@ mod tests {
                     buffered_output: Vec::new(),
                     output_watermark: None,
                     output_truncated: false,
+                    output_offset: 0,
+                    screen: None,
                 },
             }),
         };

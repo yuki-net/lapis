@@ -614,6 +614,7 @@ mod tests {
             workspace_id: workspace.clone(),
             cwd: None,
             command: None,
+            shell: Default::default(),
             size: lapis_client_api::TerminalSize {
                 columns: 80,
                 rows: 24,

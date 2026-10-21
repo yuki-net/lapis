@@ -43,6 +43,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 - 再接続では権限と実行状態を再確認し、古いClient cacheを最新のsnapshotに整合させます。
 - Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。
 - Terminal出力は順序とbyte表現を保ち、通信層で勝手に整形・除去しません。
+- Terminalの画面と標準的な端末問い合わせへの応答はHostのRuntimeが所有します。snapshotにはraw outputのbyte位置と画面状態を含め、出力の保持上限を超えても現在画面を復元します。Clientは画面の切替・buffer欠落時に再同期し、問い合わせへ重複応答しません。
 - Messageサイズ、request数、session数、timeoutなど、必要な資源上限を設けます。
 
 ## 最低限の確認項目
