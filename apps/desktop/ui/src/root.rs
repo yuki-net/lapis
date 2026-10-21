@@ -23,15 +23,31 @@ use crate::{
     shell::main::{Shell, ShellPresentation},
 };
 use gpui::{
-    AnyView, AppContext, Context, Entity, Focusable, PromptButton, PromptLevel, Render,
-    Subscription, Window, div, prelude::*,
+    AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
 };
-use lapis_desktop_client::{DocumentCloseDisposition, EditorSession};
+use lapis_desktop_client::EditorSession;
 use std::collections::HashMap;
 
+type PersistSignature = (
+    Vec<(
+        lapis_editor_core::DocumentId,
+        lapis_document::Revision,
+        bool,
+    )>,
+    Option<(
+        lapis_editor_core::DocumentId,
+        std::ops::Range<usize>,
+        usize,
+        f32,
+        f32,
+    )>,
+    lapis_desktop_client::ConversationViewState,
+);
+
 pub(crate) struct DesktopRoot {
-    shell: Entity<Shell>,
-    editor: Entity<Editor>,
+    pub(crate) shell: Entity<Shell>,
+    pub(crate) group: Entity<crate::window_host::WindowGroup>,
+    pub(crate) editor: Entity<Editor>,
     files: Entity<FilesFeature>,
     git: Entity<GitFeature>,
     tasks: Entity<TasksFeature>,
@@ -49,13 +65,16 @@ pub(crate) struct DesktopRoot {
     quick_search: Entity<QuickSearch>,
     _subscriptions: Vec<Subscription>,
     double_shift: DoubleShiftDetector,
-    worker: ClientWorker<DocumentClient>,
+    pub(crate) worker: ClientWorker<DocumentClient>,
     factory: crate::app::WindowFactory,
-    persisting: bool,
-    closing: bool,
+    persist_task: Option<gpui::Task<()>>,
+    persist_signature: Option<PersistSignature>,
+    native_smoke_requested: bool,
 }
 
 impl DesktopRoot {
+    /// Creates a root window's features, shared client worker, and window group.
+    /// Installs command, snapshot, persistence, and close subscriptions and focuses the editor.
     pub(crate) fn new(
         session: EditorSession,
         mut services: DesktopServices,
@@ -81,6 +100,8 @@ impl DesktopRoot {
             conversation: services.conversation,
             lsp: services.lsp,
             edit_chain: EditChain::default(),
+            snapshot_sequence: 0,
+            document_owners: Default::default(),
         });
         let editor = cx.new(|cx| Editor::new(worker.clone(), cx));
         let files = cx.new(|_| FilesFeature::new());
@@ -123,7 +144,7 @@ impl DesktopRoot {
         ]);
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
         shell.update(cx, |shell, cx| {
-            shell.set_locale(initial_locale, cx);
+            shell.set_locale(initial_locale.clone(), cx);
             shell.activate_panel_view(PanelPosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
                 shell.activate_panel_view(PanelPosition::Right, id::VIEW_ASSISTANT.into(), cx);
@@ -141,12 +162,39 @@ impl DesktopRoot {
                 );
             }
         });
+        let group = cx.new(|_| {
+            crate::window_host::WindowGroup::new(
+                window,
+                editor.clone(),
+                shell.clone(),
+                initial_locale,
+            )
+        });
+        shell.update(cx, |shell, _| shell.group = Some(group.entity_id()));
         let mut subscriptions = vec![
+            cx.observe_window_activation(window, |root, window, cx| {
+                if !window.is_window_active() {
+                    root.shell
+                        .update(cx, |shell, cx| shell.cancel_tab_drag(window, cx));
+                }
+            }),
+            cx.observe_window_bounds(window, |root, window, cx| {
+                root.group.update(cx, |group, _| {
+                    if let Some(member) = group.members.get_mut(&0) {
+                        member.bounds = window.window_bounds();
+                    }
+                });
+            }),
+            cx.observe(&group, |root, _, cx| root.synchronize_group(cx)),
             cx.subscribe(
                 &settings,
                 |root, _, values: &lapis_settings::GlobalSettings, cx| {
                     root.shell
                         .update(cx, |shell, cx| shell.set_locale(values.locale.clone(), cx));
+                    root.group.update(cx, |group, cx| {
+                        group.locale = values.locale.clone();
+                        cx.notify();
+                    });
                     cx.refresh_windows();
                 },
             ),
@@ -160,7 +208,17 @@ impl DesktopRoot {
                 root.command(command.clone(), window, cx)
             }),
             cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
-                EditorEvent::Snapshot(snapshot) => root.apply_snapshot(snapshot, cx),
+                EditorEvent::Snapshot(snapshot) => {
+                    let local = root.editor.read(cx).local_snapshot(snapshot);
+                    root.apply_snapshot(&local, cx);
+                    root.group
+                        .update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
+                    root.schedule_persist(cx);
+                    if root.native_smoke_requested {
+                        root.native_smoke_requested = false;
+                        crate::window_host::run_native_smoke(root, window, cx);
+                    }
+                }
                 EditorEvent::Status(message) => root.set_status(message.clone(), cx),
                 EditorEvent::WorkspaceSearch(query) => {
                     root.search
@@ -185,6 +243,13 @@ impl DesktopRoot {
                 }
             }),
             cx.subscribe(&conversation, |root, _, event, cx| {
+                if root.group.read(cx).members.len() > 1 || root.group.read(cx).closing {
+                    root.set_status(
+                        "別Windowのタブを閉じるか再ドックしてから会話を切り替えてください".into(),
+                        cx,
+                    );
+                    return;
+                }
                 let event = event.clone();
                 let view = root.persisted_view(cx);
                 root.editor.update(cx, |editor, cx| {
@@ -276,8 +341,13 @@ impl DesktopRoot {
                     }
                 });
                 root.sync_preview(cx);
+                root.schedule_persist(cx);
             }),
-            cx.observe(&shell, |root, _, cx| root.sync_preview(cx)),
+            cx.observe(&shell, |root, _, cx| {
+                root.record_window_layout(cx);
+                root.sync_preview(cx);
+                root.schedule_persist(cx);
+            }),
         ];
 
         let weak = cx.entity().downgrade();
@@ -307,40 +377,9 @@ impl DesktopRoot {
                 }
             }
         }));
-        cx.spawn(async move |this, cx| {
-            loop {
-                gpui::Timer::after(std::time::Duration::from_secs(1)).await;
-                if this
-                    .update(cx, |root, cx| {
-                        if root.persisting || root.closing || root.editor.read(cx).has_pending() {
-                            return;
-                        }
-                        let view = root.persisted_view(cx);
-                        root.persisting = true;
-                        let admitted = root.worker.submit(
-                            cx,
-                            move |client| client.persist_view(view),
-                            |root, result, cx| {
-                                root.persisting = false;
-                                if let Err(error) = result {
-                                    root.set_status(error, cx);
-                                }
-                            },
-                        );
-                        if let Err(error) = admitted {
-                            root.persisting = false;
-                            root.set_status(error, cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
         window.focus(&editor.focus_handle(cx));
         Self {
+            group,
             shell,
             editor,
             files,
@@ -359,8 +398,9 @@ impl DesktopRoot {
             double_shift: DoubleShiftDetector::default(),
             worker,
             factory,
-            persisting: false,
-            closing: false,
+            persist_task: None,
+            persist_signature: None,
+            native_smoke_requested: initial.native_window_smoke,
         }
     }
 
@@ -386,7 +426,9 @@ impl DesktopRoot {
             .update(cx, |preview, cx| preview.update(text, cx));
     }
 
-    fn apply_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
+    /// Updates root feature contexts and shell presentation from a snapshot filtered for this host.
+    /// Restores the saved shell layout when the active conversation changes.
+    pub(crate) fn apply_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
         let switched = self.conversation.read(cx).active.as_ref() != Some(&snapshot.conversation);
         let record = snapshot
             .conversations
@@ -470,7 +512,8 @@ impl DesktopRoot {
         self.sync_preview(cx);
     }
 
-    fn persisted_view(&self, cx: &Context<Self>) -> PersistedView {
+    /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
+    pub(crate) fn persisted_view(&self, cx: &gpui::App) -> PersistedView {
         PersistedView {
             document: self.editor.read(cx).view_state(),
             layout: self.shell.read(cx).view_state(),
@@ -484,187 +527,99 @@ impl DesktopRoot {
         }
     }
 
-    fn begin_flush(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> Result<std::sync::mpsc::Receiver<Result<(), String>>, String> {
-        if self.closing {
-            return Err("Windowの終了処理中です".into());
-        }
-        self.closing = true;
-        self.editor
-            .update(cx, |editor, cx| editor.set_enabled(false, cx));
-        let view = self.persisted_view(cx);
-        match self
-            .worker
-            .try_request(move |client| client.persist_view(view))
-        {
-            Ok(receiver) => Ok(receiver),
-            Err(error) => {
-                self.closing = false;
-                self.editor
-                    .update(cx, |editor, cx| editor.set_enabled(true, cx));
-                Err(error)
-            }
-        }
-    }
-    fn quit_after_flush(&mut self, cx: &mut Context<Self>) {
-        if self.closing {
-            return;
-        }
-        let own_id = cx.entity_id();
-        let windows = cx.windows();
-        let mut started_windows = Vec::new();
-        let mut admission_error = None;
-        let mut pending = Vec::new();
-        match self.begin_flush(cx) {
-            Ok(receiver) => pending.push((self.worker.clone(), receiver)),
-            Err(error) => {
-                self.set_status(error, cx);
-                return;
-            }
-        }
-        for handle in &windows {
-            let result = handle.update(cx, |view, _, cx| {
-                let root = view.downcast::<DesktopRoot>().ok()?;
-                if root.entity_id() == own_id {
-                    return None;
-                }
-                Some(root.update(cx, |root, cx| {
-                    root.begin_flush(cx)
-                        .map(|receiver| (root.worker.clone(), receiver))
-                }))
-            });
-            match result {
-                Ok(Some(Ok(pending_window))) => {
-                    pending.push(pending_window);
-                    started_windows.push(*handle);
-                }
-                Ok(Some(Err(error))) => admission_error = Some(error),
-                Err(error) => admission_error = Some(error.to_string()),
-                Ok(None) => {}
-            }
-        }
-        cx.spawn(async move |this, cx| {
-            let mut error = admission_error;
-            for (_worker, receiver) in pending {
-                loop {
-                    match receiver.try_recv() {
-                        Ok(result) => {
-                            if let Err(failure) = result {
-                                error = Some(failure);
-                            }
-                            break;
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            error = Some("Client workerが終了しました".into());
-                            break;
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            gpui::Timer::after(std::time::Duration::from_millis(16)).await;
-                        }
-                    }
-                }
-            }
-            let _ = this.update(cx, |root, cx| {
-                if let Some(error) = error {
-                    root.closing = false;
-                    root.editor
-                        .update(cx, |editor, cx| editor.set_enabled(true, cx));
-                    root.set_status(error, cx);
-                    for handle in started_windows {
-                        let _ = handle.update(cx, |view, _, cx| {
-                            if let Ok(entity) = view.downcast::<DesktopRoot>()
-                                && entity.entity_id() != own_id
-                            {
-                                entity.update(cx, |root, cx| {
-                                    root.closing = false;
-                                    root.editor
-                                        .update(cx, |editor, cx| editor.set_enabled(true, cx));
-                                });
-                            }
-                        });
-                    }
-                } else {
-                    cx.quit();
-                }
-            });
-        })
-        .detach();
-    }
-
+    /// Starts closing this root's entire group and returns false to defer native window removal.
     fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.closing {
-            return false;
-        }
-        if self.editor.read(cx).needs_recovery() {
-            let receiver = window.prompt(
-                PromptLevel::Warning,
-                "未確定の入力があります",
-                Some("復旧する場合はCancelを選択し、入力を新しい文書へ退避してください。"),
-                &[
-                    PromptButton::new("Copy draft and close"),
-                    PromptButton::new("Discard and close"),
-                    PromptButton::cancel("Cancel"),
-                ],
-                cx,
-            );
-            let handle = window.window_handle();
-            cx.spawn(async move |this, cx| {
-                let Ok(answer) = receiver.await else {
-                    return;
-                };
-                if answer > 1 {
-                    return;
-                }
-                let _ = this.update(cx, |root, cx| {
-                    if answer == 0 {
-                        cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                            root.editor.read(cx).document().content_for_save(),
-                        ));
-                    }
-                    root.closing = true;
-                    let _ = handle.update(cx, |_, window, _| window.remove_window());
-                });
-            })
-            .detach();
-            return false;
-        }
-        self.closing = true;
-        self.editor
-            .update(cx, |editor, cx| editor.set_enabled(false, cx));
-        let view = self.persisted_view(cx);
-        let handle = window.window_handle();
-        let admitted = self.worker.submit(
-            cx,
-            move |client| client.persist_view(view),
-            move |root, result, cx| match result {
-                Ok(()) => {
-                    let _ = handle.update(cx, |_, window, _| window.remove_window());
-                }
-                Err(error) => {
-                    root.closing = false;
-                    root.editor
-                        .update(cx, |editor, cx| editor.set_enabled(true, cx));
-                    root.set_status(error, cx);
-                }
-            },
-        );
-        if let Err(error) = admitted {
-            self.closing = false;
-            self.editor
-                .update(cx, |editor, cx| editor.set_enabled(true, cx));
-            self.set_status(error, cx);
-        }
+        self.close_hosts(crate::shell::window_group::ROOT_HOST, None, window, cx);
         false
     }
-    fn set_status(&mut self, status: String, cx: &mut Context<Self>) {
+
+    /// Debounces persistence by 500 milliseconds when document versions, editor view, or layout change.
+    /// Skips the write while closing; asynchronous persistence errors become status messages.
+    pub(crate) fn schedule_persist(&mut self, cx: &mut Context<Self>) {
+        let versions = self
+            .group
+            .read(cx)
+            .latest
+            .as_ref()
+            .map(|snapshot| {
+                snapshot
+                    .documents
+                    .iter()
+                    .map(|cache| {
+                        (
+                            cache.id.clone(),
+                            cache.document.revision(),
+                            cache.document.is_dirty(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let signature = (
+            versions,
+            self.editor.read(cx).view_state(),
+            self.shell.read(cx).view_state(),
+        );
+        if self.persist_signature.as_ref() == Some(&signature) {
+            return;
+        }
+        self.persist_signature = Some(signature);
+        self.persist_task = Some(cx.spawn(async move |this, cx| {
+            gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.group.read(cx).closing {
+                    return;
+                }
+                let view = root.persisted_view(cx);
+                let _ = root.worker.submit(
+                    cx,
+                    move |client| {
+                        client
+                            .edit_chain
+                            .apply(client.edit_chain.epoch(), || Ok(()))?;
+                        client.persist_view(view)
+                    },
+                    |root, result, cx| {
+                        if let Err(error) = result {
+                            root.set_status(error, cx);
+                        }
+                    },
+                );
+            });
+        }));
+    }
+
+    /// Updates the root shell's status and publishes it to the window group.
+    pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {
+        self.group.update(cx, |group, cx| {
+            group.status = status.clone();
+            cx.notify();
+        });
         self.shell
             .update(cx, |shell, cx| shell.set_status(status, cx));
     }
 
-    fn command(&mut self, command: UiCommand, window: &mut Window, cx: &mut Context<Self>) {
-        if self.closing {
+    /// Dispatches root commands, ignoring them while closing.
+    /// Workspace switches are rejected with a status message while detached windows exist.
+    pub(crate) fn command(
+        &mut self,
+        command: UiCommand,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.group.read(cx).closing {
+            return;
+        }
+        if self.group.read(cx).members.len() > 1
+            && matches!(
+                command,
+                UiCommand::OpenWorkspace | UiCommand::OpenRecent(_) | UiCommand::CloseWorkspace
+            )
+        {
+            self.set_status(
+                "別Windowのタブを閉じるか再ドックしてからWorkspaceを切り替えてください".into(),
+                cx,
+            );
             return;
         }
         if matches!(
@@ -705,6 +660,11 @@ impl DesktopRoot {
             return;
         }
         match command {
+            UiCommand::Save if self.editor.read(cx).document_id().is_none() => {}
+            command @ (UiCommand::DetachTab(_)
+            | UiCommand::DockTab(_)
+            | UiCommand::MoveTab(_, _)
+            | UiCommand::ReleaseTab(_, _)) => self.host_command(0, command, window, cx),
             UiCommand::Theme(theme) => self
                 .settings
                 .update(cx, |settings, cx| settings.select_theme(theme, cx)),
@@ -730,7 +690,7 @@ impl DesktopRoot {
                 self.editor.update(cx, |editor, cx| editor.activate(id, cx));
                 window.focus(&self.editor.focus_handle(cx));
             }
-            UiCommand::CloseDocument(id) => self.close_document(id, window, cx),
+            UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::Undo => self
                 .editor
                 .update(cx, |editor, cx| editor.undo(&crate::app::Undo, window, cx)),
@@ -821,99 +781,15 @@ impl DesktopRoot {
             }
         }
     }
-
-    fn close_document(
-        &mut self,
-        id: lapis_editor_core::DocumentId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let clean = self
-            .shell
-            .read(cx)
-            .session
-            .documents
-            .iter()
-            .find(|tab| tab.id == id)
-            .is_some_and(|tab| !tab.dirty)
-            && !self.editor.read(cx).has_pending();
-        if clean {
-            self.editor.update(cx, |editor, cx| {
-                editor.submit(
-                    false,
-                    move |client| {
-                        client
-                            .editor
-                            .close_document(&id, DocumentCloseDisposition::PreserveChanges)
-                            .map(|_| ())
-                            .map_err(|error| error.to_string())
-                    },
-                    cx,
-                )
-            });
-            return;
-        }
-        let receiver = window.prompt(
-            PromptLevel::Warning,
-            "文書を閉じますか？",
-            Some("未保存の変更は、保存するか明示的に破棄してください。"),
-            &[
-                PromptButton::new("Save"),
-                PromptButton::new("Discard"),
-                PromptButton::cancel("Cancel"),
-            ],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            let Ok(answer) = receiver.await else {
-                return;
-            };
-            if answer > 1 {
-                return;
-            }
-            let _ = this.update(cx, |root, cx| {
-                root.editor.update(cx, |editor, cx| {
-                    editor.submit(
-                        false,
-                        move |client| {
-                            client.editor.activate_document(&id);
-                            if answer == 0 {
-                                let result = client
-                                    .editor
-                                    .save_document()
-                                    .map_err(|error| error.to_string())?;
-                                if result == lapis_desktop_client::DocumentAction::Cancelled {
-                                    return Ok(());
-                                }
-                            }
-                            client
-                                .editor
-                                .close_document(
-                                    &id,
-                                    if answer == 1 {
-                                        DocumentCloseDisposition::DiscardChanges
-                                    } else {
-                                        DocumentCloseDisposition::PreserveChanges
-                                    },
-                                )
-                                .map(|_| ())
-                                .map_err(|error| error.to_string())
-                        },
-                        cx,
-                    )
-                });
-            });
-        })
-        .detach();
-    }
 }
 impl Render for DesktopRoot {
+    /// Renders the root shell with application quit and command-search keyboard handlers.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
-            .on_action(cx.listener(|root, _: &crate::app::Quit, _, cx| {
+            .on_action(cx.listener(|root, _: &crate::app::Quit, window, cx| {
                 cx.stop_propagation();
-                root.quit_after_flush(cx);
+                root.close_application(window, cx);
             }))
             .on_modifiers_changed(cx.listener(
                 |root, event: &gpui::ModifiersChangedEvent, window, cx| {

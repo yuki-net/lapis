@@ -176,7 +176,7 @@ impl Editor {
         self.submit(
             true,
             move |client| {
-                client.editor.activate_document(&id);
+                client.editor.select_document_for_operation(&id);
                 client.editor.undo();
                 Ok(())
             },
@@ -190,7 +190,7 @@ impl Editor {
         self.submit(
             true,
             move |client| {
-                client.editor.activate_document(&id);
+                client.editor.select_document_for_operation(&id);
                 client.editor.redo();
                 Ok(())
             },

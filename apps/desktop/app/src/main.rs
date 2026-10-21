@@ -19,6 +19,7 @@ use lapis_remote::{
     RemoteLimits, RemoteServer, RemoteServerConfig, Tls13ServerConfig,
 };
 
+/// Dispatches worker and task smoke modes, or starts the desktop with command-line options.
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if arguments.get(1).map(std::ffi::OsString::as_os_str)
@@ -176,6 +177,7 @@ fn main() {
     }
     let initial_view = lapis_desktop_ui::InitialView {
         empty_window: false,
+        native_window_smoke: arguments.iter().any(|value| value == "--window-host-smoke"),
         show_tasks: arguments.iter().any(|value| value == "--show-tasks"),
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),

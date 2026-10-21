@@ -6,6 +6,44 @@ struct MemoryDocuments {
 }
 
 #[test]
+fn internal_document_selection_and_idle_polls_do_not_persist_window_activity() {
+    use std::sync::atomic::Ordering;
+    let repository = Arc::new(MemoryRepository::default());
+    let state = Arc::new(MemoryState::default());
+    let mut editor = session(repository, state.clone());
+    let root = editor.active_document_id().unwrap().clone();
+    editor.new_document();
+    let child = editor.active_document_id().unwrap().clone();
+    let before = state.saves.load(Ordering::Relaxed);
+    let persisted = state.load().unwrap();
+
+    // 同じ対象の反復と、Root / 子の交互送信の両方で保存を増やさない。
+    for id in [&root, &root, &child, &root, &child] {
+        assert!(editor.select_document_for_operation(id));
+        editor.poll_external_changes();
+        assert_eq!(editor.active_document_id(), Some(id));
+        assert_eq!(state.saves.load(Ordering::Relaxed), before);
+        assert_eq!(state.load().unwrap(), persisted);
+    }
+    assert!(!editor.select_document_for_operation(&DocumentId::new("closed")));
+    assert_eq!(editor.active_document_id(), Some(&child));
+    assert_eq!(state.saves.load(Ordering::Relaxed), before);
+
+    // 実際の選択・編集・表示状態更新の保存は維持する。
+    assert!(editor.activate_document(&root));
+    assert_eq!(state.saves.load(Ordering::Relaxed), before + 1);
+    assert_eq!(state.load().unwrap().unwrap().active_document_id, Some(root.clone()));
+    assert!(editor.select_document_for_operation(&child));
+    editor.replace_range(0..0, "child draft").unwrap();
+    assert_eq!(state.saves.load(Ordering::Relaxed), before + 2);
+    assert_eq!(editor.active_text().unwrap(), "child draft");
+    assert!(editor.select_document_for_operation(&root));
+    assert!(editor.active_text().unwrap().is_empty());
+    editor.update_active_view(0..0, 0, 0., 10.);
+    assert_eq!(state.saves.load(Ordering::Relaxed), before + 3);
+}
+
+#[test]
 fn rejected_optimistic_input_can_be_recovered_without_overwriting_the_shared_document() {
     let repository = Arc::new(MemoryRepository::default());
     let path = PathBuf::from("shared.md");

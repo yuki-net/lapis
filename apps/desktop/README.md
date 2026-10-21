@@ -25,3 +25,11 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。
 - UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。
+
+## Window の所有と検証
+
+Root ごとに WindowGroup を作り、Detached は元の Client worker と Document を共有する。Shell の共通描画を使い、Focus・Active Tab・scroll は Window ごとに持つ。Tool の実行資源を複製して移動することはない。終了・移動・将来の配置復元の契約は [WindowGroup](../../docs/specs/architecture.md#desktop-の-windowgroup) を参照。
+
+Windows では `cargo build -p lapis` 後に `./scripts/test_window_host.ps1` で隔離した Native Window のスモーク検証を実行できる。Release は `-Binary <release/lapis.exe>` を指定する。テストは一時 Workspace のみを編集し、利用者の設定は使用しない。
+
+Document タブは ↗ / ↩ ボタンで取り外し・Root へ再ドックできる。Windows ではタブを Window 外で離すと取り外し、同じグループの別 Window の Panel 上で離すと再ドックする。Escape で取り消す。移動で空になった子 Window は手動で閉じる。Tool の Window 間移動と、再起動後の Window 配置復元は未対応。
