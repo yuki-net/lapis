@@ -18,8 +18,8 @@ impl Render for DragPreview {
             return div().size(px(0.0));
         }
         div()
-            .w(px(280.0))
-            .h(px(32.0))
+            .w(px(260.0))
+            .h(px(28.0))
             .flex()
             .items_center()
             .px(crate::tokens::spacing::XS)
@@ -29,6 +29,7 @@ impl Render for DragPreview {
             .border_color(crate::theme::colors().button_border_focused)
             .text_color(crate::theme::colors().text_primary)
             .text_size(crate::tokens::typography::FONT_XS)
+            .truncate()
             .child(self.label.clone())
     }
 }
@@ -116,8 +117,8 @@ mod platform {
                 None,
                 point.x + 14,
                 point.y + 18,
-                (280.0 * window.scale_factor()).round() as i32,
-                (32.0 * window.scale_factor()).round() as i32,
+                (260.0 * window.scale_factor()).round() as i32,
+                (28.0 * window.scale_factor()).round() as i32,
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             )
         };

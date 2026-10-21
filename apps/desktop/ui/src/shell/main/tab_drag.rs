@@ -15,7 +15,7 @@ impl Shell {
                     if phase != gpui::DispatchPhase::Capture || event.button != MouseButton::Left {
                         return;
                     }
-                    let active = cx.has_active_drag() && event.button == MouseButton::Left;
+                    let active = cx.has_active_drag();
                     let _ = released.update(cx, |shell, cx| {
                         shell.close_drag_preview(cx);
                         let Some(drag) = shell.tab_drag.release(active) else {
