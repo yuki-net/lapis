@@ -77,10 +77,26 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let conversation_session = ConversationSession::new(
+    let mut conversation_session = ConversationSession::new(
         Arc::new(LocalConversationRepository::user_default()),
         session.snapshot(),
     );
+    if let Some(root) = session.workspace_root().map(ToOwned::to_owned)
+        && conversation_session.load_error().is_none()
+        && conversation_session
+            .active_record()
+            .is_some_and(|record| record.workspace.root.as_ref() != Some(&root))
+    {
+        let result = conversation_session
+            .register_project(&session, root.clone())
+            .and_then(|project| {
+                conversation_session.create_task(&mut session, &project, root, None)
+            });
+        if let Err(error) = result {
+            eprintln!("Project/Taskを開けません: {error}");
+            std::process::exit(1);
+        }
+    }
     let settings_session =
         SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::user_default()))
             .unwrap_or_else(|error| {

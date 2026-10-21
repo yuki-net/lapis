@@ -6,7 +6,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lapis_desktop_client::{ConversationRecord, ConversationRepository};
+use lapis_desktop_client::{
+    ConversationRecord, ConversationRepository, ConversationState, Project,
+};
 use lapis_editor_core::ConversationId;
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_workspace::WorkspaceError;
@@ -65,6 +67,8 @@ impl GlobalSettingsRepository for LocalGlobalSettingsRepository {
 #[derive(Serialize, Deserialize)]
 struct StoredConversations {
     version: u32,
+    #[serde(default)]
+    projects: Vec<Project>,
     records: Vec<ConversationRecord>,
     active: ConversationId,
 }
@@ -84,11 +88,11 @@ impl LocalConversationRepository {
 }
 
 impl ConversationRepository for LocalConversationRepository {
-    fn load(&self) -> Result<(Vec<ConversationRecord>, Option<ConversationId>), WorkspaceError> {
+    fn load(&self) -> Result<ConversationState, WorkspaceError> {
         let bytes = match fs::read(&self.path) {
             Ok(bytes) => bytes,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok((Vec::new(), None));
+                return Ok(Default::default());
             }
             Err(error) => return Err(WorkspaceError::new(error.to_string())),
         };
@@ -97,18 +101,40 @@ impl ConversationRepository for LocalConversationRepository {
         if stored.version != 1 {
             return Err(WorkspaceError::new("未対応の Conversation 復元形式です"));
         }
-        Ok((stored.records, Some(stored.active)))
+        Ok((stored.projects, stored.records, Some(stored.active)))
     }
 
     fn save(
         &self,
+        expected: &ConversationState,
+        projects: &[Project],
         records: &[ConversationRecord],
         active: &ConversationId,
     ) -> Result<(), WorkspaceError> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|error| WorkspaceError::new(error.to_string()))?;
+        }
+        let mut lock_path = self.path.as_os_str().to_owned();
+        lock_path.push(".lock");
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(lock_path)
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        lock.lock()
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        if &self.load()? != expected {
+            return Err(WorkspaceError::new(
+                "別のWindowがProject/Taskを更新しました。下書きを保持したまま、Windowを開き直してください",
+            ));
+        }
         atomic_json_write(
             &self.path,
             &StoredConversations {
                 version: 1,
+                projects: projects.to_vec(),
                 records: records.to_vec(),
                 active: active.clone(),
             },
@@ -189,6 +215,11 @@ mod tests {
                 ..ConversationViewState::default()
             },
             selected_execution: Some(ExecutionId::new("execution-1")),
+            environment: None,
+            source_role: Default::default(),
+            other_workspace: None,
+            other_terminals: Vec::new(),
+            other_execution: None,
             terminals: vec![RestoredTerminal {
                 cwd: PathBuf::from("C:/作業/lapis"),
                 status: TerminalStatus::Running,
@@ -197,8 +228,44 @@ mod tests {
             }],
         }];
 
-        repository.save(&records, &active).unwrap();
+        repository
+            .save(&Default::default(), &[], &records, &active)
+            .unwrap();
         let restored = repository.load().unwrap();
-        assert_eq!(restored, (records, Some(active)));
+        assert_eq!(restored, (Vec::new(), records, Some(active)));
+    }
+
+    #[test]
+    fn concurrent_windows_cannot_overwrite_each_others_task_catalog() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("tasks.json");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let handles = ["first", "second"].map(|name| {
+                let repository = LocalConversationRepository::new(path.clone());
+                let barrier = barrier.clone();
+                scope.spawn(move || {
+                    let expected = repository.load().unwrap();
+                    barrier.wait();
+                    let active = ConversationId::new(name);
+                    let result = repository.save(&expected, &[], &[], &active);
+                    (active, result)
+                })
+            });
+            handles.map(|handle| handle.join().unwrap())
+        });
+        assert_eq!(
+            results.iter().filter(|(_, result)| result.is_ok()).count(),
+            1
+        );
+        let winner = results
+            .into_iter()
+            .find(|(_, result)| result.is_ok())
+            .unwrap()
+            .0;
+        assert_eq!(
+            LocalConversationRepository::new(path).load().unwrap().2,
+            Some(winner)
+        );
     }
 }

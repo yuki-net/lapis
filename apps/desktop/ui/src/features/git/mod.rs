@@ -26,20 +26,6 @@ pub(super) fn descriptor() -> FeatureDescriptor {
     .requires("workspace.git")
 }
 
-pub(super) fn history_descriptor() -> FeatureDescriptor {
-    FeatureDescriptor::bundled(
-        id::FEATURE_HISTORY,
-        [ActivationCondition::OnView(ViewId::new(id::VIEW_HISTORY))],
-    )
-    .contributes(UiContribution::view(
-        id::VIEW_HISTORY,
-        UiSlot::ToolDock,
-        "view.history",
-        "history",
-        40,
-    ))
-}
-
 fn change_label(kind: ChangeKind) -> &'static str {
     match kind {
         ChangeKind::Added => "A",

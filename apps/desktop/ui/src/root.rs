@@ -116,7 +116,7 @@ impl DesktopRoot {
             (id::VIEW_TERMINAL.into(), terminal.clone().into()),
             (id::VIEW_PROBLEMS.into(), problems.clone().into()),
             (id::VIEW_SEARCH.into(), search.clone().into()),
-            (id::VIEW_HISTORY.into(), conversation.clone().into()),
+            (id::VIEW_PROJECT_TASKS.into(), conversation.clone().into()),
             (id::VIEW_PREVIEW.into(), preview.clone().into()),
             (id::VIEW_SETTINGS.into(), settings.clone().into()),
             (id::VIEW_COMMAND_SEARCH.into(), quick_search.clone().into()),
@@ -124,6 +124,7 @@ impl DesktopRoot {
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
         shell.update(cx, |shell, cx| {
             shell.set_locale(initial_locale, cx);
+            shell.activate_panel_view(PanelPosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
                 shell.activate_panel_view(PanelPosition::Right, id::VIEW_ASSISTANT.into(), cx);
             }
@@ -192,10 +193,40 @@ impl DesktopRoot {
                         move |client| {
                             client.persist_view(view)?;
                             match event {
-                                ConversationEvent::Create => client
+                                ConversationEvent::RegisterProject => {
+                                    if let Some(path) =
+                                        client.editor.file_dialog().choose_workspace_path()
+                                    {
+                                        client
+                                            .conversation
+                                            .register_project(&client.editor, path)
+                                            .map_err(|error| error.to_string())?;
+                                    }
+                                    Ok(())
+                                }
+                                ConversationEvent::RegisterSource(project) => {
+                                    if let Some(path) =
+                                        client.editor.file_dialog().choose_workspace_path()
+                                    {
+                                        client
+                                            .conversation
+                                            .register_source(&client.editor, &project, path)
+                                            .map_err(|error| error.to_string())?;
+                                    }
+                                    Ok(())
+                                }
+                                ConversationEvent::Create {
+                                    project,
+                                    primary,
+                                    sub,
+                                } => client
                                     .conversation
-                                    .create(&client.editor, Default::default())
+                                    .create_task(&mut client.editor, &project, primary, sub)
                                     .map(|_| ())
+                                    .map_err(|error| error.to_string()),
+                                ConversationEvent::Source(role) => client
+                                    .conversation
+                                    .switch_source(&mut client.editor, role)
                                     .map_err(|error| error.to_string()),
                                 ConversationEvent::Switch(id) => client
                                     .conversation
@@ -394,6 +425,8 @@ impl DesktopRoot {
         self.conversation.update(cx, |conversation, cx| {
             conversation.update(
                 snapshot.conversations.clone(),
+                snapshot.projects.clone(),
+                snapshot.project_error.clone(),
                 snapshot.conversation.clone(),
                 cx,
             )
@@ -632,6 +665,43 @@ impl DesktopRoot {
 
     fn command(&mut self, command: UiCommand, window: &mut Window, cx: &mut Context<Self>) {
         if self.closing {
+            return;
+        }
+        if matches!(
+            command,
+            UiCommand::OpenWorkspace | UiCommand::OpenRecent(_) | UiCommand::CloseWorkspace
+        ) {
+            let view = self.persisted_view(cx);
+            self.editor.update(cx, |editor, cx| {
+                editor.submit(
+                    false,
+                    move |client| {
+                        client.persist_view(view)?;
+                        if matches!(command, UiCommand::CloseWorkspace) {
+                            return client
+                                .editor
+                                .close_workspace()
+                                .map_err(|error| error.to_string());
+                        }
+                        let path = match command {
+                            UiCommand::OpenRecent(path) => Some(path),
+                            _ => client.editor.file_dialog().choose_workspace_path(),
+                        };
+                        if let Some(path) = path {
+                            let project = client
+                                .conversation
+                                .register_project(&client.editor, path.clone())
+                                .map_err(|error| error.to_string())?;
+                            client
+                                .conversation
+                                .create_task(&mut client.editor, &project, path, None)
+                                .map_err(|error| error.to_string())?;
+                        }
+                        Ok(())
+                    },
+                    cx,
+                )
+            });
             return;
         }
         match command {

@@ -3126,6 +3126,7 @@ dependencies = [
  "lapis-git",
  "lapis-localization",
  "lapis-lsp",
+ "lapis-project",
  "lapis-settings",
  "lapis-task",
  "lapis-terminal",
@@ -3252,6 +3253,7 @@ name = "lapis-project"
 version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
+ "serde",
 ]
 
 [[package]]
