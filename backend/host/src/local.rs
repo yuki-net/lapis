@@ -273,9 +273,34 @@ fn host_record_active(record: &Record, directory: &Path) -> io::Result<bool> {
         .write(true)
         .open(directory.join("local-v1.lease"))?;
     match lease.try_lock() {
-        Ok(()) => Ok(false),
+        Ok(()) => {
+            lease.unlock()?;
+            Ok(false)
+        }
         Err(std::fs::TryLockError::WouldBlock) => Ok(true),
         Err(std::fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
+struct HostLease(fs::File);
+
+impl HostLease {
+    fn acquire(directory: &Path) -> Result<Self, Error> {
+        let file = private_options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(directory.join("local-v1.lease"))?;
+        file.try_lock()?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for HostLease {
+    fn drop(&mut self) {
+        // fork等で複製されたFDが残っても、Hostの正常終了で所有権を解放する。
+        let _ = self.0.unlock();
     }
 }
 
@@ -382,13 +407,7 @@ fn process_started_at(pid: u32) -> io::Result<Option<String>> {
 /// 親が作った匿名pipeだけへbootstrap情報を返す。secretを引数・ログへ渡さない。
 pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     // Host自身が終了まで所有する。PIDが他ユーザーへ再利用されても、このleaseはOSが解放する。
-    let lease = private_options()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(directory.join("local-v1.lease"))?;
-    lease.try_lock()?;
+    let _lease = HostLease::acquire(directory)?;
     let root = root.canonicalize()?;
     let host = BackendHost::start()?;
     let workspace = host.register_workspace(&root)?;
@@ -518,18 +537,21 @@ mod tests {
     #[test]
     fn process_owned_lease_recovers_without_querying_a_reused_pid() {
         let directory = tempfile::tempdir().unwrap();
-        let lease = private_options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(directory.path().join("local-v1.lease"))
-            .unwrap();
+        let lease = HostLease::acquire(directory.path()).unwrap();
+        // Linuxのfork/dupと同じく、所有者以外にも同じopen file descriptionを保持する。
+        let inherited = lease.0.try_clone().unwrap();
         let mut record = record();
         record.managed_lease = true;
         record.pid = u32::MAX;
-        lease.lock().unwrap();
         assert!(host_record_active(&record, directory.path()).unwrap());
+        assert!(HostLease::acquire(directory.path()).is_err());
         drop(lease);
+        assert!(!host_record_active(&record, directory.path()).unwrap());
+        let next_owner = HostLease::acquire(directory.path()).unwrap();
+        assert!(host_record_active(&record, directory.path()).unwrap());
+        drop(inherited);
+        assert!(host_record_active(&record, directory.path()).unwrap());
+        drop(next_owner);
         assert!(!host_record_active(&record, directory.path()).unwrap());
     }
 
