@@ -45,6 +45,7 @@
 - 共通の OS Window options と Shell が、テーマ・タイトルバー・Window Controls・タブ・フッターを描画する。Detached は Root 用のメニューや補助 Panel を持たない。
 - WindowGroup は Window の親子関係、`PanelTab` の所属 Window・Panel、終了中フラグを持つ。Window bounds はイベントで更新する。Active Tab・focus・selection・scroll・Panel サイズは各 Window の Shell / Editor が所有する。
 - Document の操作は共有 worker で直列化し、送信元 Window の対象を操作前に選ぶ。新規 Document の作成元も worker 内で記録し、先に届いた Snapshot の送信元から所属を推測しない。応答の連番と各 Editor の世代で古い結果を拒否する。移動中に入力を失わないため、未完了入力・復旧待ち・終了処理中の移動は受け付けない。
+- Worker 内の対象切替は `select_document_for_operation` を使い、表示状態を保存しない。Root の既存 poll と子の操作が異なる文書を対象にしても、切替だけで保存済み Active Tab を書き換えない。ユーザーによるタブ選択、文書変更、debounce 後の表示状態更新はそれぞれの保存経路を維持する。
 - Window の生成成功後にタブの所属を移す。生成失敗・未受理のドロップでは元のタブを残す。新 Host の購読が有効になる前に初回 Snapshot と配置通知が併合される場合も、defer した通知で配置を渡す。
 - close は入力の受付停止 → FIFO 上の入力失敗検査 → 全対象の保存/破棄判断 → 保存 → revision の事前検証 → タブの close → 表示状態の保存 → OS Window の閉鎖の順。Cancel / Save As のキャンセルではタブを閉じない。通常の Root close はその系列だけ、Quit は全 Root 系列を対象とし、判断が揃う前に一部だけ閉じない。複数Rootが同じDocument正本を開いている場合、判断・保存・破棄は一度だけ行い、各attachmentを個別に閉じる。外部 I/O の commit 失敗まで rollback できる分散トランザクションではない。
 - Detached の終了はタブを閉じ、Root へ戻さない。表示 Entity・購読の解放と Host 上のプロセス終了は別操作である。

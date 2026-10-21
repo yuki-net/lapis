@@ -94,7 +94,7 @@ impl DocumentClient {
             self.edit_chain.restart();
         }
         if let Some((id, selection, cursor, scroll_x, scroll_y)) = view.document
-            && (recovered || self.editor.activate_document(&id))
+            && (recovered || self.editor.select_document_for_operation(&id))
         {
             self.editor
                 .update_active_view(selection, cursor, scroll_x, scroll_y);

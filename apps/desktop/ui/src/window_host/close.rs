@@ -210,7 +210,7 @@ impl DesktopRoot {
                             }
                         }
                         for id in saves {
-                            if !client.editor.activate_document(&id) { return Err("対象文書が閉じられました".into()); }
+                            if !client.editor.select_document_for_operation(&id) { return Err("対象文書が閉じられました".into()); }
                             if client.editor.save_document().map_err(|e| e.to_string())? == DocumentAction::Cancelled {
                                 return Err("保存をキャンセルしました".into());
                             }

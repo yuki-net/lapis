@@ -1488,11 +1488,23 @@ impl EditorSession {
     }
 
     pub fn activate_document(&mut self, id: &DocumentId) -> bool {
+        if !self.select_document_for_operation(id) {
+            return false;
+        }
+        self.persist_best_effort();
+        true
+    }
+
+    /// Worker の操作対象だけを切り替える。表示状態の保存や文書 I/O は行わない。
+    /// ユーザーによるタブ選択の保存には `activate_document` を使う。
+    pub fn select_document_for_operation(&mut self, id: &DocumentId) -> bool {
+        if self.active_document_id() == Some(id) {
+            return true;
+        }
         let Some(index) = self.documents.iter().position(|open| &open.id == id) else {
             return false;
         };
         self.active = Some(index);
-        self.persist_best_effort();
         true
     }
 
@@ -2014,15 +2026,20 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MemoryState(Mutex<Option<WorkspaceSnapshot>>);
+    struct MemoryState {
+        snapshot: Mutex<Option<WorkspaceSnapshot>>,
+        saves: std::sync::atomic::AtomicUsize,
+    }
 
     impl WorkspaceStateRepository for MemoryState {
         fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
-            Ok(self.0.lock().unwrap().clone())
+            Ok(self.snapshot.lock().unwrap().clone())
         }
 
         fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
-            *self.0.lock().unwrap() = Some(snapshot.clone());
+            self.saves
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            *self.snapshot.lock().unwrap() = Some(snapshot.clone());
             Ok(())
         }
     }

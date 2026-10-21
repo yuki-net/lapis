@@ -221,7 +221,7 @@ impl Editor {
             cx,
             move |client| {
                 if let Some(target) = target {
-                    client.editor.activate_document(&target);
+                    client.editor.select_document_for_operation(&target);
                 }
                 let epoch = epoch.unwrap_or_else(|| client.edit_chain.epoch());
                 let permitted = if recovering {
@@ -450,7 +450,7 @@ impl Editor {
             move |client| {
                 let editor = &mut client.editor;
                 client.edit_chain.apply(epoch, || {
-                    if !editor.activate_document(&id) {
+                    if !editor.select_document_for_operation(&id) {
                         return Err("編集対象の文書は閉じられています".into());
                     }
                     if editor.active_revision() != revision {
