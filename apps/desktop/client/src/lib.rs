@@ -1164,6 +1164,28 @@ impl EditorSession {
         self.workspace_root.as_deref()
     }
 
+    pub fn workspace_path(
+        &self,
+        expected_root: &Path,
+        input: &str,
+    ) -> Result<PathBuf, WorkspaceError> {
+        if self.workspace_root() != Some(expected_root) {
+            return Err(WorkspaceError::new(
+                "作業環境が切り替わりました。操作をやり直してください",
+            ));
+        }
+        if input.is_empty()
+            || Path::new(input)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(WorkspaceError::new(
+                "Workspace内の相対pathを指定してください",
+            ));
+        }
+        Ok(expected_root.join(input))
+    }
+
     pub fn workspace_id(&self) -> Option<&WorkspaceId> {
         self.workspace_id.as_ref()
     }
