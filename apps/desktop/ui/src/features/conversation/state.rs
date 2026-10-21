@@ -220,14 +220,17 @@ impl Render for ConversationFeature {
         {
             view = view.child("操作対象（Editor / Terminal / Git）").child(
                 action_button(
-                    format!("Primary: {}", environment.primary().display()),
+                    format!(
+                        "Primary: {}",
+                        environment.root(SourceRole::Primary).unwrap().display()
+                    ),
                     record.source_role == SourceRole::Primary,
                 )
                 .on_click(cx.listener(|_, _, _, cx| {
                     cx.emit(ConversationEvent::Source(SourceRole::Primary))
                 })),
             );
-            if let Some(sub) = environment.sub() {
+            if let Some(sub) = environment.root(SourceRole::Sub) {
                 view = view.child(
                     action_button(
                         format!("Sub: {}", sub.display()),

@@ -97,6 +97,8 @@ impl Shell {
         self.shell
             .panel_mut(position)
             .activate_tool_without_open(view);
+        self.refresh_feature_activation();
+        cx.notify();
     }
 
     pub(crate) fn close_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {

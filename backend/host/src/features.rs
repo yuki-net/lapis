@@ -58,6 +58,40 @@ impl HostGit {
     }
 }
 impl GitConnection for HostGit {
+    fn open_worktree(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: &TaskId,
+    ) -> Result<std::path::PathBuf, GitError> {
+        let id = lapis_client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
+        let path = self
+            .host
+            .service()
+            .worktree_path(id, worktree.clone())
+            .map_err(git_error)?;
+        self.host.register_workspace(&path).map_err(git_error)?;
+        Ok(path)
+    }
+    fn execute(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: Option<&TaskId>,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<lapis_git::GitActionResult, GitError> {
+        match execute(
+            &self.host,
+            workspace,
+            Operation::GitAction {
+                worktree: worktree.cloned(),
+                request,
+            },
+        )
+        .map_err(git_error)?
+        {
+            Outcome::GitAction(result) => Ok(result),
+            _ => Err(git_error("Unexpected Git result")),
+        }
+    }
     fn status(
         &self,
         workspace: &WorkspaceId,

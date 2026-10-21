@@ -25,6 +25,27 @@ pub struct BackendService {
 }
 
 impl BackendService {
+    /// Host内部の登録用。Git I/Oは正規状態workerの外で実行する。
+    pub fn worktree_path(
+        &self,
+        workspace_id: WorkspaceId,
+        worktree: lapis_editor_core::TaskId,
+    ) -> Result<std::path::PathBuf, BackendServiceError> {
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::PrepareWorktreeLookup {
+                workspace_id,
+                worktree,
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        receive
+            .recv()
+            .map_err(|_| BackendServiceError::Unavailable)?
+            .and_then(|lookup| lookup.execute())
+            .map_err(BackendServiceError::State)
+    }
     pub fn relocate_document(
         &self,
         source: WorkspaceId,
@@ -110,6 +131,12 @@ impl BackendService {
     ) -> Result<ResponseEnvelope, BackendServiceError> {
         let changed = request.operation.is_mutation();
         let workspace_id = session.workspace_id.clone();
+        let removing = match &request.operation {
+            lapis_client_api::WorkspaceOperation::DiscardWorktree { worktree_id } => {
+                Some(worktree_id.clone())
+            }
+            _ => None,
+        };
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
             .sender()?
@@ -122,7 +149,32 @@ impl BackendService {
         let prepared = receive
             .recv()
             .map_err(|_| BackendServiceError::Unavailable)?;
-        let result = prepared.and_then(|operation| operation.execute());
+        let mut reserved = None;
+        let admitted = prepared.is_ok();
+        let result = prepared.and_then(|operation| {
+            if let Some(id) = removing {
+                let root =
+                    self.worktree_path(workspace_id.clone(), id)
+                        .map_err(|error| match error {
+                            BackendServiceError::State(error) => error,
+                            error => BackendStateError::Operation(error.to_string()),
+                        })?;
+                let (respond, receive) = mpsc::sync_channel(1);
+                self.inner
+                    .sender()
+                    .map_err(|error| BackendStateError::Operation(error.to_string()))?
+                    .send(Command::ReserveWorktreeRemoval {
+                        root: root.clone(),
+                        respond,
+                    })
+                    .map_err(|_| BackendStateError::Operation("Backend unavailable".into()))?;
+                receive
+                    .recv()
+                    .map_err(|_| BackendStateError::Operation("Backend unavailable".into()))??;
+                reserved = Some(root);
+            }
+            operation.execute()
+        });
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
             .sender()?
@@ -131,6 +183,8 @@ impl BackendService {
                 changed,
                 request_id,
                 result,
+                reserved,
+                admitted,
                 respond,
             })
             .map_err(|_| BackendServiceError::Unavailable)?;
@@ -217,6 +271,15 @@ impl Drop for ServiceInner {
 }
 
 enum Command {
+    ReserveWorktreeRemoval {
+        root: std::path::PathBuf,
+        respond: mpsc::SyncSender<Result<(), BackendStateError>>,
+    },
+    PrepareWorktreeLookup {
+        workspace_id: WorkspaceId,
+        worktree: lapis_editor_core::TaskId,
+        respond: mpsc::SyncSender<Result<crate::state::PreparedWorktreeLookup, BackendStateError>>,
+    },
     PrepareWorkspaceOperation {
         session: BackendSession,
         request: lapis_client_api::WorkspaceOperationRequest,
@@ -228,6 +291,8 @@ enum Command {
         changed: bool,
         request_id: lapis_client_api::RequestId,
         result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
+        reserved: Option<std::path::PathBuf>,
+        admitted: bool,
         respond: mpsc::SyncSender<ResponseEnvelope>,
     },
     RelocateDocument {
@@ -280,6 +345,16 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
     loop {
         match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+            Ok(Command::ReserveWorktreeRemoval { root, respond }) => {
+                let _ = respond.send(state.reserve_worktree_removal(root));
+            }
+            Ok(Command::PrepareWorktreeLookup {
+                workspace_id,
+                worktree,
+                respond,
+            }) => {
+                let _ = respond.send(state.prepare_worktree_lookup(&workspace_id, worktree));
+            }
             Ok(Command::PrepareWorkspaceOperation {
                 session,
                 request,
@@ -292,8 +367,16 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
                 changed,
                 request_id,
                 result,
+                reserved,
+                admitted,
                 respond,
             }) => {
+                if admitted {
+                    state.finish_workspace_operation(&workspace_id);
+                }
+                if let Some(root) = reserved {
+                    state.release_worktree_removal(&root);
+                }
                 let outcome =
                     state.complete_workspace_operation(workspace_id, changed, request_id, result);
                 let _ = respond.send(outcome.response);

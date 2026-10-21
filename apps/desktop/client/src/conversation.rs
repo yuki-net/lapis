@@ -1,5 +1,6 @@
 use super::*;
 use lapis_editor_core::ProjectId;
+use lapis_git::GitConnection;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
@@ -19,6 +20,15 @@ pub struct ConversationRecord {
     pub other_terminals: Vec<RestoredTerminal>,
     #[serde(default)]
     pub other_execution: Option<ExecutionId>,
+    #[serde(default)]
+    pub parked_sources: Vec<TaskSourceState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TaskSourceState {
+    pub workspace: WorkspaceSnapshot,
+    pub terminals: Vec<RestoredTerminal>,
+    pub selected_execution: Option<ExecutionId>,
 }
 
 pub type ConversationState = (
@@ -68,6 +78,7 @@ impl ConversationSession {
                 other_workspace: None,
                 other_terminals: Vec::new(),
                 other_execution: None,
+                parked_sources: Vec::new(),
             });
         }
         let active = active
@@ -107,6 +118,21 @@ impl ConversationSession {
                     .any(|other| other.id() == project.id())
         }) || records.iter().enumerate().any(|(index, record)| {
             records[..index].iter().any(|other| other.id == record.id)
+                || record
+                    .parked_sources
+                    .iter()
+                    .enumerate()
+                    .any(|(index, source)| {
+                        source.workspace.root.is_none()
+                            || source.workspace.root == record.workspace.root
+                            || record
+                                .other_workspace
+                                .as_ref()
+                                .is_some_and(|other| other.root == source.workspace.root)
+                            || record.parked_sources[..index]
+                                .iter()
+                                .any(|other| other.workspace.root == source.workspace.root)
+                    })
                 || record.environment.as_ref().is_some_and(|environment| {
                     !projects.iter().any(|project| environment.validate(project))
                         || environment.root(record.source_role) != record.workspace.root.as_deref()
@@ -283,6 +309,7 @@ impl ConversationSession {
             other_workspace: None,
             other_terminals: Vec::new(),
             other_execution: None,
+            parked_sources: Vec::new(),
         });
         self.active = id.clone();
         if let Err(error) = self.save() {
@@ -453,10 +480,87 @@ impl ConversationSession {
                 other_workspace: None,
                 other_terminals: Vec::new(),
                 other_execution: None,
+                parked_sources: Vec::new(),
             });
             session.active = id.clone();
             session.save()?;
             Ok(id)
+        })
+    }
+
+    pub fn set_worktree(
+        &mut self,
+        editor: &mut EditorSession,
+        git: &dyn GitConnection,
+        worktree: Option<&TaskId>,
+    ) -> Result<(), WorkspaceError> {
+        let record = self
+            .active_record()
+            .ok_or_else(|| WorkspaceError::new("Taskが見つかりません"))?;
+        let environment = record
+            .environment
+            .as_ref()
+            .ok_or_else(|| WorkspaceError::new("作業Taskを選択してください"))?;
+        let role = record.source_role;
+        if environment.root(role) != editor.workspace_root() {
+            return Err(WorkspaceError::new("Taskの操作対象が変わっています"));
+        }
+        let source = environment
+            .source_root(role)
+            .ok_or_else(|| WorkspaceError::new("Taskの作業環境がありません"))?
+            .to_owned();
+        let binding = worktree
+            .map(|id| {
+                let workspace = Self::validate_source(editor, &source)?;
+                let root = git
+                    .open_worktree(&workspace, id)
+                    .map_err(|error| WorkspaceError::new(error.to_string()))?;
+                Self::validate_source(editor, &root)?;
+                Ok::<_, WorkspaceError>(lapis_project::WorktreeBinding {
+                    id: id.clone(),
+                    root,
+                })
+            })
+            .transpose()?;
+        let mut environment = environment.clone();
+        environment
+            .set_worktree(role, binding)
+            .map_err(WorkspaceError::new)?;
+        let root = environment.root(role).unwrap().to_owned();
+        if editor.workspace_root() == Some(root.as_path()) {
+            return Ok(());
+        }
+        self.transaction(editor, move |session, editor| {
+            let record = session
+                .records
+                .iter_mut()
+                .find(|record| record.id == session.active)
+                .unwrap();
+            let next = record
+                .parked_sources
+                .iter()
+                .position(|source| source.workspace.root.as_deref() == Some(root.as_path()))
+                .map(|index| record.parked_sources.remove(index))
+                .unwrap_or_else(|| TaskSourceState {
+                    workspace: WorkspaceSnapshot {
+                        root: Some(root),
+                        ..Default::default()
+                    },
+                    terminals: Vec::new(),
+                    selected_execution: None,
+                });
+            let previous = TaskSourceState {
+                workspace: editor.snapshot(),
+                terminals: record.terminals.clone(),
+                selected_execution: record.selected_execution.clone(),
+            };
+            editor.restore_snapshot(next.workspace)?;
+            record.workspace = editor.snapshot();
+            record.terminals = next.terminals;
+            record.selected_execution = next.selected_execution;
+            record.environment = Some(environment);
+            record.parked_sources.push(previous);
+            session.save()
         })
     }
 

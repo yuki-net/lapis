@@ -113,3 +113,64 @@ fn desktop_and_wire_can_diff_tracked_files_after_their_parent_directory_is_delet
         ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitDiff(snapshot))
     );
 }
+
+#[test]
+fn stage_over_the_wire_changes_only_the_selected_workspace_index() {
+    let roots = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
+    for root in &roots {
+        git(root.path(), &["init", "--initial-branch=main"]);
+        std::fs::write(root.path().join("note.txt"), "draft\n").unwrap();
+    }
+    let host = BackendHost::start().unwrap();
+    let first_id = host.register_workspace(roots[0].path()).unwrap();
+    let second_id = host.register_workspace(roots[1].path()).unwrap();
+    let wire = host.connect(roots[0].path()).unwrap();
+    let request = lapis_git::GitActionRequest {
+        action: lapis_git::GitAction::Stage {
+            path: "note.txt".into(),
+        },
+        expected_head: Some(String::new()),
+    };
+    let denied = wire
+        .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+            workspace_id: second_id.clone(),
+            operation: WorkspaceOperation::GitAction {
+                worktree: None,
+                request: request.clone(),
+            },
+        }))
+        .unwrap();
+    assert!(
+        matches!(denied, ResponseBody::Error(error) if error.code.as_str() == lapis_client_api::FORBIDDEN)
+    );
+    let response = wire
+        .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+            workspace_id: first_id.clone(),
+            operation: WorkspaceOperation::GitAction {
+                worktree: None,
+                request,
+            },
+        }))
+        .unwrap();
+    assert!(matches!(
+        response,
+        ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitAction(_))
+    ));
+    let connection = host.git();
+    let first = connection
+        .status(&WorkspaceId::new(first_id.as_str()), None)
+        .unwrap();
+    let second = connection
+        .status(&WorkspaceId::new(second_id.as_str()), None)
+        .unwrap();
+    assert_eq!(first.files.len(), 1);
+    assert_eq!(second.files.len(), 1);
+    assert!(first.files[0].staged);
+    assert!(!second.files[0].staged);
+    for root in &roots {
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("note.txt")).unwrap(),
+            "draft\n"
+        );
+    }
+}

@@ -15,6 +15,7 @@ pub(crate) struct DocumentClient {
     pub conversation: ConversationSession,
     pub lsp: LspSession,
     pub edit_chain: EditChain,
+    pub git: std::sync::Arc<dyn lapis_git::GitConnection>,
 }
 
 #[derive(Clone)]

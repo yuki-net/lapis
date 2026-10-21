@@ -84,6 +84,8 @@ impl WorkspaceRegistration {
 }
 
 pub struct BackendState {
+    removing_worktrees: HashSet<PathBuf>,
+    active_operations: HashMap<WorkspaceId, usize>,
     workspaces: HashMap<WorkspaceId, WorkspaceState>,
     connected_sessions: HashMap<SessionId, WorkspaceId>,
     next_document_id: u64,
@@ -107,6 +109,26 @@ pub(crate) struct PreparedWorkspaceOperation {
     operation: lapis_client_api::WorkspaceOperation,
 }
 
+pub(crate) struct PreparedWorktreeLookup {
+    operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
+    root: PathBuf,
+    worktree: lapis_editor_core::TaskId,
+}
+
+impl PreparedWorktreeLookup {
+    pub(crate) fn execute(self) -> Result<PathBuf, BackendStateError> {
+        let tree = self
+            .operations
+            .lock()
+            .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
+            .worktree(&self.root, &self.worktree)?;
+        if tree.state == lapis_git::WorktreeState::Discarded {
+            return Err(BackendStateError::WorkspaceDenied);
+        }
+        Ok(tree.path)
+    }
+}
+
 impl PreparedWorkspaceOperation {
     pub(crate) fn execute(
         self,
@@ -119,17 +141,87 @@ impl PreparedWorkspaceOperation {
 }
 
 impl BackendState {
-    pub(crate) fn prepare_workspace_operation(
+    pub(crate) fn reserve_worktree_removal(
+        &mut self,
+        root: PathBuf,
+    ) -> Result<(), BackendStateError> {
+        if self
+            .removing_worktrees
+            .iter()
+            .any(|other| root.starts_with(other) || other.starts_with(&root))
+        {
+            return Err(BackendStateError::Operation("Worktreeを削除中です".into()));
+        }
+        for (id, workspace) in &self.workspaces {
+            let within = workspace.resolver.root().starts_with(&root);
+            if workspace.terminals.active_in(&root)
+                || workspace.documents.values().any(|document| {
+                    (within
+                        || document
+                            .document
+                            .path()
+                            .is_some_and(|path| path.starts_with(&root)))
+                        && (document.document.is_dirty() || !document.attached_sessions.is_empty())
+                })
+                || within
+                    && (self
+                        .connected_sessions
+                        .values()
+                        .any(|connected| connected == id)
+                        || self.active_operations.get(id).copied().unwrap_or(0) != 0)
+            {
+                return Err(BackendStateError::Operation("Worktreeが使用中です。文書の未保存変更を保存・退避し、Terminalを終了して作業環境を切り替えてください".into()));
+            }
+        }
+        self.removing_worktrees.insert(root);
+        Ok(())
+    }
+
+    pub(crate) fn release_worktree_removal(&mut self, root: &std::path::Path) {
+        self.removing_worktrees.remove(root);
+    }
+
+    fn require_available_workspace(&self, id: &WorkspaceId) -> Result<(), BackendStateError> {
+        if self.workspaces.get(id).is_some_and(|workspace| {
+            self.removing_worktrees
+                .iter()
+                .any(|root| workspace.resolver.root().starts_with(root))
+        }) {
+            return Err(BackendStateError::Operation("Worktreeを削除中です".into()));
+        }
+        Ok(())
+    }
+    pub(crate) fn prepare_worktree_lookup(
         &self,
+        workspace_id: &WorkspaceId,
+        worktree: lapis_editor_core::TaskId,
+    ) -> Result<PreparedWorktreeLookup, BackendStateError> {
+        let workspace = self
+            .workspaces
+            .get(workspace_id)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        Ok(PreparedWorktreeLookup {
+            operations: workspace.operations.clone(),
+            root: workspace.resolver.root().to_owned(),
+            worktree,
+        })
+    }
+    pub(crate) fn prepare_workspace_operation(
+        &mut self,
         session: &BackendSession,
         request: lapis_client_api::WorkspaceOperationRequest,
     ) -> Result<PreparedWorkspaceOperation, BackendStateError> {
         self.require_workspace(session, &request.workspace_id)?;
         self.require_connected(session)?;
+        self.require_available_workspace(&session.workspace_id)?;
         let workspace = self
             .workspaces
             .get(&session.workspace_id)
             .ok_or(BackendStateError::WorkspaceNotFound)?;
+        *self
+            .active_operations
+            .entry(session.workspace_id.clone())
+            .or_default() += 1;
         Ok(PreparedWorkspaceOperation {
             operations: workspace.operations.clone(),
             root: workspace.resolver.root().to_owned(),
@@ -169,6 +261,12 @@ impl BackendState {
                 },
                 events: Vec::new(),
             },
+        }
+    }
+
+    pub(crate) fn finish_workspace_operation(&mut self, workspace: &WorkspaceId) {
+        if let Some(count) = self.active_operations.get_mut(workspace) {
+            *count = count.saturating_sub(1);
         }
     }
 
@@ -249,6 +347,13 @@ impl BackendState {
             return Err(BackendStateError::DuplicateWorkspace);
         }
         let workspace = WorkspaceState::new(registration)?;
+        if self
+            .removing_worktrees
+            .iter()
+            .any(|root| workspace.resolver.root().starts_with(root))
+        {
+            return Err(BackendStateError::Operation("Worktreeを削除中です".into()));
+        }
         self.workspaces.insert(workspace_id, workspace);
         Ok(())
     }
@@ -265,6 +370,8 @@ impl BackendState {
             }
         }
         Ok(Self {
+            removing_worktrees: HashSet::new(),
+            active_operations: HashMap::new(),
             workspaces,
             connected_sessions: HashMap::new(),
             next_document_id: 1,
@@ -313,6 +420,7 @@ impl BackendState {
         session: &BackendSession,
         request: RequestBody,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        self.require_available_workspace(&session.workspace_id)?;
         match request {
             RequestBody::CreateDirectory(request) => {
                 self.require_workspace(session, &request.workspace_id)?;

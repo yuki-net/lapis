@@ -9,7 +9,7 @@ mod view;
 use crate::theme;
 use lapis_git::ChangeKind;
 
-pub(crate) use state::GitFeature;
+pub(crate) use state::{GitEvent, GitFeature, GitInputRequest};
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(

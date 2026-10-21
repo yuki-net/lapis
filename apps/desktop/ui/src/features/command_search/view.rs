@@ -78,6 +78,7 @@ impl DoubleShiftDetector {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum QuickSearchEvent {
     Execute(CommandId),
+    SubmitText(String),
     Dismiss,
 }
 
@@ -86,6 +87,7 @@ type QuickSearchEventHandler = dyn Fn(QuickSearchEvent, &mut Window, &mut Contex
 pub(crate) struct QuickSearch {
     focus_handle: FocusHandle,
     query: String,
+    input_title: Option<String>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -106,6 +108,7 @@ impl QuickSearch {
         Self {
             focus_handle: cx.focus_handle(),
             query: String::new(),
+            input_title: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -124,6 +127,7 @@ impl QuickSearch {
     }
 
     pub(crate) fn open(&mut self, provider: CommandSearchProvider, cx: &mut Context<Self>) {
+        self.input_title = None;
         self.provider = provider;
         self.query.clear();
         self.selected_range = 0..0;
@@ -133,8 +137,22 @@ impl QuickSearch {
         cx.notify();
     }
 
+    pub(crate) fn open_input(&mut self, title: &str, suggested: &str, cx: &mut Context<Self>) {
+        self.input_title = Some(title.to_owned());
+        self.query = suggested.to_owned();
+        self.selected_range = 0..self.query.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.refresh_matches();
+        cx.notify();
+    }
+
     fn refresh_matches(&mut self) {
-        self.matches = self.provider.search(&self.query);
+        self.matches = if self.input_title.is_some() {
+            Vec::new()
+        } else {
+            self.provider.search(&self.query)
+        };
         self.selected_index = self
             .selected_index
             .min(self.matches.len().saturating_sub(1));
@@ -253,6 +271,10 @@ impl QuickSearch {
     }
 
     fn confirm(&mut self, _: &SearchConfirm, window: &mut Window, cx: &mut Context<Self>) {
+        if self.input_title.is_some() {
+            (self.on_event)(QuickSearchEvent::SubmitText(self.query.clone()), window, cx);
+            return;
+        }
         if let Some(command) = selected_command(&self.matches, self.selected_index) {
             (self.on_event)(QuickSearchEvent::Execute(command), window, cx);
         }
@@ -493,7 +515,11 @@ impl Element for SearchTextElement {
         let input = self.input.read(cx);
         let style = window.text_style();
         let display_text: gpui::SharedString = if input.query.is_empty() {
-            "Search commands…".into()
+            if input.input_title.is_some() {
+                "value".into()
+            } else {
+                "Search commands…".into()
+            }
         } else {
             input.query.clone().into()
         };
@@ -631,6 +657,9 @@ impl Render for QuickSearch {
             .on_action(cx.listener(Self::next))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
+            .when_some(self.input_title.clone(), |view, title| {
+                view.child(div().p_2().child(title))
+            })
             .child(
                 div()
                     .m_2()
@@ -662,10 +691,11 @@ impl Render for QuickSearch {
                     .pb_1()
                     .text_size(px(10.0))
                     .text_color(theme::colors().text_tertiary)
-                    .child(format!(
-                        "{} commands ﾂｷ 竊鯛・ select ﾂｷ Enter run",
-                        rows.len()
-                    )),
+                    .child(if self.input_title.is_some() {
+                        "Enterで確定 · Escで戻る".to_owned()
+                    } else {
+                        format!("{} commands · ↑↓ select · Enter run", rows.len())
+                    }),
             )
             .child(
                 scroll_viewport(
@@ -678,7 +708,7 @@ impl Render for QuickSearch {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .when(rows.is_empty(), |results| {
+                        .when(rows.is_empty() && self.input_title.is_none(), |results| {
                             results.child(
                                 div()
                                     .p_3()
