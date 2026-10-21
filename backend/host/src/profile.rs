@@ -130,6 +130,7 @@ pub fn open_host_file(
             key: key.clone(),
             pid: 0,
             started_at: None,
+            managed_lease: false,
             address: config.address,
             server_name: config.server_name.clone(),
             label: invitation.name.clone(),

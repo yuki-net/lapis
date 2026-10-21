@@ -27,7 +27,13 @@ fn main() {
             .get(2)
             .ok_or("Workspaceがありません")
             .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })
-            .and_then(|root| lapis_host::run_managed_host(std::path::Path::new(root)));
+            .and_then(|root| {
+                let directory = arguments.get(3).ok_or("Hostの状態フォルダがありません")?;
+                lapis_host::run_managed_host(
+                    std::path::Path::new(root),
+                    std::path::Path::new(directory),
+                )
+            });
         if result.is_err() {
             std::process::exit(1);
         }
