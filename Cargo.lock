@@ -3152,9 +3152,11 @@ dependencies = [
  "lapis-task",
  "lapis-terminal",
  "lapis-workspace",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "vt100",
+ "windows 0.61.3",
 ]
 
 [[package]]

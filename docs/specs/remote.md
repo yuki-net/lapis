@@ -28,14 +28,19 @@
 
 Desktopは招待ファイルから証明書と一回限りのtokenを取り込み、以後は証明書とcredentialを保存したprofileを使います。Windowsではユーザー単位DPAPI、Unixの開発・CIではprivate directory/fileで保護します。Local所有者情報は親子の匿名pipeだけで受け渡し、引数やログへ秘密を出しません。Local所有者の鍵はOSユーザーとHostの寿命に紐付き、Remote credentialとは期限を分けます。
 
-## Clientの回復と未実装事項
+Local HostはPIDとOSのprocess開始情報の組で識別します。PID再利用または終了を確認した場合だけ起動し直し、通信失敗やprocess情報へのアクセス拒否では置換しません。開始情報のない旧Local記録で同じPIDが生存している場合も、誤置換を避けて明示的な再起動を案内します。
+
+## Clientの回復
 
 - `sync_client.rs` は機能workerから呼び出し、再接続では保存済みの証明書・credentialを検証し、Workspace接続とsnapshot取得でattachmentを復元します。送信済み更新要求は自動再送しません。期限を過ぎた待機要求は実行しません。
 - イベント購読のqueue上限を超えた場合は購読を切断し、snapshotから回復します。
-- QR・手動codeによるPairing招待の配布。
-- Server秘密鍵・証明書の保存と更新手順。
 
 認証拒否、protocol不一致、証明書不一致を単なる一時切断として自動的に信頼し直しません。
+
+## 未実装事項
+
+- QR・手動codeによるPairing招待の配布。
+- Server秘密鍵・証明書の保存と更新手順。
 
 ## 状態と回復
 

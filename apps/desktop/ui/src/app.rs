@@ -93,11 +93,14 @@ impl DesktopServices {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InitialView {
     pub empty_window: bool,
+    #[doc(hidden)]
+    pub native_window_smoke: bool,
     pub show_tasks: bool,
     pub show_terminal: bool,
     pub show_problems: bool,
 }
 
+/// Runs the desktop event loop with an initial root window and quits after the last window closes.
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
     Application::new()
         .with_assets(crate::components::IconAssets)
@@ -105,23 +108,13 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
             bind_keys(cx);
             #[cfg(debug_assertions)]
             crate::devtools::init(cx);
-            let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Lapis".into()),
-                        appears_transparent: true,
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    cx.new(|cx| DesktopRoot::new(session, services, initial_view, window, cx))
-                },
-            )
-            .expect("Lapis window should open");
-            cx.on_action(|_: &Quit, cx| cx.quit());
+            open_desktop_window(session, services, initial_view, cx);
+            cx.on_window_closed(|cx| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+            .detach();
         });
 }
 
@@ -181,27 +174,32 @@ impl WindowFactory {
             .ok_or_else(|| "この起動構成ではHost接続を開けません".to_owned())?()
     }
 }
+/// Opens an independent root window; an opening failure leaves no new window and is not returned.
 pub(crate) fn open_desktop_window(
     editor: EditorSession,
     services: DesktopServices,
     initial: InitialView,
     cx: &mut App,
 ) {
-    let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
-    let result = cx.open_window(
-        WindowOptions {
-            window_bounds: Some(WindowBounds::Windowed(bounds)),
-            titlebar: Some(TitlebarOptions {
-                title: Some("Lapis".into()),
-                appears_transparent: true,
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-        move |window, cx| cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx)),
-    );
+    let result = cx.open_window(window_options(cx), move |window, cx| {
+        cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx))
+    });
     if let Err(error) = result {
         eprintln!("Windowを開けませんでした: {error}");
+    }
+}
+
+/// Returns centered 1440 by 900 logical-pixel bounds with a transparent Lapis title bar.
+pub(crate) fn window_options(cx: &App) -> WindowOptions {
+    let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+    WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(bounds)),
+        titlebar: Some(TitlebarOptions {
+            title: Some("Lapis".into()),
+            appears_transparent: true,
+            ..Default::default()
+        }),
+        ..Default::default()
     }
 }
 

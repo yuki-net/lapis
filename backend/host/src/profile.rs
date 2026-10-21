@@ -129,6 +129,7 @@ pub fn open_host_file(
             version: 1,
             key: key.clone(),
             pid: 0,
+            started_at: None,
             address: config.address,
             server_name: config.server_name.clone(),
             label: invitation.name.clone(),

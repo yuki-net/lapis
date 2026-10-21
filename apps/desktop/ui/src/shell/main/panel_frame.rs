@@ -38,6 +38,9 @@ impl Shell {
         handle
     }
 
+    /// Renders a panel's tabs and active content and records its bounds for drop targeting.
+    /// `animated_size` overrides the side width or bottom height in logical pixels.
+    /// Drops from this group move tabs locally or emit a command for a transfer between windows.
     pub(super) fn render_panel_window_frame(
         &self,
         panel: &PanelHost,
@@ -45,6 +48,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let position = panel.position;
+        let shell = cx.entity().downgrade();
         let is_bottom = panel.position == PanelPosition::Bottom;
         let panel_size = animated_size.unwrap_or(panel.size);
         let size = if panel.position == PanelPosition::Main {
@@ -109,12 +113,32 @@ impl Shell {
 
         size.flex_shrink_0().overflow_hidden().child(
             surface(SurfaceVariant::Panel)
+                .relative()
                 .size_full()
                 .flex()
                 .flex_col()
                 .on_drop(cx.listener(move |this, drag: &DraggedPanelTab, _, cx| {
-                    this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
+                    if !drag.belongs_to(this.group) {
+                        return;
+                    }
+                    if drag.source_host == this.host {
+                        this.move_panel_tab(drag.source_panel, position, drag.tab.clone(), cx);
+                    } else {
+                        cx.emit(UiCommand::MoveTab(drag.clone(), position));
+                    }
                 }))
+                .child(
+                    gpui::canvas(
+                        move |bounds, _, cx| {
+                            let _ = shell.update(cx, |shell, _| {
+                                shell.panel_bounds.borrow_mut().insert(position, bounds);
+                            });
+                        },
+                        |_, _, _, _| {},
+                    )
+                    .absolute()
+                    .size_full(),
+                )
                 .child(self.render_tool_panel_header(panel, cx))
                 .child(body),
         )

@@ -107,6 +107,68 @@ impl lapis_desktop_client::WorkspaceDialog for NoDialog {
 }
 
 #[test]
+fn group_close_refreshes_the_other_attachment_after_shared_save_or_discard() {
+    use lapis_desktop_client::{DocumentCloseDisposition as Close, EditorSession};
+    for save in [true, false] {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("shared-close.md");
+        std::fs::write(&path, "base").unwrap();
+        let host = BackendHost::start().unwrap();
+        let make_editor = || {
+            EditorSession::new_empty(
+                host.workspaces(),
+                std::sync::Arc::new(NoDialog),
+                std::sync::Arc::new(ViewStore::default()),
+                host.documents(),
+            )
+        };
+        let mut first = make_editor();
+        let mut second = make_editor();
+        first.open_workspace(root.path().to_owned()).unwrap();
+        second.open_workspace(root.path().to_owned()).unwrap();
+        first.open_path(path.clone()).unwrap();
+        second.open_path(path.clone()).unwrap();
+        let id = first.active_document_id().unwrap().clone();
+        assert_eq!(second.active_document_id(), Some(&id));
+        first.replace_range(0..4, "draft").unwrap();
+        second.poll_external_changes();
+        assert!(second.is_dirty());
+        let revision = first.active_revision();
+        if save {
+            first.save_document().unwrap();
+        }
+        first
+            .close_documents(&[(
+                id.clone(),
+                if save {
+                    Close::PreserveChanges
+                } else {
+                    Close::DiscardChanges
+                },
+                revision,
+            )])
+            .unwrap();
+        // 第二のWindowのcacheはdirtyのままでも、保存・破棄後の正本を検証して閉じる。
+        assert!(second.is_dirty());
+        let current = second.document_connection().attach(&id).unwrap();
+        assert!(!current.document.is_dirty());
+        second
+            .close_documents(&[(
+                id.clone(),
+                Close::PreserveChanges,
+                current.document.revision(),
+            )])
+            .unwrap();
+        assert!(first.tabs().is_empty());
+        assert!(second.tabs().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            if save { "draft" } else { "base" }
+        );
+    }
+}
+
+#[test]
 fn desktop_sessions_share_runtime_resources_across_close_restore_and_workspace_switches() {
     let root = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();

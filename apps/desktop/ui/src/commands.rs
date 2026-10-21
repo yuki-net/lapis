@@ -17,6 +17,16 @@ pub(crate) enum UiCommand {
     NewWindow,
     ConnectHost,
     CloseWindow,
+    DetachTab(crate::shell::PanelTab),
+    DockTab(crate::shell::PanelTab),
+    MoveTab(
+        crate::shell::DraggedPanelTab,
+        crate::extension_ui::PanelPosition,
+    ),
+    ReleaseTab(
+        crate::shell::DraggedPanelTab,
+        crate::window_host::drag::ScreenPoint,
+    ),
     Undo,
     Redo,
     Cut,
