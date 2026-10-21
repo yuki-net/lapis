@@ -1,5 +1,6 @@
 mod definition;
 mod registry;
+pub(crate) mod syntax;
 
 // テーマ定義とレジストリ
 pub use definition::{ThemeColors, ThemeDefinition};
