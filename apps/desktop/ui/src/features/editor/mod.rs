@@ -112,10 +112,15 @@ pub(crate) struct Editor {
 impl gpui::EventEmitter<EditorEvent> for Editor {}
 
 impl Editor {
+    /// Creates a local editor view and starts snapshot polling on the shared worker.
     pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
         Self::new_with_polling(worker, true, cx)
     }
 
+    /// Creates a local editor view over an existing worker.
+    ///
+    /// With `poll`, requests an initial snapshot and polls every two seconds when
+    /// idle and outside recovery. Otherwise, snapshots must be supplied by the host.
     pub(crate) fn new_with_polling(
         worker: ClientWorker<DocumentClient>,
         poll: bool,
@@ -181,6 +186,13 @@ impl Editor {
         self.submit_with_recovery(preserve_input, preserve_input, operation, cx)
     }
 
+    /// Queues an operation for this view's active document and records this host as creator of new tabs.
+    ///
+    /// Returns whether the worker accepted the request, not whether it succeeded.
+    /// Disabled or recovery-blocked views reject it. Failures emit status events;
+    /// `recover_on_error` retains the draft for recovery after an asynchronous failure.
+    /// `preserve_input` preserves selection and composition when the document stays active.
+    /// Only the latest submitted generation applies its response to this view.
     fn submit_with_recovery(
         &mut self,
         preserve_input: bool,
@@ -283,6 +295,10 @@ impl Editor {
         }
     }
 
+    /// Filters tabs by this host's inclusion and exclusion lists, retaining all document caches.
+    ///
+    /// Selects the snapshot's active tab if visible, then this view's active tab,
+    /// then the first visible tab, or none when no tabs remain.
     pub(crate) fn local_snapshot(&self, snapshot: &ClientSnapshot) -> ClientSnapshot {
         let mut snapshot = snapshot.clone();
         snapshot.tabs.retain(|tab| {
@@ -308,6 +324,8 @@ impl Editor {
         snapshot
     }
 
+    /// Refreshes an idle view from the group snapshot while preserving its local active tab if visible.
+    /// Pending operations or draft recovery defer the refresh.
     pub(crate) fn receive_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
         if !self.has_pending() {
             self.edit_epoch = Some(snapshot.edit_epoch);
@@ -319,6 +337,11 @@ impl Editor {
         }
     }
 
+    /// Applies a snapshot unless its sequence is older than the last accepted one.
+    ///
+    /// Restores saved selection and scroll on document switches. `preserve_input`
+    /// keeps selection and valid composition only when the active document is unchanged;
+    /// selection endpoints are clamped to the refreshed document's character length.
     fn accept_snapshot(
         &mut self,
         snapshot: &ClientSnapshot,
@@ -391,6 +414,12 @@ impl Editor {
             .retain(|id, _| snapshot.documents.iter().any(|cache| &cache.id == id));
     }
 
+    /// Optimistically replaces a range of character offsets and queues the shared-document edit.
+    ///
+    /// Returns false when disabled, without an active document, or for unchanged text.
+    /// Invalid ranges propagate document errors; recovery or a missing edit epoch
+    /// returns a conflict. Queue rejection restores the prior document and returns
+    /// an I/O error. Later worker failures are reported through status and recovery.
     fn edit(
         &mut self,
         range: Range<usize>,
@@ -503,6 +532,8 @@ impl Editor {
         &self.session
     }
 
+    /// Returns a tab's ID, character selection, cursor offset, and logical-pixel scroll offsets.
+    /// Uses live state for the active tab, cached state otherwise, or none if no selection is cached.
     pub(crate) fn tab_view(
         &self,
         id: &DocumentId,
@@ -521,6 +552,8 @@ impl Editor {
         ))
     }
 
+    /// Caches a transferred tab's character selection, cursor direction, and logical-pixel scroll offsets.
+    /// The cached view takes effect when that tab is selected.
     pub(crate) fn seed_view(&mut self, view: (DocumentId, Range<usize>, usize, f32, f32)) {
         let (id, selection, cursor, x, y) = view;
         self.views
@@ -528,6 +561,7 @@ impl Editor {
         self.scroll_positions.insert(id, gpui::point(px(x), px(y)));
     }
 
+    /// Selects an incoming document from the group snapshot, restoring its cached view state.
     pub(crate) fn select_transferred(
         &mut self,
         snapshot: &ClientSnapshot,
@@ -542,6 +576,7 @@ impl Editor {
     pub(crate) fn has_pending(&self) -> bool {
         self.in_flight > 0 || self.recovery
     }
+    /// Reports outstanding worker requests, excluding draft recovery without a request.
     pub(crate) fn has_in_flight(&self) -> bool {
         self.in_flight > 0
     }

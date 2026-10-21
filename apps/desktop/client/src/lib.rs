@@ -1541,7 +1541,12 @@ impl EditorSession {
         Ok(true)
     }
 
-    /// 全対象を検証してから閉じる。承認待ち・保存失敗時は呼び出さない。
+    /// Validates all close decisions, then closes the documents in order.
+    ///
+    /// Each tuple contains a document ID, its approved disposition, and the revision
+    /// confirmed by the caller. Complete any required approval and saving first.
+    /// Validation errors leave all tabs open. Discard and close errors propagate;
+    /// documents already closed before such an error remain closed.
     pub fn close_documents(
         &mut self,
         documents: &[(
@@ -1557,6 +1562,12 @@ impl EditorSession {
         Ok(())
     }
 
+    /// Checks approved revisions and refreshes matching open-document caches without closing tabs.
+    ///
+    /// Each tuple supplies a document ID, approved disposition, and expected revision.
+    /// Returns a conflict if a revision changed or a dirty document would be closed
+    /// with `PreserveChanges`. Attachment errors propagate. Caches refreshed before
+    /// an error remain updated; this method does not save or discard changes.
     pub fn validate_document_closes(
         &mut self,
         documents: &[(

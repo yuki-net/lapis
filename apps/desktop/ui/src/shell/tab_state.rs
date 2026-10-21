@@ -16,6 +16,7 @@ pub(crate) struct DraggedPanelTab {
 }
 
 impl DraggedPanelTab {
+    /// Returns true only when both group IDs are present and equal.
     pub(crate) fn belongs_to(&self, group: Option<gpui::EntityId>) -> bool {
         self.group.is_some() && self.group == group
     }
@@ -26,14 +27,17 @@ impl DraggedPanelTab {
 pub(super) struct TabDragState(Option<DraggedPanelTab>);
 
 impl TabDragState {
+    /// Records a drag, replacing any pending one without changing tab placement.
     pub fn begin(&mut self, drag: DraggedPanelTab) {
         self.0 = Some(drag);
     }
 
+    /// Clears the pending drag and reports whether one existed.
     pub fn cancel(&mut self) -> bool {
         self.0.take().is_some()
     }
 
+    /// Consumes the pending drag, returning it only if GPUI still considers the release active.
     pub fn release(&mut self, active: bool) -> Option<DraggedPanelTab> {
         self.0.take().filter(|_| active)
     }

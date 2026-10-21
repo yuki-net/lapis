@@ -41,6 +41,7 @@ pub(crate) struct WindowGroup {
 }
 
 impl WindowGroup {
+    /// Creates a group with the supplied window, editor, and shell as its root member.
     pub(crate) fn new(
         window: &Window,
         editor: Entity<Editor>,
@@ -65,6 +66,7 @@ impl WindowGroup {
         }
     }
 
+    /// Returns document IDs placed in this host, in unspecified order.
     pub(crate) fn documents(&self, host: HostId) -> Vec<DocumentId> {
         self.layout
             .tabs
@@ -76,6 +78,8 @@ impl WindowGroup {
             .collect()
     }
 
+    /// Accepts a strictly newer snapshot and reconciles document ownership while preserving tab moves.
+    /// Notifies observers when workspace, conversation, or document identity, revision, dirty state, or path changes.
     pub(crate) fn publish(&mut self, snapshot: ClientSnapshot, cx: &mut Context<Self>) {
         if self
             .latest
@@ -114,6 +118,8 @@ impl WindowGroup {
         }
     }
 
+    /// Applies host ownership filters, closing state, and the latest group snapshot to an editor.
+    /// The root accepts unassigned documents; detached editors show only their assigned documents.
     pub(crate) fn configure_editor(
         &self,
         host: HostId,
@@ -153,6 +159,8 @@ struct WindowHost {
 }
 
 impl WindowHost {
+    /// Registers a detached window with local editor and shell state over the group's existing worker.
+    /// Subscribes to group updates and routes commands and close requests through the root without polling.
     fn new(
         group: Entity<WindowGroup>,
         host: HostId,
@@ -241,6 +249,7 @@ impl WindowHost {
         this
     }
 
+    /// Refreshes this host's document filter, locale, nonempty group status, and shell presentation.
     fn synchronize(&mut self, cx: &mut Context<Self>) {
         self.group.update(cx, |group, cx| {
             group.configure_editor(self.host, &self.editor, cx)
@@ -256,6 +265,8 @@ impl WindowHost {
         self.update_presentation(cx);
     }
 
+    /// Updates the detached shell from the latest snapshot and local editor state, then applies panel placement.
+    /// Does nothing until a group snapshot is available.
     fn update_presentation(&mut self, cx: &mut Context<Self>) {
         let Some(snapshot) = self.group.read(cx).latest.as_ref() else {
             return;
@@ -285,6 +296,7 @@ impl WindowHost {
 }
 
 impl Render for WindowHost {
+    /// Renders the detached shell and routes Quit through the root's application close flow.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         gpui::div()
             .size_full()
@@ -299,6 +311,7 @@ impl Render for WindowHost {
 }
 
 impl DesktopRoot {
+    /// Refreshes the root's local view and panel placement from the group and schedules persistence.
     pub(crate) fn synchronize_group(&mut self, cx: &mut Context<Self>) {
         self.group.update(cx, |group, cx| {
             group.configure_editor(ROOT_HOST, &self.editor, cx)
@@ -313,6 +326,7 @@ impl DesktopRoot {
         }
     }
 
+    /// Records root panel placements and removes absent root tools while preserving detached ownership.
     pub(crate) fn record_window_layout(&mut self, cx: &mut Context<Self>) {
         let placements = self
             .shell
@@ -343,6 +357,8 @@ impl DesktopRoot {
         });
     }
 
+    /// Dispatches a host's tab, document, save, or close command through this group's root.
+    /// Ignores commands while closing and command variants unsupported by detached hosts.
     pub(crate) fn host_command(
         &mut self,
         host: HostId,
@@ -393,6 +409,8 @@ impl DesktopRoot {
         }
     }
 
+    /// Moves an eligible document tab to an existing group member, seeding its selection and scroll state.
+    /// Selects the destination document and panel; invalid ownership, pending input, or closing blocks the move.
     fn transfer_tab(
         &mut self,
         source: HostId,
@@ -443,10 +461,14 @@ impl DesktopRoot {
         cx.defer(move |cx| group.update(cx, |_, cx| cx.notify()));
     }
 
+    /// Opens a detached window at the default bounds for an eligible document tab.
     fn detach_tab(&mut self, host: HostId, tab: PanelTab, cx: &mut Context<Self>) {
         self.detach_tab_at(host, tab, None, cx);
     }
 
+    /// Opens a detached window before transferring an eligible document tab into it.
+    /// An optional physical screen point positions it on Windows. Opening failures
+    /// retain the source placement and become status messages.
     fn detach_tab_at(
         &mut self,
         host: HostId,
@@ -481,6 +503,7 @@ impl DesktopRoot {
     }
 }
 
+/// Waits asynchronously for one worker response, returning its result or an error if the channel disconnects.
 async fn wait_client<T>(
     receiver: std::sync::mpsc::Receiver<Result<T, String>>,
 ) -> Result<T, String> {
@@ -497,6 +520,7 @@ async fn wait_client<T>(
     }
 }
 
+/// Moves tabs already present in the shell to their recorded panels for this host.
 fn apply_panel_layout(
     group: &Entity<WindowGroup>,
     host: HostId,

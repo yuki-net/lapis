@@ -20,6 +20,8 @@ impl Render for PanelTabDragPreview {
 }
 
 impl Shell {
+    /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
+    /// Detached windows omit the tool-add button.
     pub(super) fn render_tool_panel_header(
         &self,
         panel: &PanelHost,

@@ -38,7 +38,7 @@ impl Shell {
         )
     }
 
-    /// Composes the 3-section application header (Left, Center, Right) with consistent padding.
+    /// Renders the application header sections, or only the workspace title in detached windows.
     fn render_app_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_1()

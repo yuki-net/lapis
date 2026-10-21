@@ -73,6 +73,8 @@ pub(crate) struct DesktopRoot {
 }
 
 impl DesktopRoot {
+    /// Creates a root window's features, shared client worker, and window group.
+    /// Installs command, snapshot, persistence, and close subscriptions and focuses the editor.
     pub(crate) fn new(
         session: EditorSession,
         mut services: DesktopServices,
@@ -393,6 +395,8 @@ impl DesktopRoot {
             .update(cx, |preview, cx| preview.update(text, cx));
     }
 
+    /// Updates root feature contexts and shell presentation from a snapshot filtered for this host.
+    /// Restores the saved shell layout when the active conversation changes.
     pub(crate) fn apply_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
         let switched = self.conversation.read(cx).active.as_ref() != Some(&snapshot.conversation);
         let record = snapshot
@@ -475,6 +479,7 @@ impl DesktopRoot {
         self.sync_preview(cx);
     }
 
+    /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
     pub(crate) fn persisted_view(&self, cx: &gpui::App) -> PersistedView {
         PersistedView {
             document: self.editor.read(cx).view_state(),
@@ -489,11 +494,14 @@ impl DesktopRoot {
         }
     }
 
+    /// Starts closing this root's entire group and returns false to defer native window removal.
     fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         self.close_hosts(crate::shell::window_group::ROOT_HOST, None, window, cx);
         false
     }
 
+    /// Debounces persistence by 500 milliseconds when document versions, editor view, or layout change.
+    /// Skips the write while closing; asynchronous persistence errors become status messages.
     pub(crate) fn schedule_persist(&mut self, cx: &mut Context<Self>) {
         let versions = self
             .group
@@ -548,6 +556,7 @@ impl DesktopRoot {
         }));
     }
 
+    /// Updates the root shell's status and publishes it to the window group.
     pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {
         self.group.update(cx, |group, cx| {
             group.status = status.clone();
@@ -557,6 +566,8 @@ impl DesktopRoot {
             .update(cx, |shell, cx| shell.set_status(status, cx));
     }
 
+    /// Dispatches root commands, ignoring them while closing.
+    /// Workspace switches are rejected with a status message while detached windows exist.
     pub(crate) fn command(
         &mut self,
         command: UiCommand,
@@ -702,6 +713,7 @@ impl DesktopRoot {
     }
 }
 impl Render for DesktopRoot {
+    /// Renders the root shell with application quit and command-search keyboard handlers.
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()

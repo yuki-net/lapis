@@ -90,6 +90,7 @@ pub struct InitialView {
     pub show_problems: bool,
 }
 
+/// Runs the desktop event loop with an initial root window and quits after the last window closes.
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
     Application::new()
         .with_assets(crate::components::IconAssets)
@@ -153,6 +154,7 @@ impl WindowFactory {
         (editor, services)
     }
 }
+/// Opens an independent root window; an opening failure leaves no new window and is not returned.
 pub(crate) fn open_desktop_window(
     editor: EditorSession,
     services: DesktopServices,
@@ -167,6 +169,7 @@ pub(crate) fn open_desktop_window(
     }
 }
 
+/// Returns centered 1440 by 900 logical-pixel bounds with a transparent Lapis title bar.
 pub(crate) fn window_options(cx: &App) -> WindowOptions {
     let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
     WindowOptions {

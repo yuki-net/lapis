@@ -1,6 +1,7 @@
 use super::*;
 
 impl Shell {
+    /// Renders the animated root panel layout, or a single main panel filling a detached window's body.
     pub(crate) fn render_main(
         &self,
         window: &mut Window,

@@ -1,6 +1,8 @@
 use super::*;
 
 impl Shell {
+    /// Installs capture handlers that release tab drags outside the source window or cancel them on mouse down.
+    /// Releases inside the source window are left to panel drop handlers.
     pub(super) fn tab_drag_events(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let shell = cx.entity().downgrade();
         gpui::canvas(
@@ -47,6 +49,7 @@ impl Shell {
         .size_full()
     }
 
+    /// Clears a pending tab drag and stops GPUI's active drag when one was recorded.
     pub(crate) fn cancel_tab_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.tab_drag.cancel() {
             cx.stop_active_drag(window);

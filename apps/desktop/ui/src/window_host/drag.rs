@@ -10,6 +10,8 @@ pub(crate) struct ScreenPoint {
 }
 
 impl DesktopRoot {
+    /// Allows moves only for a document owned by a live host when the group is not closing
+    /// and no member has pending worker operations or draft recovery.
     pub(super) fn can_move_tab(&self, host: HostId, tab: &PanelTab, cx: &gpui::App) -> bool {
         let group = self.group.read(cx);
         !group.closing
@@ -26,6 +28,11 @@ impl DesktopRoot {
                 .any(|member| member.editor.read(cx).has_pending())
     }
 
+    /// Resolves a drag release at a physical screen point.
+    /// On Windows, moves eligible tabs into a panel in this group or detaches over
+    /// external windows and desktop space. Releases over the source, another group,
+    /// or a non-panel Lapis region leave placement unchanged. Other platforms
+    /// cannot resolve native targets and detach eligible tabs if called directly.
     pub(super) fn release_tab(
         &mut self,
         host: HostId,
@@ -114,6 +121,7 @@ mod platform {
         },
     };
 
+    /// Returns the native Win32 handle, or none if unavailable or of another platform type.
     fn hwnd(window: &Window) -> Option<HWND> {
         match HasWindowHandle::window_handle(window).ok()?.as_raw() {
             RawWindowHandle::Win32(handle) => Some(HWND(handle.hwnd.get() as *mut _)),
@@ -121,6 +129,7 @@ mod platform {
         }
     }
 
+    /// Converts logical client pixels to physical screen pixels, or none if handle lookup or conversion fails.
     pub(crate) fn screen_position(
         position: gpui::Point<gpui::Pixels>,
         window: &Window,
@@ -138,6 +147,7 @@ mod platform {
             })
     }
 
+    /// Converts physical screen pixels to logical client pixels, or none if handle lookup or conversion fails.
     pub(super) fn client_position(
         window: &Window,
         point: ScreenPoint,
@@ -156,6 +166,9 @@ mod platform {
             })
     }
 
+    /// Places a nominal 1000 by 700 logical-pixel window near the physical screen point.
+    /// Clamps size and position to the nearest monitor's work area, using 96 DPI if
+    /// DPI lookup fails. Missing handles, monitor information, or placement errors are ignored.
     pub(crate) fn position_window(window: &Window, point: ScreenPoint) {
         let Some(handle) = hwnd(window) else {
             return;
@@ -197,6 +210,8 @@ mod platform {
         };
     }
 
+    /// Tests whether this window is the frontmost native root at the physical screen point.
+    /// Returns false if its native handle is unavailable.
     pub(super) fn is_target(window: &Window, point: ScreenPoint) -> bool {
         let Some(handle) = hwnd(window) else {
             return false;
@@ -216,21 +231,26 @@ mod platform {
 #[cfg(not(target_os = "windows"))]
 mod platform {
     use super::*;
+    /// Returns none because screen-coordinate conversion is unavailable on this platform.
     pub(crate) fn screen_position(_: gpui::Point<gpui::Pixels>, _: &Window) -> Option<ScreenPoint> {
         None
     }
+    /// Returns none because native client-coordinate conversion is unavailable on this platform.
     pub(super) fn client_position(_: &Window, _: ScreenPoint) -> Option<gpui::Point<gpui::Pixels>> {
         None
     }
+    /// Returns false because native window hit testing is unavailable on this platform.
     pub(super) fn is_target(_: &Window, _: ScreenPoint) -> bool {
         false
     }
+    /// Leaves window placement unchanged on this platform.
     pub(crate) fn position_window(_: &Window, _: ScreenPoint) {}
 }
 
 pub(crate) use platform::screen_position;
 use platform::{client_position, is_target};
 
+/// Tests whether the source window is frontmost at a physical screen point; returns false outside Windows.
 pub(crate) fn is_source_window(window: &Window, point: ScreenPoint) -> bool {
     is_target(window, point)
 }

@@ -156,6 +156,7 @@ impl Focusable for Shell {
     }
 }
 impl Shell {
+    /// Creates a shell around supplied feature views and intercepts Escape to cancel tab drags.
     pub(crate) fn new(
         document_view: AnyView,
         views: HashMap<ViewId, AnyView>,

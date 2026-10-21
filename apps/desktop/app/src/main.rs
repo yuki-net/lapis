@@ -19,6 +19,7 @@ use lapis_remote::{
     RemoteLimits, RemoteServer, RemoteServerConfig, Tls13ServerConfig,
 };
 
+/// Dispatches worker and task smoke modes, or starts the desktop with command-line options.
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
     if arguments.get(1).map(std::ffi::OsString::as_os_str)

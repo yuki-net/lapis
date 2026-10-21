@@ -38,6 +38,10 @@ pub(crate) struct ClientSnapshot {
 }
 
 impl DocumentClient {
+    /// Refreshes document caches and captures client state with a new sequence number.
+    ///
+    /// Removes creator metadata for closed tabs. Attachment failures return their
+    /// error text without advancing the sequence; external-change polling is best effort.
     pub fn snapshot(&mut self) -> Result<ClientSnapshot, String> {
         self.editor.poll_external_changes();
         let tabs = self.editor.tabs();

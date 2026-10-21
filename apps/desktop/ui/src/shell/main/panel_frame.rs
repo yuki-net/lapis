@@ -38,6 +38,9 @@ impl Shell {
         handle
     }
 
+    /// Renders a panel's tabs and active content and records its bounds for drop targeting.
+    /// `animated_size` overrides the side width or bottom height in logical pixels.
+    /// Drops from this group move tabs locally or emit a command for a transfer between windows.
     pub(super) fn render_panel_window_frame(
         &self,
         panel: &PanelHost,

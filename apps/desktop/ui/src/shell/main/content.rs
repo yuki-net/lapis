@@ -55,6 +55,7 @@ impl Shell {
             None => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
         }
     }
+    /// Renders a no-tabs placeholder for detached windows, or workspace actions and recent roots.
     pub(super) fn render_main_empty_panel(&self, cx: &mut Context<Self>) -> gpui::Div {
         if self.detached {
             return div()

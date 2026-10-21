@@ -28,6 +28,11 @@ struct ClosePlan {
 }
 
 impl DesktopRoot {
+    /// Captures close targets and queues a snapshot after earlier worker operations.
+    ///
+    /// `document` targets one owned tab; otherwise the root targets its entire group
+    /// and a child targets itself. Returns an error if closing, recovery is required,
+    /// the document is not owned by the host, or the worker cannot accept the request.
     fn close_request(
         &self,
         host: HostId,
@@ -82,6 +87,8 @@ impl DesktopRoot {
         })
     }
 
+    /// Starts the approval and save flow for one tab, a child window, or the root's entire group.
+    /// Request failures become status messages without starting the close flow.
     pub(crate) fn close_hosts(
         &mut self,
         host: HostId,
@@ -95,6 +102,8 @@ impl DesktopRoot {
         }
     }
 
+    /// Collects all root groups for a shared approval and save flow before closing their windows.
+    /// A request or window-access failure reports status and aborts before closing starts.
     pub(crate) fn close_application(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut requests = match self.close_request(ROOT_HOST, None, cx) {
             Ok(request) => vec![request],
@@ -138,6 +147,12 @@ impl DesktopRoot {
         self.start_close(requests, window, cx);
     }
 
+    /// Disables group editors while collecting decisions, saving, validating, and closing attachments.
+    ///
+    /// Decisions and saves finish before any close; shared documents are prompted,
+    /// saved, and discarded at most once. Cancellation or errors restore input and
+    /// report status. Completed saves and attachment closes are not rolled back
+    /// after a later failure. Native windows are removed only after every plan succeeds.
     fn start_close(
         &mut self,
         requests: Vec<CloseRequest>,
@@ -256,6 +271,7 @@ impl DesktopRoot {
     }
 }
 
+/// Publishes a group's closing state and disables or enables all member editors accordingly.
 fn set_closing(group: &Entity<WindowGroup>, closing: bool, cx: &mut gpui::App) {
     let editors = group.update(cx, |group, cx| {
         group.closing = closing;

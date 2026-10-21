@@ -14,6 +14,7 @@ pub(crate) struct GroupLayout {
 }
 
 impl GroupLayout {
+    /// Creates a layout containing only the root window and no tab placements.
     pub(crate) fn new() -> Self {
         Self {
             next_host: 1,
@@ -22,6 +23,7 @@ impl GroupLayout {
         }
     }
 
+    /// Registers a new child of the root and returns its group-local host ID.
     pub(crate) fn add_window(&mut self) -> HostId {
         let id = self.next_host;
         self.next_host += 1;
@@ -39,6 +41,8 @@ impl GroupLayout {
         self.tabs.entry(tab).or_insert((owner, PanelPosition::Main));
     }
 
+    /// Updates placement and returns true when the target exists and the source owns the tab.
+    /// Invalid targets or ownership mismatches leave the layout unchanged and return false.
     pub(crate) fn move_tab(
         &mut self,
         source: HostId,
@@ -55,6 +59,7 @@ impl GroupLayout {
         true
     }
 
+    /// Removes a window and its tab placements without returning them to the root.
     pub(crate) fn remove_window(&mut self, host: HostId) {
         self.windows.remove(&host);
         self.tabs.retain(|_, (owner, _)| *owner != host);
