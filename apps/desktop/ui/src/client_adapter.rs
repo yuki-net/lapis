@@ -16,10 +16,14 @@ pub(crate) struct DocumentClient {
     pub lsp: LspSession,
     pub edit_chain: EditChain,
     pub git: std::sync::Arc<dyn lapis_git::GitConnection>,
+    pub snapshot_sequence: u64,
+    pub document_owners: std::collections::HashMap<DocumentId, u64>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ClientSnapshot {
+    pub sequence: u64,
+    pub document_owners: std::collections::HashMap<DocumentId, u64>,
     pub tabs: Vec<DocumentTab>,
     pub documents: Vec<DocumentCache>,
     pub active: Option<DocumentId>,
@@ -37,6 +41,10 @@ pub(crate) struct ClientSnapshot {
 }
 
 impl DocumentClient {
+    /// Refreshes document caches and captures client state with a new sequence number.
+    ///
+    /// Removes creator metadata for closed tabs. Attachment failures return their
+    /// error text without advancing the sequence; external-change polling is best effort.
     pub fn snapshot(&mut self) -> Result<ClientSnapshot, String> {
         self.editor.poll_external_changes();
         let tabs = self.editor.tabs();
@@ -46,7 +54,12 @@ impl DocumentClient {
             .map(|tab| connection.attach(&tab.id))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| error.to_string())?;
+        self.document_owners
+            .retain(|id, _| tabs.iter().any(|tab| &tab.id == id));
+        self.snapshot_sequence += 1;
         Ok(ClientSnapshot {
+            sequence: self.snapshot_sequence,
+            document_owners: self.document_owners.clone(),
             tabs,
             documents,
             active: self.editor.active_document_id().cloned(),
@@ -86,7 +99,7 @@ impl DocumentClient {
             self.edit_chain.restart();
         }
         if let Some((id, selection, cursor, scroll_x, scroll_y)) = view.document
-            && (recovered || self.editor.activate_document(&id))
+            && (recovered || self.editor.select_document_for_operation(&id))
         {
             self.editor
                 .update_active_view(selection, cursor, scroll_x, scroll_y);

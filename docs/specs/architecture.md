@@ -39,6 +39,27 @@
 - 応答の適用には要求順序と対象の世代を検証する。楽観編集の先行操作が失敗したら、数値 revision が偶然一致しても依存する後続編集を適用しない。未確定入力は明示的な復旧まで保持する。
 - Window 終了時は受付済み入力と表示状態の保存を完了させる。購読・表示 worker の破棄によって Host の Terminal・Agent を終了しない。保存先や Workspace が失われても、復元用 draft を無言で破棄しない。
 
+## Desktop の WindowGroup
+
+- Root ごとに独立した WindowGroup と Client worker を持つ。Detached は元の worker・Document・Conversation を共有し、Feature や実行サービスを作り直さない。別 Root のグループへタブを渡さない。
+- 共通の OS Window options と Shell が、テーマ・タイトルバー・Window Controls・タブ・フッターを描画する。Detached は Root 用のメニューや補助 Panel を持たない。
+- WindowGroup は Window の親子関係、`PanelTab` の所属 Window・Panel、終了中フラグを持つ。Window bounds はイベントで更新する。Active Tab・focus・selection・scroll・Panel サイズは各 Window の Shell / Editor が所有する。
+- Document の操作は共有 worker で直列化し、送信元 Window の対象を操作前に選ぶ。新規 Document の作成元も worker 内で記録し、先に届いた Snapshot の送信元から所属を推測しない。応答の連番と各 Editor の世代で古い結果を拒否する。移動中に入力を失わないため、未完了入力・復旧待ち・終了処理中の移動は受け付けない。
+- Worker 内の対象切替は `select_document_for_operation` を使い、表示状態を保存しない。Root の既存 poll と子の操作が異なる文書を対象にしても、切替だけで保存済み Active Tab を書き換えない。ユーザーによるタブ選択、文書変更、debounce 後の表示状態更新はそれぞれの保存経路を維持する。
+- Window の生成成功後にタブの所属を移す。生成失敗・未受理のドロップでは元のタブを残す。新 Host の購読が有効になる前に初回 Snapshot と配置通知が併合される場合も、defer した通知で配置を渡す。
+- close は入力の受付停止 → FIFO 上の入力失敗検査 → 全対象の保存/破棄判断 → 保存 → revision の事前検証 → タブの close → 表示状態の保存 → OS Window の閉鎖の順。Cancel / Save As のキャンセルではタブを閉じない。通常の Root close はその系列だけ、Quit は全 Root 系列を対象とし、判断が揃う前に一部だけ閉じない。複数Rootが同じDocument正本を開いている場合、判断・保存・破棄は一度だけ行い、各attachmentを個別に閉じる。外部 I/O の commit 失敗まで rollback できる分散トランザクションではない。
+- Detached の終了はタブを閉じ、Root へ戻さない。表示 Entity・購読の解放と Host 上のプロセス終了は別操作である。
+
+Document は取り外しボタンと Root への再ドックに加え、Windows ではタブを Window 外で離すと新 Window を作り、同じグループの Panel へ離すと再ドックする。Root / 子 / 子同士を同じ移動経路で扱い、移動先で文書を選択する。空になった子 Window は開いたままとし、閉じる操作で解放する。配置モデルは Document / Tool 共通だが、Tool の Window 間移動は未有効。Terminal は focus と入力先・出力購読、Task / Agent は選択 execution とストリームの寿命を持つため、既存 Entity を再利用して再購読範囲を検証するまで移動させない。個別の Window Manager や汎用 Trait は増やさない。
+
+GPUI 0.2.2 の Windows backend は MouseDown で `SetCapture`、MouseUp で `ReleaseCapture` し、GPUI は受信した Window の MouseUp 後に active drag を破棄する。Shell は元 Window の capture phase で解放を受け、`ClientToScreen` / `ScreenToClient` で各 Window の DPI をまたぐ物理座標を変換する。`WindowFromPoint` の手前の Window と描画時の Panel bounds を照合し、背後の Window へ移動しない。別グループの Lapis Window と、Lapis の Panel 以外の領域では取り消す。外部アプリ上では新 Window を生成する。新 Window は離した位置のモニターの作業領域内へ置く。GPUI の変更やイベントの定期監視は加えない。
+
+ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。ドラッグのラベル表示は元 Window の範囲内であり、Window 外の追従プレビューや移動先の強調表示は未実装。Windows 以外では既存の Window 内ドラッグとボタン操作を維持するが、Window 間ドラッグは未対応。
+
+WindowGroup の再起動復元は未実装。後続では group / window の永続 ID、親子関係、bounds、Panel ごとのタブ順・Active Tab・サイズを、Document の復元用 ID と関連づけて保存する。現状の HostId / GPUI EntityId を永続 ID に使わない。明示 close 後の更新済み Document 一覧を保存し、閉じたタブ・Window を復活させない。既存の文書復元は OS Window の配置復元を意味しない。
+
+`scripts/test_window_host.ps1` は隔離した Workspace と設定で Native Window の生成・共有編集・再ドック・グループ分離・終了・再生成と CPU の短時間サンプルを検証する。Windows では自プロセスのテスト Window だけに Mouse / Key メッセージを送り、Escape、Window 外への取り外し、重なった Window の再ドック、子同士の移動、別グループへの拒否、文書領域の高さも確認する。対象 Window の表示と重なり順はこの明示的な smoke モードだけで操作する。保存確認ダイアログ・IME・複数 DPI のモニターをまたぐ実操作と継続性能は別途確認する。
+
 ## 依存の検査
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。

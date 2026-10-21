@@ -2167,6 +2167,7 @@ impl Interactivity {
                                 view: drag,
                                 value: drag_value,
                                 cursor_offset,
+                                button: mouse_down.button,
                                 cursor_style: drag_cursor_style,
                             });
                             pending_mouse_down.take();
