@@ -2,6 +2,7 @@
   "version": 1,
   "id": "lapis.white",
   "name": "White",
+  "appearance": "light",
   "colors": {
     "background_primary": "#f4f5f7",
     "background_secondary": "#ffffff",
