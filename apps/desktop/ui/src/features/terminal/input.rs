@@ -32,13 +32,13 @@ impl TerminalFeature {
 
 fn key_bytes(key: &gpui::Keystroke, application_cursor: bool) -> Option<String> {
     let text = key.key.as_str();
+    if key.modifiers.control && (text == "space" || text == " ") {
+        return Some("\0".to_owned());
+    }
     if key.modifiers.control && text.len() == 1 {
         let byte = text.as_bytes()[0].to_ascii_uppercase();
         if (b'@'..=b'_').contains(&byte) {
             return Some(char::from(byte & 0x1f).to_string());
-        }
-        if text == " " {
-            return Some("\0".to_owned());
         }
     }
     let arrow = match text {
@@ -183,5 +183,17 @@ mod tests {
         key.modifiers.control = false;
         key.key = "tab".to_owned();
         assert_eq!(key_bytes(&key, false).as_deref(), Some("\t"));
+    }
+
+    #[test]
+    fn terminal_ctrl_space_sends_nul_for_gpui_space_names() {
+        let mut key = gpui::Keystroke {
+            key: "space".to_owned(),
+            ..Default::default()
+        };
+        key.modifiers.control = true;
+        assert_eq!(key_bytes(&key, false).as_deref(), Some("\0"));
+        key.key = " ".to_owned();
+        assert_eq!(key_bytes(&key, false).as_deref(), Some("\0"));
     }
 }

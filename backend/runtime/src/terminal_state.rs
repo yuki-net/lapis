@@ -167,6 +167,8 @@ impl TerminalRegistry {
                         } else {
                             resource.screen.process(&resource.buffered_output);
                         }
+                        // 画面の再構築では、過去の問い合わせへ再応答しない。
+                        resource.screen.callbacks_mut().replies.clear();
                         resource.append_output(&[]);
                         resource.status = match snapshot.status {
                             lapis_terminal::TerminalStatus::Running => TerminalStatus::Running,
@@ -218,8 +220,9 @@ impl TerminalRegistry {
                 }
             }
             let replies = std::mem::take(&mut resource.screen.callbacks_mut().replies);
-            if !replies.is_empty() {
-                backend.input(&resource.backend_id, &replies)?;
+            if !replies.is_empty() && resource.status == TerminalStatus::Running {
+                // 応答の失敗で、適用済みの出力・状態イベントを破棄しない。
+                let _ = backend.input(&resource.backend_id, &replies);
             }
         }
         Ok(published)
@@ -471,12 +474,14 @@ mod tests {
     };
     use std::sync::{
         Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     #[derive(Default)]
     struct ScriptedSource {
         next: AtomicUsize,
+        fail_input: AtomicBool,
+        input_calls: AtomicUsize,
         events: Mutex<BTreeMap<String, Result<Vec<TerminalEvent>, TerminalError>>>,
     }
 
@@ -489,7 +494,12 @@ mod tests {
         }
 
         fn input(&self, _: &BackendTerminalId, _: &[u8]) -> Result<(), TerminalError> {
-            Ok(())
+            self.input_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_input.load(Ordering::SeqCst) {
+                Err(TerminalError::new("terminal input failed"))
+            } else {
+                Ok(())
+            }
         }
         fn resize(&self, _: &BackendTerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
             Ok(())
@@ -505,6 +515,95 @@ mod tests {
                 .remove(id.as_str())
                 .unwrap_or_else(|| Ok(Vec::new()))
         }
+    }
+
+    fn start_registry(
+        backend: Arc<ScriptedSource>,
+    ) -> (TerminalRegistry, WorkspaceId, SessionId, TerminalId) {
+        let workspace = WorkspaceId::try_new("workspace").unwrap();
+        let session = SessionId::try_new("session").unwrap();
+        let terminal = TerminalId::try_new("visible").unwrap();
+        let mut registry = TerminalRegistry::new(Some(backend));
+        registry
+            .start(
+                terminal.clone(),
+                &session,
+                &workspace,
+                Path::new("."),
+                &TerminalStartRequest {
+                    workspace_id: workspace.clone(),
+                    cwd: None,
+                    command: None,
+                    shell: Default::default(),
+                    size: TerminalSize {
+                        columns: 80,
+                        rows: 24,
+                    },
+                },
+            )
+            .unwrap();
+        (registry, workspace, session, terminal)
+    }
+
+    #[test]
+    fn snapshot_rebuild_does_not_resend_old_terminal_queries() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, workspace, _session, _terminal) = start_registry(backend.clone());
+        backend.events.lock().unwrap().insert(
+            "source-1".to_owned(),
+            Ok(vec![TerminalEvent::Snapshot(SourceSnapshot {
+                id: BackendTerminalId::new("source-1"),
+                cwd: ".".into(),
+                status: SourceStatus::Running,
+                columns: 80,
+                rows: 24,
+                output: b"\x1b[6n".to_vec(),
+                output_sequence: 1,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
+            })]),
+        );
+
+        assert!(matches!(
+            &registry.poll().unwrap()[..],
+            [EventBody::SnapshotRequired { workspace_id, reason: SnapshotReason::EventGap }]
+                if workspace_id == &workspace
+        ));
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn failed_terminal_reply_does_not_drop_published_events() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, _workspace, _session, _terminal) = start_registry(backend.clone());
+        backend.fail_input.store(true, Ordering::SeqCst);
+        backend.events.lock().unwrap().insert(
+            "source-1".to_owned(),
+            Ok(vec![
+                TerminalEvent::Output(TerminalOutput {
+                    sequence: 1,
+                    data: b"\x1b[6n".to_vec(),
+                }),
+                TerminalEvent::Output(TerminalOutput {
+                    sequence: 2,
+                    data: b"after query".to_vec(),
+                }),
+            ]),
+        );
+
+        let events = registry.poll().unwrap();
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 1);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EventBody::TerminalOutput { sequence, data, .. }
+                if sequence.value() == 1 && data == b"\x1b[6n"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EventBody::TerminalOutput { sequence, data, .. }
+                if sequence.value() == 2 && data == b"after query"
+        )));
     }
 
     #[test]

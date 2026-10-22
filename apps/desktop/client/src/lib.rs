@@ -565,10 +565,19 @@ impl TerminalSession {
 
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
+        let mut attach_error = None;
         for terminal in &mut self.terminals {
             if terminal.status == TerminalStatus::Disconnected {
-                *terminal = self.backend.attach(&terminal.cwd, &terminal.id)?;
-                changed = true;
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                        continue;
+                    }
+                }
             }
             if terminal.status != TerminalStatus::Running {
                 continue;
@@ -628,11 +637,21 @@ impl TerminalSession {
                 })
             }) {
                 // buffer欠落や通常/代替画面の切替時は、Hostの現在画面を取り直す。
-                *terminal = self.backend.attach(&terminal.cwd, &terminal.id)?;
-                changed = true;
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                    }
+                }
             }
         }
-        Ok(changed)
+        match attach_error {
+            Some(error) => Err(TerminalError::new(error)),
+            None => Ok(changed),
+        }
     }
 
     pub fn terminate(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
@@ -2301,6 +2320,62 @@ mod tests {
         }
     }
 
+    struct SelectiveAttachBackend;
+
+    impl TerminalBackend for SelectiveAttachBackend {
+        fn start(
+            &self,
+            _cwd: &Path,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalId, TerminalError> {
+            panic!("refresh must never start a terminal")
+        }
+
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+            unreachable!("refresh does not send terminal input")
+        }
+
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            unreachable!("refresh does not resize terminals")
+        }
+
+        fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            if id.as_str() == "recoverable" {
+                Ok(vec![TerminalEvent::Output(
+                    lapis_terminal::TerminalOutput {
+                        sequence: 1,
+                        data: b"later terminal".to_vec(),
+                    },
+                )])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
+            unreachable!("refresh does not terminate terminals")
+        }
+
+        fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+            if id.as_str() == "unavailable" {
+                return Err(TerminalError::new("terminal is still unavailable"));
+            }
+            Ok(TerminalSnapshot {
+                id: id.clone(),
+                cwd: cwd.to_owned(),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+                output: Vec::new(),
+                output_sequence: 0,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
+            })
+        }
+    }
+
     impl lapis_task::TaskConnection for MemoryTaskBackend {
         fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
             Ok(self
@@ -2742,6 +2817,38 @@ mod tests {
             terminals.terminals()[0].status,
             TerminalStatus::Disconnected
         );
+    }
+
+    #[test]
+    fn terminal_refresh_continues_after_one_attach_failure() {
+        let mut terminals = TerminalSession::new(Arc::new(SelectiveAttachBackend));
+        terminals.restore_summaries(&[
+            RestoredTerminal {
+                id: Some(TerminalId::new("unavailable")),
+                cwd: PathBuf::from("first"),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            },
+            RestoredTerminal {
+                id: Some(TerminalId::new("recoverable")),
+                cwd: PathBuf::from("second"),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            },
+        ]);
+
+        let error = terminals
+            .refresh()
+            .expect_err("the failed attach is reported");
+        assert_eq!(error.to_string(), "terminal is still unavailable");
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+        assert_eq!(terminals.terminals()[1].status, TerminalStatus::Running);
+        assert_eq!(terminals.terminals()[1].output, b"later terminal");
     }
 
     #[test]

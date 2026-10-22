@@ -239,6 +239,7 @@ impl DesktopRoot {
                 for plan in plans {
                     let ClosePlan { request, mut decisions, .. } = plan;
                     let ids = decisions.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>();
+                    let saved_in_plan = ids.iter().any(|id| saved.contains(id));
                     let previous = committed.clone();
                     let view = request.view;
                     let receiver = request.worker.try_request(move |client| {
@@ -249,7 +250,13 @@ impl DesktopRoot {
                                 *revision = client.editor.document_connection().attach(id).map_err(|e| e.to_string())?.document.revision();
                             }
                         }
-                        client.editor.close_documents(&decisions).map_err(|e| e.to_string())?;
+                        client.editor.close_documents(&decisions).map_err(|error| {
+                            if saved_in_plan {
+                                format!("保存しました。文書を閉じられませんでした: {error}")
+                            } else {
+                                error.to_string()
+                            }
+                        })?;
                         client.persist_view(view)?;
                         client.snapshot()
                     })?;
