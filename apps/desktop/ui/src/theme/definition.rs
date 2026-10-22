@@ -3,6 +3,14 @@ use serde::Deserialize;
 
 use crate::extension_ui::ThemeId;
 
+/// 構文配色の明暗を決めるテーマ属性。
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeAppearance {
+    Dark,
+    Light,
+}
+
 /// テーマが提供するセマンティックカラートークン。
 #[derive(Clone, Debug)]
 pub struct ThemeColors {
@@ -66,6 +74,7 @@ pub struct ThemeDefinition {
     pub id: ThemeId,
     pub name: String,
     pub colors: ThemeColors,
+    pub appearance: ThemeAppearance,
 }
 
 impl ThemeDefinition {
@@ -74,6 +83,7 @@ impl ThemeDefinition {
         Self {
             name: id.as_str().to_owned(),
             id,
+            appearance: ThemeAppearance::from_colors(&colors),
             colors,
         }
     }
@@ -82,8 +92,15 @@ impl ThemeDefinition {
         Self {
             id: id.into(),
             name: name.into(),
+            appearance: ThemeAppearance::from_colors(&colors),
             colors,
         }
+    }
+
+    /// 登録するテーマの明暗を明示する。
+    pub fn with_appearance(mut self, appearance: ThemeAppearance) -> Self {
+        self.appearance = appearance;
+        self
     }
 
     pub fn from_json(source: &str) -> Result<Self, String> {
@@ -98,7 +115,15 @@ impl ThemeDefinition {
         if file.name.trim().is_empty() {
             return Err("theme name must not be empty".to_owned());
         }
-        Ok(Self::named(file.id, file.name, file.colors.try_into()?))
+        let colors = file.colors.try_into()?;
+        Ok(Self {
+            id: file.id.into(),
+            name: file.name,
+            appearance: file
+                .appearance
+                .unwrap_or_else(|| ThemeAppearance::from_colors(&colors)),
+            colors,
+        })
     }
 }
 
@@ -107,7 +132,22 @@ struct ThemeFile {
     version: u32,
     id: String,
     name: String,
+    #[serde(default)]
+    appearance: Option<ThemeAppearance>,
     colors: ThemeColorsFile,
+}
+
+impl ThemeAppearance {
+    fn from_colors(colors: &ThemeColors) -> Self {
+        let luminance = 0.2126 * colors.background_primary.r
+            + 0.7152 * colors.background_primary.g
+            + 0.0722 * colors.background_primary.b;
+        if luminance > 0.5 {
+            Self::Light
+        } else {
+            Self::Dark
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -255,6 +295,11 @@ mod tests {
         let definition = ThemeDefinition::from_json(source).unwrap();
         assert_eq!(definition.id.as_str(), "lapis.dark");
         assert_eq!(definition.name, "Dark");
+        assert_eq!(definition.appearance, ThemeAppearance::Dark);
+
+        let light =
+            ThemeDefinition::from_json(include_str!("../../assets/themes/white.json")).unwrap();
+        assert_eq!(light.appearance, ThemeAppearance::Light);
 
         let invalid = source.replace(r#""version": 1"#, r#""version": 2"#);
         assert!(ThemeDefinition::from_json(&invalid).is_err());
