@@ -9,10 +9,10 @@ if ($owned.Count -ne $hosts.Count) {
     throw 'このworktreeの画面または作業プロセスが実行中です。保存して終了してから再実行してください。'
 }
 if ($hosts.Count -eq 0) { return }
-# ??exe???????Host????????????????????
+# 同じexeを通常起動したHostは対象外。開発用保存先の登録と照合する。
 $recordPath = Join-Path $PSScriptRoot '../target/dev-state/hosts/local-v1.host'
 if (-not (Test-Path -LiteralPath $recordPath) -or (Get-Item -LiteralPath $recordPath).Length -gt 131072) {
-    throw '???Local Host???????????????????'
+    throw '開発用Local Hostの記録ファイルが存在しないか、サイズが上限を超えているため停止しません。'
 }
 Add-Type -AssemblyName System.Security
 $encrypted = [IO.File]::ReadAllBytes($recordPath)
@@ -24,7 +24,7 @@ try {
     $registeredStart = $record.started_at
     if ($record.version -ne 1 -or $record.key -ne 'local-v1' -or
         $hosts.Count -ne 1 -or $hosts[0].ProcessId -ne $registeredPid) {
-        throw '???????Host?process???????????????'
+        throw '開発用Local Hostの記録と実行中のprocessが一致しないため停止しません。'
     }
 } finally {
     [Array]::Clear($plaintext, 0, $plaintext.Length)

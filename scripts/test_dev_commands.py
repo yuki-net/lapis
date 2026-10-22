@@ -68,13 +68,21 @@ $bytes = [Security.Cryptography.ProtectedData]::Protect(
     [Text.Encoding]::UTF8.GetBytes($record), [Text.Encoding]::UTF8.GetBytes('local-v1'),
     [Security.Cryptography.DataProtectionScope]::CurrentUser)
 [IO.File]::WriteAllBytes($recordPath, $bytes)
+if ($Scenario -eq 'missing') { [IO.File]::Delete($recordPath) }
 function Get-CimInstance { param($ClassName, $Filter) return $global:devTestitem }
 function Get-Process { param($Id, $ErrorAction) return $global:devTestfake }
 $failed = $false
-try { & $Target } catch { $failed = $true }
+$message = ''
+try { & $Target } catch { $failed = $true; $message = $_.Exception.Message }
+if ($Scenario -eq 'missing' -and $message -ne '開発用Local Hostの記録ファイルが存在しないか、サイズが上限を超えているため停止しません。') {
+    throw 'Missing record error is unreadable or incorrect'
+}
+if ($Scenario -eq 'foreign' -and $message -ne '開発用Local Hostの記録と実行中のprocessが一致しないため停止しません。') {
+    throw 'Mismatched record error is unreadable or incorrect'
+}
 $expected = if ($Scenario -eq 'host') { 1 } else { 0 }
 if ($global:devTestkilled -ne $expected) { throw "unexpected termination: $Scenario" }
-if ($failed -ne ($Scenario -in @('ui', 'reused', 'foreign'))) { throw "unexpected result: $Scenario" }
+if ($failed -ne ($Scenario -in @('ui', 'reused', 'foreign', 'missing'))) { throw "unexpected result: $Scenario" }
 '''
         with tempfile.TemporaryDirectory() as directory:
             fixture_script = Path(directory) / "scripts" / script.name
@@ -82,7 +90,7 @@ if ($failed -ne ($Scenario -in @('ui', 'reused', 'foreign'))) { throw "unexpecte
             shutil.copyfile(script, fixture_script)
             path = Path(directory) / "host harness.ps1"
             path.write_text(harness, encoding="utf-8-sig")
-            for scenario in ("host", "other", "ui", "reused", "gone", "foreign"):
+            for scenario in ("host", "other", "ui", "reused", "gone", "foreign", "missing"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         ["powershell", "-NoProfile", "-NonInteractive", "-File", str(path), str(fixture_script), scenario],

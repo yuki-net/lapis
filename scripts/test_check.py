@@ -8,6 +8,17 @@ import check
 
 
 class CheckTests(unittest.TestCase):
+    def test_format_runs_for_both_surfaces_and_propagates_failure(self):
+        for surface in ("backend", "desktop"):
+            with self.subTest(surface=surface):
+                with patch.object(check.subprocess, "run") as execute:
+                    execute.side_effect = subprocess.CalledProcessError(1, ["cargo", "fmt"])
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        check.run(surface, "format")
+                    execute.assert_called_once_with(
+                        ["cargo", "fmt", "--all", "--", "--check"], cwd=check.ROOT, check=True
+                    )
+
     def test_failure_stops_before_later_checks(self):
         with patch.object(check.subprocess, "run") as execute:
             execute.side_effect = subprocess.CalledProcessError(7, ["cargo", "check"])

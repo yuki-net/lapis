@@ -19,7 +19,7 @@ def commands(surface, stage):
             [sys.executable, "scripts/check_architecture.py"],
         ]
     if stage == "format":
-        return [["cargo", "fmt", "--all", "--", "--check"]] if surface == "backend" else []
+        return [["cargo", "fmt", "--all", "--", "--check"]]
     action = "clippy" if stage == "lint" else stage
     if surface == "backend":
         scope = ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "lapis-desktop-ui"]
