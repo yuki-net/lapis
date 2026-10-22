@@ -10,7 +10,7 @@ pub(crate) struct Preset {
 
 // 順序: comment, string, number, boolean, control, keyword, function, type,
 // tag, attribute, variable, constant, operator, markup。スコープの粒度はSyntectに委ねる。
-static PRESETS: [Preset; 8] = [
+static PRESETS: [Preset; 10] = [
     Preset {
         foreground: 0xe5e7eb,
         colors: [
@@ -61,6 +61,20 @@ static PRESETS: [Preset; 8] = [
         ],
     },
     Preset {
+        foreground: 0x080808,
+        colors: [
+            0x8c8c8c, 0x067d17, 0x1750eb, 0x0033b3, 0x0033b3, 0x0033b3, 0x00627a, 0x080808,
+            0x080808, 0x174ad4, 0x080808, 0x871094, 0x080808, 0x0033b3,
+        ],
+    },
+    Preset {
+        foreground: 0xa9b7c6,
+        colors: [
+            0x808080, 0x6a8759, 0x6897bb, 0xcc7832, 0xcc7832, 0xcc7832, 0xffc66d, 0xa9b7c6,
+            0xe8bf6a, 0xbababa, 0xa9b7c6, 0x9876aa, 0xa9b7c6, 0xcc7832,
+        ],
+    },
+    Preset {
         foreground: 0x000000,
         colors: [
             0x808080, 0x008000, 0x0000ff, 0x000080, 0x000080, 0x000080, 0x000000, 0x000000,
@@ -69,11 +83,12 @@ static PRESETS: [Preset; 8] = [
     },
 ];
 
-pub(crate) const FAMILIES: [(SyntaxTheme, &str); 4] = [
+pub(crate) const FAMILIES: [(SyntaxTheme, &str); 5] = [
     (SyntaxTheme::Lapis, "Lapis"),
     (SyntaxTheme::VsCode, "VS Code"),
     (SyntaxTheme::Zed, "Zed"),
-    (SyntaxTheme::Intellij, "IntelliJ"),
+    (SyntaxTheme::Intellij, "IntelliJ (New)"),
+    (SyntaxTheme::IntellijClassic, "IntelliJ (Classic / Darcula)"),
 ];
 
 static SELECTORS: LazyLock<Vec<ScopeSelectors>> = LazyLock::new(|| {
@@ -114,6 +129,7 @@ pub(crate) fn resolve(family: Option<SyntaxTheme>, ui_theme: &str) -> &'static P
         SyntaxTheme::VsCode => 2,
         SyntaxTheme::Zed => 4,
         SyntaxTheme::Intellij => 6,
+        SyntaxTheme::IntellijClassic => 8,
     };
     &PRESETS[pair + usize::from(ui_theme == "lapis.white")]
 }
@@ -146,9 +162,9 @@ mod tests {
     use crate::extension_ui::ThemeId;
 
     #[test]
-    fn four_families_have_eight_scoped_palettes() {
-        assert_eq!(FAMILIES.len(), 4);
-        assert_eq!(PRESETS.len(), 8);
+    fn five_families_have_ten_scoped_palettes() {
+        assert_eq!(FAMILIES.len(), 5);
+        assert_eq!(PRESETS.len(), 10);
         let keyword: Scope = "keyword.control.rust".parse().unwrap();
         let unknown: Scope = "source.unknown".parse().unwrap();
         for preset in &PRESETS {
@@ -163,6 +179,24 @@ mod tests {
         }
         assert_eq!(resolve(None, "lapis.dark").foreground, 0xe5e7eb);
         assert_eq!(resolve(None, "lapis.white").foreground, 0x334155);
+    }
+
+    #[test]
+    fn intellij_new_and_classic_keep_distinct_colors_in_both_ui_modes() {
+        let string: Scope = "string.quoted.double".parse().unwrap();
+        for ui in ["lapis.dark", "lapis.white"] {
+            let modern = resolve(Some(SyntaxTheme::Intellij), ui);
+            let classic = resolve(Some(SyntaxTheme::IntellijClassic), ui);
+            assert_ne!(modern.color(&[string]), classic.color(&[string]));
+        }
+        assert_eq!(
+            resolve(Some(SyntaxTheme::IntellijClassic), "lapis.dark").colors[1],
+            0x6a8759
+        );
+        assert_eq!(
+            resolve(Some(SyntaxTheme::IntellijClassic), "lapis.white").colors[1],
+            0x008000
+        );
     }
 
     #[test]

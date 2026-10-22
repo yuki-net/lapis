@@ -11,8 +11,10 @@ pub enum SyntaxTheme {
     VsCode,
     #[serde(alias = "zed.one-dark")]
     Zed,
-    #[serde(alias = "intellij.dark", alias = "intellij.darcula")]
+    #[serde(alias = "intellij.dark")]
     Intellij,
+    #[serde(alias = "intellij.darcula")]
+    IntellijClassic,
     #[default]
     #[serde(alias = "lapis.dark", alias = "lapis.light", other)]
     Lapis,
@@ -85,14 +87,16 @@ mod tests {
             serde_json::from_str(r#"{"version":1,"locale":"en-US","theme":"lapis.white"}"#)
                 .unwrap();
         assert!(old.syntax_theme.is_none());
-        let selected = GlobalSettings {
-            syntax_theme: Some(SyntaxTheme::Intellij),
-            ..old
-        };
-        let loaded: GlobalSettings =
-            serde_json::from_str(&serde_json::to_string(&selected).unwrap()).unwrap();
-        assert_eq!(loaded, selected);
-        assert_eq!(loaded.theme, "lapis.white");
+        for family in [SyntaxTheme::Intellij, SyntaxTheme::IntellijClassic] {
+            let selected = GlobalSettings {
+                syntax_theme: Some(family),
+                ..old.clone()
+            };
+            let loaded: GlobalSettings =
+                serde_json::from_str(&serde_json::to_string(&selected).unwrap()).unwrap();
+            assert_eq!(loaded, selected);
+            assert_eq!(loaded.theme, "lapis.white");
+        }
     }
 
     #[test]
@@ -103,7 +107,11 @@ mod tests {
             ("vscode.dark-plus", SyntaxTheme::VsCode, "vscode"),
             ("zed.one-dark", SyntaxTheme::Zed, "zed"),
             ("intellij.dark", SyntaxTheme::Intellij, "intellij"),
-            ("intellij.darcula", SyntaxTheme::Intellij, "intellij"),
+            (
+                "intellij.darcula",
+                SyntaxTheme::IntellijClassic,
+                "intellij-classic",
+            ),
         ] {
             let json = format!(r#"{{"version":1,"locale":"en-US","syntax_theme":"{old}"}}"#);
             let settings: GlobalSettings = serde_json::from_str(&json).unwrap();

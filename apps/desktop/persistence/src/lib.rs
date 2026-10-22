@@ -189,6 +189,16 @@ mod tests {
         assert_eq!(restarted.settings().syntax_theme, Some(SyntaxTheme::Zed));
         let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
         assert_eq!(stored["syntax_theme"], "zed");
+
+        for family in [SyntaxTheme::Intellij, SyntaxTheme::IntellijClassic] {
+            session.set_syntax_theme(family).unwrap();
+            let restarted = SettingsSession::load(std::sync::Arc::new(
+                LocalGlobalSettingsRepository::new(directory.path().join("settings-v1.json")),
+            ))
+            .unwrap();
+            assert_eq!(restarted.settings().syntax_theme, Some(family));
+            assert_eq!(restarted.settings().theme, "lapis.white");
+        }
     }
 
     #[test]
