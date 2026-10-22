@@ -24,6 +24,7 @@ impl SettingsFeature {
         let mut locale = Localizer::bundled();
         let _ = locale.set_active(&values.locale);
         let _ = theme::set_active(&ThemeId::new(values.theme.clone()));
+        theme::syntax::set_active(values.syntax_theme);
         Self {
             worker: ClientWorker::new(settings),
             confirmed: values.clone(),
@@ -50,6 +51,7 @@ impl SettingsFeature {
     }
     fn apply_values(&mut self, values: lapis_settings::GlobalSettings, cx: &mut Context<Self>) {
         let _ = theme::set_active(&ThemeId::new(values.theme.clone()));
+        theme::syntax::set_active(values.syntax_theme);
         let _ = self.locale.set_active(&values.locale);
         self.values = values;
         cx.emit(self.values.clone());
@@ -124,6 +126,12 @@ impl SettingsFeature {
         self.change(candidate, move |settings| settings.set_locale(locale), cx);
     }
 
+    fn select_syntax_theme(&mut self, id: lapis_settings::SyntaxTheme, cx: &mut Context<Self>) {
+        let mut candidate = self.values.clone();
+        candidate.syntax_theme = Some(id);
+        self.change(candidate, move |settings| settings.set_syntax_theme(id), cx);
+    }
+
     pub(super) fn render_settings_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let active_theme = theme::active_id();
         let current_locale = self.values.locale.clone();
@@ -133,12 +141,10 @@ impl SettingsFeature {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| self.t("settings.no-workspace"));
 
-        div().flex_1().w_full().h_full().child(
+        div().w_full().child(
             div()
                 .id("main-settings-content")
-                .flex_1()
                 .w_full()
-                .h_full()
                 .flex()
                 .flex_col()
                 .p_8()
@@ -164,6 +170,34 @@ impl SettingsFeature {
                         .flex()
                         .flex_col()
                         .gap_4()
+                        .child(
+                            div()
+                                .p_4()
+                                .rounded(px(8.0))
+                                .border_1()
+                                .border_color(theme::colors().border_default)
+                                .bg(theme::colors().background_tertiary)
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(self.t("settings.syntax-theme"))
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors().text_tertiary)
+                                        .child(self.t("settings.syntax-theme-follows-ui")),
+                                )
+                                .child(div().flex().flex_wrap().gap_2().children(
+                                    theme::syntax::FAMILIES.iter().map(|&(id, name)| {
+                                        let selected = theme::syntax::active_family() == id;
+                                        crate::components::action_button(name, selected).on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.select_syntax_theme(id, cx)
+                                            }),
+                                        )
+                                    }),
+                                )),
+                        )
                         .child(
                             div()
                                 .p_4()
@@ -324,6 +358,7 @@ impl SettingsFeature {
 impl Render for SettingsFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .w_full()
             .flex()
             .flex_col()
             .child(self.message.clone())
