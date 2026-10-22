@@ -8,6 +8,9 @@ cd "$repo_root"
 git_local_env=$(git rev-parse --local-env-vars)
 unset $git_local_env
 
-# コミット時は整形のみ。変更関連のテストは手元で、全検証はCIで実行する。
+# コミット時は整形とコンパイル検査。変更関連のテストは手元で、全検証はCIで実行する。
 echo "[pre-commit] Checking Rust formatting..."
 cargo fmt --all -- --check
+
+echo "[pre-commit] Checking the workspace..."
+cargo check --locked --workspace --all-targets

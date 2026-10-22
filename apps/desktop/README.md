@@ -44,7 +44,7 @@ build/runは同じ `target/` を使い、開発用の設定・会話・復元状
 
 生成物と開発用状態はGit管理外の `target/` 内に置くため、worktreeのディレクトリ削除と一緒に消えます。`cargo clean`でも開発用状態ごと削除されるため、残したいファイルは先に保存してください。worktree削除前に起動中のプロセスを終了し、復元用の下書きも必要なら保存します。以前の `target/run/` は自動移動・削除しません。不要なら停止後に削除できます。Cargoのダウンロードキャッシュはユーザー共通で再利用します。
 
-コミット時のhookはRustのfmtのみで、変更関連のテストは手元で実行します。全体の合否は `.github/workflows/ci.yml` のCIで確認します。Rustの検証内容は `scripts/check.py` をCIとローカルで共有し、既存の対象・警告の扱いを維持しています。実画面の確認はCIとは別に行います。
+コミット時のhookはRustのfmtとworkspace全体の`cargo check`で、変更関連のテストは手元で実行します。全体の合否は `.github/workflows/ci.yml` のCIで確認します。Rustの検証内容は `scripts/check.py` をCIとローカルで共有し、既存の対象・警告の扱いを維持しています。実画面の確認はCIとは別に行います。
 
 ## Host接続
 
