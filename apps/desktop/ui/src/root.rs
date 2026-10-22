@@ -534,6 +534,8 @@ impl DesktopRoot {
             gpui::Timer::after(std::time::Duration::from_millis(500)).await;
             let _ = this.update(cx, |root, cx| {
                 if root.group.read(cx).closing || root.group.read(cx).synchronization_required {
+                    // 指紋はデバウンス用であり、見送った書き込みは再同期後に再試行できるようにする。
+                    root.persist_signature = None;
                     return;
                 }
                 let view = root.persisted_view(cx);

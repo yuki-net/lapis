@@ -31,8 +31,10 @@ impl DesktopRoot {
     /// Captures close targets and queues a snapshot after earlier worker operations.
     ///
     /// `document` targets one owned tab; otherwise the root targets its entire group
-    /// and a child targets itself. Returns an error if closing, recovery is required,
-    /// the document is not owned by the host, or the worker cannot accept the request.
+    /// and a child targets itself. Returns an error if closing, the target is not owned
+    /// by the host, or the worker cannot accept the request. Recovery is checked again
+    /// after the queued snapshot has drained, so a reconciliation retry cannot discard
+    /// an editor-only draft.
     fn close_request(
         &self,
         host: HostId,
@@ -194,6 +196,39 @@ impl DesktopRoot {
                     let snapshot = wait_client(request.snapshot.take().unwrap()).await?;
                     this.update(cx, |_, cx| request.group.update(cx, |group, cx| group.publish_reconciled(snapshot.clone(), cx)))
                         .map_err(|e| e.to_string())?;
+                    // Snapshot公開でグループの同期必須状態は解除できるが、Editor個別の
+                    // 復旧待ち入力は解決しない。入力処理が落ち着くまで待ってから復旧を
+                    // 再確認し、残っていればCloseを拒否する。編集チェーンが正常でも、
+                    // すべてのローカル入力が保存済みとは限らないためである。
+                    loop {
+                        let pending = this
+                            .update(cx, |_, cx| {
+                                request
+                                    .group
+                                    .read(cx)
+                                    .members
+                                    .values()
+                                    .any(|member| member.editor.read(cx).has_in_flight())
+                            })
+                            .map_err(|e| e.to_string())?;
+                        if !pending {
+                            break;
+                        }
+                        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                    }
+                    let recovery_required = this
+                        .update(cx, |_, cx| {
+                            request
+                                .group
+                                .read(cx)
+                                .members
+                                .values()
+                                .any(|member| member.editor.read(cx).needs_recovery())
+                        })
+                        .map_err(|e| e.to_string())?;
+                    if recovery_required {
+                        return Err("未確定の入力を新しい文書へ退避・復旧してから閉じてください".into());
+                    }
                     let mut decisions = Vec::new();
                     let mut saves = Vec::new();
                     for tab in snapshot.tabs.iter().filter(|tab| request.document.as_ref().map_or_else(
