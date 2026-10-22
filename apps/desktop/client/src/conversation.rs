@@ -706,10 +706,20 @@ impl ConversationSession {
                 "Taskの保存状態が更新されました。Worktree削除をやり直してください",
             ));
         }
+        let mut previous = self.clone();
         *self = next;
-        git.discard_worktree(workspace, id)
-            .map(|_| ())
-            .map_err(|error| WorkspaceError::new(error.to_string()))
+        if let Err(error) = git.discard_worktree(workspace, id) {
+            previous.persisted = self.persisted.clone();
+            let restored = previous.save();
+            *self = previous;
+            return Err(WorkspaceError::new(match restored {
+                Ok(()) => error.to_string(),
+                Err(restore) => format!(
+                    "{error}。退避状態は手元に保持していますが、保存の復旧に失敗しました: {restore}"
+                ),
+            }));
+        }
+        Ok(())
     }
 
     pub fn set_worktree(

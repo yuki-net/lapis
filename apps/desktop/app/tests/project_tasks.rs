@@ -205,6 +205,17 @@ fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_suc
     repository
         .fail
         .store(false, std::sync::atomic::Ordering::SeqCst);
+    std::fs::write(path.join("untracked.txt"), "keep").unwrap();
+    assert!(
+        tasks
+            .discard_worktree(&editor, connection.as_ref(), &tree)
+            .is_err()
+    );
+    assert!(path.is_dir());
+    assert_eq!(tasks.active_record().unwrap().parked_sources.len(), 1);
+    let restored = ConversationSession::new(repository.clone(), Default::default());
+    assert_eq!(restored.active_record().unwrap().parked_sources.len(), 1);
+    std::fs::remove_file(path.join("untracked.txt")).unwrap();
     tasks
         .discard_worktree(&editor, connection.as_ref(), &tree)
         .unwrap();
