@@ -294,11 +294,23 @@ impl WorkspaceDialog for NoDialog {
 }
 
 fn git(root: &std::path::Path, args: &[&str]) {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .args(args)
-        .output()
-        .unwrap();
+    let mut command = std::process::Command::new("git");
+    command.current_dir(root).args(args);
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    ] {
+        command.env_remove(name);
+    }
+    if let Some(parent) = root.parent() {
+        command.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    let output = command.output().unwrap();
     assert!(
         output.status.success(),
         "{args:?}: {}",

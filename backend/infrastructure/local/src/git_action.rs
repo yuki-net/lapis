@@ -191,7 +191,14 @@ fn stash(
             "Stash一覧が変わりました。更新して選び直してください",
         ));
     }
-    git_text(repository, &["stash", operation, &reference])
+    let target = if operation == "apply" {
+        // applyは検証済みOIDを使い、stash@{n}の再解決による取り違えを防ぐ。
+        oid.trim()
+    } else {
+        // pop/dropはstash@{n}が必要なため、検証直後に外部変更される競合窓が残る。
+        reference.as_str()
+    };
+    git_text(repository, &["stash", operation, target])
 }
 
 fn selected_hunk(patch: &str, index: usize) -> Result<String, GitError> {
