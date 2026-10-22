@@ -2,6 +2,7 @@
   "version": 1,
   "id": "lapis.dark",
   "name": "Dark",
+  "appearance": "dark",
   "colors": {
     "background_primary": "#090909",
     "background_secondary": "#18191b",

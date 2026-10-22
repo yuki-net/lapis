@@ -3,6 +3,8 @@ use lapis_settings::SyntaxTheme;
 use std::{cell::RefCell, sync::LazyLock};
 use syntect::{highlighting::ScopeSelectors, parsing::Scope};
 
+use super::ThemeAppearance;
+
 pub(crate) struct Preset {
     foreground: u32,
     colors: [u32; 14],
@@ -123,7 +125,7 @@ pub(crate) fn active_family() -> SyntaxTheme {
     SELECTED.with(|selected| selected.borrow().unwrap_or_default())
 }
 
-pub(crate) fn resolve(family: Option<SyntaxTheme>, ui_theme: &str) -> &'static Preset {
+pub(crate) fn resolve(family: Option<SyntaxTheme>, appearance: ThemeAppearance) -> &'static Preset {
     let pair = match family.unwrap_or_default() {
         SyntaxTheme::Lapis => 0,
         SyntaxTheme::VsCode => 2,
@@ -131,11 +133,11 @@ pub(crate) fn resolve(family: Option<SyntaxTheme>, ui_theme: &str) -> &'static P
         SyntaxTheme::Intellij => 6,
         SyntaxTheme::IntellijClassic => 8,
     };
-    &PRESETS[pair + usize::from(ui_theme == "lapis.white")]
+    &PRESETS[pair + usize::from(appearance == ThemeAppearance::Light)]
 }
 
 pub(crate) fn active() -> &'static Preset {
-    resolve(Some(active_family()), super::active_id().as_str())
+    resolve(Some(active_family()), super::active_appearance())
 }
 
 impl Preset {
@@ -173,28 +175,28 @@ mod tests {
         }
         for (family, _) in FAMILIES {
             assert_ne!(
-                resolve(Some(family), "lapis.dark").foreground(),
-                resolve(Some(family), "lapis.white").foreground()
+                resolve(Some(family), ThemeAppearance::Dark).foreground(),
+                resolve(Some(family), ThemeAppearance::Light).foreground()
             );
         }
-        assert_eq!(resolve(None, "lapis.dark").foreground, 0xe5e7eb);
-        assert_eq!(resolve(None, "lapis.white").foreground, 0x334155);
+        assert_eq!(resolve(None, ThemeAppearance::Dark).foreground, 0xe5e7eb);
+        assert_eq!(resolve(None, ThemeAppearance::Light).foreground, 0x334155);
     }
 
     #[test]
     fn intellij_new_and_classic_keep_distinct_colors_in_both_ui_modes() {
         let string: Scope = "string.quoted.double".parse().unwrap();
-        for ui in ["lapis.dark", "lapis.white"] {
-            let modern = resolve(Some(SyntaxTheme::Intellij), ui);
-            let classic = resolve(Some(SyntaxTheme::IntellijClassic), ui);
+        for appearance in [ThemeAppearance::Dark, ThemeAppearance::Light] {
+            let modern = resolve(Some(SyntaxTheme::Intellij), appearance);
+            let classic = resolve(Some(SyntaxTheme::IntellijClassic), appearance);
             assert_ne!(modern.color(&[string]), classic.color(&[string]));
         }
         assert_eq!(
-            resolve(Some(SyntaxTheme::IntellijClassic), "lapis.dark").colors[1],
+            resolve(Some(SyntaxTheme::IntellijClassic), ThemeAppearance::Dark).colors[1],
             0x6a8759
         );
         assert_eq!(
-            resolve(Some(SyntaxTheme::IntellijClassic), "lapis.white").colors[1],
+            resolve(Some(SyntaxTheme::IntellijClassic), ThemeAppearance::Light).colors[1],
             0x008000
         );
     }
@@ -214,15 +216,36 @@ mod tests {
             for ui in ["lapis.dark", "lapis.white", "lapis.dark"] {
                 assert!(super::super::set_active(&ThemeId::new(ui)));
                 let background = super::super::colors().background_primary;
+                let appearance = super::super::active_appearance();
                 assert_eq!(active_family(), family);
                 assert_eq!(
                     active().foreground(),
-                    resolve(Some(family), ui).foreground()
+                    resolve(Some(family), appearance).foreground()
                 );
                 assert_eq!(super::super::active_id().as_str(), ui);
                 assert_eq!(super::super::colors().background_primary, background);
             }
         }
+        set_active(None);
+        assert!(super::super::set_active(&original));
+    }
+
+    #[test]
+    fn custom_light_theme_uses_light_syntax_palette() {
+        let original = super::super::active_id();
+        let custom_id = ThemeId::new("test.light.syntax");
+        let colors = super::super::colors();
+        super::super::register(
+            super::super::ThemeDefinition::new(custom_id.clone(), colors)
+                .with_appearance(ThemeAppearance::Light),
+        )
+        .unwrap();
+        assert!(super::super::set_active(&custom_id));
+        set_active(Some(SyntaxTheme::Lapis));
+        assert_eq!(
+            active().foreground(),
+            resolve(Some(SyntaxTheme::Lapis), ThemeAppearance::Light).foreground()
+        );
         set_active(None);
         assert!(super::super::set_active(&original));
     }
