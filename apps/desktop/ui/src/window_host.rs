@@ -231,8 +231,10 @@ impl WindowHost {
             }),
             cx.subscribe(&editor, move |this, _, event, cx| match event {
                 EditorEvent::Snapshot(snapshot) => {
-                    editor_group.update(cx, |group, cx| group.publish(*snapshot.clone(), cx))
+                    editor_group.update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
+                    this.synchronize(cx);
                 }
+                EditorEvent::Idle => this.synchronize(cx),
                 EditorEvent::Status(message) => this
                     .shell
                     .update(cx, |shell, cx| shell.set_status(message.clone(), cx)),

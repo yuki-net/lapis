@@ -208,16 +208,15 @@ impl DesktopRoot {
             }),
             cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
                 EditorEvent::Snapshot(snapshot) => {
-                    let local = root.editor.read(cx).local_snapshot(snapshot);
-                    root.apply_snapshot(&local, cx);
                     root.group
                         .update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
-                    root.schedule_persist(cx);
+                    root.synchronize_group(cx);
                     if root.native_smoke_requested {
                         root.native_smoke_requested = false;
                         crate::window_host::run_native_smoke(root, window, cx);
                     }
                 }
+                EditorEvent::Idle => root.synchronize_group(cx),
                 EditorEvent::Status(message) => root.set_status(message.clone(), cx),
                 EditorEvent::WorkspaceSearch(query) => {
                     root.search

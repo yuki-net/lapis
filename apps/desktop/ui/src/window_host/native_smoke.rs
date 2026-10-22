@@ -226,11 +226,12 @@ pub(crate) fn run_native_smoke(
                         std::sync::Arc::new(SmokeFailConversation),
                         client.editor.snapshot(),
                     );
-                    Ok(std::mem::replace(&mut client.conversation, failing))
+                    let original = std::mem::replace(&mut client.conversation, failing);
+                    Ok((original, client.snapshot()?))
                 })
             })
             .unwrap();
-        let saved_conversation = wait_client(saved_conversation).await.unwrap();
+        let (saved_conversation, stale_snapshot) = wait_client(saved_conversation).await.unwrap();
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| {
@@ -268,6 +269,54 @@ pub(crate) fn run_native_smoke(
             );
             assert!(group.status.contains("smoke view persistence failure"));
             eprintln!("SMOKE committed close survives view persistence failure in all windows OK");
+        })
+        .unwrap();
+        // closeより前の応答が遅れて届いても、ShellとEditorを過去へ戻さない。
+        let closed = stale_snapshot
+            .tabs
+            .iter()
+            .find(|tab| stale_snapshot.document_owners.get(&tab.id) == Some(&child))
+            .unwrap()
+            .id
+            .clone();
+        this.update(cx, |root, cx| {
+            let editors = root
+                .group
+                .read(cx)
+                .members
+                .values()
+                .map(|member| member.editor.clone())
+                .collect::<Vec<_>>();
+            for editor in editors {
+                editor.update(cx, |_, cx| {
+                    cx.emit(EditorEvent::Snapshot(Box::new(stale_snapshot.clone())));
+                    cx.emit(EditorEvent::Idle);
+                });
+            }
+        })
+        .unwrap();
+        wait_for(&this, cx, None).await;
+        this.update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert!(
+                !group
+                    .layout
+                    .tabs
+                    .contains_key(&PanelTab::Document(closed.clone()))
+            );
+            for member in group.members.values() {
+                assert_ne!(member.editor.read(cx).document_id().as_ref(), Some(&closed));
+                assert!(
+                    member
+                        .shell
+                        .read(cx)
+                        .shell
+                        .panels()
+                        .iter()
+                        .all(|panel| !panel.contains(&PanelTab::Document(closed.clone())))
+                );
+            }
+            eprintln!("SMOKE delayed responses keep all editors and shells synchronized OK");
         })
         .unwrap();
         let restored = this
