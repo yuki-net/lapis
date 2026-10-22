@@ -1,6 +1,32 @@
 //! 隔離したWorkspaceでNative Windowの寿命・所属・共有状態を検証する。
 use super::*;
 
+struct SmokeFailConversation;
+
+impl lapis_desktop_client::ConversationRepository for SmokeFailConversation {
+    fn load(
+        &self,
+    ) -> Result<
+        (
+            Vec<lapis_desktop_client::ConversationRecord>,
+            Option<lapis_editor_core::ConversationId>,
+        ),
+        lapis_workspace::WorkspaceError,
+    > {
+        Ok(Default::default())
+    }
+
+    fn save(
+        &self,
+        _: &[lapis_desktop_client::ConversationRecord],
+        _: &lapis_editor_core::ConversationId,
+    ) -> Result<(), lapis_workspace::WorkspaceError> {
+        Err(lapis_workspace::WorkspaceError::new(
+            "smoke view persistence failure",
+        ))
+    }
+}
+
 pub(crate) fn run_native_smoke(
     root: &mut DesktopRoot,
     window: &mut Window,
@@ -202,6 +228,67 @@ pub(crate) fn run_native_smoke(
                 (child, handle)
             })
             .unwrap();
+        // 永続化境界で失敗させ、実Runtimeのcloseと全Windowへの反映を検証する。
+        let saved_conversation = this
+            .update(cx, |root, _| {
+                root.worker.request(|client| {
+                    let failing = lapis_desktop_client::ConversationSession::new(
+                        std::sync::Arc::new(SmokeFailConversation),
+                        client.editor.snapshot(),
+                    );
+                    Ok(std::mem::replace(&mut client.conversation, failing))
+                })
+            })
+            .unwrap();
+        let saved_conversation = wait_client(saved_conversation).await.unwrap();
+        handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |root, cx| {
+                    root.close_hosts(child, None, window, cx);
+                    assert!(root.group.read(cx).closing);
+                    root.close_hosts(child, None, window, cx);
+                    root.close_application(window, cx);
+                    assert!(root.group.read(cx).closing);
+                    eprintln!("SMOKE concurrent Close and Quit rejected OK");
+                })
+            })
+            .unwrap()
+            .unwrap();
+        wait_for(&this, cx, None).await;
+        this.update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert!(!group.closing);
+            assert_eq!(group.members.len(), 2);
+            assert!(group.documents(child).is_empty());
+            assert!(
+                group.members[&child]
+                    .editor
+                    .read(cx)
+                    .document_id()
+                    .is_none()
+            );
+            assert!(
+                group
+                    .latest
+                    .as_ref()
+                    .unwrap()
+                    .document_owners
+                    .values()
+                    .all(|owner| *owner != child)
+            );
+            assert!(group.status.contains("smoke view persistence failure"));
+            eprintln!("SMOKE committed close survives view persistence failure in all windows OK");
+        })
+        .unwrap();
+        let restored = this
+            .update(cx, |root, _| {
+                root.worker.request(move |client| {
+                    client.conversation = saved_conversation;
+                    Ok(())
+                })
+            })
+            .unwrap();
+        wait_client(restored).await.unwrap();
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(child, None, window, cx))

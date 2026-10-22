@@ -534,7 +534,7 @@ impl DesktopRoot {
         self.persist_task = Some(cx.spawn(async move |this, cx| {
             gpui::Timer::after(std::time::Duration::from_millis(500)).await;
             let _ = this.update(cx, |root, cx| {
-                if root.group.read(cx).closing {
+                if root.group.read(cx).closing || root.group.read(cx).synchronization_required {
                     return;
                 }
                 let view = root.persisted_view(cx);
@@ -575,6 +575,18 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) {
         if self.group.read(cx).closing {
+            return;
+        }
+        if self.group.read(cx).synchronization_required
+            && !matches!(
+                command,
+                UiCommand::CloseWindow | UiCommand::CloseDocument(_) | UiCommand::Copy
+            )
+        {
+            self.set_status(
+                "状態を再確認するため、もう一度CloseまたはQuitを実行してください".into(),
+                cx,
+            );
             return;
         }
         if self.group.read(cx).members.len() > 1

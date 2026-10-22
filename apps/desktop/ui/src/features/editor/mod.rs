@@ -240,8 +240,10 @@ impl Editor {
         let admitted = self.worker.submit(
             cx,
             move |client| {
-                if let Some(target) = target {
-                    client.editor.select_document_for_operation(&target);
+                if let Some(target) = target
+                    && !client.editor.select_document_for_operation(&target)
+                {
+                    return Err("対象文書は既に閉じられています".into());
                 }
                 let epoch = epoch.unwrap_or_else(|| client.edit_chain.epoch());
                 let permitted = if recovering {
