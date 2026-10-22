@@ -136,7 +136,7 @@ fn main() {
             .is_some_and(|record| record.workspace.root.as_ref() != Some(&root))
         && let Err(error) = conversation_session.open_project(&mut session, root)
     {
-        eprintln!("Project/Task??????: {error}");
+        eprintln!("Project/Taskの復元に失敗しました: {error}");
     }
     let settings_session = SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
         startup.directory.join("settings-v1.json"),
