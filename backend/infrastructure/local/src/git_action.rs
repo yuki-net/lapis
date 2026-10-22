@@ -253,6 +253,27 @@ fn apply_patch(repository: &Path, patch: String, reverse: bool) -> Result<(), Gi
     Ok(())
 }
 
+const GIT_OUTPUT_LIMIT: usize = 1024 * 1024;
+const GIT_OUTPUT_OMISSION: &str = "\n…（出力が1MiBを超えたため省略しました。操作は完了しています）";
+
+fn limit_git_output(mutation: bool, text: String) -> Result<String, GitError> {
+    if text.len() <= GIT_OUTPUT_LIMIT {
+        return Ok(text);
+    }
+    if !mutation {
+        return Err(invalid(
+            "表示結果が1MiBを超えています。TerminalのGit CLIで確認してください",
+        ));
+    }
+    let mut end = GIT_OUTPUT_LIMIT.saturating_sub(GIT_OUTPUT_OMISSION.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut output = text[..end].to_owned();
+    output.push_str(GIT_OUTPUT_OMISSION);
+    Ok(output)
+}
+
 impl LocalGitBackend {
     pub(super) fn execute_action(
         &self,
@@ -265,6 +286,7 @@ impl LocalGitBackend {
                 "HEADが表示時から変わりました。Statusを更新して操作し直してください",
             ));
         }
+        let mutation = request.action.is_mutation();
         let text = match request.action {
             GitAction::Diff { path, staged } => diff(repository, &path, staged)?,
             GitAction::Stage { path } => git_text(repository, &["add", "--", relative(&path)?])?,
@@ -450,18 +472,24 @@ impl LocalGitBackend {
                 )?
             }
         };
-        if text.len() > 1024 * 1024 {
-            return Err(invalid(
-                "表示結果が1MiBを超えています。TerminalのGit CLIで確認してください",
-            ));
-        }
-        Ok(GitActionResult { output: text })
+        Ok(GitActionResult {
+            output: limit_git_output(mutation, text)?,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mutation_output_is_truncated_and_read_output_is_rejected() {
+        let text = "あ".repeat(GIT_OUTPUT_LIMIT);
+        let output = limit_git_output(true, text).unwrap();
+        assert!(output.len() <= GIT_OUTPUT_LIMIT);
+        assert!(output.contains("操作は完了しています"));
+        assert!(limit_git_output(false, "x".repeat(GIT_OUTPUT_LIMIT + 1)).is_err());
+    }
 
     #[test]
     fn fetch_preserves_repository_ssh_command() {
