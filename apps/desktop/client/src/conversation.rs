@@ -358,6 +358,40 @@ impl ConversationSession {
         Ok(id)
     }
 
+    /// 既存Taskを再利用する。複数候補のときは明示的なTask選択を求める。
+    pub fn open_project(
+        &mut self,
+        editor: &mut EditorSession,
+        root: PathBuf,
+    ) -> Result<(), WorkspaceError> {
+        let project = self.register_project(editor, root.clone())?;
+        let candidates: Vec<_> = self
+            .records
+            .iter()
+            .filter(|record| {
+                record
+                    .environment
+                    .as_ref()
+                    .is_some_and(|environment| environment.project() == &project)
+            })
+            .map(|record| record.id.clone())
+            .collect();
+        match candidates.as_slice() {
+            [] => {
+                self.create_task(editor, &project, root, None)?;
+            }
+            [id] => {
+                self.switch(id, editor)?;
+            }
+            _ => {
+                return Err(WorkspaceError::new(
+                    "このProjectには複数のTaskがあります。左側のProject / Taskから選択してください",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn register_source(
         &mut self,
         editor: &EditorSession,

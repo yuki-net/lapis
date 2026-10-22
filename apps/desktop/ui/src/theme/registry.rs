@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::BTreeMap};
 
 use crate::extension_ui::ThemeId;
 
-use super::definition::{ThemeColors, ThemeDefinition};
+use super::definition::{ThemeAppearance, ThemeColors, ThemeDefinition};
 
 /// テーマの登録・切り替えを管理するレジストリ。
 struct ThemeRegistry {
@@ -88,6 +88,11 @@ pub fn active_colors() -> ThemeColors {
 
 pub fn active_id() -> ThemeId {
     THEMES.with(|registry| registry.borrow().active.clone())
+}
+
+/// アクティブテーマの明暗を返す。
+pub fn active_appearance() -> ThemeAppearance {
+    THEMES.with(|registry| registry.borrow().active_definition().appearance)
 }
 
 pub fn available() -> Vec<(ThemeId, String)> {

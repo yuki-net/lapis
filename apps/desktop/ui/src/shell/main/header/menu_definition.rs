@@ -5,6 +5,7 @@ pub(crate) enum MenuAction {
     NewFile,
     NewFolder,
     NewWindow,
+    ConnectHost,
     OpenProject,
     OpenFile,
     CloseProject,
@@ -74,6 +75,7 @@ pub(crate) const ROOT_MENUS: &[(MenuId, &str)] = &[
 ];
 
 const FILE_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action("connect-host", "Hostに接続…", None, MenuAction::ConnectHost),
     MenuItemDefinition::action(
         "new-file",
         "New File...",

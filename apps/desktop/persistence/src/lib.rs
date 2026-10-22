@@ -182,11 +182,49 @@ mod tests {
             version: 1,
             locale: LocaleId::new("ja-JP"),
             theme: "lapis.white".to_owned(),
+            syntax_theme: Some(lapis_settings::SyntaxTheme::Zed),
         };
 
         repository.save(&settings).unwrap();
 
         assert_eq!(repository.load().unwrap(), settings);
+    }
+
+    #[test]
+    fn syntax_family_survives_ui_changes_and_restart() {
+        use lapis_desktop_client::SettingsSession;
+        use lapis_settings::SyntaxTheme;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings-v1.json");
+        fs::write(
+            &path,
+            r#"{"version":1,"locale":"ja-JP","theme":"lapis.dark","syntax_theme":"zed.one-dark"}"#,
+        )
+        .unwrap();
+        let session = SettingsSession::load(std::sync::Arc::new(
+            LocalGlobalSettingsRepository::new(path.clone()),
+        ))
+        .unwrap();
+        assert_eq!(session.settings().syntax_theme, Some(SyntaxTheme::Zed));
+        session.set_theme("lapis.white".into()).unwrap();
+        let restarted = SettingsSession::load(std::sync::Arc::new(
+            LocalGlobalSettingsRepository::new(path.clone()),
+        ))
+        .unwrap();
+        assert_eq!(restarted.settings().theme, "lapis.white");
+        assert_eq!(restarted.settings().syntax_theme, Some(SyntaxTheme::Zed));
+        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(stored["syntax_theme"], "zed");
+
+        for family in [SyntaxTheme::Intellij, SyntaxTheme::IntellijClassic] {
+            session.set_syntax_theme(family).unwrap();
+            let restarted = SettingsSession::load(std::sync::Arc::new(
+                LocalGlobalSettingsRepository::new(directory.path().join("settings-v1.json")),
+            ))
+            .unwrap();
+            assert_eq!(restarted.settings().syntax_theme, Some(family));
+            assert_eq!(restarted.settings().theme, "lapis.white");
+        }
     }
 
     #[test]

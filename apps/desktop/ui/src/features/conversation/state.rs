@@ -68,7 +68,9 @@ impl ConversationFeature {
                 .and_then(|record| record.environment.as_ref())
                 .map(|environment| environment.project().clone())
                 .or_else(|| self.projects.first().map(|project| project.id().clone()));
-            if let Some(selected) = selected {
+            if let Some(selected) = selected
+                && self.selected_project.as_ref() != Some(&selected)
+            {
                 self.select_project(selected);
             }
         }

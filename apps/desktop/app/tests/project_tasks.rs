@@ -16,6 +16,49 @@ impl WorkspaceDialog for NoDialog {
 }
 
 #[test]
+fn reopening_project_restores_inactive_task_without_creating_duplicates() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let other = root.join("other");
+    std::fs::create_dir(&other).unwrap();
+    std::fs::write(root.join("note.ts"), "original").unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(root.join("editor.txt"))),
+        host.documents(),
+    );
+    editor.open_workspace(root.clone()).unwrap();
+    let mut tasks = ConversationSession::new(
+        Arc::new(LocalConversationRepository::new(root.join("tasks.json"))),
+        editor.snapshot(),
+    );
+    let first = tasks.active_id().clone();
+    let project = tasks.projects()[0].id().clone();
+    editor.open_path(root.join("note.ts")).unwrap();
+    editor.replace_range(0..8, "draft").unwrap();
+    tasks
+        .capture(&editor, Default::default(), None, &[])
+        .unwrap();
+    tasks.open_project(&mut editor, other).unwrap();
+    let count = tasks.records().len();
+    tasks.open_project(&mut editor, root.clone()).unwrap();
+    assert_eq!(tasks.active_id(), &first);
+    assert_eq!(tasks.records().len(), count);
+    assert_eq!(editor.active_text().unwrap(), "draft");
+    tasks
+        .create_task(&mut editor, &project, root.clone(), None)
+        .unwrap();
+    let active = tasks.active_id().clone();
+    let before = editor.snapshot();
+    assert!(tasks.open_project(&mut editor, root).is_err());
+    assert_eq!(tasks.active_id(), &active);
+    assert_eq!(tasks.records().len(), count + 1);
+    assert_eq!(editor.snapshot(), before);
+}
+
+#[test]
 fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     let directory = tempfile::tempdir().unwrap();
     let primary = directory.path().join("primary");

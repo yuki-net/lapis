@@ -643,13 +643,9 @@ impl DesktopRoot {
                             _ => client.editor.file_dialog().choose_workspace_path(),
                         };
                         if let Some(path) = path {
-                            let project = client
-                                .conversation
-                                .register_project(&client.editor, path.clone())
-                                .map_err(|error| error.to_string())?;
                             client
                                 .conversation
-                                .create_task(&mut client.editor, &project, path, None)
+                                .open_project(&mut client.editor, path)
                                 .map_err(|error| error.to_string())?;
                         }
                         Ok(())
@@ -708,6 +704,21 @@ impl DesktopRoot {
             }),
             UiCommand::CloneRepository => self.set_status("Clone from Git は準備中です".into(), cx),
 
+            UiCommand::ConnectHost => {
+                let factory = self.factory.clone();
+                let admitted = self.worker.submit(
+                    cx,
+                    move |_| factory.open_host(),
+                    |root, result, cx| {
+                        if let Err(error) = result {
+                            root.set_status(error, cx);
+                        }
+                    },
+                );
+                if let Err(error) = admitted {
+                    self.set_status(error, cx);
+                }
+            }
             UiCommand::NewWindow => {
                 let factory = self.factory.clone();
                 let admitted = self.worker.submit(
