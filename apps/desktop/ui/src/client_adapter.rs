@@ -108,7 +108,12 @@ impl DocumentClient {
             return Ok(());
         }
         self.conversation
-            .capture(&self.editor, view.layout, view.execution, &view.terminals)
+            .capture(
+                &mut self.editor,
+                view.layout,
+                view.execution,
+                &view.terminals,
+            )
             .map_err(|error| error.to_string())
     }
 }

@@ -8,6 +8,65 @@ use std::{path::PathBuf, sync::Arc};
 struct NoDialog;
 
 #[test]
+fn unchanged_window_adopts_latest_task_on_capture_and_switch_without_forking_or_overwriting() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    std::fs::write(root.join("note.ts"), "base").unwrap();
+    let host = BackendHost::start().unwrap();
+    let make_editor = |name: &str| {
+        let mut editor = EditorSession::new_empty(
+            host.workspaces(),
+            Arc::new(NoDialog),
+            Arc::new(LocalWorkspaceStateRepository::new(root.join(name))),
+            host.documents(),
+        );
+        editor.open_workspace(root.clone()).unwrap();
+        editor
+    };
+    let mut first_editor = make_editor("first.json");
+    let mut second_editor = make_editor("second.json");
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut first = ConversationSession::new(repository.clone(), first_editor.snapshot());
+    first
+        .capture(&mut first_editor, Default::default(), None, &[])
+        .unwrap();
+    let mut second = ConversationSession::new(repository.clone(), second_editor.snapshot());
+    let active = second.active_id().clone();
+    first_editor.open_path(root.join("note.ts")).unwrap();
+    first_editor.replace_range(0..4, "first draft").unwrap();
+    first
+        .capture(&mut first_editor, Default::default(), None, &[])
+        .unwrap();
+    second
+        .capture(&mut second_editor, Default::default(), None, &[])
+        .unwrap();
+    assert_eq!(second.records().len(), 1);
+    assert_eq!(second.active_id(), &active);
+    assert_eq!(second_editor.active_text().unwrap(), "first draft");
+    // 最新状態の採用後、次のcaptureで古いEditor状態を書き戻さない。
+    second
+        .capture(&mut second_editor, Default::default(), None, &[])
+        .unwrap();
+    first_editor.new_document();
+    first_editor.replace_range(0..0, "new draft").unwrap();
+    first
+        .capture(&mut first_editor, Default::default(), None, &[])
+        .unwrap();
+    second.switch(&active, &mut second_editor).unwrap();
+    assert_eq!(second.records().len(), 1);
+    assert_eq!(second_editor.active_text().unwrap(), "new draft");
+    second
+        .capture(&mut second_editor, Default::default(), None, &[])
+        .unwrap();
+    let reloaded = ConversationSession::new(repository, Default::default());
+    assert_eq!(reloaded.records().len(), 1);
+    assert_eq!(
+        reloaded.active_record().unwrap().workspace,
+        second_editor.snapshot()
+    );
+}
+
+#[test]
 fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
@@ -30,7 +89,7 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
     let mut first = ConversationSession::new(repository.clone(), first_editor.snapshot());
     first
-        .capture(&first_editor, Default::default(), None, &[])
+        .capture(&mut first_editor, Default::default(), None, &[])
         .unwrap();
     let mut second = ConversationSession::new(repository.clone(), second_editor.snapshot());
     first_editor.open_path(root.join("a.ts")).unwrap();
@@ -38,10 +97,10 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     second_editor.open_path(root.join("b.ts")).unwrap();
     second_editor.replace_range(0..4, "second draft").unwrap();
     first
-        .capture(&first_editor, Default::default(), None, &[])
+        .capture(&mut first_editor, Default::default(), None, &[])
         .unwrap();
     second
-        .capture(&second_editor, Default::default(), None, &[])
+        .capture(&mut second_editor, Default::default(), None, &[])
         .unwrap();
     assert_ne!(first.active_id(), second.active_id());
     assert!(
@@ -53,7 +112,7 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     );
     let count = second.records().len();
     second
-        .capture(&second_editor, Default::default(), None, &[])
+        .capture(&mut second_editor, Default::default(), None, &[])
         .unwrap();
     assert_eq!(second.records().len(), count);
     let reloaded = ConversationSession::new(repository, Default::default());
@@ -71,10 +130,10 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     std::fs::create_dir(&first_root).unwrap();
     std::fs::create_dir(&second_root).unwrap();
     let first_project = first
-        .register_project(&first_editor, first_root.clone())
+        .register_project(&mut first_editor, first_root.clone())
         .unwrap();
     let second_project = second
-        .register_project(&second_editor, second_root.clone())
+        .register_project(&mut second_editor, second_root.clone())
         .unwrap();
     assert_ne!(first_project, second_project);
     second
@@ -106,14 +165,14 @@ fn closing_workspace_uses_a_scratch_record_and_keeps_the_task_draft() {
     editor.open_path(root.join("note.ts")).unwrap();
     editor.replace_range(0..4, "draft").unwrap();
     tasks
-        .capture(&editor, Default::default(), None, &[])
+        .capture(&mut editor, Default::default(), None, &[])
         .unwrap();
     let original = tasks.active_id().clone();
     tasks.close_workspace(&mut editor).unwrap();
     assert!(editor.workspace_root().is_none());
     assert!(tasks.active_record().unwrap().environment.is_none());
     tasks
-        .capture(&editor, Default::default(), None, &[])
+        .capture(&mut editor, Default::default(), None, &[])
         .unwrap();
     tasks.switch(&original, &mut editor).unwrap();
     assert_eq!(editor.active_text().unwrap(), "draft");
@@ -197,7 +256,7 @@ fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_suc
         .store(true, std::sync::atomic::Ordering::SeqCst);
     assert!(
         tasks
-            .discard_worktree(&editor, connection.as_ref(), &tree)
+            .discard_worktree(&mut editor, connection.as_ref(), &tree)
             .is_err()
     );
     assert!(path.is_dir());
@@ -208,7 +267,7 @@ fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_suc
     std::fs::write(path.join("untracked.txt"), "keep").unwrap();
     assert!(
         tasks
-            .discard_worktree(&editor, connection.as_ref(), &tree)
+            .discard_worktree(&mut editor, connection.as_ref(), &tree)
             .is_err()
     );
     assert!(path.is_dir());
@@ -217,7 +276,7 @@ fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_suc
     assert_eq!(restored.active_record().unwrap().parked_sources.len(), 1);
     std::fs::remove_file(path.join("untracked.txt")).unwrap();
     tasks
-        .discard_worktree(&editor, connection.as_ref(), &tree)
+        .discard_worktree(&mut editor, connection.as_ref(), &tree)
         .unwrap();
     assert!(!path.exists());
     assert!(tasks.active_record().unwrap().parked_sources.is_empty());
@@ -300,7 +359,7 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
     let project = tasks.projects()[0].id().clone();
     tasks
-        .register_source(&editor, &project, sub.clone())
+        .register_source(&mut editor, &project, sub.clone())
         .unwrap();
     let task = tasks
         .create_task(&mut editor, &project, primary.clone(), Some(sub.clone()))
@@ -317,7 +376,7 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     let mut terminal = TerminalSession::new(host.terminals());
     let id = terminal.start(&primary, 80, 24).unwrap();
     tasks
-        .capture(&editor, Default::default(), None, terminal.terminals())
+        .capture(&mut editor, Default::default(), None, terminal.terminals())
         .unwrap();
     tasks
         .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
@@ -330,7 +389,7 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     editor.replace_range(0..4, "worktree draft").unwrap();
     let tree_document = editor.active_document_id().cloned();
     tasks
-        .capture(&editor, Default::default(), None, &[])
+        .capture(&mut editor, Default::default(), None, &[])
         .unwrap();
     tasks.switch_source(&mut editor, SourceRole::Sub).unwrap();
     assert!(
@@ -352,7 +411,7 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     let saved = tasks.active_record().unwrap().clone();
     assert!(
         tasks
-            .discard_worktree(&editor, connection.as_ref(), &tree)
+            .discard_worktree(&mut editor, connection.as_ref(), &tree)
             .is_err()
     );
     assert!(tree_path.is_dir());
@@ -452,7 +511,7 @@ fn reopening_project_restores_inactive_task_without_creating_duplicates() {
     editor.open_path(root.join("note.ts")).unwrap();
     editor.replace_range(0..8, "draft").unwrap();
     tasks
-        .capture(&editor, Default::default(), None, &[])
+        .capture(&mut editor, Default::default(), None, &[])
         .unwrap();
     tasks.open_project(&mut editor, other).unwrap();
     let count = tasks.records().len();
@@ -498,10 +557,10 @@ fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
     let project = tasks.projects()[0].id().clone();
     tasks
-        .register_source(&editor, &project, sub.clone())
+        .register_source(&mut editor, &project, sub.clone())
         .unwrap();
     tasks
-        .register_source(&editor, &project, primary.join("."))
+        .register_source(&mut editor, &project, primary.join("."))
         .unwrap();
     assert_eq!(tasks.projects()[0].sources().count(), 2);
     assert!(
@@ -519,7 +578,7 @@ fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     let mut terminal = TerminalSession::new(host.terminals());
     let terminal_id = terminal.start(&primary, 80, 24).unwrap();
     tasks
-        .capture(&editor, Default::default(), None, terminal.terminals())
+        .capture(&mut editor, Default::default(), None, terminal.terminals())
         .unwrap();
     tasks.switch_source(&mut editor, SourceRole::Sub).unwrap();
     assert_eq!(editor.workspace_root(), Some(sub.as_path()));
@@ -527,7 +586,7 @@ fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     editor.open_path(sub.join("note.ts")).unwrap();
     editor.replace_range(0..3, "sub draft").unwrap();
     tasks
-        .capture(&editor, Default::default(), None, &[])
+        .capture(&mut editor, Default::default(), None, &[])
         .unwrap();
     let second = tasks
         .create_task(&mut editor, &project, primary.clone(), None)
@@ -606,7 +665,7 @@ fn corrupt_catalog_is_reported_and_never_overwritten() {
     assert!(tasks.load_error().is_some());
     assert!(
         tasks
-            .capture(&editor, Default::default(), None, &[])
+            .capture(&mut editor, Default::default(), None, &[])
             .is_err()
     );
     assert_eq!(std::fs::read_to_string(path).unwrap(), "{broken");

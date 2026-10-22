@@ -2535,11 +2535,11 @@ mod tests {
         let mut conversations = ConversationSession::new(store.clone(), editor.snapshot());
         let first = conversations.active_id().clone();
         conversations
-            .capture(&editor, ConversationViewState::default(), None, &[])
+            .capture(&mut editor, ConversationViewState::default(), None, &[])
             .unwrap();
         let second = conversations
             .create(
-                &editor,
+                &mut editor,
                 ConversationViewState {
                     active_tool: "search".to_owned(),
                     ..ConversationViewState::default()
@@ -2548,7 +2548,7 @@ mod tests {
             .unwrap();
         editor.open_path(second_path).unwrap();
         conversations
-            .capture(&editor, conversations.active_view(), None, &[])
+            .capture(&mut editor, conversations.active_view(), None, &[])
             .unwrap();
 
         let first_view = conversations.switch(&first, &mut editor).unwrap();
