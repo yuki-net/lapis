@@ -179,14 +179,106 @@ impl ConversationSession {
         if let Some(error) = &self.load_error {
             return Err(WorkspaceError::new(error));
         }
-        self.repository
-            .save(&self.persisted, &self.projects, &self.records, &self.active)?;
+        if let Err(error) =
+            self.repository
+                .save(&self.persisted, &self.projects, &self.records, &self.active)
+        {
+            let mut latest = Self::new(self.repository.clone(), Default::default());
+            if latest.load_error.is_some() || latest.persisted == self.persisted {
+                return Err(error);
+            }
+            latest.active = self.active.clone();
+            let mut projects = Vec::new();
+            for project in &self.projects {
+                let index = if let Some(index) = latest
+                    .projects
+                    .iter()
+                    .position(|item| item.root() == project.root())
+                {
+                    index
+                } else {
+                    let mut number = latest.projects.len() + 1;
+                    while latest
+                        .projects
+                        .iter()
+                        .any(|item| item.id().as_str() == format!("project-{number}"))
+                    {
+                        number += 1;
+                    }
+                    latest.projects.push(Project::new(
+                        ProjectId::new(format!("project-{number}")),
+                        project.root().to_owned(),
+                    ));
+                    latest.projects.len() - 1
+                };
+                for source in project.sources() {
+                    latest.projects[index].register_source(source.clone());
+                }
+                projects.push((project.id().clone(), latest.projects[index].clone()));
+            }
+            for record in &self.records {
+                let base = self.persisted.1.iter().find(|item| item.id == record.id);
+                if base == Some(record) && record.id != self.active {
+                    continue;
+                }
+                let mut local = record.clone();
+                if let Some(environment) = &mut local.environment {
+                    let project = projects
+                        .iter()
+                        .find(|(id, _)| id == environment.project())
+                        .ok_or_else(|| WorkspaceError::new("復旧するTaskのProjectがありません"))?;
+                    environment
+                        .reassign_project(&project.1)
+                        .map_err(WorkspaceError::new)?;
+                }
+                let index = latest.records.iter().position(|item| item.id == record.id);
+                if index.is_some_and(|index| latest.records[index] == local) {
+                    continue;
+                }
+                if index.is_some_and(|index| Some(&latest.records[index]) != base) {
+                    // 同じTaskを両Windowが変更した場合は、どちらの下書きも上書きしない。
+                    while latest
+                        .records
+                        .iter()
+                        .any(|item| item.id.as_str() == format!("conversation-{}", latest.next_id))
+                    {
+                        latest.next_id += 1;
+                    }
+                    local.id = ConversationId::new(format!("conversation-{}", latest.next_id));
+                    latest.next_id += 1;
+                    local.title.push_str("（競合から復旧）");
+                    if record.id == self.active {
+                        latest.active = local.id.clone();
+                    }
+                    latest.records.push(local);
+                } else if let Some(index) = index {
+                    latest.records[index] = local;
+                } else {
+                    latest.records.push(local);
+                }
+            }
+            latest.repository.save(
+                &latest.persisted,
+                &latest.projects,
+                &latest.records,
+                &latest.active,
+            )?;
+            *self = latest;
+        }
         self.persisted = (
             self.projects.clone(),
             self.records.clone(),
             Some(self.active.clone()),
         );
         Ok(())
+    }
+
+    pub fn close_workspace(&mut self, editor: &mut EditorSession) -> Result<(), WorkspaceError> {
+        self.transaction(editor, |session, editor| {
+            editor.close_workspace()?;
+            session.create(editor, Default::default())?;
+            Ok(())
+        })
     }
     pub fn active_id(&self) -> &ConversationId {
         &self.active
@@ -316,7 +408,7 @@ impl ConversationSession {
             *self = previous;
             return Err(error);
         }
-        Ok(id)
+        Ok(self.active.clone())
     }
 
     pub fn switch(
@@ -377,12 +469,18 @@ impl ConversationSession {
             number += 1;
         }
         let id = ProjectId::new(format!("project-{number}"));
-        self.projects.push(Project::new(id.clone(), root));
+        self.projects.push(Project::new(id.clone(), root.clone()));
         if let Err(error) = self.save() {
             self.projects.pop();
             return Err(error);
         }
-        Ok(id)
+        Ok(self
+            .projects
+            .iter()
+            .find(|project| project.root() == root)
+            .expect("saved project")
+            .id()
+            .clone())
     }
 
     /// 既存Taskを再利用する。複数候補のときは明示的なTask選択を求める。
@@ -518,12 +616,12 @@ impl ConversationSession {
             });
             session.active = id.clone();
             session.save()?;
-            Ok(id)
+            Ok(session.active.clone())
         })
     }
 
     pub fn discard_worktree(
-        &self,
+        &mut self,
         editor: &EditorSession,
         git: &dyn GitConnection,
         id: &TaskId,
@@ -536,15 +634,33 @@ impl ConversationSession {
             .map_err(|error| WorkspaceError::new(error.to_string()))?;
         // 別Windowが保存したTaskと、まだ保存していない手元の状態の両方を保護する。
         let (_, saved_records, _) = self.repository.load()?;
-        for record in self.records.iter().chain(&saved_records) {
-            if std::iter::once(&record.workspace)
+        let in_use = |record: &ConversationRecord| {
+            std::iter::once(&record.workspace)
                 .chain(record.other_workspace.iter())
-                .chain(record.parked_sources.iter().map(|source| &source.workspace))
                 .any(|workspace| {
                     workspace
                         .root
                         .as_ref()
                         .is_some_and(|path| path.starts_with(&root))
+                })
+                || record.parked_sources.iter().any(|source| {
+                    source
+                        .workspace
+                        .root
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(&root))
+                        && (source
+                            .workspace
+                            .open_documents
+                            .iter()
+                            .any(|document| document.draft_content.is_some())
+                            || source.terminals.iter().any(|terminal| {
+                                !matches!(
+                                    terminal.status,
+                                    lapis_terminal::TerminalStatus::Exited
+                                        | lapis_terminal::TerminalStatus::Failed
+                                )
+                            }))
                 })
                 || record.environment.as_ref().is_some_and(|environment| {
                     [SourceRole::Primary, SourceRole::Sub]
@@ -555,13 +671,42 @@ impl ConversationSession {
                                 .is_some_and(|path| path.starts_with(&root))
                         })
                 })
-            {
+        };
+        for record in self.records.iter().chain(&saved_records) {
+            if in_use(record) {
                 return Err(WorkspaceError::new(format!(
                     "Task「{}」が作業状態を保持しています。Worktreeは削除できません",
                     record.title
                 )));
             }
         }
+        let mut next = self.clone();
+        // 保存を先に確定する。失敗した場合はGitの削除を開始しない。
+        for record in &mut next.records {
+            record.parked_sources.retain(|source| {
+                !source
+                    .workspace
+                    .root
+                    .as_ref()
+                    .is_some_and(|path| path.starts_with(&root))
+            });
+        }
+        next.save()?;
+        if next.records.iter().any(|record| {
+            in_use(record)
+                || record.parked_sources.iter().any(|source| {
+                    source
+                        .workspace
+                        .root
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(&root))
+                })
+        }) {
+            return Err(WorkspaceError::new(
+                "Taskの保存状態が更新されました。Worktree削除をやり直してください",
+            ));
+        }
+        *self = next;
         git.discard_worktree(workspace, id)
             .map(|_| ())
             .map_err(|error| WorkspaceError::new(error.to_string()))

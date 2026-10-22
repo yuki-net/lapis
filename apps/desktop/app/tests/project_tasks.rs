@@ -6,6 +6,214 @@ use lapis_persistence::{LocalConversationRepository, LocalWorkspaceStateReposito
 use std::{path::PathBuf, sync::Arc};
 
 struct NoDialog;
+
+#[test]
+fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    for name in ["a.ts", "b.ts"] {
+        std::fs::write(root.join(name), "base").unwrap();
+    }
+    let host = BackendHost::start().unwrap();
+    let make_editor = |name: &str| {
+        let mut editor = EditorSession::new_empty(
+            host.workspaces(),
+            Arc::new(NoDialog),
+            Arc::new(LocalWorkspaceStateRepository::new(root.join(name))),
+            host.documents(),
+        );
+        editor.open_workspace(root.clone()).unwrap();
+        editor
+    };
+    let mut first_editor = make_editor("first-editor.json");
+    let mut second_editor = make_editor("second-editor.json");
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut first = ConversationSession::new(repository.clone(), first_editor.snapshot());
+    first
+        .capture(&first_editor, Default::default(), None, &[])
+        .unwrap();
+    let mut second = ConversationSession::new(repository.clone(), second_editor.snapshot());
+    first_editor.open_path(root.join("a.ts")).unwrap();
+    first_editor.replace_range(0..4, "first draft").unwrap();
+    second_editor.open_path(root.join("b.ts")).unwrap();
+    second_editor.replace_range(0..4, "second draft").unwrap();
+    first
+        .capture(&first_editor, Default::default(), None, &[])
+        .unwrap();
+    second
+        .capture(&second_editor, Default::default(), None, &[])
+        .unwrap();
+    assert_ne!(first.active_id(), second.active_id());
+    assert!(
+        second
+            .active_record()
+            .unwrap()
+            .title
+            .contains("競合から復旧")
+    );
+    let count = second.records().len();
+    second
+        .capture(&second_editor, Default::default(), None, &[])
+        .unwrap();
+    assert_eq!(second.records().len(), count);
+    let reloaded = ConversationSession::new(repository, Default::default());
+    assert!(reloaded.load_error().is_none());
+    let drafts: Vec<_> = reloaded
+        .records()
+        .iter()
+        .flat_map(|record| record.workspace.open_documents.iter())
+        .filter_map(|document| document.draft_content.as_deref())
+        .collect();
+    assert!(drafts.contains(&"first draft"));
+    assert!(drafts.contains(&"second draft"));
+    let first_root = root.join("first-project");
+    let second_root = root.join("second-project");
+    std::fs::create_dir(&first_root).unwrap();
+    std::fs::create_dir(&second_root).unwrap();
+    let first_project = first
+        .register_project(&first_editor, first_root.clone())
+        .unwrap();
+    let second_project = second
+        .register_project(&second_editor, second_root.clone())
+        .unwrap();
+    assert_ne!(first_project, second_project);
+    second
+        .create_task(&mut second_editor, &second_project, second_root, None)
+        .unwrap();
+    assert!(
+        second
+            .projects()
+            .iter()
+            .any(|project| project.root() == first_root)
+    );
+}
+
+#[test]
+fn closing_workspace_uses_a_scratch_record_and_keeps_the_task_draft() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    std::fs::write(root.join("note.ts"), "base").unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(root.join("editor.json"))),
+        host.documents(),
+    );
+    editor.open_workspace(root.clone()).unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
+    editor.open_path(root.join("note.ts")).unwrap();
+    editor.replace_range(0..4, "draft").unwrap();
+    tasks
+        .capture(&editor, Default::default(), None, &[])
+        .unwrap();
+    let original = tasks.active_id().clone();
+    tasks.close_workspace(&mut editor).unwrap();
+    assert!(editor.workspace_root().is_none());
+    assert!(tasks.active_record().unwrap().environment.is_none());
+    tasks
+        .capture(&editor, Default::default(), None, &[])
+        .unwrap();
+    tasks.switch(&original, &mut editor).unwrap();
+    assert_eq!(editor.active_text().unwrap(), "draft");
+    assert!(
+        ConversationSession::new(repository, Default::default())
+            .load_error()
+            .is_none()
+    );
+}
+
+#[test]
+fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_succeed_first() {
+    use lapis_desktop_client::{
+        ConversationRecord, ConversationRepository, ConversationState, Project,
+    };
+    use lapis_editor_core::ConversationId;
+    use lapis_workspace::WorkspaceError;
+    struct Repository {
+        inner: LocalConversationRepository,
+        fail: std::sync::atomic::AtomicBool,
+    }
+    impl ConversationRepository for Repository {
+        fn load(&self) -> Result<ConversationState, WorkspaceError> {
+            self.inner.load()
+        }
+        fn save(
+            &self,
+            expected: &ConversationState,
+            projects: &[Project],
+            records: &[ConversationRecord],
+            active: &ConversationId,
+        ) -> Result<(), WorkspaceError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(WorkspaceError::new("injected save failure"));
+            }
+            self.inner.save(expected, projects, records, active)
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    git(&root, &["init", "-b", "main"]);
+    git(&root, &["config", "user.name", "Lapis Test"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(
+        &root,
+        &[
+            "-c",
+            "core.hooksPath=",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    );
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(root.join("editor.json"))),
+        host.documents(),
+    );
+    editor.open_workspace(root.clone()).unwrap();
+    let repository = Arc::new(Repository {
+        inner: LocalConversationRepository::new(root.join("tasks.json")),
+        fail: Default::default(),
+    });
+    let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
+    let connection = host.git();
+    let workspace = editor.workspace_id().unwrap().clone();
+    let tree = connection.create_worktree(&workspace).unwrap().worktree_id;
+    let path = connection.open_worktree(&workspace, &tree).unwrap();
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), None)
+        .unwrap();
+    assert_eq!(tasks.active_record().unwrap().parked_sources.len(), 1);
+    repository
+        .fail
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        tasks
+            .discard_worktree(&editor, connection.as_ref(), &tree)
+            .is_err()
+    );
+    assert!(path.is_dir());
+    assert_eq!(tasks.active_record().unwrap().parked_sources.len(), 1);
+    repository
+        .fail
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    tasks
+        .discard_worktree(&editor, connection.as_ref(), &tree)
+        .unwrap();
+    assert!(!path.exists());
+    assert!(tasks.active_record().unwrap().parked_sources.is_empty());
+    let reloaded = ConversationSession::new(repository, Default::default());
+    assert!(reloaded.load_error().is_none());
+    assert!(reloaded.active_record().unwrap().parked_sources.is_empty());
+}
 impl WorkspaceDialog for NoDialog {
     fn choose_workspace_path(&self) -> Option<PathBuf> {
         None

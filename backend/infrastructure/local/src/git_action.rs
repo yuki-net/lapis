@@ -6,6 +6,53 @@ pub(super) fn git_output(
     command: &mut Command,
     timeout: Duration,
 ) -> std::io::Result<std::process::Output> {
+    let configured_env = |name: &str| {
+        command
+            .get_envs()
+            .find(|(key, _)| *key == name)
+            .map_or_else(|| env::var_os(name).is_some(), |(_, value)| value.is_some())
+    };
+    if command
+        .get_args()
+        .any(|arg| arg == "fetch" || arg == "pull" || arg == "push")
+        && !configured_env("GIT_SSH_COMMAND")
+        && !configured_env("GIT_SSH")
+    {
+        let mut probe = Command::new(command.get_program());
+        if let Some(directory) = command.get_current_dir() {
+            probe.current_dir(directory);
+        }
+        let mut args = command.get_args();
+        while let Some(arg) = args.next() {
+            if arg == "-C"
+                && let Some(root) = args.next()
+            {
+                probe.arg("-C").arg(root);
+            }
+        }
+        for (key, value) in command.get_envs() {
+            if let Some(value) = value {
+                probe.env(key, value);
+            } else {
+                probe.env_remove(key);
+            }
+        }
+        probe
+            .args(["config", "--get", "core.sshCommand"])
+            .stdin(Stdio::null());
+        let configured = run_output(&mut probe, timeout)?;
+        if configured.status.code() == Some(1) {
+            command.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+        } else if !configured.status.success() {
+            return Err(std::io::Error::other(
+                String::from_utf8_lossy(&configured.stderr).into_owned(),
+            ));
+        }
+    }
+    run_output(command, timeout)
+}
+
+fn run_output(command: &mut Command, timeout: Duration) -> std::io::Result<std::process::Output> {
     use std::io::{Seek, SeekFrom};
     // pipeを保持する認証ヘルパーを待ち続けないよう、出力は一時ファイルへ捕捉する。
     let mut stdout = tempfile::tempfile()?;
@@ -16,9 +63,6 @@ pub(super) fn git_output(
         .env("SSH_ASKPASS_REQUIRE", "never")
         .stdout(stdout.try_clone()?)
         .stderr(stderr.try_clone()?);
-    if env::var_os("GIT_SSH_COMMAND").is_none() && env::var_os("GIT_SSH").is_none() {
-        command.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
-    }
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -411,6 +455,43 @@ impl LocalGitBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetch_preserves_repository_ssh_command() {
+        let root = tempfile::tempdir().unwrap();
+        for args in [
+            vec!["init"],
+            vec![
+                "config",
+                "core.sshCommand",
+                "printf 'LAPIS_CONFIGURED_SSH' >&2; exit 97",
+            ],
+        ] {
+            assert!(
+                Command::new("git")
+                    .arg("-C")
+                    .arg(root.path())
+                    .args(args)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success()
+            );
+        }
+        let output = git_output(
+            Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(["fetch", "ssh://invalid.example/repository"])
+                .env_remove("GIT_SSH_COMMAND")
+                .env_remove("GIT_SSH")
+                .stdin(Stdio::null()),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("LAPIS_CONFIGURED_SSH"));
+    }
 
     #[test]
     fn timeout_stops_a_command_without_waiting_for_its_normal_exit() {
