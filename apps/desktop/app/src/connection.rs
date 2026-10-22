@@ -136,6 +136,35 @@ fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsStri
 mod tests {
     use super::*;
     #[test]
+    fn explicit_worktree_state_keeps_settings_and_hosts_separate() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first worktree/target/dev-state");
+        let second = temp.path().join("second worktree/target/dev-state");
+        for directory in [&first, &second] {
+            let arguments = [
+                OsString::from("lapis"),
+                OsString::from("--state-directory"),
+                directory.as_os_str().to_owned(),
+            ];
+            let startup = Startup::open(&arguments).unwrap().unwrap();
+            assert_eq!(startup.directory, *directory);
+            assert_eq!(startup.connector_directory, *directory);
+            let settings = lapis_persistence::LocalGlobalSettingsRepository::new(
+                startup.directory.join("settings-v1.json"),
+            );
+            let settings =
+                lapis_desktop_client::SettingsSession::load(std::sync::Arc::new(settings)).unwrap();
+            if directory == &first {
+                settings.set_theme("lapis.white".into()).unwrap();
+            } else {
+                assert_eq!(settings.settings().theme, "lapis.dark");
+            }
+        }
+        assert!(first.join("settings-v1.json").is_file());
+        assert!(!second.join("settings-v1.json").exists());
+    }
+
+    #[test]
     fn legacy_drafts_conversations_and_settings_keep_their_original_directory() {
         let temp = tempfile::tempdir().unwrap();
         let preferred = temp.path().join("state");
