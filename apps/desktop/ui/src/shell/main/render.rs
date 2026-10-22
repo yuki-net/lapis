@@ -3,6 +3,26 @@ use super::*;
 impl Render for Shell {
     /// Builds the window shell and input handlers, clearing panel drop bounds for the new layout pass.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "hot-reload", debug_assertions))]
+        {
+            subsecond::HotFn::current(Self::render_hot).call((self, window, cx))
+        }
+
+        #[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+        {
+            self.render_content(window, cx)
+        }
+    }
+}
+
+impl Shell {
+    #[cfg(all(feature = "hot-reload", debug_assertions))]
+    #[inline(never)]
+    fn render_hot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_content(window, cx).into_any_element()
+    }
+
+    fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.shell
             .layout
             .finish_due_closes(std::time::Instant::now());

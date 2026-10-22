@@ -8,7 +8,27 @@ use gpui::{Context, Render, Window, div, prelude::*, px};
 use lapis_git::{ChangeKind, ConflictSide, GitAction};
 
 impl Render for GitFeature {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "hot-reload", debug_assertions))]
+        {
+            subsecond::HotFn::current(Self::render_hot).call((self, _window, cx))
+        }
+
+        #[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+        {
+            self.render_content(_window, cx)
+        }
+    }
+}
+
+impl GitFeature {
+    #[cfg(all(feature = "hot-reload", debug_assertions))]
+    #[inline(never)]
+    fn render_hot(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_content(window, cx).into_any_element()
+    }
+
+    fn render_content(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut content = div()
             .id("git-content")
             .flex()

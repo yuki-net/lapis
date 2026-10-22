@@ -107,6 +107,8 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
+            #[cfg(all(feature = "hot-reload", debug_assertions))]
+            crate::hot_reload::init(cx);
             bind_keys(cx);
             #[cfg(debug_assertions)]
             crate::devtools::init(cx);
