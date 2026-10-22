@@ -203,11 +203,8 @@ impl LocalHosts {
             if record.pid != pid || record.key != key || !record.address.ip().is_loopback() {
                 return Err::<Record, Error>("Hostの起動情報が一致しません".into());
             }
-            if !record.managed_lease
-                || record.started_at.is_none()
-                || !record_process_matches(&record)?
-            {
-                return Err("Hostのprocess開始情報が一致しません".into());
+            if !record.managed_lease || !host_record_active(&record, &self.directory)? {
+                return Err("Hostのprocess leaseを確認できません".into());
             }
             record.config()?;
             let plaintext = Zeroizing::new(serde_json::to_vec(&record)?);
@@ -459,9 +456,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
                 version: 1,
                 key: LOCAL_KEY.to_owned(),
                 pid: std::process::id(),
-                started_at: Some(
-                    process_started_at(std::process::id())?.ok_or("Host processが存在しません")?,
-                ),
+                started_at: process_started_at(std::process::id()).ok().flatten(),
                 managed_lease: true,
                 address: server.listening_address()?,
                 server_name: "lapis-host".to_owned(),
@@ -542,6 +537,7 @@ mod tests {
         let inherited = lease.0.try_clone().unwrap();
         let mut record = record();
         record.managed_lease = true;
+        record.started_at = None;
         record.pid = u32::MAX;
         assert!(host_record_active(&record, directory.path()).unwrap());
         assert!(HostLease::acquire(directory.path()).is_err());
