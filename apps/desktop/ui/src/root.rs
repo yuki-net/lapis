@@ -264,7 +264,7 @@ impl DesktopRoot {
                                     {
                                         client
                                             .conversation
-                                            .register_project(&client.editor, path)
+                                            .register_project(&mut client.editor, path)
                                             .map_err(|error| error.to_string())?;
                                     }
                                     Ok(())
@@ -275,7 +275,7 @@ impl DesktopRoot {
                                     {
                                         client
                                             .conversation
-                                            .register_source(&client.editor, &project, path)
+                                            .register_source(&mut client.editor, &project, path)
                                             .map_err(|error| error.to_string())?;
                                     }
                                     Ok(())

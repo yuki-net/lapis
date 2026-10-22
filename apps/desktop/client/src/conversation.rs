@@ -149,7 +149,8 @@ impl ConversationSession {
     pub fn load_error(&self) -> Option<&str> {
         self.load_error.as_deref()
     }
-    fn save(&mut self) -> Result<(), WorkspaceError> {
+    fn save(&mut self, editor: &mut EditorSession) -> Result<(), WorkspaceError> {
+        let mut restore = None;
         if let Some(error) = &self.load_error {
             return Err(WorkspaceError::new(error));
         }
@@ -192,7 +193,7 @@ impl ConversationSession {
             }
             for record in &self.records {
                 let base = self.persisted.1.iter().find(|item| item.id == record.id);
-                if base == Some(record) && record.id != self.active {
+                if base == Some(record) {
                     continue;
                 }
                 let mut local = record.clone();
@@ -237,6 +238,11 @@ impl ConversationSession {
                 &latest.records,
                 &latest.active,
             )?;
+            let before = self.active_record().map(|record| &record.workspace);
+            let after = latest.active_record().map(|record| &record.workspace);
+            if before != after {
+                restore = after.cloned();
+            }
             *self = latest;
         }
         self.persisted = (
@@ -244,6 +250,9 @@ impl ConversationSession {
             self.records.clone(),
             Some(self.active.clone()),
         );
+        if let Some(workspace) = restore {
+            editor.restore_snapshot(workspace)?;
+        }
         Ok(())
     }
 
@@ -303,7 +312,7 @@ impl ConversationSession {
 
     pub fn capture(
         &mut self,
-        editor: &EditorSession,
+        editor: &mut EditorSession,
         view: ConversationViewState,
         selected_execution: Option<ExecutionId>,
         terminals: &[TerminalSnapshot],
@@ -334,12 +343,12 @@ impl ConversationSession {
                 })
                 .collect();
         }
-        self.save()
+        self.save(editor)
     }
 
     pub fn create(
         &mut self,
-        editor: &EditorSession,
+        editor: &mut EditorSession,
         view: ConversationViewState,
     ) -> Result<ConversationId, WorkspaceError> {
         let environment = editor
@@ -377,7 +386,7 @@ impl ConversationSession {
             other_execution: None,
         });
         self.active = id.clone();
-        if let Err(error) = self.save() {
+        if let Err(error) = self.save(editor) {
             *self = previous;
             return Err(error);
         }
@@ -398,7 +407,7 @@ impl ConversationSession {
         self.transaction(editor, |session, editor| {
             editor.restore_snapshot(record.workspace)?;
             session.active = id.clone();
-            session.save()?;
+            session.save(editor)?;
             Ok(record.view)
         })
     }
@@ -418,7 +427,7 @@ impl ConversationSession {
 
     pub fn register_project(
         &mut self,
-        editor: &EditorSession,
+        editor: &mut EditorSession,
         root: PathBuf,
     ) -> Result<ProjectId, WorkspaceError> {
         let workspace = Self::validate_source(editor, &root)?;
@@ -443,7 +452,7 @@ impl ConversationSession {
         }
         let id = ProjectId::new(format!("project-{number}"));
         self.projects.push(Project::new(id.clone(), root.clone()));
-        if let Err(error) = self.save() {
+        if let Err(error) = self.save(editor) {
             self.projects.pop();
             return Err(error);
         }
@@ -492,7 +501,7 @@ impl ConversationSession {
 
     pub fn register_source(
         &mut self,
-        editor: &EditorSession,
+        editor: &mut EditorSession,
         id: &ProjectId,
         root: PathBuf,
     ) -> Result<(), WorkspaceError> {
@@ -513,7 +522,7 @@ impl ConversationSession {
             .find(|project| project.id() == id)
             .unwrap()
             .register_source(root);
-        if let Err(error) = self.save() {
+        if let Err(error) = self.save(editor) {
             self.projects = previous;
             return Err(error);
         }
@@ -587,7 +596,7 @@ impl ConversationSession {
                 other_execution: None,
             });
             session.active = id.clone();
-            session.save()?;
+            session.save(editor)?;
             Ok(session.active.clone())
         })
     }
@@ -628,7 +637,7 @@ impl ConversationSession {
             record.source_role = role;
             std::mem::swap(&mut record.terminals, &mut record.other_terminals);
             std::mem::swap(&mut record.selected_execution, &mut record.other_execution);
-            session.save()
+            session.save(editor)
         })
     }
 }
