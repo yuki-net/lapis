@@ -19,6 +19,7 @@ use lapis_document::{Document, DocumentError};
 use lapis_editor_core::DocumentId;
 mod actions;
 mod canvas;
+mod input;
 mod interactions;
 mod syntax;
 mod widths;
@@ -467,6 +468,7 @@ impl Editor {
             .edit_epoch
             .ok_or_else(|| DocumentError::conflict("文書を読み込み中です"))?;
         let previous = self.session.clone();
+        let syntax_edit = range.clone();
         let first_line = previous.char_to_position(range.start)?.line as usize;
         let last_line = previous.char_to_position(range.end)?.line as usize;
         let revision = self.session.revision();
@@ -510,14 +512,23 @@ impl Editor {
                 first_line..new_end,
             );
         }
-        self.refresh_syntax(cx);
+        if self.syntax_lines.as_mut().is_some_and(|lines| {
+            syntax::rebase(lines, &previous, &self.session, syntax_edit).is_none()
+        }) {
+            self.syntax_lines = None;
+        }
+        self.schedule_syntax(cx);
         Ok(changed)
     }
 
     fn refresh_syntax(&mut self, cx: &mut Context<Self>) {
+        self.syntax_lines = None;
+        self.schedule_syntax(cx);
+    }
+
+    fn schedule_syntax(&mut self, cx: &mut Context<Self>) {
         self.syntax_generation
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        self.syntax_lines = None;
         self.start_syntax(cx);
     }
 
