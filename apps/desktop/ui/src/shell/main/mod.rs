@@ -256,10 +256,6 @@ impl Shell {
             &self.session.documents,
             &self.feature_registry,
         );
-        let navigation = PanelTab::Tool(id::VIEW_PROJECT_TASKS.into());
-        if !self.shell.left_panel.tabs.contains(&navigation) {
-            self.shell.left_panel.tabs.insert(0, navigation);
-        }
         self.refresh_feature_activation();
         cx.notify();
     }

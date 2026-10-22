@@ -385,6 +385,40 @@ impl ConversationSession {
         Ok(id)
     }
 
+    /// 既存Taskを再利用する。複数候補のときは明示的なTask選択を求める。
+    pub fn open_project(
+        &mut self,
+        editor: &mut EditorSession,
+        root: PathBuf,
+    ) -> Result<(), WorkspaceError> {
+        let project = self.register_project(editor, root.clone())?;
+        let candidates: Vec<_> = self
+            .records
+            .iter()
+            .filter(|record| {
+                record
+                    .environment
+                    .as_ref()
+                    .is_some_and(|environment| environment.project() == &project)
+            })
+            .map(|record| record.id.clone())
+            .collect();
+        match candidates.as_slice() {
+            [] => {
+                self.create_task(editor, &project, root, None)?;
+            }
+            [id] => {
+                self.switch(id, editor)?;
+            }
+            _ => {
+                return Err(WorkspaceError::new(
+                    "このProjectには複数のTaskがあります。左側のProject / Taskから選択してください",
+                ));
+            }
+        }
+        Ok(())
+    }
+
     pub fn register_source(
         &mut self,
         editor: &EditorSession,
@@ -486,6 +520,51 @@ impl ConversationSession {
             session.save()?;
             Ok(id)
         })
+    }
+
+    pub fn discard_worktree(
+        &self,
+        editor: &EditorSession,
+        git: &dyn GitConnection,
+        id: &TaskId,
+    ) -> Result<(), WorkspaceError> {
+        let workspace = editor
+            .workspace_id()
+            .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
+        let root = git
+            .open_worktree(workspace, id)
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        // 別Windowが保存したTaskと、まだ保存していない手元の状態の両方を保護する。
+        let (_, saved_records, _) = self.repository.load()?;
+        for record in self.records.iter().chain(&saved_records) {
+            if std::iter::once(&record.workspace)
+                .chain(record.other_workspace.iter())
+                .chain(record.parked_sources.iter().map(|source| &source.workspace))
+                .any(|workspace| {
+                    workspace
+                        .root
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(&root))
+                })
+                || record.environment.as_ref().is_some_and(|environment| {
+                    [SourceRole::Primary, SourceRole::Sub]
+                        .into_iter()
+                        .any(|role| {
+                            environment
+                                .root(role)
+                                .is_some_and(|path| path.starts_with(&root))
+                        })
+                })
+            {
+                return Err(WorkspaceError::new(format!(
+                    "Task「{}」が作業状態を保持しています。Worktreeは削除できません",
+                    record.title
+                )));
+            }
+        }
+        git.discard_worktree(workspace, id)
+            .map(|_| ())
+            .map_err(|error| WorkspaceError::new(error.to_string()))
     }
 
     pub fn set_worktree(

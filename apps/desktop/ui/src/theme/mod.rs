@@ -1,9 +1,12 @@
 mod definition;
 mod registry;
+pub(crate) mod syntax;
 
 // テーマ定義とレジストリ
-pub use definition::{ThemeColors, ThemeDefinition};
-pub use registry::{active_colors, active_id, available, name, register, set_active};
+pub use definition::{ThemeAppearance, ThemeColors, ThemeDefinition};
+pub use registry::{
+    active_appearance, active_colors, active_id, available, name, register, set_active,
+};
 
 /// アクティブテーマのカラートークンを取得する。
 pub fn colors() -> ThemeColors {

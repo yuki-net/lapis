@@ -60,6 +60,7 @@ impl Shell {
             MenuAction::NewFile => self.new_document(&New, window, cx),
             MenuAction::NewFolder => self.create_new_folder(window, cx),
             MenuAction::NewWindow => self.open_new_window(cx),
+            MenuAction::ConnectHost => cx.emit(UiCommand::ConnectHost),
             MenuAction::OpenProject => self.open_project(window, cx),
             MenuAction::OpenFile => self.open_file(window, cx),
             MenuAction::CloseProject => self.close_project(window, cx),

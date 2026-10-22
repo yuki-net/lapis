@@ -1,5 +1,6 @@
-use crate::BackendHost;
-use lapis_backend_state::{BackendEventReceiver, EmbeddedClient};
+use crate::BackendClient;
+use crate::client::Client;
+use lapis_backend_state::BackendEventReceiver;
 use lapis_client_api::{
     EventBody, RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalInputRequest,
     TerminalResizeRequest, TerminalSize, TerminalStartRequest, TerminalStatus,
@@ -21,12 +22,12 @@ use std::{
 };
 
 pub(super) struct HostTerminals {
-    host: BackendHost,
+    host: BackendClient,
     attachments: Mutex<HashMap<String, Attachment>>,
 }
 
 struct Attachment {
-    client: Option<EmbeddedClient>,
+    client: Option<Client>,
     receiver: Option<BackendEventReceiver>,
     terminal_id: lapis_client_api::TerminalId,
     cwd: PathBuf,
@@ -249,7 +250,7 @@ impl Attachment {
 }
 
 impl HostTerminals {
-    pub(super) fn new(host: BackendHost) -> Self {
+    pub(super) fn new(host: BackendClient) -> Self {
         Self {
             host,
             attachments: Mutex::new(HashMap::new()),

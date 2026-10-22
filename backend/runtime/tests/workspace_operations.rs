@@ -346,6 +346,32 @@ fn denied(response: ResponseBody) {
     };
     assert_eq!(error.code.as_str(), lapis_client_api::FORBIDDEN);
 }
+
+#[test]
+fn git_actions_accept_deleted_parent_directories_without_relaxing_containment() {
+    let fixture = Fixture::new();
+    let client = fixture.client("deleted-path", "first");
+    let stage = |path: &str| Operation::GitAction {
+        worktree: None,
+        request: lapis_git::GitActionRequest {
+            action: lapis_git::GitAction::Stage { path: path.into() },
+            expected_head: Some("abc".into()),
+        },
+    };
+    assert!(matches!(
+        execute(&client, stage("deleted/directory/note.txt")),
+        ResponseBody::WorkspaceExecute(_)
+    ));
+    assert!(matches!(
+        execute(&client, stage("../outside.txt")),
+        ResponseBody::Error(_)
+    ));
+    std::fs::write(fixture.root.path().join("file"), "content").unwrap();
+    assert!(matches!(
+        execute(&client, stage("file/note.txt")),
+        ResponseBody::Error(_)
+    ));
+}
 fn started(client: &EmbeddedClient, isolated: bool) -> TaskSnapshot {
     let Outcome::TaskStarted(value) = outcome(execute(
         client,

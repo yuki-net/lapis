@@ -1,6 +1,78 @@
 use super::*;
 use lapis_git::{ConflictSide, GitAction, GitActionRequest, GitActionResult};
 
+/// 全Git操作を非対話で実行し、期限超過時は子プロセスも終了する。
+pub(super) fn git_output(
+    command: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::io::{Seek, SeekFrom};
+    // pipeを保持する認証ヘルパーを待ち続けないよう、出力は一時ファイルへ捕捉する。
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
+    command
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("SSH_ASKPASS_REQUIRE", "never")
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?);
+    if env::var_os("GIT_SSH_COMMAND").is_none() && env::var_os("GIT_SSH").is_none() {
+        command.env("GIT_SSH_COMMAND", "ssh -oBatchMode=yes");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command.spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() < timeout => thread::sleep(Duration::from_millis(10)),
+            result => {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    let _ = Command::new("taskkill")
+                        .args(["/F", "/T", "/PID", &child.id().to_string()])
+                        .creation_flags(0x08000000)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+                #[cfg(unix)]
+                let _ = Command::new("/bin/kill")
+                    .args(["-KILL", "--", &format!("-{}", child.id())])
+                    .status();
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(result.err().unwrap_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Git操作が120秒以内に完了しませんでした。状態を更新して確認してください",
+                    )
+                }));
+            }
+        }
+    };
+    stdout.seek(SeekFrom::Start(0))?;
+    stderr.seek(SeekFrom::Start(0))?;
+    let mut output = std::process::Output {
+        status,
+        stdout: Vec::new(),
+        stderr: Vec::new(),
+    };
+    stdout.read_to_end(&mut output.stdout)?;
+    stderr.read_to_end(&mut output.stderr)?;
+    Ok(output)
+}
+
 fn invalid(message: impl Into<String>) -> GitError {
     GitError::new(GitErrorKind::Conflict, message)
 }
@@ -103,34 +175,30 @@ fn selected_hunk(patch: &str, index: usize) -> Result<String, GitError> {
 }
 
 fn apply_patch(repository: &Path, patch: String, reverse: bool) -> Result<(), GitError> {
+    use std::io::{Seek, SeekFrom};
+    let mut input = tempfile::tempfile().map_err(|error| invalid(error.to_string()))?;
+    input
+        .write_all(patch.as_bytes())
+        .map_err(|error| invalid(error.to_string()))?;
+    input
+        .seek(SeekFrom::Start(0))
+        .map_err(|error| invalid(error.to_string()))?;
     let mut command = Command::new("git");
-    command
-        .current_dir(repository)
-        .args(["apply", "--cached", "--whitespace=nowarn"]);
+    command.current_dir(repository).args([
+        "-c",
+        "credential.interactive=never",
+        "apply",
+        "--cached",
+        "--whitespace=nowarn",
+    ]);
     if reverse {
         command.arg("--reverse");
     }
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let output = git_output(command.stdin(input), Duration::from_secs(120))
         .map_err(|error| invalid(error.to_string()))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| invalid("Git stdinを開けません"))?;
-    let writer = thread::spawn(move || stdin.write_all(patch.as_bytes()));
-    let output = child
-        .wait_with_output()
-        .map_err(|error| invalid(error.to_string()))?;
-    let written = writer
-        .join()
-        .map_err(|_| invalid("Git patch入力が失敗しました"))?;
     if !output.status.success() {
         return Err(invalid(String::from_utf8_lossy(&output.stderr)));
     }
-    written.map_err(|error| invalid(error.to_string()))?;
     Ok(())
 }
 
@@ -337,5 +405,48 @@ impl LocalGitBackend {
             ));
         }
         Ok(GitActionResult { output: text })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_stops_a_command_without_waiting_for_its_normal_exit() {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("powershell.exe");
+            command.args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 30",
+            ]);
+            command
+        };
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "sleep 30"]);
+            command
+        };
+        let started = Instant::now();
+        let error =
+            git_output(command.stdin(Stdio::null()), Duration::from_millis(100)).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
+    fn git_output_captures_stdout_stderr_and_exit_code() {
+        let output = git_output(
+            Command::new("git").arg("--version").stdin(Stdio::null()),
+            Duration::from_secs(10),
+        )
+        .unwrap();
+        assert!(output.status.success());
+        assert!(output.stdout.starts_with(b"git version"));
+        assert!(output.stderr.is_empty());
     }
 }

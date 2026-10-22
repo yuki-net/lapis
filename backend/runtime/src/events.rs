@@ -12,6 +12,9 @@ pub struct BackendEventReceiver {
 }
 
 impl BackendEventReceiver {
+    pub fn from_receiver(receiver: mpsc::Receiver<EventEnvelope>) -> Self {
+        Self { receiver }
+    }
     pub fn recv(&self) -> Result<EventEnvelope, mpsc::RecvError> {
         self.receiver.recv()
     }

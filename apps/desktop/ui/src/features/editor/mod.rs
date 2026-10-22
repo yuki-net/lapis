@@ -19,7 +19,10 @@ use lapis_document::{Document, DocumentError};
 use lapis_editor_core::DocumentId;
 mod actions;
 mod canvas;
+mod input;
 mod interactions;
+mod syntax;
+mod widths;
 use canvas::{EditorElement, EditorLineLayout};
 
 pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
@@ -82,6 +85,11 @@ pub(crate) enum EditorEvent {
 }
 
 pub(crate) struct Editor {
+    syntax_worker: ClientWorker<syntax::SyntaxCache>,
+    syntax_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    syntax_busy: bool,
+    syntax_lines: Option<syntax::Lines>,
+    line_widths: widths::LineWidths,
     session: Document,
     document_id: Option<DocumentId>,
     worker: ClientWorker<DocumentClient>,
@@ -111,6 +119,13 @@ pub(crate) struct Editor {
 
 impl gpui::EventEmitter<EditorEvent> for Editor {}
 
+impl Drop for Editor {
+    fn drop(&mut self) {
+        self.syntax_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 impl Editor {
     /// Creates a local editor view and starts snapshot polling on the shared worker.
     pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
@@ -127,6 +142,11 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut editor = Self {
+            syntax_worker: ClientWorker::new(syntax::SyntaxCache::default()),
+            syntax_generation: Default::default(),
+            syntax_busy: false,
+            syntax_lines: None,
+            line_widths: widths::LineWidths::new(&Document::new()),
             session: Document::new(),
             document_id: None,
             worker,
@@ -346,7 +366,7 @@ impl Editor {
         &mut self,
         snapshot: &ClientSnapshot,
         preserve_input: bool,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         if snapshot.sequence < self.snapshot_sequence {
             return;
@@ -382,12 +402,21 @@ impl Editor {
                 .unwrap_or_else(|| gpui::point(px(0.0), px(0.0)));
             self.editor_scroll.handle().set_offset(offset);
         }
+        let previous_revision = self.session.revision();
+        let previous_path = self.session.path().map(ToOwned::to_owned);
         self.session = snapshot
             .documents
             .iter()
             .find(|cache| Some(&cache.id) == snapshot.active.as_ref())
             .map(|cache| cache.document.clone())
             .unwrap_or_default();
+        if changed_document
+            || previous_revision != self.session.revision()
+            || previous_path.as_deref() != self.session.path()
+        {
+            self.line_widths.refresh(&self.session);
+            self.refresh_syntax(cx);
+        }
         if changed_document || !preserve_input {
             let (range, reversed) = self
                 .document_id
@@ -435,16 +464,19 @@ impl Editor {
         if self.recovery {
             return Err(DocumentError::conflict("入力の復旧が必要です"));
         }
+        let epoch = self
+            .edit_epoch
+            .ok_or_else(|| DocumentError::conflict("文書を読み込み中です"))?;
         let previous = self.session.clone();
+        let syntax_edit = range.clone();
+        let first_line = previous.char_to_position(range.start)?.line as usize;
+        let last_line = previous.char_to_position(range.end)?.line as usize;
         let revision = self.session.revision();
         let changed = self.session.replace_char_range(range.clone(), text)?;
         if !changed {
             return Ok(false);
         }
         let text = text.to_owned();
-        let epoch = self
-            .edit_epoch
-            .ok_or_else(|| DocumentError::conflict("文書を読み込み中です"))?;
         let admitted = self.submit(
             true,
             move |client| {
@@ -470,7 +502,74 @@ impl Editor {
             self.session = previous;
             return Err(DocumentError::io("Clientの処理待ちが上限に達しました"));
         }
+        {
+            let new_end = (last_line + 1)
+                .saturating_add(self.session.len_lines())
+                .saturating_sub(previous.len_lines());
+            self.line_widths.replace(
+                first_line..last_line + 1,
+                &self.session,
+                first_line..new_end,
+            );
+        }
+        if self.syntax_lines.as_mut().is_some_and(|lines| {
+            syntax::rebase(lines, &previous, &self.session, syntax_edit).is_none()
+        }) {
+            self.syntax_lines = None;
+        }
+        self.schedule_syntax(cx);
         Ok(changed)
+    }
+
+    fn refresh_syntax(&mut self, cx: &mut Context<Self>) {
+        self.syntax_lines = None;
+        self.schedule_syntax(cx);
+    }
+
+    fn schedule_syntax(&mut self, cx: &mut Context<Self>) {
+        self.syntax_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.start_syntax(cx);
+    }
+
+    fn start_syntax(&mut self, cx: &mut Context<Self>) {
+        use std::sync::atomic::Ordering;
+        if self.syntax_busy {
+            return;
+        }
+        let generation = self.syntax_generation.load(Ordering::Relaxed);
+        let latest = self.syntax_generation.clone();
+        let document = self.session.clone();
+        let id = self.document_id.clone();
+        let revision = document.revision();
+        self.syntax_busy = true;
+        let result = self.syntax_worker.submit(
+            cx,
+            move |cache| {
+                let lines = cache.update(&document, generation, &latest);
+                Ok(lines)
+            },
+            move |editor, result, cx| {
+                editor.syntax_busy = false;
+                if editor.syntax_generation.load(Ordering::Relaxed) != generation {
+                    editor.start_syntax(cx);
+                    return;
+                }
+                if editor.document_id == id && editor.session.revision() == revision {
+                    if let Ok(lines) = result {
+                        editor.syntax_lines = lines;
+                    }
+                    cx.notify();
+                }
+            },
+        );
+        if result.is_err() {
+            self.syntax_busy = false;
+        }
+    }
+
+    fn content_width(&self) -> f32 {
+        (self.line_widths.max() + 80.0).max(600.0)
     }
 
     pub(crate) fn activate(&mut self, id: DocumentId, cx: &mut Context<Self>) {
@@ -616,13 +715,7 @@ impl Render for Editor {
             .relative()
             .min_w_full()
             .min_h_full()
-            .w(px((0..self.session.len_lines())
-                .filter_map(|line| self.session.line(line))
-                .map(|line| line.chars().count())
-                .max()
-                .unwrap_or(0) as f32
-                * 18.0
-                + 80.0))
+            .w(px(self.content_width()))
             .px(px(18.0))
             .py(px(10.0))
             .cursor(CursorStyle::IBeam)

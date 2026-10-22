@@ -14,6 +14,7 @@ pub(crate) enum UiCommand {
     NewFolder,
     CloneRepository,
     NewWindow,
+    ConnectHost,
     CloseWindow,
     DetachTab(crate::shell::PanelTab),
     DockTab(crate::shell::PanelTab),

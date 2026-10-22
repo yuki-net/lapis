@@ -311,14 +311,18 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         if !constant_time_digest_matches(credential.secret_bytes(), &record.digest) {
             return Err(AuthError::CredentialUnavailable);
         }
-        if &record.client_id != client_id || &record.workspace_id != workspace_id {
+        let owner = record
+            .capabilities
+            .iter()
+            .any(|capability| capability.as_str() == lapis_client_api::capability::HOST_MANAGE);
+        if &record.client_id != client_id || (!owner && &record.workspace_id != workspace_id) {
             return Err(AuthError::CredentialBindingMismatch);
         }
         let now = self.clock.now_unix_seconds();
         if now >= record.expires_at {
             return Err(AuthError::CredentialExpired);
         }
-        let granted_workspace = record.workspace_id.clone();
+        let granted_workspace = workspace_id.clone();
         let granted_capabilities = record.capabilities.clone();
         let session_id = self.generate_session_id()?;
         let grant = SessionGrant::from_authenticated(
@@ -372,7 +376,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         self.clock.now_unix_seconds().saturating_add(lifetime)
     }
 
-    fn require_active_session(&self, grant: &SessionGrant) -> Result<(), AuthError> {
+    pub(crate) fn require_active_session(&self, grant: &SessionGrant) -> Result<(), AuthError> {
         self.require_enabled()?;
         let credential_id = self
             .sessions
@@ -529,6 +533,57 @@ mod tests {
             auth.authenticate(&credential, &client, &workspace),
             Err(AuthError::CredentialExpired)
         ));
+    }
+
+    #[test]
+    fn only_host_owner_can_authenticate_for_another_workspace() {
+        let mut auth = setup();
+        let owner = CapabilityId::try_new(capability::HOST_MANAGE).unwrap();
+        let capabilities = CapabilitySet::try_new([
+            owner,
+            CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap(),
+        ])
+        .unwrap();
+        auth.policy = AuthPolicy::new(capabilities.clone());
+        auth.enable();
+        let (client, workspace) = ids();
+        let other = WorkspaceId::try_new("workspace-2").unwrap();
+        let token = auth.begin_pairing(workspace.clone()).unwrap();
+        let guest = auth
+            .complete_pairing(&token, &client, &CapabilitySet::default())
+            .unwrap();
+        assert!(matches!(
+            auth.authenticate(&guest, &client, &other),
+            Err(AuthError::CredentialBindingMismatch)
+        ));
+        let token = auth.begin_pairing(workspace).unwrap();
+        let credential = auth
+            .complete_pairing(&token, &client, &capabilities)
+            .unwrap();
+        let grant = auth.authenticate(&credential, &client, &other).unwrap();
+        assert_eq!(grant.workspace_id(), &other);
+        assert!(matches!(
+            auth.authenticate(
+                &credential,
+                &ClientId::try_new("another-client").unwrap(),
+                &other
+            ),
+            Err(AuthError::CredentialBindingMismatch)
+        ));
+        // 所有者も一つのsessionから別Workspaceの通常操作はできない。
+        assert!(matches!(
+            auth.authorize_request(
+                &grant,
+                &RequestBody::WorkspaceConnect(lapis_client_api::WorkspaceConnectRequest {
+                    workspace_id: ids().1
+                })
+            ),
+            Err(AccessError::Authorization(
+                crate::AuthorizationError::WorkspaceDenied
+            ))
+        ));
+        assert!(auth.revoke(credential.id()));
+        assert!(auth.require_active_session(&grant).is_err());
     }
 
     #[test]

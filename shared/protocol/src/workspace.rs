@@ -2,6 +2,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::WorkspaceId;
 
+/// Host所有者による登録要求。通常のWorkspace操作にはOSの絶対pathを渡さない。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostRegisterRequest {
+    pub root: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceSummary {
     pub workspace_id: WorkspaceId,

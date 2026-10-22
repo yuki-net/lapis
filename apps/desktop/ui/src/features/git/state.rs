@@ -65,6 +65,10 @@ impl GitInputRequest {
 #[derive(Clone)]
 pub(crate) enum GitEvent {
     Input(GitInputRequest),
+    DiscardWorktree {
+        workspace: WorkspaceId,
+        worktree: TaskId,
+    },
     OpenWorktree {
         workspace: WorkspaceId,
         worktree: Option<TaskId>,
@@ -137,6 +141,13 @@ impl GitFeature {
         let Some(workspace) = self.workspace.clone() else {
             return;
         };
+        if let GitOperation::Discard(worktree) = operation {
+            cx.emit(GitEvent::DiscardWorktree {
+                workspace,
+                worktree,
+            });
+            return;
+        }
         let is_refresh = matches!(&operation, GitOperation::Refresh);
         let token = self.gate.issue();
         self.pending += 1;
@@ -149,7 +160,7 @@ impl GitFeature {
                 let result = match operation {
                     GitOperation::Refresh => Ok(()),
                     GitOperation::Import(task, path) => session.import_file(&task, &path),
-                    GitOperation::Discard(task) => session.discard_worktree(&task),
+                    GitOperation::Discard(_) => unreachable!("Task状態の所有者で検証する"),
                     GitOperation::Action(worktree, request) => {
                         session.execute_action(worktree.as_ref(), request)
                     }
@@ -177,6 +188,14 @@ impl GitFeature {
                 match result {
                     Ok(snapshot) => {
                         git.snapshot = snapshot;
+                        if git.target.as_ref().is_some_and(|target| {
+                            !git.snapshot
+                                .worktree_statuses
+                                .iter()
+                                .any(|(id, _)| id == target)
+                        }) {
+                            git.target = None;
+                        }
                         if !is_refresh || git.message_from_refresh {
                             git.message.clear();
                             git.message_from_refresh = false;

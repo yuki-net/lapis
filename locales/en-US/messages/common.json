@@ -65,6 +65,8 @@
   "workspace.no-recent": "No recent workspaces",
   "settings.title": "Settings",
   "settings.appearance": "Appearance / Theme",
+  "settings.syntax-theme": "Code syntax colors",
+  "settings.syntax-theme-follows-ui": "Light and dark colors follow the app theme automatically.",
   "settings.language": "Language / 言語",
   "settings.workspace-info": "Workspace & Version",
   "settings.no-workspace": "No workspace open"

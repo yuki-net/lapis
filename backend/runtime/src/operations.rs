@@ -233,7 +233,7 @@ impl WorkspaceOperations {
                     let path = lapis_client_api::WorkspaceRelativePath::parse(path)
                         .map_err(|_| BackendStateError::WorkspaceDenied)?;
                     crate::WorkspacePathResolver::new(directory.clone())?
-                        .resolve_new_file(&path)?;
+                        .resolve_scoped_path(&path)?;
                 }
                 Ok(Outcome::GitAction(
                     self.git()?.execute(&directory, request).map_err(problem)?,
