@@ -77,16 +77,6 @@ pub(crate) fn run_native_smoke(
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE idle sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
-        #[cfg(target_os = "windows")]
-        verify_drag_routes(&this, handle, &id, cx).await;
-        handle
-            .update(cx, |_, window, cx| {
-                this.update(cx, |root, cx| {
-                    root.command(UiCommand::NewWindow, window, cx)
-                })
-            })
-            .unwrap()
-            .unwrap();
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 2);
             let child = *root
@@ -349,6 +339,16 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         wait_for(&this, cx, None).await;
+        #[cfg(target_os = "windows")]
+        verify_drag_routes(&this, handle, &id, cx).await;
+        handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |root, cx| {
+                    root.command(UiCommand::NewWindow, window, cx)
+                })
+            })
+            .unwrap()
+            .unwrap();
         let (handle, peer) = this
             .update(cx, |root, cx| {
                 let own_id = cx.entity_id();
