@@ -1,0 +1,60 @@
+[environment]
+os=Windows 11 Pro 10.0.26200
+rustc=1.96.0 (ac68faa20 2026-05-25)
+subsecond=0.7.10
+dioxus_cli=0.7.10
+target=x86_64-pc-windows-msvc
+
+[minimal-no-large-frame]
+result=success
+observed=同一PIDのまま数値変更を複数回反映
+
+[minimal-large-frame-before-cli-fix]
+change=16 KiBのローカル配列をホット関数へ追加
+observed=patch-applied後にthread main has overflowed its stack
+exit_code=0xc00000fd
+generated_stub=48 B8 <address> FF E0 (mov rax, address; jmp rax)
+generated_function=mov eax, 4030h; call __chkstk; sub rsp, rax
+
+[gpui-probe]
+result=success
+window_count=1
+observed=背景色変更後もPID=66368、Window handle=18883208を維持し、描画ログを継続
+scope=1 Window、1 Render Entity、明示的refresh_windows
+
+[causal-chain]
+1=大きなスタックフレームがRAXへサイズを設定
+2=__chkstkへのWindowsスタブがRAXをアドレスへ上書き
+3=__chkstk復帰後のsub rsp, raxが不正値を使用
+4=stack overflow (0xc00000fd)
+
+[upstream-fix]
+pr=https://github.com/DioxusLabs/dioxus/pull/5967
+fix=Windows x64 stubをjmp [rip+0]へ変更し、RAXを保存
+status=検証時点で未マージ。修正済みCLIでLapis本体の最終追試が必要
+
+[minimal-large-frame-after-cli-fix]
+result=success
+observed=同一PIDのまま数値変更を継続反映し、stack overflowなし
+cli_fix=PR #5967相当のjmp [rip+0]スタブ
+
+[gpui-probe-after-cli-fix]
+result=success
+observed=同一PID・Windowを維持し、patch-applied後にrefresh windows=1。背景色変更後も描画継続
+
+[lapis-before-theme-workaround]
+result=failure
+observed=修正済みCLIでShell背景色を変更するとpatch DLL適用後に0xc000041d
+fault=0xc0000005 at liblapis-patch offset 0x2ff663
+symbol=lapis_desktop_ui::theme::registry::THEMES::constant$0::closure_env$0
+analysis=patched DLLのthread_local! THEMES accessorが元EXEのMSVC TLS領域外アドレスを参照
+
+[lapis-after-theme-workaround]
+result=success
+observed=PID=76704、Window=1を維持。Shell背景色を複数回保存し、各回patch-appliedとrefresh windows=1。終了イベントなし
+workaround=hot-reload DebugだけThemeRegistryをLazyLock<Mutex<_>>へ切り替え、通常Debug/Releaseはthread_local!を維持
+hot_patch_ms=1293-1586
+
+[scope]
+state=同一プロセスと既存Windowの維持を確認。未保存編集・タブ・Panel・フォーカス・Terminalの全項目は今回未確認
+unsupported=構造体レイアウト、独自Element、include_str!テーマJSON変更は再起動または別機構

@@ -5,6 +5,9 @@ edition.workspace = true
 description.workspace = true
 license.workspace = true
 
+[features]
+hot-reload = ["dep:async-channel", "dep:dioxus-devtools", "dep:subsecond"]
+
 [dependencies]
 gpui.workspace = true
 serde.workspace = true
@@ -22,6 +25,9 @@ lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true
 vt100 = "0.16.2"
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
+async-channel = { version = "2", optional = true }
+dioxus-devtools = { version = "=0.7.10", optional = true }
+subsecond = { version = "=0.7.10", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"

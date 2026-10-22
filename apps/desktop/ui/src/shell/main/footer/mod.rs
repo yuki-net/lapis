@@ -4,6 +4,24 @@ use crate::components::{ButtonSize, button};
 impl Shell {
     /// フッター（ステータスバー）を描画する。
     pub(super) fn render_footer(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "hot-reload", debug_assertions))]
+        {
+            subsecond::HotFn::current(Self::render_footer_hot).call((self, _cx))
+        }
+
+        #[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+        {
+            self.render_footer_content(_cx)
+        }
+    }
+
+    #[cfg(all(feature = "hot-reload", debug_assertions))]
+    #[inline(never)]
+    fn render_footer_hot(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_footer_content(cx).into_any_element()
+    }
+
+    fn render_footer_content(&self, _cx: &mut Context<Self>) -> impl IntoElement {
         let (line, column) = self.session.cursor;
         let mut path = div()
             .flex()

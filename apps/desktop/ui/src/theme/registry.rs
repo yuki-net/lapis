@@ -1,4 +1,10 @@
-use std::{cell::RefCell, collections::BTreeMap};
+use std::collections::BTreeMap;
+
+#[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+use std::cell::RefCell;
+
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+use std::sync::{LazyLock, Mutex};
 
 use crate::extension_ui::ThemeId;
 
@@ -51,14 +57,38 @@ impl ThemeRegistry {
     }
 }
 
+#[cfg(not(all(feature = "hot-reload", debug_assertions)))]
 thread_local! {
     static THEMES: RefCell<ThemeRegistry> = RefCell::new(ThemeRegistry::bundled());
 }
 
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+static THEMES: LazyLock<Mutex<ThemeRegistry>> =
+    LazyLock::new(|| Mutex::new(ThemeRegistry::bundled()));
+
+#[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+fn with_themes<R>(f: impl FnOnce(&ThemeRegistry) -> R) -> R {
+    THEMES.with(|registry| f(&registry.borrow()))
+}
+
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+fn with_themes<R>(f: impl FnOnce(&ThemeRegistry) -> R) -> R {
+    f(&THEMES.lock().expect("theme registry lock poisoned"))
+}
+
+#[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+fn with_themes_mut<R>(f: impl FnOnce(&mut ThemeRegistry) -> R) -> R {
+    THEMES.with(|registry| f(&mut registry.borrow_mut()))
+}
+
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+fn with_themes_mut<R>(f: impl FnOnce(&mut ThemeRegistry) -> R) -> R {
+    f(&mut THEMES.lock().expect("theme registry lock poisoned"))
+}
+
 /// テーマを登録する。同一 ID が既存の場合は `Err(id)` を返す。
 pub fn register(definition: ThemeDefinition) -> Result<(), ThemeId> {
-    THEMES.with(|registry| {
-        let mut registry = registry.borrow_mut();
+    with_themes_mut(|registry| {
         if registry.definitions.contains_key(&definition.id) {
             return Err(definition.id);
         }
@@ -71,8 +101,7 @@ pub fn register(definition: ThemeDefinition) -> Result<(), ThemeId> {
 
 /// アクティブテーマを切り替える。ID が未登録の場合は `false` を返す。
 pub fn set_active(theme: &ThemeId) -> bool {
-    THEMES.with(|registry| {
-        let mut registry = registry.borrow_mut();
+    with_themes_mut(|registry| {
         if !registry.definitions.contains_key(theme) {
             return false;
         }
@@ -83,22 +112,21 @@ pub fn set_active(theme: &ThemeId) -> bool {
 
 /// アクティブテーマの ID を返す。
 pub fn active_colors() -> ThemeColors {
-    THEMES.with(|registry| registry.borrow().active_definition().colors.clone())
+    with_themes(|registry| registry.active_definition().colors.clone())
 }
 
 pub fn active_id() -> ThemeId {
-    THEMES.with(|registry| registry.borrow().active.clone())
+    with_themes(|registry| registry.active.clone())
 }
 
 /// アクティブテーマの明暗を返す。
 pub fn active_appearance() -> ThemeAppearance {
-    THEMES.with(|registry| registry.borrow().active_definition().appearance)
+    with_themes(|registry| registry.active_definition().appearance)
 }
 
 pub fn available() -> Vec<(ThemeId, String)> {
-    THEMES.with(|registry| {
+    with_themes(|registry| {
         registry
-            .borrow()
             .definitions
             .values()
             .map(|definition| (definition.id.clone(), definition.name.clone()))
@@ -107,9 +135,8 @@ pub fn available() -> Vec<(ThemeId, String)> {
 }
 
 pub fn name(theme: &ThemeId) -> Option<String> {
-    THEMES.with(|registry| {
+    with_themes(|registry| {
         registry
-            .borrow()
             .definitions
             .get(theme)
             .map(|definition| definition.name.clone())
