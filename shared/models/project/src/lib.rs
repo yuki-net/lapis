@@ -88,6 +88,12 @@ impl TaskEnvironment {
     pub fn project(&self) -> &ProjectId {
         &self.project
     }
+
+    pub fn reassign_project(&mut self, project: &Project) -> Result<(), &'static str> {
+        Self::new(project, self.primary.clone(), self.sub.clone())?;
+        self.project = project.id.clone();
+        Ok(())
+    }
     pub fn primary(&self) -> &Path {
         &self.primary
     }

@@ -634,8 +634,8 @@ impl DesktopRoot {
                         client.persist_view(view)?;
                         if matches!(command, UiCommand::CloseWorkspace) {
                             return client
-                                .editor
-                                .close_workspace()
+                                .conversation
+                                .close_workspace(&mut client.editor)
                                 .map_err(|error| error.to_string());
                         }
                         let path = match command {
