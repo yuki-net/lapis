@@ -48,17 +48,8 @@ impl Element for EditorElement {
     ) -> (LayoutId, Self::RequestLayoutState) {
         let editor = self.editor.read(cx);
         let line_count = editor.session.len_lines().max(1);
-        let max_visual_width = (0..line_count)
-            .filter_map(|line| editor.session.line(line))
-            .map(|line| {
-                line.trim_end_matches(['\r', '\n'])
-                    .chars()
-                    .map(|c| if c.is_ascii() { 9.0 } else { 18.0 })
-                    .sum::<f32>()
-            })
-            .fold(0.0f32, f32::max);
         let mut style = Style::default();
-        style.size.width = px((max_visual_width + 80.0).max(600.0)).into();
+        style.size.width = px(editor.content_width()).into();
         style.size.height = px(24.0 * line_count as f32).into();
         (window.request_layout(style, [], cx), ())
     }
@@ -117,10 +108,31 @@ impl Element for EditorElement {
                 underline: None,
                 strikethrough: None,
             };
+            let mut runs = Vec::new();
+            if let Some(spans) = editor
+                .syntax_lines
+                .as_ref()
+                .and_then(|lines| lines.get(line_index))
+            {
+                for span in spans.iter() {
+                    let start = span.range.start.min(text.len());
+                    let end = span.range.end.min(text.len());
+                    if start < end {
+                        runs.push(TextRun {
+                            len: end - start,
+                            color: theme::syntax::color(&span.scopes, text_style.color),
+                            ..run.clone()
+                        });
+                    }
+                }
+            }
+            if runs.is_empty() {
+                runs.push(run);
+            }
             let shaped = window.text_system().shape_line(
                 SharedString::from(text.to_owned()),
                 px(16.0),
-                &[run],
+                &runs,
                 None,
             );
             let origin = point(bounds.left(), bounds.top() + line_height * line_index);
@@ -295,10 +307,7 @@ impl EntityInputHandler for Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(range) = range_utf16 {
-            self.selected_range = self.range_from_utf16(&range);
-        }
-        self.replace_selection(new_text, cx);
+        self.apply_input(range_utf16, new_text, input::InputKind::Commit, cx);
     }
 
     fn replace_and_mark_text_in_range(
@@ -309,27 +318,12 @@ impl EntityInputHandler for Editor {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let target = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .or_else(|| self.marked_range.clone())
-            .unwrap_or_else(|| self.selected_range.clone());
-        let start = target.start;
-        if let Err(error) = self.edit(target, new_text, cx) {
-            self.status = format!("入力失敗: {error}");
-            cx.notify();
-            return;
-        }
-        let inserted_chars = new_text.chars().count();
-        self.marked_range = Some(start..start + inserted_chars);
-        self.selected_range = new_selected_range_utf16
-            .map(|range| {
-                start + char_for_utf16_in_text(new_text, range.start)
-                    ..start + char_for_utf16_in_text(new_text, range.end)
-            })
-            .unwrap_or(start + inserted_chars..start + inserted_chars);
-        self.selection_reversed = false;
-        cx.notify();
+        self.apply_input(
+            range_utf16,
+            new_text,
+            input::InputKind::Mark(new_selected_range_utf16),
+            cx,
+        );
     }
 
     fn bounds_for_range(
@@ -364,13 +358,39 @@ impl EntityInputHandler for Editor {
     }
 }
 
-fn char_for_utf16_in_text(text: &str, target: usize) -> usize {
-    let mut utf16 = 0usize;
-    for (index, ch) in text.chars().enumerate() {
-        if utf16 >= target {
-            return index;
+impl Editor {
+    fn apply_input(
+        &mut self,
+        explicit: Option<Range<usize>>,
+        text: &str,
+        kind: input::InputKind,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.enabled || self.document_id.is_none() {
+            return;
         }
-        utf16 += ch.len_utf16();
+        let result = input::InputEdit::new(
+            &self.session,
+            &self.selected_range,
+            self.marked_range.as_ref(),
+            explicit,
+            text,
+            kind,
+        )
+        .and_then(|plan| {
+            self.edit(plan.target.clone(), text, cx)?;
+            Ok(plan)
+        });
+        match result {
+            Ok(plan) => {
+                self.selected_range = plan.selection;
+                self.marked_range = plan.marked;
+                self.selection_reversed = false;
+            }
+            Err(error) => {
+                self.status = error.to_string();
+            }
+        }
+        cx.notify();
     }
-    text.chars().count()
 }
