@@ -53,8 +53,8 @@ pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision, TerminalOutputSequence};
 pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot};
 pub use terminal::{
-    TerminalCommandResponse, TerminalInputRequest, TerminalResizeRequest, TerminalSize,
-    TerminalSnapshot, TerminalStartRequest, TerminalStartResponse, TerminalStatus,
+    TerminalCommandResponse, TerminalInputRequest, TerminalResizeRequest, TerminalShell,
+    TerminalSize, TerminalSnapshot, TerminalStartRequest, TerminalStartResponse, TerminalStatus,
     TerminalTerminateRequest,
 };
 pub use version::{

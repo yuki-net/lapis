@@ -20,6 +20,7 @@ lapis-task = { path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true
+vt100 = "0.16.2"
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
