@@ -74,6 +74,10 @@ pub(crate) fn run_native_smoke(
     cx.spawn(async move |this, cx| {
         // 起動直後の描画とidleのCPUサンプルを分ける。
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+        #[cfg(debug_assertions)]
+        if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            crate::devtools::native_smoke::run(handle, cx).await;
+        }
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。

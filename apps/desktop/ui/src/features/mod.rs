@@ -254,4 +254,19 @@ mod tests {
                     .is_some_and(|command| { command.as_str() == id::COMMAND_TOGGLE_INSPECTOR }))
         );
     }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn release_build_does_not_register_inspector_command() {
+        assert!(
+            bundled_registry()
+                .contributions(UiSlot::CommandPalette)
+                .iter()
+                .all(|contribution| {
+                    contribution.command.as_ref().is_none_or(|command| {
+                        command.as_str() != "lapis.command.dev.toggle-inspector"
+                    })
+                })
+        );
+    }
 }

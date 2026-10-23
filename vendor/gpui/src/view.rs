@@ -165,7 +165,10 @@ impl Element for AnyView {
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
         window.with_rendered_view(self.entity_id(), |window| {
-            // Disable caching when inspecting so that mouse_hit_test has all hitboxes.
+            // 検査中は未変更のsubtreeも収集する。Pick以外のTree選択にも全要素が必要。
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            let caching_disabled = window.inspector_is_enabled();
+            #[cfg(not(any(feature = "inspector", debug_assertions)))]
             let caching_disabled = window.is_inspector_picking(cx);
             match self.cached_style.as_ref() {
                 Some(style) if !caching_disabled => {

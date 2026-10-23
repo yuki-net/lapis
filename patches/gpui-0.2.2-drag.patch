@@ -1,0 +1,54 @@
+diff --git a/src/window.rs b/src/window.rs
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -3629,0 +3650 @@ impl Window {
++                            button: MouseButton::Left,
+@@ -3721 +3742,5 @@ impl Window {
+-            } else if event.is::<MouseUpEvent>() {
++            } else if event.downcast_ref::<MouseUpEvent>().is_some_and(|event| {
++                cx.active_drag
++                    .as_ref()
++                    .is_some_and(|drag| crate::drag_ends_on_mouse_up(drag.button, event.button))
++            }) {
+diff --git a/src/app.rs b/src/app.rs
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -40,5 +40,6 @@ use crate::{
+-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, PromptBuilder,
+-    PromptButton, PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle,
+-    Reservation, ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer, Task,
+-    TextSystem, Window, WindowAppearance, WindowHandle, WindowId, WindowInvalidator,
++    Keymap, Keystroke, LayoutId, Menu, MenuItem, MouseButton, OwnedMenu, PathPromptOptions, Pixels,
++    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point,
++    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
++    RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
++    Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
++    WindowInvalidator,
+@@ -2305,0 +2307,3 @@ pub struct AnyDrag {
++    /// The mouse button that initiated this drag.
++    pub button: MouseButton,
++
+@@ -2313,0 +2318,4 @@ pub struct AnyDrag {
++pub(crate) fn drag_ends_on_mouse_up(drag_button: MouseButton, button: MouseButton) -> bool {
++    drag_button == button
++}
++
+@@ -2429,0 +2438,12 @@ mod test {
++    #[test]
++    fn drag_ends_only_when_its_start_button_is_released() {
++        assert!(!crate::drag_ends_on_mouse_up(
++            crate::MouseButton::Left,
++            crate::MouseButton::Right
++        ));
++        assert!(crate::drag_ends_on_mouse_up(
++            crate::MouseButton::Left,
++            crate::MouseButton::Left
++        ));
++    }
++
+diff --git a/src/elements/div.rs b/src/elements/div.rs
+--- a/src/elements/div.rs
++++ b/src/elements/div.rs
+@@ -2169,0 +2175 @@ impl Interactivity {
++                                button: mouse_down.button,

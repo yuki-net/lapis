@@ -1,3 +1,7 @@
+use super::{
+    inspection::Inspection,
+    tree_state::{TreeRow, TreeState},
+};
 use crate::components::ScrollState;
 
 use gpui::{
@@ -67,6 +71,8 @@ pub(super) struct InspectorController {
     _window_closed_subscription: Option<Subscription>,
     tree_scroll: ScrollState,
     content_scroll: ScrollState,
+    inspection: Option<Inspection>,
+    tree: TreeState,
 }
 
 impl Global for InspectorController {}
@@ -106,13 +112,19 @@ pub(super) fn init(cx: &mut App) {
             let inspector_window = (closed != ClosedWindow::Unrelated)
                 .then(|| controller.inspector_window.take())
                 .flatten();
+            if closed != ClosedWindow::Unrelated {
+                controller.inspection = None;
+                controller.tree = TreeState::default();
+                controller.tree_scroll = ScrollState::default();
+                controller.content_scroll = ScrollState::default();
+            }
             (closed, target_window, inspector_window)
         };
 
         match closed {
             ClosedWindow::Inspector => {
                 if let Some(target_window) = target_window {
-                    let _ = target_window.update(cx, |_, window, _cx| window.disable_inspector());
+                    let _ = target_window.update(cx, |_, window, _cx| Inspection::disable(window));
                 }
             }
             ClosedWindow::Target => {
@@ -128,6 +140,38 @@ pub(super) fn init(cx: &mut App) {
 }
 
 impl InspectorController {
+    pub(super) fn defer(
+        cx: &mut gpui::Context<gpui::Inspector>,
+        action: impl FnOnce(&mut App) + 'static,
+    ) {
+        let entity = cx.entity_id();
+        cx.defer(move |cx| {
+            // 閉じて再開した後に届いた古いUI操作を新しいsessionへ適用しない。
+            if cx
+                .global::<Self>()
+                .inspection
+                .as_ref()
+                .is_some_and(|inspection| inspection.entity().entity_id() == entity)
+            {
+                action(cx);
+            }
+        });
+    }
+    pub(super) fn inspector_handle(&self) -> Option<AnyWindowHandle> {
+        self.inspector_window
+    }
+    pub(super) fn tree_rows(inspector: &gpui::Inspector, cx: &mut App) -> std::rc::Rc<[TreeRow]> {
+        cx.global_mut::<Self>().tree.rows(
+            inspector.element_tree(),
+            inspector.tree_revision(),
+            inspector.active_element_id(),
+            inspector.is_picking(),
+        )
+    }
+
+    pub(super) fn toggle_tree_node(id: InspectorElementId, cx: &mut App) {
+        cx.global_mut::<Self>().tree.toggle(id);
+    }
     pub(super) fn tree_scroll(cx: &App) -> ScrollState {
         cx.global::<InspectorController>().tree_scroll.clone()
     }
@@ -138,13 +182,23 @@ impl InspectorController {
     pub(super) fn toggle(target_window: &mut Window, cx: &mut App) -> Result<bool, String> {
         let is_open = cx.global::<InspectorController>().lifecycle.is_open();
         if is_open {
-            let inspector_window = {
+            let (inspector_window, target) = {
                 let controller = cx.global_mut::<InspectorController>();
                 controller.lifecycle.reset();
-                controller.target_window = None;
-                controller.inspector_window.take()
+                let target = controller.target_window.take();
+                controller.inspection = None;
+                controller.tree = TreeState::default();
+                controller.tree_scroll = ScrollState::default();
+                controller.content_scroll = ScrollState::default();
+                (controller.inspector_window.take(), target)
             };
-            target_window.disable_inspector();
+            if let Some(target) = target {
+                if target == target_window.window_handle() {
+                    Inspection::disable(target_window);
+                } else {
+                    let _ = target.update(cx, |_, window, _| Inspection::disable(window));
+                }
+            }
             if let Some(inspector_window) = inspector_window {
                 let _ = inspector_window.update(cx, |_, window, _cx| window.remove_window());
             }
@@ -152,7 +206,8 @@ impl InspectorController {
         }
 
         let target_handle = target_window.window_handle();
-        let inspector = target_window.enable_external_inspector(cx);
+        let inspector = Inspection::enable(target_window, cx);
+        let observed = inspector.clone();
         let bounds = Bounds::centered(None, size(px(900.0), px(800.0)), cx);
         let inspector_window = match cx.open_window(
             WindowOptions {
@@ -168,13 +223,14 @@ impl InspectorController {
         ) {
             Ok(window) => AnyWindowHandle::from(window),
             Err(error) => {
-                target_window.disable_inspector();
+                Inspection::disable(target_window);
                 return Err(format!("Inspectorウィンドウを開けませんでした: {error}"));
             }
         };
 
-        target_window.set_external_inspector_window(Some(inspector_window));
+        let inspection = Inspection::attach(observed, inspector_window, cx);
         let controller = cx.global_mut::<InspectorController>();
+        controller.inspection = Some(inspection);
         controller.lifecycle.reset();
         let target_attached = controller
             .lifecycle
@@ -194,7 +250,16 @@ impl InspectorController {
             .target_window
             .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
         if let Some(target_window) = target_window {
-            let _ = target_window.update(cx, |_, window, cx| window.stop_inspector_picking(cx));
+            let inspector = cx
+                .global::<Self>()
+                .inspection
+                .as_ref()
+                .map(Inspection::entity);
+            if let Some(inspector) = inspector {
+                let _ = target_window.update(cx, |_, window, cx| {
+                    Inspection::refresh(&inspector, window, cx)
+                });
+            }
         }
     }
     pub(super) fn repaint_target(cx: &mut App) {
@@ -214,7 +279,7 @@ impl InspectorController {
             .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| {
-                window.select_inspector_element(id, cx);
+                Inspection::select(id, window, cx);
             });
         }
     }
@@ -225,7 +290,7 @@ impl InspectorController {
             .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| {
-                window.preview_inspector_element(id, cx);
+                Inspection::hover(id, window, cx);
             });
         }
     }

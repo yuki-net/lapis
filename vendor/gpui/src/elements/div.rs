@@ -1549,7 +1549,12 @@ impl Interactivity {
             cx,
             |inspector_state: &mut Option<DivInspectorState>, _window| {
                 if let Some(inspector_state) = inspector_state {
-                    self.base_style = inspector_state.base_style.clone();
+                    if _window.inspector_is_external() {
+                        // 外部Inspectorは読み取り用。古いStyleで対象の再描画を上書きしない。
+                        inspector_state.base_style.clone_from(&self.base_style);
+                    } else {
+                        self.base_style = inspector_state.base_style.clone();
+                    }
                 } else {
                     *inspector_state = Some(DivInspectorState {
                         base_style: self.base_style.clone(),

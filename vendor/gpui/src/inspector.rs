@@ -22,7 +22,7 @@ pub use conditional::*;
 mod conditional {
     use super::*;
     use crate::{AnyElement, App, Bounds, Context, Empty, IntoElement, Pixels, Render, Window};
-    use collections::{FxHashMap, FxHashSet};
+    use collections::FxHashMap;
     use std::any::{Any, TypeId};
 
     /// `GlobalElementId` qualified by source location of element construction.
@@ -71,6 +71,11 @@ mod conditional {
     pub type InspectorRenderer =
         Box<dyn Fn(&mut Inspector, &mut Window, &mut Context<Inspector>) -> AnyElement>;
 
+    /// 検査対象の描画が完了し、Treeと要素情報を読み取れる。
+    pub struct InspectorUpdated;
+
+    impl crate::EventEmitter<InspectorUpdated> for Inspector {}
+
     /// Manages inspector state - which element is currently selected and whether the inspector is
     /// in picking mode.
     pub struct Inspector {
@@ -80,7 +85,7 @@ mod conditional {
         pub(crate) pick_depth: Option<f32>,
         element_tree: Vec<InspectorElementNode>,
         tree_revision: u64,
-        collapsed_elements: FxHashSet<InspectorElementId>,
+        overlay_renderer: Option<fn(&Inspector, &mut Window) -> bool>,
     }
 
     struct InspectedElement {
@@ -98,6 +103,16 @@ mod conditional {
     }
 
     impl Inspector {
+        /// 対象上の検査表示を差し替える。falseなら公式のHitbox描画へ委譲する。
+        pub fn set_overlay_renderer(&mut self, renderer: fn(&Inspector, &mut Window) -> bool) {
+            self.overlay_renderer = Some(renderer);
+        }
+
+        pub(crate) fn paint_overlay(&self, window: &mut Window) -> bool {
+            self.overlay_renderer
+                .is_some_and(|renderer| renderer(self, window))
+        }
+
         pub(crate) fn new() -> Self {
             Self {
                 selected_element_visible: false,
@@ -106,30 +121,17 @@ mod conditional {
                 pick_depth: Some(0.0),
                 element_tree: Vec::new(),
                 tree_revision: 0,
-                collapsed_elements: FxHashSet::default(),
+                overlay_renderer: None,
             }
         }
 
         pub(crate) fn select(&mut self, id: InspectorElementId, window: &mut Window) {
-            self.set_active_element_id(id.clone(), window);
+            self.set_active_element_id(id, window);
             self.hovered_element = None;
             self.selected_element_visible = false;
-            self.expand_ancestors(&id);
             self.pick_depth = None;
         }
 
-        pub(crate) fn expand_ancestors(&mut self, id: &InspectorElementId) {
-            let mut current = id.clone();
-            while let Some(parent) = self
-                .element_tree
-                .iter()
-                .find(|node| node.id == current)
-                .and_then(|node| node.parent.clone())
-            {
-                self.collapsed_elements.remove(&parent);
-                current = parent;
-            }
-        }
         pub(crate) fn set_hovered_element_id(
             &mut self,
             id: Option<InspectorElementId>,
@@ -210,37 +212,24 @@ mod conditional {
             self.tree_revision
         }
 
-        /// Returns whether a tree node is collapsed in the inspector UI.
-        pub fn is_tree_node_collapsed(&self, id: &InspectorElementId) -> bool {
-            self.collapsed_elements.contains(id)
-        }
-
-        /// Toggles whether a tree node is collapsed in the inspector UI.
-        pub fn toggle_tree_node(&mut self, id: InspectorElementId) {
-            if !self.collapsed_elements.remove(&id) {
-                self.collapsed_elements.insert(id);
-            }
-        }
-
-        pub(crate) fn replace_element_tree(&mut self, nodes: Vec<InspectorElementNode>) -> bool {
+        pub(crate) fn replace_element_tree(&mut self, nodes: &[InspectorElementNode]) -> bool {
             if self.element_tree == nodes {
                 return false;
             }
 
-            self.element_tree = nodes;
+            self.element_tree.clear();
+            self.element_tree.extend_from_slice(nodes);
             self.tree_revision = self.tree_revision.wrapping_add(1);
-            self.collapsed_elements
-                .retain(|id| self.element_tree.iter().any(|node| &node.id == id));
 
             if self
                 .active_element_id()
-                .is_some_and(|active| !self.element_tree.iter().any(|node| &node.id == active))
+                .is_some_and(|active| !nodes.iter().any(|node| &node.id == active))
             {
                 self.active_element = None;
             }
             if self
                 .hovered_element_id()
-                .is_some_and(|hovered| !self.element_tree.iter().any(|node| &node.id == hovered))
+                .is_some_and(|hovered| !nodes.iter().any(|node| &node.id == hovered))
             {
                 self.hovered_element = None;
             }
