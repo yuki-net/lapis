@@ -3,6 +3,18 @@ struct MemoryDocuments {
     documents: Arc<Mutex<HashMap<DocumentId, Document>>>,
     concurrent_edit: Arc<Mutex<Option<String>>>,
     workspace_failure: Arc<std::sync::atomic::AtomicBool>,
+    faults: Arc<Mutex<CloseFaults>>,
+}
+
+#[derive(Default)]
+struct CloseFaults {
+    fail_close: Option<(DocumentId, bool)>,
+    fail_attach: bool,
+    fail_discard_response: bool,
+    fail_save: bool,
+    attached: std::collections::HashSet<DocumentId>,
+    closed: Vec<DocumentId>,
+    discarded: Vec<DocumentId>,
 }
 
 #[test]
@@ -41,6 +53,159 @@ fn internal_document_selection_and_idle_polls_do_not_persist_window_activity() {
     assert!(editor.active_text().unwrap().is_empty());
     editor.update_active_view(0..0, 0, 0., 10.);
     assert_eq!(state.saves.load(Ordering::Relaxed), before + 3);
+}
+
+#[test]
+fn close_failure_display_uses_readable_stage_and_document_ids() {
+    let persistence_failure = DocumentCloseFailure {
+        progress: DocumentCloseProgress {
+            closed: vec![DocumentId::new("doc-a"), DocumentId::new("doc-b")],
+        },
+        failed: None,
+        remaining: Vec::new(),
+        stage: DocumentCloseStage::Persistence,
+        error: DocumentError::io("view state failed"),
+    };
+    assert_eq!(
+        persistence_failure.to_string(),
+        "保存段階で失敗しました（対象: なし、閉鎖済み: doc-a, doc-b）: view state failed"
+    );
+
+    let close_failure = DocumentCloseFailure {
+        progress: DocumentCloseProgress::default(),
+        failed: Some(DocumentId::new("doc-c")),
+        remaining: vec![DocumentId::new("doc-d")],
+        stage: DocumentCloseStage::Close,
+        error: DocumentError::io("close rejected"),
+    };
+    assert_eq!(
+        close_failure.to_string(),
+        "閉鎖段階で失敗しました（対象: doc-c、閉鎖済み: なし）: close rejected"
+    );
+}
+
+#[test]
+fn partial_close_reports_commits_and_retry_uses_remaining_attachments() {
+    for failed_index in [0, 2] {
+        let repository = Arc::new(MemoryRepository::default());
+        let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+        let mut editor = EditorSession::new_empty(repository, Arc::new(FixedDialog {
+            workspace: None, save: None,
+        }), Arc::new(MemoryState::default()), connection.clone());
+        for _ in 0..3 { editor.new_document(); }
+        let ids = editor.tabs().iter().map(|tab| tab.id.clone()).collect::<Vec<_>>();
+        let plan = ids.iter().map(|id| (id.clone(), DocumentCloseDisposition::PreserveChanges,
+            connection.attach(id).unwrap().document.revision())).collect::<Vec<_>>();
+        connection.faults.lock().unwrap().fail_close = Some((ids[failed_index].clone(), false));
+        let failure = editor.close_documents(&plan).unwrap_err();
+        assert_eq!(failure.stage, DocumentCloseStage::Close);
+        assert_eq!(failure.progress.closed, ids[..failed_index]);
+        assert_eq!(failure.failed.as_ref(), Some(&ids[failed_index]));
+        assert_eq!(failure.remaining, ids[failed_index + 1..]);
+        assert_eq!(editor.tabs().iter().map(|tab| tab.id.clone()).collect::<Vec<_>>(), ids[failed_index..]);
+        let faults = connection.faults.lock().unwrap();
+        for id in &ids[..failed_index] { assert!(!faults.attached.contains(id)); }
+        for id in &ids[failed_index..] { assert!(faults.attached.contains(id)); }
+        drop(faults);
+        connection.faults.lock().unwrap().fail_close = None;
+        editor.close_documents(&plan[failed_index..]).unwrap();
+        assert!(editor.tabs().is_empty());
+        assert!(connection.faults.lock().unwrap().attached.is_empty());
+        assert_eq!(connection.faults.lock().unwrap().closed, ids);
+        assert!(editor.close_documents(&plan).is_err());
+        assert!(connection.faults.lock().unwrap().attached.is_empty());
+        // closeは正本の削除ではない。
+        assert_eq!(connection.documents.lock().unwrap().len(), 3);
+    }
+}
+
+#[test]
+fn close_commit_survives_persistence_and_snapshot_failures() {
+    let repository = Arc::new(MemoryRepository::default());
+    let state = Arc::new(MemoryState::default());
+    let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(repository, Arc::new(FixedDialog {
+        workspace: None, save: None,
+    }), state.clone(), connection.clone());
+    editor.new_document();
+    let closed = editor.active_document_id().unwrap().clone();
+    let revision = editor.active_revision();
+    editor.new_document();
+    let retained = editor.active_document_id().unwrap().clone();
+    state.fail.store(true, std::sync::atomic::Ordering::SeqCst);
+    let failure = editor.close_documents(&[(closed.clone(), DocumentCloseDisposition::PreserveChanges, revision)]).unwrap_err();
+    assert_eq!(failure.stage, DocumentCloseStage::Persistence);
+    assert_eq!(failure.progress.closed, vec![closed.clone()]);
+    assert!(failure.failed.is_none());
+    connection.faults.lock().unwrap().fail_attach = true;
+    assert!(editor.refresh_documents().is_err());
+    assert_eq!(editor.document_caches().iter().map(|cache| cache.id.clone()).collect::<Vec<_>>(), vec![retained.clone()]);
+    assert!(!connection.faults.lock().unwrap().attached.contains(&closed));
+    connection.faults.lock().unwrap().fail_attach = false;
+    state.fail.store(false, std::sync::atomic::Ordering::SeqCst);
+    editor.refresh_documents().unwrap();
+    editor.persist_documents().unwrap();
+    assert_eq!(state.load().unwrap().unwrap().open_documents[0].document_id, Some(retained));
+    assert_eq!(connection.faults.lock().unwrap().closed, vec![closed]);
+}
+
+#[test]
+fn discard_or_close_response_loss_reconciles_before_fresh_approval() {
+    for discard_response_lost in [true, false] {
+        let repository = Arc::new(MemoryRepository::default());
+        let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+        let mut editor = EditorSession::new_empty(repository, Arc::new(FixedDialog {
+            workspace: None, save: None,
+        }), Arc::new(MemoryState::default()), connection.clone());
+        editor.new_document();
+        editor.replace_range(0..0, "approved draft").unwrap();
+        let id = editor.active_document_id().unwrap().clone();
+        let revision = editor.active_revision();
+        {
+            let mut faults = connection.faults.lock().unwrap();
+            if discard_response_lost { faults.fail_discard_response = true; }
+            else { faults.fail_close = Some((id.clone(), true)); }
+        }
+        let failure = editor.close_documents(&[(id.clone(), DocumentCloseDisposition::DiscardChanges, revision)]).unwrap_err();
+        assert!(failure.progress.closed.is_empty());
+        assert_eq!(failure.failed, Some(id.clone()));
+        assert_eq!(editor.tabs().len(), 1);
+        assert!(!editor.is_dirty());
+        assert!(connection.faults.lock().unwrap().attached.contains(&id));
+        editor.refresh_documents().unwrap();
+        editor.close_documents(&[(id.clone(), DocumentCloseDisposition::PreserveChanges, editor.active_revision())]).unwrap();
+        assert!(editor.tabs().is_empty());
+        assert_eq!(connection.faults.lock().unwrap().discarded, vec![id]);
+    }
+}
+
+#[test]
+fn failed_save_retains_canonical_input_and_recovery_draft_then_retries() {
+    let repository = Arc::new(MemoryRepository::default());
+    let path = PathBuf::from("save-failure.md");
+    insert_file(&repository, path.clone(), "base");
+    let state = Arc::new(MemoryState::default());
+    let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(repository.clone(), Arc::new(FixedDialog {
+        workspace: None, save: None,
+    }), state.clone(), connection.clone());
+    editor.open_path(path.clone()).unwrap();
+    editor.replace_range(0..4, "unsaved input").unwrap();
+    let id = editor.active_document_id().unwrap().clone();
+    connection.faults.lock().unwrap().fail_save = true;
+    assert!(editor.save_document().is_err());
+    assert!(editor.is_dirty());
+    assert_eq!(editor.active_text().unwrap(), "unsaved input");
+    assert_eq!(connection.attach(&id).unwrap().document.content_for_save(), "unsaved input");
+    assert_eq!(state.load().unwrap().unwrap().open_documents[0].draft_content.as_deref(), Some("unsaved input"));
+    assert!(editor.close_documents(&[(id.clone(), DocumentCloseDisposition::PreserveChanges, editor.active_revision())]).is_err());
+    assert!(connection.faults.lock().unwrap().closed.is_empty());
+    connection.faults.lock().unwrap().fail_save = false;
+    assert_eq!(editor.save_document().unwrap(), DocumentAction::Completed);
+    assert!(!editor.is_dirty());
+    editor.close_documents(&[(id, DocumentCloseDisposition::PreserveChanges, editor.active_revision())]).unwrap();
+    assert!(editor.tabs().is_empty());
+    assert_eq!(repository.read_file(&path).unwrap().bytes, b"unsaved input");
 }
 
 #[test]
@@ -133,6 +298,7 @@ impl MemoryDocuments {
             documents: Arc::new(Mutex::new(HashMap::new())),
             concurrent_edit: Arc::new(Mutex::new(None)),
             workspace_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            faults: Arc::new(Mutex::new(CloseFaults::default())),
         }
     }
 
@@ -175,6 +341,7 @@ impl DocumentConnection for MemoryDocuments {
             documents: self.documents.clone(),
             concurrent_edit: self.concurrent_edit.clone(),
             workspace_failure: self.workspace_failure.clone(),
+            faults: self.faults.clone(),
         })
     }
     fn workspace(&self, _: &Path) -> Result<WorkspaceId, DocumentError> {
@@ -208,6 +375,12 @@ impl DocumentConnection for MemoryDocuments {
         Ok(cache)
     }
     fn attach(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        let mut faults = self.faults.lock().unwrap();
+        if faults.fail_attach {
+            return Err(DocumentError::io("attach unavailable"));
+        }
+        faults.attached.insert(id.clone());
+        drop(faults);
         let documents = self.documents.lock().unwrap();
         Ok(self.cache(
             id,
@@ -255,6 +428,9 @@ impl DocumentConnection for MemoryDocuments {
         revision: Revision,
         path: Option<PathBuf>,
     ) -> Result<DocumentCache, DocumentError> {
+        if self.faults.lock().unwrap().fail_save {
+            return Err(DocumentError::io("save disk full"));
+        }
         self.mutate(id, revision, |document| {
             let path = path
                 .or_else(|| document.path().map(Path::to_owned))
@@ -283,7 +459,7 @@ impl DocumentConnection for MemoryDocuments {
         })
     }
     fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
-        self.mutate(id, revision, |document| {
+        let result = self.mutate(id, revision, |document| {
             let saved = if document.saved_fingerprint().is_some() {
                 let path = document
                     .path()
@@ -297,10 +473,28 @@ impl DocumentConnection for MemoryDocuments {
                 None
             };
             document.discard(saved)
-        })
+        })?;
+        let mut faults = self.faults.lock().unwrap();
+        faults.discarded.push(id.clone());
+        if faults.fail_discard_response {
+            faults.fail_discard_response = false;
+            return Err(DocumentError::io("discard response lost"));
+        }
+        Ok(result)
     }
 
-    fn close(&self, _: &DocumentId) -> Result<(), DocumentError> {
+    fn close(&self, id: &DocumentId) -> Result<(), DocumentError> {
+        let mut faults = self.faults.lock().unwrap();
+        let failure = faults.fail_close.as_ref().filter(|(target, _)| target == id).cloned();
+        if failure.as_ref().is_some_and(|(_, after)| !after) {
+            return Err(DocumentError::io("close rejected"));
+        }
+        faults.attached.remove(id);
+        faults.closed.push(id.clone());
+        if failure.is_some() {
+            faults.fail_close = None;
+            return Err(DocumentError::io("close response lost"));
+        }
         Ok(())
     }
 }

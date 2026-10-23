@@ -312,16 +312,15 @@ impl DesktopRoot {
             }),
             cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
                 EditorEvent::Snapshot(snapshot) => {
-                    let local = root.editor.read(cx).local_snapshot(snapshot);
-                    root.apply_snapshot(&local, cx);
                     root.group
                         .update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
-                    root.schedule_persist(cx);
+                    root.synchronize_group(cx);
                     if root.native_smoke_requested {
                         root.native_smoke_requested = false;
                         crate::window_host::run_native_smoke(root, window, cx);
                     }
                 }
+                EditorEvent::Idle => root.synchronize_group(cx),
                 EditorEvent::Status(message) => root.set_status(message.clone(), cx),
                 EditorEvent::WorkspaceSearch(query) => {
                     root.search
@@ -684,7 +683,9 @@ impl DesktopRoot {
         self.persist_task = Some(cx.spawn(async move |this, cx| {
             gpui::Timer::after(std::time::Duration::from_millis(500)).await;
             let _ = this.update(cx, |root, cx| {
-                if root.group.read(cx).closing {
+                if root.group.read(cx).closing || root.group.read(cx).synchronization_required {
+                    // 指紋はデバウンス用であり、見送った書き込みは再同期後に再試行できるようにする。
+                    root.persist_signature = None;
                     return;
                 }
                 let view = root.persisted_view(cx);
@@ -807,6 +808,18 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) {
         if self.group.read(cx).closing {
+            return;
+        }
+        if self.group.read(cx).synchronization_required
+            && !matches!(
+                command,
+                UiCommand::CloseWindow | UiCommand::CloseDocument(_) | UiCommand::Copy
+            )
+        {
+            self.set_status(
+                "状態を再確認するため、もう一度CloseまたはQuitを実行してください".into(),
+                cx,
+            );
             return;
         }
         if self.group.read(cx).members.len() > 1

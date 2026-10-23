@@ -32,8 +32,10 @@ impl DesktopRoot {
     /// Captures close targets and queues a snapshot after earlier worker operations.
     ///
     /// `document` targets one owned tab; otherwise the root targets its entire group
-    /// and a child targets itself. Returns an error if closing, recovery is required,
-    /// the document is not owned by the host, or the worker cannot accept the request.
+    /// and a child targets itself. Returns an error if closing, the target is not owned
+    /// by the host, or the worker cannot accept the request. Recovery is checked again
+    /// after the queued snapshot has drained, so a reconciliation retry cannot discard
+    /// an editor-only draft.
     fn close_request(
         &self,
         host: HostId,
@@ -44,10 +46,11 @@ impl DesktopRoot {
         if group.closing {
             return Err("Windowの終了処理中です".into());
         }
-        if group
-            .members
-            .values()
-            .any(|member| member.editor.read(cx).needs_recovery())
+        if !group.synchronization_required
+            && group
+                .members
+                .values()
+                .any(|member| member.editor.read(cx).needs_recovery())
         {
             return Err("未確定の入力を新しい文書へ退避・復旧してから閉じてください".into());
         }
@@ -165,10 +168,27 @@ impl DesktopRoot {
             set_closing(&request.group, true, cx);
         }
         let handle = window.window_handle();
-        let groups = requests
+        let mut recovery = requests
             .iter()
-            .map(|request| request.group.clone())
+            .map(|request| (request.group.clone(), request.worker.clone(), true))
             .collect::<Vec<_>>();
+        // 別Rootが共有正本を表示している場合も、保存・破棄後の状態を渡す。
+        let own = cx.entity_id();
+        for handle in cx.windows() {
+            let _ = handle.update(cx, |view, _, cx| {
+                if let Ok(entity) = view.downcast::<DesktopRoot>() {
+                    if entity.entity_id() == own {
+                        return;
+                    }
+                    let root = entity.read(cx);
+                    if !root.group.read(cx).closing
+                        && !recovery.iter().any(|(group, _, _)| group == &root.group)
+                    {
+                        recovery.push((root.group.clone(), root.worker.clone(), false));
+                    }
+                }
+            });
+        }
         cx.spawn(async move |this, cx| {
             let result: Result<Vec<ClosedGroup>, String> = async {
                 let mut plans = Vec::new();
@@ -177,6 +197,41 @@ impl DesktopRoot {
                 // 全グループの判断が揃うまで保存・破棄・closeを実行しない。
                 for mut request in requests {
                     let snapshot = wait_client(request.snapshot.take().unwrap()).await?;
+                    this.update(cx, |_, cx| request.group.update(cx, |group, cx| group.publish_reconciled(snapshot.clone(), cx)))
+                        .map_err(|e| e.to_string())?;
+                    // Snapshot公開でグループの同期必須状態は解除できるが、Editor個別の
+                    // 復旧待ち入力は解決しない。入力処理が落ち着くまで待ってから復旧を
+                    // 再確認し、残っていればCloseを拒否する。編集チェーンが正常でも、
+                    // すべてのローカル入力が保存済みとは限らないためである。
+                    loop {
+                        let pending = this
+                            .update(cx, |_, cx| {
+                                request
+                                    .group
+                                    .read(cx)
+                                    .members
+                                    .values()
+                                    .any(|member| member.editor.read(cx).has_in_flight())
+                            })
+                            .map_err(|e| e.to_string())?;
+                        if !pending {
+                            break;
+                        }
+                        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                    }
+                    let recovery_required = this
+                        .update(cx, |_, cx| {
+                            request
+                                .group
+                                .read(cx)
+                                .members
+                                .values()
+                                .any(|member| member.editor.read(cx).needs_recovery())
+                        })
+                        .map_err(|e| e.to_string())?;
+                    if recovery_required {
+                        return Err("未確定の入力を新しい文書へ退避・復旧してから閉じてください".into());
+                    }
                     let mut decisions = Vec::new();
                     let mut saves = Vec::new();
                     for tab in snapshot.tabs.iter().filter(|tab| request.document.as_ref().map_or_else(
@@ -239,7 +294,6 @@ impl DesktopRoot {
                 for plan in plans {
                     let ClosePlan { request, mut decisions, .. } = plan;
                     let ids = decisions.iter().map(|(id, _, _)| id.clone()).collect::<Vec<_>>();
-                    let saved_in_plan = ids.iter().any(|id| saved.contains(id));
                     let previous = committed.clone();
                     let view = request.view;
                     let receiver = request.worker.try_request(move |client| {
@@ -250,34 +304,59 @@ impl DesktopRoot {
                                 *revision = client.editor.document_connection().attach(id).map_err(|e| e.to_string())?.document.revision();
                             }
                         }
-                        client.editor.close_documents(&decisions).map_err(|error| {
-                            if saved_in_plan {
-                                format!("保存しました。文書を閉じられませんでした: {error}")
-                            } else {
-                                error.to_string()
-                            }
-                        })?;
-                        client.persist_view(view)?;
-                        client.snapshot()
+                        // 操作結果・永続化・Snapshotは互いの結果を隠さない。
+                        Ok(client.close_documents(&decisions, view))
                     })?;
-                    let snapshot = wait_client(receiver).await?;
+                    let report = wait_client(receiver).await?;
+                    let error = report.error();
+                    let snapshot = report.snapshot;
+                    this.update(cx, |_, cx| request.group.update(cx, |group, cx| group.publish_reconciled(snapshot.clone(), cx)))
+                        .map_err(|e| e.to_string())?;
+                    if let Some(error) = error { return Err(error); }
                     committed.extend(ids);
                     results.push((request.group, snapshot, request.windows));
                 }
                 Ok(results)
             }.await;
+            // 保存・破棄・他Rootの操作も正本を変え得る。全対象を同期する。
+            let mut refreshes = Vec::new();
+            for (group, worker, participant) in recovery {
+                let refresh = match worker.try_request(|client| Ok(client.reconcile_snapshot())) {
+                    Ok(receiver) => wait_client(receiver).await,
+                    Err(error) => Err(error),
+                };
+                refreshes.push((group, refresh, participant));
+            }
             let _ = this.update(cx, |root, cx| {
-                for group in groups { set_closing(&group, false, cx); }
+                let mut result = result;
+                for (group, refresh, participant) in refreshes {
+                    match refresh {
+                        Ok(snapshot) => {
+                            if participant && let Some(error) = &snapshot.synchronization_error {
+                                append_error(&mut result, error.clone());
+                            }
+                            group.update(cx, |group, cx| group.publish_reconciled(snapshot, cx));
+                        }
+                        Err(error) => {
+                            group.update(cx, |group, cx| {
+                                group.synchronization_required = true;
+                                group.status = error.clone();
+                                cx.notify();
+                            });
+                            if participant { append_error(&mut result, error); }
+                        }
+                    }
+                    if participant { set_closing(&group, false, cx); }
+                }
                 match result {
                     Err(error) => {
                         root.set_status(error, cx);
-                        root.editor.update(cx, |editor, cx| { editor.submit(true, |_| Ok(()), cx); });
                     }
                     Ok(results) => {
                         let mut handles = Vec::new();
                         for (group, snapshot, windows) in results {
                             group.update(cx, |group, cx| {
-                                group.publish(snapshot, cx);
+                                group.publish_reconciled(snapshot, cx);
                                 for id in windows {
                                     if let Some(member) = group.members.remove(&id) { handles.push(member.handle); }
                                     group.layout.remove_window(id);
@@ -305,6 +384,18 @@ fn set_closing(group: &Entity<WindowGroup>, closing: bool, cx: &mut gpui::App) {
             .collect::<Vec<_>>()
     });
     for editor in editors {
-        editor.update(cx, |editor, cx| editor.set_enabled(!closing, cx));
+        let enabled = !closing && !group.read(cx).synchronization_required;
+        editor.update(cx, |editor, cx| editor.set_enabled(enabled, cx));
+    }
+}
+
+fn append_error<T>(result: &mut Result<T, String>, error: String) {
+    match result {
+        Err(existing) if *existing != error => {
+            existing.push_str("; ");
+            existing.push_str(&error);
+        }
+        Err(_) => {}
+        Ok(_) => *result = Err(error),
     }
 }

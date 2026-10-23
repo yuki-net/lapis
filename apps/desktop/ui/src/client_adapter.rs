@@ -23,6 +23,7 @@ pub(crate) struct DocumentClient {
 #[derive(Clone)]
 pub(crate) struct ClientSnapshot {
     pub sequence: u64,
+    pub synchronization_error: Option<String>,
     pub document_owners: std::collections::HashMap<DocumentId, u64>,
     pub tabs: Vec<DocumentTab>,
     pub documents: Vec<DocumentCache>,
@@ -40,25 +41,74 @@ pub(crate) struct ClientSnapshot {
     pub workspace_view: lapis_desktop_client::WorkspaceSnapshot,
 }
 
+pub(crate) struct DocumentCloseReport {
+    pub close: Result<
+        lapis_desktop_client::DocumentCloseProgress,
+        lapis_desktop_client::DocumentCloseFailure,
+    >,
+    pub persistence: Result<(), String>,
+    pub snapshot: ClientSnapshot,
+}
+
+impl DocumentCloseReport {
+    pub(crate) fn error(&self) -> Option<String> {
+        let errors = [
+            self.close.as_ref().err().map(ToString::to_string),
+            self.persistence.as_ref().err().cloned(),
+            self.snapshot.synchronization_error.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+        (!errors.is_empty()).then(|| errors.join("; "))
+    }
+}
+
 impl DocumentClient {
-    /// Refreshes document caches and captures client state with a new sequence number.
-    ///
-    /// Removes creator metadata for closed tabs. Attachment failures return their
-    /// error text without advancing the sequence; external-change polling is best effort.
+    /// close済みIDは、表示状態保存や正本再取得の結果から独立して返す。
+    pub(crate) fn close_documents(
+        &mut self,
+        decisions: &[(
+            DocumentId,
+            lapis_desktop_client::DocumentCloseDisposition,
+            lapis_document::Revision,
+        )],
+        view: PersistedView,
+    ) -> DocumentCloseReport {
+        let close = self.editor.close_documents(decisions);
+        let persistence = self
+            .editor
+            .persist_documents()
+            .map_err(|e| e.to_string())
+            .and_then(|()| self.persist_view(view));
+        DocumentCloseReport {
+            close,
+            persistence,
+            snapshot: self.reconcile_snapshot(),
+        }
+    }
+
+    /// 残す全Documentの再attachを確認してからSnapshotを返す。
     pub fn snapshot(&mut self) -> Result<ClientSnapshot, String> {
+        let snapshot = self.reconcile_snapshot();
+        if let Some(error) = &snapshot.synchronization_error {
+            return Err(error.clone());
+        }
+        Ok(snapshot)
+    }
+
+    /// 正本の再取得が失敗しても確認済み所属を返す。未確認cacheは復旧まで編集しない。
+    pub(crate) fn reconcile_snapshot(&mut self) -> ClientSnapshot {
         self.editor.poll_external_changes();
+        let synchronization_error = self.editor.refresh_documents().err().map(|e| e.to_string());
         let tabs = self.editor.tabs();
-        let connection = self.editor.document_connection();
-        let documents = tabs
-            .iter()
-            .map(|tab| connection.attach(&tab.id))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| error.to_string())?;
+        let documents = self.editor.document_caches();
         self.document_owners
             .retain(|id, _| tabs.iter().any(|tab| &tab.id == id));
         self.snapshot_sequence += 1;
-        Ok(ClientSnapshot {
+        ClientSnapshot {
             sequence: self.snapshot_sequence,
+            synchronization_error,
             document_owners: self.document_owners.clone(),
             tabs,
             documents,
@@ -74,7 +124,7 @@ impl DocumentClient {
             view: self.conversation.active_view(),
             edit_epoch: self.edit_chain.epoch(),
             workspace_view: self.editor.snapshot(),
-        })
+        }
     }
 }
 
@@ -119,6 +169,9 @@ impl DocumentClient {
 }
 
 pub(crate) use crate::client_worker::{ClientWorker, EditChain, EditEpoch, ResponseGate};
+
+#[cfg(test)]
+pub(crate) mod tests;
 
 impl<State: Send + 'static> ClientWorker<State> {
     pub(crate) fn submit<Entity: 'static, Output: Send + 'static>(

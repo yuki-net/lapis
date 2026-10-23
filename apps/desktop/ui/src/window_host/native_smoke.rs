@@ -1,6 +1,66 @@
 //! 隔離したWorkspaceでNative Windowの寿命・所属・共有状態を検証する。
 use super::*;
 
+struct SmokeFailConversation;
+
+type SmokeSavedConversation = Option<(
+    Vec<lapis_desktop_client::ConversationRecord>,
+    lapis_editor_core::ConversationId,
+)>;
+
+struct SmokeRecordingConversation {
+    inner: std::sync::Arc<dyn lapis_desktop_client::ConversationRepository>,
+    saved: std::sync::Arc<std::sync::Mutex<SmokeSavedConversation>>,
+}
+
+impl lapis_desktop_client::ConversationRepository for SmokeRecordingConversation {
+    fn load(
+        &self,
+    ) -> Result<
+        (
+            Vec<lapis_desktop_client::ConversationRecord>,
+            Option<lapis_editor_core::ConversationId>,
+        ),
+        lapis_workspace::WorkspaceError,
+    > {
+        self.inner.load()
+    }
+
+    fn save(
+        &self,
+        records: &[lapis_desktop_client::ConversationRecord],
+        active: &lapis_editor_core::ConversationId,
+    ) -> Result<(), lapis_workspace::WorkspaceError> {
+        self.inner.save(records, active)?;
+        *self.saved.lock().unwrap() = Some((records.to_vec(), active.clone()));
+        Ok(())
+    }
+}
+
+impl lapis_desktop_client::ConversationRepository for SmokeFailConversation {
+    fn load(
+        &self,
+    ) -> Result<
+        (
+            Vec<lapis_desktop_client::ConversationRecord>,
+            Option<lapis_editor_core::ConversationId>,
+        ),
+        lapis_workspace::WorkspaceError,
+    > {
+        Ok(Default::default())
+    }
+
+    fn save(
+        &self,
+        _: &[lapis_desktop_client::ConversationRecord],
+        _: &lapis_editor_core::ConversationId,
+    ) -> Result<(), lapis_workspace::WorkspaceError> {
+        Err(lapis_workspace::WorkspaceError::new(
+            "smoke view persistence failure",
+        ))
+    }
+}
+
 pub(crate) fn run_native_smoke(
     root: &mut DesktopRoot,
     window: &mut Window,
@@ -51,16 +111,6 @@ pub(crate) fn run_native_smoke(
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE idle sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
-        #[cfg(target_os = "windows")]
-        verify_drag_routes(&this, handle, &id, cx).await;
-        handle
-            .update(cx, |_, window, cx| {
-                this.update(cx, |root, cx| {
-                    root.command(UiCommand::NewWindow, window, cx)
-                })
-            })
-            .unwrap()
-            .unwrap();
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 2);
             let child = *root
@@ -80,32 +130,107 @@ pub(crate) fn run_native_smoke(
         .unwrap();
         wait_for(&this, cx, None).await;
         this.update(cx, |root, cx| {
-            let editor = root
+            let child = *root
                 .group
                 .read(cx)
                 .members
-                .values()
-                .find(|member| member.editor.entity_id() != root.editor.entity_id())
-                .unwrap()
-                .editor
-                .clone();
+                .keys()
+                .find(|host| **host != ROOT_HOST)
+                .unwrap();
+            let worker = root.worker.clone();
+            let _ = worker.request(|client| {
+                client.edit_chain.restart();
+                Ok(())
+            });
+            let editor = root.group.read(cx).members[&child].editor.clone();
             editor.update(cx, |editor, cx| {
-                editor.submit(true, |_| Err("smoke recovery".into()), cx);
+                editor.replace_selection("view-only recovery ", cx);
             });
         })
         .unwrap();
         wait_for(&this, cx, None).await;
+        let (child, child_handle) = this
+            .update(cx, |root, cx| {
+                let child = *root
+                    .group
+                    .read(cx)
+                    .members
+                    .keys()
+                    .find(|host| **host != ROOT_HOST)
+                    .unwrap();
+                let editor = root.group.read(cx).members[&child].editor.clone();
+                assert!(editor.read(cx).needs_recovery());
+                assert!(
+                    editor
+                        .read(cx)
+                        .document()
+                        .content_for_save()
+                        .contains("smoke edit")
+                );
+                assert!(
+                    !root
+                        .group
+                        .read(cx)
+                        .latest
+                        .as_ref()
+                        .unwrap()
+                        .documents
+                        .iter()
+                        .find(|cache| cache.id == id)
+                        .unwrap()
+                        .document
+                        .content_for_save()
+                        .contains("view-only recovery")
+                );
+                (child, root.group.read(cx).members[&child].handle)
+            })
+            .unwrap();
+        child_handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |root, cx| {
+                    root.group.update(cx, |group, cx| {
+                        group.synchronization_required = true;
+                        cx.notify();
+                    });
+                    root.close_hosts(child, None, window, cx);
+                })
+            })
+            .unwrap()
+            .unwrap();
+        wait_for(&this, cx, None).await;
         this.update(cx, |root, cx| {
-            let editor = root
-                .group
-                .read(cx)
-                .members
-                .values()
-                .find(|member| member.editor.entity_id() != root.editor.entity_id())
-                .unwrap()
-                .editor
-                .clone();
-            assert!(editor.read(cx).needs_recovery());
+            let group = root.group.read(cx);
+            assert!(!group.closing);
+            assert!(!group.synchronization_required);
+            assert!(group.documents(child).contains(&id));
+            assert!(group.members[&child].editor.read(cx).needs_recovery());
+            eprintln!("SMOKE Close retry preserves view-only recovery draft OK");
+        })
+        .unwrap();
+        handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |root, cx| {
+                    root.group.update(cx, |group, cx| {
+                        group.synchronization_required = true;
+                        cx.notify();
+                    });
+                    root.close_application(window, cx);
+                })
+            })
+            .unwrap()
+            .unwrap();
+        wait_for(&this, cx, None).await;
+        this.update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert!(!group.closing);
+            assert!(!group.synchronization_required);
+            assert!(group.documents(child).contains(&id));
+            assert!(group.members[&child].editor.read(cx).needs_recovery());
+            eprintln!("SMOKE Quit retry preserves view-only recovery draft OK");
+        })
+        .unwrap();
+        this.update(cx, |root, cx| {
+            let editor = root.group.read(cx).members[&child].editor.clone();
             editor.update(cx, |editor, cx| editor.recover_draft(cx));
         })
         .unwrap();
@@ -134,7 +259,7 @@ pub(crate) fn run_native_smoke(
                     .unwrap()
                     .document
                     .content_for_save()
-                    .contains("smoke edit")
+                    .contains("view-only recovery")
             );
             let editor = root.group.read(cx).members[&child].editor.clone();
             assert_eq!(editor.read(cx).document_id(), Some(recovered.clone()));
@@ -202,6 +327,190 @@ pub(crate) fn run_native_smoke(
                 (child, handle)
             })
             .unwrap();
+        // 永続化境界で失敗させ、実Runtimeのcloseと全Windowへの反映を検証する。
+        let recorded = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let original_conversation = this
+            .update(cx, |root, _| {
+                let recorded = recorded.clone();
+                root.worker.request(move |client| {
+                    let recording = lapis_desktop_client::ConversationSession::new(
+                        std::sync::Arc::new(SmokeRecordingConversation {
+                            inner: client.conversation.repository(),
+                            saved: recorded.clone(),
+                        }),
+                        client.editor.snapshot(),
+                    );
+                    let original = std::mem::replace(&mut client.conversation, recording);
+                    Ok((original, recorded))
+                })
+            })
+            .unwrap();
+        let (_original_conversation, recorded) = wait_client(original_conversation).await.unwrap();
+        let barrier = this
+            .update(cx, |root, _| root.worker.request(|_| Ok(())))
+            .unwrap();
+        wait_client(barrier).await.unwrap();
+        *recorded.lock().unwrap() = None;
+        this.update(cx, |root, cx| {
+            root.group.update(cx, |group, cx| {
+                group.synchronization_required = true;
+                cx.notify();
+            });
+            root.shell.update(cx, |shell, cx| {
+                shell.toggle_panel(PanelPosition::Bottom, cx);
+            });
+            root.schedule_persist(cx);
+        })
+        .unwrap();
+        gpui::Timer::after(std::time::Duration::from_millis(700)).await;
+        let barrier = this
+            .update(cx, |root, _| root.worker.request(|_| Ok(())))
+            .unwrap();
+        wait_client(barrier).await.unwrap();
+        assert!(recorded.lock().unwrap().is_none());
+        let reconciled = this
+            .update(cx, |root, _| {
+                root.worker
+                    .request(|client| Ok(client.reconcile_snapshot()))
+            })
+            .unwrap();
+        let reconciled = wait_client(reconciled).await.unwrap();
+        this.update(cx, |root, cx| {
+            root.group
+                .update(cx, |group, cx| group.publish_reconciled(reconciled, cx));
+            root.schedule_persist(cx);
+        })
+        .unwrap();
+        gpui::Timer::after(std::time::Duration::from_millis(700)).await;
+        let barrier = this
+            .update(cx, |root, _| root.worker.request(|_| Ok(())))
+            .unwrap();
+        wait_client(barrier).await.unwrap();
+        let saved_view = recorded
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("persistence must be retried after the synchronization latch is cleared");
+        this.update(cx, |root, cx| {
+            let expected = root.shell.read(cx).view_state();
+            let active = saved_view
+                .0
+                .iter()
+                .find(|record| record.id == saved_view.1)
+                .expect("recorded active conversation");
+            assert_eq!(active.view, expected);
+            eprintln!("SMOKE deferred view persistence retries after reconciliation OK");
+        })
+        .unwrap();
+        let saved_conversation = this
+            .update(cx, |root, _| {
+                root.worker.request(|client| {
+                    let failing = lapis_desktop_client::ConversationSession::new(
+                        std::sync::Arc::new(SmokeFailConversation),
+                        client.editor.snapshot(),
+                    );
+                    let original = std::mem::replace(&mut client.conversation, failing);
+                    Ok((original, client.snapshot()?))
+                })
+            })
+            .unwrap();
+        let (saved_conversation, stale_snapshot) = wait_client(saved_conversation).await.unwrap();
+        handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |root, cx| {
+                    root.close_hosts(child, None, window, cx);
+                    assert!(root.group.read(cx).closing);
+                    root.close_hosts(child, None, window, cx);
+                    root.close_application(window, cx);
+                    assert!(root.group.read(cx).closing);
+                    eprintln!("SMOKE concurrent Close and Quit rejected OK");
+                })
+            })
+            .unwrap()
+            .unwrap();
+        wait_for(&this, cx, None).await;
+        this.update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert!(!group.closing);
+            assert_eq!(group.members.len(), 2);
+            assert!(group.documents(child).is_empty());
+            assert!(
+                group.members[&child]
+                    .editor
+                    .read(cx)
+                    .document_id()
+                    .is_none()
+            );
+            assert!(
+                group
+                    .latest
+                    .as_ref()
+                    .unwrap()
+                    .document_owners
+                    .values()
+                    .all(|owner| *owner != child)
+            );
+            assert!(group.status.contains("smoke view persistence failure"));
+            eprintln!("SMOKE committed close survives view persistence failure in all windows OK");
+        })
+        .unwrap();
+        // closeより前の応答が遅れて届いても、ShellとEditorを過去へ戻さない。
+        let closed = stale_snapshot
+            .tabs
+            .iter()
+            .find(|tab| stale_snapshot.document_owners.get(&tab.id) == Some(&child))
+            .unwrap()
+            .id
+            .clone();
+        this.update(cx, |root, cx| {
+            let editors = root
+                .group
+                .read(cx)
+                .members
+                .values()
+                .map(|member| member.editor.clone())
+                .collect::<Vec<_>>();
+            for editor in editors {
+                editor.update(cx, |_, cx| {
+                    cx.emit(EditorEvent::Snapshot(Box::new(stale_snapshot.clone())));
+                    cx.emit(EditorEvent::Idle);
+                });
+            }
+        })
+        .unwrap();
+        wait_for(&this, cx, None).await;
+        this.update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert!(
+                !group
+                    .layout
+                    .tabs
+                    .contains_key(&PanelTab::Document(closed.clone()))
+            );
+            for member in group.members.values() {
+                assert_ne!(member.editor.read(cx).document_id().as_ref(), Some(&closed));
+                assert!(
+                    member
+                        .shell
+                        .read(cx)
+                        .shell
+                        .panels()
+                        .iter()
+                        .all(|panel| !panel.contains(&PanelTab::Document(closed.clone())))
+                );
+            }
+            eprintln!("SMOKE delayed responses keep all editors and shells synchronized OK");
+        })
+        .unwrap();
+        let restored = this
+            .update(cx, |root, _| {
+                root.worker.request(move |client| {
+                    client.conversation = saved_conversation;
+                    Ok(())
+                })
+            })
+            .unwrap();
+        wait_client(restored).await.unwrap();
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(child, None, window, cx))
@@ -262,6 +571,16 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         wait_for(&this, cx, None).await;
+        #[cfg(target_os = "windows")]
+        verify_drag_routes(&this, handle, &id, cx).await;
+        handle
+            .update(cx, |_, window, cx| {
+                this.update(cx, |root, cx| {
+                    root.command(UiCommand::NewWindow, window, cx)
+                })
+            })
+            .unwrap()
+            .unwrap();
         let (handle, peer) = this
             .update(cx, |root, cx| {
                 let own_id = cx.entity_id();

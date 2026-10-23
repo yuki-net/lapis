@@ -1054,6 +1054,56 @@ impl OpenDocument {
     }
 }
 
+/// 一括closeの確認済み進捗。永続化失敗でも閉鎖済みIDを保持する。
+#[derive(Debug, Default)]
+pub struct DocumentCloseProgress {
+    pub closed: Vec<DocumentId>,
+}
+
+#[derive(Debug)]
+pub struct DocumentCloseFailure {
+    pub progress: DocumentCloseProgress,
+    pub failed: Option<DocumentId>,
+    pub remaining: Vec<DocumentId>,
+    pub stage: DocumentCloseStage,
+    pub error: DocumentError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentCloseStage {
+    Validation,
+    Close,
+    Persistence,
+}
+
+impl std::fmt::Display for DocumentCloseFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stage = match self.stage {
+            DocumentCloseStage::Validation => "確認",
+            DocumentCloseStage::Close => "閉鎖",
+            DocumentCloseStage::Persistence => "保存",
+        };
+        let target = self.failed.as_ref().map_or("なし", |id| id.as_str());
+        let closed = if self.progress.closed.is_empty() {
+            "なし".to_string()
+        } else {
+            self.progress
+                .closed
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        write!(
+            f,
+            "{stage}段階で失敗しました（対象: {target}、閉鎖済み: {closed}）: {}",
+            self.error
+        )
+    }
+}
+
+impl std::error::Error for DocumentCloseFailure {}
+
 /// UIからDocumentと外部I/Oを分離する、複数文書Workspace編集セッション。
 pub struct EditorSession {
     documents: Vec<OpenDocument>,
@@ -1474,6 +1524,40 @@ impl EditorSession {
         self.repository.clone()
     }
 
+    /// 残すattachmentを再確立する。一部の取得失敗でも他のcache更新は保持する。
+    pub fn refresh_documents(&mut self) -> Result<(), DocumentError> {
+        let mut failure = None;
+        for open in &mut self.documents {
+            match self.document_connection.attach(&open.id) {
+                Ok(cache) => open.update(cache),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// I/Oを行わず、Clientが最後に確認したattachmentと文書cacheを返す。
+    pub fn document_caches(&self) -> Vec<DocumentCache> {
+        self.documents
+            .iter()
+            .map(|open| DocumentCache {
+                id: open.id.clone(),
+                document: open.document.clone(),
+                can_undo: open.can_undo,
+                can_redo: open.can_redo,
+                external_change: open.external_change,
+                reused: true,
+            })
+            .collect()
+    }
+
+    /// 復旧情報の保存完了を終了barrierとして確認する。
+    pub fn persist_documents(&self) -> Result<(), WorkspaceError> {
+        self.persist()
+    }
+
     pub fn document_connection(&self) -> Arc<dyn DocumentConnection> {
         self.document_connection.clone()
     }
@@ -1572,6 +1656,14 @@ impl EditorSession {
         let Some(index) = self.documents.iter().position(|open| &open.id == id) else {
             return Ok(false);
         };
+        // 確認後の変更にDiscardの承認を流用しない。
+        let current = self.document_connection.attach(id)?;
+        let expected = self.documents[index].document.revision();
+        self.documents[index].update(current);
+        if self.documents[index].document.revision() != expected {
+            self.persist_best_effort();
+            return Err(DocumentError::conflict("確認後に文書が変更されました"));
+        }
         if self.documents[index].document.is_dirty()
             && disposition == DocumentCloseDisposition::PreserveChanges
         {
@@ -1579,7 +1671,9 @@ impl EditorSession {
                 "未保存の文書は確認なしに閉じられません",
             ));
         }
-        if disposition == DocumentCloseDisposition::DiscardChanges {
+        if disposition == DocumentCloseDisposition::DiscardChanges
+            && self.documents[index].document.is_dirty()
+        {
             match self
                 .document_connection
                 .discard(id, self.documents[index].document.revision())
@@ -1594,7 +1688,13 @@ impl EditorSession {
                 }
             }
         }
-        self.document_connection.close(id)?;
+        if let Err(error) = self.document_connection.close(id) {
+            // 応答不明のcloseを成功と推測せず、残す意図で再attachする。
+            if let Ok(cache) = self.document_connection.attach(id) {
+                self.documents[index].update(cache);
+            }
+            return Err(error);
+        }
         let was_active = self.active == Some(index);
         self.documents.remove(index);
         self.active = if self.documents.is_empty() {
@@ -1609,12 +1709,8 @@ impl EditorSession {
         Ok(true)
     }
 
-    /// Validates all close decisions, then closes the documents in order.
-    ///
-    /// Each tuple contains a document ID, its approved disposition, and the revision
-    /// confirmed by the caller. Complete any required approval and saving first.
-    /// Validation errors leave all tabs open. Discard and close errors propagate;
-    /// documents already closed before such an error remain closed.
+    /// 全判断を検証してから順番に閉じる。失敗時も確認済みcloseを返す。
+    /// Close段階の失敗IDは応答不明を含む。再attach・再確認してから再試行する。
     pub fn close_documents(
         &mut self,
         documents: &[(
@@ -1622,12 +1718,56 @@ impl EditorSession {
             DocumentCloseDisposition,
             lapis_document::Revision,
         )],
-    ) -> Result<(), DocumentError> {
-        self.validate_document_closes(documents)?;
-        for (id, disposition, _) in documents {
-            self.close_document(id, *disposition)?;
+    ) -> Result<DocumentCloseProgress, DocumentCloseFailure> {
+        let mut progress = DocumentCloseProgress::default();
+        for (index, decision) in documents.iter().enumerate() {
+            if let Err(error) = self.validate_document_closes(std::slice::from_ref(decision)) {
+                return Err(DocumentCloseFailure {
+                    progress,
+                    failed: Some(decision.0.clone()),
+                    remaining: documents
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .map(|(_, (id, _, _))| id.clone())
+                        .collect(),
+                    stage: DocumentCloseStage::Validation,
+                    error,
+                });
+            }
         }
-        Ok(())
+        for (index, (id, disposition, revision)) in documents.iter().enumerate() {
+            // 事前検証後の変更にもDiscardの承認を流用しない。
+            let result = self
+                .validate_document_closes(&[(id.clone(), *disposition, *revision)])
+                .and_then(|()| self.close_document(id, *disposition));
+            match result {
+                Ok(true) => progress.closed.push(id.clone()),
+                Ok(false) => {}
+                Err(error) => {
+                    return Err(DocumentCloseFailure {
+                        progress,
+                        failed: Some(id.clone()),
+                        remaining: documents[index + 1..]
+                            .iter()
+                            .map(|(id, _, _)| id.clone())
+                            .collect(),
+                        stage: DocumentCloseStage::Close,
+                        error,
+                    });
+                }
+            }
+        }
+        if let Err(error) = self.persist_documents() {
+            return Err(DocumentCloseFailure {
+                progress,
+                failed: None,
+                remaining: Vec::new(),
+                stage: DocumentCloseStage::Persistence,
+                error: DocumentError::io(error.to_string()),
+            });
+        }
+        Ok(progress)
     }
 
     /// Checks approved revisions and refreshes matching open-document caches without closing tabs.
@@ -1645,6 +1785,9 @@ impl EditorSession {
         )],
     ) -> Result<(), DocumentError> {
         for (id, disposition, revision) in documents {
+            if !self.documents.iter().any(|open| &open.id == id) {
+                return Err(DocumentError::conflict("対象文書は既に閉じられています"));
+            }
             let current = self.document_connection.attach(id)?;
             if current.document.revision() != *revision {
                 return Err(DocumentError::conflict("確認後に文書が変更されました"));
@@ -2104,6 +2247,7 @@ mod tests {
     struct MemoryState {
         snapshot: Mutex<Option<WorkspaceSnapshot>>,
         saves: std::sync::atomic::AtomicUsize,
+        fail: std::sync::atomic::AtomicBool,
     }
 
     impl WorkspaceStateRepository for MemoryState {
@@ -2112,6 +2256,9 @@ mod tests {
         }
 
         fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(WorkspaceError::new("disk full"));
+            }
             self.saves
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *self.snapshot.lock().unwrap() = Some(snapshot.clone());

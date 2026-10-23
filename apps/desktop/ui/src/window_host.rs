@@ -37,6 +37,7 @@ pub(crate) struct WindowGroup {
     pub members: HashMap<HostId, HostMember>,
     pub latest: Option<ClientSnapshot>,
     pub closing: bool,
+    pub synchronization_required: bool,
     pub locale: lapis_localization::LocaleId,
     pub status: String,
 }
@@ -62,6 +63,7 @@ impl WindowGroup {
             )]),
             latest: None,
             closing: false,
+            synchronization_required: false,
             locale,
             status: String::new(),
         }
@@ -82,12 +84,24 @@ impl WindowGroup {
     /// Accepts a strictly newer snapshot and reconciles document ownership while preserving tab moves.
     /// Notifies observers when workspace, conversation, or document identity, revision, dirty state, or path changes.
     pub(crate) fn publish(&mut self, snapshot: ClientSnapshot, cx: &mut Context<Self>) {
+        if self.reconcile(snapshot, false) {
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn publish_reconciled(&mut self, snapshot: ClientSnapshot, cx: &mut Context<Self>) {
+        if self.reconcile(snapshot, true) {
+            cx.notify();
+        }
+    }
+
+    fn reconcile(&mut self, snapshot: ClientSnapshot, recovered: bool) -> bool {
         if self
             .latest
             .as_ref()
             .is_some_and(|old| old.sequence >= snapshot.sequence)
         {
-            return;
+            return false;
         }
         self.layout.tabs.retain(|tab, _| match tab {
             PanelTab::Document(id) => snapshot.tabs.iter().any(|tab| &tab.id == id),
@@ -102,21 +116,27 @@ impl WindowGroup {
             self.layout
                 .register_tab(PanelTab::Document(tab.id.clone()), owner);
         }
-        let changed = self.latest.as_ref().is_none_or(|old| {
-            old.root != snapshot.root
-                || old.conversation != snapshot.conversation
-                || old.documents.len() != snapshot.documents.len()
-                || old.documents.iter().zip(&snapshot.documents).any(|(a, b)| {
-                    a.id != b.id
-                        || a.document.revision() != b.document.revision()
-                        || a.document.is_dirty() != b.document.is_dirty()
-                        || a.document.path() != b.document.path()
-                })
-        });
-        self.latest = Some(snapshot);
-        if changed {
-            cx.notify();
+        let was_required = self.synchronization_required;
+        self.synchronization_required =
+            snapshot.synchronization_error.is_some() || (was_required && !recovered);
+        if let Some(error) = &snapshot.synchronization_error {
+            self.status = format!("{error}。再度CloseまたはQuitを実行して状態を確認してください");
         }
+        let changed = was_required != self.synchronization_required
+            || self.latest.as_ref().is_none_or(|old| {
+                old.synchronization_error != snapshot.synchronization_error
+                    || old.root != snapshot.root
+                    || old.conversation != snapshot.conversation
+                    || old.documents.len() != snapshot.documents.len()
+                    || old.documents.iter().zip(&snapshot.documents).any(|(a, b)| {
+                        a.id != b.id
+                            || a.document.revision() != b.document.revision()
+                            || a.document.is_dirty() != b.document.is_dirty()
+                            || a.document.path() != b.document.path()
+                    })
+            });
+        self.latest = Some(snapshot);
+        changed
     }
 
     /// Applies host ownership filters, closing state, and the latest group snapshot to an editor.
@@ -141,7 +161,7 @@ impl WindowGroup {
             editor.host = host;
             editor.excluded_documents = excluded;
             editor.only_documents = (host != ROOT_HOST).then_some(own);
-            editor.set_enabled(!self.closing, cx);
+            editor.set_enabled(!self.closing && !self.synchronization_required, cx);
             if let Some(snapshot) = &self.latest {
                 editor.receive_snapshot(snapshot, cx);
             }
@@ -211,8 +231,10 @@ impl WindowHost {
             }),
             cx.subscribe(&editor, move |this, _, event, cx| match event {
                 EditorEvent::Snapshot(snapshot) => {
-                    editor_group.update(cx, |group, cx| group.publish(*snapshot.clone(), cx))
+                    editor_group.update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
+                    this.synchronize(cx);
                 }
+                EditorEvent::Idle => this.synchronize(cx),
                 EditorEvent::Status(message) => this
                     .shell
                     .update(cx, |shell, cx| shell.set_status(message.clone(), cx)),
@@ -317,6 +339,11 @@ impl DesktopRoot {
         self.group.update(cx, |group, cx| {
             group.configure_editor(ROOT_HOST, &self.editor, cx)
         });
+        let status = self.group.read(cx).status.clone();
+        if !status.is_empty() {
+            self.shell
+                .update(cx, |shell, cx| shell.set_status(status, cx));
+        }
         if let Some(snapshot) = self.group.read(cx).latest.clone() {
             let mut snapshot = snapshot;
             snapshot.active = self.editor.read(cx).document_id();
@@ -350,6 +377,14 @@ impl DesktopRoot {
                     || placements.iter().any(|(present, _)| present == tab)
             });
             for (tab, panel) in placements {
+                if let PanelTab::Document(id) = &tab
+                    && group
+                        .latest
+                        .as_ref()
+                        .is_some_and(|snapshot| !snapshot.tabs.iter().any(|tab| &tab.id == id))
+                {
+                    continue;
+                }
                 let (owner, position) = group.layout.tabs.entry(tab).or_insert((ROOT_HOST, panel));
                 if *owner == ROOT_HOST {
                     *position = panel;
@@ -368,6 +403,18 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) {
         if self.group.read(cx).closing {
+            return;
+        }
+        if self.group.read(cx).synchronization_required
+            && !matches!(
+                command,
+                UiCommand::CloseWindow | UiCommand::CloseDocument(_)
+            )
+        {
+            self.set_status(
+                "状態を再確認するため、もう一度CloseまたはQuitを実行してください".into(),
+                cx,
+            );
             return;
         }
         match command {
@@ -556,4 +603,102 @@ fn apply_panel_layout(
             cx.notify();
         }
     });
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+    use crate::client_adapter::tests::{Fixture, plan};
+
+    fn group() -> WindowGroup {
+        WindowGroup {
+            layout: GroupLayout::new(),
+            members: HashMap::new(),
+            latest: None,
+            closing: false,
+            synchronization_required: false,
+            locale: Default::default(),
+            status: String::new(),
+        }
+    }
+
+    #[test]
+    fn partial_close_reconciles_root_and_detached_without_reopening_stale_tabs() {
+        let fixture = Fixture::default();
+        let mut client = fixture.client();
+        let decisions = plan(&client);
+        let mut group = group();
+        let first = group.layout.add_window();
+        let second = group.layout.add_window();
+        client.document_owners.insert(decisions[1].0.clone(), first);
+        client
+            .document_owners
+            .insert(decisions[2].0.clone(), second);
+        let old = client.snapshot().unwrap();
+        group.reconcile(old.clone(), true);
+        fixture.0.lock().unwrap().fail_close = Some(decisions[2].0.clone());
+        let report = client.close_documents(&decisions, Fixture::view());
+        assert_eq!(report.close.unwrap_err().progress.closed.len(), 2);
+        group.reconcile(report.snapshot, true);
+        assert!(group.documents(ROOT_HOST).is_empty());
+        assert!(group.documents(first).is_empty());
+        assert_eq!(group.documents(second), vec![decisions[2].0.clone()]);
+        assert_eq!(group.layout.windows.len(), 3);
+        assert_eq!(group.latest.as_ref().unwrap().document_owners.len(), 1);
+        assert!(!group.reconcile(old, true));
+        assert_eq!(group.layout.tabs.len(), 1);
+        fixture.0.lock().unwrap().fail_close = None;
+        let report = client.close_documents(&plan(&client), Fixture::view());
+        assert!(report.close.is_ok());
+        group.reconcile(report.snapshot, true);
+        assert!(group.layout.tabs.is_empty());
+        assert_eq!(fixture.0.lock().unwrap().closed.len(), 3);
+    }
+
+    #[test]
+    fn group_a_success_and_b_failure_keep_each_actual_membership_and_recover() {
+        let a = Fixture::default();
+        let b = Fixture::default();
+        let mut ca = a.client();
+        let mut cb = b.client();
+        let mut ga = group();
+        let mut gb = group();
+        ga.reconcile(ca.snapshot().unwrap(), true);
+        gb.reconcile(cb.snapshot().unwrap(), true);
+        let da = plan(&ca);
+        let db = plan(&cb);
+        b.0.lock().unwrap().fail_close = Some(db[1].0.clone());
+        let ra = ca.close_documents(&da, Fixture::view());
+        let rb = cb.close_documents(&db, Fixture::view());
+        assert!(ra.close.is_ok());
+        assert_eq!(rb.close.unwrap_err().progress.closed.len(), 1);
+        ga.reconcile(ra.snapshot, true);
+        gb.reconcile(rb.snapshot, true);
+        assert!(ga.layout.tabs.is_empty());
+        assert_eq!(gb.layout.tabs.len(), 2);
+        assert_eq!(ga.layout.windows.len(), 1);
+        assert_eq!(gb.layout.windows.len(), 1);
+        b.0.lock().unwrap().fail_attach = true;
+        gb.reconcile(cb.reconcile_snapshot(), true);
+        assert!(gb.synchronization_required);
+        assert_eq!(gb.layout.tabs.len(), 2);
+        b.0.lock().unwrap().fail_attach = false;
+        gb.reconcile(cb.snapshot().unwrap(), true);
+        assert!(!gb.synchronization_required);
+        assert!(ga.layout.tabs.is_empty());
+    }
+
+    #[test]
+    fn delayed_snapshot_cannot_unlock_an_uncertain_worker_result() {
+        let fixture = Fixture::default();
+        let mut client = fixture.client();
+        let mut group = group();
+        group.reconcile(client.snapshot().unwrap(), true);
+        let delayed = client.snapshot().unwrap();
+        group.synchronization_required = true;
+        group.reconcile(delayed, false);
+        assert!(group.synchronization_required);
+        group.reconcile(client.snapshot().unwrap(), true);
+        assert!(!group.synchronization_required);
+    }
 }
