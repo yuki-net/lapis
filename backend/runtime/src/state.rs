@@ -1118,7 +1118,7 @@ impl BackendState {
             &session.session_id,
             &workspace.summary.workspace_id,
             &request.terminal_id,
-            &request.data,
+            &request.input,
         )?;
         Ok((
             ResponseBody::TerminalInput(TerminalCommandResponse { terminal }),
@@ -1132,15 +1132,16 @@ impl BackendState {
         request: TerminalResizeRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
-        let terminal = workspace.terminals.resize(
+        let (terminal, event_body) = workspace.terminals.resize(
             &session.session_id,
             &workspace.summary.workspace_id,
             &request.terminal_id,
             request.size,
         )?;
+        let event = workspace.publish(event_body)?;
         Ok((
             ResponseBody::TerminalResize(TerminalCommandResponse { terminal }),
-            Vec::new(),
+            vec![event],
         ))
     }
 
