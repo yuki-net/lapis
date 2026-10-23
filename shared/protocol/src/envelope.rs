@@ -121,13 +121,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_output_event_keeps_resource_and_output_sequence() {
+    fn terminal_delta_event_keeps_resource_and_revision() {
         let event = EventEnvelope {
             event_sequence: EventSequence::new(21),
-            body: EventBody::TerminalOutput {
+            body: EventBody::TerminalDelta {
                 terminal_id: TerminalId::try_new("terminal-1").unwrap(),
-                sequence: crate::TerminalOutputSequence::new(4),
-                data: b"ok\n".to_vec(),
+                delta: crate::TerminalDelta {
+                    revision: 4,
+                    size: crate::TerminalSize::new(80, 24),
+                    changed_rows: Vec::new(),
+                    cursor: crate::TerminalCursor::default(),
+                    modes: crate::TerminalModes::default(),
+                    scrollback: Vec::new(),
+                },
             },
         };
 
@@ -135,10 +141,10 @@ mod tests {
             serde_json::from_str::<EventEnvelope>(&serde_json::to_string(&event).unwrap()).unwrap();
 
         assert_eq!(restored, event);
-        let EventBody::TerminalOutput { sequence, .. } = restored.body else {
-            panic!("expected terminal output event");
+        let EventBody::TerminalDelta { delta, .. } = restored.body else {
+            panic!("expected terminal delta event");
         };
-        assert_eq!(sequence, crate::TerminalOutputSequence::new(4));
+        assert_eq!(delta.revision, 4);
     }
 
     #[test]
@@ -175,15 +181,8 @@ mod tests {
                     workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
                     cwd: None,
                     status: crate::TerminalStatus::Running,
-                    size: crate::TerminalSize {
-                        columns: 80,
-                        rows: 24,
-                    },
-                    buffered_output: Vec::new(),
-                    output_watermark: None,
-                    output_truncated: false,
-                    output_offset: 0,
-                    screen: None,
+                    revision: 0,
+                    screen: crate::TerminalScreen::empty(crate::TerminalSize::new(80, 24)),
                 },
             }),
         };
