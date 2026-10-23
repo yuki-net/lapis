@@ -642,8 +642,15 @@ pub(crate) fn run_native_smoke(
                     )
                 })
                 .unwrap();
-            let point = show_drop_target(target, &target_shell, cx);
-            simulate_tab_drag(&this, &source_shell, source, false, Some(point), cx).await;
+            simulate_tab_drag(
+                &this,
+                &source_shell,
+                source,
+                false,
+                Some((target, &target_shell)),
+                cx,
+            )
+            .await;
             wait_for(&this, cx, None).await;
             this.update(cx, |root, cx| {
                 assert_eq!(
@@ -768,7 +775,7 @@ async fn simulate_tab_drag(
     shell: &Entity<Shell>,
     handle: gpui::AnyWindowHandle,
     cancel: bool,
-    destination: Option<drag::ScreenPoint>,
+    destination: Option<(gpui::AnyWindowHandle, &Entity<Shell>)>,
     cx: &mut gpui::AsyncApp,
 ) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -810,15 +817,6 @@ async fn simulate_tab_drag(
         })
         .unwrap();
     let hwnd = HWND(hwnd as *mut _);
-    if let Some(destination) = destination {
-        let mut point = windows::Win32::Foundation::POINT {
-            x: destination.x,
-            y: destination.y,
-        };
-        assert!(unsafe { ScreenToClient(hwnd, &mut point) }.as_bool());
-        end =
-            LPARAM(((point.y as i16 as u16 as u32) << 16 | point.x as i16 as u16 as u32) as isize);
-    }
     // smoke モードの自プロセス Window のみにイベントを送る。
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), start) }.unwrap();
     let moved = LPARAM(start.0 + 20);
@@ -838,6 +836,18 @@ async fn simulate_tab_drag(
         }
         .unwrap();
         wait_for_drag_state(cx, false, original_window_count).await;
+    }
+    // sourceの選択によるactivateが終わった後でdrop先を最前面にする。
+    // 先に上げるとRootのactivateが覆い、別Windowへのdropを検証できない。
+    if let Some((target, shell)) = destination {
+        let destination = show_drop_target(target, shell, cx);
+        let mut point = windows::Win32::Foundation::POINT {
+            x: destination.x,
+            y: destination.y,
+        };
+        assert!(unsafe { ScreenToClient(hwnd, &mut point) }.as_bool());
+        end =
+            LPARAM(((point.y as i16 as u16 as u32) << 16 | point.x as i16 as u16 as u32) as isize);
     }
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
     wait_for_drag_state(
@@ -940,24 +950,45 @@ async fn verify_drag_routes(
             )
         })
         .unwrap();
-    let point = show_drop_target(second_handle, &second_shell, cx);
-    simulate_tab_drag(root, &first_shell, first_handle, false, Some(point), cx).await;
+    simulate_tab_drag(
+        root,
+        &first_shell,
+        first_handle,
+        false,
+        Some((second_handle, &second_shell)),
+        cx,
+    )
+    .await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);
         assert!(root.group.read(cx).documents(first).is_empty());
     })
     .unwrap();
-    let point = show_drop_target(handle, &root_shell, cx);
-    simulate_tab_drag(root, &second_shell, second_handle, false, Some(point), cx).await;
+    simulate_tab_drag(
+        root,
+        &second_shell,
+        second_handle,
+        false,
+        Some((handle, &root_shell)),
+        cx,
+    )
+    .await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert!(root.group.read(cx).documents(ROOT_HOST).contains(id));
         assert_eq!(root.editor.read(cx).document_id().as_ref(), Some(id));
     })
     .unwrap();
-    let point = show_drop_target(second_handle, &second_shell, cx);
-    simulate_tab_drag(root, &root_shell, handle, false, Some(point), cx).await;
+    simulate_tab_drag(
+        root,
+        &root_shell,
+        handle,
+        false,
+        Some((second_handle, &second_shell)),
+        cx,
+    )
+    .await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);
