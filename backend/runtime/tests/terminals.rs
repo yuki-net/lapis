@@ -17,7 +17,8 @@ use lapis_client_api::{
 };
 use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use lapis_terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId as BackendTerminalId, TerminalOutput,
+    TerminalBackend, TerminalCell, TerminalDelta, TerminalError, TerminalEvent,
+    TerminalId as BackendTerminalId, TerminalInput, TerminalRowUpdate, TerminalScreen,
 };
 
 #[derive(Default)]
@@ -53,7 +54,7 @@ impl WorkspaceFileBackend for EmptyFiles {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum FakeCall {
-    Input { id: String, bytes: Vec<u8> },
+    Input { id: String, input: TerminalInput },
     Resize { id: String, columns: u16, rows: u16 },
     Terminate { id: String },
 }
@@ -75,7 +76,8 @@ struct FakeTerminal {
     columns: u16,
     rows: u16,
     events: VecDeque<TerminalEvent>,
-    next_output_sequence: u64,
+    revision: u64,
+    screen: TerminalScreen,
 }
 
 impl FakeTerminalBackend {
@@ -85,12 +87,26 @@ impl FakeTerminalBackend {
                 .terminals
                 .get_mut(id.as_str())
                 .expect("terminal must exist");
-            terminal.next_output_sequence += 1;
+            terminal.revision += 1;
+            let text = output.trim_end_matches(['\r', '\n']).to_owned();
+            if let Some(cell) = terminal.screen.rows[0].cells.first_mut() {
+                *cell = TerminalCell {
+                    text,
+                    ..TerminalCell::default()
+                };
+            }
             terminal
                 .events
-                .push_back(TerminalEvent::Output(TerminalOutput {
-                    sequence: terminal.next_output_sequence,
-                    data: output.as_bytes().to_vec(),
+                .push_back(TerminalEvent::Delta(TerminalDelta {
+                    revision: terminal.revision,
+                    size: terminal.screen.size,
+                    changed_rows: vec![TerminalRowUpdate {
+                        row: 0,
+                        value: terminal.screen.rows[0].clone(),
+                    }],
+                    cursor: terminal.screen.cursor,
+                    modes: terminal.screen.modes,
+                    scrollback: Vec::new(),
                 }));
         });
     }
@@ -136,14 +152,15 @@ impl TerminalBackend for FakeTerminalBackend {
                     columns,
                     rows,
                     events: VecDeque::new(),
-                    next_output_sequence: 0,
+                    revision: 0,
+                    screen: TerminalScreen::empty(lapis_terminal::TerminalSize::new(columns, rows)),
                 },
             );
             Ok(BackendTerminalId::new(id))
         })
     }
 
-    fn input(&self, id: &BackendTerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
+    fn input(&self, id: &BackendTerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
         self.with_state(|state| {
             let terminal = state
                 .terminals
@@ -152,13 +169,18 @@ impl TerminalBackend for FakeTerminalBackend {
             let _ = (&terminal.cwd, terminal.columns, terminal.rows);
             state.calls.push(FakeCall::Input {
                 id: id.as_str().to_owned(),
-                bytes: bytes.to_vec(),
+                input: input.clone(),
             });
             Ok(())
         })
     }
 
-    fn resize(&self, id: &BackendTerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+    fn resize(
+        &self,
+        id: &BackendTerminalId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<TerminalDelta, TerminalError> {
         self.with_state(|state| {
             let terminal = state
                 .terminals
@@ -166,12 +188,31 @@ impl TerminalBackend for FakeTerminalBackend {
                 .ok_or_else(|| TerminalError::new("terminal not found"))?;
             terminal.columns = columns;
             terminal.rows = rows;
+            terminal.revision += 1;
+            terminal.screen =
+                TerminalScreen::empty(lapis_terminal::TerminalSize::new(columns, rows));
             state.calls.push(FakeCall::Resize {
                 id: id.as_str().to_owned(),
                 columns,
                 rows,
             });
-            Ok(())
+            Ok(TerminalDelta {
+                revision: terminal.revision,
+                size: terminal.screen.size,
+                changed_rows: terminal
+                    .screen
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .map(|(row, value)| TerminalRowUpdate {
+                        row: row as u16,
+                        value: value.clone(),
+                    })
+                    .collect(),
+                cursor: terminal.screen.cursor,
+                modes: terminal.screen.modes,
+                scrollback: Vec::new(),
+            })
         })
     }
 
@@ -302,7 +343,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
             4,
             RequestBody::TerminalInput(TerminalInputRequest {
                 terminal_id: terminal_id.clone(),
-                data: "echo hello\n".to_owned(),
+                input: TerminalInput::Text("echo hello\n".to_owned()),
             }),
         ),
         ResponseBody::TerminalInput(_)
@@ -326,7 +367,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
     let backend_id = BackendTerminalId::new("fake-terminal-1");
     first_backend.queue_output(&backend_id, "hello\n");
     first_backend.queue_exit(&backend_id, Some(0));
-    assert_terminal_output(&events, &terminal_id, b"hello\n");
+    assert_terminal_output(&events, &terminal_id, "hello");
     assert_terminal_status(&events, &terminal_id, TerminalStatus::Exited);
 
     let ResponseBody::SnapshotResync(snapshot) = dispatch(
@@ -347,7 +388,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
         .find(|terminal| terminal.terminal_id == terminal_id)
         .expect("terminal must be in snapshot");
     assert_eq!(terminal.status, TerminalStatus::Exited);
-    assert_eq!(terminal.buffered_output, b"hello\n");
+    assert!(terminal.screen.plain_text().contains("hello"));
 
     assert!(matches!(
         dispatch(
@@ -362,7 +403,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
     ));
     assert!(first_backend.calls().contains(&FakeCall::Input {
         id: backend_id.as_str().to_owned(),
-        bytes: b"echo hello\n".to_vec(),
+        input: TerminalInput::Text("echo hello\n".to_owned()),
     }));
     assert!(first_backend.calls().contains(&FakeCall::Resize {
         id: backend_id.as_str().to_owned(),
@@ -376,7 +417,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
         8,
         RequestBody::TerminalInput(TerminalInputRequest {
             terminal_id,
-            data: "cross-workspace\n".to_owned(),
+            input: TerminalInput::Text("cross-workspace\n".to_owned()),
         }),
     ) else {
         panic!("cross-workspace terminal operation must be rejected");
@@ -430,7 +471,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
         .iter()
         .find(|terminal| terminal.terminal_id != running_terminal_id)
         .expect("exited terminal must remain in snapshot");
-    assert_eq!(restored_exited.buffered_output, b"hello\n");
+    assert!(restored_exited.screen.plain_text().contains("hello"));
     let restored_running = snapshot
         .snapshot
         .terminals
@@ -446,14 +487,14 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
             12,
             RequestBody::TerminalInput(TerminalInputRequest {
                 terminal_id: running_terminal_id,
-                data: "reconnected input\n".to_owned(),
+                input: TerminalInput::Text("reconnected input\n".to_owned()),
             }),
         ),
         ResponseBody::TerminalInput(_)
     ));
     assert!(first_backend.calls().contains(&FakeCall::Input {
         id: running_backend_id.as_str().to_owned(),
-        bytes: b"reconnected input\n".to_vec(),
+        input: TerminalInput::Text("reconnected input\n".to_owned()),
     }));
 
     drop(events);
@@ -517,16 +558,17 @@ fn assert_terminal_status(
 fn assert_terminal_output(
     events: &lapis_backend_state::BackendEventReceiver,
     terminal_id: &TerminalId,
-    expected: &[u8],
+    expected: &str,
 ) {
     wait_for_event(events, |event| {
         matches!(
             &event.body,
-            EventBody::TerminalOutput {
+            EventBody::TerminalDelta {
                 terminal_id: event_terminal_id,
-                data,
+                delta,
                 ..
-            } if event_terminal_id == terminal_id && data == expected
+            } if event_terminal_id == terminal_id
+                && delta.changed_rows.iter().any(|row| row.value.plain_text().contains(expected))
         )
     });
 }
