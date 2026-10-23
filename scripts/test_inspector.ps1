@@ -5,13 +5,12 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('lapis-inspector-' + [guid]::Ne
 New-Item -ItemType Directory -Path $fixture | Out-Null
 Set-Content -LiteralPath (Join-Path $fixture 'one.md') -Encoding utf8 -Value '# Inspector fixture'
 $log = Join-Path $fixture 'smoke.log'
-$previousAppData = $env:LOCALAPPDATA
 $previousSmoke = $env:LAPIS_INSPECTOR_SMOKE
 $process = $null
 try {
-    $env:LOCALAPPDATA = Join-Path $fixture 'settings'
+    $stateDirectory = Join-Path $fixture 'state'
     $env:LAPIS_INSPECTOR_SMOKE = '1'
-    $process = Start-Process -FilePath $resolvedBinary -ArgumentList @('--workspace', ('"' + $fixture + '"'), '--open-file', 'one.md', '--window-host-smoke') -WindowStyle Hidden -RedirectStandardError $log -PassThru
+    $process = Start-Process -FilePath $resolvedBinary -ArgumentList @('--state-directory', ('"' + $stateDirectory + '"'), '--workspace', ('"' + $fixture + '"'), '--open-file', 'one.md', '--window-host-smoke') -WindowStyle Hidden -RedirectStandardError $log -PassThru
     $processHandle = $process.Handle
     foreach ($mode in @('normal', 'visible', 'picking')) {
         $marker = "INSPECTOR sample $mode begin"
@@ -35,6 +34,5 @@ try {
     Write-Output "Fixture: $fixture"
 } finally {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id }
-    $env:LOCALAPPDATA = $previousAppData
     $env:LAPIS_INSPECTOR_SMOKE = $previousSmoke
 }

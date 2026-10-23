@@ -121,7 +121,7 @@ fn select_state_directory(preferred: &Path, legacy: &Path) -> Result<PathBuf, Er
 }
 
 fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsString>, Error> {
-    match arguments.iter().position(|value| value == name) {
+    match arguments.iter().rposition(|value| value == name) {
         Some(index) => Ok(Some(
             arguments
                 .get(index + 1)
@@ -135,6 +135,35 @@ fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsStri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn explicit_worktree_state_keeps_settings_and_hosts_separate() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = temp.path().join("first worktree/target/dev-state");
+        let second = temp.path().join("second worktree/target/dev-state");
+        for directory in [&first, &second] {
+            let arguments = [
+                OsString::from("lapis"),
+                OsString::from("--state-directory"),
+                directory.as_os_str().to_owned(),
+            ];
+            let startup = Startup::open(&arguments).unwrap().unwrap();
+            assert_eq!(startup.directory, *directory);
+            assert_eq!(startup.connector_directory, *directory);
+            let settings = lapis_persistence::LocalGlobalSettingsRepository::new(
+                startup.directory.join("settings-v1.json"),
+            );
+            let settings =
+                lapis_desktop_client::SettingsSession::load(std::sync::Arc::new(settings)).unwrap();
+            if directory == &first {
+                settings.set_theme("lapis.white".into()).unwrap();
+            } else {
+                assert_eq!(settings.settings().theme, "lapis.dark");
+            }
+        }
+        assert!(first.join("settings-v1.json").is_file());
+        assert!(!second.join("settings-v1.json").exists());
+    }
+
     #[test]
     fn legacy_drafts_conversations_and_settings_keep_their_original_directory() {
         let temp = tempfile::tempdir().unwrap();
@@ -180,5 +209,21 @@ mod tests {
         assert!(option(&arguments, "--host").is_err());
         assert_eq!(option(&arguments, "--workspace").unwrap().unwrap(), "repo");
         assert!(option(&arguments, "--state-directory").unwrap().is_none());
+    }
+
+    #[test]
+    fn repeated_options_use_the_last_value() {
+        let arguments = [
+            "lapis",
+            "--state-directory",
+            "default-state",
+            "--state-directory",
+            "explicit-state",
+        ]
+        .map(OsString::from);
+        assert_eq!(
+            option(&arguments, "--state-directory").unwrap().unwrap(),
+            "explicit-state"
+        );
     }
 }

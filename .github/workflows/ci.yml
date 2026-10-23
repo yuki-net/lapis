@@ -51,24 +51,22 @@ jobs:
             backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
       - name: Check architecture
-        run: |
-          python3 -m unittest discover -s scripts -p "test_*.py"
-          python3 scripts/check_architecture.py
+        run: python3 scripts/check.py backend architecture
 
       - name: Check formatting
-        run: cargo fmt --all -- --check
+        run: python3 scripts/check.py backend format
 
       - name: Check Backend
-        run: cargo check --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+        run: python3 scripts/check.py backend check
 
       - name: Test Backend
-        run: cargo test --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+        run: python3 scripts/check.py backend test
 
       - name: Lint Backend
-        run: cargo clippy --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui -- -D warnings
+        run: python3 scripts/check.py backend lint
 
       - name: Build Backend
-        run: cargo build --workspace --all-targets --exclude lapis --exclude lapis-desktop-ui
+        run: python3 scripts/check.py backend build
 
   desktop:
     name: Desktop (${{ matrix.os }})
@@ -107,17 +105,20 @@ jobs:
           restore-keys: |
             desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
+      - name: Test development commands
+        run: python scripts/check.py desktop architecture
+
       - name: Check Desktop
-        run: cargo check -p lapis -p lapis-desktop-ui --all-targets
+        run: python scripts/check.py desktop check
 
       - name: Test Desktop
-        run: cargo test -p lapis -p lapis-desktop-ui --all-targets
+        run: python scripts/check.py desktop test
 
       - name: Lint Desktop
-        run: cargo clippy -p lapis -p lapis-desktop-ui --all-targets -- -D warnings
+        run: python scripts/check.py desktop lint
 
       - name: Build Desktop
-        run: cargo build -p lapis --all-targets
+        run: python scripts/check.py desktop build
 
       - name: Verify GPUI patches
         shell: pwsh

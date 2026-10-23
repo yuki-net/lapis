@@ -3,10 +3,7 @@ use super::*;
 
 struct SmokeFailConversation;
 
-type SmokeSavedConversation = Option<(
-    Vec<lapis_desktop_client::ConversationRecord>,
-    lapis_editor_core::ConversationId,
-)>;
+type SmokeSavedConversation = Option<lapis_desktop_client::ConversationState>;
 
 struct SmokeRecordingConversation {
     inner: std::sync::Arc<dyn lapis_desktop_client::ConversationRepository>,
@@ -28,7 +25,8 @@ impl lapis_desktop_client::ConversationRepository for SmokeRecordingConversation
         active: &lapis_editor_core::ConversationId,
     ) -> Result<(), lapis_workspace::WorkspaceError> {
         self.inner.save(expected, projects, records, active)?;
-        *self.saved.lock().unwrap() = Some((records.to_vec(), active.clone()));
+        *self.saved.lock().unwrap() =
+            Some((projects.to_vec(), records.to_vec(), Some(active.clone())));
         Ok(())
     }
 }
@@ -390,9 +388,9 @@ pub(crate) fn run_native_smoke(
         this.update(cx, |root, cx| {
             let expected = root.shell.read(cx).view_state();
             let active = saved_view
-                .0
+                .1
                 .iter()
-                .find(|record| record.id == saved_view.1)
+                .find(|record| Some(&record.id) == saved_view.2.as_ref())
                 .expect("recorded active conversation");
             assert_eq!(active.view, expected);
             eprintln!("SMOKE deferred view persistence retries after reconciliation OK");
