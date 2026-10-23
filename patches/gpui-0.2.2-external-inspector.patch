@@ -203,6 +203,10 @@ diff --git a/src/view.rs b/src/view.rs
 +            #[cfg(any(feature = "inspector", debug_assertions))]
 +            let caching_disabled = window.inspector_is_enabled();
 +            #[cfg(not(any(feature = "inspector", debug_assertions)))]
+@@ -265,0 +269,3 @@ impl Element for AnyView {
++            #[cfg(any(feature = "inspector", debug_assertions))]
++            let caching_disabled = window.inspector_is_enabled();
++            #[cfg(not(any(feature = "inspector", debug_assertions)))]
 diff --git a/src/window.rs b/src/window.rs
 --- a/src/window.rs
 +++ b/src/window.rs

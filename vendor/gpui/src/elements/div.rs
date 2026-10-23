@@ -2094,8 +2094,9 @@ impl Interactivity {
         if !drop_listeners.is_empty() {
             let hitbox = hitbox.clone();
             window.on_mouse_event({
-                move |_: &MouseUpEvent, phase, window, cx| {
+                move |event: &MouseUpEvent, phase, window, cx| {
                     if let Some(drag) = &cx.active_drag
+                        && crate::drag_ends_on_mouse_up(drag.button, event.button)
                         && phase == DispatchPhase::Bubble
                         && hitbox.is_hovered(window)
                     {

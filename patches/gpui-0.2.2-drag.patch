@@ -50,5 +50,10 @@ diff --git a/src/app.rs b/src/app.rs
 diff --git a/src/elements/div.rs b/src/elements/div.rs
 --- a/src/elements/div.rs
 +++ b/src/elements/div.rs
-@@ -2169,0 +2175 @@ impl Interactivity {
+@@ -2092 +2097 @@ impl Interactivity {
+-                move |_: &MouseUpEvent, phase, window, cx| {
++                move |event: &MouseUpEvent, phase, window, cx| {
+@@ -2093,0 +2099 @@ impl Interactivity {
++                        && crate::drag_ends_on_mouse_up(drag.button, event.button)
+@@ -2169,0 +2176 @@ impl Interactivity {
 +                                button: mouse_down.button,

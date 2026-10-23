@@ -39,13 +39,83 @@ fn setup(cx: &mut TestAppContext) -> WindowHandle<Target> {
     })
 }
 
-fn draw(target: WindowHandle<Target>, cx: &mut TestAppContext) {
+fn draw<V: 'static>(target: WindowHandle<V>, cx: &mut TestAppContext) {
     cx.update_window(target.into(), |_, window, cx| {
         window.refresh();
         window.draw(cx).clear();
     })
     .unwrap();
     cx.run_until_parked();
+}
+
+#[derive(Clone)]
+struct DragToken;
+struct DragGhost;
+impl Render for DragGhost {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size(px(0.))
+    }
+}
+struct DropFixture(std::rc::Rc<std::cell::Cell<usize>>);
+impl Render for DropFixture {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let drops = self.0.clone();
+        div()
+            .size_full()
+            .flex()
+            .child(
+                div()
+                    .id("drag-source")
+                    .size(px(100.))
+                    .on_drag(DragToken, |_, _, _, cx| cx.new(|_| DragGhost)),
+            )
+            .child(
+                div()
+                    .id("drop-target")
+                    .size(px(100.))
+                    .on_drop(move |_: &DragToken, _, _| drops.set(drops.get() + 1)),
+            )
+    }
+}
+
+#[gpui::test]
+fn gpui_drop_waits_for_the_drag_start_button(cx: &mut TestAppContext) {
+    let drops = std::rc::Rc::new(std::cell::Cell::new(0));
+    let target = cx.add_window(|_, _| DropFixture(drops.clone()));
+    draw(target, cx);
+    let mut visual = VisualTestContext::from_window(target.into(), cx);
+    visual.simulate_mouse_down(
+        point(px(10.), px(10.)),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    visual.simulate_mouse_move(
+        point(px(30.), px(10.)),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    assert!(visual.read(|cx| cx.has_active_drag()));
+    draw(target, cx);
+    visual.simulate_mouse_move(
+        point(px(130.), px(10.)),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    draw(target, cx);
+    visual.simulate_mouse_up(
+        point(px(130.), px(10.)),
+        gpui::MouseButton::Right,
+        Modifiers::none(),
+    );
+    assert_eq!(drops.get(), 0);
+    assert!(visual.read(|cx| cx.has_active_drag()));
+    visual.simulate_mouse_up(
+        point(px(130.), px(10.)),
+        gpui::MouseButton::Left,
+        Modifiers::none(),
+    );
+    assert_eq!(drops.get(), 1);
+    assert!(!visual.read(|cx| cx.has_active_drag()));
 }
 
 fn inspector(cx: &mut TestAppContext) -> Entity<Inspector> {
@@ -248,9 +318,15 @@ fn pick_and_wheel_use_target_hit_testing(cx: &mut TestAppContext) {
 struct CachedTarget(Entity<Target>);
 impl Render for CachedTarget {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .child(gpui::AnyView::from(self.0.clone()).cached(Default::default()))
+        div().size_full().child(
+            gpui::AnyView::from(self.0.clone()).cached(gpui::StyleRefinement {
+                size: gpui::SizeRefinement {
+                    width: Some(px(200.).into()),
+                    height: Some(px(150.).into()),
+                },
+                ..Default::default()
+            }),
+        )
     }
 }
 
@@ -266,6 +342,12 @@ fn idle_inspector_keeps_cached_descendants(cx: &mut TestAppContext) {
             Inspection::enable(window, cx)
         })
         .unwrap();
+    // add_windowの初回描画に存在しなかったcached viewを、Inspector表示後に追加する。
+    let fresh = cx.new(|_| Target {
+        width: px(200.),
+        child: true,
+    });
+    target.update(cx, |target, _, _| target.0 = fresh).unwrap();
     cx.update_window(target.into(), |_, window, cx| {
         window.draw(cx).clear();
     })

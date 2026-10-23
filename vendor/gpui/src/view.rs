@@ -266,6 +266,9 @@ impl Element for AnyView {
         cx: &mut App,
     ) {
         window.with_rendered_view(self.entity_id(), |window| {
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            let caching_disabled = window.inspector_is_enabled();
+            #[cfg(not(any(feature = "inspector", debug_assertions)))]
             let caching_disabled = window.is_inspector_picking(cx);
             if self.cached_style.is_some() && !caching_disabled {
                 window.with_element_state::<AnyViewState, _>(
