@@ -275,7 +275,7 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         wait_for(&this, cx, None).await;
-        let (child, handle) = this
+        let (child, closing_child_handle) = this
             .update(cx, |root, cx| {
                 let snapshot = root.group.read(cx).latest.as_ref().unwrap();
                 assert!(
@@ -407,7 +407,7 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         let (saved_conversation, stale_snapshot) = wait_client(saved_conversation).await.unwrap();
-        handle
+        closing_child_handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| {
                     root.close_hosts(child, None, window, cx);
@@ -503,7 +503,7 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         wait_client(restored).await.unwrap();
-        handle
+        closing_child_handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(child, None, window, cx))
             })
