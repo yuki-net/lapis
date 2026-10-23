@@ -56,6 +56,15 @@ $global:devTestfake | Add-Member ScriptMethod Dispose {}
 switch ($Scenario) {
     'other' { $global:devTestitem.ExecutablePath = 'C:\other-worktree\target\debug\lapis.exe' }
     'ui' { $global:devTestitem.CommandLine = 'lapis.exe --state-directory target/dev-state' }
+    'mixed' {
+        $global:devTestitem = @(
+            $global:devTestitem
+            [pscustomobject]@{
+                ExecutablePath = $binary; ProcessId = 456; CreationDate = $started
+                CommandLine = 'lapis.exe --state-directory target/dev-state'
+            }
+        )
+    }
     'reused' { $global:devTestfake.StartTime = $started.AddSeconds(1) }
     'gone' { $global:devTestfake = $null }
 }
@@ -82,7 +91,7 @@ if ($Scenario -eq 'foreign' -and $message -ne '開発用Local Hostの記録と�
 }
 $expected = if ($Scenario -eq 'host') { 1 } else { 0 }
 if ($global:devTestkilled -ne $expected) { throw "unexpected termination: $Scenario" }
-if ($failed -ne ($Scenario -in @('ui', 'reused', 'foreign', 'missing'))) { throw "unexpected result: $Scenario" }
+if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing'))) { throw "unexpected result: $Scenario" }
 '''
         with tempfile.TemporaryDirectory() as directory:
             fixture_script = Path(directory) / "scripts" / script.name
@@ -90,7 +99,7 @@ if ($failed -ne ($Scenario -in @('ui', 'reused', 'foreign', 'missing'))) { throw
             shutil.copyfile(script, fixture_script)
             path = Path(directory) / "host harness.ps1"
             path.write_text(harness, encoding="utf-8-sig")
-            for scenario in ("host", "other", "ui", "reused", "gone", "foreign", "missing"):
+            for scenario in ("host", "other", "ui", "mixed", "reused", "gone", "foreign", "missing"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         ["powershell", "-NoProfile", "-NonInteractive", "-File", str(path), str(fixture_script), scenario],

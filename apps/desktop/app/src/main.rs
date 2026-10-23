@@ -113,7 +113,7 @@ fn main() {
             host.documents(),
         )
     };
-    if let Some(index) = arguments.iter().position(|value| value == "--workspace") {
+    if let Some(index) = option_index(&arguments, "--workspace") {
         let Some(root) = arguments.get(index + 1).map(std::path::PathBuf::from) else {
             eprintln!("Usage: lapis --workspace <directory>");
             std::process::exit(2);
@@ -123,7 +123,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    if let Some(index) = arguments.iter().position(|value| value == "--open-file") {
+    if let Some(index) = option_index(&arguments, "--open-file") {
         let Some(path) = arguments.get(index + 1).map(std::path::PathBuf::from) else {
             eprintln!("Usage: lapis --open-file <path>");
             std::process::exit(2);
@@ -214,6 +214,10 @@ fn main() {
     )
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
     lapis_desktop_ui::run(session, desktop_services, initial_view);
+}
+
+fn option_index(arguments: &[std::ffi::OsString], name: &str) -> Option<usize> {
+    arguments.iter().rposition(|value| value == name)
 }
 
 fn run_task_smoke(arguments: &[std::ffi::OsString]) {
@@ -309,4 +313,23 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
     }
     eprintln!("Task smoke timed out");
     std::process::exit(1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::option_index;
+    use std::ffi::OsString;
+
+    #[test]
+    fn repeated_workspace_options_use_the_last_value() {
+        let arguments = [
+            "lapis",
+            "--workspace",
+            "default-workspace",
+            "--workspace",
+            "explicit-workspace",
+        ]
+        .map(OsString::from);
+        assert_eq!(option_index(&arguments, "--workspace"), Some(3));
+    }
 }

@@ -121,7 +121,7 @@ fn select_state_directory(preferred: &Path, legacy: &Path) -> Result<PathBuf, Er
 }
 
 fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsString>, Error> {
-    match arguments.iter().position(|value| value == name) {
+    match arguments.iter().rposition(|value| value == name) {
         Some(index) => Ok(Some(
             arguments
                 .get(index + 1)
@@ -209,5 +209,21 @@ mod tests {
         assert!(option(&arguments, "--host").is_err());
         assert_eq!(option(&arguments, "--workspace").unwrap().unwrap(), "repo");
         assert!(option(&arguments, "--state-directory").unwrap().is_none());
+    }
+
+    #[test]
+    fn repeated_options_use_the_last_value() {
+        let arguments = [
+            "lapis",
+            "--state-directory",
+            "default-state",
+            "--state-directory",
+            "explicit-state",
+        ]
+        .map(OsString::from);
+        assert_eq!(
+            option(&arguments, "--state-directory").unwrap().unwrap(),
+            "explicit-state"
+        );
     }
 }
