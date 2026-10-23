@@ -16,7 +16,18 @@ class WorktreeCleanupTests(unittest.TestCase):
 
             def git(*arguments):
                 subprocess.run(
-                    ["git", "-c", "core.hooksPath=", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *arguments],
+                    [
+                        "git",
+                        "-c",
+                        "core.hooksPath=",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "-c",
+                        "user.name=Test",
+                        "-c",
+                        "user.email=test@example.invalid",
+                        *arguments,
+                    ],
                     cwd=repository, check=True, capture_output=True,
                 )
 

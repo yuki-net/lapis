@@ -1,6 +1,7 @@
 mod connection;
 mod workspace_dialog;
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -124,7 +125,11 @@ fn main() {
             eprintln!("Usage: lapis --workspace <directory>");
             std::process::exit(2);
         };
-        if let Err(error) = session.open_workspace(root) {
+        let should_open = session
+            .workspace_root()
+            .map(|current| !same_workspace(current, &root))
+            .unwrap_or(true);
+        if should_open && let Err(error) = session.open_workspace(root) {
             eprintln!("Workspace open failed: {error}");
             std::process::exit(1);
         }
@@ -238,6 +243,32 @@ fn option_index(arguments: &[std::ffi::OsString], name: &str) -> Option<usize> {
     arguments.iter().rposition(|value| value == name)
 }
 
+fn same_workspace(left: &Path, right: &Path) -> bool {
+    let normalize = |path: &Path| -> PathBuf {
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            return canonical;
+        }
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|directory| directory.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    };
+    let left = normalize(left);
+    let right = normalize(right);
+    #[cfg(windows)]
+    {
+        left.to_string_lossy()
+            .eq_ignore_ascii_case(&right.to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        left == right
+    }
+}
+
 fn run_task_smoke(arguments: &[std::ffi::OsString]) {
     let Some(workspace_root) = arguments.get(2).map(std::path::PathBuf::from) else {
         eprintln!("Usage: lapis --task-smoke <workspace> [prompt]");
@@ -335,8 +366,9 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
 
 #[cfg(test)]
 mod tests {
-    use super::option_index;
+    use super::{option_index, same_workspace};
     use std::ffi::OsString;
+    use std::path::Path;
 
     #[test]
     fn repeated_workspace_options_use_the_last_value() {
@@ -349,5 +381,18 @@ mod tests {
         ]
         .map(OsString::from);
         assert_eq!(option_index(&arguments, "--workspace"), Some(3));
+    }
+
+    #[test]
+    fn relative_and_absolute_workspace_paths_are_equivalent() {
+        let current = std::env::current_dir().expect("current directory");
+        assert!(same_workspace(Path::new("."), &current));
+    }
+
+    #[test]
+    fn different_workspace_paths_are_not_equivalent() {
+        let first = tempfile::tempdir().expect("first workspace");
+        let second = tempfile::tempdir().expect("second workspace");
+        assert!(!same_workspace(first.path(), second.path()));
     }
 }
