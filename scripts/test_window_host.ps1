@@ -5,11 +5,10 @@ $fixture = Join-Path ([IO.Path]::GetTempPath()) ('lapis-window-host-' + [guid]::
 New-Item -ItemType Directory -Path $fixture | Out-Null
 Set-Content -LiteralPath (Join-Path $fixture 'one.md') -Encoding utf8 -Value '# Window Host fixture'
 $log = Join-Path $fixture 'smoke.log'
-$previousAppData = $env:LOCALAPPDATA
 $process = $null
 try {
-    $env:LOCALAPPDATA = Join-Path $fixture 'settings'
-    $process = Start-Process -FilePath $resolvedBinary -ArgumentList @('--workspace', ('"' + $fixture + '"'), '--open-file', 'one.md', '--window-host-smoke') -WindowStyle Hidden -RedirectStandardError $log -PassThru
+    $stateDirectory = Join-Path $fixture 'state'
+    $process = Start-Process -FilePath $resolvedBinary -ArgumentList @('--state-directory', ('"' + $stateDirectory + '"'), '--workspace', ('"' + $fixture + '"'), '--open-file', 'one.md', '--window-host-smoke') -WindowStyle Hidden -RedirectStandardError $log -PassThru
     $processHandle = $process.Handle
     # テスト専用の段階通知を待つ。製品側の定期ポーリングではない。
     foreach ($marker in @('baseline sample begin', 'idle sample begin')) {
@@ -35,5 +34,4 @@ try {
     Write-Output "Fixture: $fixture"
 } finally {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id }
-    $env:LOCALAPPDATA = $previousAppData
 }

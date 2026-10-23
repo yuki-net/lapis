@@ -46,8 +46,9 @@ impl Fixture {
         DocumentClient {
             editor,
             conversation,
-            lsp: LspSession::new(port),
+            lsp: LspSession::new(port.clone()),
             edit_chain: EditChain::default(),
+            git: port,
             snapshot_sequence: 0,
             document_owners: HashMap::new(),
         }
@@ -165,15 +166,88 @@ impl WorkspaceStateRepository for Fixture {
     }
 }
 impl ConversationRepository for Fixture {
-    fn load(&self) -> Result<(Vec<ConversationRecord>, Option<ConversationId>), WorkspaceError> {
+    fn load(&self) -> Result<lapis_desktop_client::ConversationState, WorkspaceError> {
         Ok(Default::default())
     }
-    fn save(&self, _: &[ConversationRecord], _: &ConversationId) -> Result<(), WorkspaceError> {
+    fn save(
+        &self,
+        _: &lapis_desktop_client::ConversationState,
+        _: &[lapis_desktop_client::Project],
+        _: &[ConversationRecord],
+        _: &ConversationId,
+    ) -> Result<(), WorkspaceError> {
         if self.0.lock().unwrap().fail_persist {
             Err(WorkspaceError::new("view disk full"))
         } else {
             Ok(())
         }
+    }
+}
+impl lapis_git::GitConnection for Fixture {
+    fn status(
+        &self,
+        _: &WorkspaceId,
+        _: Option<&lapis_editor_core::TaskId>,
+    ) -> Result<lapis_git::GitSnapshot, lapis_git::GitError> {
+        Err(lapis_git::GitError::new(
+            lapis_git::GitErrorKind::Io,
+            "git unavailable",
+        ))
+    }
+
+    fn diff(
+        &self,
+        _: &WorkspaceId,
+        _: Option<&lapis_editor_core::TaskId>,
+        _: &str,
+    ) -> Result<lapis_git::GitDiffSnapshot, lapis_git::GitError> {
+        Err(lapis_git::GitError::new(
+            lapis_git::GitErrorKind::Io,
+            "git unavailable",
+        ))
+    }
+
+    fn worktrees(
+        &self,
+        _: &WorkspaceId,
+    ) -> Result<Vec<lapis_git::WorktreeSnapshot>, lapis_git::GitError> {
+        Err(lapis_git::GitError::new(
+            lapis_git::GitErrorKind::Io,
+            "git unavailable",
+        ))
+    }
+
+    fn create_worktree(
+        &self,
+        _: &WorkspaceId,
+    ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+        Err(lapis_git::GitError::new(
+            lapis_git::GitErrorKind::Io,
+            "git unavailable",
+        ))
+    }
+
+    fn import_file(
+        &self,
+        _: &WorkspaceId,
+        _: &lapis_editor_core::TaskId,
+        _: &str,
+    ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+        Err(lapis_git::GitError::new(
+            lapis_git::GitErrorKind::Io,
+            "git unavailable",
+        ))
+    }
+
+    fn discard_worktree(
+        &self,
+        _: &WorkspaceId,
+        _: &lapis_editor_core::TaskId,
+    ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+        Err(lapis_git::GitError::new(
+            lapis_git::GitErrorKind::Io,
+            "git unavailable",
+        ))
     }
 }
 impl lapis_lsp::LanguageServerBackend for Fixture {

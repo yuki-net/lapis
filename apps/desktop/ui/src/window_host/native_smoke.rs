@@ -3,10 +3,7 @@ use super::*;
 
 struct SmokeFailConversation;
 
-type SmokeSavedConversation = Option<(
-    Vec<lapis_desktop_client::ConversationRecord>,
-    lapis_editor_core::ConversationId,
-)>;
+type SmokeSavedConversation = Option<lapis_desktop_client::ConversationState>;
 
 struct SmokeRecordingConversation {
     inner: std::sync::Arc<dyn lapis_desktop_client::ConversationRepository>,
@@ -16,23 +13,20 @@ struct SmokeRecordingConversation {
 impl lapis_desktop_client::ConversationRepository for SmokeRecordingConversation {
     fn load(
         &self,
-    ) -> Result<
-        (
-            Vec<lapis_desktop_client::ConversationRecord>,
-            Option<lapis_editor_core::ConversationId>,
-        ),
-        lapis_workspace::WorkspaceError,
-    > {
+    ) -> Result<lapis_desktop_client::ConversationState, lapis_workspace::WorkspaceError> {
         self.inner.load()
     }
 
     fn save(
         &self,
+        expected: &lapis_desktop_client::ConversationState,
+        projects: &[lapis_desktop_client::Project],
         records: &[lapis_desktop_client::ConversationRecord],
         active: &lapis_editor_core::ConversationId,
     ) -> Result<(), lapis_workspace::WorkspaceError> {
-        self.inner.save(records, active)?;
-        *self.saved.lock().unwrap() = Some((records.to_vec(), active.clone()));
+        self.inner.save(expected, projects, records, active)?;
+        *self.saved.lock().unwrap() =
+            Some((projects.to_vec(), records.to_vec(), Some(active.clone())));
         Ok(())
     }
 }
@@ -40,18 +34,14 @@ impl lapis_desktop_client::ConversationRepository for SmokeRecordingConversation
 impl lapis_desktop_client::ConversationRepository for SmokeFailConversation {
     fn load(
         &self,
-    ) -> Result<
-        (
-            Vec<lapis_desktop_client::ConversationRecord>,
-            Option<lapis_editor_core::ConversationId>,
-        ),
-        lapis_workspace::WorkspaceError,
-    > {
+    ) -> Result<lapis_desktop_client::ConversationState, lapis_workspace::WorkspaceError> {
         Ok(Default::default())
     }
 
     fn save(
         &self,
+        _: &lapis_desktop_client::ConversationState,
+        _: &[lapis_desktop_client::Project],
         _: &[lapis_desktop_client::ConversationRecord],
         _: &lapis_editor_core::ConversationId,
     ) -> Result<(), lapis_workspace::WorkspaceError> {
@@ -394,9 +384,9 @@ pub(crate) fn run_native_smoke(
         this.update(cx, |root, cx| {
             let expected = root.shell.read(cx).view_state();
             let active = saved_view
-                .0
+                .1
                 .iter()
-                .find(|record| record.id == saved_view.1)
+                .find(|record| Some(&record.id) == saved_view.2.as_ref())
                 .expect("recorded active conversation");
             assert_eq!(active.view, expected);
             eprintln!("SMOKE deferred view persistence retries after reconciliation OK");
