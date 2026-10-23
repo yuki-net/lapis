@@ -16,6 +16,24 @@ impl Shell {
     /// Composes the persistent application header, separating app content (left/center/right)
     /// from OS window controls (minimize/maximize/close).
     pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        #[cfg(all(feature = "hot-reload", debug_assertions))]
+        {
+            subsecond::HotFn::current(Self::render_header_hot).call((self, cx))
+        }
+
+        #[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+        {
+            self.render_header_content(cx)
+        }
+    }
+
+    #[cfg(all(feature = "hot-reload", debug_assertions))]
+    #[inline(never)]
+    fn render_header_hot(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        self.render_header_content(cx).into_any_element()
+    }
+
+    fn render_header_content(&self, cx: &mut Context<Self>) -> impl IntoElement {
         apply_drag_region(
             div()
                 .h(tokens::size::TITLE_BAR_HEIGHT)

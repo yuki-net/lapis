@@ -5,6 +5,9 @@ edition.workspace = true
 description.workspace = true
 license.workspace = true
 
+[features]
+hot-reload = ["lapis-desktop-ui/hot-reload"]
+
 [dependencies]
 lapis-host = { path = "../../../backend/host" }
 lapis-desktop-client = { path = "../client" }
