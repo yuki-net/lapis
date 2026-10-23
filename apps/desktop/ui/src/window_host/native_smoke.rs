@@ -577,6 +577,8 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap()
             .unwrap();
+        // NewWindowはworker完了後に開くため、独立Root生成を待ってから検査する。
+        wait_for(&this, cx, Some(3)).await;
         let (handle, peer) = this
             .update(cx, |root, cx| {
                 let own_id = cx.entity_id();
