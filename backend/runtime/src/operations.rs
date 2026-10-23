@@ -42,7 +42,11 @@ impl WorkspaceOperations {
     fn git(&self) -> Result<&dyn GitBackend, BackendStateError> {
         self.git.as_deref().ok_or(BackendStateError::Unsupported)
     }
-    fn worktree(&self, root: &Path, id: &TaskId) -> Result<TaskWorktree, BackendStateError> {
+    pub(crate) fn worktree(
+        &self,
+        root: &Path,
+        id: &TaskId,
+    ) -> Result<TaskWorktree, BackendStateError> {
         require_safe_id(id.as_str())?;
         self.git()?
             .worktrees(root)
@@ -218,6 +222,23 @@ impl WorkspaceOperations {
         root: &Path,
     ) -> Result<Outcome, BackendStateError> {
         match operation {
+            Operation::GitAction { worktree, request } => {
+                let directory = worktree
+                    .as_ref()
+                    .map(|id| self.worktree(root, id).map(|tree| tree.path))
+                    .transpose()?
+                    .unwrap_or_else(|| root.to_owned());
+                self.require_repository(&directory)?;
+                if let Some(path) = request.action.path() {
+                    let path = lapis_client_api::WorkspaceRelativePath::parse(path)
+                        .map_err(|_| BackendStateError::WorkspaceDenied)?;
+                    crate::WorkspacePathResolver::new(directory.clone())?
+                        .resolve_scoped_path(&path)?;
+                }
+                Ok(Outcome::GitAction(
+                    self.git()?.execute(&directory, request).map_err(problem)?,
+                ))
+            }
             Operation::GitStatus { worktree } => {
                 let directory = worktree
                     .as_ref()

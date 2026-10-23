@@ -20,6 +20,16 @@ pub(crate) struct TerminalRegistry {
 }
 
 impl TerminalRegistry {
+    pub(crate) fn active_in(&self, root: &Path) -> bool {
+        self.resources.values().any(|resource| {
+            resource.cwd_path.starts_with(root)
+                && !matches!(
+                    resource.status,
+                    TerminalStatus::Exited | TerminalStatus::Terminated | TerminalStatus::Failed
+                )
+        })
+    }
+
     pub(crate) fn new(backend: Option<Arc<dyn TerminalBackend>>) -> Self {
         Self {
             backend,
@@ -44,6 +54,7 @@ impl TerminalRegistry {
         let backend_id = backend.start_with_shell(cwd, size.columns, size.rows, request.shell)?;
         let mut resource =
             TerminalResource::new(terminal_id.clone(), backend_id, workspace_id.clone(), size);
+        resource.cwd_path = cwd.to_owned();
         resource.cwd = request.cwd.clone();
         resource.attached_sessions.insert(session_id.clone());
         let snapshot = resource.snapshot(workspace_id);
@@ -269,6 +280,7 @@ struct TerminalResource {
     terminal_id: TerminalId,
     backend_id: BackendTerminalId,
     workspace_id: WorkspaceId,
+    cwd_path: std::path::PathBuf,
     cwd: Option<WorkspaceRelativePath>,
     status: TerminalStatus,
     size: TerminalSize,
@@ -291,6 +303,7 @@ impl TerminalResource {
             terminal_id,
             backend_id,
             workspace_id,
+            cwd_path: std::path::PathBuf::new(),
             cwd: None,
             status: TerminalStatus::Running,
             size,

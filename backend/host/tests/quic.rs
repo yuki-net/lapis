@@ -445,6 +445,16 @@ fn normal_pairing_cannot_register_folders_or_transfer_documents() {
             panic!("guest must not transfer documents")
         };
         assert_eq!(denied.code.as_str(), FORBIDDEN);
+        let ResponseBody::Error(denied) = request(
+            &mut client,
+            4,
+            RequestBody::HostWorktree(lapis_editor_core::TaskId::new("unknown")),
+        )
+        .await
+        else {
+            panic!("guest must not resolve Host filesystem paths")
+        };
+        assert_eq!(denied.code.as_str(), FORBIDDEN);
     });
 }
 

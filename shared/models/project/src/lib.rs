@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use lapis_editor_core::ProjectId;
+use lapis_editor_core::{ProjectId, TaskId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +63,16 @@ pub struct TaskEnvironment {
     project: ProjectId,
     primary: PathBuf,
     sub: Option<PathBuf>,
+    #[serde(default)]
+    primary_worktree: Option<WorktreeBinding>,
+    #[serde(default)]
+    sub_worktree: Option<WorktreeBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorktreeBinding {
+    pub id: TaskId,
+    pub root: PathBuf,
 }
 
 impl TaskEnvironment {
@@ -82,6 +92,8 @@ impl TaskEnvironment {
             project: project.id.clone(),
             primary,
             sub,
+            primary_worktree: None,
+            sub_worktree: None,
         })
     }
 
@@ -101,14 +113,71 @@ impl TaskEnvironment {
         self.sub.as_deref()
     }
     pub fn root(&self, role: SourceRole) -> Option<&Path> {
+        self.worktree(role)
+            .map(|binding| binding.root.as_path())
+            .or_else(|| self.source_root(role))
+    }
+    pub fn source_root(&self, role: SourceRole) -> Option<&Path> {
         match role {
             SourceRole::Primary => Some(&self.primary),
             SourceRole::Sub => self.sub(),
         }
     }
+    pub fn worktree(&self, role: SourceRole) -> Option<&WorktreeBinding> {
+        match role {
+            SourceRole::Primary => self.primary_worktree.as_ref(),
+            SourceRole::Sub => self.sub_worktree.as_ref(),
+        }
+    }
+    pub fn set_worktree(
+        &mut self,
+        role: SourceRole,
+        binding: Option<WorktreeBinding>,
+    ) -> Result<(), &'static str> {
+        if self.source_root(role).is_none() {
+            return Err("このTaskにSubはありません");
+        }
+        if binding.as_ref().is_some_and(|binding| {
+            binding.root.as_os_str().is_empty()
+                || binding.id.as_str().is_empty()
+                || !binding
+                    .id
+                    .as_str()
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        }) {
+            return Err("Worktreeの参照が不正です");
+        }
+        let other = match role {
+            SourceRole::Primary => SourceRole::Sub,
+            SourceRole::Sub => SourceRole::Primary,
+        };
+        let next = binding
+            .as_ref()
+            .map(|binding| binding.root.as_path())
+            .or_else(|| self.source_root(role));
+        if next == self.root(other) {
+            return Err("PrimaryとSubは同じ環境を選択できません");
+        }
+        match role {
+            SourceRole::Primary => self.primary_worktree = binding,
+            SourceRole::Sub => self.sub_worktree = binding,
+        }
+        Ok(())
+    }
     pub fn validate(&self, project: &Project) -> bool {
+        let Ok(_) = Self::new(project, self.primary.clone(), self.sub.clone()) else {
+            return false;
+        };
+        let mut checked = self.clone();
         self.project == project.id
-            && Self::new(project, self.primary.clone(), self.sub.clone()).is_ok()
+            && checked
+                .set_worktree(SourceRole::Primary, self.primary_worktree.clone())
+                .is_ok()
+            && (self.sub.is_none() && self.sub_worktree.is_none()
+                || checked
+                    .set_worktree(SourceRole::Sub, self.sub_worktree.clone())
+                    .is_ok())
     }
 }
 

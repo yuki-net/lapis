@@ -182,6 +182,108 @@ fn closing_workspace_uses_a_scratch_record_and_keeps_the_task_draft() {
             .is_none()
     );
 }
+
+#[test]
+fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_succeed_first() {
+    use lapis_desktop_client::{
+        ConversationRecord, ConversationRepository, ConversationState, Project,
+    };
+    use lapis_editor_core::ConversationId;
+    use lapis_workspace::WorkspaceError;
+    struct Repository {
+        inner: LocalConversationRepository,
+        fail: std::sync::atomic::AtomicBool,
+    }
+    impl ConversationRepository for Repository {
+        fn load(&self) -> Result<ConversationState, WorkspaceError> {
+            self.inner.load()
+        }
+        fn save(
+            &self,
+            expected: &ConversationState,
+            projects: &[Project],
+            records: &[ConversationRecord],
+            active: &ConversationId,
+        ) -> Result<(), WorkspaceError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(WorkspaceError::new("injected save failure"));
+            }
+            self.inner.save(expected, projects, records, active)
+        }
+    }
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    git(&root, &["init", "-b", "main"]);
+    git(&root, &["config", "user.name", "Lapis Test"]);
+    git(&root, &["config", "user.email", "test@example.invalid"]);
+    git(
+        &root,
+        &[
+            "-c",
+            "core.hooksPath=",
+            "commit",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    );
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(root.join("editor.json"))),
+        host.documents(),
+    );
+    editor.open_workspace(root.clone()).unwrap();
+    let repository = Arc::new(Repository {
+        inner: LocalConversationRepository::new(root.join("tasks.json")),
+        fail: Default::default(),
+    });
+    let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
+    let connection = host.git();
+    let workspace = editor.workspace_id().unwrap().clone();
+    let tree = connection.create_worktree(&workspace).unwrap().worktree_id;
+    let path = connection.open_worktree(&workspace, &tree).unwrap();
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), None)
+        .unwrap();
+    assert_eq!(tasks.active_record().unwrap().parked_sources.len(), 1);
+    repository
+        .fail
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert!(
+        tasks
+            .discard_worktree(&mut editor, connection.as_ref(), &tree)
+            .is_err()
+    );
+    assert!(path.is_dir());
+    assert_eq!(tasks.active_record().unwrap().parked_sources.len(), 1);
+    repository
+        .fail
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    std::fs::write(path.join("untracked.txt"), "keep").unwrap();
+    assert!(
+        tasks
+            .discard_worktree(&mut editor, connection.as_ref(), &tree)
+            .is_err()
+    );
+    assert!(path.is_dir());
+    assert_eq!(tasks.active_record().unwrap().parked_sources.len(), 1);
+    let restored = ConversationSession::new(repository.clone(), Default::default());
+    assert_eq!(restored.active_record().unwrap().parked_sources.len(), 1);
+    std::fs::remove_file(path.join("untracked.txt")).unwrap();
+    tasks
+        .discard_worktree(&mut editor, connection.as_ref(), &tree)
+        .unwrap();
+    assert!(!path.exists());
+    assert!(tasks.active_record().unwrap().parked_sources.is_empty());
+    let reloaded = ConversationSession::new(repository, Default::default());
+    assert!(reloaded.load_error().is_none());
+    assert!(reloaded.active_record().unwrap().parked_sources.is_empty());
+}
 impl WorkspaceDialog for NoDialog {
     fn choose_workspace_path(&self) -> Option<PathBuf> {
         None
@@ -189,6 +291,212 @@ impl WorkspaceDialog for NoDialog {
     fn choose_save_path(&self, _: &str) -> Option<PathBuf> {
         None
     }
+}
+
+fn git(root: &std::path::Path, args: &[&str]) {
+    let mut command = std::process::Command::new("git");
+    command.current_dir(root).args(args);
+    for name in [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_COMMON_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_PREFIX",
+    ] {
+        command.env_remove(name);
+    }
+    if let Some(parent) = root.parent() {
+        command.env("GIT_CEILING_DIRECTORIES", parent);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "{args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
+    let directory = tempfile::tempdir().unwrap();
+    let primary = directory.path().join("primary");
+    let sub = directory.path().join("sub");
+    let tree_path = directory.path().join("topic");
+    for root in [&primary, &sub] {
+        std::fs::create_dir(root).unwrap();
+        git(root, &["init", "-b", "main"]);
+        git(root, &["config", "user.name", "Lapis Test"]);
+        git(root, &["config", "user.email", "test@example.invalid"]);
+        git(root, &["config", "core.autocrlf", "false"]);
+        git(
+            root,
+            &[
+                "config",
+                "core.hooksPath",
+                directory.path().join("no-hooks").to_str().unwrap(),
+            ],
+        );
+        std::fs::write(root.join("note.ts"), "base").unwrap();
+        git(root, &["add", "note.ts"]);
+        git(root, &["commit", "-m", "initial"]);
+    }
+    git(
+        &primary,
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "topic",
+            tree_path.to_str().unwrap(),
+        ],
+    );
+    let primary = primary.canonicalize().unwrap();
+    let sub = sub.canonicalize().unwrap();
+    let tree_path = tree_path.canonicalize().unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(
+            directory.path().join("editor.json"),
+        )),
+        host.documents(),
+    );
+    editor.open_workspace(primary.clone()).unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(
+        directory.path().join("tasks.json"),
+    ));
+    let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
+    let project = tasks.projects()[0].id().clone();
+    tasks
+        .register_source(&mut editor, &project, sub.clone())
+        .unwrap();
+    let task = tasks
+        .create_task(&mut editor, &project, primary.clone(), Some(sub.clone()))
+        .unwrap();
+    let connection = host.git();
+    let trees = connection
+        .worktrees(editor.workspace_id().unwrap())
+        .unwrap();
+    assert_eq!(trees.len(), 1);
+    let tree = trees[0].worktree_id.clone();
+    editor.open_path(primary.join("note.ts")).unwrap();
+    editor.replace_range(0..4, "primary draft").unwrap();
+    let primary_document = editor.active_document_id().cloned();
+    let mut terminal = TerminalSession::new(host.terminals());
+    let id = terminal.start(&primary, 80, 24).unwrap();
+    tasks
+        .capture(&mut editor, Default::default(), None, terminal.terminals())
+        .unwrap();
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    assert_eq!(editor.workspace_root(), Some(tree_path.as_path()));
+    assert_eq!(tasks.active_id(), &task);
+    assert_eq!(tasks.projects()[0].sources().count(), 2);
+    assert!(tasks.active_record().unwrap().terminals.is_empty());
+    editor.open_path(tree_path.join("note.ts")).unwrap();
+    editor.replace_range(0..4, "worktree draft").unwrap();
+    let tree_document = editor.active_document_id().cloned();
+    tasks
+        .capture(&mut editor, Default::default(), None, &[])
+        .unwrap();
+    tasks.switch_source(&mut editor, SourceRole::Sub).unwrap();
+    assert!(
+        tasks
+            .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+            .is_err()
+    );
+    assert_eq!(editor.workspace_root(), Some(sub.as_path()));
+    tasks
+        .switch_source(&mut editor, SourceRole::Primary)
+        .unwrap();
+    assert_eq!(editor.active_text().unwrap(), "worktree draft");
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), None)
+        .unwrap();
+    assert_eq!(editor.active_document_id(), primary_document.as_ref());
+    assert_eq!(editor.active_text().unwrap(), "primary draft");
+    assert_eq!(tasks.active_record().unwrap().terminals.len(), 1);
+    let saved = tasks.active_record().unwrap().clone();
+    assert!(
+        tasks
+            .discard_worktree(&mut editor, connection.as_ref(), &tree)
+            .is_err()
+    );
+    assert!(tree_path.is_dir());
+    assert_eq!(tasks.active_record().unwrap(), &saved);
+    terminal
+        .input(
+            &id,
+            if cfg!(windows) {
+                "Write-Output ('WORKTREE_' + 'ALIVE')\r"
+            } else {
+                "printf 'WORKTREE_%s\\n' ALIVE\r"
+            },
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        terminal.refresh().unwrap();
+        if terminal.terminals()[0]
+            .output
+            .windows(b"WORKTREE_ALIVE".len())
+            .any(|bytes| bytes == b"WORKTREE_ALIVE")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "Worktree切替後のPTYが入力に応答しません"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    assert_eq!(editor.active_document_id(), tree_document.as_ref());
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    let original_tree = connection
+        .worktrees(editor.workspace_id().unwrap())
+        .unwrap()
+        .remove(0)
+        .worktree_id;
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&original_tree))
+        .unwrap();
+    assert_eq!(editor.workspace_root(), Some(primary.as_path()));
+    assert!(
+        tasks
+            .active_record()
+            .unwrap()
+            .environment
+            .as_ref()
+            .unwrap()
+            .worktree(SourceRole::Primary)
+            .is_none()
+    );
+    assert_eq!(editor.active_text().unwrap(), "primary draft");
+    tasks
+        .set_worktree(&mut editor, connection.as_ref(), Some(&tree))
+        .unwrap();
+    let reloaded = ConversationSession::new(repository, Default::default());
+    assert!(reloaded.load_error().is_none());
+    reloaded.restore_active(&mut editor).unwrap();
+    assert_eq!(editor.active_text().unwrap(), "worktree draft");
+    assert_eq!(
+        std::fs::read_to_string(primary.join("note.ts")).unwrap(),
+        "base"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree_path.join("note.ts")).unwrap(),
+        "base"
+    );
+    terminal.terminate(&id).unwrap();
 }
 
 #[test]

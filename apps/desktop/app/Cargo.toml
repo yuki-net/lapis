@@ -17,5 +17,6 @@ lapis-task = { path = "../../../shared/models/task" }
 rfd.workspace = true
 
 [dev-dependencies]
+lapis-editor-core = { path = "../../../shared/models/editor-core" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 tempfile.workspace = true

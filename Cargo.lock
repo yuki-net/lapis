@@ -3101,6 +3101,7 @@ version = "0.1.0"
 dependencies = [
  "lapis-desktop-client",
  "lapis-desktop-ui",
+ "lapis-editor-core",
  "lapis-host",
  "lapis-persistence",
  "lapis-platform",

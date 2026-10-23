@@ -11,7 +11,7 @@ use crate::{
         conversation::{ConversationEvent, ConversationFeature},
         editor::{Editor, EditorEvent},
         files::FilesFeature,
-        git::GitFeature,
+        git::{GitEvent, GitFeature, GitInputRequest},
         id,
         preview::PreviewFeature,
         problems::{ProblemsEvent, ProblemsFeature},
@@ -69,6 +69,7 @@ pub(crate) struct DesktopRoot {
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
     path_request: Option<PathRequest>,
+    git_input: Option<GitInputRequest>,
     _subscriptions: Vec<Subscription>,
     double_shift: DoubleShiftDetector,
     pub(crate) worker: ClientWorker<DocumentClient>,
@@ -106,6 +107,7 @@ impl DesktopRoot {
             conversation: services.conversation,
             lsp: services.lsp,
             edit_chain: EditChain::default(),
+            git: services.git.backend(),
             snapshot_sequence: 0,
             document_owners: Default::default(),
         });
@@ -132,12 +134,23 @@ impl DesktopRoot {
                             if let Some(PathRequest::CloseSave(sender)) = root.path_request.take() {
                                 let _ = sender.send(Err("保存をキャンセルしました".into()));
                             }
+                            root.git_input = None;
                             root.shell.update(cx, |shell, cx| {
                                 shell.close_panel(PanelPosition::Right, cx)
                             });
                         }
                         QuickSearchEvent::SubmitPath(path) => {
                             root.submit_path(path, cx);
+                            root.shell.update(cx, |shell, cx| {
+                                shell.close_panel(PanelPosition::Right, cx)
+                            });
+                        }
+                        QuickSearchEvent::SubmitText(text) => {
+                            if let Some(request) = root.git_input.take() {
+                                root.git.update(cx, |git, cx| {
+                                    git.complete_input(request, text, window, cx)
+                                });
+                            }
                             root.shell.update(cx, |shell, cx| {
                                 shell.close_panel(PanelPosition::Right, cx)
                             });
@@ -223,6 +236,79 @@ impl DesktopRoot {
             }),
             cx.subscribe_in(&search, window, |root, _, command, window, cx| {
                 root.command(command.clone(), window, cx)
+            }),
+            cx.subscribe_in(&git, window, |root, _, event, window, cx| match event {
+                GitEvent::DiscardWorktree {
+                    workspace,
+                    worktree,
+                } => {
+                    let workspace = workspace.clone();
+                    let worktree = worktree.clone();
+                    let view = root.persisted_view(cx);
+                    root.editor.update(cx, |editor, cx| {
+                        editor.submit(
+                            false,
+                            move |client| {
+                                if client.editor.workspace_id() != Some(&workspace) {
+                                    return Err("Worktreeの操作対象が変わっています".into());
+                                }
+                                client.persist_view(view)?;
+                                client
+                                    .conversation
+                                    .discard_worktree(
+                                        &mut client.editor,
+                                        client.git.as_ref(),
+                                        &worktree,
+                                    )
+                                    .map_err(|error| error.to_string())
+                            },
+                            cx,
+                        )
+                    });
+                }
+                GitEvent::OpenWorktree {
+                    workspace,
+                    worktree,
+                } => {
+                    let workspace = workspace.clone();
+                    let worktree = worktree.clone();
+                    let view = root.persisted_view(cx);
+                    root.editor.update(cx, |editor, cx| {
+                        editor.submit(
+                            false,
+                            move |client| {
+                                if client.editor.workspace_id() != Some(&workspace) {
+                                    return Err(
+                                        "Taskの操作対象が変わっています。選び直してください".into(),
+                                    );
+                                }
+                                client.persist_view(view)?;
+                                client
+                                    .conversation
+                                    .set_worktree(
+                                        &mut client.editor,
+                                        client.git.as_ref(),
+                                        worktree.as_ref(),
+                                    )
+                                    .map_err(|error| error.to_string())
+                            },
+                            cx,
+                        )
+                    });
+                }
+                GitEvent::Input(request) => {
+                    root.git_input = Some(request.clone());
+                    root.quick_search
+                        .update(cx, |search, cx| search.open_input(request.title(), "", cx));
+                    root.shell.update(cx, |shell, cx| {
+                        shell.activate_panel_view(
+                            PanelPosition::Right,
+                            id::VIEW_COMMAND_SEARCH.into(),
+                            cx,
+                        )
+                    });
+                    window.focus(&root.quick_search.read(cx).focus_handle());
+                }
             }),
             cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
                 EditorEvent::Snapshot(snapshot) => {
@@ -412,6 +498,7 @@ impl DesktopRoot {
             settings,
             quick_search,
             path_request: None,
+            git_input: None,
             _subscriptions: subscriptions,
             double_shift: DoubleShiftDetector::default(),
             worker,
@@ -455,7 +542,19 @@ impl DesktopRoot {
         self.files
             .update(cx, |files, cx| files.update(snapshot, cx));
         self.git.update(cx, |git, cx| {
-            git.set_workspace(snapshot.workspace.clone(), cx)
+            git.set_workspace(snapshot.workspace.clone(), cx);
+            let role = record
+                .map(|record| format!("{:?}", record.source_role))
+                .unwrap_or_default();
+            git.set_context_label(format!(
+                "{} · {}",
+                role,
+                snapshot
+                    .root
+                    .as_ref()
+                    .map(|root| root.display().to_string())
+                    .unwrap_or_default()
+            ));
         });
         self.tasks.update(cx, |tasks, cx| {
             tasks.set_conversation(snapshot.conversation.clone());
@@ -801,6 +900,7 @@ impl DesktopRoot {
                 .update(cx, |settings, cx| settings.select_theme(theme, cx)),
             UiCommand::QuickSearch => {
                 self.path_request = None;
+                self.git_input = None;
                 self.double_shift.reset();
                 let provider = CommandSearchProvider::from_registry(
                     &features::bundled_registry(),

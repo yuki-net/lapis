@@ -137,6 +137,28 @@ impl BackendClient {
             _ => Err(BackendServiceError::Unavailable),
         }
     }
+    pub(crate) fn open_worktree(
+        &self,
+        workspace: WorkspaceId,
+        worktree: lapis_editor_core::TaskId,
+    ) -> Result<PathBuf, BackendServiceError> {
+        let path = match &self.source {
+            Source::Embedded(host) => host.service().worktree_path(workspace, worktree)?,
+            Source::Local(_) => {
+                match self
+                    .connect_workspace(workspace)?
+                    .request(RequestBody::HostWorktree(worktree))?
+                {
+                    ResponseBody::HostWorktree(path) => PathBuf::from(path),
+                    _ => return Err(BackendServiceError::Unavailable),
+                }
+            }
+            // Remote credentialに管理権限や任意Workspaceへの接続権限を追加しない。
+            Source::Quic { .. } => return Err(BackendServiceError::Unavailable),
+        };
+        self.register_workspace(&path)?;
+        Ok(path)
+    }
     pub(crate) fn roots(&self) -> Result<Vec<(PathBuf, WorkspaceId)>, BackendServiceError> {
         match &self.source {
             Source::Embedded(host) => Ok(host

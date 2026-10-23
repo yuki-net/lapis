@@ -79,7 +79,14 @@ impl DoubleShiftDetector {
 pub(crate) enum QuickSearchEvent {
     Execute(CommandId),
     SubmitPath(String),
+    SubmitText(String),
     Dismiss,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QuickInputMode {
+    Path,
+    Text,
 }
 
 type QuickSearchEventHandler = dyn Fn(QuickSearchEvent, &mut Window, &mut Context<QuickSearch>);
@@ -88,6 +95,7 @@ pub(crate) struct QuickSearch {
     focus_handle: FocusHandle,
     query: String,
     path_title: Option<String>,
+    input_mode: Option<QuickInputMode>,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -109,6 +117,7 @@ impl QuickSearch {
             focus_handle: cx.focus_handle(),
             query: String::new(),
             path_title: None,
+            input_mode: None,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -128,6 +137,7 @@ impl QuickSearch {
 
     pub(crate) fn open(&mut self, provider: CommandSearchProvider, cx: &mut Context<Self>) {
         self.path_title = None;
+        self.input_mode = None;
         self.provider = provider;
         self.query.clear();
         self.selected_range = 0..0;
@@ -139,6 +149,18 @@ impl QuickSearch {
 
     pub(crate) fn open_path(&mut self, title: &str, suggested: &str, cx: &mut Context<Self>) {
         self.path_title = Some(title.to_owned());
+        self.input_mode = Some(QuickInputMode::Path);
+        self.query = suggested.to_owned();
+        self.selected_range = 0..self.query.len();
+        self.selection_reversed = false;
+        self.marked_range = None;
+        self.refresh_matches();
+        cx.notify();
+    }
+
+    pub(crate) fn open_input(&mut self, title: &str, suggested: &str, cx: &mut Context<Self>) {
+        self.path_title = Some(title.to_owned());
+        self.input_mode = Some(QuickInputMode::Text);
         self.query = suggested.to_owned();
         self.selected_range = 0..self.query.len();
         self.selection_reversed = false;
@@ -271,9 +293,16 @@ impl QuickSearch {
     }
 
     fn confirm(&mut self, _: &SearchConfirm, window: &mut Window, cx: &mut Context<Self>) {
-        if self.path_title.is_some() {
-            (self.on_event)(QuickSearchEvent::SubmitPath(self.query.clone()), window, cx);
-            return;
+        match self.input_mode {
+            Some(QuickInputMode::Path) => {
+                (self.on_event)(QuickSearchEvent::SubmitPath(self.query.clone()), window, cx);
+                return;
+            }
+            Some(QuickInputMode::Text) => {
+                (self.on_event)(QuickSearchEvent::SubmitText(self.query.clone()), window, cx);
+                return;
+            }
+            None => {}
         }
         if let Some(command) = selected_command(&self.matches, self.selected_index) {
             (self.on_event)(QuickSearchEvent::Execute(command), window, cx);

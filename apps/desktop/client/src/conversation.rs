@@ -1,5 +1,6 @@
 use super::*;
 use lapis_editor_core::ProjectId;
+use lapis_git::GitConnection;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
@@ -19,6 +20,15 @@ pub struct ConversationRecord {
     pub other_terminals: Vec<RestoredTerminal>,
     #[serde(default)]
     pub other_execution: Option<ExecutionId>,
+    #[serde(default)]
+    pub parked_sources: Vec<TaskSourceState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TaskSourceState {
+    pub workspace: WorkspaceSnapshot,
+    pub terminals: Vec<RestoredTerminal>,
+    pub selected_execution: Option<ExecutionId>,
 }
 
 pub type ConversationState = (
@@ -68,6 +78,7 @@ impl ConversationSession {
                 other_workspace: None,
                 other_terminals: Vec::new(),
                 other_execution: None,
+                parked_sources: Vec::new(),
             });
         }
         let active = active
@@ -107,6 +118,21 @@ impl ConversationSession {
                     .any(|other| other.id() == project.id())
         }) || records.iter().enumerate().any(|(index, record)| {
             records[..index].iter().any(|other| other.id == record.id)
+                || record
+                    .parked_sources
+                    .iter()
+                    .enumerate()
+                    .any(|(index, source)| {
+                        source.workspace.root.is_none()
+                            || source.workspace.root == record.workspace.root
+                            || record
+                                .other_workspace
+                                .as_ref()
+                                .is_some_and(|other| other.root == source.workspace.root)
+                            || record.parked_sources[..index]
+                                .iter()
+                                .any(|other| other.workspace.root == source.workspace.root)
+                    })
                 || record.environment.as_ref().is_some_and(|environment| {
                     !projects.iter().any(|project| environment.validate(project))
                         || environment.root(record.source_role) != record.workspace.root.as_deref()
@@ -385,6 +411,7 @@ impl ConversationSession {
             other_workspace: None,
             other_terminals: Vec::new(),
             other_execution: None,
+            parked_sources: Vec::new(),
         });
         self.active = id.clone();
         if let Err(error) = self.save(editor) {
@@ -595,10 +622,199 @@ impl ConversationSession {
                 other_workspace: None,
                 other_terminals: Vec::new(),
                 other_execution: None,
+                parked_sources: Vec::new(),
             });
             session.active = id.clone();
             session.save(editor)?;
             Ok(session.active.clone())
+        })
+    }
+
+    pub fn discard_worktree(
+        &mut self,
+        editor: &mut EditorSession,
+        git: &dyn GitConnection,
+        id: &TaskId,
+    ) -> Result<(), WorkspaceError> {
+        let workspace = editor
+            .workspace_id()
+            .cloned()
+            .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
+        let root = git
+            .open_worktree(&workspace, id)
+            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        // 別Windowが保存したTaskと、まだ保存していない手元の状態の両方を保護する。
+        let (_, saved_records, _) = self.repository.load()?;
+        let in_use = |record: &ConversationRecord| {
+            std::iter::once(&record.workspace)
+                .chain(record.other_workspace.iter())
+                .any(|workspace| {
+                    workspace
+                        .root
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(&root))
+                })
+                || record.parked_sources.iter().any(|source| {
+                    source
+                        .workspace
+                        .root
+                        .as_ref()
+                        .is_some_and(|path| path.starts_with(&root))
+                        && (source
+                            .workspace
+                            .open_documents
+                            .iter()
+                            .any(|document| document.draft_content.is_some())
+                            || source.terminals.iter().any(|terminal| {
+                                !matches!(
+                                    terminal.status,
+                                    lapis_terminal::TerminalStatus::Exited
+                                        | lapis_terminal::TerminalStatus::Failed
+                                )
+                            }))
+                })
+                || record.environment.as_ref().is_some_and(|environment| {
+                    [SourceRole::Primary, SourceRole::Sub]
+                        .into_iter()
+                        .any(|role| {
+                            environment
+                                .root(role)
+                                .is_some_and(|path| path.starts_with(&root))
+                        })
+                })
+        };
+        for record in self.records.iter().chain(&saved_records) {
+            if in_use(record) {
+                return Err(WorkspaceError::new(format!(
+                    "Task「{}」が作業状態を保持しています。Worktreeは削除できません",
+                    record.title
+                )));
+            }
+        }
+        let mut previous = self.clone();
+        let mut next = self.clone();
+        // 保存を先に確定する。失敗した場合はGitの削除を開始しない。
+        for record in &mut next.records {
+            record.parked_sources.retain(|source| {
+                !source
+                    .workspace
+                    .root
+                    .as_ref()
+                    .is_some_and(|path| path.starts_with(&root))
+            });
+        }
+        next.save(editor)?;
+        *self = next;
+        if editor.workspace_id() != Some(&workspace)
+            || self.records.iter().any(|record| {
+                in_use(record)
+                    || record.parked_sources.iter().any(|source| {
+                        source
+                            .workspace
+                            .root
+                            .as_ref()
+                            .is_some_and(|path| path.starts_with(&root))
+                    })
+            })
+        {
+            return Err(WorkspaceError::new(
+                "Taskの保存状態が更新されました。Worktree削除をやり直してください",
+            ));
+        }
+        if let Err(error) = git.discard_worktree(&workspace, id) {
+            previous.persisted = self.persisted.clone();
+            let restored = previous.save(editor);
+            *self = previous;
+            return Err(WorkspaceError::new(match restored {
+                Ok(()) => error.to_string(),
+                Err(restore) => format!(
+                    "{error}。退避状態は手元に保持していますが、保存の復旧に失敗しました: {restore}"
+                ),
+            }));
+        }
+        Ok(())
+    }
+
+    pub fn set_worktree(
+        &mut self,
+        editor: &mut EditorSession,
+        git: &dyn GitConnection,
+        worktree: Option<&TaskId>,
+    ) -> Result<(), WorkspaceError> {
+        let record = self
+            .active_record()
+            .ok_or_else(|| WorkspaceError::new("Taskが見つかりません"))?;
+        let environment = record
+            .environment
+            .as_ref()
+            .ok_or_else(|| WorkspaceError::new("作業Taskを選択してください"))?;
+        let role = record.source_role;
+        if environment.root(role) != editor.workspace_root() {
+            return Err(WorkspaceError::new("Taskの操作対象が変わっています"));
+        }
+        if worktree.is_some() && environment.worktree(role).map(|binding| &binding.id) == worktree {
+            return Ok(());
+        }
+        let source = environment
+            .source_root(role)
+            .ok_or_else(|| WorkspaceError::new("Taskの作業環境がありません"))?
+            .to_owned();
+        let binding = worktree
+            .map(|id| {
+                let source_id = Self::validate_source(editor, &source)?;
+                let workspace = Self::validate_source(editor, editor.workspace_root().unwrap())?;
+                let root = git
+                    .open_worktree(&workspace, id)
+                    .map_err(|error| WorkspaceError::new(error.to_string()))?;
+                if Self::validate_source(editor, &root)? == source_id {
+                    return Ok(None);
+                }
+                Ok::<_, WorkspaceError>(Some(lapis_project::WorktreeBinding {
+                    id: id.clone(),
+                    root,
+                }))
+            })
+            .transpose()?
+            .flatten();
+        let mut environment = environment.clone();
+        environment
+            .set_worktree(role, binding)
+            .map_err(WorkspaceError::new)?;
+        let root = environment.root(role).unwrap().to_owned();
+        if editor.workspace_root() == Some(root.as_path()) {
+            return Ok(());
+        }
+        self.transaction(editor, move |session, editor| {
+            let record = session
+                .records
+                .iter_mut()
+                .find(|record| record.id == session.active)
+                .unwrap();
+            let next = record
+                .parked_sources
+                .iter()
+                .position(|source| source.workspace.root.as_deref() == Some(root.as_path()))
+                .map(|index| record.parked_sources.remove(index))
+                .unwrap_or_else(|| TaskSourceState {
+                    workspace: WorkspaceSnapshot {
+                        root: Some(root),
+                        ..Default::default()
+                    },
+                    terminals: Vec::new(),
+                    selected_execution: None,
+                });
+            let previous = TaskSourceState {
+                workspace: editor.snapshot(),
+                terminals: record.terminals.clone(),
+                selected_execution: record.selected_execution.clone(),
+            };
+            editor.restore_snapshot(next.workspace)?;
+            record.workspace = editor.snapshot();
+            record.terminals = next.terminals;
+            record.selected_execution = next.selected_execution;
+            record.environment = Some(environment);
+            record.parked_sources.push(previous);
+            session.save(editor)
         })
     }
 

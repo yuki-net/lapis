@@ -182,6 +182,16 @@ pub struct GitSession {
     worktrees: Vec<lapis_git::WorktreeSnapshot>,
     worktree_statuses: Vec<(TaskId, lapis_git::GitSnapshot)>,
     selected_diff: Option<lapis_git::GitDiffSnapshot>,
+    inspection: Option<GitDiffSelection>,
+    action_output: String,
+    stash_refs: Vec<(u32, String)>,
+}
+
+#[derive(Clone)]
+pub struct GitDiffSelection {
+    pub worktree: Option<TaskId>,
+    pub path: String,
+    pub staged: bool,
 }
 
 impl GitSession {
@@ -193,6 +203,9 @@ impl GitSession {
             worktrees: Vec::new(),
             worktree_statuses: Vec::new(),
             selected_diff: None,
+            inspection: None,
+            action_output: String::new(),
+            stash_refs: Vec::new(),
         }
     }
 
@@ -227,7 +240,7 @@ impl GitSession {
             || self.worktrees != worktrees
             || self.worktree_statuses != worktree_statuses;
         if self.workspace_id.as_ref() != Some(workspace) {
-            self.selected_diff = None;
+            self.clear_inspection();
         }
         self.workspace_id = Some(workspace.clone());
         self.status = Some(status);
@@ -271,6 +284,85 @@ impl GitSession {
 
     pub fn backend(&self) -> Arc<dyn lapis_git::GitConnection> {
         self.backend.clone()
+    }
+
+    pub fn clear_inspection(&mut self) {
+        self.selected_diff = None;
+        self.inspection = None;
+        self.action_output.clear();
+        self.stash_refs.clear();
+    }
+    pub fn inspection(&self) -> Option<&GitDiffSelection> {
+        self.inspection.as_ref()
+    }
+    pub fn action_output(&self) -> &str {
+        &self.action_output
+    }
+    pub fn stash_refs(&self) -> &[(u32, String)] {
+        &self.stash_refs
+    }
+    pub fn create_worktree(&mut self) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        self.backend.create_worktree(&workspace)?;
+        self.refresh(&workspace)?;
+        Ok(())
+    }
+    pub fn execute_action(
+        &mut self,
+        worktree: Option<&TaskId>,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        let action = request.action.clone();
+        let result = self.backend.execute(&workspace, worktree, request);
+        if let Ok(result) = &result {
+            self.clear_inspection();
+            if matches!(action, lapis_git::GitAction::Stashes) {
+                self.stash_refs = result
+                    .output
+                    .lines()
+                    .filter_map(|line| {
+                        let mut fields = line.split_whitespace();
+                        let index = fields
+                            .next()?
+                            .strip_prefix("stash@{")?
+                            .strip_suffix('}')?
+                            .parse()
+                            .ok()?;
+                        Some((index, fields.next()?.to_owned()))
+                    })
+                    .collect();
+            }
+            if let lapis_git::GitAction::Diff { path, staged } = action {
+                self.inspection = Some(GitDiffSelection {
+                    worktree: worktree.cloned(),
+                    path: path.clone(),
+                    staged,
+                });
+                self.selected_diff = Some(lapis_git::GitDiffSnapshot {
+                    path,
+                    additions: result
+                        .output
+                        .lines()
+                        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+                        .count(),
+                    deletions: result
+                        .output
+                        .lines()
+                        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+                        .count(),
+                    patch: result.output.clone(),
+                    binary: result.output.contains("GIT binary patch"),
+                });
+            } else {
+                self.action_output = result.output.clone();
+            }
+        }
+        // Merge/Pull等の失敗でも競合中のStatusへ更新する。
+        let refreshed = self.refresh(&workspace);
+        result?;
+        refreshed?;
+        Ok(())
     }
 }
 
