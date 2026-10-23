@@ -50,12 +50,14 @@ pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOpe
 pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use request::RequestBody;
 pub use response::ResponseBody;
-pub use revision::{EventSequence, Revision, TerminalOutputSequence};
+pub use revision::{EventSequence, Revision};
 pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot};
 pub use terminal::{
-    TerminalCommandResponse, TerminalInputRequest, TerminalResizeRequest, TerminalShell,
-    TerminalSize, TerminalSnapshot, TerminalStartRequest, TerminalStartResponse, TerminalStatus,
-    TerminalTerminateRequest,
+    TerminalCell, TerminalColor, TerminalCommandResponse, TerminalCursor, TerminalDelta,
+    TerminalInput, TerminalInputRequest, TerminalKey, TerminalKeyEvent, TerminalModes,
+    TerminalModifiers, TerminalResizeRequest, TerminalRevision, TerminalRow, TerminalRowUpdate,
+    TerminalScreen, TerminalShell, TerminalSize, TerminalSnapshot, TerminalStartRequest,
+    TerminalStartResponse, TerminalStatus, TerminalTerminateRequest,
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
