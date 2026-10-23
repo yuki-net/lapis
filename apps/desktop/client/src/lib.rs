@@ -97,6 +97,10 @@ impl SettingsSession {
 
 /// ネイティブダイアログを利用するユースケース側の契約。
 pub trait WorkspaceDialog: Send + Sync {
+    /// Remoteではnative pickerを使わず、この名前空間内の相対pathを入力する。
+    fn path_scope(&self) -> Option<PathBuf> {
+        None
+    }
     fn choose_workspace_path(&self) -> Option<PathBuf>;
     fn choose_file_path(&self) -> Option<PathBuf> {
         None
@@ -157,183 +161,19 @@ impl Default for ConversationViewState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoredTerminal {
+    #[serde(default)]
+    pub id: Option<TerminalId>,
     pub cwd: PathBuf,
     pub status: TerminalStatus,
     pub columns: u16,
     pub rows: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ConversationRecord {
-    pub id: ConversationId,
-    pub title: String,
-    pub workspace: WorkspaceSnapshot,
-    pub view: ConversationViewState,
-    pub selected_execution: Option<ExecutionId>,
-    pub terminals: Vec<RestoredTerminal>,
-}
-
-pub trait ConversationRepository: Send + Sync {
-    fn load(&self) -> Result<(Vec<ConversationRecord>, Option<ConversationId>), WorkspaceError>;
-    fn save(
-        &self,
-        records: &[ConversationRecord],
-        active: &ConversationId,
-    ) -> Result<(), WorkspaceError>;
-}
-
-pub struct ConversationSession {
-    repository: Arc<dyn ConversationRepository>,
-    records: Vec<ConversationRecord>,
-    active: ConversationId,
-    next_id: u64,
-}
-
-impl ConversationSession {
-    pub fn new(repository: Arc<dyn ConversationRepository>, initial: WorkspaceSnapshot) -> Self {
-        let loaded = repository.load().ok();
-        let (mut records, active) = loaded.unwrap_or_default();
-        if records.is_empty() {
-            records.push(ConversationRecord {
-                id: ConversationId::new("conversation-1"),
-                title: "Conversation 1".to_owned(),
-                workspace: initial,
-                view: ConversationViewState::default(),
-                selected_execution: None,
-                terminals: Vec::new(),
-            });
-        }
-        let active = active
-            .filter(|id| records.iter().any(|record| &record.id == id))
-            .unwrap_or_else(|| records[0].id.clone());
-        let next_id = records.len() as u64 + 1;
-        Self {
-            repository,
-            records,
-            active,
-            next_id,
-        }
-    }
-
-    pub fn records(&self) -> &[ConversationRecord] {
-        &self.records
-    }
-    pub fn active_id(&self) -> &ConversationId {
-        &self.active
-    }
-    pub fn active_record(&self) -> Option<&ConversationRecord> {
-        self.records.iter().find(|record| record.id == self.active)
-    }
-
-    pub fn active_view(&self) -> ConversationViewState {
-        self.records
-            .iter()
-            .find(|record| record.id == self.active)
-            .map(|record| record.view.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn restore_active(
-        &self,
-        editor: &mut EditorSession,
-    ) -> Result<ConversationViewState, WorkspaceError> {
-        let record = self
-            .records
-            .iter()
-            .find(|record| record.id == self.active)
-            .ok_or_else(|| WorkspaceError::new("Conversation が見つかりません"))?;
-        editor.restore_snapshot(record.workspace.clone())?;
-        Ok(record.view.clone())
-    }
-
-    /// 開いた Project が最後に保存した Conversation と同じ場合だけ、その状態を復元する。
-    /// アプリ起動直後に無条件で以前の Project を開かないための境界でもある。
-    pub fn restore_matching_workspace(
-        &self,
-        editor: &mut EditorSession,
-    ) -> Result<Option<ConversationViewState>, WorkspaceError> {
-        let Some(current_root) = editor.workspace_root() else {
-            return Ok(None);
-        };
-        let Some(record) = self.active_record() else {
-            return Ok(None);
-        };
-        if record.workspace.root.as_deref() != Some(current_root) {
-            return Ok(None);
-        }
-        editor.restore_snapshot(record.workspace.clone())?;
-        Ok(Some(record.view.clone()))
-    }
-
-    pub fn capture(
-        &mut self,
-        editor: &EditorSession,
-        view: ConversationViewState,
-        selected_execution: Option<ExecutionId>,
-        terminals: &[TerminalSnapshot],
-    ) -> Result<(), WorkspaceError> {
-        if let Some(record) = self
-            .records
-            .iter_mut()
-            .find(|record| record.id == self.active)
-        {
-            record.workspace = editor.snapshot();
-            record.view = view;
-            record.selected_execution = selected_execution;
-            record.terminals = terminals
-                .iter()
-                .map(|terminal| RestoredTerminal {
-                    cwd: terminal.cwd.clone(),
-                    status: terminal.status,
-                    columns: terminal.columns,
-                    rows: terminal.rows,
-                })
-                .collect();
-        }
-        self.repository.save(&self.records, &self.active)
-    }
-
-    pub fn create(
-        &mut self,
-        editor: &EditorSession,
-        view: ConversationViewState,
-    ) -> Result<ConversationId, WorkspaceError> {
-        let id = ConversationId::new(format!("conversation-{}", self.next_id));
-        self.next_id += 1;
-        self.records.push(ConversationRecord {
-            id: id.clone(),
-            title: format!("Conversation {}", self.records.len() + 1),
-            workspace: editor.snapshot(),
-            view,
-            selected_execution: None,
-            terminals: Vec::new(),
-        });
-        self.active = id.clone();
-        self.repository.save(&self.records, &self.active)?;
-        Ok(id)
-    }
-
-    pub fn switch(
-        &mut self,
-        id: &ConversationId,
-        editor: &mut EditorSession,
-    ) -> Result<ConversationViewState, WorkspaceError> {
-        let record = self
-            .records
-            .iter()
-            .find(|record| &record.id == id)
-            .cloned()
-            .ok_or_else(|| WorkspaceError::new("Conversation が見つかりません"))?;
-        editor.restore_snapshot(record.workspace)?;
-        self.active = id.clone();
-        self.repository.save(&self.records, &self.active)?;
-        Ok(record.view)
-    }
-
-    pub fn repository(&self) -> Arc<dyn ConversationRepository> {
-        self.repository.clone()
-    }
-}
+mod conversation;
+pub use conversation::{
+    ConversationRecord, ConversationRepository, ConversationSession, ConversationState,
+};
+pub use lapis_project::{Project, SourceRole, TaskEnvironment};
 
 pub struct GitSession {
     backend: Arc<dyn lapis_git::GitConnection>,
@@ -342,6 +182,16 @@ pub struct GitSession {
     worktrees: Vec<lapis_git::WorktreeSnapshot>,
     worktree_statuses: Vec<(TaskId, lapis_git::GitSnapshot)>,
     selected_diff: Option<lapis_git::GitDiffSnapshot>,
+    inspection: Option<GitDiffSelection>,
+    action_output: String,
+    stash_refs: Vec<(u32, String)>,
+}
+
+#[derive(Clone)]
+pub struct GitDiffSelection {
+    pub worktree: Option<TaskId>,
+    pub path: String,
+    pub staged: bool,
 }
 
 impl GitSession {
@@ -353,6 +203,9 @@ impl GitSession {
             worktrees: Vec::new(),
             worktree_statuses: Vec::new(),
             selected_diff: None,
+            inspection: None,
+            action_output: String::new(),
+            stash_refs: Vec::new(),
         }
     }
 
@@ -387,7 +240,7 @@ impl GitSession {
             || self.worktrees != worktrees
             || self.worktree_statuses != worktree_statuses;
         if self.workspace_id.as_ref() != Some(workspace) {
-            self.selected_diff = None;
+            self.clear_inspection();
         }
         self.workspace_id = Some(workspace.clone());
         self.status = Some(status);
@@ -432,6 +285,85 @@ impl GitSession {
     pub fn backend(&self) -> Arc<dyn lapis_git::GitConnection> {
         self.backend.clone()
     }
+
+    pub fn clear_inspection(&mut self) {
+        self.selected_diff = None;
+        self.inspection = None;
+        self.action_output.clear();
+        self.stash_refs.clear();
+    }
+    pub fn inspection(&self) -> Option<&GitDiffSelection> {
+        self.inspection.as_ref()
+    }
+    pub fn action_output(&self) -> &str {
+        &self.action_output
+    }
+    pub fn stash_refs(&self) -> &[(u32, String)] {
+        &self.stash_refs
+    }
+    pub fn create_worktree(&mut self) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        self.backend.create_worktree(&workspace)?;
+        self.refresh(&workspace)?;
+        Ok(())
+    }
+    pub fn execute_action(
+        &mut self,
+        worktree: Option<&TaskId>,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        let action = request.action.clone();
+        let result = self.backend.execute(&workspace, worktree, request);
+        if let Ok(result) = &result {
+            self.clear_inspection();
+            if matches!(action, lapis_git::GitAction::Stashes) {
+                self.stash_refs = result
+                    .output
+                    .lines()
+                    .filter_map(|line| {
+                        let mut fields = line.split_whitespace();
+                        let index = fields
+                            .next()?
+                            .strip_prefix("stash@{")?
+                            .strip_suffix('}')?
+                            .parse()
+                            .ok()?;
+                        Some((index, fields.next()?.to_owned()))
+                    })
+                    .collect();
+            }
+            if let lapis_git::GitAction::Diff { path, staged } = action {
+                self.inspection = Some(GitDiffSelection {
+                    worktree: worktree.cloned(),
+                    path: path.clone(),
+                    staged,
+                });
+                self.selected_diff = Some(lapis_git::GitDiffSnapshot {
+                    path,
+                    additions: result
+                        .output
+                        .lines()
+                        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+                        .count(),
+                    deletions: result
+                        .output
+                        .lines()
+                        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+                        .count(),
+                    patch: result.output.clone(),
+                    binary: result.output.contains("GIT binary patch"),
+                });
+            } else {
+                self.action_output = result.output.clone();
+            }
+        }
+        // Merge/Pull等の失敗でも競合中のStatusへ更新する。
+        let refreshed = self.refresh(&workspace);
+        result?;
+        refreshed?;
+        Ok(())
+    }
 }
 
 pub struct TerminalSession {
@@ -451,20 +383,29 @@ impl TerminalSession {
         &self.terminals
     }
 
-    /// 前回終了時の端末一覧を、再実行せず参照専用の要約として復元する。
+    /// 保存済みidentityだけを再アタッチする。shellやCLIを再実行しない。
     pub fn restore_summaries(&mut self, terminals: &[RestoredTerminal]) {
         self.terminals = terminals
             .iter()
             .enumerate()
             .map(|(index, terminal)| TerminalSnapshot {
-                id: TerminalId::new(format!("restored-terminal-{}", index + 1)),
+                id: terminal
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| TerminalId::new(format!("restored-terminal-{}", index + 1))),
                 cwd: terminal.cwd.clone(),
-                status: TerminalStatus::Exited,
+                status: if terminal.id.is_some() {
+                    TerminalStatus::Disconnected
+                } else {
+                    TerminalStatus::Exited
+                },
                 columns: terminal.columns,
                 rows: terminal.rows,
                 output: Vec::new(),
                 output_sequence: 0,
                 output_truncated: false,
+                output_offset: 0,
+                screen: None,
             })
             .collect();
     }
@@ -488,7 +429,21 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError> {
-        let id = self.backend.start(cwd, columns, rows)?;
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+    }
+
+    pub fn start_with_shell(
+        &mut self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        let id = self.backend.start_with_shell(cwd, columns, rows, shell)?;
+        if let Ok(snapshot) = self.backend.attach(cwd, &id) {
+            self.terminals.push(snapshot);
+            return Ok(id);
+        }
         self.terminals.push(TerminalSnapshot {
             id: id.clone(),
             cwd: cwd.to_owned(),
@@ -498,8 +453,28 @@ impl TerminalSession {
             output: Vec::new(),
             output_sequence: 0,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         });
         Ok(id)
+    }
+
+    pub fn discover(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        self.backend.list(cwd)
+    }
+
+    pub fn attach(&mut self, cwd: &Path, id: &TerminalId) -> Result<(), TerminalError> {
+        let snapshot = self.backend.attach(cwd, id)?;
+        if let Some(existing) = self
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.id == *id)
+        {
+            *existing = snapshot;
+        } else {
+            self.terminals.push(snapshot);
+        }
+        Ok(())
     }
 
     pub fn input(&self, id: &TerminalId, text: &str) -> Result<(), TerminalError> {
@@ -530,7 +505,20 @@ impl TerminalSession {
 
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
+        let mut attach_error = None;
         for terminal in &mut self.terminals {
+            if terminal.status == TerminalStatus::Disconnected {
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                        continue;
+                    }
+                }
+            }
             if terminal.status != TerminalStatus::Running {
                 continue;
             }
@@ -544,6 +532,9 @@ impl TerminalSession {
                         }
                         const OUTPUT_LIMIT: usize = 256 * 1024;
                         if snapshot.output.len() > OUTPUT_LIMIT {
+                            snapshot.output_offset = snapshot
+                                .output_offset
+                                .saturating_add((snapshot.output.len() - OUTPUT_LIMIT) as u64);
                             snapshot
                                 .output
                                 .drain(..snapshot.output.len() - OUTPUT_LIMIT);
@@ -561,6 +552,8 @@ impl TerminalSession {
                         if terminal.output.len() > OUTPUT_LIMIT {
                             let start = terminal.output.len() - OUTPUT_LIMIT;
                             terminal.output.drain(..start);
+                            terminal.output_offset =
+                                terminal.output_offset.saturating_add(start as u64);
                             terminal.output_truncated = true;
                         }
                     }
@@ -571,8 +564,34 @@ impl TerminalSession {
                 }
                 changed = true;
             }
+            if terminal.screen.as_ref().is_some_and(|screen| {
+                if screen.output_end < terminal.output_offset {
+                    return true;
+                }
+                let suffix = (screen.output_end - terminal.output_offset) as usize;
+                terminal.output.get(suffix..).is_some_and(|bytes| {
+                    bytes
+                        .windows(7)
+                        .any(|window| window == b"\x1b[?1049" || window == b"\x1b[?1047")
+                        || bytes.windows(5).any(|window| window == b"\x1b[?47")
+                })
+            }) {
+                // buffer欠落や通常/代替画面の切替時は、Hostの現在画面を取り直す。
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                    }
+                }
+            }
         }
-        Ok(changed)
+        match attach_error {
+            Some(error) => Err(TerminalError::new(error)),
+            None => Ok(changed),
+        }
     }
 
     pub fn terminate(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
@@ -1035,6 +1054,56 @@ impl OpenDocument {
     }
 }
 
+/// 一括closeの確認済み進捗。永続化失敗でも閉鎖済みIDを保持する。
+#[derive(Debug, Default)]
+pub struct DocumentCloseProgress {
+    pub closed: Vec<DocumentId>,
+}
+
+#[derive(Debug)]
+pub struct DocumentCloseFailure {
+    pub progress: DocumentCloseProgress,
+    pub failed: Option<DocumentId>,
+    pub remaining: Vec<DocumentId>,
+    pub stage: DocumentCloseStage,
+    pub error: DocumentError,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentCloseStage {
+    Validation,
+    Close,
+    Persistence,
+}
+
+impl std::fmt::Display for DocumentCloseFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stage = match self.stage {
+            DocumentCloseStage::Validation => "確認",
+            DocumentCloseStage::Close => "閉鎖",
+            DocumentCloseStage::Persistence => "保存",
+        };
+        let target = self.failed.as_ref().map_or("なし", |id| id.as_str());
+        let closed = if self.progress.closed.is_empty() {
+            "なし".to_string()
+        } else {
+            self.progress
+                .closed
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        write!(
+            f,
+            "{stage}段階で失敗しました（対象: {target}、閉鎖済み: {closed}）: {}",
+            self.error
+        )
+    }
+}
+
+impl std::error::Error for DocumentCloseFailure {}
+
 /// UIからDocumentと外部I/Oを分離する、複数文書Workspace編集セッション。
 pub struct EditorSession {
     documents: Vec<OpenDocument>,
@@ -1102,6 +1171,28 @@ impl EditorSession {
 
     pub fn workspace_root(&self) -> Option<&Path> {
         self.workspace_root.as_deref()
+    }
+
+    pub fn workspace_path(
+        &self,
+        expected_root: &Path,
+        input: &str,
+    ) -> Result<PathBuf, WorkspaceError> {
+        if self.workspace_root() != Some(expected_root) {
+            return Err(WorkspaceError::new(
+                "作業環境が切り替わりました。操作をやり直してください",
+            ));
+        }
+        if input.is_empty()
+            || Path::new(input)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(WorkspaceError::new(
+                "Workspace内の相対pathを指定してください",
+            ));
+        }
+        Ok(expected_root.join(input))
     }
 
     pub fn workspace_id(&self) -> Option<&WorkspaceId> {
@@ -1433,6 +1524,40 @@ impl EditorSession {
         self.repository.clone()
     }
 
+    /// 残すattachmentを再確立する。一部の取得失敗でも他のcache更新は保持する。
+    pub fn refresh_documents(&mut self) -> Result<(), DocumentError> {
+        let mut failure = None;
+        for open in &mut self.documents {
+            match self.document_connection.attach(&open.id) {
+                Ok(cache) => open.update(cache),
+                Err(error) => {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+        failure.map_or(Ok(()), Err)
+    }
+
+    /// I/Oを行わず、Clientが最後に確認したattachmentと文書cacheを返す。
+    pub fn document_caches(&self) -> Vec<DocumentCache> {
+        self.documents
+            .iter()
+            .map(|open| DocumentCache {
+                id: open.id.clone(),
+                document: open.document.clone(),
+                can_undo: open.can_undo,
+                can_redo: open.can_redo,
+                external_change: open.external_change,
+                reused: true,
+            })
+            .collect()
+    }
+
+    /// 復旧情報の保存完了を終了barrierとして確認する。
+    pub fn persist_documents(&self) -> Result<(), WorkspaceError> {
+        self.persist()
+    }
+
     pub fn document_connection(&self) -> Arc<dyn DocumentConnection> {
         self.document_connection.clone()
     }
@@ -1531,6 +1656,14 @@ impl EditorSession {
         let Some(index) = self.documents.iter().position(|open| &open.id == id) else {
             return Ok(false);
         };
+        // 確認後の変更にDiscardの承認を流用しない。
+        let current = self.document_connection.attach(id)?;
+        let expected = self.documents[index].document.revision();
+        self.documents[index].update(current);
+        if self.documents[index].document.revision() != expected {
+            self.persist_best_effort();
+            return Err(DocumentError::conflict("確認後に文書が変更されました"));
+        }
         if self.documents[index].document.is_dirty()
             && disposition == DocumentCloseDisposition::PreserveChanges
         {
@@ -1538,7 +1671,9 @@ impl EditorSession {
                 "未保存の文書は確認なしに閉じられません",
             ));
         }
-        if disposition == DocumentCloseDisposition::DiscardChanges {
+        if disposition == DocumentCloseDisposition::DiscardChanges
+            && self.documents[index].document.is_dirty()
+        {
             match self
                 .document_connection
                 .discard(id, self.documents[index].document.revision())
@@ -1553,7 +1688,13 @@ impl EditorSession {
                 }
             }
         }
-        self.document_connection.close(id)?;
+        if let Err(error) = self.document_connection.close(id) {
+            // 応答不明のcloseを成功と推測せず、残す意図で再attachする。
+            if let Ok(cache) = self.document_connection.attach(id) {
+                self.documents[index].update(cache);
+            }
+            return Err(error);
+        }
         let was_active = self.active == Some(index);
         self.documents.remove(index);
         self.active = if self.documents.is_empty() {
@@ -1568,12 +1709,8 @@ impl EditorSession {
         Ok(true)
     }
 
-    /// Validates all close decisions, then closes the documents in order.
-    ///
-    /// Each tuple contains a document ID, its approved disposition, and the revision
-    /// confirmed by the caller. Complete any required approval and saving first.
-    /// Validation errors leave all tabs open. Discard and close errors propagate;
-    /// documents already closed before such an error remain closed.
+    /// 全判断を検証してから順番に閉じる。失敗時も確認済みcloseを返す。
+    /// Close段階の失敗IDは応答不明を含む。再attach・再確認してから再試行する。
     pub fn close_documents(
         &mut self,
         documents: &[(
@@ -1581,12 +1718,56 @@ impl EditorSession {
             DocumentCloseDisposition,
             lapis_document::Revision,
         )],
-    ) -> Result<(), DocumentError> {
-        self.validate_document_closes(documents)?;
-        for (id, disposition, _) in documents {
-            self.close_document(id, *disposition)?;
+    ) -> Result<DocumentCloseProgress, DocumentCloseFailure> {
+        let mut progress = DocumentCloseProgress::default();
+        for (index, decision) in documents.iter().enumerate() {
+            if let Err(error) = self.validate_document_closes(std::slice::from_ref(decision)) {
+                return Err(DocumentCloseFailure {
+                    progress,
+                    failed: Some(decision.0.clone()),
+                    remaining: documents
+                        .iter()
+                        .enumerate()
+                        .filter(|(other, _)| *other != index)
+                        .map(|(_, (id, _, _))| id.clone())
+                        .collect(),
+                    stage: DocumentCloseStage::Validation,
+                    error,
+                });
+            }
         }
-        Ok(())
+        for (index, (id, disposition, revision)) in documents.iter().enumerate() {
+            // 事前検証後の変更にもDiscardの承認を流用しない。
+            let result = self
+                .validate_document_closes(&[(id.clone(), *disposition, *revision)])
+                .and_then(|()| self.close_document(id, *disposition));
+            match result {
+                Ok(true) => progress.closed.push(id.clone()),
+                Ok(false) => {}
+                Err(error) => {
+                    return Err(DocumentCloseFailure {
+                        progress,
+                        failed: Some(id.clone()),
+                        remaining: documents[index + 1..]
+                            .iter()
+                            .map(|(id, _, _)| id.clone())
+                            .collect(),
+                        stage: DocumentCloseStage::Close,
+                        error,
+                    });
+                }
+            }
+        }
+        if let Err(error) = self.persist_documents() {
+            return Err(DocumentCloseFailure {
+                progress,
+                failed: None,
+                remaining: Vec::new(),
+                stage: DocumentCloseStage::Persistence,
+                error: DocumentError::io(error.to_string()),
+            });
+        }
+        Ok(progress)
     }
 
     /// Checks approved revisions and refreshes matching open-document caches without closing tabs.
@@ -1604,6 +1785,9 @@ impl EditorSession {
         )],
     ) -> Result<(), DocumentError> {
         for (id, disposition, revision) in documents {
+            if !self.documents.iter().any(|open| &open.id == id) {
+                return Err(DocumentError::conflict("対象文書は既に閉じられています"));
+            }
             let current = self.document_connection.attach(id)?;
             if current.document.revision() != *revision {
                 return Err(DocumentError::conflict("確認後に文書が変更されました"));
@@ -1642,6 +1826,25 @@ impl EditorSession {
         let cache = self.refresh_after_error(result)?;
         self.required_document_mut()?.update(cache);
         self.persist_best_effort();
+        Ok(DocumentAction::Completed)
+    }
+
+    pub fn save_document_to(&mut self, path: PathBuf) -> Result<(), DocumentError> {
+        let open = self.required_document()?;
+        let result = self
+            .document_connection
+            .save(&open.id, open.document.revision(), Some(path));
+        let cache = self.refresh_after_error(result)?;
+        self.required_document_mut()?.update(cache);
+        self.persist_best_effort();
+        Ok(())
+    }
+
+    pub fn save_document_as(&mut self) -> Result<DocumentAction, DocumentError> {
+        let Some(path) = self.file_dialog.choose_save_path(&self.display_name()) else {
+            return Ok(DocumentAction::Cancelled);
+        };
+        self.save_document_to(path)?;
         Ok(DocumentAction::Completed)
     }
 
@@ -2044,6 +2247,7 @@ mod tests {
     struct MemoryState {
         snapshot: Mutex<Option<WorkspaceSnapshot>>,
         saves: std::sync::atomic::AtomicUsize,
+        fail: std::sync::atomic::AtomicBool,
     }
 
     impl WorkspaceStateRepository for MemoryState {
@@ -2052,6 +2256,9 @@ mod tests {
         }
 
         fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(WorkspaceError::new("disk full"));
+            }
             self.saves
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             *self.snapshot.lock().unwrap() = Some(snapshot.clone());
@@ -2060,21 +2267,21 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MemoryConversationState(Mutex<(Vec<ConversationRecord>, Option<ConversationId>)>);
+    struct MemoryConversationState(Mutex<ConversationState>);
 
     impl ConversationRepository for MemoryConversationState {
-        fn load(
-            &self,
-        ) -> Result<(Vec<ConversationRecord>, Option<ConversationId>), WorkspaceError> {
+        fn load(&self) -> Result<ConversationState, WorkspaceError> {
             Ok(self.0.lock().unwrap().clone())
         }
 
         fn save(
             &self,
+            _expected: &ConversationState,
+            projects: &[Project],
             records: &[ConversationRecord],
             active: &ConversationId,
         ) -> Result<(), WorkspaceError> {
-            *self.0.lock().unwrap() = (records.to_vec(), Some(active.clone()));
+            *self.0.lock().unwrap() = (projects.to_vec(), records.to_vec(), Some(active.clone()));
             Ok(())
         }
     }
@@ -2197,6 +2404,62 @@ mod tests {
 
         fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
             Ok(())
+        }
+    }
+
+    struct SelectiveAttachBackend;
+
+    impl TerminalBackend for SelectiveAttachBackend {
+        fn start(
+            &self,
+            _cwd: &Path,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalId, TerminalError> {
+            panic!("refresh must never start a terminal")
+        }
+
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+            unreachable!("refresh does not send terminal input")
+        }
+
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            unreachable!("refresh does not resize terminals")
+        }
+
+        fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            if id.as_str() == "recoverable" {
+                Ok(vec![TerminalEvent::Output(
+                    lapis_terminal::TerminalOutput {
+                        sequence: 1,
+                        data: b"later terminal".to_vec(),
+                    },
+                )])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
+            unreachable!("refresh does not terminate terminals")
+        }
+
+        fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+            if id.as_str() == "unavailable" {
+                return Err(TerminalError::new("terminal is still unavailable"));
+            }
+            Ok(TerminalSnapshot {
+                id: id.clone(),
+                cwd: cwd.to_owned(),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+                output: Vec::new(),
+                output_sequence: 0,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
+            })
         }
     }
 
@@ -2583,11 +2846,11 @@ mod tests {
         let mut conversations = ConversationSession::new(store.clone(), editor.snapshot());
         let first = conversations.active_id().clone();
         conversations
-            .capture(&editor, ConversationViewState::default(), None, &[])
+            .capture(&mut editor, ConversationViewState::default(), None, &[])
             .unwrap();
         let second = conversations
             .create(
-                &editor,
+                &mut editor,
                 ConversationViewState {
                     active_tool: "search".to_owned(),
                     ..ConversationViewState::default()
@@ -2596,7 +2859,7 @@ mod tests {
             .unwrap();
         editor.open_path(second_path).unwrap();
         conversations
-            .capture(&editor, conversations.active_view(), None, &[])
+            .capture(&mut editor, conversations.active_view(), None, &[])
             .unwrap();
 
         let first_view = conversations.switch(&first, &mut editor).unwrap();
@@ -2610,8 +2873,8 @@ mod tests {
         assert_eq!(editor.display_name(), "second.md");
 
         let persisted = store.load().unwrap();
-        assert_eq!(persisted.0.len(), 2);
-        assert_eq!(persisted.1, Some(second));
+        assert_eq!(persisted.1.len(), 2);
+        assert_eq!(persisted.2, Some(second));
     }
 
     #[test]
@@ -2619,6 +2882,7 @@ mod tests {
         let backend = Arc::new(UnavailableTerminalBackend);
         let mut terminals = TerminalSession::new(backend);
         terminals.restore_summaries(&[RestoredTerminal {
+            id: None,
             cwd: PathBuf::from("repo"),
             status: TerminalStatus::Running,
             columns: 120,
@@ -2629,6 +2893,110 @@ mod tests {
         assert_eq!(terminals.terminals()[0].status, TerminalStatus::Exited);
         assert!(terminals.terminals()[0].output.is_empty());
         assert!(!terminals.refresh().unwrap());
+
+        terminals.restore_summaries(&[RestoredTerminal {
+            id: Some(TerminalId::new("live-host-terminal")),
+            cwd: PathBuf::from("repo"),
+            status: TerminalStatus::Running,
+            columns: 80,
+            rows: 24,
+        }]);
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+        assert!(terminals.refresh().is_err());
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn terminal_refresh_continues_after_one_attach_failure() {
+        let mut terminals = TerminalSession::new(Arc::new(SelectiveAttachBackend));
+        terminals.restore_summaries(&[
+            RestoredTerminal {
+                id: Some(TerminalId::new("unavailable")),
+                cwd: PathBuf::from("first"),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            },
+            RestoredTerminal {
+                id: Some(TerminalId::new("recoverable")),
+                cwd: PathBuf::from("second"),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            },
+        ]);
+
+        let error = terminals
+            .refresh()
+            .expect_err("the failed attach is reported");
+        assert_eq!(error.to_string(), "terminal is still unavailable");
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+        assert_eq!(terminals.terminals()[1].status, TerminalStatus::Running);
+        assert_eq!(terminals.terminals()[1].output, b"later terminal");
+    }
+
+    #[test]
+    fn saved_terminal_identity_reattaches_without_starting_a_shell() {
+        struct AttachOnly;
+        impl TerminalBackend for AttachOnly {
+            fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+                panic!("restore must never start a process")
+            }
+            fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+                Ok(Vec::new())
+            }
+            fn terminate(&self, _: &TerminalId) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn attach(
+                &self,
+                cwd: &Path,
+                id: &TerminalId,
+            ) -> Result<TerminalSnapshot, TerminalError> {
+                assert_eq!(id.as_str(), "host-terminal");
+                Ok(TerminalSnapshot {
+                    id: id.clone(),
+                    cwd: cwd.to_owned(),
+                    status: TerminalStatus::Running,
+                    columns: 100,
+                    rows: 28,
+                    output: b"already running".to_vec(),
+                    output_sequence: 7,
+                    output_truncated: false,
+                    output_offset: 0,
+                    screen: None,
+                })
+            }
+        }
+        let mut session = TerminalSession::new(Arc::new(AttachOnly));
+        session.restore_summaries(&[RestoredTerminal {
+            id: Some(TerminalId::new("host-terminal")),
+            cwd: "repo".into(),
+            status: TerminalStatus::Running,
+            columns: 80,
+            rows: 24,
+        }]);
+        assert_eq!(session.terminals()[0].status, TerminalStatus::Disconnected);
+        session.refresh().unwrap();
+        assert_eq!(session.terminals()[0].id.as_str(), "host-terminal");
+        assert_eq!(session.terminals()[0].output, b"already running");
+        assert_eq!(session.terminals()[0].output_sequence, 7);
+        assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
     }
 
     #[test]

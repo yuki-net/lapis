@@ -28,7 +28,7 @@
 
 Desktopは招待ファイルから証明書と一回限りのtokenを取り込み、以後は証明書とcredentialを保存したprofileを使います。Windowsではユーザー単位DPAPI、Unixの開発・CIではprivate directory/fileで保護します。Local所有者情報は親子の匿名pipeだけで受け渡し、引数やログへ秘密を出しません。Local所有者の鍵はOSユーザーとHostの寿命に紐付き、Remote credentialとは期限を分けます。
 
-Local HostはPIDとOSのprocess開始情報の組で識別します。PID再利用または終了を確認した場合だけ起動し直し、通信失敗やprocess情報へのアクセス拒否では置換しません。開始情報のない旧Local記録で同じPIDが生存している場合も、誤置換を避けて明示的な再起動を案内します。
+管理Local Hostは、起動した子プロセスのPIDとの一致と、Host自身が終了まで保持する`local-v1.lease`の排他ロックで起動と寿命を確認します。OSのprocess開始情報は取得できる場合のみ記録します。OSがロックを解放していれば、古いPIDの再利用先へアクセスできなくても起動し直せます。ロックが保持されている間は通信失敗だけで置換しません。ロック情報のない旧Local記録はPIDと開始情報で確認し、同一性を証明できない場合は誤置換を避けて明示的な再起動を案内します。
 
 ## Clientの回復
 
@@ -48,6 +48,7 @@ Local HostはPIDとOSのprocess開始情報の組で識別します。PID再利�
 - 再接続では権限と実行状態を再確認し、古いClient cacheを最新のsnapshotに整合させます。
 - Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。
 - Terminal出力は順序とbyte表現を保ち、通信層で勝手に整形・除去しません。
+- Terminalの画面と標準的な端末問い合わせへの応答はHostのRuntimeが所有します。snapshotにはraw outputのbyte位置と画面状態を含め、出力の保持上限を超えても現在画面を復元します。Clientは画面の切替・buffer欠落時に再同期し、問い合わせへ重複応答しません。
 - Messageサイズ、request数、session数、timeoutなど、必要な資源上限を設けます。
 
 ## 最低限の確認項目

@@ -159,9 +159,98 @@ fn desktop_ports_reuse_one_independent_host_and_preserve_unsaved_documents_acros
         "const value = 1;"
     );
     assert!(moved.can_undo);
+    // 接続pickerでLocal profileを選んだ別画面も、仮想rootから同じ資源へ接続する。
+    let (remote, virtual_root, _) =
+        lapis_host::open_host_file(&state.path().join("local-v1.host"), state.path()).unwrap();
+    remote.workspaces().list_tree(&virtual_root).unwrap();
+    for _ in 0..16 {
+        remote.documents().workspace(&virtual_root).unwrap();
+        remote.workspaces().list_tree(&virtual_root).unwrap();
+    }
+    let remote_document = remote
+        .documents()
+        .open(&virtual_root.join("note.ts"))
+        .unwrap();
+    assert_eq!(
+        remote_document.document.content_for_save(),
+        "const value = 1;"
+    );
     assert_eq!(
         fs::read(state.path().join("local-v1.host")).unwrap(),
         record_before
+    );
+}
+
+#[test]
+fn managed_host_opens_verified_worktrees_and_shares_documents() {
+    let state = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let _cleanup = ManagedCleanup(state.path().to_owned());
+    for args in [
+        vec!["init"],
+        vec!["config", "user.name", "Test"],
+        vec!["config", "user.email", "test@example.invalid"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    fs::write(root.path().join("note.ts"), "base").unwrap();
+    for args in [vec!["add", "."], vec!["commit", "-m", "base"]] {
+        assert!(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(root.path())
+                .args(args)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    }
+    let client = backend(state.path());
+    let documents = client.documents();
+    let workspace = documents.workspace(root.path()).unwrap();
+    let git = client.git();
+    assert!(
+        git.open_worktree(&workspace, &lapis_editor_core::TaskId::new("unknown"))
+            .is_err()
+    );
+    let tree = git.create_worktree(&workspace).unwrap();
+    let path = git.open_worktree(&workspace, &tree.worktree_id).unwrap();
+    assert_ne!(path, root.path().canonicalize().unwrap());
+    let opened = documents.open(&path.join("note.ts")).unwrap();
+    documents
+        .edit(&opened.id, opened.document.revision(), 0..4, "draft")
+        .unwrap();
+    let second = backend(state.path());
+    let second_documents = second.documents();
+    let second_workspace = second_documents.workspace(root.path()).unwrap();
+    assert_eq!(
+        second
+            .git()
+            .open_worktree(&second_workspace, &tree.worktree_id)
+            .unwrap(),
+        path
+    );
+    assert_eq!(
+        second_documents
+            .open(&path.join("note.ts"))
+            .unwrap()
+            .document
+            .content_for_save(),
+        "draft"
+    );
+    assert_eq!(
+        fs::read_to_string(root.path().join("note.ts")).unwrap(),
+        "base"
     );
 }
 

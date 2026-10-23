@@ -27,7 +27,13 @@ fn main() {
             .get(2)
             .ok_or("Workspaceがありません")
             .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })
-            .and_then(|root| lapis_host::run_managed_host(std::path::Path::new(root)));
+            .and_then(|root| {
+                let directory = arguments.get(3).ok_or("Hostの状態フォルダがありません")?;
+                lapis_host::run_managed_host(
+                    std::path::Path::new(root),
+                    std::path::Path::new(directory),
+                )
+            });
         if result.is_err() {
             std::process::exit(1);
         }
@@ -83,7 +89,7 @@ fn main() {
         use lapis_desktop_client::WorkspaceStateRepository;
         let mut session = EditorSession::new_empty(
             host.workspaces(),
-            Arc::new(workspace_dialog::NativeWorkspaceDialog),
+            Arc::new(workspace_dialog::RemoteWorkspaceDialog(root.clone())),
             state.clone(),
             host.documents(),
         );
@@ -123,6 +129,34 @@ fn main() {
             std::process::exit(1);
         }
     }
+    let mut conversation_session = ConversationSession::new(
+        Arc::new(LocalConversationRepository::new(
+            startup.directory.join("conversations-v1.json"),
+        )),
+        session.snapshot(),
+    );
+    if let Some(root) = session.workspace_root().map(ToOwned::to_owned)
+        && conversation_session.load_error().is_none()
+        && conversation_session
+            .active_record()
+            .is_some_and(|record| record.workspace.root.as_ref() != Some(&root))
+        && let Err(error) = conversation_session.open_project(&mut session, root)
+    {
+        eprintln!("Project/Taskの復元に失敗しました: {error}");
+    }
+    let settings_session = SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
+        startup.directory.join("settings-v1.json"),
+    )))
+    .unwrap_or_else(|error| {
+        eprintln!("Global settings load failed: {error}");
+        SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
+            std::env::temp_dir().join("lapis-settings-fallback.json"),
+        )))
+        .expect("temporary global settings must be available")
+    });
+    if let Err(error) = conversation_session.restore_matching_workspace(&mut session) {
+        eprintln!("Conversation restore failed: {error}");
+    }
     if let Some(index) = option_index(&arguments, "--open-file") {
         let Some(path) = arguments.get(index + 1).map(std::path::PathBuf::from) else {
             eprintln!("Usage: lapis --open-file <path>");
@@ -141,24 +175,8 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let conversation_session = ConversationSession::new(
-        Arc::new(LocalConversationRepository::new(
-            startup.directory.join("conversations-v1.json"),
-        )),
-        session.snapshot(),
-    );
-    let settings_session = SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
-        startup.directory.join("settings-v1.json"),
-    )))
-    .unwrap_or_else(|error| {
-        eprintln!("Global settings load failed: {error}");
-        SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
-            std::env::temp_dir().join("lapis-settings-fallback.json"),
-        )))
-        .expect("temporary global settings must be available")
-    });
-    if let Err(error) = conversation_session.restore_matching_workspace(&mut session) {
-        eprintln!("Conversation restore failed: {error}");
+    if let Some(warning) = session.restore_warning() {
+        eprintln!("{warning}");
     }
     if let Some(root) = session.workspace_root() {
         host.register_workspace(root)

@@ -45,8 +45,12 @@ pub(crate) fn icon_button(id: impl Into<ElementId>, icon: IconName) -> Stateful<
     header_button(id, Icon::new(icon)).w(tokens::size::HEADER_BUTTON)
 }
 
-pub(crate) fn action_button(label: &'static str, primary: bool) -> gpui::Stateful<gpui::Div> {
-    button(label, label, ButtonSize::Sm)
+pub(crate) fn action_button(
+    label: impl Into<gpui::SharedString>,
+    primary: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let label = label.into();
+    button(label.clone(), label, ButtonSize::Sm)
         .px_2()
         .rounded(px(5.0))
         .border_1()

@@ -22,7 +22,6 @@ pub mod id {
     pub const FEATURE_FILES: &str = "bundled.files";
     pub const FEATURE_SEARCH: &str = "bundled.search";
     pub const FEATURE_GIT: &str = "bundled.git";
-    pub const FEATURE_HISTORY: &str = "bundled.history";
     pub const FEATURE_PREVIEW: &str = "bundled.preview";
     pub const FEATURE_ASSISTANT: &str = "bundled.assistant";
     pub const FEATURE_TERMINAL: &str = "bundled.terminal";
@@ -46,7 +45,7 @@ pub mod id {
     pub const VIEW_FILES: &str = "lapis.view.files";
     pub const VIEW_SEARCH: &str = "lapis.view.search";
     pub const VIEW_GIT: &str = "lapis.view.git";
-    pub const VIEW_HISTORY: &str = "lapis.view.history";
+    pub const VIEW_PROJECT_TASKS: &str = "lapis.view.project-tasks";
     pub const VIEW_PREVIEW: &str = "lapis.view.preview";
     pub const VIEW_ASSISTANT: &str = "lapis.view.assistant";
     pub const VIEW_TERMINAL: &str = "lapis.view.terminal";
@@ -81,7 +80,6 @@ pub fn bundled_registry() -> FeatureRegistry {
         files::descriptor(),
         search::descriptor(),
         git::descriptor(),
-        git::history_descriptor(),
         preview::descriptor(),
         tasks::descriptor(),
         terminal::descriptor(),
@@ -200,7 +198,7 @@ mod tests {
             id::VIEW_FILES,
             id::VIEW_SEARCH,
             id::VIEW_GIT,
-            id::VIEW_HISTORY,
+            id::VIEW_PROJECT_TASKS,
             id::VIEW_PREVIEW,
             id::VIEW_PROBLEMS,
             id::VIEW_OUTPUT,

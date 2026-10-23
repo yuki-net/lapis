@@ -38,6 +38,7 @@ use lapis_workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend,
 };
 use serde::{Deserialize, Serialize};
+mod git_action;
 
 #[derive(Clone, Default)]
 pub struct ConnectionGate(Arc<AtomicBool>);
@@ -146,6 +147,43 @@ fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminal
 
 impl TerminalBackend for LocalTerminalBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+    }
+
+    fn start_with_shell(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        use lapis_terminal::TerminalShell;
+        let cwd = shell_directory(cwd, shell)?;
+        let mut command = match shell {
+            #[cfg(windows)]
+            TerminalShell::Default | TerminalShell::PowerShell => {
+                let mut command = portable_pty::CommandBuilder::new("powershell.exe");
+                command.arg("-NoLogo");
+                command
+            }
+            #[cfg(windows)]
+            TerminalShell::Cmd => {
+                let mut command = portable_pty::CommandBuilder::new("cmd.exe");
+                command.arg("/D");
+                command
+            }
+            #[cfg(not(windows))]
+            TerminalShell::Default => portable_pty::CommandBuilder::new(
+                env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
+            ),
+            #[cfg(not(windows))]
+            TerminalShell::PowerShell => portable_pty::CommandBuilder::new("pwsh"),
+            #[cfg(not(windows))]
+            TerminalShell::Cmd => {
+                return Err(TerminalError::new("cmdはWindows Hostでのみ利用できます"));
+            }
+        };
+        command.cwd(cwd);
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
@@ -155,15 +193,6 @@ impl TerminalBackend for LocalTerminalBackend {
                 pixel_height: 0,
             })
             .map_err(|error| TerminalError::new(error.to_string()))?;
-        #[cfg(windows)]
-        let mut command = portable_pty::CommandBuilder::new("powershell.exe");
-        #[cfg(not(windows))]
-        let mut command = portable_pty::CommandBuilder::new(
-            env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
-        );
-        #[cfg(windows)]
-        command.args(["-NoLogo"]);
-        command.cwd(cwd);
         let child = pair
             .slave
             .spawn_command(command)
@@ -171,16 +200,6 @@ impl TerminalBackend for LocalTerminalBackend {
         let writer = pair
             .master
             .take_writer()
-            .map_err(|error| TerminalError::new(error.to_string()))?;
-        #[cfg(windows)]
-        let mut writer = writer;
-        // ConPTY asks the terminal emulator for its initial cursor position.  The
-        // current UI renders the byte stream directly, so answer this standard
-        // query here instead of exposing it as command input.
-        #[cfg(windows)]
-        writer
-            .write_all(b"\x1b[1;1R")
-            .and_then(|()| writer.flush())
             .map_err(|error| TerminalError::new(error.to_string()))?;
         let reader = pair
             .master
@@ -289,6 +308,34 @@ impl TerminalBackend for LocalTerminalBackend {
         terminal.exited = true;
         Ok(())
     }
+}
+
+fn shell_directory(
+    cwd: &Path,
+    shell: lapis_terminal::TerminalShell,
+) -> Result<PathBuf, TerminalError> {
+    #[cfg(windows)]
+    if let Some(std::path::Component::Prefix(prefix)) = cwd.components().next() {
+        use std::path::Prefix;
+        match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => {
+                // cmdはcanonicalizeのverbatim prefixをUNCと誤認し、別cwdへ移る。
+                let mut path = PathBuf::from(format!("{}:", char::from(drive)));
+                path.extend(cwd.components().skip(1));
+                return Ok(path);
+            }
+            Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _)
+                if shell == lapis_terminal::TerminalShell::Cmd =>
+            {
+                return Err(TerminalError::new(
+                    "cmdはUNC作業フォルダを使用できません。PowerShellを選択してください",
+                ));
+            }
+            _ => {}
+        }
+    }
+    let _ = shell;
+    Ok(cwd.to_owned())
 }
 
 struct LspProcess {
@@ -1478,10 +1525,30 @@ impl LocalGitBackend {
 }
 
 impl GitBackend for LocalGitBackend {
+    fn execute(
+        &self,
+        repository: &Path,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<lapis_git::GitActionResult, GitError> {
+        let gate = git_repository_gate(repository)?;
+        let _guard = gate
+            .lock()
+            .map_err(|_| GitError::new(GitErrorKind::Io, "Repositoryの操作lockが利用できません"))?;
+        self.execute_action(repository, request)
+    }
     fn status(&self, repository: &Path) -> Result<RepositoryStatus, GitError> {
         let root = git_text(repository, &["rev-parse", "--show-toplevel"])?;
-        let head = git_text(repository, &["rev-parse", "HEAD"])?;
-        let output = git_bytes(repository, &["status", "--porcelain=v1", "-z", "--branch"])?;
+        let head = git_text(repository, &["rev-parse", "--verify", "HEAD"]).unwrap_or_default();
+        let output = git_bytes(
+            repository,
+            &[
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--branch",
+                "--untracked-files=all",
+            ],
+        )?;
         let fields = output
             .split(|byte| *byte == 0)
             .filter(|field| !field.is_empty())
@@ -1515,30 +1582,46 @@ impl GitBackend for LocalGitBackend {
             } else {
                 None
             };
-            let kind = if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
-                ChangeKind::Conflicted
+            if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
+                files.push(ChangedFile {
+                    path,
+                    old_path,
+                    kind: ChangeKind::Conflicted,
+                    staged: false,
+                });
             } else if x == '?' && y == '?' {
-                ChangeKind::Untracked
-            } else if x == 'A' || y == 'A' {
-                ChangeKind::Added
-            } else if x == 'D' || y == 'D' {
-                ChangeKind::Deleted
-            } else if x == 'R' || y == 'R' {
-                ChangeKind::Renamed
+                files.push(ChangedFile {
+                    path,
+                    old_path,
+                    kind: ChangeKind::Untracked,
+                    staged: false,
+                });
             } else {
-                ChangeKind::Modified
-            };
-            files.push(ChangedFile {
-                path,
-                old_path,
-                kind,
-                staged: x != ' ' && x != '?',
-            });
+                for (change, staged) in [(x, true), (y, false)] {
+                    if change == ' ' {
+                        continue;
+                    }
+                    let kind = match change {
+                        'A' => ChangeKind::Added,
+                        'D' => ChangeKind::Deleted,
+                        'R' | 'C' => ChangeKind::Renamed,
+                        _ => ChangeKind::Modified,
+                    };
+                    files.push(ChangedFile {
+                        path: path.clone(),
+                        old_path: old_path.clone(),
+                        kind,
+                        staged,
+                    });
+                }
+            }
             index += 1;
         }
         Ok(RepositoryStatus {
             root: PathBuf::from(root.trim()),
-            branch,
+            branch: git_text(repository, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+                .map(|name| name.trim().to_owned())
+                .unwrap_or(branch),
             head: head.trim().to_owned(),
             files,
         })
@@ -1636,13 +1719,14 @@ impl GitBackend for LocalGitBackend {
 
     fn worktrees(&self, repository: &Path) -> Result<Vec<TaskWorktree>, GitError> {
         let canonical = self.status(repository)?.root;
+        let common = git_common_directory(repository)?;
         let entries = match fs::read_dir(&self.state_root) {
-            Ok(entries) => entries,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
             Err(error) => return Err(GitError::new(GitErrorKind::Io, error.to_string())),
         };
         let mut records = Vec::new();
-        for entry in entries {
+        for entry in entries.into_iter().flatten() {
             let entry =
                 entry.map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
             if !entry.file_name().to_string_lossy().starts_with("worktree-") {
@@ -1653,11 +1737,56 @@ impl GitBackend for LocalGitBackend {
                     .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?,
             )
             .map_err(|error| GitError::new(GitErrorKind::InvalidOutput, error.to_string()))?;
-            if record.repository_root == canonical {
-                records.push(record);
+            records.push(record);
+        }
+        let listing = git_bytes(repository, &["worktree", "list", "--porcelain", "-z"])?;
+        let mut discovered = Vec::new();
+        let mut path = None;
+        let mut head = String::new();
+        for field in listing.split(|byte| *byte == 0) {
+            if let Some(value) = field.strip_prefix(b"worktree ") {
+                path = Some(PathBuf::from(std::str::from_utf8(value).map_err(
+                    |error| GitError::new(GitErrorKind::InvalidOutput, error.to_string()),
+                )?));
+            } else if let Some(value) = field.strip_prefix(b"HEAD ") {
+                head = String::from_utf8_lossy(value).into_owned();
+            } else if field.is_empty()
+                && let Some(path) = path.take()
+                && let Ok(path) = path.canonicalize()
+                && path
+                    != canonical
+                        .canonicalize()
+                        .unwrap_or_else(|_| canonical.clone())
+            {
+                if git_common_directory(&path).ok().as_ref() != Some(&common) {
+                    continue;
+                }
+                let mut record = records
+                    .iter()
+                    .find(|record| {
+                        record.state != WorktreeState::Discarded
+                            && record.path.canonicalize().ok().as_ref() == Some(&path)
+                    })
+                    .cloned()
+                    .unwrap_or_else(|| TaskWorktree {
+                        task_id: lapis_editor_core::TaskId::new(format!(
+                            "external-{:016x}",
+                            stable_path_hash(&path)
+                        )),
+                        repository_root: canonical.clone(),
+                        path: path.clone(),
+                        base_commit: head.clone(),
+                        state: WorktreeState::Active,
+                        conflict: None,
+                    });
+                // 一覧の正本はGit。保存済みrecordから他Repositoryのpathを認可しない。
+                record.repository_root = canonical.clone();
+                record.path = path;
+                discovered.push(record);
             }
         }
-        Ok(records)
+        discovered.sort_by(|left, right| left.task_id.as_str().cmp(right.task_id.as_str()));
+        Ok(discovered)
     }
 
     fn import_file(&self, worktree: &TaskWorktree, path: &Path) -> Result<TaskWorktree, GitError> {
@@ -1718,10 +1847,28 @@ impl GitBackend for LocalGitBackend {
     }
 
     fn discard_worktree(&self, worktree: &TaskWorktree) -> Result<TaskWorktree, GitError> {
+        if !self.status(&worktree.path)?.files.is_empty() {
+            return Err(GitError::new(
+                GitErrorKind::Conflict,
+                "未保存・未Commitの変更があるWorktreeは削除できません",
+            ));
+        }
+        if git_text(
+            &worktree.path,
+            &["branch", "--contains", "HEAD", "--format=%(refname)"],
+        )?
+        .trim()
+        .is_empty()
+        {
+            return Err(GitError::new(
+                GitErrorKind::Conflict,
+                "WorktreeのCommitを先にBranchへ保存してください",
+            ));
+        }
         let path_text = worktree.path.to_string_lossy();
         git_bytes(
             &worktree.repository_root,
-            &["worktree", "remove", "--force", &path_text],
+            &["worktree", "remove", "--", &path_text],
         )?;
         let mut discarded = worktree.clone();
         discarded.state = WorktreeState::Discarded;
@@ -1740,13 +1887,17 @@ fn git_bytes_allow_exit_code(
     arguments: &[&str],
     allowed_failure_code: i32,
 ) -> Result<Vec<u8>, GitError> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repository)
-        .args(arguments)
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .output()
-        .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+    let output = git_action::git_output(
+        Command::new("git")
+            .args(["-c", "credential.interactive=never", "--literal-pathspecs"])
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .stdin(Stdio::null())
+            .env("GIT_OPTIONAL_LOCKS", "0"),
+        Duration::from_secs(120),
+    )
+    .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
     if output.status.success() || output.status.code() == Some(allowed_failure_code) {
         Ok(output.stdout)
     } else {
@@ -1762,6 +1913,33 @@ fn git_bytes_allow_exit_code(
 
 fn git_text(repository: &Path, arguments: &[&str]) -> Result<String, GitError> {
     Ok(String::from_utf8_lossy(&git_bytes(repository, arguments)?).into_owned())
+}
+
+fn git_common_directory(repository: &Path) -> Result<PathBuf, GitError> {
+    let path = git_text(
+        repository,
+        &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+    )?;
+    PathBuf::from(path.trim())
+        .canonicalize()
+        .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))
+}
+
+fn git_repository_gate(repository: &Path) -> Result<Arc<Mutex<()>>, GitError> {
+    type Gates = std::collections::HashMap<PathBuf, std::sync::Weak<Mutex<()>>>;
+    static GATES: std::sync::OnceLock<Mutex<Gates>> = std::sync::OnceLock::new();
+    let directory = git_common_directory(repository)?;
+    let mut gates = GATES
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| GitError::new(GitErrorKind::Io, "Repositoryの操作lockが利用できません"))?;
+    gates.retain(|_, gate| gate.strong_count() != 0);
+    if let Some(gate) = gates.get(&directory).and_then(std::sync::Weak::upgrade) {
+        return Ok(gate);
+    }
+    let gate = Arc::new(Mutex::new(()));
+    gates.insert(directory, Arc::downgrade(&gate));
+    Ok(gate)
 }
 
 fn stable_path_hash(path: &Path) -> u64 {
@@ -1796,6 +1974,19 @@ impl<T: TaskBackend> TaskBackend for LoopbackBackend<T> {
 }
 
 impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
+    fn execute(
+        &self,
+        repository: &Path,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<lapis_git::GitActionResult, GitError> {
+        if !self.gate.is_connected() {
+            return Err(GitError::new(
+                GitErrorKind::Io,
+                "loopback workspace is disconnected",
+            ));
+        }
+        self.inner.execute(repository, request)
+    }
     fn status(&self, repository: &Path) -> Result<RepositoryStatus, GitError> {
         if !self.gate.is_connected() {
             return Err(GitError::new(
@@ -1867,6 +2058,19 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
             return Err(TerminalError::new("loopback workspace is disconnected"));
         }
         self.inner.start(cwd, columns, rows)
+    }
+
+    fn start_with_shell(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        if !self.gate.is_connected() {
+            return Err(TerminalError::new("loopback workspace is disconnected"));
+        }
+        self.inner.start_with_shell(cwd, columns, rows, shell)
     }
 
     fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
@@ -2201,6 +2405,33 @@ mod tests {
             .unwrap_err();
         assert_eq!(conflict.kind(), GitErrorKind::Conflict);
 
+        for (index, tree) in [&worktree, &worktree2].into_iter().enumerate() {
+            assert!(backend.discard_worktree(tree).is_err());
+            assert!(tree.path.join("note.txt").exists());
+            for args in [
+                vec![
+                    "switch".to_owned(),
+                    "-c".to_owned(),
+                    format!("preserve-{index}"),
+                ],
+                vec!["add".to_owned(), "note.txt".to_owned()],
+                vec![
+                    "commit".to_owned(),
+                    "-m".to_owned(),
+                    "preserve changes".to_owned(),
+                ],
+            ] {
+                assert!(
+                    Command::new("git")
+                        .arg("-C")
+                        .arg(&tree.path)
+                        .args(args)
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            }
+        }
         assert_eq!(
             backend.discard_worktree(&worktree).unwrap().state,
             WorktreeState::Discarded
@@ -2260,9 +2491,15 @@ mod tests {
         let backend = LocalTerminalBackend::default();
         let id = backend.start(Path::new("."), 100, 30).unwrap();
         backend.resize(&id, 120, 32).unwrap();
-        backend
-            .input(&id, b"Write-Output lapis-terminal-smoke\r")
-            .unwrap();
+        let command = if cfg!(windows) {
+            "Write-Output ('lapis-terminal-' + 'smoke')\r"
+        } else {
+            "printf 'lapis-terminal-%s\\n' smoke\n"
+        };
+        let mut command_sent = !cfg!(windows);
+        if command_sent {
+            backend.input(&id, command.as_bytes()).unwrap();
+        }
         let deadline = Instant::now() + Duration::from_secs(8);
         let mut output = Vec::new();
         let mut sequences = Vec::new();
@@ -2272,6 +2509,13 @@ mod tests {
                     sequences.push(chunk.sequence);
                     output.extend(chunk.data);
                 }
+            }
+            // この低水準テストではClient役がConPTYの問い合わせへ応答する。
+            // 通常接続ではRuntimeが一度だけ応答する。
+            if !command_sent && output.windows(4).any(|bytes| bytes == b"\x1b[6n") {
+                backend.input(&id, b"\x1b[1;1R").unwrap();
+                backend.input(&id, command.as_bytes()).unwrap();
+                command_sent = true;
             }
             if String::from_utf8_lossy(&output).contains("lapis-terminal-smoke") {
                 break;

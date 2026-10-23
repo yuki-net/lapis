@@ -88,7 +88,9 @@ pub(crate) fn apply_view_state(
         .activate_tool(ViewId::new(match view.active_tool.as_str() {
             "search" | id::VIEW_SEARCH => id::VIEW_SEARCH,
             "git" | id::VIEW_GIT => id::VIEW_GIT,
-            "history" | id::VIEW_HISTORY => id::VIEW_HISTORY,
+            "history" | "projects" | "lapis.view.history" | id::VIEW_PROJECT_TASKS => {
+                id::VIEW_PROJECT_TASKS
+            }
             _ => id::VIEW_FILES,
         }));
     shell.left_panel.size = view.tool_width.clamp(190.0, 380.0);

@@ -49,6 +49,9 @@
 - Window の生成成功後にタブの所属を移す。生成失敗・未受理のドロップでは元のタブを残す。新 Host の購読が有効になる前に初回 Snapshot と配置通知が併合される場合も、defer した通知で配置を渡す。
 - close は入力の受付停止 → FIFO 上の入力失敗検査 → 全対象の保存/破棄判断 → 保存 → revision の事前検証 → タブの close → 表示状態の保存 → OS Window の閉鎖の順。Cancel / Save As のキャンセルではタブを閉じない。通常の Root close はその系列だけ、Quit は全 Root 系列を対象とし、判断が揃う前に一部だけ閉じない。複数Rootが同じDocument正本を開いている場合、判断・保存・破棄は一度だけ行い、各attachmentを個別に閉じる。外部 I/O の commit 失敗まで rollback できる分散トランザクションではない。
 - Detached の終了はタブを閉じ、Root へ戻さない。表示 Entity・購読の解放と Host 上のプロセス終了は別操作である。
+- 一括closeは確認済みの閉鎖ID、失敗対象、未実行ID、失敗段階を返す。表示状態保存とSnapshot取得はclose結果と独立させ、後段の失敗で成功済みattachment解除を隠さない。Clientが保持するattachment一覧と正本から更新したcacheを全対象WindowGroupへ反映してから終了中フラグを解除する。途中失敗ではOS Windowを閉じず、閉鎖済みタブ・所有情報だけを除去する。
+- 正本の再取得が失敗しても、Clientの確認済み所属と最後のcacheをsequence付きで配信する。未確認cacheでの編集・移動・保存は止め、再度Close / Quitを実行したときのworker上の再照合で解除する。通常の遅延Snapshotでは復旧待ちを解除しない。残すDocumentは再attachして最新revisionと保存判断を確認し、応答不明のcloseやdiscardを成功と推測しない。DocumentCloseは正本文書の削除ではなく接続のattachment解除であり、再attachは残す意図を再確立する。worker自体が終了して再照合できない場合は、Windowとcacheを保持したまま操作を停止する。
+- Editorの処理待ちでGroup Snapshotの適用を見送った場合は、古い世代の応答も含めて待ち処理が解消した時点でHostへ通知し、Groupの最新状態を再適用する。Shellは個別の遅延応答を直接表示せず、sequence検証後のGroup状態から更新する。
 
 Document は取り外しボタンと Root への再ドックに加え、Windows ではタブを Window 外で離すと新 Window を作り、同じグループの Panel へ離すと再ドックする。Root / 子 / 子同士を同じ移動経路で扱い、移動先で文書を選択する。空になった子 Window は開いたままとし、閉じる操作で解放する。配置モデルは Document / Tool 共通だが、Tool の Window 間移動は未有効。Terminal は focus と入力先・出力購読、Task / Agent は選択 execution とストリームの寿命を持つため、既存 Entity を再利用して再購読範囲を検証するまで移動させない。個別の Window Manager や汎用 Trait は増やさない。
 

@@ -5,7 +5,9 @@ use std::{fmt, path::PathBuf};
 use lapis_editor_core::TaskId;
 use serde::{Deserialize, Serialize};
 
+mod action;
 mod connection;
+pub use action::{ConflictSide, GitAction, GitActionRequest, GitActionResult};
 pub use connection::{
     GitConnection, GitDiffSnapshot, GitFileSnapshot, GitSnapshot, WorktreeSnapshot,
 };
@@ -66,6 +68,13 @@ pub struct TaskWorktree {
 }
 
 pub trait GitBackend: Send + Sync {
+    fn execute(
+        &self,
+        _repository: &std::path::Path,
+        _request: GitActionRequest,
+    ) -> Result<GitActionResult, GitError> {
+        Err(GitError::new(GitErrorKind::Io, "Git操作に対応していません"))
+    }
     fn status(&self, repository: &std::path::Path) -> Result<RepositoryStatus, GitError>;
     fn diff(
         &self,

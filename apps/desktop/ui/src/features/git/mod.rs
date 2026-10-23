@@ -9,7 +9,7 @@ mod view;
 use crate::theme;
 use lapis_git::ChangeKind;
 
-pub(crate) use state::GitFeature;
+pub(crate) use state::{GitEvent, GitFeature, GitInputRequest};
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(
@@ -24,20 +24,6 @@ pub(super) fn descriptor() -> FeatureDescriptor {
         30,
     ))
     .requires("workspace.git")
-}
-
-pub(super) fn history_descriptor() -> FeatureDescriptor {
-    FeatureDescriptor::bundled(
-        id::FEATURE_HISTORY,
-        [ActivationCondition::OnView(ViewId::new(id::VIEW_HISTORY))],
-    )
-    .contributes(UiContribution::view(
-        id::VIEW_HISTORY,
-        UiSlot::ToolDock,
-        "view.history",
-        "history",
-        40,
-    ))
 }
 
 fn change_label(kind: ChangeKind) -> &'static str {

@@ -73,8 +73,19 @@ struct FakeGit {
     unscoped_discovery: Mutex<bool>,
     status_files: Mutex<Vec<lapis_git::ChangedFile>>,
     blocked_status: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+    blocked_discard: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
 impl GitBackend for FakeGit {
+    fn execute(
+        &self,
+        repository: &Path,
+        _: lapis_git::GitActionRequest,
+    ) -> Result<lapis_git::GitActionResult, GitError> {
+        self.calls.lock().unwrap().push(repository.to_owned());
+        Ok(lapis_git::GitActionResult {
+            output: "executed".into(),
+        })
+    }
     fn status(&self, repository: &Path) -> Result<RepositoryStatus, GitError> {
         let blocked = self.blocked_status.lock().unwrap().take();
         if let Some((entered, release)) = blocked {
@@ -146,9 +157,98 @@ impl GitBackend for FakeGit {
         Ok(tree.clone())
     }
     fn discard_worktree(&self, tree: &TaskWorktree) -> Result<TaskWorktree, GitError> {
+        if let Some((entered, release)) = self.blocked_discard.lock().unwrap().take() {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
         self.calls.lock().unwrap().push(tree.path.clone());
         Ok(tree.clone())
     }
+}
+
+#[test]
+fn worktree_removal_rejects_active_clients_and_reserves_the_directory_during_git_io() {
+    use std::{sync::mpsc, time::Duration};
+    let fixture = Fixture::new();
+    let parent = fixture.client("parent", "first");
+    let Outcome::Worktree(tree) = outcome(execute(&parent, Operation::CreateWorktree)) else {
+        panic!("Worktree required")
+    };
+    let path = fixture
+        .service
+        .worktree_path(parent.workspace_id().clone(), tree.worktree_id.clone())
+        .unwrap();
+    let child_id = WorkspaceId::try_new("child").unwrap();
+    fixture
+        .service
+        .register_workspace(WorkspaceRegistration::new(
+            child_id.clone(),
+            "child",
+            path.clone(),
+            Arc::new(EmptyFiles),
+        ))
+        .unwrap();
+    let child = fixture.client("child-client", "child");
+    fixture.git.calls.lock().unwrap().clear();
+    assert!(matches!(
+        execute(
+            &parent,
+            Operation::DiscardWorktree {
+                worktree_id: tree.worktree_id.clone()
+            }
+        ),
+        ResponseBody::Error(_)
+    ));
+    assert!(fixture.git.calls.lock().unwrap().is_empty());
+    drop(child);
+    let (entered, started) = mpsc::channel();
+    let (release, resume) = mpsc::channel();
+    *fixture.git.blocked_discard.lock().unwrap() = Some((entered, resume));
+    let deleting = std::thread::spawn(move || {
+        execute(
+            &parent,
+            Operation::DiscardWorktree {
+                worktree_id: tree.worktree_id,
+            },
+        )
+    });
+    started.recv_timeout(Duration::from_secs(2)).unwrap();
+    let blocked = EmbeddedClient::connect(
+        fixture.service.clone(),
+        SessionId::try_new("new-client").unwrap(),
+        child_id.clone(),
+    );
+    assert!(blocked.is_err());
+    assert!(
+        fixture
+            .service
+            .register_workspace(WorkspaceRegistration::new(
+                WorkspaceId::try_new("new-alias").unwrap(),
+                "alias",
+                path,
+                Arc::new(EmptyFiles)
+            ))
+            .is_err()
+    );
+    let unrelated = fixture.client("unrelated", "second");
+    assert!(matches!(
+        execute(&unrelated, Operation::GitStatus { worktree: None }),
+        ResponseBody::WorkspaceExecute(_)
+    ));
+    release.send(()).unwrap();
+    assert!(matches!(
+        deleting.join().unwrap(),
+        ResponseBody::WorkspaceExecute(_)
+    ));
+    // FakeGitはdirectoryを残す。予約が完了後に解放されることも確認する。
+    assert!(
+        EmbeddedClient::connect(
+            fixture.service.clone(),
+            SessionId::try_new("after-removal").unwrap(),
+            child_id
+        )
+        .is_ok()
+    );
 }
 struct Fixture {
     root: tempfile::TempDir,
@@ -246,6 +346,32 @@ fn denied(response: ResponseBody) {
     };
     assert_eq!(error.code.as_str(), lapis_client_api::FORBIDDEN);
 }
+
+#[test]
+fn git_actions_accept_deleted_parent_directories_without_relaxing_containment() {
+    let fixture = Fixture::new();
+    let client = fixture.client("deleted-path", "first");
+    let stage = |path: &str| Operation::GitAction {
+        worktree: None,
+        request: lapis_git::GitActionRequest {
+            action: lapis_git::GitAction::Stage { path: path.into() },
+            expected_head: Some("abc".into()),
+        },
+    };
+    assert!(matches!(
+        execute(&client, stage("deleted/directory/note.txt")),
+        ResponseBody::WorkspaceExecute(_)
+    ));
+    assert!(matches!(
+        execute(&client, stage("../outside.txt")),
+        ResponseBody::Error(_)
+    ));
+    std::fs::write(fixture.root.path().join("file"), "content").unwrap();
+    assert!(matches!(
+        execute(&client, stage("file/note.txt")),
+        ResponseBody::Error(_)
+    ));
+}
 fn started(client: &EmbeddedClient, isolated: bool) -> TaskSnapshot {
     let Outcome::TaskStarted(value) = outcome(execute(
         client,
@@ -270,6 +396,28 @@ fn request_capabilities_separate_git_reads_writes_and_task_controls() {
     let id = TaskId::new("tree");
     let path = WorkspaceRelativePath::parse("note.txt").unwrap();
     for (operation, expected) in [
+        (
+            Operation::GitAction {
+                worktree: None,
+                request: lapis_git::GitActionRequest {
+                    action: lapis_git::GitAction::History,
+                    expected_head: None,
+                },
+            },
+            "workspace.git.read",
+        ),
+        (
+            Operation::GitAction {
+                worktree: None,
+                request: lapis_git::GitActionRequest {
+                    action: lapis_git::GitAction::Stage {
+                        path: "note.txt".into(),
+                    },
+                    expected_head: Some("abc".into()),
+                },
+            },
+            "workspace.git.write",
+        ),
         (
             Operation::GitStatus { worktree: None },
             "workspace.git.read",
@@ -393,6 +541,13 @@ fn foreign_workspace_task_and_worktree_operations_are_denied_before_backend_call
     let tree = task.execution.worktree_id.unwrap();
     fixture.git.calls.lock().unwrap().clear();
     for operation in [
+        Operation::GitAction {
+            worktree: None,
+            request: lapis_git::GitActionRequest {
+                action: lapis_git::GitAction::History,
+                expected_head: None,
+            },
+        },
         Operation::Tasks,
         Operation::Worktrees,
         Operation::GitStatus { worktree: None },
@@ -408,6 +563,15 @@ fn foreign_workspace_task_and_worktree_operations_are_denied_before_backend_call
     }
     assert!(tasks(&second).is_empty());
     for operation in [
+        Operation::GitAction {
+            worktree: Some(tree.clone()),
+            request: lapis_git::GitActionRequest {
+                action: lapis_git::GitAction::Stage {
+                    path: "note.txt".into(),
+                },
+                expected_head: Some("abc".into()),
+            },
+        },
         Operation::GitStatus {
             worktree: Some(tree.clone()),
         },
@@ -767,6 +931,7 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
                     workspace_id: documents.workspace_id().clone(),
                     cwd: None,
                     command: None,
+                    shell: Default::default(),
                     size: lapis_client_api::TerminalSize {
                         columns: 80,
                         rows: 24

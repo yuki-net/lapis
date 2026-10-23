@@ -21,7 +21,9 @@ impl RemoteRequestHandler for HostRemoteHandler {
     fn handle(&self, grant: SessionGrant, request: RequestEnvelope) -> RemoteResponseFuture<'_> {
         if !matches!(
             request.body,
-            RequestBody::HostRegister(_) | RequestBody::DocumentRelocate(_)
+            RequestBody::HostRegister(_)
+                | RequestBody::HostWorktree(_)
+                | RequestBody::DocumentRelocate(_)
         ) {
             return self.inner.handle(grant, request);
         }
@@ -40,6 +42,18 @@ impl RemoteRequestHandler for HostRemoteHandler {
             }
             let body = tokio::task::spawn_blocking(move || {
                 match request.body {
+                    RequestBody::HostWorktree(worktree) => {
+                        match host
+                            .service()
+                            .worktree_path(grant.workspace_id().clone(), worktree)
+                        {
+                            Ok(path) => match path.to_str() {
+                                Some(path) => ResponseBody::HostWorktree(path.to_owned()),
+                                None => error(INVALID_PATH),
+                            },
+                            Err(problem) => service_error(problem),
+                        }
+                    }
                     RequestBody::HostRegister(input) => {
                         let root = Path::new(&input.root);
                         if !root.is_absolute() {

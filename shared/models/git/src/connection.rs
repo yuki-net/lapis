@@ -38,6 +38,28 @@ pub struct WorktreeSnapshot {
 }
 
 pub trait GitConnection: Send + Sync {
+    /// 検証済みWorktreeを開き、Clientで使うroot（Remoteでは仮想path）を返す。
+    fn open_worktree(
+        &self,
+        _workspace: &WorkspaceId,
+        _worktree: &TaskId,
+    ) -> Result<std::path::PathBuf, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "Worktreeの作業環境切替に対応していません",
+        ))
+    }
+    fn execute(
+        &self,
+        _workspace: &WorkspaceId,
+        _worktree: Option<&TaskId>,
+        _request: crate::GitActionRequest,
+    ) -> Result<crate::GitActionResult, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "Git操作に対応していません",
+        ))
+    }
     fn status(
         &self,
         workspace: &WorkspaceId,

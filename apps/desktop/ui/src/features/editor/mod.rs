@@ -79,6 +79,7 @@ pub(super) fn rust_descriptor() -> crate::extension_ui::FeatureDescriptor {
 
 pub(crate) enum EditorEvent {
     Snapshot(Box<ClientSnapshot>),
+    Idle,
     Status(String),
     WorkspaceSearch(String),
     Completion(bool),
@@ -103,6 +104,7 @@ pub(crate) struct Editor {
     enabled: bool,
     edit_epoch: Option<crate::client_adapter::EditEpoch>,
     in_flight: usize,
+    group_sync_pending: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -160,6 +162,7 @@ impl Editor {
             enabled: true,
             edit_epoch: None,
             in_flight: 0,
+            group_sync_pending: false,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -240,8 +243,10 @@ impl Editor {
         let admitted = self.worker.submit(
             cx,
             move |client| {
-                if let Some(target) = target {
-                    client.editor.select_document_for_operation(&target);
+                if let Some(target) = target
+                    && !client.editor.select_document_for_operation(&target)
+                {
+                    return Err("対象文書は既に閉じられています".into());
                 }
                 let epoch = epoch.unwrap_or_else(|| client.edit_chain.epoch());
                 let permitted = if recovering {
@@ -268,6 +273,7 @@ impl Editor {
             move |editor, result, cx| {
                 editor.in_flight = editor.in_flight.saturating_sub(1);
                 if editor.generation != generation {
+                    editor.notify_idle(cx);
                     return;
                 }
                 editor.recovering = false;
@@ -285,6 +291,7 @@ impl Editor {
                         editor.recovery |= recover_on_error || recovering;
                         cx.emit(EditorEvent::Status(error));
                         cx.notify();
+                        editor.notify_idle(cx);
                         return;
                     }
                 };
@@ -301,6 +308,7 @@ impl Editor {
                 editor.accept_snapshot(&local, preserve_input, cx);
                 cx.emit(EditorEvent::Snapshot(Box::new(snapshot)));
                 cx.notify();
+                editor.notify_idle(cx);
             },
         );
         if let Err(error) = admitted {
@@ -347,6 +355,7 @@ impl Editor {
     /// Refreshes an idle view from the group snapshot while preserving its local active tab if visible.
     /// Pending operations or draft recovery defer the refresh.
     pub(crate) fn receive_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
+        self.group_sync_pending = self.has_pending();
         if !self.has_pending() {
             self.edit_epoch = Some(snapshot.edit_epoch);
             let mut snapshot = snapshot.clone();
@@ -354,6 +363,14 @@ impl Editor {
             let local = self.local_snapshot(&snapshot);
             self.accept_snapshot(&local, true, cx);
             cx.notify();
+        }
+    }
+
+    /// 古い世代の応答も含め、待ち処理の解消をHostへ通知する。
+    fn notify_idle(&mut self, cx: &mut Context<Self>) {
+        if self.in_flight == 0 && self.group_sync_pending {
+            self.group_sync_pending = false;
+            cx.emit(EditorEvent::Idle);
         }
     }
 
