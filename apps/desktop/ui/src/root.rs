@@ -28,6 +28,11 @@ use gpui::{
 use lapis_desktop_client::EditorSession;
 use std::collections::HashMap;
 
+enum PathRequest {
+    Open(std::path::PathBuf),
+    Save(std::path::PathBuf, lapis_editor_core::DocumentId),
+    CloseSave(std::sync::mpsc::Sender<Result<String, String>>),
+}
 type PersistSignature = (
     Vec<(
         lapis_editor_core::DocumentId,
@@ -63,6 +68,7 @@ pub(crate) struct DesktopRoot {
     )>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
+    path_request: Option<PathRequest>,
     _subscriptions: Vec<Subscription>,
     double_shift: DoubleShiftDetector,
     pub(crate) worker: ClientWorker<DocumentClient>,
@@ -122,9 +128,20 @@ impl DesktopRoot {
                         QuickSearchEvent::Execute(command) => root
                             .shell
                             .update(cx, |shell, cx| shell.execute_command(command, window, cx)),
-                        QuickSearchEvent::Dismiss => root
-                            .shell
-                            .update(cx, |shell, cx| shell.close_panel(PanelPosition::Right, cx)),
+                        QuickSearchEvent::Dismiss => {
+                            if let Some(PathRequest::CloseSave(sender)) = root.path_request.take() {
+                                let _ = sender.send(Err("保存をキャンセルしました".into()));
+                            }
+                            root.shell.update(cx, |shell, cx| {
+                                shell.close_panel(PanelPosition::Right, cx)
+                            });
+                        }
+                        QuickSearchEvent::SubmitPath(path) => {
+                            root.submit_path(path, cx);
+                            root.shell.update(cx, |shell, cx| {
+                                shell.close_panel(PanelPosition::Right, cx)
+                            });
+                        }
                     }
                     window.focus(&root.editor.focus_handle(cx));
                 });
@@ -362,6 +379,7 @@ impl DesktopRoot {
             line_ending_cache: None,
             settings,
             quick_search,
+            path_request: None,
             _subscriptions: subscriptions,
             double_shift: DoubleShiftDetector::default(),
             worker,
@@ -567,6 +585,88 @@ impl DesktopRoot {
             .update(cx, |shell, cx| shell.set_status(status, cx));
     }
 
+    fn submit_path(&mut self, input: String, cx: &mut Context<Self>) {
+        let Some(request) = self.path_request.take() else {
+            return;
+        };
+        let (root, document) = match request {
+            PathRequest::Open(root) => (root, None),
+            PathRequest::Save(root, document) => (root, Some(document)),
+            PathRequest::CloseSave(sender) => {
+                let _ = sender.send(Ok(input));
+                return;
+            }
+        };
+        self.editor.update(cx, |editor, cx| {
+            editor.submit(
+                false,
+                move |client| {
+                    let target = client
+                        .editor
+                        .workspace_path(&root, &input)
+                        .map_err(|error| error.to_string())?;
+                    if let Some(document) = document {
+                        if client.editor.active_document_id() != Some(&document) {
+                            return Err(
+                                "保存対象が切り替わりました。保存をやり直してください".to_owned()
+                            );
+                        }
+                        client
+                            .editor
+                            .save_document_to(target)
+                            .map_err(|error| error.to_string())?;
+                        Ok(())
+                    } else {
+                        client
+                            .editor
+                            .open_path(target)
+                            .map_err(|error| error.to_string())
+                    }
+                },
+                cx,
+            );
+        });
+    }
+
+    pub(crate) fn remote_path_scope(&self, cx: &gpui::App) -> Option<std::path::PathBuf> {
+        self.factory
+            .path_scope()
+            .map(|initial| self.shell.read(cx).session.root.clone().unwrap_or(initial))
+    }
+
+    fn show_path_request(
+        &mut self,
+        request: PathRequest,
+        title: &'static str,
+        suggested: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.path_request = Some(request);
+        self.quick_search
+            .update(cx, |search, cx| search.open_path(title, suggested, cx));
+        self.shell.update(cx, |shell, cx| {
+            shell.activate_panel_view(PanelPosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
+        });
+        window.focus(&self.quick_search.read(cx).focus_handle());
+    }
+
+    pub(crate) fn request_close_path(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> std::sync::mpsc::Receiver<Result<String, String>> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.show_path_request(
+            PathRequest::CloseSave(sender),
+            "Hostに保存して閉じる",
+            "new-file.txt",
+            window,
+            cx,
+        );
+        receiver
+    }
+
     /// Dispatches root commands, ignoring them while closing.
     /// Workspace switches are rejected with a status message while detached windows exist.
     pub(crate) fn command(
@@ -602,6 +702,41 @@ impl DesktopRoot {
             );
             return;
         }
+        if let Some(root) = self.remote_path_scope(cx) {
+            let request = match &command {
+                UiCommand::OpenFile => Some(PathRequest::Open(root)),
+                UiCommand::SaveAs => self
+                    .editor
+                    .read(cx)
+                    .document_id()
+                    .map(|id| PathRequest::Save(root, id)),
+                UiCommand::Save if self.editor.read(cx).document().path().is_none() => self
+                    .editor
+                    .read(cx)
+                    .document_id()
+                    .map(|id| PathRequest::Save(root, id)),
+                _ => None,
+            };
+            if let Some(request) = request {
+                let (title, suggested) = match &request {
+                    PathRequest::Open(_) => ("Hostのファイルを開く", String::new()),
+                    PathRequest::Save(_, _) => (
+                        "Hostに名前を付けて保存",
+                        self.editor
+                            .read(cx)
+                            .document()
+                            .path()
+                            .and_then(|path| path.file_name())
+                            .and_then(|name| name.to_str())
+                            .unwrap_or("new-file.txt")
+                            .to_owned(),
+                    ),
+                    PathRequest::CloseSave(_) => unreachable!(),
+                };
+                self.show_path_request(request, title, &suggested, window, cx);
+                return;
+            }
+        }
         match command {
             UiCommand::Save if self.editor.read(cx).document_id().is_none() => {}
             command @ (UiCommand::DetachTab(_)
@@ -612,6 +747,7 @@ impl DesktopRoot {
                 .settings
                 .update(cx, |settings, cx| settings.select_theme(theme, cx)),
             UiCommand::QuickSearch => {
+                self.path_request = None;
                 self.double_shift.reset();
                 let provider = CommandSearchProvider::from_registry(
                     &features::bundled_registry(),
@@ -721,6 +857,11 @@ impl DesktopRoot {
                             UiCommand::Save => client
                                 .editor
                                 .save_document()
+                                .map(|_| ())
+                                .map_err(|error| error.to_string()),
+                            UiCommand::SaveAs => client
+                                .editor
+                                .save_document_as()
                                 .map(|_| ())
                                 .map_err(|error| error.to_string()),
                             UiCommand::CloseWorkspace => client

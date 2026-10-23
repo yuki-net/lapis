@@ -19,6 +19,7 @@ struct CloseRequest {
     document: Option<DocumentId>,
     placements: HashMap<DocumentId, HostId>,
     windows: Vec<HostId>,
+    remote: bool,
 }
 
 struct ClosePlan {
@@ -87,6 +88,7 @@ impl DesktopRoot {
                 })
                 .collect(),
             windows,
+            remote: self.remote_path_scope(cx).is_some(),
         })
     }
 
@@ -191,6 +193,7 @@ impl DesktopRoot {
             let result: Result<Vec<ClosedGroup>, String> = async {
                 let mut plans = Vec::new();
                 let mut approvals = HashMap::new();
+                let mut save_paths = HashMap::new();
                 // 全グループの判断が揃うまで保存・破棄・closeを実行しない。
                 for mut request in requests {
                     let snapshot = wait_client(request.snapshot.take().unwrap()).await?;
@@ -249,6 +252,14 @@ impl DesktopRoot {
                         } else { 0 };
                         approvals.insert(tab.id.clone(), (answer, cache.document.revision()));
                         if answer > 1 { return Err("終了をキャンセルしました".into()); }
+                        if tab.dirty && answer == 0 && tab.path.is_none() && request.remote && !save_paths.contains_key(&tab.id) {
+                            let root = snapshot.root.clone().ok_or("保存先のWorkspaceがありません")?;
+                            let receiver = handle.update(cx, |_, window, cx| this.update(cx, |owner, cx| {
+                                owner.request_close_path(window, cx)
+                            })).map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+                            let input = wait_client(receiver).await?;
+                            save_paths.insert(tab.id.clone(), (root, input));
+                        }
                         if tab.dirty && answer == 0 { saves.push(tab.id.clone()); }
                         decisions.push((tab.id.clone(), if answer == 1 { DocumentCloseDisposition::DiscardChanges } else { DocumentCloseDisposition::PreserveChanges }, cache.document.revision()));
                     }
@@ -258,6 +269,7 @@ impl DesktopRoot {
                 for plan in &plans {
                     let decisions = plan.decisions.clone();
                     let saves = plan.saves.iter().filter(|id| saved.insert((*id).clone())).cloned().collect::<Vec<_>>();
+                    let save_paths = save_paths.clone();
                     let receiver = plan.request.worker.try_request(move |client| {
                         for (id, _, revision) in &decisions {
                             if client.editor.document_connection().attach(id).map_err(|e| e.to_string())?.document.revision() != *revision {
@@ -266,7 +278,10 @@ impl DesktopRoot {
                         }
                         for id in saves {
                             if !client.editor.select_document_for_operation(&id) { return Err("対象文書が閉じられました".into()); }
-                            if client.editor.save_document().map_err(|e| e.to_string())? == DocumentAction::Cancelled {
+                            if let Some((root, input)) = save_paths.get(&id) {
+                                let path = client.editor.workspace_path(root, input).map_err(|e| e.to_string())?;
+                                client.editor.save_document_to(path).map_err(|e| e.to_string())?;
+                            } else if client.editor.save_document().map_err(|e| e.to_string())? == DocumentAction::Cancelled {
                                 return Err("保存をキャンセルしました".into());
                             }
                         }

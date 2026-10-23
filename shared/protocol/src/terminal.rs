@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{TerminalId, TerminalOutputSequence, WorkspaceId, WorkspaceRelativePath};
+pub use lapis_terminal::TerminalShell;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -23,6 +24,8 @@ pub struct TerminalSize {
 pub struct TerminalSnapshot {
     pub terminal_id: TerminalId,
     pub workspace_id: WorkspaceId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<WorkspaceRelativePath>,
     pub status: TerminalStatus,
     pub size: TerminalSize,
     /// backendが再同期用に保持しているraw output。
@@ -31,6 +34,10 @@ pub struct TerminalSnapshot {
     pub output_watermark: Option<TerminalOutputSequence>,
     /// 保持上限によりwatermark以前のoutputが欠落している場合にtrue。
     pub output_truncated: bool,
+    #[serde(default)]
+    pub output_offset: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub screen: Option<lapis_terminal::TerminalScreenState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,6 +47,8 @@ pub struct TerminalStartRequest {
     pub cwd: Option<WorkspaceRelativePath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
+    #[serde(default)]
+    pub shell: TerminalShell,
     pub size: TerminalSize,
 }
 

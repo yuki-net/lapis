@@ -141,6 +141,7 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
                 workspace_id: workspace.clone(),
                 cwd: None,
                 command: None,
+                shell: Default::default(),
                 size: TerminalSize {
                     columns: 80,
                     rows: 24,
