@@ -197,7 +197,7 @@ fn delta(revision: u64, size: TerminalSize, text: &str) -> TerminalDelta {
         changed_rows: vec![TerminalRowUpdate { row: 0, value: row }],
         cursor: Default::default(),
         modes: Default::default(),
-        scrollback: Vec::new(),
+        scrollback: None,
     }
 }
 

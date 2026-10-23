@@ -520,7 +520,7 @@ mod tests {
             }],
             cursor: Default::default(),
             modes: Default::default(),
-            scrollback: Vec::new(),
+            scrollback: None,
         }
     }
 

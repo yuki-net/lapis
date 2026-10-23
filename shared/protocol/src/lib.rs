@@ -56,8 +56,8 @@ pub use terminal::{
     TerminalCell, TerminalColor, TerminalCommandResponse, TerminalCursor, TerminalDelta,
     TerminalInput, TerminalInputRequest, TerminalKey, TerminalKeyEvent, TerminalModes,
     TerminalModifiers, TerminalResizeRequest, TerminalRevision, TerminalRow, TerminalRowUpdate,
-    TerminalScreen, TerminalShell, TerminalSize, TerminalSnapshot, TerminalStartRequest,
-    TerminalStartResponse, TerminalStatus, TerminalTerminateRequest,
+    TerminalScreen, TerminalScrollbackDelta, TerminalShell, TerminalSize, TerminalSnapshot,
+    TerminalStartRequest, TerminalStartResponse, TerminalStatus, TerminalTerminateRequest,
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,

@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 
 pub type TerminalRevision = u64;
 
+pub const MAX_SCROLLBACK_LINES: usize = 2_000;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalId(String);
 
@@ -116,6 +118,13 @@ impl TerminalRow {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalScrollbackDelta {
+    pub reset: bool,
+    pub dropped: u16,
+    pub rows: Vec<TerminalRow>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalCursor {
     pub row: u16,
@@ -180,6 +189,7 @@ impl TerminalScreen {
             self.rows = (0..delta.size.rows)
                 .map(|_| TerminalRow::empty(delta.size.columns))
                 .collect();
+            self.scrollback.clear();
         }
 
         for update in &delta.changed_rows {
@@ -195,8 +205,36 @@ impl TerminalScreen {
         }
         self.cursor = delta.cursor;
         self.modes = delta.modes;
-        if !delta.scrollback.is_empty() {
-            self.scrollback = delta.scrollback.clone();
+        if let Some(scrollback) = &delta.scrollback {
+            if scrollback
+                .rows
+                .iter()
+                .any(|row| row.cells.len() != self.size.columns as usize)
+            {
+                return Err(TerminalError::new(format!(
+                    "invalid terminal scrollback revision {}",
+                    delta.revision
+                )));
+            }
+            if scrollback.reset {
+                self.scrollback = scrollback.rows.clone();
+            } else {
+                let dropped = usize::from(scrollback.dropped);
+                if dropped > self.scrollback.len() {
+                    return Err(TerminalError::new(format!(
+                        "terminal scrollback gap at revision {}",
+                        delta.revision
+                    )));
+                }
+                self.scrollback.drain(..dropped);
+                self.scrollback.extend(scrollback.rows.clone());
+            }
+            if self.scrollback.len() > MAX_SCROLLBACK_LINES {
+                return Err(TerminalError::new(format!(
+                    "terminal scrollback is too large at revision {}",
+                    delta.revision
+                )));
+            }
         }
         Ok(())
     }
@@ -216,7 +254,7 @@ pub struct TerminalDelta {
     pub cursor: TerminalCursor,
     pub modes: TerminalModes,
     #[serde(default)]
-    pub scrollback: Vec<TerminalRow>,
+    pub scrollback: Option<TerminalScrollbackDelta>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -423,5 +461,79 @@ mod tests {
             wrapped: false,
         };
         assert_eq!(row.plain_text(), "界 ");
+    }
+
+    #[test]
+    fn terminal_delta_appends_and_truncates_scrollback() {
+        let mut screen = TerminalScreen::empty(TerminalSize::new(4, 1));
+        screen.scrollback = vec![
+            TerminalRow {
+                cells: vec![
+                    TerminalCell {
+                        text: "a".to_owned(),
+                        ..Default::default()
+                    };
+                    4
+                ],
+                wrapped: false,
+            },
+            TerminalRow {
+                cells: vec![
+                    TerminalCell {
+                        text: "b".to_owned(),
+                        ..Default::default()
+                    };
+                    4
+                ],
+                wrapped: false,
+            },
+        ];
+        screen
+            .apply_delta(&TerminalDelta {
+                revision: 1,
+                size: screen.size,
+                changed_rows: Vec::new(),
+                cursor: screen.cursor,
+                modes: screen.modes,
+                scrollback: Some(TerminalScrollbackDelta {
+                    reset: false,
+                    dropped: 1,
+                    rows: vec![TerminalRow {
+                        cells: vec![
+                            TerminalCell {
+                                text: "c".to_owned(),
+                                ..Default::default()
+                            };
+                            4
+                        ],
+                        wrapped: false,
+                    }],
+                }),
+            })
+            .unwrap();
+        assert_eq!(
+            screen
+                .scrollback
+                .iter()
+                .map(TerminalRow::plain_text)
+                .collect::<Vec<_>>(),
+            vec!["bbbb", "cccc"]
+        );
+
+        screen
+            .apply_delta(&TerminalDelta {
+                revision: 2,
+                size: screen.size,
+                changed_rows: Vec::new(),
+                cursor: screen.cursor,
+                modes: screen.modes,
+                scrollback: Some(TerminalScrollbackDelta {
+                    reset: true,
+                    dropped: 0,
+                    rows: Vec::new(),
+                }),
+            })
+            .unwrap();
+        assert!(screen.scrollback.is_empty());
     }
 }

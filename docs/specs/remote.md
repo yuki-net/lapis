@@ -71,3 +71,7 @@ Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
 この契約により、Desktop は GPUI Renderer、将来の Mobile は native Renderer として
 同じ Model を描画できる。Agent Session、ACP、Chat UI、provider 固有の handoff は
 Terminal の同期契約に含めない。
+
+Scrollback は Snapshot では bounded な履歴全体を含め、Delta では追加行と削除数を
+送る。履歴の再構成が必要な resize、alternate screen 切替、状態不一致では reset
+Delta または Snapshot を使い、Client 側で履歴が無制限に増えないようにする。

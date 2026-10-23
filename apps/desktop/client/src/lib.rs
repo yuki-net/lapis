@@ -522,6 +522,7 @@ impl TerminalSession {
             if terminal.status != TerminalStatus::Running {
                 continue;
             }
+            let mut resync = false;
             for event in self.backend.poll(&terminal.id)? {
                 match event {
                     TerminalEvent::Snapshot(snapshot) => {
@@ -535,9 +536,13 @@ impl TerminalSession {
                             continue;
                         }
                         if delta.revision != terminal.revision.saturating_add(1) {
-                            return Err(TerminalError::new("terminal revision gap"));
+                            resync = true;
+                            break;
                         }
-                        terminal.screen.apply_delta(&delta)?;
+                        if terminal.screen.apply_delta(&delta).is_err() {
+                            resync = true;
+                            break;
+                        }
                         terminal.revision = delta.revision;
                     }
                     TerminalEvent::Exited { .. } => terminal.status = TerminalStatus::Exited,
@@ -545,6 +550,16 @@ impl TerminalSession {
                         terminal.status = TerminalStatus::Failed;
                     }
                 }
+                changed = true;
+            }
+            if resync {
+                let id = terminal.id.clone();
+                let cwd = terminal.cwd.clone();
+                let snapshot = self.backend.attach(&cwd, &id)?;
+                if snapshot.id != id || snapshot.revision < terminal.revision {
+                    return Err(TerminalError::new("terminal snapshot resync failed"));
+                }
+                *terminal = snapshot;
                 changed = true;
             }
         }
@@ -2377,6 +2392,60 @@ mod tests {
         }
     }
 
+    struct GapRecoveringTerminalBackend {
+        events: Mutex<Vec<TerminalEvent>>,
+        attach_count: Mutex<usize>,
+    }
+
+    impl TerminalBackend for GapRecoveringTerminalBackend {
+        fn start(
+            &self,
+            _cwd: &Path,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalId, TerminalError> {
+            Ok(TerminalId::new("gap-terminal"))
+        }
+
+        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn resize(
+            &self,
+            _id: &TerminalId,
+            columns: u16,
+            rows: u16,
+        ) -> Result<TerminalDelta, TerminalError> {
+            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
+        }
+
+        fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            Ok(self.events.lock().unwrap().drain(..).collect())
+        }
+
+        fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+            let mut count = self.attach_count.lock().unwrap();
+            if *count == 0 {
+                *count += 1;
+                return Err(TerminalError::new("not attached yet"));
+            }
+            let mut screen = TerminalScreen::empty(TerminalSize::new(80, 24));
+            screen.rows[0] = model_row(80, "resynced");
+            Ok(TerminalSnapshot {
+                id: id.clone(),
+                cwd: cwd.to_owned(),
+                status: TerminalStatus::Running,
+                revision: 2,
+                screen,
+            })
+        }
+    }
+
     struct SelectiveAttachBackend;
 
     impl TerminalBackend for SelectiveAttachBackend {
@@ -2450,7 +2519,7 @@ mod tests {
             }],
             cursor: Default::default(),
             modes: Default::default(),
-            scrollback: Vec::new(),
+            scrollback: None,
         }
     }
 
@@ -3027,6 +3096,29 @@ mod tests {
         let terminal = &terminals.terminals()[0];
         assert_eq!(terminal.screen.rows[0].plain_text().trim_end(), "done");
         assert_eq!(terminal.revision, 6);
+    }
+
+    #[test]
+    fn terminal_session_resyncs_from_a_snapshot_after_a_delta_gap() {
+        let backend = Arc::new(GapRecoveringTerminalBackend {
+            events: Mutex::new(vec![TerminalEvent::Delta(model_delta(
+                2,
+                TerminalSize::new(80, 24),
+                "stale delta",
+            ))]),
+            attach_count: Mutex::new(0),
+        });
+        let mut terminals = TerminalSession::new(backend);
+        terminals.start(Path::new("repo"), 80, 24).unwrap();
+
+        assert!(terminals.refresh().unwrap());
+        assert_eq!(terminals.terminals()[0].revision, 2);
+        assert_eq!(
+            terminals.terminals()[0].screen.rows[0]
+                .plain_text()
+                .trim_end(),
+            "resynced"
+        );
     }
 
     #[test]

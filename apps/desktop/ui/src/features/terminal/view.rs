@@ -12,9 +12,22 @@ impl Render for TerminalFeature {
         let screen = self.active_screen().cloned();
         let rows = screen
             .as_ref()
-            .map(|screen| screen.rows.clone())
+            .map(|screen| {
+                screen
+                    .scrollback
+                    .iter()
+                    .chain(screen.rows.iter())
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
-        let cursor = screen.as_ref().map(|screen| screen.cursor);
+        let cursor = screen.as_ref().map(|screen| {
+            let mut cursor = screen.cursor;
+            cursor.row = cursor
+                .row
+                .saturating_add(u16::try_from(screen.scrollback.len()).unwrap_or(u16::MAX));
+            cursor
+        });
         let output = self
             .terminals
             .iter()
@@ -207,6 +220,9 @@ fn render_cell(cell: TerminalCell) -> impl IntoElement {
     if cell.inverse {
         std::mem::swap(&mut foreground, &mut background);
     }
+    if cell.dim {
+        foreground = dim_color(foreground);
+    }
     let mut view = div()
         .flex_none()
         .w(px(7.8 * f32::from(cell.width)))
@@ -229,6 +245,15 @@ fn render_cell(cell: TerminalCell) -> impl IntoElement {
         view = view.underline();
     }
     view
+}
+
+fn dim_color(color: gpui::Rgba) -> gpui::Rgba {
+    gpui::Rgba {
+        r: color.r * 0.66,
+        g: color.g * 0.66,
+        b: color.b * 0.66,
+        a: color.a,
+    }
 }
 
 fn color(color: TerminalColor, default: gpui::Rgba) -> gpui::Rgba {

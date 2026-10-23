@@ -430,7 +430,7 @@ mod tests {
                 .collect(),
             cursor: Default::default(),
             modes: Default::default(),
-            scrollback: Vec::new(),
+            scrollback: None,
         }
     }
 

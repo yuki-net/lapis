@@ -86,3 +86,5 @@ Client から Host へ渡し、key encoding は Host 側が現在の Terminal mo
 
 Terminal Session の所有者は Host であり、Client の切断や Panel の close では終了しない。
 表示だけでは resize せず、明示的な resize 操作の結果を全 Client へ反映する。
+Scrollback は Host の Model に含まれる履歴を画面の前に描画し、Client 側で VT/ANSI
+を再解釈しない。履歴の上限と再同期は Protocol の Snapshot / Delta 契約に従う。

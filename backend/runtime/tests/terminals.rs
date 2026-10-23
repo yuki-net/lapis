@@ -106,7 +106,7 @@ impl FakeTerminalBackend {
                     }],
                     cursor: terminal.screen.cursor,
                     modes: terminal.screen.modes,
-                    scrollback: Vec::new(),
+                    scrollback: None,
                 }));
         });
     }
@@ -211,7 +211,7 @@ impl TerminalBackend for FakeTerminalBackend {
                     .collect(),
                 cursor: terminal.screen.cursor,
                 modes: terminal.screen.modes,
-                scrollback: Vec::new(),
+                scrollback: None,
             })
         })
     }

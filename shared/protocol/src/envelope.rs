@@ -132,7 +132,7 @@ mod tests {
                     changed_rows: Vec::new(),
                     cursor: crate::TerminalCursor::default(),
                     modes: crate::TerminalModes::default(),
-                    scrollback: Vec::new(),
+                    scrollback: None,
                 },
             },
         };

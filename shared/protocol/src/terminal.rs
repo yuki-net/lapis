@@ -6,7 +6,7 @@ pub use lapis_terminal::TerminalShell;
 pub use lapis_terminal::{
     TerminalCell, TerminalColor, TerminalCursor, TerminalDelta, TerminalInput, TerminalKey,
     TerminalKeyEvent, TerminalModes, TerminalModifiers, TerminalRevision, TerminalRow,
-    TerminalRowUpdate, TerminalScreen, TerminalSize,
+    TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta, TerminalSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

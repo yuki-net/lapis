@@ -7,8 +7,9 @@ use lapis_client_api::{
     TerminalTerminateRequest, WorkspaceConnectRequest,
 };
 use lapis_terminal::{
-    TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-    TerminalRevision, TerminalRowUpdate, TerminalSnapshot, TerminalStatus as ModelTerminalStatus,
+    MAX_SCROLLBACK_LINES, TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId,
+    TerminalInput, TerminalRevision, TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot,
+    TerminalStatus as ModelTerminalStatus,
 };
 use std::{
     collections::HashMap,
@@ -514,7 +515,11 @@ fn validate_snapshot(terminal: &lapis_client_api::TerminalSnapshot) -> Result<()
             .rows
             .iter()
             .any(|row| row.cells.len() != screen.size.columns as usize)
-        || screen.scrollback.len() > 2_000
+        || screen.scrollback.len() > MAX_SCROLLBACK_LINES
+        || screen
+            .scrollback
+            .iter()
+            .any(|row| row.cells.len() != screen.size.columns as usize)
     {
         return Err(error("terminal snapshot is invalid"));
     }
@@ -540,7 +545,11 @@ fn snapshot_delta(
             .collect(),
         cursor: terminal.screen.cursor,
         modes: terminal.screen.modes,
-        scrollback: terminal.screen.scrollback.clone(),
+        scrollback: Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: terminal.screen.scrollback.clone(),
+        }),
     })
 }
 

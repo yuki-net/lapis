@@ -887,7 +887,7 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
                 changed_rows: Vec::new(),
                 cursor: Default::default(),
                 modes: Default::default(),
-                scrollback: Vec::new(),
+                scrollback: None,
             })
         }
         fn terminate(
