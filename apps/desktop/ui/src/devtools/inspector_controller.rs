@@ -160,6 +160,10 @@ impl InspectorController {
     pub(super) fn inspector_handle(&self) -> Option<AnyWindowHandle> {
         self.inspector_window
     }
+
+    pub(super) fn inspection_entity(&self) -> Option<gpui::Entity<gpui::Inspector>> {
+        self.inspection.as_ref().map(Inspection::entity)
+    }
     pub(super) fn tree_rows(inspector: &gpui::Inspector, cx: &mut App) -> std::rc::Rc<[TreeRow]> {
         cx.global_mut::<Self>().tree.rows(
             inspector.element_tree(),

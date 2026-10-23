@@ -41,10 +41,9 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
                 .global::<InspectorController>()
                 .inspector_handle()
                 .unwrap();
-            let inspector = viewer
-                .downcast::<gpui::Inspector>()
-                .unwrap()
-                .root(cx)
+            let inspector = cx
+                .global::<InspectorController>()
+                .inspection_entity()
                 .unwrap();
             let id = inspector
                 .read(cx)
