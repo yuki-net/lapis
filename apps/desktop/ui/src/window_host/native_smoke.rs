@@ -97,6 +97,22 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         wait_for(&this, cx, None).await;
+        #[cfg(debug_assertions)]
+        if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            let child = this
+                .update(cx, |root, cx| {
+                    root.group
+                        .read(cx)
+                        .members
+                        .iter()
+                        .find(|(host, _)| **host != ROOT_HOST)
+                        .unwrap()
+                        .1
+                        .handle
+                })
+                .unwrap();
+            crate::devtools::native_smoke::check_pair(handle, child, cx).await;
+        }
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 2);
             eprintln!("SMOKE drag outside creates native window OK");
@@ -505,6 +521,9 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         wait_client(restored).await.unwrap();
+        #[cfg(debug_assertions)]
+        let closing_inspector = std::env::var_os("LAPIS_INSPECTOR_SMOKE")
+            .map(|_| crate::devtools::native_smoke::open_for_target(closing_child_handle, cx));
         closing_child_handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(child, None, window, cx))
@@ -512,6 +531,11 @@ pub(crate) fn run_native_smoke(
             .unwrap()
             .unwrap();
         wait_for(&this, cx, None).await;
+        #[cfg(debug_assertions)]
+        if let Some(viewer) = closing_inspector {
+            assert!(viewer.update(cx, |_, _, _| ()).is_err());
+            eprintln!("INSPECTOR_NATIVE_TARGET_CLOSE_PASS");
+        }
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 1);
             assert_eq!(
@@ -660,21 +684,55 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         }
+        #[cfg(debug_assertions)]
+        let peer_inspector = if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            let targets = this
+                .update(cx, |root, cx| {
+                    root.group
+                        .read(cx)
+                        .members
+                        .values()
+                        .map(|member| member.handle)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap();
+            for target in targets {
+                crate::devtools::native_smoke::open_for_target(target, cx);
+            }
+            let target = peer
+                .update(cx, |root, cx| {
+                    root.group.read(cx).members[&ROOT_HOST].handle
+                })
+                .unwrap();
+            Some(crate::devtools::native_smoke::open_for_target(target, cx))
+        } else {
+            None
+        };
+        #[cfg(not(debug_assertions))]
+        let peer_inspector: Option<gpui::AnyWindowHandle> = None;
+        let remaining_windows = 1 + usize::from(peer_inspector.is_some());
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(0, None, window, cx))
             })
             .unwrap()
             .unwrap();
-        wait_for(&peer.downgrade(), cx, Some(1)).await;
+        wait_for(&peer.downgrade(), cx, Some(remaining_windows)).await;
         let handle = peer
             .update(cx, |other, cx| {
                 assert_eq!(other.group.read(cx).members.len(), 1);
-                assert_eq!(cx.windows().len(), 1);
+                assert_eq!(cx.windows().len(), remaining_windows);
                 other.group.read(cx).members[&0].handle
             })
             .unwrap();
         eprintln!("SMOKE independent group, foreign transfer rejection and root cascade OK");
+        if let Some(viewer) = peer_inspector {
+            viewer
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+            wait_for(&peer.downgrade(), cx, Some(1)).await;
+            eprintln!("INSPECTOR_NATIVE_ROOT_CASCADE_PASS");
+        }
         let peer_path = shared_path.clone();
         peer.update(cx, |other, cx| {
             other.editor.update(cx, |editor, cx| {

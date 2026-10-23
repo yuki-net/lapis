@@ -22,6 +22,8 @@ pub(super) struct TreeState {
     rows: Rc<[TreeRow]>,
     dirty: bool,
     was_picking: bool,
+    width_index: usize,
+    scroll_target: Option<usize>,
 }
 
 impl TreeState {
@@ -49,7 +51,8 @@ impl TreeState {
             self.dirty = true;
         }
         // Pick確定時に祖先を展開する。単なるpointer移動では折り畳みを変えない。
-        if !picking && (self.was_picking || self.selected.as_ref() != selected) {
+        let reveal = !picking && (self.was_picking || self.selected.as_ref() != selected);
+        if reveal {
             self.selected = selected.cloned();
             let mut current = selected;
             for _ in 0..self.parents.len() {
@@ -91,10 +94,31 @@ impl TreeState {
                     });
                 }
             }
+            // 幅の測定候補もsnapshot変更時だけ選ぶ。描画のたびに全行を走査しない。
+            self.width_index = rows
+                .iter()
+                .enumerate()
+                .max_by_key(|(_, row)| {
+                    row.depth * 14
+                        + row.node.id.path.global_id.to_string().chars().count() * 10
+                        + row.node.element_type.len() * 7
+                })
+                .map_or(0, |(index, _)| index);
             self.rows = rows.into();
             self.dirty = false;
         }
+        if reveal {
+            self.scroll_target = selected
+                .and_then(|selected| self.rows.iter().position(|row| &row.node.id == selected));
+        }
         self.rows.clone()
+    }
+
+    pub fn width_index(&self) -> usize {
+        self.width_index
+    }
+    pub fn take_scroll_target(&mut self) -> Option<usize> {
+        self.scroll_target.take()
     }
 }
 

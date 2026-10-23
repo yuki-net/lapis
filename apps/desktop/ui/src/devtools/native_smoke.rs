@@ -39,11 +39,11 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
             assert_eq!(before, window.viewport_size());
             let viewer = cx
                 .global::<InspectorController>()
-                .inspector_handle()
+                .inspector_handle(target.window_id())
                 .unwrap();
             let inspector = cx
                 .global::<InspectorController>()
-                .inspection_entity()
+                .inspection_entity(target.window_id())
                 .unwrap();
             let id = inspector
                 .read(cx)
@@ -97,4 +97,76 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
         })
         .unwrap();
     eprintln!("INSPECTOR_NATIVE_SMOKE_PASS");
+}
+
+pub(crate) fn open_for_target(target: AnyWindowHandle, cx: &mut AsyncApp) -> AnyWindowHandle {
+    target
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap()
+}
+
+/// 実際のRoot / Detachedを同時検査し、開閉してもTargetの所属に触れない。
+pub(crate) async fn check_pair(root: AnyWindowHandle, child: AnyWindowHandle, cx: &mut AsyncApp) {
+    let a_viewer = open_for_target(root, cx);
+    assert_eq!(open_for_target(root, cx).window_id(), a_viewer.window_id());
+    let b_viewer = open_for_target(child, cx);
+    assert_ne!(a_viewer.window_id(), b_viewer.window_id());
+    for target in [root, child] {
+        target
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            })
+            .unwrap();
+    }
+    let (a, b) = cx
+        .update(|cx| {
+            let controller = cx.global::<InspectorController>();
+            (
+                controller.inspection_entity(root.window_id()).unwrap(),
+                controller.inspection_entity(child.window_id()).unwrap(),
+            )
+        })
+        .unwrap();
+    cx.update(|cx| {
+        assert_ne!(a.entity_id(), b.entity_id());
+        let id = a.read(cx).element_tree().first().unwrap().id.clone();
+        InspectorController::select_element(id.clone(), a.entity_id(), cx);
+        InspectorController::hover_element(Some(id), a.entity_id(), cx);
+        assert!(b.read(cx).active_element_id().is_none());
+        assert!(b.read(cx).hovered_element_id().is_none());
+        b.update(cx, |inspector, _| inspector.start_picking());
+    })
+    .unwrap();
+    root.update(cx, |_, window, cx| {
+        assert!(!window.is_inspector_picking(cx))
+    })
+    .unwrap();
+    child
+        .update(cx, |_, window, cx| assert!(window.is_inspector_picking(cx)))
+        .unwrap();
+    a_viewer
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    Timer::after(Duration::from_millis(100)).await;
+    assert!(root.update(cx, |_, _, _| ()).is_ok());
+    assert!(b_viewer.update(cx, |_, _, _| ()).is_ok());
+    let reopened = open_for_target(root, cx);
+    assert_ne!(reopened.window_id(), a_viewer.window_id());
+    for viewer in [reopened, b_viewer] {
+        viewer
+            .update(cx, |_, window, _| window.remove_window())
+            .unwrap();
+    }
+    Timer::after(Duration::from_millis(100)).await;
+    for target in [root, child] {
+        target
+            .update(cx, |_, window, cx| {
+                assert!(!window.is_inspector_picking(cx))
+            })
+            .unwrap();
+    }
+    eprintln!("INSPECTOR_NATIVE_PAIR_PASS");
 }

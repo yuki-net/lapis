@@ -68,6 +68,9 @@ Windows では `cargo build -p lapis` 後に `./scripts/test_window_host.ps1` �
 
 Debugの独立Inspectorは既存のHelpメニュー/コマンドから開く。検査APIとの境界は
 `ui/src/devtools/inspection.rs`、Treeの表示状態とOverlayは同じdevtools内が所有する。
+各Root/Detachedから独立して開ける。同じTargetへのOpenは既存Inspectorを使用し、
+Target終了時は対応するInspectorだけを解放する。共通Window chromeを使うがタブ配置には含めない。
+Treeは表示範囲だけをUI化し、Pick/選択の確定時に該当行を表示する。
 `./scripts/test_inspector.ps1 -Binary <debug/lapis.exe>`で隔離したNative Windowの開閉・再開、
 Tree選択・Hover・Detailsと通常時/表示時/Pick中のCPU・メモリ・CPU描画時間を採取する。
 短時間の環境依存サンプルであり、GPU時間・複数モニターの実操作・継続性能は別途確認する。

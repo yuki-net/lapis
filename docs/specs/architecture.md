@@ -43,6 +43,10 @@
 
 DebugのInspectorでは、GPUIが描画要素の識別・検査snapshot・Hit Testingと検査状態を所有する。
 Lapisのdevtoolsは独立OS Window・購読の寿命、Treeの開閉/表示cache、Overlayの配色を所有する。
+Targetの世代付きWindowIdごとに一つのsessionを持ち、検査EntityIdで遅延UI操作を照合する。
+Inspectorのcloseは対象を閉じず、Targetのcloseは対応するInspectorだけを閉じる。
+Treeの可視行はGPUIのuniform_listで描画し、選択・Hover・開閉・scrollを他sessionと共有しない。
+Window optionsはapp、タイトルバー/controlsはwindow_host::chromeをRoot・Detachedと共用する。
 描画完了のEntity通知からInspectorだけを更新し、終了時に購読と対象の検査資源を解放する。
 Document/Toolのタブ配置へInspectorを登録しない。公式との差分と撤去条件は
 [vendor GPUI](../../vendor/gpui/README.LAPIS.md)で管理する。

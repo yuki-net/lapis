@@ -13,17 +13,17 @@ pub(super) fn render_inspector(
     window: &mut Window,
     cx: &mut Context<Inspector>,
 ) -> AnyElement {
-    let content_scroll = InspectorController::content_scroll(cx);
+    let content_scroll = InspectorController::content_scroll(cx.entity_id(), cx);
     div()
         .size_full()
         .flex()
         .flex_col()
         .bg(theme::colors().background_secondary)
         .text_color(theme::colors().text_primary)
-        .child(
+        .child(crate::window_host::chrome::title_bar(
             div()
-                .h(px(44.0))
-                .flex_none()
+                .h_full()
+                .flex_1()
                 .flex()
                 .items_center()
                 .justify_between()
@@ -35,7 +35,7 @@ pub(super) fn render_inspector(
                         .flex()
                         .items_center()
                         .gap_2()
-                        .child("GPUI Inspector")
+                        .child("Lapis Inspector")
                         .child(
                             div()
                                 .text_size(px(10.0))
@@ -90,7 +90,8 @@ pub(super) fn render_inspector(
                                 })),
                         ),
                 ),
-        )
+            |_, window, _| window.remove_window(),
+        ))
         .child(
             div()
                 .min_h(px(0.0))

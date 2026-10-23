@@ -20,7 +20,7 @@ use crate::{
 use gpui::{
     AnyView, App, ClickEvent, Context, CursorStyle, ElementId, FocusHandle, Focusable,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
-    Timer, Window, WindowControlArea, div, point, prelude::*, px, relative,
+    Timer, Window, div, point, prelude::*, px, relative,
 };
 use lapis_workspace::FileEntryKind;
 use std::{cell::RefCell, collections::HashMap, time::Duration};

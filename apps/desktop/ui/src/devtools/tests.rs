@@ -118,8 +118,11 @@ fn gpui_drop_waits_for_the_drag_start_button(cx: &mut TestAppContext) {
     assert!(!visual.read(|cx| cx.has_active_drag()));
 }
 
-fn inspector(cx: &mut TestAppContext) -> Entity<Inspector> {
-    let viewer = cx.read(|cx| cx.global::<InspectorController>().inspector_handle());
+fn inspector(target: WindowHandle<Target>, cx: &mut TestAppContext) -> Entity<Inspector> {
+    let viewer = cx.read(|cx| {
+        cx.global::<InspectorController>()
+            .inspector_handle(target.window_id())
+    });
     viewer
         .unwrap()
         .downcast::<Inspector>()
@@ -140,7 +143,7 @@ fn external_tree_selection_hover_details_and_refresh(cx: &mut TestAppContext) {
         })
         .unwrap();
     draw(target, cx);
-    let inspector = inspector(cx);
+    let inspector = inspector(target, cx);
     let (parent, child) = inspector.read_with(cx, |inspector, _| {
         let nodes = inspector.element_tree();
         let parent = nodes
@@ -235,14 +238,14 @@ fn close_reopen_target_release_and_delayed_viewer_update(cx: &mut TestAppContext
         })
         .unwrap();
     draw(target, cx);
-    let old = inspector(cx);
+    let old = inspector(target, cx);
     let weak = old.downgrade();
     cx.update(|cx| {
         // 通知のdeferが残った状態でviewerを閉じても、Targetは生き続ける。
         old.update(cx, |_, cx| cx.emit(gpui::InspectorUpdated));
         let viewer = cx
             .global::<InspectorController>()
-            .inspector_handle()
+            .inspector_handle(target.window_id())
             .unwrap();
         viewer
             .update(cx, |_, window, _| window.remove_window())
@@ -265,7 +268,7 @@ fn close_reopen_target_release_and_delayed_viewer_update(cx: &mut TestAppContext
     draw(target, cx);
     let viewer = cx.read(|cx| {
         cx.global::<InspectorController>()
-            .inspector_handle()
+            .inspector_handle(target.window_id())
             .unwrap()
     });
     target
@@ -283,7 +286,7 @@ fn pick_and_wheel_use_target_hit_testing(cx: &mut TestAppContext) {
             InspectorController::toggle(window, cx).unwrap()
         })
         .unwrap();
-    let inspector = inspector(cx);
+    let inspector = inspector(target, cx);
     inspector.update(cx, |inspector, _| inspector.start_picking());
     draw(target, cx);
     let mut visual = VisualTestContext::from_window(target.into(), cx);
@@ -384,12 +387,12 @@ fn deferred_old_ui_action_is_rejected_after_reopen(cx: &mut TestAppContext) {
             InspectorController::toggle(window, cx).unwrap()
         })
         .unwrap();
-    let old = inspector(cx);
+    let old = inspector(target, cx);
     let called = std::rc::Rc::new(std::cell::Cell::new(false));
     let captured = called.clone();
     cx.update(|cx| {
         old.update(cx, |_, cx| {
-            InspectorController::defer(cx, move |_| captured.set(true))
+            InspectorController::defer(cx, move |_, _| captured.set(true))
         });
         cx.update_window(target.into(), |_, window, cx| {
             assert!(!InspectorController::toggle(window, cx).unwrap());
@@ -399,7 +402,144 @@ fn deferred_old_ui_action_is_rejected_after_reopen(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     assert!(!called.get());
-    assert_ne!(old.entity_id(), inspector(cx).entity_id());
+    assert_ne!(old.entity_id(), inspector(target, cx).entity_id());
+}
+
+#[gpui::test]
+fn controller_keeps_target_sessions_and_ui_state_independent(cx: &mut TestAppContext) {
+    let first = setup(cx);
+    let second = cx.add_window(|_, _| Target {
+        width: px(300.),
+        child: true,
+    });
+    let a_viewer = first
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    let same = first
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    assert_eq!(a_viewer.window_id(), same.window_id());
+    let b_viewer = second
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    assert_ne!(a_viewer.window_id(), b_viewer.window_id());
+    draw(first, cx);
+    draw(second, cx);
+    let a = inspector(first, cx);
+    let b = inspector(second, cx);
+    assert_ne!(a.entity_id(), b.entity_id());
+    let parent = a.read_with(cx, |inspector, _| {
+        inspector
+            .element_tree()
+            .iter()
+            .find(|node| {
+                node.id
+                    .path
+                    .global_id
+                    .to_string()
+                    .ends_with("fixture-parent")
+            })
+            .unwrap()
+            .id
+            .clone()
+    });
+    cx.update(|cx| {
+        InspectorController::select_element(parent.clone(), a.entity_id(), cx);
+        InspectorController::hover_element(Some(parent.clone()), a.entity_id(), cx);
+        InspectorController::toggle_tree_node(parent.clone(), a.entity_id(), cx);
+    });
+    draw(first, cx);
+    draw(second, cx);
+    b.read_with(cx, |inspector, _| {
+        assert!(inspector.active_element_id().is_none());
+        assert!(inspector.hovered_element_id().is_none());
+    });
+    let a_rows = a.update(cx, |inspector, cx| {
+        InspectorController::tree_rows(inspector, cx.entity_id(), cx)
+    });
+    let b_rows = b.update(cx, |inspector, cx| {
+        InspectorController::tree_rows(inspector, cx.entity_id(), cx)
+    });
+    assert!(a_rows.len() < b_rows.len());
+    // 共通ScrollStateのhandleを別sessionへ渡していないことを確認する。
+    let (a_scroll, b_scroll) = cx.read(|cx| {
+        (
+            InspectorController::tree_scroll(a.entity_id(), cx),
+            InspectorController::tree_scroll(b.entity_id(), cx),
+        )
+    });
+    assert!(!a_scroll.shares_state_with(&b_scroll));
+    a_viewer
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert!(
+        first
+            .update(cx, |target, _, _| target.width = px(220.))
+            .is_ok()
+    );
+    assert!(b_viewer.update(cx, |_, _, _| ()).is_ok());
+    let reopened = first
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    assert_ne!(reopened.window_id(), a_viewer.window_id());
+    assert_ne!(a.entity_id(), inspector(first, cx).entity_id());
+    second
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert!(b_viewer.update(cx, |_, _, _| ()).is_err());
+    assert!(reopened.update(cx, |_, _, _| ()).is_ok());
+    first
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+    assert!(reopened.update(cx, |_, _, _| ()).is_err());
+}
+
+#[gpui::test]
+fn old_target_handle_and_delayed_ui_cannot_attach_to_a_new_window(cx: &mut TestAppContext) {
+    let old_target = setup(cx);
+    old_target
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    let old = inspector(old_target, cx);
+    let called = std::rc::Rc::new(std::cell::Cell::new(false));
+    let captured = called.clone();
+    cx.update(|cx| {
+        old.update(cx, |_, cx| {
+            InspectorController::defer(cx, move |_, _| captured.set(true))
+        });
+        cx.update_window(old_target.into(), |_, window, _| window.remove_window())
+            .unwrap();
+    });
+    cx.run_until_parked();
+    let replacement = cx.add_window(|_, _| Target {
+        width: px(150.),
+        child: true,
+    });
+    replacement
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    assert_ne!(replacement.window_id(), old_target.window_id());
+    assert!(old_target.update(cx, |_, _, _| ()).is_err());
+    assert!(!called.get());
+    assert_ne!(old.entity_id(), inspector(replacement, cx).entity_id());
+    old.update(cx, |_, cx| cx.emit(gpui::InspectorUpdated));
+    cx.run_until_parked();
+    assert!(replacement.update(cx, |_, _, _| ()).is_ok());
 }
 
 #[gpui::test]
@@ -452,6 +592,85 @@ fn gpui_inspection_state_is_owned_by_each_target(cx: &mut TestAppContext) {
 struct SourceProbe {
     div: gpui::Div,
     calls: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+struct LargeTarget;
+impl Render for LargeTarget {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().children(
+            (0..3000usize).map(|index| div().id(("large-child", index)).w_full().h(px(1.))),
+        )
+    }
+}
+
+#[gpui::test]
+fn large_tree_renders_only_viewport_rows_and_reveals_selection(cx: &mut TestAppContext) {
+    cx.update(super::init);
+    let target = cx.add_window(|_, _| LargeTarget);
+    let viewer = cx
+        .update_window(target.into(), |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    draw(target, cx);
+    let engine = cx.read(|cx| {
+        cx.global::<InspectorController>()
+            .inspection_entity(target.window_id())
+            .unwrap()
+    });
+    assert!(engine.read_with(cx, |inspector, _| inspector.element_tree().len()) >= 3000);
+    // Viewer自体の描画済み要素を検査し、全3000行のUIを作っていないことを確認する。
+    let viewer_inspection = viewer
+        .update(cx, |_, window, cx| {
+            let inspection = Inspection::enable(window, cx);
+            window.draw(cx).clear();
+            inspection
+        })
+        .unwrap();
+    let rendered_rows = viewer_inspection.read_with(cx, |inspector, _| {
+        inspector
+            .element_tree()
+            .iter()
+            .filter(|node| {
+                node.id
+                    .path
+                    .global_id
+                    .to_string()
+                    .contains("inspector-tree-row")
+            })
+            .count()
+    });
+    assert!(
+        rendered_rows > 0 && rendered_rows < 200,
+        "rendered rows: {rendered_rows}"
+    );
+    let last = engine.read_with(cx, |inspector, _| {
+        inspector.element_tree().last().unwrap().id.clone()
+    });
+    cx.update(|cx| InspectorController::select_element(last.clone(), engine.entity_id(), cx));
+    draw(target, cx);
+    viewer
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        })
+        .unwrap();
+    let offset = cx.read(|cx| {
+        InspectorController::tree_scroll(engine.entity_id(), cx)
+            .handle()
+            .offset()
+    });
+    assert!(offset.y < px(0.));
+    engine.read_with(cx, |inspector, _| {
+        assert_eq!(inspector.active_element_id(), Some(&last))
+    });
+    viewer
+        .update(cx, |_, window, _| {
+            Inspection::disable(window);
+            window.remove_window();
+        })
+        .unwrap();
+    cx.run_until_parked();
 }
 impl gpui::Element for SourceProbe {
     type RequestLayoutState = <gpui::Div as gpui::Element>::RequestLayoutState;
