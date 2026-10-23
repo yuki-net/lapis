@@ -8,6 +8,8 @@ pub(crate) enum MenuAction {
     ConnectHost,
     OpenProject,
     OpenFile,
+    Save,
+    SaveAs,
     CloseProject,
     CloseWindow,
     Undo,
@@ -75,6 +77,13 @@ pub(crate) const ROOT_MENUS: &[(MenuId, &str)] = &[
 ];
 
 const FILE_MENU: &[MenuItemDefinition] = &[
+    MenuItemDefinition::action("save", "Save", Some("Ctrl+S"), MenuAction::Save),
+    MenuItemDefinition::action(
+        "save-as",
+        "Save As…",
+        Some("Ctrl+Shift+S"),
+        MenuAction::SaveAs,
+    ),
     MenuItemDefinition::action("connect-host", "Hostに接続…", None, MenuAction::ConnectHost),
     MenuItemDefinition::action(
         "new-file",

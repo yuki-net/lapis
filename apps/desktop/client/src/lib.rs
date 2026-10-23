@@ -97,6 +97,10 @@ impl SettingsSession {
 
 /// ネイティブダイアログを利用するユースケース側の契約。
 pub trait WorkspaceDialog: Send + Sync {
+    /// Remoteではnative pickerを使わず、この名前空間内の相対pathを入力する。
+    fn path_scope(&self) -> Option<PathBuf> {
+        None
+    }
     fn choose_workspace_path(&self) -> Option<PathBuf>;
     fn choose_file_path(&self) -> Option<PathBuf> {
         None
@@ -157,6 +161,8 @@ impl Default for ConversationViewState {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RestoredTerminal {
+    #[serde(default)]
+    pub id: Option<TerminalId>,
     pub cwd: PathBuf,
     pub status: TerminalStatus,
     pub columns: u16,
@@ -283,6 +289,7 @@ impl ConversationSession {
             record.terminals = terminals
                 .iter()
                 .map(|terminal| RestoredTerminal {
+                    id: Some(terminal.id.clone()),
                     cwd: terminal.cwd.clone(),
                     status: terminal.status,
                     columns: terminal.columns,
@@ -451,20 +458,29 @@ impl TerminalSession {
         &self.terminals
     }
 
-    /// 前回終了時の端末一覧を、再実行せず参照専用の要約として復元する。
+    /// 保存済みidentityだけを再アタッチする。shellやCLIを再実行しない。
     pub fn restore_summaries(&mut self, terminals: &[RestoredTerminal]) {
         self.terminals = terminals
             .iter()
             .enumerate()
             .map(|(index, terminal)| TerminalSnapshot {
-                id: TerminalId::new(format!("restored-terminal-{}", index + 1)),
+                id: terminal
+                    .id
+                    .clone()
+                    .unwrap_or_else(|| TerminalId::new(format!("restored-terminal-{}", index + 1))),
                 cwd: terminal.cwd.clone(),
-                status: TerminalStatus::Exited,
+                status: if terminal.id.is_some() {
+                    TerminalStatus::Disconnected
+                } else {
+                    TerminalStatus::Exited
+                },
                 columns: terminal.columns,
                 rows: terminal.rows,
                 output: Vec::new(),
                 output_sequence: 0,
                 output_truncated: false,
+                output_offset: 0,
+                screen: None,
             })
             .collect();
     }
@@ -488,7 +504,21 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError> {
-        let id = self.backend.start(cwd, columns, rows)?;
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+    }
+
+    pub fn start_with_shell(
+        &mut self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        let id = self.backend.start_with_shell(cwd, columns, rows, shell)?;
+        if let Ok(snapshot) = self.backend.attach(cwd, &id) {
+            self.terminals.push(snapshot);
+            return Ok(id);
+        }
         self.terminals.push(TerminalSnapshot {
             id: id.clone(),
             cwd: cwd.to_owned(),
@@ -498,8 +528,28 @@ impl TerminalSession {
             output: Vec::new(),
             output_sequence: 0,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         });
         Ok(id)
+    }
+
+    pub fn discover(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        self.backend.list(cwd)
+    }
+
+    pub fn attach(&mut self, cwd: &Path, id: &TerminalId) -> Result<(), TerminalError> {
+        let snapshot = self.backend.attach(cwd, id)?;
+        if let Some(existing) = self
+            .terminals
+            .iter_mut()
+            .find(|terminal| terminal.id == *id)
+        {
+            *existing = snapshot;
+        } else {
+            self.terminals.push(snapshot);
+        }
+        Ok(())
     }
 
     pub fn input(&self, id: &TerminalId, text: &str) -> Result<(), TerminalError> {
@@ -530,7 +580,20 @@ impl TerminalSession {
 
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
+        let mut attach_error = None;
         for terminal in &mut self.terminals {
+            if terminal.status == TerminalStatus::Disconnected {
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                        continue;
+                    }
+                }
+            }
             if terminal.status != TerminalStatus::Running {
                 continue;
             }
@@ -544,6 +607,9 @@ impl TerminalSession {
                         }
                         const OUTPUT_LIMIT: usize = 256 * 1024;
                         if snapshot.output.len() > OUTPUT_LIMIT {
+                            snapshot.output_offset = snapshot
+                                .output_offset
+                                .saturating_add((snapshot.output.len() - OUTPUT_LIMIT) as u64);
                             snapshot
                                 .output
                                 .drain(..snapshot.output.len() - OUTPUT_LIMIT);
@@ -561,6 +627,8 @@ impl TerminalSession {
                         if terminal.output.len() > OUTPUT_LIMIT {
                             let start = terminal.output.len() - OUTPUT_LIMIT;
                             terminal.output.drain(..start);
+                            terminal.output_offset =
+                                terminal.output_offset.saturating_add(start as u64);
                             terminal.output_truncated = true;
                         }
                     }
@@ -571,8 +639,34 @@ impl TerminalSession {
                 }
                 changed = true;
             }
+            if terminal.screen.as_ref().is_some_and(|screen| {
+                if screen.output_end < terminal.output_offset {
+                    return true;
+                }
+                let suffix = (screen.output_end - terminal.output_offset) as usize;
+                terminal.output.get(suffix..).is_some_and(|bytes| {
+                    bytes
+                        .windows(7)
+                        .any(|window| window == b"\x1b[?1049" || window == b"\x1b[?1047")
+                        || bytes.windows(5).any(|window| window == b"\x1b[?47")
+                })
+            }) {
+                // buffer欠落や通常/代替画面の切替時は、Hostの現在画面を取り直す。
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                    }
+                }
+            }
         }
-        Ok(changed)
+        match attach_error {
+            Some(error) => Err(TerminalError::new(error)),
+            None => Ok(changed),
+        }
     }
 
     pub fn terminate(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
@@ -1102,6 +1196,28 @@ impl EditorSession {
 
     pub fn workspace_root(&self) -> Option<&Path> {
         self.workspace_root.as_deref()
+    }
+
+    pub fn workspace_path(
+        &self,
+        expected_root: &Path,
+        input: &str,
+    ) -> Result<PathBuf, WorkspaceError> {
+        if self.workspace_root() != Some(expected_root) {
+            return Err(WorkspaceError::new(
+                "作業環境が切り替わりました。操作をやり直してください",
+            ));
+        }
+        if input.is_empty()
+            || Path::new(input)
+                .components()
+                .any(|part| !matches!(part, std::path::Component::Normal(_)))
+        {
+            return Err(WorkspaceError::new(
+                "Workspace内の相対pathを指定してください",
+            ));
+        }
+        Ok(expected_root.join(input))
     }
 
     pub fn workspace_id(&self) -> Option<&WorkspaceId> {
@@ -1642,6 +1758,25 @@ impl EditorSession {
         let cache = self.refresh_after_error(result)?;
         self.required_document_mut()?.update(cache);
         self.persist_best_effort();
+        Ok(DocumentAction::Completed)
+    }
+
+    pub fn save_document_to(&mut self, path: PathBuf) -> Result<(), DocumentError> {
+        let open = self.required_document()?;
+        let result = self
+            .document_connection
+            .save(&open.id, open.document.revision(), Some(path));
+        let cache = self.refresh_after_error(result)?;
+        self.required_document_mut()?.update(cache);
+        self.persist_best_effort();
+        Ok(())
+    }
+
+    pub fn save_document_as(&mut self) -> Result<DocumentAction, DocumentError> {
+        let Some(path) = self.file_dialog.choose_save_path(&self.display_name()) else {
+            return Ok(DocumentAction::Cancelled);
+        };
+        self.save_document_to(path)?;
         Ok(DocumentAction::Completed)
     }
 
@@ -2200,6 +2335,62 @@ mod tests {
         }
     }
 
+    struct SelectiveAttachBackend;
+
+    impl TerminalBackend for SelectiveAttachBackend {
+        fn start(
+            &self,
+            _cwd: &Path,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalId, TerminalError> {
+            panic!("refresh must never start a terminal")
+        }
+
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+            unreachable!("refresh does not send terminal input")
+        }
+
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            unreachable!("refresh does not resize terminals")
+        }
+
+        fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            if id.as_str() == "recoverable" {
+                Ok(vec![TerminalEvent::Output(
+                    lapis_terminal::TerminalOutput {
+                        sequence: 1,
+                        data: b"later terminal".to_vec(),
+                    },
+                )])
+            } else {
+                Ok(Vec::new())
+            }
+        }
+
+        fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
+            unreachable!("refresh does not terminate terminals")
+        }
+
+        fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+            if id.as_str() == "unavailable" {
+                return Err(TerminalError::new("terminal is still unavailable"));
+            }
+            Ok(TerminalSnapshot {
+                id: id.clone(),
+                cwd: cwd.to_owned(),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+                output: Vec::new(),
+                output_sequence: 0,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
+            })
+        }
+    }
+
     impl lapis_task::TaskConnection for MemoryTaskBackend {
         fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
             Ok(self
@@ -2619,6 +2810,7 @@ mod tests {
         let backend = Arc::new(UnavailableTerminalBackend);
         let mut terminals = TerminalSession::new(backend);
         terminals.restore_summaries(&[RestoredTerminal {
+            id: None,
             cwd: PathBuf::from("repo"),
             status: TerminalStatus::Running,
             columns: 120,
@@ -2629,6 +2821,110 @@ mod tests {
         assert_eq!(terminals.terminals()[0].status, TerminalStatus::Exited);
         assert!(terminals.terminals()[0].output.is_empty());
         assert!(!terminals.refresh().unwrap());
+
+        terminals.restore_summaries(&[RestoredTerminal {
+            id: Some(TerminalId::new("live-host-terminal")),
+            cwd: PathBuf::from("repo"),
+            status: TerminalStatus::Running,
+            columns: 80,
+            rows: 24,
+        }]);
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+        assert!(terminals.refresh().is_err());
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+    }
+
+    #[test]
+    fn terminal_refresh_continues_after_one_attach_failure() {
+        let mut terminals = TerminalSession::new(Arc::new(SelectiveAttachBackend));
+        terminals.restore_summaries(&[
+            RestoredTerminal {
+                id: Some(TerminalId::new("unavailable")),
+                cwd: PathBuf::from("first"),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            },
+            RestoredTerminal {
+                id: Some(TerminalId::new("recoverable")),
+                cwd: PathBuf::from("second"),
+                status: TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            },
+        ]);
+
+        let error = terminals
+            .refresh()
+            .expect_err("the failed attach is reported");
+        assert_eq!(error.to_string(), "terminal is still unavailable");
+        assert_eq!(
+            terminals.terminals()[0].status,
+            TerminalStatus::Disconnected
+        );
+        assert_eq!(terminals.terminals()[1].status, TerminalStatus::Running);
+        assert_eq!(terminals.terminals()[1].output, b"later terminal");
+    }
+
+    #[test]
+    fn saved_terminal_identity_reattaches_without_starting_a_shell() {
+        struct AttachOnly;
+        impl TerminalBackend for AttachOnly {
+            fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+                panic!("restore must never start a process")
+            }
+            fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+                Ok(Vec::new())
+            }
+            fn terminate(&self, _: &TerminalId) -> Result<(), TerminalError> {
+                unreachable!()
+            }
+            fn attach(
+                &self,
+                cwd: &Path,
+                id: &TerminalId,
+            ) -> Result<TerminalSnapshot, TerminalError> {
+                assert_eq!(id.as_str(), "host-terminal");
+                Ok(TerminalSnapshot {
+                    id: id.clone(),
+                    cwd: cwd.to_owned(),
+                    status: TerminalStatus::Running,
+                    columns: 100,
+                    rows: 28,
+                    output: b"already running".to_vec(),
+                    output_sequence: 7,
+                    output_truncated: false,
+                    output_offset: 0,
+                    screen: None,
+                })
+            }
+        }
+        let mut session = TerminalSession::new(Arc::new(AttachOnly));
+        session.restore_summaries(&[RestoredTerminal {
+            id: Some(TerminalId::new("host-terminal")),
+            cwd: "repo".into(),
+            status: TerminalStatus::Running,
+            columns: 80,
+            rows: 24,
+        }]);
+        assert_eq!(session.terminals()[0].status, TerminalStatus::Disconnected);
+        session.refresh().unwrap();
+        assert_eq!(session.terminals()[0].id.as_str(), "host-terminal");
+        assert_eq!(session.terminals()[0].output, b"already running");
+        assert_eq!(session.terminals()[0].output_sequence, 7);
+        assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
     }
 
     #[test]

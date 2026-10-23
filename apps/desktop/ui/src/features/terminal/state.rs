@@ -116,6 +116,13 @@ impl TerminalRequests {
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
     pub(super) terminals: Vec<lapis_terminal::TerminalSnapshot>,
+    pub(super) discovered: Vec<lapis_terminal::TerminalSnapshot>,
+    pub(super) selected: Option<lapis_terminal::TerminalId>,
+    selected_by_context: HashMap<(Option<PathBuf>, ConversationId), lapis_terminal::TerminalId>,
+    pub(super) focus: gpui::FocusHandle,
+    pub(super) marked: String,
+    pub(super) screens: HashMap<String, super::screen::TerminalScreen>,
+    pub(super) visible_output: Option<(lapis_terminal::TerminalId, u64)>,
     pub(super) root: Option<std::path::PathBuf>,
     conversation: ConversationId,
     requests: TerminalRequests,
@@ -138,6 +145,13 @@ impl TerminalFeature {
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
             terminals,
+            discovered: Vec::new(),
+            selected: None,
+            selected_by_context: HashMap::new(),
+            focus: cx.focus_handle(),
+            marked: String::new(),
+            screens: HashMap::new(),
+            visible_output: None,
             root,
             conversation,
             requests: TerminalRequests::default(),
@@ -204,19 +218,40 @@ impl TerminalFeature {
             return;
         }
         self.requests.context_unavailable = false;
+        if let Some(selected) = self.active_id() {
+            self.selected_by_context
+                .insert((self.root.clone(), self.conversation.clone()), selected);
+        }
+        self.selected = self
+            .selected_by_context
+            .get(&(root.clone(), conversation.clone()))
+            .cloned();
+        self.discovered.clear();
+        self.marked.clear();
         self.root = root;
         self.conversation = conversation;
         self.terminals.clear();
         cx.notify();
     }
     pub(crate) fn start(&mut self, cx: &mut gpui::Context<Self>) {
+        self.start_shell(lapis_terminal::TerminalShell::Default, cx);
+    }
+
+    pub(super) fn start_shell(
+        &mut self,
+        shell: lapis_terminal::TerminalShell,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(root) = self.root.clone() else {
             return;
         };
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.action(|session| session.start(&root, 80, 24).map(|_| ()))),
+            move |sessions| {
+                Ok(sessions
+                    .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ())))
+            },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
@@ -224,6 +259,8 @@ impl TerminalFeature {
                 match result {
                     Ok((result, terminals)) => {
                         feature.terminals = terminals;
+                        feature.selected =
+                            feature.terminals.last().map(|terminal| terminal.id.clone());
                         feature.message = result.err().unwrap_or_default();
                         feature.message_from_poll = false;
                     }
@@ -243,16 +280,164 @@ impl TerminalFeature {
         }
     }
     pub(crate) fn send_clipboard(&mut self, cx: &mut gpui::Context<Self>) {
-        let Some(id) = self.terminals.last().map(|terminal| terminal.id.clone()) else {
+        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
+        let text = if self
+            .active_screen()
+            .is_some_and(|screen| screen.bracketed_paste())
+        {
+            format!("\x1b[200~{text}\x1b[201~")
+        } else {
+            text
+        };
+        self.send_text(text, cx);
+    }
+
+    pub(super) fn active_id(&self) -> Option<lapis_terminal::TerminalId> {
+        self.selected
+            .as_ref()
+            .filter(|id| self.terminals.iter().any(|terminal| terminal.id == **id))
+            .cloned()
+            .or_else(|| self.terminals.last().map(|terminal| terminal.id.clone()))
+    }
+
+    pub(super) fn active_screen(&self) -> Option<&super::screen::TerminalScreen> {
+        self.screens.get(self.active_id()?.as_str())
+    }
+
+    pub(super) fn update_screens(&mut self) {
+        self.screens.retain(|id, _| {
+            self.terminals
+                .iter()
+                .any(|terminal| terminal.id.as_str() == id)
+        });
+        for terminal in &self.terminals {
+            match self.screens.entry(terminal.id.as_str().to_owned()) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().update(terminal)
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(super::screen::TerminalScreen::new(terminal));
+                }
+            }
+        }
+    }
+
+    pub(super) fn discover(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(root) = self.root.clone() else {
             return;
         };
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.action(|session| session.input(&id, &text))),
+            move |sessions| {
+                sessions
+                    .session
+                    .discover(&root)
+                    .map_err(|error| error.to_string())
+            },
+            move |feature, result, cx| {
+                if feature.requests.finish_action(token) {
+                    match result {
+                        Ok(terminals) => {
+                            feature.discovered = terminals;
+                            feature.message.clear();
+                        }
+                        Err(error) => feature.message = error,
+                    }
+                    cx.notify();
+                }
+            },
+        );
+        if let Err(error) = admitted {
+            self.requests.finish_action(token);
+            self.message = error;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn attach(&mut self, id: lapis_terminal::TerminalId, cx: &mut gpui::Context<Self>) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let selected = id.clone();
+        let token = self.requests.begin_action();
+        let admitted = self.worker.submit(
+            cx,
+            move |sessions| Ok(sessions.action(|session| session.attach(&root, &id))),
+            move |feature, result, cx| {
+                if feature.requests.finish_action(token) {
+                    match result {
+                        Ok((outcome, terminals)) => {
+                            if outcome.is_ok() {
+                                feature.selected = Some(selected);
+                            }
+                            feature.terminals = terminals;
+                            feature.message = outcome.err().unwrap_or_default();
+                        }
+                        Err(error) => feature.message = error,
+                    }
+                    cx.notify();
+                }
+            },
+        );
+        if let Err(error) = admitted {
+            self.requests.finish_action(token);
+            self.message = error;
+            cx.notify();
+        }
+    }
+
+    pub(super) fn send_text(&mut self, text: String, cx: &mut gpui::Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        self.operate(move |session| session.input(&id, &text), cx);
+    }
+
+    pub(super) fn resize(&mut self, columns: u16, rows: u16, cx: &mut gpui::Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        self.operate(move |session| session.resize(&id, columns, rows), cx);
+    }
+
+    pub(super) fn confirm_terminate(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(id) = self.active_id() else { return };
+        let message = format!(
+            "{} のshellとCLIを終了します。他のClientもこのTerminalを使用できなくなります。",
+            id.as_str()
+        );
+        let answer = window.prompt(
+            gpui::PromptLevel::Warning,
+            "Terminalを終了しますか？",
+            Some(&message),
+            &[
+                gpui::PromptButton::new("終了"),
+                gpui::PromptButton::cancel("戻る"),
+            ],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if matches!(answer.await, Ok(0)) {
+                let _ = this.update(cx, |this, cx| {
+                    this.operate(move |session| session.terminate(&id), cx)
+                });
+            }
+        })
+        .detach();
+    }
+
+    fn operate(
+        &mut self,
+        operation: impl FnOnce(&mut TerminalSession) -> Result<(), TerminalError> + Send + 'static,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let token = self.requests.begin_action();
+        let admitted = self.worker.submit(
+            cx,
+            move |sessions| Ok(sessions.action(operation)),
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
@@ -517,6 +702,7 @@ mod tests {
                     None,
                     conversation.clone(),
                     &[RestoredTerminal {
+                        id: None,
                         cwd: "other".into(),
                         status: TerminalStatus::Running,
                         columns: 80,
@@ -608,6 +794,7 @@ mod tests {
             .start(Path::new("workspace"), 80, 24)
             .unwrap();
         let summaries = [RestoredTerminal {
+            id: None,
             cwd: "saved".into(),
             status: TerminalStatus::Running,
             columns: 120,
@@ -738,6 +925,7 @@ mod tests {
             .start(Path::new("workspace"), 80, 24)
             .unwrap();
         let summaries = [RestoredTerminal {
+            id: None,
             cwd: "old".into(),
             status: TerminalStatus::Running,
             columns: 40,

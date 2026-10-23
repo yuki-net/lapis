@@ -3,6 +3,8 @@ use crate::{
     features::id,
 };
 
+mod input;
+mod screen;
 mod state;
 mod view;
 
