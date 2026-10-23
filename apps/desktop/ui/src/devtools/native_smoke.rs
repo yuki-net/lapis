@@ -49,12 +49,14 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
                 .read(cx)
                 .element_tree()
                 .iter()
-                .find(|node| node.element_type.contains("::div::Div"))
+                .find(|node| node.element_type == std::any::type_name::<gpui::Div>())
                 .unwrap()
                 .id
                 .clone();
             assert!(window.select_inspector_element(id.clone(), cx));
             assert!(window.preview_inspector_element(Some(id.clone()), cx));
+            // Hiddenで起動するNative検証でも検査stateの描画更新を完了させる。
+            window.draw(cx).clear();
             (viewer, inspector, id)
         })
         .unwrap();
