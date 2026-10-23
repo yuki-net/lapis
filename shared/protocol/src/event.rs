@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    DocumentId, DocumentSnapshot, DocumentTransaction, Revision, SnapshotReason, TerminalId,
-    TerminalOutputSequence, TerminalStatus, WorkspaceId,
+    DocumentId, DocumentSnapshot, DocumentTransaction, Revision, SnapshotReason, TerminalDelta,
+    TerminalId, TerminalStatus, WorkspaceId,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,11 +26,10 @@ pub enum EventBody {
     DocumentReplaced { document: DocumentSnapshot },
     #[serde(rename = "document.closed")]
     DocumentClosed { document_id: DocumentId },
-    #[serde(rename = "terminal.output")]
-    TerminalOutput {
+    #[serde(rename = "terminal.delta")]
+    TerminalDelta {
         terminal_id: TerminalId,
-        sequence: TerminalOutputSequence,
-        data: Vec<u8>,
+        delta: TerminalDelta,
     },
     #[serde(rename = "terminal.status")]
     TerminalStatus {
