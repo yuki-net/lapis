@@ -56,6 +56,35 @@ fn internal_document_selection_and_idle_polls_do_not_persist_window_activity() {
 }
 
 #[test]
+fn close_failure_display_uses_readable_stage_and_document_ids() {
+    let persistence_failure = DocumentCloseFailure {
+        progress: DocumentCloseProgress {
+            closed: vec![DocumentId::new("doc-a"), DocumentId::new("doc-b")],
+        },
+        failed: None,
+        remaining: Vec::new(),
+        stage: DocumentCloseStage::Persistence,
+        error: DocumentError::io("view state failed"),
+    };
+    assert_eq!(
+        persistence_failure.to_string(),
+        "保存段階で失敗しました（対象: なし、閉鎖済み: doc-a, doc-b）: view state failed"
+    );
+
+    let close_failure = DocumentCloseFailure {
+        progress: DocumentCloseProgress::default(),
+        failed: Some(DocumentId::new("doc-c")),
+        remaining: vec![DocumentId::new("doc-d")],
+        stage: DocumentCloseStage::Close,
+        error: DocumentError::io("close rejected"),
+    };
+    assert_eq!(
+        close_failure.to_string(),
+        "閉鎖段階で失敗しました（対象: doc-c、閉鎖済み: なし）: close rejected"
+    );
+}
+
+#[test]
 fn partial_close_reports_commits_and_retry_uses_remaining_attachments() {
     for failed_index in [0, 2] {
         let repository = Arc::new(MemoryRepository::default());

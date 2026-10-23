@@ -1153,10 +1153,26 @@ pub enum DocumentCloseStage {
 
 impl std::fmt::Display for DocumentCloseFailure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let stage = match self.stage {
+            DocumentCloseStage::Validation => "確認",
+            DocumentCloseStage::Close => "閉鎖",
+            DocumentCloseStage::Persistence => "保存",
+        };
+        let target = self.failed.as_ref().map_or("なし", |id| id.as_str());
+        let closed = if self.progress.closed.is_empty() {
+            "なし".to_string()
+        } else {
+            self.progress
+                .closed
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         write!(
             f,
-            "{:?}（対象: {:?}、閉鎖済み: {:?}）: {}",
-            self.stage, self.failed, self.progress.closed, self.error
+            "{stage}段階で失敗しました（対象: {target}、閉鎖済み: {closed}）: {}",
+            self.error
         )
     }
 }
