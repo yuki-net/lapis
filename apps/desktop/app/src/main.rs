@@ -27,7 +27,13 @@ fn main() {
             .get(2)
             .ok_or("Workspaceがありません")
             .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })
-            .and_then(|root| lapis_host::run_managed_host(std::path::Path::new(root)));
+            .and_then(|root| {
+                let directory = arguments.get(3).ok_or("Hostの状態フォルダがありません")?;
+                lapis_host::run_managed_host(
+                    std::path::Path::new(root),
+                    std::path::Path::new(directory),
+                )
+            });
         if result.is_err() {
             std::process::exit(1);
         }
@@ -83,7 +89,7 @@ fn main() {
         use lapis_desktop_client::WorkspaceStateRepository;
         let mut session = EditorSession::new_empty(
             host.workspaces(),
-            Arc::new(workspace_dialog::NativeWorkspaceDialog),
+            Arc::new(workspace_dialog::RemoteWorkspaceDialog(root.clone())),
             state.clone(),
             host.documents(),
         );
@@ -168,6 +174,9 @@ fn main() {
             eprintln!("File open failed: {error}");
             std::process::exit(1);
         }
+    }
+    if let Some(warning) = session.restore_warning() {
+        eprintln!("{warning}");
     }
     if let Some(root) = session.workspace_root() {
         host.register_workspace(root)

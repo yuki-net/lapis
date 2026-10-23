@@ -10,6 +10,7 @@ pub(crate) enum UiCommand {
     OpenRecent(PathBuf),
     OpenPath(PathBuf),
     Save,
+    SaveAs,
     CloseWorkspace,
     NewFolder,
     CloneRepository,

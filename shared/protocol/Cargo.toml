@@ -9,6 +9,7 @@ license.workspace = true
 lapis-git = { path = "../models/git" }
 lapis-task = { path = "../models/task" }
 lapis-editor-core = { path = "../models/editor-core" }
+lapis-terminal = { path = "../models/terminal" }
 serde.workspace = true
 
 [dev-dependencies]

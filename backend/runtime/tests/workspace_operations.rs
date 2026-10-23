@@ -931,6 +931,7 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
                     workspace_id: documents.workspace_id().clone(),
                     cwd: None,
                     command: None,
+                    shell: Default::default(),
                     size: lapis_client_api::TerminalSize {
                         columns: 80,
                         rows: 24

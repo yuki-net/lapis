@@ -1099,7 +1099,7 @@ impl BackendState {
             &session.session_id,
             &workspace.summary.workspace_id,
             &cwd,
-            request.size,
+            &request,
         )?;
         let event = workspace.publish(event_body)?;
         Ok((

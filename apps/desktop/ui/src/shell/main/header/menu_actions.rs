@@ -63,6 +63,8 @@ impl Shell {
             MenuAction::ConnectHost => cx.emit(UiCommand::ConnectHost),
             MenuAction::OpenProject => self.open_project(window, cx),
             MenuAction::OpenFile => self.open_file(window, cx),
+            MenuAction::Save => cx.emit(UiCommand::Save),
+            MenuAction::SaveAs => cx.emit(UiCommand::SaveAs),
             MenuAction::CloseProject => self.close_project(window, cx),
             MenuAction::CloseWindow => cx.emit(UiCommand::CloseWindow),
             MenuAction::Undo => self.undo(&Undo, window, cx),

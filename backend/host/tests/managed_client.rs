@@ -159,6 +159,22 @@ fn desktop_ports_reuse_one_independent_host_and_preserve_unsaved_documents_acros
         "const value = 1;"
     );
     assert!(moved.can_undo);
+    // 接続pickerでLocal profileを選んだ別画面も、仮想rootから同じ資源へ接続する。
+    let (remote, virtual_root, _) =
+        lapis_host::open_host_file(&state.path().join("local-v1.host"), state.path()).unwrap();
+    remote.workspaces().list_tree(&virtual_root).unwrap();
+    for _ in 0..16 {
+        remote.documents().workspace(&virtual_root).unwrap();
+        remote.workspaces().list_tree(&virtual_root).unwrap();
+    }
+    let remote_document = remote
+        .documents()
+        .open(&virtual_root.join("note.ts"))
+        .unwrap();
+    assert_eq!(
+        remote_document.document.content_for_save(),
+        "const value = 1;"
+    );
     assert_eq!(
         fs::read(state.path().join("local-v1.host")).unwrap(),
         record_before

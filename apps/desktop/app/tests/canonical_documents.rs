@@ -1,6 +1,40 @@
 use lapis_host::BackendHost;
 
 #[test]
+fn relative_file_requests_follow_the_current_root_and_reject_a_stale_source() {
+    use std::sync::Arc;
+    let directory = tempfile::tempdir().unwrap();
+    let primary = directory.path().join("primary");
+    let sub = directory.path().join("sub");
+    std::fs::create_dir(&primary).unwrap();
+    std::fs::create_dir(&sub).unwrap();
+    let primary = primary.canonicalize().unwrap();
+    let sub = sub.canonicalize().unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = lapis_desktop_client::EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(ViewStore::default()),
+        host.documents(),
+    );
+    editor.open_workspace(primary.clone()).unwrap();
+    assert_eq!(
+        editor.workspace_path(&primary, "note.ts").unwrap(),
+        primary.join("note.ts")
+    );
+    editor.open_workspace(sub.clone()).unwrap();
+    assert!(editor.workspace_path(&primary, "note.ts").is_err());
+    assert!(editor.workspace_path(&sub, "../note.ts").is_err());
+    assert!(editor.workspace_path(&sub, "").is_err());
+    let target = editor.workspace_path(&sub, "note.ts").unwrap();
+    editor.new_document();
+    editor.replace_range(0..0, "sub draft").unwrap();
+    editor.save_document_to(target.clone()).unwrap();
+    assert_eq!(std::fs::read_to_string(target).unwrap(), "sub draft");
+    assert!(!primary.join("note.ts").exists());
+}
+
+#[test]
 fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("deleted.md");

@@ -87,6 +87,8 @@ impl Fixture {
             output: Vec::new(),
             output_sequence: 0,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         });
         let fixture = Self {
             root,

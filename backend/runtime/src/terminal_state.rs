@@ -6,7 +6,7 @@ use std::{
 
 use lapis_client_api::{
     EventBody, SessionId, SnapshotReason, TerminalId, TerminalOutputSequence, TerminalSize,
-    TerminalSnapshot, TerminalStatus, WorkspaceId,
+    TerminalSnapshot, TerminalStartRequest, TerminalStatus, WorkspaceId, WorkspaceRelativePath,
 };
 use lapis_terminal::{TerminalBackend, TerminalEvent, TerminalId as BackendTerminalId};
 
@@ -22,13 +22,14 @@ pub(crate) struct TerminalRegistry {
 impl TerminalRegistry {
     pub(crate) fn active_in(&self, root: &Path) -> bool {
         self.resources.values().any(|resource| {
-            resource.cwd.starts_with(root)
+            resource.cwd_path.starts_with(root)
                 && !matches!(
                     resource.status,
                     TerminalStatus::Exited | TerminalStatus::Terminated | TerminalStatus::Failed
                 )
         })
     }
+
     pub(crate) fn new(backend: Option<Arc<dyn TerminalBackend>>) -> Self {
         Self {
             backend,
@@ -42,17 +43,19 @@ impl TerminalRegistry {
         session_id: &SessionId,
         workspace_id: &WorkspaceId,
         cwd: &Path,
-        size: TerminalSize,
+        request: &TerminalStartRequest,
     ) -> Result<(TerminalSnapshot, EventBody), BackendStateError> {
+        let size = request.size;
         require_size(size)?;
         let backend = self
             .backend
             .as_ref()
             .ok_or(BackendStateError::Unsupported)?;
-        let backend_id = backend.start(cwd, size.columns, size.rows)?;
+        let backend_id = backend.start_with_shell(cwd, size.columns, size.rows, request.shell)?;
         let mut resource =
             TerminalResource::new(terminal_id.clone(), backend_id, workspace_id.clone(), size);
-        resource.cwd = cwd.to_owned();
+        resource.cwd_path = cwd.to_owned();
+        resource.cwd = request.cwd.clone();
         resource.attached_sessions.insert(session_id.clone());
         let snapshot = resource.snapshot(workspace_id);
         self.resources.insert(terminal_id.clone(), resource);
@@ -98,6 +101,10 @@ impl TerminalRegistry {
         resource.require_running()?;
         backend.resize(&resource.backend_id, size.columns, size.rows)?;
         resource.size = size;
+        resource
+            .screen
+            .screen_mut()
+            .set_size(size.rows, size.columns);
         Ok(resource.snapshot(workspace_id))
     }
 
@@ -132,7 +139,10 @@ impl TerminalRegistry {
         };
         let mut published = Vec::new();
         for resource in self.resources.values_mut() {
-            if resource.status != TerminalStatus::Running {
+            if !matches!(
+                resource.status,
+                TerminalStatus::Running | TerminalStatus::Disconnected
+            ) {
                 continue;
             }
             let events = match backend.poll(&resource.backend_id) {
@@ -160,12 +170,24 @@ impl TerminalRegistry {
                         resource.output_watermark = (snapshot.output_sequence != 0)
                             .then_some(TerminalOutputSequence::new(snapshot.output_sequence));
                         resource.output_truncated = snapshot.output_truncated;
+                        resource.output_offset = snapshot.output_offset;
                         resource.buffered_output = snapshot.output;
+                        resource.screen = new_screen(snapshot.rows, snapshot.columns);
+                        if let Some(screen) = snapshot.screen {
+                            resource.screen.process(&screen.data);
+                        } else {
+                            resource.screen.process(&resource.buffered_output);
+                        }
+                        // 画面の再構築では、過去の問い合わせへ再応答しない。
+                        resource.screen.callbacks_mut().replies.clear();
                         resource.append_output(&[]);
                         resource.status = match snapshot.status {
                             lapis_terminal::TerminalStatus::Running => TerminalStatus::Running,
                             lapis_terminal::TerminalStatus::Exited => TerminalStatus::Exited,
                             lapis_terminal::TerminalStatus::Failed => TerminalStatus::Failed,
+                            lapis_terminal::TerminalStatus::Disconnected => {
+                                TerminalStatus::Disconnected
+                            }
                         };
                         published.push(EventBody::SnapshotRequired {
                             workspace_id: resource.workspace_id.clone(),
@@ -207,6 +229,11 @@ impl TerminalRegistry {
                 if resource.status != TerminalStatus::Running {
                     break;
                 }
+            }
+            let replies = std::mem::take(&mut resource.screen.callbacks_mut().replies);
+            if !replies.is_empty() && resource.status == TerminalStatus::Running {
+                // 応答の失敗で、適用済みの出力・状態イベントを破棄しない。
+                let _ = backend.input(&resource.backend_id, &replies);
             }
         }
         Ok(published)
@@ -250,13 +277,16 @@ impl Drop for TerminalRegistry {
 }
 
 struct TerminalResource {
-    cwd: std::path::PathBuf,
     terminal_id: TerminalId,
     backend_id: BackendTerminalId,
     workspace_id: WorkspaceId,
+    cwd_path: std::path::PathBuf,
+    cwd: Option<WorkspaceRelativePath>,
     status: TerminalStatus,
     size: TerminalSize,
     buffered_output: Vec<u8>,
+    output_offset: u64,
+    screen: vt100::Parser<TerminalReplies>,
     output_watermark: Option<TerminalOutputSequence>,
     output_truncated: bool,
     attached_sessions: HashSet<SessionId>,
@@ -270,13 +300,16 @@ impl TerminalResource {
         size: TerminalSize,
     ) -> Self {
         Self {
-            cwd: std::path::PathBuf::new(),
             terminal_id,
             backend_id,
             workspace_id,
+            cwd_path: std::path::PathBuf::new(),
+            cwd: None,
             status: TerminalStatus::Running,
             size,
             buffered_output: Vec::new(),
+            output_offset: 0,
+            screen: new_screen(size.rows, size.columns),
             output_watermark: None,
             output_truncated: false,
             attached_sessions: HashSet::new(),
@@ -292,24 +325,40 @@ impl TerminalResource {
     }
 
     fn append_output(&mut self, data: &[u8]) {
+        self.screen.process(data);
         self.buffered_output.extend_from_slice(data);
         if self.buffered_output.len() <= MAX_BUFFERED_OUTPUT_BYTES {
             return;
         }
         let start = self.buffered_output.len() - MAX_BUFFERED_OUTPUT_BYTES;
         self.buffered_output.drain(..start);
+        self.output_offset = self.output_offset.saturating_add(start as u64);
         self.output_truncated = true;
     }
 
     fn snapshot(&self, workspace_id: &WorkspaceId) -> TerminalSnapshot {
+        let mut screen = if self.screen.screen().alternate_screen() {
+            b"\x1b[?1049h".to_vec()
+        } else {
+            b"\x1b[?1049l".to_vec()
+        };
+        screen.extend(self.screen.screen().state_formatted());
         TerminalSnapshot {
             terminal_id: self.terminal_id.clone(),
             workspace_id: workspace_id.clone(),
+            cwd: self.cwd.clone(),
             status: self.status,
             size: self.size,
             buffered_output: self.buffered_output.clone(),
             output_watermark: self.output_watermark,
             output_truncated: self.output_truncated,
+            output_offset: self.output_offset,
+            screen: Some(lapis_terminal::TerminalScreenState {
+                output_end: self
+                    .output_offset
+                    .saturating_add(self.buffered_output.len() as u64),
+                data: screen,
+            }),
         }
     }
 }
@@ -330,28 +379,122 @@ fn require_attached_mut<'a>(
 }
 
 fn require_size(size: TerminalSize) -> Result<(), BackendStateError> {
-    if size.columns == 0 || size.rows == 0 {
+    if size.columns == 0 || size.rows == 0 || size.columns > 512 || size.rows > 256 {
         Err(BackendStateError::InvalidTerminalSize)
     } else {
         Ok(())
     }
 }
 
+#[derive(Default)]
+struct TerminalReplies {
+    replies: Vec<u8>,
+}
+
+impl vt100::Callbacks for TerminalReplies {
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        i1: Option<u8>,
+        i2: Option<u8>,
+        params: &[&[u16]],
+        command: char,
+    ) {
+        if self.replies.len() >= 64 * 1024 {
+            return;
+        }
+        let parameter = params
+            .first()
+            .and_then(|values| values.first())
+            .copied()
+            .unwrap_or(0);
+        let reply = match (i1, i2, parameter, command) {
+            (None, None, 6, 'n') => {
+                let (row, column) = screen.cursor_position();
+                format!("\x1b[{};{}R", row + 1, column + 1)
+            }
+            (None, None, 5, 'n') => "\x1b[0n".to_owned(),
+            (None, None, 0, 'c') => "\x1b[?1;2c".to_owned(),
+            (Some(b'>'), None, 0, 'c') => "\x1b[>0;0;0c".to_owned(),
+            _ => return,
+        };
+        self.replies.extend_from_slice(reply.as_bytes());
+    }
+}
+
+fn new_screen(rows: u16, columns: u16) -> vt100::Parser<TerminalReplies> {
+    vt100::Parser::new_with_callbacks(rows, columns, 0, TerminalReplies::default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_survives_raw_output_truncation_and_restores_input_modes() {
+        let workspace = WorkspaceId::try_new("workspace").unwrap();
+        let mut terminal = TerminalResource::new(
+            TerminalId::try_new("visible").unwrap(),
+            BackendTerminalId::new("source"),
+            workspace.clone(),
+            TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+        );
+        terminal.append_output(&b"old line\r\n".repeat(30_000));
+        terminal.append_output(b"\x1b[2J\x1b[Hcurrent screen\x1b[?1h\x1b[?2004h");
+        let snapshot = terminal.snapshot(&workspace);
+        assert!(snapshot.output_truncated);
+        assert!(snapshot.output_offset > 0);
+        let state = snapshot.screen.unwrap();
+        assert_eq!(
+            state.output_end,
+            snapshot.output_offset + snapshot.buffered_output.len() as u64
+        );
+        let mut restored = vt100::Parser::new(24, 80, 0);
+        restored.process(&state.data);
+        assert_eq!(
+            restored.screen().contents(),
+            terminal.screen.screen().contents()
+        );
+        assert!(restored.screen().application_cursor());
+        assert!(restored.screen().bracketed_paste());
+    }
+
+    #[test]
+    fn host_answers_cursor_query_once_even_without_a_client() {
+        let mut parser = new_screen(24, 80);
+        parser.process(b"\x1b[3;5H\x1b[6");
+        assert!(parser.callbacks().replies.is_empty());
+        parser.process(b"n");
+        assert_eq!(
+            std::mem::take(&mut parser.callbacks_mut().replies),
+            b"\x1b[3;5R"
+        );
+        assert!(parser.callbacks().replies.is_empty());
+        assert!(
+            require_size(TerminalSize {
+                columns: u16::MAX,
+                rows: u16::MAX
+            })
+            .is_err()
+        );
+    }
     use lapis_terminal::{
         TerminalError, TerminalOutput, TerminalSnapshot as SourceSnapshot,
         TerminalStatus as SourceStatus,
     };
     use std::sync::{
         Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     #[derive(Default)]
     struct ScriptedSource {
         next: AtomicUsize,
+        fail_input: AtomicBool,
+        input_calls: AtomicUsize,
         events: Mutex<BTreeMap<String, Result<Vec<TerminalEvent>, TerminalError>>>,
     }
 
@@ -364,7 +507,12 @@ mod tests {
         }
 
         fn input(&self, _: &BackendTerminalId, _: &[u8]) -> Result<(), TerminalError> {
-            Ok(())
+            self.input_calls.fetch_add(1, Ordering::SeqCst);
+            if self.fail_input.load(Ordering::SeqCst) {
+                Err(TerminalError::new("terminal input failed"))
+            } else {
+                Ok(())
+            }
         }
         fn resize(&self, _: &BackendTerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
             Ok(())
@@ -382,6 +530,95 @@ mod tests {
         }
     }
 
+    fn start_registry(
+        backend: Arc<ScriptedSource>,
+    ) -> (TerminalRegistry, WorkspaceId, SessionId, TerminalId) {
+        let workspace = WorkspaceId::try_new("workspace").unwrap();
+        let session = SessionId::try_new("session").unwrap();
+        let terminal = TerminalId::try_new("visible").unwrap();
+        let mut registry = TerminalRegistry::new(Some(backend));
+        registry
+            .start(
+                terminal.clone(),
+                &session,
+                &workspace,
+                Path::new("."),
+                &TerminalStartRequest {
+                    workspace_id: workspace.clone(),
+                    cwd: None,
+                    command: None,
+                    shell: Default::default(),
+                    size: TerminalSize {
+                        columns: 80,
+                        rows: 24,
+                    },
+                },
+            )
+            .unwrap();
+        (registry, workspace, session, terminal)
+    }
+
+    #[test]
+    fn snapshot_rebuild_does_not_resend_old_terminal_queries() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, workspace, _session, _terminal) = start_registry(backend.clone());
+        backend.events.lock().unwrap().insert(
+            "source-1".to_owned(),
+            Ok(vec![TerminalEvent::Snapshot(SourceSnapshot {
+                id: BackendTerminalId::new("source-1"),
+                cwd: ".".into(),
+                status: SourceStatus::Running,
+                columns: 80,
+                rows: 24,
+                output: b"\x1b[6n".to_vec(),
+                output_sequence: 1,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
+            })]),
+        );
+
+        assert!(matches!(
+            &registry.poll().unwrap()[..],
+            [EventBody::SnapshotRequired { workspace_id, reason: SnapshotReason::EventGap }]
+                if workspace_id == &workspace
+        ));
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn failed_terminal_reply_does_not_drop_published_events() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, _workspace, _session, _terminal) = start_registry(backend.clone());
+        backend.fail_input.store(true, Ordering::SeqCst);
+        backend.events.lock().unwrap().insert(
+            "source-1".to_owned(),
+            Ok(vec![
+                TerminalEvent::Output(TerminalOutput {
+                    sequence: 1,
+                    data: b"\x1b[6n".to_vec(),
+                }),
+                TerminalEvent::Output(TerminalOutput {
+                    sequence: 2,
+                    data: b"after query".to_vec(),
+                }),
+            ]),
+        );
+
+        let events = registry.poll().unwrap();
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 1);
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EventBody::TerminalOutput { sequence, data, .. }
+                if sequence.value() == 1 && data == b"\x1b[6n"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EventBody::TerminalOutput { sequence, data, .. }
+                if sequence.value() == 2 && data == b"after query"
+        )));
+    }
+
     #[test]
     fn transient_poll_errors_preserve_running_and_provider_snapshots_replace_mapped_state() {
         let backend = Arc::new(ScriptedSource::default());
@@ -397,9 +634,15 @@ mod tests {
                     &session,
                     &workspace,
                     Path::new("."),
-                    TerminalSize {
-                        columns: 80,
-                        rows: 24,
+                    &TerminalStartRequest {
+                        workspace_id: workspace.clone(),
+                        cwd: None,
+                        command: None,
+                        shell: Default::default(),
+                        size: TerminalSize {
+                            columns: 80,
+                            rows: 24,
+                        },
                     },
                 )
                 .unwrap();
@@ -430,6 +673,8 @@ mod tests {
             output: bytes.clone(),
             output_sequence: 7,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         };
         backend.events.lock().unwrap().insert(
             "source-2".to_owned(),

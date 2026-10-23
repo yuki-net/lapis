@@ -362,6 +362,7 @@ impl ConversationSession {
             record.terminals = terminals
                 .iter()
                 .map(|terminal| RestoredTerminal {
+                    id: Some(terminal.id.clone()),
                     cwd: terminal.cwd.clone(),
                     status: terminal.status,
                     columns: terminal.columns,
