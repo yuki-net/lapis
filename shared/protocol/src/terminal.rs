@@ -1,7 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{TerminalId, TerminalOutputSequence, WorkspaceId, WorkspaceRelativePath};
+use crate::{TerminalId, WorkspaceId, WorkspaceRelativePath};
+
 pub use lapis_terminal::TerminalShell;
+pub use lapis_terminal::{
+    TerminalCell, TerminalColor, TerminalCursor, TerminalDelta, TerminalInput, TerminalKey,
+    TerminalKeyEvent, TerminalModes, TerminalModifiers, TerminalRevision, TerminalRow,
+    TerminalRowUpdate, TerminalScreen, TerminalSize,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,12 +20,6 @@ pub enum TerminalStatus {
     Disconnected,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TerminalSize {
-    pub columns: u16,
-    pub rows: u16,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalSnapshot {
     pub terminal_id: TerminalId,
@@ -27,17 +27,8 @@ pub struct TerminalSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<WorkspaceRelativePath>,
     pub status: TerminalStatus,
-    pub size: TerminalSize,
-    /// backendが再同期用に保持しているraw output。
-    pub buffered_output: Vec<u8>,
-    /// buffered_outputへ反映済みの最後のoutput。まだoutputがなければNone。
-    pub output_watermark: Option<TerminalOutputSequence>,
-    /// 保持上限によりwatermark以前のoutputが欠落している場合にtrue。
-    pub output_truncated: bool,
-    #[serde(default)]
-    pub output_offset: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub screen: Option<lapis_terminal::TerminalScreenState>,
+    pub revision: TerminalRevision,
+    pub screen: TerminalScreen,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,7 +51,7 @@ pub struct TerminalStartResponse {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalInputRequest {
     pub terminal_id: TerminalId,
-    pub data: String,
+    pub input: TerminalInput,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
