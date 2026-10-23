@@ -22,8 +22,18 @@ impl TerminalId {
 #[serde(rename_all = "snake_case")]
 pub enum TerminalStatus {
     Running,
+    Disconnected,
     Exited,
     Failed,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalShell {
+    #[default]
+    Default,
+    PowerShell,
+    Cmd,
 }
 
 /// PTYから届いた一つのordered output chunk。
@@ -44,6 +54,13 @@ pub enum TerminalEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TerminalScreenState {
+    /// この画面へ反映済みのraw output末尾のbyte位置。
+    pub output_end: u64,
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalSnapshot {
     pub id: TerminalId,
     pub cwd: PathBuf,
@@ -56,6 +73,10 @@ pub struct TerminalSnapshot {
     pub output_sequence: TerminalOutputSequence,
     /// 保持上限により過去のoutputが欠落している場合にtrue。
     pub output_truncated: bool,
+    #[serde(default)]
+    pub output_offset: u64,
+    #[serde(default)]
+    pub screen: Option<TerminalScreenState>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +103,32 @@ pub trait TerminalBackend: Send + Sync {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError>;
+    fn start_with_shell(
+        &self,
+        cwd: &std::path::Path,
+        columns: u16,
+        rows: u16,
+        shell: TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        if shell != TerminalShell::Default {
+            return Err(TerminalError::new("この接続ではshellを選択できません"));
+        }
+        self.start(cwd, columns, rows)
+    }
+    fn list(&self, _cwd: &std::path::Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        Err(TerminalError::new(
+            "この接続ではTerminal一覧を取得できません",
+        ))
+    }
+    fn attach(
+        &self,
+        _cwd: &std::path::Path,
+        _id: &TerminalId,
+    ) -> Result<TerminalSnapshot, TerminalError> {
+        Err(TerminalError::new(
+            "この接続ではTerminalを再アタッチできません",
+        ))
+    }
     fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError>;
     fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError>;
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError>;
@@ -103,6 +150,8 @@ mod tests {
             output: Vec::new(),
             output_sequence: 0,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         };
         assert_eq!(snapshot.id.as_str(), "terminal-1");
         assert_eq!(snapshot.columns, 120);
@@ -138,6 +187,8 @@ mod tests {
             output: output.data.clone(),
             output_sequence: output.sequence,
             output_truncated: false,
+            output_offset: 0,
+            screen: None,
         };
         let encoded = serde_json::to_vec(&snapshot).unwrap();
         let decoded: TerminalSnapshot = serde_json::from_slice(&encoded).unwrap();

@@ -259,6 +259,7 @@ mod tests {
             other_terminals: Vec::new(),
             other_execution: None,
             terminals: vec![RestoredTerminal {
+                id: None,
                 cwd: PathBuf::from("C:/作業/lapis"),
                 status: TerminalStatus::Running,
                 columns: 132,
