@@ -169,7 +169,7 @@ fn close_reopen_target_release_and_delayed_viewer_update(cx: &mut TestAppContext
     let weak = old.downgrade();
     cx.update(|cx| {
         // 通知のdeferが残った状態でviewerを閉じても、Targetは生き続ける。
-        old.update(cx, |_, cx| cx.notify());
+        old.update(cx, |_, cx| cx.emit(gpui::InspectorUpdated));
         let viewer = cx
             .global::<InspectorController>()
             .inspector_handle()
