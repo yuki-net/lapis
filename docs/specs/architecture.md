@@ -41,6 +41,17 @@
 
 ## Desktop の WindowGroup
 
+### 開発用Inspector
+
+- DebugのInspectorは独立OS Windowで表示する。Document/Toolの`PanelTab`やHost資源として扱わない。
+- GPUIは要素の識別・親子・Bounds・Style状態、Hit Testingと選択検証を所有する。Lapisの`devtools`はTree表示・折り畳み・スクロール、色付きOverlay、外部Windowと購読の寿命を所有する。
+- TargetからInspectorへの更新はEntity通知で接続し、GPUI内にviewer Windowの参照を保持しない。閉鎖時は購読・表示cache・検査用バッファを解放する。
+- UIからの遅延操作はInspector Entityの世代とTarget handleを照合する。古いviewerの操作を再開後の検査へ流用しない。Window破棄通知からの別Window操作はdeferし、再入を避ける。
+- 現在のControllerは一組のTarget/Inspectorを管理する。Targetごとの複数Inspector管理は未実装であり、WindowGroupの親子管理と混同しない。
+- GPUI patchの範囲と削除条件は`vendor/gpui/README.md`を参照する。Releaseでは`devtools`をコンパイルしない。
+
+### WindowGroupの所有と終了
+
 - Root ごとに独立した WindowGroup と Client worker を持つ。Detached は元の worker・Document・Conversation を共有し、Feature や実行サービスを作り直さない。別 Root のグループへタブを渡さない。
 - 共通の OS Window options と Shell が、テーマ・タイトルバー・Window Controls・タブ・フッターを描画する。Detached は Root 用のメニューや補助 Panel を持たない。
 - WindowGroup は Window の親子関係、`PanelTab` の所属 Window・Panel、終了中フラグを持つ。Window bounds はイベントで更新する。Active Tab・focus・selection・scroll・Panel サイズは各 Window の Shell / Editor が所有する。

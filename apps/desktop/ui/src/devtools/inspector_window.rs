@@ -59,7 +59,10 @@ pub(super) fn render_inspector(
                                 .hover(|style| style.bg(theme::colors().button_background_hover))
                                 .child("Refresh")
                                 .on_click(cx.listener(|_, _, _, cx| {
-                                    cx.defer(InspectorController::refresh_target);
+                                    let session = cx.entity().entity_id();
+                                    cx.defer(move |cx| {
+                                        InspectorController::refresh_target(session, cx)
+                                    });
                                 })),
                         )
                         .child(
@@ -80,7 +83,10 @@ pub(super) fn render_inspector(
                                     inspector.start_picking();
                                     window.refresh();
                                     cx.notify();
-                                    cx.defer(InspectorController::repaint_target);
+                                    let session = cx.entity().entity_id();
+                                    cx.defer(move |cx| {
+                                        InspectorController::repaint_target(session, cx)
+                                    });
                                 })),
                         ),
                 ),

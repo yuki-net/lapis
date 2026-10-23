@@ -43,4 +43,6 @@ Root ごとに WindowGroup を作り、Detached は元の Client worker と Docu
 
 Windows では `cargo build -p lapis` 後に `./scripts/test_window_host.ps1` で隔離した Native Window のスモーク検証を実行できる。Release は `-Binary <release/lapis.exe>` を指定する。テストは一時 Workspace のみを編集し、利用者の設定は使用しない。
 
+DebugではInspectorの独立Window、Tree選択・Hover・Pick、解放・再開も検証する。`-InspectorSamples`を付けると通常時・Inspector表示時・Pick中のCPUとメモリを短時間サンプルとして出力する。フレーム構築時間はGPU presentを含まず、実操作・複数モニター・継続負荷は別途確認する。ReleaseにこのInspector検証は含めない。
+
 Document タブは ↗ / ↩ ボタンで取り外し・Root へ再ドックできる。Windows ではタブを Window 外で離すと取り外し、同じグループの別 Window の Panel 上で離すと再ドックする。Escape で取り消す。移動で空になった子 Window は手動で閉じる。Tool の Window 間移動と、再起動後の Window 配置復元は未対応。

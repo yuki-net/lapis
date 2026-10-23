@@ -1,0 +1,95 @@
+diff --git a/src/app.rs b/src/app.rs
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -37,11 +37,12 @@
+     Action, ActionBuildError, ActionRegistry, Any, AnyView, AnyWindowHandle, AppContext, Asset,
+     AssetSource, BackgroundExecutor, Bounds, ClipboardItem, CursorStyle, DispatchPhase, DisplayId,
+     EventEmitter, FocusHandle, FocusMap, ForegroundExecutor, Global, KeyBinding, KeyContext,
+-    Keymap, Keystroke, LayoutId, Menu, MenuItem, OwnedMenu, PathPromptOptions, Pixels, Platform,
+-    PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point, PromptBuilder,
+-    PromptButton, PromptHandle, PromptLevel, Render, RenderImage, RenderablePromptHandle,
+-    Reservation, ScreenCaptureSource, SharedString, SubscriberSet, Subscription, SvgRenderer, Task,
+-    TextSystem, Window, WindowAppearance, WindowHandle, WindowId, WindowInvalidator,
++    Keymap, Keystroke, LayoutId, Menu, MenuItem, MouseButton, OwnedMenu, PathPromptOptions, Pixels,
++    Platform, PlatformDisplay, PlatformKeyboardLayout, PlatformKeyboardMapper, Point,
++    PromptBuilder, PromptButton, PromptHandle, PromptLevel, Render, RenderImage,
++    RenderablePromptHandle, Reservation, ScreenCaptureSource, SharedString, SubscriberSet,
++    Subscription, SvgRenderer, Task, TextSystem, Window, WindowAppearance, WindowHandle, WindowId,
++    WindowInvalidator,
+     colors::{Colors, GlobalColors},
+     current_platform, hash, init_app_menus,
+ };
+@@ -2303,12 +2314,19 @@
+     /// The value of the dragged item, to be dropped
+     pub value: Arc<dyn Any>,
+ 
++    /// The mouse button that initiated this drag.
++    pub button: MouseButton,
++
+     /// This is used to render the dragged item in the same place
+     /// on the original element that the drag was initiated
+     pub cursor_offset: Point<Pixels>,
+ 
+     /// The cursor style to use while dragging
+     pub cursor_style: Option<CursorStyle>,
++}
++
++pub(crate) fn drag_ends_on_mouse_up(drag_button: MouseButton, button: MouseButton) -> bool {
++    drag_button == button
+ }
+ 
+ /// Contains state associated with a tooltip. You'll only need this struct if you're implementing
+@@ -2428,6 +2446,18 @@
+     use crate::{AppContext, TestAppContext};
+ 
+     #[test]
++    fn drag_ends_only_when_its_start_button_is_released() {
++        assert!(!crate::drag_ends_on_mouse_up(
++            crate::MouseButton::Left,
++            crate::MouseButton::Right
++        ));
++        assert!(crate::drag_ends_on_mouse_up(
++            crate::MouseButton::Left,
++            crate::MouseButton::Left
++        ));
++    }
++
++    #[test]
+     fn test_gpui_borrow() {
+         let cx = TestAppContext::single();
+         let observation_count = Rc::new(RefCell::new(0));
+diff --git a/src/elements/div.rs b/src/elements/div.rs
+--- a/src/elements/div.rs
++++ b/src/elements/div.rs
+@@ -2167,6 +2167,7 @@
+                                 view: drag,
+                                 value: drag_value,
+                                 cursor_offset,
++                                button: mouse_down.button,
+                                 cursor_style: drag_cursor_style,
+                             });
+                             pending_mouse_down.take();
+diff --git a/src/window.rs b/src/window.rs
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -3627,6 +3647,7 @@
+                             value: Arc::new(paths.clone()),
+                             view: cx.new(|_| paths).into(),
+                             cursor_offset: position,
++                            button: MouseButton::Left,
+                             cursor_style: None,
+                         });
+                     }
+@@ -3718,7 +3739,11 @@
+                 // If this was a mouse move event, redraw the window so that the
+                 // active drag can follow the mouse cursor.
+                 self.refresh();
+-            } else if event.is::<MouseUpEvent>() {
++            } else if event.downcast_ref::<MouseUpEvent>().is_some_and(|event| {
++                cx.active_drag
++                    .as_ref()
++                    .is_some_and(|drag| crate::drag_ends_on_mouse_up(drag.button, event.button))
++            }) {
+                 // If this was a mouse up event, cancel the active drag and redraw
+                 // the window.
+                 cx.active_drag = None;

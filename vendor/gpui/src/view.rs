@@ -167,6 +167,9 @@ impl Element for AnyView {
         window.with_rendered_view(self.entity_id(), |window| {
             // Disable caching when inspecting so that mouse_hit_test has all hitboxes.
             let caching_disabled = window.is_inspector_picking(cx);
+            // Full-tree inspection also needs the children of cached views while not picking.
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            let caching_disabled = caching_disabled || window.inspector_is_enabled();
             match self.cached_style.as_ref() {
                 Some(style) if !caching_disabled => {
                     let mut root_style = Style::default();
@@ -264,6 +267,8 @@ impl Element for AnyView {
     ) {
         window.with_rendered_view(self.entity_id(), |window| {
             let caching_disabled = window.is_inspector_picking(cx);
+            #[cfg(any(feature = "inspector", debug_assertions))]
+            let caching_disabled = caching_disabled || window.inspector_is_enabled();
             if self.cached_style.is_some() && !caching_disabled {
                 window.with_element_state::<AnyViewState, _>(
                     global_id.unwrap(),

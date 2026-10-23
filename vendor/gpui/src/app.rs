@@ -586,6 +586,8 @@ pub struct App {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_renderer: Option<crate::InspectorRenderer>,
     #[cfg(any(feature = "inspector", debug_assertions))]
+    pub(crate) inspector_overlay_renderer: Option<fn(&crate::Inspector, &mut Window, &App)>,
+    #[cfg(any(feature = "inspector", debug_assertions))]
     pub(crate) inspector_element_registry: InspectorElementRegistry,
     #[cfg(any(test, feature = "test-support", debug_assertions))]
     pub(crate) name: Option<&'static str>,
@@ -658,6 +660,8 @@ impl App {
                 prompt_builder: Some(PromptBuilder::Default),
                 #[cfg(any(feature = "inspector", debug_assertions))]
                 inspector_renderer: None,
+                #[cfg(any(feature = "inspector", debug_assertions))]
+                inspector_overlay_renderer: None,
                 #[cfg(any(feature = "inspector", debug_assertions))]
                 inspector_element_registry: InspectorElementRegistry::default(),
                 quitting: false,
@@ -2085,6 +2089,12 @@ impl App {
     #[cfg(any(feature = "inspector", debug_assertions))]
     pub fn set_inspector_renderer(&mut self, f: crate::InspectorRenderer) {
         self.inspector_renderer = Some(f);
+    }
+
+    /// Sets the optional target overlay renderer. Inspection data remains owned by GPUI.
+    #[cfg(any(feature = "inspector", debug_assertions))]
+    pub fn set_inspector_overlay_renderer(&mut self, f: fn(&crate::Inspector, &mut Window, &App)) {
+        self.inspector_overlay_renderer = Some(f);
     }
 
     /// Registers a renderer specific to an inspector state.

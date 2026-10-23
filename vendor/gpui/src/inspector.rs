@@ -22,7 +22,7 @@ pub use conditional::*;
 mod conditional {
     use super::*;
     use crate::{AnyElement, App, Bounds, Context, Empty, IntoElement, Pixels, Render, Window};
-    use collections::{FxHashMap, FxHashSet};
+    use collections::FxHashMap;
     use std::any::{Any, TypeId};
 
     /// `GlobalElementId` qualified by source location of element construction.
@@ -80,7 +80,6 @@ mod conditional {
         pub(crate) pick_depth: Option<f32>,
         element_tree: Vec<InspectorElementNode>,
         tree_revision: u64,
-        collapsed_elements: FxHashSet<InspectorElementId>,
     }
 
     struct InspectedElement {
@@ -106,7 +105,6 @@ mod conditional {
                 pick_depth: Some(0.0),
                 element_tree: Vec::new(),
                 tree_revision: 0,
-                collapsed_elements: FxHashSet::default(),
             }
         }
 
@@ -114,22 +112,9 @@ mod conditional {
             self.set_active_element_id(id.clone(), window);
             self.hovered_element = None;
             self.selected_element_visible = false;
-            self.expand_ancestors(&id);
             self.pick_depth = None;
         }
 
-        pub(crate) fn expand_ancestors(&mut self, id: &InspectorElementId) {
-            let mut current = id.clone();
-            while let Some(parent) = self
-                .element_tree
-                .iter()
-                .find(|node| node.id == current)
-                .and_then(|node| node.parent.clone())
-            {
-                self.collapsed_elements.remove(&parent);
-                current = parent;
-            }
-        }
         pub(crate) fn set_hovered_element_id(
             &mut self,
             id: Option<InspectorElementId>,
@@ -210,27 +195,14 @@ mod conditional {
             self.tree_revision
         }
 
-        /// Returns whether a tree node is collapsed in the inspector UI.
-        pub fn is_tree_node_collapsed(&self, id: &InspectorElementId) -> bool {
-            self.collapsed_elements.contains(id)
-        }
-
-        /// Toggles whether a tree node is collapsed in the inspector UI.
-        pub fn toggle_tree_node(&mut self, id: InspectorElementId) {
-            if !self.collapsed_elements.remove(&id) {
-                self.collapsed_elements.insert(id);
-            }
-        }
-
-        pub(crate) fn replace_element_tree(&mut self, nodes: Vec<InspectorElementNode>) -> bool {
+        pub(crate) fn replace_element_tree(&mut self, nodes: &[InspectorElementNode]) -> bool {
             if self.element_tree == nodes {
                 return false;
             }
 
-            self.element_tree = nodes;
+            self.element_tree.clear();
+            self.element_tree.extend_from_slice(nodes);
             self.tree_revision = self.tree_revision.wrapping_add(1);
-            self.collapsed_elements
-                .retain(|id| self.element_tree.iter().any(|node| &node.id == id));
 
             if self
                 .active_element_id()

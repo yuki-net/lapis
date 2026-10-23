@@ -1,46 +1,91 @@
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use gpui::{
     Div, Inspector, InspectorElementId, InspectorElementNode, Stateful, div, prelude::*, px,
 };
 
-use crate::{
-    components::{ScrollAxis, scroll_viewport},
-    theme,
-};
+use crate::{components::uniform_list_viewport, theme};
 
 use super::{inspector_controller::InspectorController, style_view::detail_row};
 
 #[derive(Clone)]
-struct TreeRow {
+pub(super) struct TreeRow {
     node: InspectorElementNode,
     depth: usize,
     has_children: bool,
+    collapsed: bool,
+}
+
+#[derive(Default)]
+pub(super) struct TreeState {
+    collapsed: HashSet<InspectorElementId>,
+    revision: Option<u64>,
+    active: Option<InspectorElementId>,
+    rows: Rc<Vec<TreeRow>>,
+}
+
+impl TreeState {
+    pub(super) fn toggle(&mut self, id: InspectorElementId) {
+        if !self.collapsed.remove(&id) {
+            self.collapsed.insert(id);
+        }
+        self.revision = None;
+    }
+
+    pub(super) fn rows(&mut self, inspector: &Inspector) -> Rc<Vec<TreeRow>> {
+        let active = inspector.active_element_id();
+        if self.revision == Some(inspector.tree_revision()) && self.active.as_ref() == active {
+            return self.rows.clone();
+        }
+        let nodes = inspector.element_tree();
+        let parents: HashMap<_, _> = nodes
+            .iter()
+            .map(|node| (&node.id, node.parent.as_ref()))
+            .collect();
+        self.collapsed.retain(|id| parents.contains_key(id));
+        if self.active.as_ref() != active {
+            let mut current = active;
+            while let Some(parent) = current.and_then(|id| parents.get(id).copied().flatten()) {
+                self.collapsed.remove(parent);
+                current = Some(parent);
+            }
+        }
+        self.active = active.cloned();
+        self.revision = Some(inspector.tree_revision());
+        self.rows = Rc::new(visible_rows(nodes, &self.collapsed));
+        self.rows.clone()
+    }
 }
 
 pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Inspector>) -> Div {
-    let rows = visible_rows(inspector);
+    let rows = InspectorController::ui(cx).tree.rows(inspector);
     let node_count = inspector.element_tree().len();
     let revision = inspector.tree_revision();
     let active = inspector.active_element_id().cloned();
     let scroll_state = InspectorController::tree_scroll(cx);
 
-    let tree_content = div()
-        .py_1()
-        .when(rows.is_empty(), |element| {
-            element.child(
-                div()
-                    .p_3()
-                    .text_size(px(11.0))
-                    .text_color(theme::colors().text_secondary)
-                    .child("対象ウィンドウを描画するとツリーが表示されます"),
-            )
-        })
-        .children(
-            rows.into_iter()
-                .enumerate()
-                .map(|(index, row)| render_tree_row(index, row, active.as_ref(), inspector, cx)),
-        );
+    let empty = rows.is_empty();
+    let tree_content = gpui::uniform_list(
+        "inspector-tree-scroll",
+        rows.len(),
+        cx.processor(move |_, range: std::ops::Range<usize>, _, cx| {
+            range
+                .map(|index| render_tree_row(index, rows[index].clone(), active.as_ref(), cx))
+                .collect()
+        }),
+    )
+    .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained);
+
+    let tree_content = if empty {
+        div()
+            .p_3()
+            .text_size(px(11.0))
+            .text_color(theme::colors().text_secondary)
+            .child("対象ウィンドウを描画するとツリーが表示されます")
+    } else {
+        uniform_list_viewport(&scroll_state, tree_content)
+    };
 
     div()
         .size_full()
@@ -64,16 +109,7 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                         .child(format!("{node_count} nodes · rev {revision}")),
                 ),
         )
-        .child(
-            scroll_viewport(
-                "inspector-tree-scroll",
-                ScrollAxis::Both,
-                &scroll_state,
-                tree_content,
-            )
-            .min_h(px(0.0))
-            .flex_1(),
-        )
+        .child(tree_content.min_h(px(0.0)).flex_1())
 }
 pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
     let active = inspector.active_element_id()?;
@@ -108,8 +144,10 @@ pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
     )
 }
 
-fn visible_rows(inspector: &Inspector) -> Vec<TreeRow> {
-    let nodes = inspector.element_tree();
+fn visible_rows(
+    nodes: &[InspectorElementNode],
+    collapsed: &HashSet<InspectorElementId>,
+) -> Vec<TreeRow> {
     let parents_with_children = nodes
         .iter()
         .filter_map(|node| node.parent.clone())
@@ -125,8 +163,7 @@ fn visible_rows(inspector: &Inspector) -> Vec<TreeRow> {
             .and_then(|parent| depths.get(parent).copied())
             .map_or(0, |depth| depth + 1);
         let is_visible = node.parent.as_ref().is_none_or(|parent| {
-            visible.get(parent).copied().unwrap_or(true)
-                && !inspector.is_tree_node_collapsed(parent)
+            visible.get(parent).copied().unwrap_or(true) && !collapsed.contains(parent)
         });
         depths.insert(node.id.clone(), depth);
         visible.insert(node.id.clone(), is_visible);
@@ -136,6 +173,7 @@ fn visible_rows(inspector: &Inspector) -> Vec<TreeRow> {
                 node: node.clone(),
                 depth,
                 has_children: parents_with_children.contains(&node.id),
+                collapsed: collapsed.contains(&node.id),
             });
         }
     }
@@ -146,18 +184,18 @@ fn render_tree_row(
     index: usize,
     row: TreeRow,
     active: Option<&InspectorElementId>,
-    inspector: &mut Inspector,
     cx: &mut gpui::Context<Inspector>,
 ) -> Stateful<Div> {
     let id = row.node.id.clone();
     let hover_id = id.clone();
     let toggle_id = id.clone();
     let selected = active == Some(&id);
-    let collapsed = inspector.is_tree_node_collapsed(&id);
+    let collapsed = row.collapsed;
     let global_id = row.node.id.path.global_id.to_string();
 
     div()
         .id(("inspector-tree-row", index))
+        .debug_selector(move || format!("inspector-tree-row-{index}").into())
         .h(px(26.0))
         .min_w(px(280.0))
         .flex()
@@ -173,6 +211,7 @@ fn render_tree_row(
         .child(
             div()
                 .id(("inspector-tree-toggle", index))
+                .debug_selector(move || format!("inspector-tree-toggle-{index}").into())
                 .w(px(14.0))
                 .flex_none()
                 .text_color(theme::colors().text_secondary)
@@ -182,8 +221,8 @@ fn render_tree_row(
                     ""
                 })
                 .when(row.has_children, |element| {
-                    element.on_click(cx.listener(move |inspector, _, _, cx| {
-                        inspector.toggle_tree_node(toggle_id.clone());
+                    element.on_click(cx.listener(move |_, _, _, cx| {
+                        InspectorController::ui(cx).tree.toggle(toggle_id.clone());
                         cx.stop_propagation();
                         cx.notify();
                     }))
@@ -210,14 +249,16 @@ fn render_tree_row(
             )
         })
         .on_hover(cx.listener(move |_, hovered: &bool, _, cx| {
+            let session = cx.entity().entity_id();
             let id = hovered.then(|| hover_id.clone());
             cx.defer(move |cx| {
-                InspectorController::hover_element(id, cx);
+                InspectorController::hover_element(session, id, cx);
             });
         }))
         .on_click(cx.listener(move |_, _, _, cx| {
+            let session = cx.entity().entity_id();
             let id = id.clone();
-            cx.defer(move |cx| InspectorController::select_element(id, cx));
+            cx.defer(move |cx| InspectorController::select_element(session, id, cx));
         }))
 }
 
@@ -263,6 +304,47 @@ fn pixels(value: gpui::Pixels) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_node(instance_id: usize, parent: Option<InspectorElementId>) -> InspectorElementNode {
+        InspectorElementNode {
+            id: InspectorElementId {
+                path: Rc::new(gpui::InspectorElementPath {
+                    global_id: Default::default(),
+                    source_location: std::panic::Location::caller(),
+                }),
+                instance_id,
+            },
+            parent,
+            element_type: "test::Div",
+            bounds: Default::default(),
+        }
+    }
+
+    #[test]
+    fn collapsed_nodes_hide_only_their_descendants() {
+        let root = test_node(0, None);
+        let parent = test_node(1, Some(root.id.clone()));
+        let leaf = test_node(2, Some(parent.id.clone()));
+        let sibling = test_node(3, Some(root.id.clone()));
+        let nodes = [root.clone(), parent.clone(), leaf.clone(), sibling.clone()];
+        let rows = visible_rows(&nodes, &HashSet::from([parent.id.clone()]));
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.node.id.clone())
+                .collect::<Vec<_>>(),
+            vec![root.id, parent.id.clone(), sibling.id]
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.depth).collect::<Vec<_>>(),
+            vec![0, 1, 1]
+        );
+        assert!(rows[1].has_children);
+        assert!(rows[1].collapsed);
+        let rows = visible_rows(&nodes, &HashSet::new());
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[2].node.id, leaf.id);
+        assert_eq!(rows[2].depth, 2);
+    }
 
     #[test]
     fn short_type_name_prefers_dom_like_names() {

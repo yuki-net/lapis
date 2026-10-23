@@ -182,6 +182,22 @@ pub(crate) fn scroll_viewport(
         ScrollAxis::Both => viewport.overflow_scroll(),
     };
 
+    scroll_frame(axis, state, viewport)
+}
+
+#[cfg(debug_assertions)]
+pub(crate) fn uniform_list_viewport(state: &ScrollState, list: gpui::UniformList) -> gpui::Div {
+    let handle = gpui::UniformListScrollHandle::new();
+    handle.0.borrow_mut().base_handle = state.handle();
+    let wheel_state = state.clone();
+    let list = list
+        .size_full()
+        .track_scroll(handle)
+        .on_scroll_wheel(move |_, _, _| wheel_state.reveal());
+    scroll_frame(ScrollAxis::Both, state, list)
+}
+
+fn scroll_frame(axis: ScrollAxis, state: &ScrollState, viewport: impl IntoElement) -> gpui::Div {
     div()
         .relative()
         .size_full()

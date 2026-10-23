@@ -76,6 +76,8 @@ pub(crate) fn run_native_smoke(
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
+        #[cfg(all(debug_assertions, target_os = "windows"))]
+        crate::devtools::run_native_smoke(handle, cx).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
         #[cfg(target_os = "windows")]
         {

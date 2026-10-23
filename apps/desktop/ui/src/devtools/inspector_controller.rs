@@ -1,8 +1,11 @@
 use crate::components::ScrollState;
 
+#[cfg(target_os = "windows")]
+pub(super) mod native_smoke;
+
 use gpui::{
-    AnyWindowHandle, App, Bounds, Global, InspectorElementId, Subscription, TitlebarOptions,
-    Window, WindowBounds, WindowId, WindowOptions, px, size,
+    AnyWindowHandle, App, Bounds, EntityId, Global, InspectorElementId, Subscription,
+    TitlebarOptions, Window, WindowBounds, WindowId, WindowOptions, px, size,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,10 +64,18 @@ impl InspectorLifecycle {
 
 #[derive(Default)]
 pub(super) struct InspectorController {
+    ui: Option<InspectorUiState>,
     lifecycle: InspectorLifecycle,
     target_window: Option<AnyWindowHandle>,
     inspector_window: Option<AnyWindowHandle>,
     _window_closed_subscription: Option<Subscription>,
+    inspection_subscription: Option<Subscription>,
+    inspection_id: Option<EntityId>,
+}
+
+#[derive(Default)]
+pub(super) struct InspectorUiState {
+    pub(super) tree: super::tree_view::TreeState,
     tree_scroll: ScrollState,
     content_scroll: ScrollState,
 }
@@ -74,6 +85,9 @@ impl Global for InspectorController {}
 pub(super) fn init(cx: &mut App) {
     cx.set_global(InspectorController::default());
     let subscription = cx.on_window_closed(|cx| {
+        if cx.global::<InspectorController>().target_window.is_none() {
+            return;
+        }
         let open_windows = cx
             .windows()
             .into_iter()
@@ -100,6 +114,11 @@ pub(super) fn init(cx: &mut App) {
             } else {
                 ClosedWindow::Unrelated
             };
+            if closed != ClosedWindow::Unrelated {
+                controller.inspection_subscription = None;
+                controller.inspection_id = None;
+                controller.ui = None;
+            }
             let target_window = (closed != ClosedWindow::Unrelated)
                 .then(|| controller.target_window.take())
                 .flatten();
@@ -112,12 +131,14 @@ pub(super) fn init(cx: &mut App) {
         match closed {
             ClosedWindow::Inspector => {
                 if let Some(target_window) = target_window {
-                    let _ = target_window.update(cx, |_, window, _cx| window.disable_inspector());
+                    InspectorController::release_target(target_window, cx);
                 }
             }
             ClosedWindow::Target => {
                 if let Some(inspector_window) = inspector_window {
-                    let _ = inspector_window.update(cx, |_, window, _cx| window.remove_window());
+                    cx.defer(move |cx| {
+                        let _ = inspector_window.update(cx, |_, window, _| window.remove_window());
+                    });
                 }
             }
             ClosedWindow::Unrelated => {}
@@ -128,23 +149,48 @@ pub(super) fn init(cx: &mut App) {
 }
 
 impl InspectorController {
-    pub(super) fn tree_scroll(cx: &App) -> ScrollState {
-        cx.global::<InspectorController>().tree_scroll.clone()
+    fn release_target(target: AnyWindowHandle, cx: &mut App) {
+        cx.defer(move |cx| {
+            let controller = cx.global::<Self>();
+            if controller.target_window == Some(target) && controller.lifecycle.is_open() {
+                return;
+            }
+            let _ = target.update(cx, |_, window, _| window.disable_inspector());
+        });
     }
 
-    pub(super) fn content_scroll(cx: &App) -> ScrollState {
-        cx.global::<InspectorController>().content_scroll.clone()
+    pub(super) fn ui(cx: &mut App) -> &mut InspectorUiState {
+        cx.global_mut::<Self>()
+            .ui
+            .get_or_insert_with(Default::default)
+    }
+
+    pub(super) fn tree_scroll(cx: &mut App) -> ScrollState {
+        Self::ui(cx).tree_scroll.clone()
+    }
+
+    pub(super) fn content_scroll(cx: &mut App) -> ScrollState {
+        Self::ui(cx).content_scroll.clone()
     }
     pub(super) fn toggle(target_window: &mut Window, cx: &mut App) -> Result<bool, String> {
         let is_open = cx.global::<InspectorController>().lifecycle.is_open();
         if is_open {
-            let inspector_window = {
+            let (inspector_window, previous_target) = {
                 let controller = cx.global_mut::<InspectorController>();
                 controller.lifecycle.reset();
-                controller.target_window = None;
-                controller.inspector_window.take()
+                controller.inspection_subscription = None;
+                controller.inspection_id = None;
+                controller.ui = None;
+                (
+                    controller.inspector_window.take(),
+                    controller.target_window.take(),
+                )
             };
-            target_window.disable_inspector();
+            if previous_target == Some(target_window.window_handle()) {
+                target_window.disable_inspector();
+            } else if let Some(previous_target) = previous_target {
+                Self::release_target(previous_target, cx);
+            }
             if let Some(inspector_window) = inspector_window {
                 let _ = inspector_window.update(cx, |_, window, _cx| window.remove_window());
             }
@@ -152,8 +198,11 @@ impl InspectorController {
         }
 
         let target_handle = target_window.window_handle();
+        // close通知の遅延中でも、新しい検査セッションへ古いIDを持ち越さない。
+        target_window.disable_inspector();
         let inspector = target_window.enable_external_inspector(cx);
         let bounds = Bounds::centered(None, size(px(900.0), px(800.0)), cx);
+        let observed_inspector = inspector.clone();
         let inspector_window = match cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -173,7 +222,11 @@ impl InspectorController {
             }
         };
 
-        target_window.set_external_inspector_window(Some(inspector_window));
+        let inspection_subscription = cx.observe(&observed_inspector, move |_, cx| {
+            cx.defer(move |cx| {
+                let _ = inspector_window.update(cx, |_, window, _| window.refresh());
+            });
+        });
         let controller = cx.global_mut::<InspectorController>();
         controller.lifecycle.reset();
         let target_attached = controller
@@ -183,46 +236,43 @@ impl InspectorController {
             .lifecycle
             .attach_inspector(inspector_window.window_id());
         debug_assert!(target_attached && inspector_attached);
+        controller.inspection_id = Some(observed_inspector.entity_id());
+        controller.inspection_subscription = Some(inspection_subscription);
         controller.target_window = Some(target_handle);
         controller.inspector_window = Some(inspector_window);
         Ok(true)
     }
 
-    pub(super) fn refresh_target(cx: &mut App) {
-        let target_window = cx
-            .global::<InspectorController>()
+    fn target_for(session: EntityId, cx: &App) -> Option<AnyWindowHandle> {
+        let controller = cx.global::<Self>();
+        controller
             .target_window
-            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+            .filter(|_| controller.lifecycle.is_open() && controller.inspection_id == Some(session))
+    }
+
+    pub(super) fn refresh_target(session: EntityId, cx: &mut App) {
+        let target_window = Self::target_for(session, cx);
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| window.stop_inspector_picking(cx));
         }
     }
-    pub(super) fn repaint_target(cx: &mut App) {
-        let target_window = cx
-            .global::<InspectorController>()
-            .target_window
-            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+    pub(super) fn repaint_target(session: EntityId, cx: &mut App) {
+        let target_window = Self::target_for(session, cx);
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, _cx| window.refresh());
         }
     }
 
-    pub(super) fn select_element(id: InspectorElementId, cx: &mut App) {
-        let target_window = cx
-            .global::<InspectorController>()
-            .target_window
-            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+    pub(super) fn select_element(session: EntityId, id: InspectorElementId, cx: &mut App) {
+        let target_window = Self::target_for(session, cx);
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| {
                 window.select_inspector_element(id, cx);
             });
         }
     }
-    pub(super) fn hover_element(id: Option<InspectorElementId>, cx: &mut App) {
-        let target_window = cx
-            .global::<InspectorController>()
-            .target_window
-            .filter(|_| cx.global::<InspectorController>().lifecycle.is_open());
+    pub(super) fn hover_element(session: EntityId, id: Option<InspectorElementId>, cx: &mut App) {
+        let target_window = Self::target_for(session, cx);
         if let Some(target_window) = target_window {
             let _ = target_window.update(cx, |_, window, cx| {
                 window.preview_inspector_element(id, cx);
@@ -232,42 +282,4 @@ impl InspectorController {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lifecycle_prevents_duplicate_inspector_windows_and_allows_reopen() {
-        let target = WindowId::from(1);
-        let inspector = WindowId::from(2);
-        let replacement = WindowId::from(3);
-        let mut lifecycle = InspectorLifecycle::default();
-
-        assert!(lifecycle.attach_target(target));
-        assert!(lifecycle.attach_inspector(inspector));
-        assert!(lifecycle.is_open());
-        assert!(!lifecycle.attach_target(target));
-        assert!(!lifecycle.attach_inspector(replacement));
-
-        assert_eq!(lifecycle.closed(inspector), ClosedWindow::Inspector);
-        assert!(!lifecycle.is_open());
-        assert!(lifecycle.attach_target(target));
-        assert!(lifecycle.attach_inspector(replacement));
-        assert!(lifecycle.is_open());
-    }
-
-    #[test]
-    fn closing_target_detaches_the_inspector() {
-        let target = WindowId::from(11);
-        let inspector = WindowId::from(12);
-        let mut lifecycle = InspectorLifecycle::default();
-        assert!(lifecycle.attach_target(target));
-        assert!(lifecycle.attach_inspector(inspector));
-
-        assert_eq!(lifecycle.closed(target), ClosedWindow::Target);
-        assert!(!lifecycle.is_open());
-        assert_eq!(
-            lifecycle.closed(WindowId::from(99)),
-            ClosedWindow::Unrelated
-        );
-    }
-}
+mod tests;

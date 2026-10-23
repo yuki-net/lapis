@@ -1,114 +1,41 @@
-diff --git a/crates/gpui/src/inspector.rs b/crates/gpui/src/inspector.rs
-index 9f86576..0636109 100644
---- a/crates/gpui/src/inspector.rs
-+++ b/crates/gpui/src/inspector.rs
-@@ -21,8 +21,8 @@ pub use conditional::*;
- #[cfg(any(feature = "inspector", debug_assertions))]
- mod conditional {
-     use super::*;
--    use crate::{AnyElement, App, Context, Empty, IntoElement, Render, Window};
--    use collections::FxHashMap;
-+    use crate::{AnyElement, App, Bounds, Context, Empty, IntoElement, Pixels, Render, Window};
-+    use collections::{FxHashMap, FxHashSet};
-     use std::any::{Any, TypeId};
+diff --git a/src/app.rs b/src/app.rs
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -585,6 +586,8 @@
+     #[cfg(any(feature = "inspector", debug_assertions))]
+     pub(crate) inspector_renderer: Option<crate::InspectorRenderer>,
+     #[cfg(any(feature = "inspector", debug_assertions))]
++    pub(crate) inspector_overlay_renderer: Option<fn(&crate::Inspector, &mut Window, &App)>,
++    #[cfg(any(feature = "inspector", debug_assertions))]
+     pub(crate) inspector_element_registry: InspectorElementRegistry,
+     #[cfg(any(test, feature = "test-support", debug_assertions))]
+     pub(crate) name: Option<&'static str>,
+@@ -658,6 +661,8 @@
+                 #[cfg(any(feature = "inspector", debug_assertions))]
+                 inspector_renderer: None,
+                 #[cfg(any(feature = "inspector", debug_assertions))]
++                inspector_overlay_renderer: None,
++                #[cfg(any(feature = "inspector", debug_assertions))]
+                 inspector_element_registry: InspectorElementRegistry::default(),
+                 quitting: false,
  
-     /// `GlobalElementId` qualified by source location of element construction.
-@@ -51,6 +51,22 @@ mod conditional {
-         }
+@@ -2086,6 +2091,12 @@
+         self.inspector_renderer = Some(f);
      }
  
-+    /// A node in the most recently rendered inspectable element tree.
-+    ///
-+    /// Unlike a browser DOM node, this is a snapshot. GPUI rebuilds its element tree for every
-+    /// frame, and the inspector replaces this list after the target window finishes rendering.
-+    #[derive(Clone, Debug, PartialEq)]
-+    pub struct InspectorElementNode {
-+        /// ID used to select this element and associate its inspector state.
-+        pub id: InspectorElementId,
-+        /// Nearest inspectable parent in the rendered element tree.
-+        pub parent: Option<InspectorElementId>,
-+        /// Concrete Rust element type used for this frame.
-+        pub element_type: &'static str,
-+        /// Actual bounds computed during prepaint.
-+        pub bounds: Bounds<Pixels>,
++    /// Sets the optional target overlay renderer. Inspection data remains owned by GPUI.
++    #[cfg(any(feature = "inspector", debug_assertions))]
++    pub fn set_inspector_overlay_renderer(&mut self, f: fn(&crate::Inspector, &mut Window, &App)) {
++        self.inspector_overlay_renderer = Some(f);
 +    }
 +
-     /// Function set on `App` to render the inspector UI.
-     pub type InspectorRenderer =
-         Box<dyn Fn(&mut Inspector, &mut Window, &mut Context<Inspector>) -> AnyElement>;
-@@ -60,6 +76,9 @@ mod conditional {
-     pub struct Inspector {
-         active_element: Option<InspectedElement>,
-         pub(crate) pick_depth: Option<f32>,
-+        element_tree: Vec<InspectorElementNode>,
-+        tree_revision: u64,
-+        collapsed_elements: FxHashSet<InspectorElementId>,
-     }
- 
-     struct InspectedElement {
-@@ -81,6 +100,9 @@ mod conditional {
-             Self {
-                 active_element: None,
-                 pick_depth: Some(0.0),
-+                element_tree: Vec::new(),
-+                tree_revision: 0,
-+                collapsed_elements: FxHashSet::default(),
-             }
-         }
- 
-@@ -116,6 +138,47 @@ mod conditional {
-             self.active_element.as_ref().map(|e| &e.id)
-         }
- 
-+        /// The inspectable element tree from the target window's most recently rendered frame.
-+        pub fn element_tree(&self) -> &[InspectorElementNode] {
-+            &self.element_tree
-+        }
-+
-+        /// Monotonically increasing revision of the element tree snapshot.
-+        pub fn tree_revision(&self) -> u64 {
-+            self.tree_revision
-+        }
-+
-+        /// Returns whether a tree node is collapsed in the inspector UI.
-+        pub fn is_tree_node_collapsed(&self, id: &InspectorElementId) -> bool {
-+            self.collapsed_elements.contains(id)
-+        }
-+
-+        /// Toggles whether a tree node is collapsed in the inspector UI.
-+        pub fn toggle_tree_node(&mut self, id: InspectorElementId) {
-+            if !self.collapsed_elements.remove(&id) {
-+                self.collapsed_elements.insert(id);
-+            }
-+        }
-+
-+        pub(crate) fn replace_element_tree(&mut self, nodes: Vec<InspectorElementNode>) -> bool {
-+            if self.element_tree == nodes {
-+                return false;
-+            }
-+
-+            self.element_tree = nodes;
-+            self.tree_revision = self.tree_revision.wrapping_add(1);
-+            self.collapsed_elements
-+                .retain(|id| self.element_tree.iter().any(|node| &node.id == id));
-+
-+            if self
-+                .active_element_id()
-+                .is_some_and(|active| !self.element_tree.iter().any(|node| &node.id == active))
-+            {
-+                self.active_element = None;
-+            }
-+            true
-+        }
-+
-         pub(crate) fn with_active_element_state<T: 'static, R>(
-             &mut self,
-             window: &mut Window,
-diff --git a/crates/gpui/src/element.rs b/crates/gpui/src/element.rs
-index a3fc626..4de9d06 100644
---- a/crates/gpui/src/element.rs
-+++ b/crates/gpui/src/element.rs
-@@ -359,13 +359,18 @@ impl<E: Element> Drawable<E> {
+     /// Registers a renderer specific to an inspector state.
+     #[cfg(any(feature = "inspector", debug_assertions))]
+     pub fn register_inspector_element<T: 'static, R: crate::IntoElement>(
+diff --git a/src/element.rs b/src/element.rs
+--- a/src/element.rs
++++ b/src/element.rs
+@@ -359,13 +359,18 @@
                  let inspector_id;
                  #[cfg(any(feature = "inspector", debug_assertions))]
                  {
@@ -134,17 +61,17 @@ index a3fc626..4de9d06 100644
                  }
                  #[cfg(not(any(feature = "inspector", debug_assertions)))]
                  {
-@@ -379,6 +384,9 @@ impl<E: Element> Drawable<E> {
+@@ -378,6 +383,9 @@
+                     window,
                      cx,
                  );
- 
++
 +                #[cfg(any(feature = "inspector", debug_assertions))]
 +                window.pop_inspector_element(inspector_id.as_ref());
-+
+ 
                  if global_id.is_some() {
                      window.element_id_stack.pop();
-                 }
-@@ -416,6 +424,8 @@ impl<E: Element> Drawable<E> {
+@@ -416,6 +424,8 @@
                  }
  
                  let bounds = window.layout_bounds(layout_id);
@@ -153,11 +80,222 @@ index a3fc626..4de9d06 100644
                  let node_id = window.next_frame.dispatch_tree.push_node();
                  let prepaint = self.element.prepaint(
                      global_id.as_ref(),
-diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 6d74a0e..3a797b5 100644
---- a/crates/gpui/src/window.rs
-+++ b/crates/gpui/src/window.rs
-@@ -684,6 +684,10 @@ pub(crate) struct Frame {
+diff --git a/src/inspector.rs b/src/inspector.rs
+--- a/src/inspector.rs
++++ b/src/inspector.rs
+@@ -21,7 +21,7 @@
+ #[cfg(any(feature = "inspector", debug_assertions))]
+ mod conditional {
+     use super::*;
+-    use crate::{AnyElement, App, Context, Empty, IntoElement, Render, Window};
++    use crate::{AnyElement, App, Bounds, Context, Empty, IntoElement, Pixels, Render, Window};
+     use collections::FxHashMap;
+     use std::any::{Any, TypeId};
+ 
+@@ -51,6 +51,22 @@
+         }
+     }
+ 
++    /// A node in the most recently rendered inspectable element tree.
++    ///
++    /// Unlike a browser DOM node, this is a snapshot. GPUI rebuilds its element tree for every
++    /// frame, and the inspector replaces this list after the target window finishes rendering.
++    #[derive(Clone, Debug, PartialEq)]
++    pub struct InspectorElementNode {
++        /// ID used to select this element and associate its inspector state.
++        pub id: InspectorElementId,
++        /// Nearest inspectable parent in the rendered element tree.
++        pub parent: Option<InspectorElementId>,
++        /// Concrete Rust element type used for this frame.
++        pub element_type: &'static str,
++        /// Actual bounds computed during prepaint.
++        pub bounds: Bounds<Pixels>,
++    }
++
+     /// Function set on `App` to render the inspector UI.
+     pub type InspectorRenderer =
+         Box<dyn Fn(&mut Inspector, &mut Window, &mut Context<Inspector>) -> AnyElement>;
+@@ -59,7 +75,11 @@
+     /// in picking mode.
+     pub struct Inspector {
+         active_element: Option<InspectedElement>,
++        selected_element_visible: bool,
++        hovered_element: Option<InspectedElement>,
+         pub(crate) pick_depth: Option<f32>,
++        element_tree: Vec<InspectorElementNode>,
++        tree_revision: u64,
+     }
+ 
+     struct InspectedElement {
+@@ -79,16 +99,49 @@
+     impl Inspector {
+         pub(crate) fn new() -> Self {
+             Self {
++                selected_element_visible: false,
+                 active_element: None,
++                hovered_element: None,
+                 pick_depth: Some(0.0),
++                element_tree: Vec::new(),
++                tree_revision: 0,
+             }
+         }
+ 
+         pub(crate) fn select(&mut self, id: InspectorElementId, window: &mut Window) {
+-            self.set_active_element_id(id, window);
++            self.set_active_element_id(id.clone(), window);
++            self.hovered_element = None;
++            self.selected_element_visible = false;
+             self.pick_depth = None;
+         }
+ 
++        pub(crate) fn set_hovered_element_id(
++            &mut self,
++            id: Option<InspectorElementId>,
++            window: &mut Window,
++        ) {
++            let changed = self.hovered_element.as_ref().map(|element| &element.id) != id.as_ref();
++            if changed {
++                self.hovered_element = id.map(InspectedElement::new);
++                window.refresh();
++            }
++        }
++
++        /// ID of the element currently hovered in the inspector tree.
++        pub fn hovered_element_id(&self) -> Option<&InspectorElementId> {
++            self.hovered_element.as_ref().map(|element| &element.id)
++        }
++        pub(crate) fn set_selected_element_visible(&mut self, visible: bool, window: &mut Window) {
++            if self.selected_element_visible != visible {
++                self.selected_element_visible = visible;
++                window.refresh();
++            }
++        }
++
++        /// Returns whether the selected element should remain highlighted.
++        pub fn selected_element_visible(&self) -> bool {
++            self.selected_element_visible
++        }
+         pub(crate) fn hover(&mut self, id: InspectorElementId, window: &mut Window) {
+             if self.is_picking() {
+                 let changed = self.set_active_element_id(id, window);
+@@ -116,6 +169,79 @@
+             self.active_element.as_ref().map(|e| &e.id)
+         }
+ 
++        /// Returns a reference to the active element state of type T if available.
++        pub fn active_element_state<T: 'static>(&self) -> Option<&T> {
++            self.active_element
++                .as_ref()
++                .and_then(|element| element.states.get(&TypeId::of::<T>()))
++                .and_then(|boxed| boxed.downcast_ref::<T>())
++        }
++
++        /// Returns a reference to the currently hovered element state of type T if available.
++        pub fn hovered_element_state<T: 'static>(&self) -> Option<&T> {
++            self.hovered_element
++                .as_ref()
++                .and_then(|element| element.states.get(&TypeId::of::<T>()))
++                .and_then(|boxed| boxed.downcast_ref::<T>())
++        }
++
++        /// The inspectable element tree from the target window's most recently rendered frame.
++        pub fn element_tree(&self) -> &[InspectorElementNode] {
++            &self.element_tree
++        }
++
++        /// Monotonically increasing revision of the element tree snapshot.
++        pub fn tree_revision(&self) -> u64 {
++            self.tree_revision
++        }
++
++        pub(crate) fn replace_element_tree(&mut self, nodes: &[InspectorElementNode]) -> bool {
++            if self.element_tree == nodes {
++                return false;
++            }
++
++            self.element_tree.clear();
++            self.element_tree.extend_from_slice(nodes);
++            self.tree_revision = self.tree_revision.wrapping_add(1);
++
++            if self
++                .active_element_id()
++                .is_some_and(|active| !self.element_tree.iter().any(|node| &node.id == active))
++            {
++                self.active_element = None;
++            }
++            if self
++                .hovered_element_id()
++                .is_some_and(|hovered| !self.element_tree.iter().any(|node| &node.id == hovered))
++            {
++                self.hovered_element = None;
++            }
++            true
++        }
++
++        pub(crate) fn with_hovered_element_state<T: 'static, R>(
++            &mut self,
++            window: &mut Window,
++            f: impl FnOnce(&mut Option<T>, &mut Window) -> R,
++        ) -> R {
++            let Some(hovered_element) = &mut self.hovered_element else {
++                return f(&mut None, window);
++            };
++
++            let type_id = TypeId::of::<T>();
++            let mut inspector_state = hovered_element
++                .states
++                .remove(&type_id)
++                .map(|state| *state.downcast().unwrap());
++            let result = f(&mut inspector_state, window);
++            if let Some(inspector_state) = inspector_state {
++                hovered_element
++                    .states
++                    .insert(type_id, Box::new(inspector_state));
++            }
++            result
++        }
++
+         pub(crate) fn with_active_element_state<T: 'static, R>(
+             &mut self,
+             window: &mut Window,
+@@ -145,6 +271,11 @@
+         /// Starts element picking mode, allowing the user to select elements by clicking.
+         pub fn start_picking(&mut self) {
+             self.pick_depth = Some(0.0);
++        }
++        /// Ends element picking mode without changing the selected element.
++        pub fn stop_picking(&mut self) {
++            self.pick_depth = None;
++            self.hovered_element = None;
+         }
+ 
+         /// Returns whether the inspector is currently in picking mode.
+diff --git a/src/view.rs b/src/view.rs
+--- a/src/view.rs
++++ b/src/view.rs
+@@ -167,6 +167,9 @@
+         window.with_rendered_view(self.entity_id(), |window| {
+             // Disable caching when inspecting so that mouse_hit_test has all hitboxes.
+             let caching_disabled = window.is_inspector_picking(cx);
++            // Full-tree inspection also needs the children of cached views while not picking.
++            #[cfg(any(feature = "inspector", debug_assertions))]
++            let caching_disabled = caching_disabled || window.inspector_is_enabled();
+             match self.cached_style.as_ref() {
+                 Some(style) if !caching_disabled => {
+                     let mut root_style = Style::default();
+@@ -264,6 +267,8 @@
+     ) {
+         window.with_rendered_view(self.entity_id(), |window| {
+             let caching_disabled = window.is_inspector_picking(cx);
++            #[cfg(any(feature = "inspector", debug_assertions))]
++            let caching_disabled = caching_disabled || window.inspector_is_enabled();
+             if self.cached_style.is_some() && !caching_disabled {
+                 window.with_element_state::<AnyViewState, _>(
+                     global_id.unwrap(),
+diff --git a/src/window.rs b/src/window.rs
+--- a/src/window.rs
++++ b/src/window.rs
+@@ -684,6 +684,10 @@
      pub(crate) next_inspector_instance_ids: FxHashMap<Rc<crate::InspectorElementPath>, usize>,
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub(crate) inspector_hitboxes: FxHashMap<HitboxId, crate::InspectorElementId>,
@@ -168,7 +306,7 @@ index 6d74a0e..3a797b5 100644
      pub(crate) tab_stops: TabStopMap,
  }
  
-@@ -733,6 +737,10 @@ impl Frame {
+@@ -733,6 +737,10 @@
  
              #[cfg(any(feature = "inspector", debug_assertions))]
              inspector_hitboxes: FxHashMap::default(),
@@ -179,7 +317,7 @@ index 6d74a0e..3a797b5 100644
              tab_stops: TabStopMap::default(),
          }
      }
-@@ -756,6 +764,8 @@ impl Frame {
+@@ -756,6 +764,8 @@
          {
              self.next_inspector_instance_ids.clear();
              self.inspector_hitboxes.clear();
@@ -188,7 +326,7 @@ index 6d74a0e..3a797b5 100644
          }
      }
  
-@@ -834,6 +844,8 @@ pub struct Window {
+@@ -834,6 +844,8 @@
      layout_engine: Option<TaffyLayoutEngine>,
      pub(crate) root: Option<AnyView>,
      pub(crate) element_id_stack: SmallVec<[ElementId; 32]>,
@@ -197,18 +335,16 @@ index 6d74a0e..3a797b5 100644
      pub(crate) text_style_stack: Vec<TextStyleRefinement>,
      pub(crate) rendered_entity_stack: Vec<EntityId>,
      pub(crate) element_offset_stack: Vec<Point<Pixels>>,
-@@ -874,6 +886,10 @@ pub struct Window {
+@@ -874,6 +886,8 @@
      pub(crate) client_inset: Option<Pixels>,
      #[cfg(any(feature = "inspector", debug_assertions))]
      inspector: Option<Entity<Inspector>>,
 +    #[cfg(any(feature = "inspector", debug_assertions))]
 +    inspector_is_external: bool,
-+    #[cfg(any(feature = "inspector", debug_assertions))]
-+    external_inspector_window: Option<AnyWindowHandle>,
  }
  
  #[derive(Clone, Debug, Default)]
-@@ -1218,6 +1234,8 @@ impl Window {
+@@ -1218,6 +1232,8 @@
              layout_engine: Some(TaffyLayoutEngine::new()),
              root: None,
              element_id_stack: SmallVec::default(),
@@ -217,18 +353,16 @@ index 6d74a0e..3a797b5 100644
              text_style_stack: Vec::new(),
              rendered_entity_stack: Vec::new(),
              element_offset_stack: Vec::new(),
-@@ -1258,6 +1276,10 @@ impl Window {
+@@ -1258,6 +1274,8 @@
              image_cache_stack: Vec::new(),
              #[cfg(any(feature = "inspector", debug_assertions))]
              inspector: None,
 +            #[cfg(any(feature = "inspector", debug_assertions))]
 +            inspector_is_external: false,
-+            #[cfg(any(feature = "inspector", debug_assertions))]
-+            external_inspector_window: None,
          })
      }
  
-@@ -1941,6 +1963,8 @@ impl Window {
+@@ -1941,6 +1959,8 @@
          let previous_window_active = self.rendered_frame.window_active;
          mem::swap(&mut self.rendered_frame, &mut self.next_frame);
          self.next_frame.clear();
@@ -237,7 +371,7 @@ index 6d74a0e..3a797b5 100644
          let current_focus_path = self.rendered_frame.focus_path();
          let current_window_active = self.rendered_frame.window_active;
  
-@@ -2018,7 +2042,7 @@ impl Window {
+@@ -2018,7 +2038,7 @@
          let root_size = {
              #[cfg(any(feature = "inspector", debug_assertions))]
              {
@@ -246,23 +380,21 @@ index 6d74a0e..3a797b5 100644
                      let mut size = self.viewport_size;
                      size.width = (size.width - _inspector_width).max(px(0.0));
                      size
-@@ -4431,10 +4455,83 @@ impl Window {
+@@ -4431,10 +4456,110 @@
      #[cfg(any(feature = "inspector", debug_assertions))]
      pub fn toggle_inspector(&mut self, cx: &mut App) {
          self.inspector = match self.inspector {
 -            None => Some(cx.new(|_| Inspector::new())),
 +            None => {
 +                self.inspector_is_external = false;
-+                self.external_inspector_window = None;
 +                Some(cx.new(|_| Inspector::new()))
 +            }
              Some(_) => None,
          };
 +        if self.inspector.is_none() {
 +            self.inspector_is_external = false;
-+            self.external_inspector_window = None;
 +        }
-+        self.refresh();
+         self.refresh();
 +    }
 +
 +    /// Enables inspector picking and state collection without rendering the inspector inside this
@@ -275,19 +407,19 @@ index 6d74a0e..3a797b5 100644
 +            .clone();
 +        inspector.update(cx, |inspector, _cx| inspector.pick_depth = None);
 +        self.inspector_is_external = true;
-         self.refresh();
++        self.refresh();
 +        inspector
 +    }
 +
-+    /// Associates the external inspector entity with the window that renders it.
-+    ///
-+    /// GPUI uses this handle to refresh the viewer when inspected state changes in the target
-+    /// window. Passing `None` detaches the viewer while leaving inspector picking enabled.
++    /// Ends inspector picking mode and refreshes the target window.
 +    #[cfg(any(feature = "inspector", debug_assertions))]
-+    pub fn set_external_inspector_window(&mut self, window: Option<AnyWindowHandle>) {
-+        self.external_inspector_window = window;
++    pub fn stop_inspector_picking(&mut self, cx: &mut App) {
++        if let Some(inspector) = self.inspector.clone() {
++            inspector.update(cx, |inspector, _cx| inspector.stop_picking());
++        }
++        self.notify_inspector(cx);
++        self.refresh();
 +    }
-+
 +    /// Selects an element from an external inspector tree and refreshes its target state.
 +    #[cfg(any(feature = "inspector", debug_assertions))]
 +    pub fn select_inspector_element(
@@ -297,17 +429,19 @@ index 6d74a0e..3a797b5 100644
 +    ) -> bool {
 +        if !self
 +            .rendered_frame
-+            .inspector_elements
-+            .iter()
-+            .any(|node| node.id == id)
++            .inspector_element_indices
++            .contains_key(&id)
 +        {
 +            return false;
 +        }
 +        let Some(inspector) = self.inspector.clone() else {
 +            return false;
 +        };
-+        inspector.update(cx, |inspector, _cx| inspector.select(id, self));
-+        self.refresh_external_inspector(cx);
++        inspector.update(cx, |inspector, _cx| {
++            inspector.select(id, self);
++            inspector.set_selected_element_visible(true, self);
++        });
++        self.notify_inspector(cx);
 +        true
 +    }
 +
@@ -316,35 +450,79 @@ index 6d74a0e..3a797b5 100644
 +    pub fn disable_inspector(&mut self) {
 +        self.inspector = None;
 +        self.inspector_is_external = false;
-+        self.external_inspector_window = None;
++        self.inspector_element_stack = Vec::new();
++        for frame in [&mut self.rendered_frame, &mut self.next_frame] {
++            frame.inspector_elements = Vec::new();
++            frame.inspector_element_indices = FxHashMap::default();
++            frame.next_inspector_instance_ids = FxHashMap::default();
++            frame.inspector_hitboxes = FxHashMap::default();
++        }
 +        self.refresh();
 +    }
 +
++    /// Previews an element selected by hovering a row in an external inspector.
 +    #[cfg(any(feature = "inspector", debug_assertions))]
-+    fn refresh_external_inspector(&self, cx: &mut App) {
-+        let Some(window) = self.external_inspector_window else {
-+            return;
++    pub fn preview_inspector_element(
++        &mut self,
++        id: Option<crate::InspectorElementId>,
++        cx: &mut App,
++    ) -> bool {
++        if let Some(id) = &id
++            && !self
++                .rendered_frame
++                .inspector_element_indices
++                .contains_key(id)
++        {
++            return false;
++        }
++        let Some(inspector) = self.inspector.clone() else {
++            return false;
 +        };
-+        cx.defer(move |cx| {
-+            let _ = window.update(cx, |_, window, _cx| window.refresh());
++        inspector.update(cx, |inspector, _cx| {
++            inspector.set_hovered_element_id(id, self);
 +        });
++        self.notify_inspector(cx);
++        true
++    }
++    #[cfg(any(feature = "inspector", debug_assertions))]
++    fn notify_inspector(&self, cx: &mut App) {
++        if let Some(inspector) = &self.inspector {
++            inspector.update(cx, |_, cx| cx.notify());
++        }
      }
  
      /// Returns true if the window is in inspector mode.
-@@ -4462,9 +4559,11 @@ impl Window {
+@@ -4460,11 +4585,26 @@
+             && let Some(inspector) = &self.inspector
+         {
              let inspector = inspector.clone();
-             let active_element_id = inspector.read(cx).active_element_id();
-             if Some(inspector_id) == active_element_id {
+-            let active_element_id = inspector.read(cx).active_element_id();
+-            if Some(inspector_id) == active_element_id {
 -                return inspector.update(cx, |inspector, _cx| {
++            let (active_element_id, hovered_element_id) = {
++                let inspector = inspector.read(cx);
++                (
++                    inspector.active_element_id().cloned(),
++                    inspector.hovered_element_id().cloned(),
++                )
++            };
++            if active_element_id.as_ref() == Some(inspector_id) {
 +                let result = inspector.update(cx, |inspector, _cx| {
                      inspector.with_active_element_state(self, f)
                  });
-+                self.refresh_external_inspector(cx);
++                self.notify_inspector(cx);
++                return result;
++            }
++            if hovered_element_id.as_ref() == Some(inspector_id) {
++                let result = inspector.update(cx, |inspector, _cx| {
++                    inspector.with_hovered_element_state(self, f)
++                });
++                self.notify_inspector(cx);
 +                return result;
              }
          }
          f(&mut None, self)
-@@ -4474,6 +4573,7 @@ impl Window {
+@@ -4474,6 +4614,7 @@
      pub(crate) fn build_inspector_element_id(
          &mut self,
          path: crate::InspectorElementPath,
@@ -352,7 +530,7 @@ index 6d74a0e..3a797b5 100644
      ) -> crate::InspectorElementId {
          self.invalidator.debug_assert_paint_or_prepaint();
          let path = Rc::new(path);
-@@ -4484,11 +4584,87 @@ impl Window {
+@@ -4484,11 +4625,84 @@
              .or_insert(0);
          let instance_id = *next_instance_id;
          *next_instance_id += 1;
@@ -420,17 +598,14 @@ index 6d74a0e..3a797b5 100644
 +        let Some(inspector) = self.inspector.clone() else {
 +            return;
 +        };
-+        let nodes = self.rendered_frame.inspector_elements.clone();
-+        let changed = inspector.update(cx, |inspector, cx| {
++        let nodes = &self.rendered_frame.inspector_elements;
++        inspector.update(cx, |inspector, cx| {
 +            let changed = inspector.replace_element_tree(nodes);
 +            if changed {
 +                cx.notify();
 +            }
 +            changed
 +        });
-+        if changed {
-+            self.refresh_external_inspector(cx);
-+        }
      }
  
      #[cfg(any(feature = "inspector", debug_assertions))]
@@ -441,62 +616,40 @@ index 6d74a0e..3a797b5 100644
          if let Some(inspector) = self.inspector.take() {
              let mut inspector_element = AnyView::from(inspector.clone()).into_any_element();
              inspector_element.prepaint_as_root(
-@@ -4535,14 +4711,26 @@ impl Window {
+@@ -4533,6 +4747,12 @@
+ 
+     #[cfg(any(feature = "inspector", debug_assertions))]
      fn paint_inspector_hitbox(&mut self, cx: &App) {
++        if let (Some(inspector), Some(paint)) =
++            (self.inspector.clone(), cx.inspector_overlay_renderer)
++        {
++            paint(inspector.read(cx), self, cx);
++            return;
++        }
          if let Some(inspector) = self.inspector.as_ref() {
              let inspector = inspector.read(cx);
--            if let Some((hitbox_id, _)) = self.hovered_inspector_hitbox(inspector, &self.next_frame)
--                && let Some(hitbox) = self
--                    .next_frame
--                    .hitboxes
--                    .iter()
--                    .find(|hitbox| hitbox.id == hitbox_id)
--            {
--                self.paint_quad(crate::fill(hitbox.bounds, crate::rgba(0x61afef4d)));
-+            let bounds = if inspector.is_picking() {
-+                self.hovered_inspector_hitbox(inspector, &self.next_frame)
-+                    .and_then(|(hitbox_id, _)| {
-+                        self.next_frame
-+                            .hitboxes
-+                            .iter()
-+                            .find(|hitbox| hitbox.id == hitbox_id)
-+                            .map(|hitbox| hitbox.bounds)
-+                    })
-+            } else {
-+                inspector.active_element_id().and_then(|active| {
-+                    self.next_frame
-+                        .inspector_elements
-+                        .iter()
-+                        .find(|node| &node.id == active)
-+                        .map(|node| node.bounds)
-+                })
-+            };
-+            if let Some(bounds) = bounds {
-+                self.paint_quad(crate::fill(bounds, crate::rgba(0x61afef4d)));
-             }
-         }
-     }
-@@ -4560,6 +4748,7 @@ impl Window {
+             if let Some((hitbox_id, _)) = self.hovered_inspector_hitbox(inspector, &self.next_frame)
+@@ -4560,6 +4780,7 @@
                      inspector.hover(inspector_id, self);
                  }
              });
-+            self.refresh_external_inspector(cx);
++            self.notify_inspector(cx);
          } else if event.downcast_ref::<crate::MouseDownEvent>().is_some() {
              inspector.update(cx, |inspector, _cx| {
                  if let Some((_, inspector_id)) =
-@@ -4568,6 +4757,7 @@ impl Window {
+@@ -4568,6 +4789,7 @@
                      inspector.select(inspector_id, self);
                  }
              });
-+            self.refresh_external_inspector(cx);
++            self.notify_inspector(cx);
          } else if let Some(event) = event.downcast_ref::<crate::ScrollWheelEvent>() {
              // This should be kept in sync with SCROLL_LINES in x11 platform.
              const SCROLL_LINES: f32 = 3.0;
-@@ -4593,6 +4783,7 @@ impl Window {
+@@ -4593,6 +4815,7 @@
                          }
                      }
                  });
-+                self.refresh_external_inspector(cx);
++                self.notify_inspector(cx);
              }
          }
      }

@@ -1,10 +1,11 @@
-﻿param([string]$Binary = (Join-Path $PSScriptRoot '../target/debug/lapis.exe'))
+﻿param([string]$Binary = (Join-Path $PSScriptRoot '../target/debug/lapis.exe'), [switch]$InspectorSamples)
 $ErrorActionPreference = 'Stop'
 $resolvedBinary = (Resolve-Path -LiteralPath $Binary).Path
 $fixture = Join-Path ([IO.Path]::GetTempPath()) ('lapis-window-host-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $fixture | Out-Null
 Set-Content -LiteralPath (Join-Path $fixture 'one.md') -Encoding utf8 -Value '# Window Host fixture'
 $log = Join-Path $fixture 'smoke.log'
+Write-Output "Fixture: $fixture"
 $previousAppData = $env:LOCALAPPDATA
 $process = $null
 try {
@@ -12,7 +13,10 @@ try {
     $process = Start-Process -FilePath $resolvedBinary -ArgumentList @('--workspace', ('"' + $fixture + '"'), '--open-file', 'one.md', '--window-host-smoke') -WindowStyle Hidden -RedirectStandardError $log -PassThru
     $processHandle = $process.Handle
     # テスト専用の段階通知を待つ。製品側の定期ポーリングではない。
-    foreach ($marker in @('baseline sample begin', 'idle sample begin')) {
+    $markers = @('baseline sample begin')
+    if ($InspectorSamples) { $markers += @('Inspector sample begin', 'Pick sample begin') }
+    $markers += 'idle sample begin'
+    foreach ($marker in $markers) {
         $deadline = [DateTime]::UtcNow.AddSeconds(20)
         while (-not ((Get-Content -Raw -LiteralPath $log -ErrorAction SilentlyContinue) -like "*$marker*")) {
             if ($process.HasExited -or [DateTime]::UtcNow -gt $deadline) { throw "Smoke stage missing: $marker" }
@@ -25,6 +29,7 @@ try {
         $process.Refresh()
         $cpu = ($process.TotalProcessorTime - $before).TotalMilliseconds / $sample.Elapsed.TotalMilliseconds * 100
         Write-Output ('{0}: CPU {1:N2}% of one core' -f $marker, $cpu)
+        Write-Output ('Working set {0:N1} MiB, private {1:N1} MiB' -f ($process.WorkingSet64 / 1MB), ($process.PrivateMemorySize64 / 1MB))
     }
     if (-not $process.WaitForExit(30000)) { throw 'Native Window smoke timed out' }
     $output = Get-Content -Raw -LiteralPath $log
@@ -33,6 +38,9 @@ try {
     if ($process.ExitCode -ne 0 -or $output -match 'panicked' -or $output -notlike '*WINDOW_HOST_SMOKE_PASS*') { throw 'Native Window smoke failed' }
     if ((Get-Content -Raw -LiteralPath (Join-Path $fixture 'one.md')) -notlike '*smoke edit*') { throw 'Detached edit was not saved' }
     Write-Output "Fixture: $fixture"
+} catch {
+    Get-Content -LiteralPath $log -ErrorAction SilentlyContinue | Write-Output
+    throw
 } finally {
     if ($process -and -not $process.HasExited) { Stop-Process -Id $process.Id }
     $env:LOCALAPPDATA = $previousAppData

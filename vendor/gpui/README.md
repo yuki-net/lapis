@@ -1,5 +1,42 @@
 # Welcome to GPUI!
 
+## Lapisでの保守境界
+
+GPUI更新時に残す変更を判断する開発者向けの記録。依存は公式crates.ioの0.2.2
+（Zed `69e2130295c2649963eb639fc70b4f2ee8ea1624`、`crates/gpui`）を元にしている。
+公式crateのchecksumは`979b45cfa6ec723b6f42330915a1b3769b930d02b2d505f9697f8ca602bee707`。
+以下のpatchは改行を正規化した公式ソースとの差分であり、同じファイルに複数の責務が含まれる場合も分けて記録する。
+
+| patch（リポジトリルートの`patches/`） | 目的・対象 |
+| --- | --- |
+| `gpui-0.2.2-external-inspector.patch` | 全要素ID・親子・Boundsの収集、任意選択、Tree Hover、独立表示と全幅維持、Entity通知、Overlay描画callback。`element.rs`、`inspector.rs`、`window.rs`、`view.rs`と`app.rs`の一部。 |
+| `gpui-0.2.2-drag.patch` | 開始したマウスボタンの解放だけでdragを終了する。`app.rs`、`elements/div.rs`、`window.rs`の一部。Inspectorとは独立。 |
+| `gpui-0.2.2-windows.patch` | Native移動・リサイズ中の描画と処理継続、non-client領域の既定処理、DirectX Debug Layerのopt-in。`platform/windows/events.rs`、`directx_devices.rs`。 |
+
+公式の`set_inspector_renderer`、`register_inspector_element`、Pick・深さ変更、Div状態・Style・生成元を利用する。
+公式`toggle_inspector`は右側30remを予約し、全ツリー列挙・任意選択・Tree Hoverの公開APIを持たないため、外部検査APIを残す。
+LapisのUI状態、折り畳み、スクロール、外部Windowのhandleと購読、Box Modelの色・形状はGPUIに置かない。
+外部Window更新は`Context::notify`とLapisの`App::observe`で接続する。
+Overlay callbackを登録しなければ公式の単色Pick描画を使用する。
+
+Inspector無効時は要素ID・ツリーを収集しない。起動中は描画に合わせてsnapshotを比較し、変化した場合だけコピー・revision更新する。
+選択・Hover状態の再取得もEntityへ通知する。定期収集や全Windowの定期再描画は追加しない。
+cached viewの子も検査するため、Inspector使用中はview cacheを使わない。終了するとFrame内の検査用バッファも解放する。
+
+Inspector用patchの削除条件は、全幅の独立Window、全ツリー、任意選択、Hover、同等の可視性を公式公開APIで維持し、回帰テストを通せること。
+Windows・drag patchは別に操作回帰を検証して判断し、Inspector移行と一緒に削除しない。
+
+リポジトリルートで各patchに対し次を実行すると、保存差分とvendorの整合を確認できる。
+
+```powershell
+git apply --reverse --check --directory=vendor/gpui patches/gpui-0.2.2-external-inspector.patch
+git apply --reverse --check --directory=vendor/gpui patches/gpui-0.2.2-drag.patch
+git apply --reverse --check --directory=vendor/gpui patches/gpui-0.2.2-windows.patch
+```
+
+独立Inspectorの描画・開閉はDesktop UIの`devtools`テストと、Debugの`scripts/test_window_host.ps1`内のInspector smokeで検証する。
+Native smokeのフレーム計測はGPU presentを含まない短時間の構築時間であり、実操作や継続負荷の保証ではない。
+
 GPUI is a hybrid immediate and retained mode, GPU accelerated, UI framework
 for Rust, designed to support a wide variety of applications.
 

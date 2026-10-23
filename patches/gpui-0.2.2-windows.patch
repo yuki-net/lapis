@@ -1,0 +1,95 @@
+diff --git a/src/platform/windows/directx_devices.rs b/src/platform/windows/directx_devices.rs
+--- a/src/platform/windows/directx_devices.rs
++++ b/src/platform/windows/directx_devices.rs
+@@ -93,6 +93,16 @@
+ fn check_debug_layer_available() -> bool {
+     #[cfg(debug_assertions)]
+     {
++        // The DirectX debug layer performs validation on the rendering path and
++        // can make interactive development builds visibly stutter. Keep it
++        // opt-in so a normal debug build has production-like frame pacing.
++        let enabled = std::env::var("LAPIS_GPUI_DX_DEBUG")
++            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
++            .unwrap_or(false);
++        if !enabled {
++            return false;
++        }
++
+         use windows::Win32::Graphics::Dxgi::{DXGIGetDebugInterface1, IDXGIInfoQueue};
+ 
+         unsafe { DXGIGetDebugInterface1::<IDXGIInfoQueue>(0) }
+diff --git a/src/platform/windows/events.rs b/src/platform/windows/events.rs
+--- a/src/platform/windows/events.rs
++++ b/src/platform/windows/events.rs
+@@ -43,6 +43,7 @@
+             WM_CREATE => self.handle_create_msg(handle),
+             WM_MOVE => self.handle_move_msg(handle, lparam),
+             WM_SIZE => self.handle_size_msg(wparam, lparam),
++            WM_MOVING | WM_SIZING => self.handle_size_move_progress(handle),
+             WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
+             WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
+             WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
+@@ -143,12 +144,18 @@
+                 lock.display = WindowsDisplay::new_with_handle(monitor);
+             }
+         }
+-        if let Some(mut callback) = lock.callbacks.moved.take() {
+-            drop(lock);
++        let moved_callback = lock.callbacks.moved.take();
++        drop(lock);
++        if let Some(mut callback) = moved_callback {
+             callback();
+             self.state.borrow_mut().callbacks.moved = Some(callback);
+         }
+-        Some(0)
++
++        // Windows enters a modal message loop while a native title-bar drag is active.
++        // `WM_TIMER` is low priority in that loop and can be starved by a continuous stream
++        // of move messages, leaving the client content visibly behind the window frame.
++        // Request a frame for each position update instead of relying only on that timer.
++        self.draw_window(handle, false)
+     }
+ 
+     fn handle_get_min_max_info_msg(&self, lparam: LPARAM) -> Option<isize> {
+@@ -235,6 +242,20 @@
+         unsafe {
+             KillTimer(Some(handle), SIZE_MOVE_LOOP_TIMER_ID).log_err();
+         }
++        None
++    }
++
++    fn handle_size_move_progress(&self, handle: HWND) -> Option<isize> {
++        // Native move/resize enters a modal Windows message loop. `WM_TIMER`
++        // is low priority and can be starved while `WM_MOVING` / `WM_SIZING`
++        // keep arriving, so process GPUI work on those progress messages too.
++        for runnable in self.main_receiver.drain() {
++            runnable.run();
++        }
++        self.draw_window(handle, false);
++
++        // Continue through DefWindowProcW so Windows can apply the RECT carried
++        // by WM_MOVING / WM_SIZING.
+         None
+     }
+ 
+@@ -953,6 +974,20 @@
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
++        if matches!(
++            wparam.0 as u32,
++            HTCAPTION
++                | HTLEFT
++                | HTRIGHT
++                | HTTOP
++                | HTBOTTOM
++                | HTTOPLEFT
++                | HTTOPRIGHT
++                | HTBOTTOMLEFT
++                | HTBOTTOMRIGHT
++        ) {
++            return None;
++        }
+         let mut lock = self.state.borrow_mut();
+         if let Some(mut func) = lock.callbacks.input.take() {
+             let scale_factor = lock.scale_factor;
