@@ -256,6 +256,7 @@ impl Shell {
             &self.session.documents,
             &self.feature_registry,
         );
+        self.refresh_feature_activation();
         cx.notify();
     }
     pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {

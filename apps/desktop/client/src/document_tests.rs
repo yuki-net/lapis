@@ -785,10 +785,10 @@ fn untitled_selection_survives_conversation_switching() {
         Arc::new(MemoryConversationState::default()), editor.snapshot(),
     );
     let first = conversations.active_id().clone();
-    conversations.capture(&editor, ConversationViewState::default(), None, &[]).unwrap();
-    conversations.create(&editor, ConversationViewState::default()).unwrap();
+    conversations.capture(&mut editor, ConversationViewState::default(), None, &[]).unwrap();
+    conversations.create(&mut editor, ConversationViewState::default()).unwrap();
     editor.new_document();
-    conversations.capture(&editor, ConversationViewState::default(), None, &[]).unwrap();
+    conversations.capture(&mut editor, ConversationViewState::default(), None, &[]).unwrap();
     conversations.switch(&first, &mut editor).unwrap();
     assert_eq!(editor.active_document_id(), Some(&selected));
     assert_eq!(editor.active_text().unwrap(), "selected recovery");

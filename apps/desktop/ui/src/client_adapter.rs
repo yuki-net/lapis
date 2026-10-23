@@ -31,6 +31,8 @@ pub(crate) struct ClientSnapshot {
     pub workspace_name: String,
     pub files: Vec<FileEntry>,
     pub conversations: Vec<ConversationRecord>,
+    pub projects: Vec<lapis_desktop_client::Project>,
+    pub project_error: Option<String>,
     pub conversation: ConversationId,
     pub view: ConversationViewState,
     pub edit_epoch: EditEpoch,
@@ -65,6 +67,8 @@ impl DocumentClient {
             workspace_name: self.editor.workspace_name().to_owned(),
             files: self.editor.file_tree().to_vec(),
             conversations: self.conversation.records().to_vec(),
+            projects: self.conversation.projects().to_vec(),
+            project_error: self.conversation.load_error().map(ToOwned::to_owned),
             conversation: self.conversation.active_id().clone(),
             view: self.conversation.active_view(),
             edit_epoch: self.edit_chain.epoch(),
@@ -103,7 +107,12 @@ impl DocumentClient {
             return Ok(());
         }
         self.conversation
-            .capture(&self.editor, view.layout, view.execution, &view.terminals)
+            .capture(
+                &mut self.editor,
+                view.layout,
+                view.execution,
+                &view.terminals,
+            )
             .map_err(|error| error.to_string())
     }
 }

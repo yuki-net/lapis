@@ -169,178 +169,11 @@ pub struct RestoredTerminal {
     pub rows: u16,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ConversationRecord {
-    pub id: ConversationId,
-    pub title: String,
-    pub workspace: WorkspaceSnapshot,
-    pub view: ConversationViewState,
-    pub selected_execution: Option<ExecutionId>,
-    pub terminals: Vec<RestoredTerminal>,
-}
-
-pub trait ConversationRepository: Send + Sync {
-    fn load(&self) -> Result<(Vec<ConversationRecord>, Option<ConversationId>), WorkspaceError>;
-    fn save(
-        &self,
-        records: &[ConversationRecord],
-        active: &ConversationId,
-    ) -> Result<(), WorkspaceError>;
-}
-
-pub struct ConversationSession {
-    repository: Arc<dyn ConversationRepository>,
-    records: Vec<ConversationRecord>,
-    active: ConversationId,
-    next_id: u64,
-}
-
-impl ConversationSession {
-    pub fn new(repository: Arc<dyn ConversationRepository>, initial: WorkspaceSnapshot) -> Self {
-        let loaded = repository.load().ok();
-        let (mut records, active) = loaded.unwrap_or_default();
-        if records.is_empty() {
-            records.push(ConversationRecord {
-                id: ConversationId::new("conversation-1"),
-                title: "Conversation 1".to_owned(),
-                workspace: initial,
-                view: ConversationViewState::default(),
-                selected_execution: None,
-                terminals: Vec::new(),
-            });
-        }
-        let active = active
-            .filter(|id| records.iter().any(|record| &record.id == id))
-            .unwrap_or_else(|| records[0].id.clone());
-        let next_id = records.len() as u64 + 1;
-        Self {
-            repository,
-            records,
-            active,
-            next_id,
-        }
-    }
-
-    pub fn records(&self) -> &[ConversationRecord] {
-        &self.records
-    }
-    pub fn active_id(&self) -> &ConversationId {
-        &self.active
-    }
-    pub fn active_record(&self) -> Option<&ConversationRecord> {
-        self.records.iter().find(|record| record.id == self.active)
-    }
-
-    pub fn active_view(&self) -> ConversationViewState {
-        self.records
-            .iter()
-            .find(|record| record.id == self.active)
-            .map(|record| record.view.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn restore_active(
-        &self,
-        editor: &mut EditorSession,
-    ) -> Result<ConversationViewState, WorkspaceError> {
-        let record = self
-            .records
-            .iter()
-            .find(|record| record.id == self.active)
-            .ok_or_else(|| WorkspaceError::new("Conversation が見つかりません"))?;
-        editor.restore_snapshot(record.workspace.clone())?;
-        Ok(record.view.clone())
-    }
-
-    /// 開いた Project が最後に保存した Conversation と同じ場合だけ、その状態を復元する。
-    /// アプリ起動直後に無条件で以前の Project を開かないための境界でもある。
-    pub fn restore_matching_workspace(
-        &self,
-        editor: &mut EditorSession,
-    ) -> Result<Option<ConversationViewState>, WorkspaceError> {
-        let Some(current_root) = editor.workspace_root() else {
-            return Ok(None);
-        };
-        let Some(record) = self.active_record() else {
-            return Ok(None);
-        };
-        if record.workspace.root.as_deref() != Some(current_root) {
-            return Ok(None);
-        }
-        editor.restore_snapshot(record.workspace.clone())?;
-        Ok(Some(record.view.clone()))
-    }
-
-    pub fn capture(
-        &mut self,
-        editor: &EditorSession,
-        view: ConversationViewState,
-        selected_execution: Option<ExecutionId>,
-        terminals: &[TerminalSnapshot],
-    ) -> Result<(), WorkspaceError> {
-        if let Some(record) = self
-            .records
-            .iter_mut()
-            .find(|record| record.id == self.active)
-        {
-            record.workspace = editor.snapshot();
-            record.view = view;
-            record.selected_execution = selected_execution;
-            record.terminals = terminals
-                .iter()
-                .map(|terminal| RestoredTerminal {
-                    id: Some(terminal.id.clone()),
-                    cwd: terminal.cwd.clone(),
-                    status: terminal.status,
-                    columns: terminal.columns,
-                    rows: terminal.rows,
-                })
-                .collect();
-        }
-        self.repository.save(&self.records, &self.active)
-    }
-
-    pub fn create(
-        &mut self,
-        editor: &EditorSession,
-        view: ConversationViewState,
-    ) -> Result<ConversationId, WorkspaceError> {
-        let id = ConversationId::new(format!("conversation-{}", self.next_id));
-        self.next_id += 1;
-        self.records.push(ConversationRecord {
-            id: id.clone(),
-            title: format!("Conversation {}", self.records.len() + 1),
-            workspace: editor.snapshot(),
-            view,
-            selected_execution: None,
-            terminals: Vec::new(),
-        });
-        self.active = id.clone();
-        self.repository.save(&self.records, &self.active)?;
-        Ok(id)
-    }
-
-    pub fn switch(
-        &mut self,
-        id: &ConversationId,
-        editor: &mut EditorSession,
-    ) -> Result<ConversationViewState, WorkspaceError> {
-        let record = self
-            .records
-            .iter()
-            .find(|record| &record.id == id)
-            .cloned()
-            .ok_or_else(|| WorkspaceError::new("Conversation が見つかりません"))?;
-        editor.restore_snapshot(record.workspace)?;
-        self.active = id.clone();
-        self.repository.save(&self.records, &self.active)?;
-        Ok(record.view)
-    }
-
-    pub fn repository(&self) -> Arc<dyn ConversationRepository> {
-        self.repository.clone()
-    }
-}
+mod conversation;
+pub use conversation::{
+    ConversationRecord, ConversationRepository, ConversationSession, ConversationState,
+};
+pub use lapis_project::{Project, SourceRole, TaskEnvironment};
 
 pub struct GitSession {
     backend: Arc<dyn lapis_git::GitConnection>,
@@ -2195,21 +2028,21 @@ mod tests {
     }
 
     #[derive(Default)]
-    struct MemoryConversationState(Mutex<(Vec<ConversationRecord>, Option<ConversationId>)>);
+    struct MemoryConversationState(Mutex<ConversationState>);
 
     impl ConversationRepository for MemoryConversationState {
-        fn load(
-            &self,
-        ) -> Result<(Vec<ConversationRecord>, Option<ConversationId>), WorkspaceError> {
+        fn load(&self) -> Result<ConversationState, WorkspaceError> {
             Ok(self.0.lock().unwrap().clone())
         }
 
         fn save(
             &self,
+            _expected: &ConversationState,
+            projects: &[Project],
             records: &[ConversationRecord],
             active: &ConversationId,
         ) -> Result<(), WorkspaceError> {
-            *self.0.lock().unwrap() = (records.to_vec(), Some(active.clone()));
+            *self.0.lock().unwrap() = (projects.to_vec(), records.to_vec(), Some(active.clone()));
             Ok(())
         }
     }
@@ -2774,11 +2607,11 @@ mod tests {
         let mut conversations = ConversationSession::new(store.clone(), editor.snapshot());
         let first = conversations.active_id().clone();
         conversations
-            .capture(&editor, ConversationViewState::default(), None, &[])
+            .capture(&mut editor, ConversationViewState::default(), None, &[])
             .unwrap();
         let second = conversations
             .create(
-                &editor,
+                &mut editor,
                 ConversationViewState {
                     active_tool: "search".to_owned(),
                     ..ConversationViewState::default()
@@ -2787,7 +2620,7 @@ mod tests {
             .unwrap();
         editor.open_path(second_path).unwrap();
         conversations
-            .capture(&editor, conversations.active_view(), None, &[])
+            .capture(&mut editor, conversations.active_view(), None, &[])
             .unwrap();
 
         let first_view = conversations.switch(&first, &mut editor).unwrap();
@@ -2801,8 +2634,8 @@ mod tests {
         assert_eq!(editor.display_name(), "second.md");
 
         let persisted = store.load().unwrap();
-        assert_eq!(persisted.0.len(), 2);
-        assert_eq!(persisted.1, Some(second));
+        assert_eq!(persisted.1.len(), 2);
+        assert_eq!(persisted.2, Some(second));
     }
 
     #[test]
