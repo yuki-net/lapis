@@ -112,11 +112,7 @@ impl Shell {
         };
 
         size.flex_shrink_0().overflow_hidden().child(
-            surface(SurfaceVariant::Panel)
-                .relative()
-                .size_full()
-                .flex()
-                .flex_col()
+            crate::components::panel_surface()
                 .on_drop(cx.listener(move |this, drag: &DraggedPanelTab, _, cx| {
                     if !drag.belongs_to(this.group) {
                         return;

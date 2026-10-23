@@ -70,6 +70,7 @@ Debugの独立Inspectorは既存のHelpメニュー/コマンドから開く。�
 `ui/src/devtools/inspection.rs`、Treeの表示状態とOverlayは同じdevtools内が所有する。
 各Root/Detachedから独立して開ける。同じTargetへのOpenは既存Inspectorを使用し、
 Target終了時は対応するInspectorだけを解放する。共通Window chromeを使うがタブ配置には含めない。
+Tree/Detailsは通常Panelと共通のアイランドで、Refresh/PickはDetails内のヘッダーに置く。
 Treeは表示範囲だけをUI化し、Pick/選択の確定時に該当行を表示する。
 `./scripts/test_inspector.ps1 -Binary <debug/lapis.exe>`で隔離したNative Windowの開閉・再開、
 Tree選択・Hover・Detailsと通常時/表示時/Pick中のCPU・メモリ・CPU描画時間を採取する。

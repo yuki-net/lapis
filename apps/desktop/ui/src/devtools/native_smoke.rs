@@ -34,6 +34,17 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
         })
         .unwrap();
     sample("visible", target, cx).await;
+    #[cfg(target_os = "windows")]
+    {
+        let viewer = cx
+            .update(|cx| {
+                cx.global::<InspectorController>()
+                    .inspector_handle(target.window_id())
+                    .unwrap()
+            })
+            .unwrap();
+        check_toolbar_hit_test(viewer, cx);
+    }
     let (viewer, inspector, selected) = target
         .update(cx, |_, window, cx| {
             assert_eq!(before, window.viewport_size());
@@ -97,6 +108,56 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
         })
         .unwrap();
     eprintln!("INSPECTOR_NATIVE_SMOKE_PASS");
+}
+
+#[cfg(target_os = "windows")]
+fn check_toolbar_hit_test(viewer: AnyWindowHandle, cx: &mut AsyncApp) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        UI::WindowsAndMessaging::{HTCLIENT, SendMessageW, WM_NCHITTEST},
+    };
+    let (raw, points) = viewer
+        .update(cx, |_, window, cx| {
+            let inspection = Inspection::enable(window, cx);
+            window.draw(cx).clear();
+            let points = ["inspector-refresh", "inspector-pick"].map(|id| {
+                let bounds = inspection
+                    .read(cx)
+                    .element_tree()
+                    .iter()
+                    .find(|node| node.id.path.global_id.to_string().contains(id))
+                    .unwrap()
+                    .bounds;
+                crate::window_host::drag::screen_position(bounds.center(), window).unwrap()
+            });
+            Inspection::disable(window);
+            let RawWindowHandle::Win32(raw) =
+                HasWindowHandle::window_handle(window).unwrap().as_raw()
+            else {
+                panic!("Windows handle required")
+            };
+            (raw.hwnd.get(), points)
+        })
+        .unwrap();
+    // Windowを借用していない位置で、OSからGPUIのnative Hit Testを呼ぶ。
+    for point in points {
+        let coordinates =
+            LPARAM(((point.y as i16 as u16 as u32) << 16 | point.x as i16 as u16 as u32) as isize);
+        let result = unsafe {
+            SendMessageW(
+                HWND(raw as *mut _),
+                WM_NCHITTEST,
+                Some(WPARAM(0)),
+                Some(coordinates),
+            )
+        };
+        assert_eq!(
+            result.0, HTCLIENT as isize,
+            "Inspector toolbar must not be a caption drag area"
+        );
+    }
+    eprintln!("INSPECTOR_NATIVE_TOOLBAR_PASS");
 }
 
 pub(crate) fn open_for_target(target: AnyWindowHandle, cx: &mut AsyncApp) -> AnyWindowHandle {

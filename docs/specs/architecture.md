@@ -47,6 +47,7 @@ Targetの世代付きWindowIdごとに一つのsessionを持ち、検査EntityId
 Inspectorのcloseは対象を閉じず、Targetのcloseは対応するInspectorだけを閉じる。
 Treeの可視行はGPUIのuniform_listで描画し、選択・Hover・開閉・scrollを他sessionと共有しない。
 Window optionsはapp、タイトルバー/controlsはwindow_host::chromeをRoot・Detachedと共用する。
+本文は通常Panelと共通のアイランド枠・ヘッダーを使い、Refresh/PickはDetails内に置く。
 描画完了のEntity通知からInspectorだけを更新し、終了時に購読と対象の検査資源を解放する。
 Document/Toolのタブ配置へInspectorを登録しない。公式との差分と撤去条件は
 [vendor GPUI](../../vendor/gpui/README.LAPIS.md)で管理する。

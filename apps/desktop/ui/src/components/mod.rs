@@ -17,4 +17,4 @@ pub(crate) use menu::{MenuItemSpec, menu_item, menu_surface};
 pub(crate) use scroll::scroll_surface;
 pub(crate) use scroll::{ScrollState, scroll_viewport};
 pub(crate) use separator::separator;
-pub(crate) use surface::{SurfaceVariant, surface};
+pub(crate) use surface::{SurfaceVariant, panel_header, panel_surface, surface};

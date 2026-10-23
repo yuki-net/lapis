@@ -595,6 +595,72 @@ struct SourceProbe {
 }
 
 struct LargeTarget;
+
+#[gpui::test]
+fn inspector_islands_keep_toolbar_inside_details(cx: &mut TestAppContext) {
+    let target = setup(cx);
+    let viewer = cx
+        .update_window(target.into(), |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    cx.simulate_window_resize(viewer, gpui::size(px(640.), px(360.)));
+    draw(target, cx);
+    let pick_position = viewer
+        .update(cx, |_, window, cx| {
+            let inspection = Inspection::enable(window, cx);
+            window.refresh();
+            window.draw(cx).clear();
+            let bounds = |id: &str| {
+                inspection
+                    .read(cx)
+                    .element_tree()
+                    .iter()
+                    .find(|node| node.id.path.global_id.to_string().contains(id))
+                    .unwrap_or_else(|| panic!("missing {id}"))
+                    .bounds
+            };
+            let title = bounds("inspector-title");
+            let tree = bounds("inspector-tree-island");
+            let details = bounds("inspector-details-island");
+            let header = bounds("inspector-details-header");
+            assert!(details.contains(&header.origin));
+            assert!(details.contains(&header.bottom_right()));
+            let gap = crate::tokens::spacing::GAP;
+            assert_eq!(tree.origin.x, gap);
+            assert_eq!(tree.origin.y, title.bottom() + gap);
+            assert_eq!(details.origin.x, tree.right() + gap);
+            assert_eq!(tree.origin.y, details.origin.y);
+            assert_eq!(tree.bottom(), details.bottom());
+            assert_eq!(details.right() + gap, window.viewport_size().width);
+            for id in ["inspector-refresh", "inspector-pick"] {
+                let button = bounds(id);
+                assert!(header.contains(&button.origin));
+                assert!(
+                    header.contains(&button.bottom_right()),
+                    "{id}: {button:?} outside {header:?}"
+                );
+                assert!(button.origin.y > title.bottom());
+            }
+            let pick = bounds("inspector-pick").center();
+            Inspection::disable(window);
+            pick
+        })
+        .unwrap();
+    let engine = cx.read(|cx| {
+        cx.global::<InspectorController>()
+            .inspection_entity(target.window_id())
+            .unwrap()
+    });
+    let mut visual = VisualTestContext::from_window(viewer, cx);
+    visual.simulate_click(pick_position, Modifiers::none());
+    engine.read_with(cx, |inspector, _| assert!(inspector.is_picking()));
+    viewer
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    cx.run_until_parked();
+}
+
 impl Render for LargeTarget {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         div().size_full().children(

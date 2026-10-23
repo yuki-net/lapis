@@ -2,6 +2,29 @@ use gpui::{div, prelude::*};
 
 use crate::{theme, tokens};
 
+/// タブの有無によらない、通常PanelとInspector共通のアイランド。
+pub(crate) fn panel_surface() -> gpui::Div {
+    surface(SurfaceVariant::Panel)
+        .relative()
+        .size_full()
+        .flex()
+        .flex_col()
+        .min_w(gpui::px(0.))
+        .min_h(gpui::px(0.))
+        .overflow_hidden()
+}
+
+pub(crate) fn panel_header() -> gpui::Div {
+    div()
+        .h(gpui::px(34.))
+        .px(tokens::spacing::XS)
+        .py(gpui::px(3.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .gap(tokens::spacing::XS)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SurfaceVariant {
     Menu,

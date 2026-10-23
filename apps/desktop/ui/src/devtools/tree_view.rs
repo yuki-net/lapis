@@ -1,7 +1,7 @@
 use gpui::{Div, Inspector, InspectorElementId, Stateful, div, prelude::*, px};
 
 use crate::{
-    components::{ScrollAxis, scroll_surface},
+    components::{ScrollAxis, panel_header, scroll_surface},
     theme,
 };
 
@@ -49,15 +49,9 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
         .flex()
         .flex_col()
         .child(
-            div()
-                .h(px(38.0))
-                .flex_none()
-                .flex()
-                .items_center()
+            panel_header()
                 .justify_between()
                 .px_3()
-                .border_b_1()
-                .border_color(theme::colors().border_default)
                 .child("Element tree")
                 .child(
                     div()
