@@ -442,9 +442,9 @@ fn task_worktree_roundtrip_preserves_drafts_terminals_and_source_identity() {
     loop {
         terminal.refresh().unwrap();
         if terminal.terminals()[0]
-            .output
-            .windows(b"WORKTREE_ALIVE".len())
-            .any(|bytes| bytes == b"WORKTREE_ALIVE")
+            .screen
+            .plain_text()
+            .contains("WORKTREE_ALIVE")
         {
             break;
         }
@@ -628,9 +628,9 @@ fn project_tasks_restore_primary_sub_drafts_and_keep_host_terminal_running() {
     loop {
         terminal.refresh().unwrap();
         if terminal.terminals()[0]
-            .output
-            .windows(b"TASK_ALIVE".len())
-            .any(|bytes| bytes == b"TASK_ALIVE")
+            .screen
+            .plain_text()
+            .contains("TASK_ALIVE")
         {
             break;
         }
