@@ -13,7 +13,6 @@ lapis-client-api = { path = "../../shared/protocol" }
 lapis-document = { path = "../../shared/models/document" }
 lapis-text = { path = "../../shared/models/text" }
 lapis-terminal = { path = "../../shared/models/terminal" }
-vt100 = "0.16.2"
 
 [dev-dependencies]
 tempfile.workspace = true
