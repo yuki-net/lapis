@@ -195,7 +195,7 @@ fn render_tree_row(
 
     div()
         .id(("inspector-tree-row", index))
-        .debug_selector(move || format!("inspector-tree-row-{index}").into())
+        .debug_selector(move || format!("inspector-tree-row-{index}"))
         .h(px(26.0))
         .min_w(px(280.0))
         .flex()
@@ -211,7 +211,7 @@ fn render_tree_row(
         .child(
             div()
                 .id(("inspector-tree-toggle", index))
-                .debug_selector(move || format!("inspector-tree-toggle-{index}").into())
+                .debug_selector(move || format!("inspector-tree-toggle-{index}"))
                 .w(px(14.0))
                 .flex_none()
                 .text_color(theme::colors().text_secondary)

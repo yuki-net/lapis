@@ -231,9 +231,8 @@ fn controller_closes_reopens_and_rejects_late_window_updates(cx: &mut TestAppCon
             .position(|node| node.id == stale)
             .unwrap()
     });
-    let row = viewer_cx
-        .debug_bounds(&format!("inspector-tree-row-{index}"))
-        .unwrap();
+    assert_eq!(index, 1);
+    let row = viewer_cx.debug_bounds("inspector-tree-row-1").unwrap();
     viewer_cx.simulate_mouse_move(row.center(), None, Modifiers::default());
     draw(target);
     inspector.read_with(target, |inspector, _| {
