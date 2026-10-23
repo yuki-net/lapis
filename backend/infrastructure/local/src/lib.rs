@@ -29,9 +29,11 @@ use lapis_task_runner::{
     CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
     TaskEvent, TaskRecord, run_codex_app_server,
 };
+#[cfg(test)]
+use lapis_terminal::TerminalScreen;
 use lapis_terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalOutput,
-    TerminalOutputSequence,
+    TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
+    TerminalKey, TerminalKeyEvent, TerminalModifiers, TerminalSize,
 };
 use lapis_workspace::WorkspaceRepository;
 use lapis_workspace::{
@@ -39,6 +41,8 @@ use lapis_workspace::{
 };
 use serde::{Deserialize, Serialize};
 mod git_action;
+mod terminal_engine;
+use terminal_engine::{TerminalEngine, normalized_size};
 
 #[derive(Clone, Default)]
 pub struct ConnectionGate(Arc<AtomicBool>);
@@ -90,7 +94,8 @@ struct LiveTerminal {
     writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send>,
     receiver: mpsc::Receiver<RawTerminalEvent>,
-    next_output_sequence: TerminalOutputSequence,
+    engine: TerminalEngine,
+    pending_events: std::collections::VecDeque<TerminalEvent>,
     reader_finished: Arc<AtomicBool>,
     exited: bool,
 }
@@ -158,6 +163,7 @@ impl TerminalBackend for LocalTerminalBackend {
         shell: lapis_terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
         use lapis_terminal::TerminalShell;
+        let size = normalized_size(TerminalSize::new(columns, rows));
         let cwd = shell_directory(cwd, shell)?;
         let mut command = match shell {
             #[cfg(windows)]
@@ -187,8 +193,8 @@ impl TerminalBackend for LocalTerminalBackend {
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
             .openpty(portable_pty::PtySize {
-                rows,
-                cols: columns,
+                rows: size.rows,
+                cols: size.columns,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -223,7 +229,8 @@ impl TerminalBackend for LocalTerminalBackend {
                 writer,
                 child,
                 receiver,
-                next_output_sequence: 0,
+                engine: TerminalEngine::new(size),
+                pending_events: std::collections::VecDeque::new(),
                 reader_finished,
                 exited: false,
             },
@@ -231,32 +238,44 @@ impl TerminalBackend for LocalTerminalBackend {
         Ok(id)
     }
 
-    fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
+    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
         let mut terminals = self.lock()?;
         let terminal = terminals
             .get_mut(id.as_str())
             .ok_or_else(|| TerminalError::new("Terminal not found"))?;
+        let bytes = encode_input(&terminal.engine, input)?;
         terminal
             .writer
-            .write_all(bytes)
+            .write_all(&bytes)
             .and_then(|()| terminal.writer.flush())
             .map_err(|error| TerminalError::new(error.to_string()))
     }
 
-    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+    fn resize(
+        &self,
+        id: &TerminalId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<TerminalDelta, TerminalError> {
         let mut terminals = self.lock()?;
         let terminal = terminals
             .get_mut(id.as_str())
             .ok_or_else(|| TerminalError::new("Terminal not found"))?;
+        let size = normalized_size(TerminalSize::new(columns, rows));
         terminal
             .master
             .resize(portable_pty::PtySize {
-                rows,
-                cols: columns,
+                rows: size.rows,
+                cols: size.columns,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|error| TerminalError::new(error.to_string()))
+            .map_err(|error| TerminalError::new(error.to_string()))?;
+        let (_, delta) = terminal.engine.resize(size);
+        terminal
+            .pending_events
+            .push_back(TerminalEvent::Delta(delta.clone()));
+        Ok(delta)
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -264,18 +283,19 @@ impl TerminalBackend for LocalTerminalBackend {
         let terminal = terminals
             .get_mut(id.as_str())
             .ok_or_else(|| TerminalError::new("Terminal not found"))?;
-        let mut events = Vec::new();
+        let mut events = terminal.pending_events.drain(..).collect::<Vec<_>>();
         for event in terminal.receiver.try_iter() {
             match event {
                 RawTerminalEvent::Output(data) if !data.is_empty() => {
-                    terminal.next_output_sequence = terminal
-                        .next_output_sequence
-                        .checked_add(1)
-                        .ok_or_else(|| TerminalError::new("Terminal output sequence overflowed"))?;
-                    events.push(TerminalEvent::Output(TerminalOutput {
-                        sequence: terminal.next_output_sequence,
-                        data,
-                    }));
+                    let delta = terminal.engine.process(&data);
+                    for reply in terminal.engine.take_replies() {
+                        terminal
+                            .writer
+                            .write_all(&reply)
+                            .and_then(|()| terminal.writer.flush())
+                            .map_err(|error| TerminalError::new(error.to_string()))?;
+                    }
+                    events.push(TerminalEvent::Delta(delta));
                 }
                 RawTerminalEvent::Output(_) => {}
                 RawTerminalEvent::Failed(message) => events.push(TerminalEvent::Failed(message)),
@@ -307,6 +327,144 @@ impl TerminalBackend for LocalTerminalBackend {
             .map_err(|error| TerminalError::new(error.to_string()))?;
         terminal.exited = true;
         Ok(())
+    }
+}
+
+fn encode_input(engine: &TerminalEngine, input: &TerminalInput) -> Result<Vec<u8>, TerminalError> {
+    match input {
+        TerminalInput::Text(text) => Ok(text.as_bytes().to_vec()),
+        TerminalInput::Paste(text) => {
+            if engine
+                .mode()
+                .contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
+            {
+                Ok(format!("\x1b[200~{text}\x1b[201~").into_bytes())
+            } else {
+                Ok(text.as_bytes().to_vec())
+            }
+        }
+        TerminalInput::Key(event) => encode_key(engine, event),
+    }
+}
+
+fn encode_key(engine: &TerminalEngine, event: &TerminalKeyEvent) -> Result<Vec<u8>, TerminalError> {
+    let modifiers = event.modifiers;
+    let modifier = modifier_parameter(modifiers);
+    let application_cursor = engine
+        .mode()
+        .contains(alacritty_terminal::term::TermMode::APP_CURSOR);
+    let kitty_keyboard = engine
+        .mode()
+        .contains(alacritty_terminal::term::TermMode::KITTY_KEYBOARD_PROTOCOL);
+    let csi = |body: &str, suffix: char| {
+        if modifier == 1 {
+            format!("\x1b[{body}{suffix}").into_bytes()
+        } else {
+            format!("\x1b[{body};{modifier}{suffix}").into_bytes()
+        }
+    };
+    let mut bytes = match &event.key {
+        TerminalKey::Character(text) => {
+            if modifiers.control {
+                if let Some(byte) = control_byte(text) {
+                    vec![byte]
+                } else {
+                    text.as_bytes().to_vec()
+                }
+            } else {
+                text.as_bytes().to_vec()
+            }
+        }
+        TerminalKey::Enter if modifier == 1 => vec![b'\r'],
+        TerminalKey::Backspace if modifier == 1 => vec![0x7f],
+        TerminalKey::Backspace if modifiers.control && !modifiers.alt => vec![0x08],
+        TerminalKey::Tab if modifier == 1 => vec![b'\t'],
+        TerminalKey::Tab if modifiers.shift && !modifiers.control && !modifiers.alt => {
+            b"\x1b[Z".to_vec()
+        }
+        TerminalKey::Escape if modifier == 1 => vec![0x1b],
+        TerminalKey::ArrowUp => arrow_sequence(b'A', application_cursor, modifier),
+        TerminalKey::ArrowDown => arrow_sequence(b'B', application_cursor, modifier),
+        TerminalKey::ArrowRight => arrow_sequence(b'C', application_cursor, modifier),
+        TerminalKey::ArrowLeft => arrow_sequence(b'D', application_cursor, modifier),
+        TerminalKey::Home => {
+            if modifier == 1 {
+                b"\x1b[H".to_vec()
+            } else {
+                format!("\x1b[1;{modifier}H").into_bytes()
+            }
+        }
+        TerminalKey::End => {
+            if modifier == 1 {
+                b"\x1b[F".to_vec()
+            } else {
+                format!("\x1b[1;{modifier}F").into_bytes()
+            }
+        }
+        TerminalKey::Insert => csi("2", '~'),
+        TerminalKey::Delete => csi("3", '~'),
+        TerminalKey::PageUp => csi("5", '~'),
+        TerminalKey::PageDown => csi("6", '~'),
+        TerminalKey::Function(number @ 1..=4) => {
+            let suffix = b'P' + (number - 1);
+            if modifier == 1 {
+                format!("\x1bO{}", suffix as char).into_bytes()
+            } else {
+                format!("\x1b[1;{modifier}{}", suffix as char).into_bytes()
+            }
+        }
+        TerminalKey::Function(number @ 5..=12) => {
+            let base = [15, 17, 18, 19, 20, 21, 23, 24][(*number - 5) as usize];
+            csi(&base.to_string(), '~')
+        }
+        TerminalKey::Enter | TerminalKey::Backspace | TerminalKey::Tab | TerminalKey::Escape => {
+            if kitty_keyboard {
+                let code = match &event.key {
+                    TerminalKey::Enter => 13,
+                    TerminalKey::Backspace => 127,
+                    TerminalKey::Tab => 9,
+                    TerminalKey::Escape => 27,
+                    _ => unreachable!(),
+                };
+                format!("\x1b[{code};{modifier}u").into_bytes()
+            } else {
+                vec![]
+            }
+        }
+        _ => Vec::new(),
+    };
+    if modifiers.alt && !matches!(&event.key, TerminalKey::Escape) && !kitty_keyboard {
+        bytes.insert(0, 0x1b);
+    }
+    Ok(bytes)
+}
+
+fn modifier_parameter(modifiers: TerminalModifiers) -> u8 {
+    1 + u8::from(modifiers.shift)
+        + 2 * u8::from(modifiers.alt)
+        + 4 * u8::from(modifiers.control)
+        + 8 * u8::from(modifiers.super_key)
+}
+
+fn control_byte(text: &str) -> Option<u8> {
+    let byte = text.as_bytes().first().copied()?;
+    if text.len() != 1 {
+        return None;
+    }
+    if byte == b' ' || byte == b'@' {
+        return Some(0);
+    }
+    let upper = byte.to_ascii_uppercase();
+    (b'@'..=b'_').contains(&upper).then_some(upper & 0x1f)
+}
+
+fn arrow_sequence(arrow: u8, application_cursor: bool, modifier: u8) -> Vec<u8> {
+    if modifier == 1 && application_cursor {
+        format!("\x1bO{}", arrow as char).into_bytes()
+    } else if modifier == 1 {
+        format!("\x1b[{}", arrow as char).into_bytes()
+    } else {
+        format!("\x1b[1;{modifier}{}", arrow as char).into_bytes()
     }
 }
 
@@ -2073,14 +2231,19 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
         self.inner.start_with_shell(cwd, columns, rows, shell)
     }
 
-    fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
+    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
         if !self.gate.is_connected() {
             return Err(TerminalError::new("loopback workspace is disconnected"));
         }
-        self.inner.input(id, bytes)
+        self.inner.input(id, input)
     }
 
-    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+    fn resize(
+        &self,
+        id: &TerminalId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<TerminalDelta, TerminalError> {
         if !self.gate.is_connected() {
             return Err(TerminalError::new("loopback workspace is disconnected"));
         }
@@ -2490,41 +2653,38 @@ mod tests {
     fn terminal_pty_accepts_input_and_returns_output() {
         let backend = LocalTerminalBackend::default();
         let id = backend.start(Path::new("."), 100, 30).unwrap();
-        backend.resize(&id, 120, 32).unwrap();
+        let resize = backend.resize(&id, 120, 32).unwrap();
+        let mut screen = TerminalScreen::empty(resize.size);
+        screen.apply_delta(&resize).unwrap();
         let command = if cfg!(windows) {
             "Write-Output ('lapis-terminal-' + 'smoke')\r"
         } else {
             "printf 'lapis-terminal-%s\\n' smoke\n"
         };
-        let mut command_sent = !cfg!(windows);
-        if command_sent {
-            backend.input(&id, command.as_bytes()).unwrap();
-        }
+        backend
+            .input(&id, &TerminalInput::Text(command.to_owned()))
+            .unwrap();
         let deadline = Instant::now() + Duration::from_secs(8);
-        let mut output = Vec::new();
+        let mut output = String::new();
         let mut sequences = Vec::new();
         while Instant::now() < deadline {
             for event in backend.poll(&id).unwrap() {
-                if let TerminalEvent::Output(chunk) = event {
-                    sequences.push(chunk.sequence);
-                    output.extend(chunk.data);
+                if let TerminalEvent::Delta(delta) = event {
+                    sequences.push(delta.revision);
+                    screen.apply_delta(&delta).unwrap();
+                    output = screen.plain_text();
                 }
             }
             // この低水準テストではClient役がConPTYの問い合わせへ応答する。
             // 通常接続ではRuntimeが一度だけ応答する。
-            if !command_sent && output.windows(4).any(|bytes| bytes == b"\x1b[6n") {
-                backend.input(&id, b"\x1b[1;1R").unwrap();
-                backend.input(&id, command.as_bytes()).unwrap();
-                command_sent = true;
-            }
-            if String::from_utf8_lossy(&output).contains("lapis-terminal-smoke") {
+            if output.contains("lapis-terminal-smoke") {
                 break;
             }
             thread::sleep(Duration::from_millis(50));
         }
         backend.terminate(&id).unwrap();
         assert!(
-            String::from_utf8_lossy(&output).contains("lapis-terminal-smoke"),
+            output.contains("lapis-terminal-smoke"),
             "output: {output:?}"
         );
         assert!(
