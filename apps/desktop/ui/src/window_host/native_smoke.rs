@@ -677,8 +677,11 @@ pub(crate) fn run_native_smoke(
                     false,
                     move |client| {
                         client
-                            .editor
-                            .open_workspace(peer_path.parent().unwrap().to_owned())
+                            .conversation
+                            .open_project(
+                                &mut client.editor,
+                                peer_path.parent().unwrap().to_owned(),
+                            )
                             .map_err(|e| e.to_string())?;
                         client
                             .editor
@@ -720,8 +723,9 @@ pub(crate) fn run_native_smoke(
                                             false,
                                             move |client| {
                                                 client
-                                                    .editor
-                                                    .open_workspace(
+                                                    .conversation
+                                                    .open_project(
+                                                        &mut client.editor,
                                                         path.parent().unwrap().to_owned(),
                                                     )
                                                     .map_err(|e| e.to_string())?;
