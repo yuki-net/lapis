@@ -848,18 +848,17 @@ fn terminal_snapshot_atomically_replaces_cache_and_rejects_wrong_or_stale_resour
     let mut session = TerminalSession::new(backend.clone());
     let id = session.start(Path::new("repo"), 80, 24).unwrap();
     let mut snapshot = session.terminals()[0].clone();
-    snapshot.output = vec![42; 256 * 1024 + 10];
-    snapshot.output_sequence = 10;
+    snapshot.revision = 10;
+    snapshot.screen.rows[0].cells[0].text = "accepted".to_owned();
     backend
         .events
         .lock()
         .unwrap()
         .push(TerminalEvent::Snapshot(snapshot.clone()));
     assert!(session.refresh().unwrap());
-    assert_eq!(session.terminals()[0].output.len(), 256 * 1024);
-    assert!(session.terminals()[0].output_truncated);
-    assert_eq!(session.terminals()[0].output_sequence, 10);
-    snapshot.output_sequence = 9;
+    assert_eq!(session.terminals()[0].screen.rows[0].cells[0].text, "accepted");
+    assert_eq!(session.terminals()[0].revision, 10);
+    snapshot.revision = 9;
     snapshot.status = TerminalStatus::Failed;
     backend
         .events
@@ -867,7 +866,7 @@ fn terminal_snapshot_atomically_replaces_cache_and_rejects_wrong_or_stale_resour
         .unwrap()
         .push(TerminalEvent::Snapshot(snapshot.clone()));
     assert!(!session.refresh().unwrap());
-    snapshot.output_sequence = 11;
+    snapshot.revision = 11;
     snapshot.id = TerminalId::new("foreign");
     backend
         .events
@@ -876,7 +875,7 @@ fn terminal_snapshot_atomically_replaces_cache_and_rejects_wrong_or_stale_resour
         .push(TerminalEvent::Snapshot(snapshot.clone()));
     assert!(!session.refresh().unwrap());
     snapshot.id = id;
-    snapshot.output = b"recovered".to_vec();
+    snapshot.screen.rows[0].cells[0].text = "recovered".to_owned();
     snapshot.status = TerminalStatus::Exited;
     backend
         .events
@@ -884,9 +883,9 @@ fn terminal_snapshot_atomically_replaces_cache_and_rejects_wrong_or_stale_resour
         .unwrap()
         .push(TerminalEvent::Snapshot(snapshot));
     assert!(session.refresh().unwrap());
-    assert_eq!(session.terminals()[0].output, b"recovered");
+    assert_eq!(session.terminals()[0].screen.rows[0].cells[0].text, "recovered");
     assert_eq!(session.terminals()[0].status, TerminalStatus::Exited);
-    assert_eq!(session.terminals()[0].output_sequence, 11);
+    assert_eq!(session.terminals()[0].revision, 11);
 }
 
 #[test]
