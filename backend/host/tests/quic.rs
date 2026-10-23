@@ -147,7 +147,9 @@ async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd
         } else {
             "printf 'LAPIS_PORT_%s\\n' SHARED\ncat cwd-proof.txt\n"
         };
-        observer.input(&id, command.as_bytes()).unwrap();
+        observer
+            .input(&id, &TerminalInput::Text(command.to_owned()))
+            .unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(15);
         loop {
             let snapshot = observer
@@ -156,7 +158,7 @@ async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd
                 .into_iter()
                 .find(|terminal| terminal.id == id)
                 .unwrap();
-            let output = String::from_utf8_lossy(&snapshot.output);
+            let output = snapshot.screen.plain_text();
             let succeeded =
                 output.contains("LAPIS_PORT_SHARED") && output.contains("LAPIS_ACTUAL_CWD");
             if succeeded {
@@ -905,18 +907,20 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                 2,
                 RequestBody::TerminalInput(TerminalInputRequest {
                     terminal_id: terminal.clone(),
-                    data: if cfg!(windows) {
-                        "Write-Output ('LAPIS_QUIC_' + 'SHARED_PTY')\r\n"
-                    } else {
-                        "printf 'LAPIS_QUIC_%s\\n' SHARED_PTY\n"
-                    }
-                    .to_owned(),
+                    input: TerminalInput::Text(
+                        if cfg!(windows) {
+                            "Write-Output ('LAPIS_QUIC_' + 'SHARED_PTY')\r\n"
+                        } else {
+                            "printf 'LAPIS_QUIC_%s\\n' SHARED_PTY\n"
+                        }
+                        .to_owned()
+                    ),
                 })
             )
             .await,
             ResponseBody::TerminalInput(_)
         ));
-        let mut last_output = Vec::new();
+        let mut last_output = String::new();
         let completed = tokio::time::timeout(Duration::from_secs(15), async {
             let mut number = 3;
             loop {
@@ -939,9 +943,8 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                     .find(|value| value.terminal_id == terminal)
                     .unwrap();
                 assert_eq!(value.status, TerminalStatus::Running);
-                last_output = value.buffered_output.clone();
-                if String::from_utf8_lossy(&value.buffered_output).contains("LAPIS_QUIC_SHARED_PTY")
-                {
+                last_output = value.screen.plain_text();
+                if last_output.contains("LAPIS_QUIC_SHARED_PTY") {
                     break;
                 }
                 number += 1;
@@ -952,7 +955,7 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
         assert!(
             completed.is_ok(),
             "shell output missing: {:?}",
-            String::from_utf8_lossy(&last_output[last_output.len().saturating_sub(4096)..])
+            &last_output[last_output.len().saturating_sub(4096)..]
         );
         // Local埋め込み接続も同じHostのPTYを再起動せず発見する。
         let embedded = fixture.host.connect(fixture._root.path()).unwrap();
