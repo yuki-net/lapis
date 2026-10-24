@@ -15,7 +15,10 @@ use crate::{
 };
 use crate::{
     extension_ui::PanelPosition,
-    shell::{DraggedPanelTab, PanelHost, PanelSpanTransition, PanelTab, ResizeMode, ResizeTarget},
+    shell::{
+        DraggedPanelTab, DropTarget, DropZone, LayoutError, LayoutNode, PanelHost,
+        PanelSpanTransition, PanelTab, ResizeMode, ResizeTarget, SplitDirection, TabGroupId,
+    },
 };
 use gpui::{
     AnyView, App, ClickEvent, Context, CursorStyle, ElementId, FocusHandle, Focusable,
@@ -39,15 +42,6 @@ mod resize;
 mod tab_drag;
 mod tool_picker;
 
-const fn panel_key(position: PanelPosition) -> u32 {
-    match position {
-        PanelPosition::Left => 1,
-        PanelPosition::Main => 2,
-        PanelPosition::Bottom => 3,
-        PanelPosition::Right => 4,
-    }
-}
-
 pub(crate) struct Shell {
     pub(crate) shell: ShellState,
     pub(crate) host: super::window_group::HostId,
@@ -57,6 +51,8 @@ pub(crate) struct Shell {
     drag_preview: Option<gpui::AnyWindowHandle>,
     _drag_keys: gpui::Subscription,
     pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
+    pub(crate) group_bounds: RefCell<HashMap<TabGroupId, gpui::Bounds<Pixels>>>,
+    drop_target: Option<DropTarget>,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
     focus_handle: FocusHandle,
@@ -185,6 +181,7 @@ impl Shell {
             if event.keystroke.key == "escape" {
                 let _ = shell.update(cx, |shell, cx| {
                     if shell.tab_drag.cancel() {
+                        shell.drop_target = None;
                         shell.close_drag_preview(cx);
                         cx.stop_active_drag(window);
                         cx.stop_propagation();
@@ -205,6 +202,8 @@ impl Shell {
             drag_preview: None,
             _drag_keys: drag_keys,
             panel_bounds: Default::default(),
+            group_bounds: Default::default(),
+            drop_target: None,
             session: ShellPresentation::default(),
             document_view,
             focus_handle: cx.focus_handle(),
@@ -234,15 +233,14 @@ impl Shell {
             .and_then(|path| self.languages.detect_path(path));
         self.feature_registry
             .activate(ActivationEvent::LanguageChanged(language));
-        self.refresh_feature_activation(cx);
+        self.refresh_feature_activation();
         cx.notify();
     }
     pub(crate) fn t(&self, key: &str) -> String {
         self.locale
             .resolve(&lapis_localization::MessageId::new(key))
     }
-    fn refresh_feature_activation(&mut self, cx: &mut Context<Self>) {
-        self.synchronize_view_instances(cx);
+    fn refresh_feature_activation(&mut self) {
         self.shell
             .synchronize_activation(&mut self.feature_registry);
     }
@@ -286,7 +284,7 @@ impl Shell {
             &self.feature_registry,
         );
         self.synchronize_view_instances(cx);
-        self.refresh_feature_activation(cx);
+        self.refresh_feature_activation();
         cx.notify();
     }
     pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {

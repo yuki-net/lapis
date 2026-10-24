@@ -54,7 +54,7 @@ Document/Toolのタブ配置へInspectorを登録しない。公式との差分�
 
 - Root ごとに独立した WindowGroup と Client worker を持つ。Detached は元の worker・Document・Conversation を共有し、Feature や実行サービスを作り直さない。別 Root のグループへタブを渡さない。
 - 共通の OS Window options と Shell が、テーマ・タイトルバー・Window Controls・タブ・フッターを描画する。Detached は Root 用のメニューや補助 Panel を持たない。
-- WindowGroup は Window の親子関係、`PanelTab` の所属Window・`TabGroupId`、終了中フラグを持つ。同じZoneの複数Groupを`PanelPosition`で代用しない。既存の再ドックボタンは移動先WindowのMain Anchorを解決してから共通のGroup移動APIを呼ぶ。Window bounds はイベントで更新する。Active Tab・focus・selection・scroll・Panel サイズは各 Window の Shell / Editor が所有する。
+- WindowGroup は Window の親子関係、`PanelTab` の所属 Window・Panel、終了中フラグを持つ。Window bounds はイベントで更新する。Active Tab・focus・selection・scroll・Panel サイズは各 Window の Shell / Editor が所有する。
 - Document の操作は共有 worker で直列化し、送信元 Window の対象を操作前に選ぶ。新規 Document の作成元も worker 内で記録し、先に届いた Snapshot の送信元から所属を推測しない。応答の連番と各 Editor の世代で古い結果を拒否する。移動中に入力を失わないため、未完了入力・復旧待ち・終了処理中の移動は受け付けない。
 - Worker 内の対象切替は `select_document_for_operation` を使い、表示状態を保存しない。Root の既存 poll と子の操作が異なる文書を対象にしても、切替だけで保存済み Active Tab を書き換えない。ユーザーによるタブ選択、文書変更、debounce 後の表示状態更新はそれぞれの保存経路を維持する。
 - Window の生成成功後にタブの所属を移す。生成失敗・未受理のドロップでは元のタブを残す。新 Host の購読が有効になる前に初回 Snapshot と配置通知が併合される場合も、defer した通知で配置を渡す。
@@ -68,7 +68,7 @@ Document は取り外しボタンと Root への再ドックに加え、Windows 
 
 GPUI 0.2.2 の Windows backend は MouseDown で `SetCapture`、MouseUp で `ReleaseCapture` し、GPUI は受信した Window の MouseUp 後に active drag を破棄する。Shell は元 Window の capture phase で解放を受け、`ClientToScreen` / `ScreenToClient` で各 Window の DPI をまたぐ物理座標を変換する。`WindowFromPoint` の手前の Window と描画時の Panel bounds を照合し、背後の Window へ移動しない。別グループの Lapis Window と、Lapis の Panel 以外の領域では取り消す。外部アプリ上では新 Window を生成する。新 Window は離した位置のモニターの作業領域内へ置く。GPUI の変更やイベントの定期監視は加えない。
 
-ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。ドラッグのラベル表示は元 Window の範囲内であり、Window 外の追従プレビューや移動先の強調表示は未実装。Windows 以外では既存の Window 内ドラッグとボタン操作を維持するが、Window 間ドラッグは未対応。
+ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。同一Window内の移動先は `DropZone` のOverlayで強調する。Window外の追従プレビューと別Windowの移動先の強調表示は未実装。Windows 以外では既存の Window 内ドラッグとボタン操作を維持するが、Window 間ドラッグは未対応。
 
 WindowGroup の再起動復元は未実装。後続では group / window の永続 ID、親子関係、bounds、Panel ごとのタブ順・Active Tab・サイズを、Document の復元用 ID と関連づけて保存する。現状の HostId / GPUI EntityId を永続 ID に使わない。明示 close 後の更新済み Document 一覧を保存し、閉じたタブ・Window を復活させない。既存の文書復元は OS Window の配置復元を意味しない。
 
@@ -82,7 +82,6 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `FeatureRegistry`がViewのFactory・共有Entity・個体別Entityを保持する。`Multiple`はFactory登録時だけ追加可能で、既存のFactory未対応Featureは`Shared`を維持する。個体IDは再起動・別Window・非表示Taskをまたぐ乱数IDを使い、描画処理ではEntityを生成しない。
 - `ConversationViewState.layout` はLayoutの保存値。不正なGroup ID・位置・比率、非有限のサイズ、重複Group/leaf、木とGroupの不一致、Main/Left/Bottom/Rightの互換アンカー欠落は全体を拒否し、旧`panels`形式へフォールバックする。有限のサイズは旧形式と同じ範囲へ補正する。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、Layoutの復元は継続する。互換アンカーはHeaderの操作先を保証するもので、Group数の上限ではない。
 - 通常のHeader操作は互換アンカーを対象にするが、可変Splitの内部構造へ固定4Panelや左右の列数制限を埋め込まない。制限が必要な場合はUI操作ポリシーで拒否し、Layoutモデル自体を狭めない。
-- `LayoutViewState.anchors`は互換Headerの操作先IDを保存する。未記録の旧形式は既定IDを優先して移行する。復元・変更は同じ不変条件（Anchor参照、Group/個体IDの一意性、Active所属、比率）を検証し、失敗時に現状態を部分適用しない。旧形式へのフォールバックでは以前の可変Groupを残さず、利用可能なDocumentを一度だけ配置する。これはResourceの再生成・終了を意味しない。
 
 ## Desktop の共通Tab操作
 
@@ -90,6 +89,13 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
 - HeaderのPanel操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じPanel操作APIを呼び出して復元できる。
+
+## Desktop の分割・ドラッグ
+
+- ドラッグ中は`DropTarget`だけを更新し、`DropZone`のOverlayを表示する。`Split`やタブ移動はDrop確定時にだけ実行し、Escape・Focus喪失・不正Dropでは配置を変更しない。
+- 通常の左右サイド領域はUI操作として2列まで、最小領域はLayout APIの不変条件として検査する。ただし`DockLayout`の木自体に固定列数を埋め込まず、将来の広い画面向けポリシー変更を妨げない。
+- 同じWindowGroup内のDocumentは既存のDock/Undock経路へ接続する。別WindowへのTool移動はHost・Featureの寿命契約が検証されるまで受理せず、見た目だけの移動を実装しない。
+- Windowsの`SetCapture`/`ReleaseCapture`、`ClientToScreen`/`ScreenToClient`、DPI変換、`WindowFromPoint`の検証は`window_host`の責務として維持する。描画中に同期I/Oを行わず、Window生成失敗でも元のTabとResourceを保持する。
 
 ## 依存の検査
 

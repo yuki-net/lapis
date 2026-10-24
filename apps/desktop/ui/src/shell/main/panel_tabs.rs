@@ -3,24 +3,15 @@ use super::*;
 impl Shell {
     /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
     /// Detached windows omit the tool-add button.
-    pub(super) fn render_tool_panel_header(
-        &self,
-        panel: &PanelHost,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let group = self.shell.layout.primary_group_id(panel.position).clone();
-        self.render_tool_panel_header_for_group(panel, group, cx)
-    }
-
     pub(super) fn render_tool_panel_header_for_group(
         &self,
         panel: &PanelHost,
-        group: super::super::TabGroupId,
+        group: &TabGroupId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let position = panel.position;
-        let is_panel_focused = self.shell.focused_group == group;
-        let scroll_state = self.scroll_states.panel_tabs(&group);
+        let is_panel_focused = self.shell.focused_group == *group;
+        let scroll_state = self.scroll_states.panel_tabs(group);
         let max_offset = scroll_state.handle().max_offset();
         let offset = scroll_state.handle().offset();
         let has_overflow = max_offset.width > px(0.0);
@@ -97,13 +88,15 @@ impl Shell {
                 let tab = tab.clone();
                 let close_tab = tab.clone();
                 let detach_tab = tab.clone();
+                let select_group = group.clone();
+                let close_group = group.clone();
                 let movable = matches!(tab, PanelTab::Document(_));
                 let drag_shell = cx.entity().downgrade();
                 let drag_label = label.clone();
                 let drag = DraggedPanelTab {
                     group: self.group,
                     source_host: self.host,
-                    source_panel: position,
+                    source_group: group.clone(),
                     tab: tab.clone(),
                 };
 
@@ -160,6 +153,7 @@ impl Shell {
                             cx,
                         );
                         let _ = drag_shell.update(cx, |shell, _| {
+                            shell.drop_target = None;
                             shell.tab_drag.begin(drag.clone());
                             shell.drag_preview = preview;
                         });
@@ -171,9 +165,15 @@ impl Shell {
                         })
                     })
                     .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
-                        PanelTab::Tool { .. } => this.select_panel_tab(position, tab.clone(), cx),
+                        PanelTab::Tool { .. } => this.select_panel_tab_in_group(
+                            select_group.clone(),
+                            position,
+                            tab.clone(),
+                            cx,
+                        ),
                         PanelTab::Document(document_id) => {
-                            this.select_panel_tab(
+                            this.select_panel_tab_in_group(
+                                select_group.clone(),
                                 position,
                                 PanelTab::Document(document_id.clone()),
                                 cx,
@@ -228,7 +228,13 @@ impl Shell {
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.close_panel_tab(position, close_tab.clone(), window, cx);
+                                this.close_panel_tab_in_group(
+                                    close_group.clone(),
+                                    position,
+                                    close_tab.clone(),
+                                    window,
+                                    cx,
+                                );
                             }))
                             .child(Icon::new(IconName::X).size(px(9.0))),
                     )

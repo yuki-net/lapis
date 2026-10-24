@@ -67,19 +67,14 @@ pub(crate) fn apply_view_state(
         shell
             .panel_mut(PanelPosition::Main)
             .set_open_immediate(true);
-        shell.synchronize_documents(documents);
         return;
     }
-    // 拒否した候補や以前のTaskの可変Groupを旧形式の復元へ混ぜない。
-    shell.layout = Default::default();
     if !view.panels.is_empty() {
         shell.show_panel_controls = view.show_panel_controls;
         let valid_documents = documents
             .iter()
             .map(|document| document.id.clone())
             .collect::<Vec<_>>();
-        let mut seen_instances = std::collections::HashSet::new();
-        let mut restored_positions = std::collections::HashSet::new();
         for panel_view in view.panels {
             let Some(position) = panel_position(panel_view.position.as_str()) else {
                 continue;
@@ -90,10 +85,7 @@ pub(crate) fn apply_view_state(
                 .filter_map(|contribution| contribution.view.clone())
                 .collect::<Vec<_>>();
             let panel = shell.panel_mut(position);
-            if restored_positions.insert(position) {
-                panel.tabs.clear();
-            }
-            let tabs = panel_view
+            panel.tabs = panel_view
                 .tabs
                 .into_iter()
                 .filter_map(|value| deserialize_panel_tab(&value))
@@ -101,9 +93,7 @@ pub(crate) fn apply_view_state(
                     PanelTab::Document(id) => valid_documents.contains(id),
                     PanelTab::Tool { view, .. } => valid_tools.contains(view),
                 })
-                .filter(|tab| seen_instances.insert(tab.instance_id()))
-                .collect::<Vec<_>>();
-            panel.tabs.extend(tabs);
+                .collect();
             panel.active = panel_view
                 .active_tab
                 .as_deref()
@@ -111,8 +101,7 @@ pub(crate) fn apply_view_state(
                 .filter(|tab| match tab {
                     PanelTab::Document(id) => valid_documents.contains(id),
                     PanelTab::Tool { view, .. } => valid_tools.contains(view),
-                })
-                .filter(|tab| panel.tabs.contains(tab));
+                });
             if panel.active.is_none() {
                 panel.active = panel.tabs.first().cloned();
             }
@@ -122,7 +111,6 @@ pub(crate) fn apply_view_state(
         shell
             .panel_mut(PanelPosition::Main)
             .set_open_immediate(true);
-        shell.synchronize_documents(documents);
         return;
     }
 
@@ -155,7 +143,6 @@ pub(crate) fn apply_view_state(
             .panel_mut(PanelPosition::Bottom)
             .activate_tool(ViewId::new(bottom));
     }
-    shell.synchronize_documents(documents);
 }
 
 fn serialize_panel_tab(tab: &PanelTab) -> String {
@@ -199,83 +186,3 @@ fn panel_position_name(position: PanelPosition) -> &'static str {
         PanelPosition::Right => "right-panel",
     }
 }
-<<<<<<< HEAD
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use lapis_desktop_client::{LayoutGroupViewState, LayoutNodeViewState};
-
-    #[test]
-    fn broken_layout_falls_back_without_old_groups_or_lost_dirty_documents() {
-        let mut shell = ShellState::default();
-        let mut previous = shell.layout.capture_view_state();
-        previous.groups.push(LayoutGroupViewState {
-            id: "group-5".into(),
-            position: "main-panel".into(),
-            tabs: vec![],
-            active_tab: None,
-            open: true,
-            size: 0.0,
-        });
-        previous.root = LayoutNodeViewState::Split {
-            direction: "horizontal".into(),
-            ratio: 0.5,
-            first: Box::new(previous.root),
-            second: Box::new(LayoutNodeViewState::Tabs {
-                group: "group-5".into(),
-            }),
-        };
-        assert!(
-            shell
-                .layout
-                .restore_view_state(&previous, deserialize_panel_tab)
-        );
-        let mut broken = previous;
-        broken.groups.retain(|group| group.position == "main-panel");
-        let document = DocumentTab {
-            id: lapis_editor_core::DocumentId::new("unsaved"),
-            display_name: "Untitled".into(),
-            path: None,
-            dirty: true,
-            external_change: lapis_document::ExternalChange::Unchanged,
-            encoding: Default::default(),
-            active: true,
-        };
-        let view = ConversationViewState {
-            layout: Some(broken),
-            panels: vec![PanelViewState {
-                position: "left-panel".into(),
-                tabs: vec![format!("tool:{}", id::VIEW_FILES)],
-                active_tab: Some("tool:unknown".into()),
-                open: true,
-                size: f32::NAN,
-            }],
-            ..Default::default()
-        };
-        apply_view_state(
-            view,
-            &mut shell,
-            std::slice::from_ref(&document),
-            &crate::features::bundled_registry(),
-        );
-        assert_eq!(shell.layout.leaf_group_ids().len(), 4);
-        assert!(shell.layout.validate().is_ok());
-        assert_eq!(
-            shell
-                .layout
-                .placements()
-                .iter()
-                .filter(|(tab, _)| tab == &PanelTab::Document(document.id.clone()))
-                .count(),
-            1
-        );
-        assert!(document.dirty);
-        assert_eq!(
-            shell.panel(PanelPosition::Main).active,
-            Some(PanelTab::Document(document.id))
-        );
-    }
-}
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)

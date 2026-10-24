@@ -78,24 +78,18 @@ Tree選択・Hover・Detailsと通常時/表示時/Pick中のCPU・メモリ・C
 
 Document タブは ↗ / ↩ ボタンで取り外し・Root へ再ドックできる。Windows ではタブを Window 外で離すと取り外し、同じグループの別 Window の Panel 上で離すと再ドックする。Escape で取り消す。移動で空になった子 Window は手動で閉じる。Tool の Window 間移動と、再起動後の Window 配置復元は未対応。
 
-## Terminal
-
-Terminal の描画は `lapis_terminal::TerminalScreen` を直接読む。Desktop UI は
-VT/ANSI parser や PTY bytes を持たず、Host が配信した Model の rows、cell attributes、
-cursor、mode を GPUI へ変換する。入力も `TerminalInput` の semantic event として
-Client から Host へ渡し、key encoding は Host 側が現在の Terminal mode に基づいて行う。
-
-Terminal Session の所有者は Host であり、Client の切断や Panel の close では終了しない。
-表示だけでは resize せず、明示的な resize 操作の結果を全 Client へ反映する。
-Scrollback は Host の Model に含まれる履歴を画面の前に描画し、Client 側で VT/ANSI
-を再解釈しない。履歴の上限と再同期は Protocol の Snapshot / Delta 契約に従う。
-
 ## 共通Tab操作
 
 - TabBar、TabItem、追加PickerはPanel固有の実装にせず、Shellの共通描画・`FeatureRegistry`の`UiContribution`を使う。Featureが独自のTab管理やPickerを持たない。
 - `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。
 - Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
 - HeaderのPanel開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じ操作APIで復元できる。個別Panelの非表示はタブとHost Resourceを保持する。
+
+## Split とTabドラッグ
+
+- ドラッグ中は配置先の`DropZone`をハイライトするだけで、Drop確定まで`DockLayout`を変更しない。Escape、Focus喪失、不正Drop、Window生成失敗では元のTabとResourceを保持する。
+- 同じWindowGroup内のDocumentは既存のWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は実行資源の契約がないため受理せず、UIだけ成功したように見せない。
+- 左右サイドの通常操作は2列まで、最小領域を満たさないSplitは拒否する。内部のSplit木は可変であり、このUI制限をLayoutモデルへ固定しない。
 
 ## Layout の責務
 
