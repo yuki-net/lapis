@@ -7,7 +7,7 @@ use std::{
 };
 
 use lapis_desktop_client::{
-    ConversationRecord, ConversationRepository, ConversationState, Project,
+    ConversationRecord, ConversationRepository, ConversationState, LayoutViewState, Project,
 };
 use lapis_editor_core::ConversationId;
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
@@ -73,6 +73,31 @@ struct StoredConversations {
     active: ConversationId,
 }
 
+fn decode_conversations(bytes: &[u8]) -> Result<StoredConversations, serde_json::Error> {
+    let mut value: serde_json::Value = serde_json::from_slice(bytes)?;
+    if let Some(records) = value
+        .get_mut("records")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for record in records {
+            let Some(view) = record
+                .get_mut("view")
+                .and_then(serde_json::Value::as_object_mut)
+            else {
+                continue;
+            };
+            if let Some(layout) = view.get("layout")
+                && !layout.is_null()
+                && serde_json::from_value::<LayoutViewState>(layout.clone()).is_err()
+            {
+                // UI配置の破損でTask・未保存Documentまで復元不能にしない。
+                view.remove("layout");
+            }
+        }
+    }
+    serde_json::from_value(value)
+}
+
 impl LocalConversationRepository {
     pub fn new(path: PathBuf) -> Self {
         Self { path }
@@ -96,8 +121,8 @@ impl ConversationRepository for LocalConversationRepository {
             }
             Err(error) => return Err(WorkspaceError::new(error.to_string())),
         };
-        let stored: StoredConversations = serde_json::from_slice(&bytes)
-            .map_err(|error| WorkspaceError::new(error.to_string()))?;
+        let stored =
+            decode_conversations(&bytes).map_err(|error| WorkspaceError::new(error.to_string()))?;
         if stored.version != 1 {
             return Err(WorkspaceError::new("未対応の Conversation 復元形式です"));
         }
@@ -273,6 +298,27 @@ mod tests {
             .unwrap();
         let restored = repository.load().unwrap();
         assert_eq!(restored, (Vec::new(), records, Some(active)));
+
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(&repository.path).unwrap()).unwrap();
+        for invalid in [
+            serde_json::json!("invalid"),
+            serde_json::json!({}),
+            serde_json::json!({"root":{"invalid":0},"groups":[]}),
+        ] {
+            let mut damaged = saved.clone();
+            damaged["records"][0]["view"]["layout"] = invalid;
+            fs::write(&repository.path, serde_json::to_vec(&damaged).unwrap()).unwrap();
+            assert_eq!(repository.load().unwrap(), restored);
+        }
+        let mut structural = saved;
+        let layout = serde_json::json!({"version":999,"root":{"Tabs":{"group":"missing"}},"groups":[],"anchors":{}});
+        structural["records"][0]["view"]["layout"] = layout.clone();
+        fs::write(&repository.path, serde_json::to_vec(&structural).unwrap()).unwrap();
+        assert_eq!(
+            repository.load().unwrap().1[0].view.layout,
+            Some(serde_json::from_value(layout).unwrap())
+        );
     }
 
     #[test]
