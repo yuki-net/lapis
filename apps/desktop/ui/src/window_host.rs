@@ -350,6 +350,7 @@ impl DesktopRoot {
             snapshot.active = self.editor.read(cx).document_id();
             let local = self.editor.read(cx).local_snapshot(&snapshot);
             self.apply_snapshot(&local, cx);
+            self.record_window_layout(cx);
             apply_panel_layout(&self.group, ROOT_HOST, &self.shell, cx);
             self.schedule_persist(cx);
         }

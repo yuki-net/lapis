@@ -32,6 +32,7 @@ pub(crate) struct PanelHost {
 impl PanelHost {
     pub(super) fn new(position: PanelPosition, tabs: Vec<PanelTab>, open: bool, size: f32) -> Self {
         let active = tabs.first().cloned();
+        let size = panel_size(position, size);
         Self {
             position,
             tabs,
