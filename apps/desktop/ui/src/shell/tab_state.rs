@@ -82,6 +82,18 @@ impl PanelTab {
     }
 }
 
+impl From<String> for ViewInstanceId {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for ViewInstanceId {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

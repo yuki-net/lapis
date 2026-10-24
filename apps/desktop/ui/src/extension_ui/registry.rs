@@ -1,4 +1,6 @@
+use gpui::{AnyView, App};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
 
 use lapis_language::LanguageId;
 
@@ -69,13 +71,80 @@ pub struct FeatureRegistry {
     descriptors: BTreeMap<FeatureId, FeatureDescriptor>,
     states: HashMap<FeatureId, FeatureState>,
     active_views: HashMap<UiSlot, ViewId>,
+    visible_views: HashSet<ViewId>,
+    shared_views: HashMap<ViewId, AnyView>,
+    view_factories: HashMap<ViewId, ViewFactory>,
+    instances: HashMap<super::ViewInstanceId, (ViewId, AnyView)>,
     active_language: Option<LanguageId>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
 }
 
+type ViewFactory = Rc<dyn Fn(&mut App) -> AnyView>;
+
 impl FeatureRegistry {
+    pub(crate) fn register_shared_view(&mut self, view: ViewId, entity: AnyView) {
+        self.shared_views.insert(view, entity);
+    }
+
+    /// MultipleはFactoryが提供する独立Entityだけで描画する。
+    #[allow(dead_code)] // Plugin・Featureの登録入口。
+    pub(crate) fn register_view_factory(&mut self, view: ViewId, factory: ViewFactory) {
+        self.view_factories.insert(view, factory);
+    }
+
+    pub(crate) fn can_create_view(&self, view: &ViewId, policy: super::ToolInstancePolicy) -> bool {
+        match policy {
+            super::ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
+            super::ToolInstancePolicy::Multiple => self.view_factories.contains_key(view),
+        }
+    }
+
+    pub(crate) fn ensure_view_instance(
+        &mut self,
+        view: &ViewId,
+        instance: &super::ViewInstanceId,
+        cx: &mut App,
+    ) -> bool {
+        if let Some((definition, _)) = self.instances.get(instance) {
+            return definition == view;
+        }
+        let policy = self
+            .descriptors
+            .values()
+            .flat_map(|feature| &feature.contributions)
+            .find(|contribution| contribution.view.as_ref() == Some(view))
+            .map(|contribution| contribution.instance_policy);
+        let entity = match policy {
+            Some(super::ToolInstancePolicy::Multiple) => {
+                self.view_factories.get(view).map(|factory| factory(cx))
+            }
+            Some(super::ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
+            None => None,
+        };
+        let Some(entity) = entity else {
+            return false;
+        };
+        self.instances
+            .insert(instance.clone(), (view.clone(), entity));
+        true
+    }
+
+    pub(crate) fn instance_view(&self, instance: &super::ViewInstanceId) -> Option<&AnyView> {
+        self.instances.get(instance).map(|(_, entity)| entity)
+    }
+
+    pub(crate) fn close_view_instance(&mut self, instance: &super::ViewInstanceId) {
+        // 表示Entityへの参照だけを解放する。Resourceの終了APIは呼ばない。
+        self.instances.remove(instance);
+    }
+
+    pub(crate) fn set_visible_views(&mut self, views: impl IntoIterator<Item = ViewId>) {
+        self.visible_views = views.into_iter().collect();
+        self.recompute();
+    }
+
     pub fn register(&mut self, descriptor: FeatureDescriptor) -> Result<(), FeatureId> {
         if self.descriptors.contains_key(&descriptor.id) {
             return Err(descriptor.id);
@@ -122,12 +191,18 @@ impl FeatureRegistry {
     }
 
     pub fn panel_contributions(&self, position: PanelPosition) -> Vec<&UiContribution> {
+        let workspace_open = self.workspace_open;
+        let capabilities = &self.capabilities;
         let mut contributions = self
             .descriptors
             .values()
             .flat_map(|descriptor| descriptor.contributions.iter())
             .filter(|contribution| {
-                contribution.view.is_some() && contribution.allowed_panels.contains(&position)
+                contribution.view.is_some()
+                    && contribution.allowed_panels.contains(&position)
+                    && contribution
+                        .visibility
+                        .is_visible(workspace_open, capabilities)
             })
             .collect::<Vec<_>>();
         contributions.sort_by_key(|contribution| contribution.order);
@@ -217,7 +292,8 @@ impl FeatureRegistry {
                         self.active_commands.contains(command)
                     }
                     ActivationCondition::OnView(view) => {
-                        self.active_views.values().any(|active| active == view)
+                        self.visible_views.contains(view)
+                            || self.active_views.values().any(|active| active == view)
                     }
                     ActivationCondition::OnWorkspaceCapability(capability) => {
                         self.capabilities.contains(capability)
@@ -233,6 +309,92 @@ impl FeatureRegistry {
 mod tests {
     use super::*;
     use crate::extension_ui::{IconId, MessageId};
+
+    struct InstanceCounter(usize);
+    impl gpui::Render for InstanceCounter {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn multiple_views_own_independent_entities_and_reuse_the_same_instance(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let mut registry = FeatureRegistry::default();
+        let view = ViewId::new("counter");
+        registry
+            .register(
+                FeatureDescriptor::core("counter").contributes(
+                    UiContribution::view(view.clone(), UiSlot::ToolDock, "counter", "counter", 0)
+                        .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        // 宣言だけではMultipleを有効化しない。
+        assert!(!registry.can_create_view(&view, super::super::ToolInstancePolicy::Multiple));
+        let entities = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let created = entities.clone();
+        registry.register_view_factory(
+            view.clone(),
+            Rc::new(move |cx| {
+                let entity = cx.new(|_| InstanceCounter(0));
+                created.borrow_mut().push(entity.clone());
+                entity.into()
+            }),
+        );
+        let first = super::super::ViewInstanceId::new("one");
+        let second = super::super::ViewInstanceId::new("two");
+        cx.update(|cx| {
+            assert!(registry.ensure_view_instance(&view, &first, cx));
+            assert!(registry.ensure_view_instance(&view, &second, cx));
+            assert!(registry.ensure_view_instance(&view, &first, cx));
+            assert_eq!(entities.borrow().len(), 2);
+            let first_entity = entities.borrow()[0].clone();
+            let second_entity = entities.borrow()[1].clone();
+            first_entity.update(cx, |counter, _| counter.0 = 7);
+            assert_eq!(first_entity.read(cx).0, 7);
+            assert_eq!(second_entity.read(cx).0, 0);
+            assert_ne!(
+                registry.instance_view(&first).unwrap().entity_id(),
+                registry.instance_view(&second).unwrap().entity_id()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn shared_views_reuse_registered_entity(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        cx.update(|cx| {
+            let mut registry = FeatureRegistry::default();
+            let view = ViewId::new("shared");
+            registry
+                .register(
+                    FeatureDescriptor::core("shared").contributes(UiContribution::view(
+                        view.clone(),
+                        UiSlot::ToolDock,
+                        "shared",
+                        "shared",
+                        0,
+                    )),
+                )
+                .unwrap();
+            let entity = cx.new(|_| InstanceCounter(0));
+            registry.register_shared_view(view.clone(), entity.clone().into());
+            let instance = super::super::ViewInstanceId::shared_tool(&view);
+            assert!(registry.ensure_view_instance(&view, &instance, cx));
+            assert!(registry.ensure_view_instance(&view, &instance, cx));
+            assert_eq!(
+                registry.instance_view(&instance).unwrap().entity_id(),
+                entity.entity_id()
+            );
+        });
+    }
 
     #[test]
     fn bundled_feature_loads_only_when_its_view_is_active() {
@@ -314,5 +476,39 @@ mod tests {
         registry.deactivate_command(&command);
         assert!(registry.state("feature.search").loaded);
         assert!(!registry.state("feature.search").running);
+    }
+
+    #[test]
+    fn picker_contributions_respect_visibility_conditions() {
+        let view = ViewId::new("view.workspace-only");
+        let mut registry = FeatureRegistry::default();
+        registry
+            .register(
+                FeatureDescriptor::bundled(
+                    "feature.workspace-only",
+                    [ActivationCondition::OnWorkspaceOpen],
+                )
+                .contributes(
+                    UiContribution::view(
+                        view.clone(),
+                        UiSlot::ToolDock,
+                        "view.workspace-only.title",
+                        "workspace",
+                        1,
+                    )
+                    .visible_when_workspace_open(),
+                ),
+            )
+            .unwrap();
+
+        assert!(registry.panel_contributions(PanelPosition::Left).is_empty());
+        registry.activate(ActivationEvent::WorkspaceOpened);
+        assert_eq!(
+            registry
+                .panel_contributions(PanelPosition::Left)
+                .first()
+                .and_then(|contribution| contribution.view.as_ref()),
+            Some(&view)
+        );
     }
 }

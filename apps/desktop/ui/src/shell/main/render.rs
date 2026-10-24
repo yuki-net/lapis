@@ -37,8 +37,8 @@ impl Render for Shell {
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
             })
-            .when_some(self.shell.tool_picker, |root, position| {
-                root.child(self.render_tool_picker(position, cx))
+            .when_some(self.shell.tool_picker.clone(), |root, group| {
+                root.child(self.render_tool_picker(group, cx))
             })
             .when(self.shell.settings_menu_open, |root| {
                 root.child(self.render_settings_menu(cx))

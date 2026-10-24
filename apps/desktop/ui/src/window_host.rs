@@ -514,7 +514,7 @@ impl DesktopRoot {
         self.group.update(cx, |group, cx| {
             if group.layout.move_tab(source, target, target_group, &tab) {
                 group.members[&target].shell.update(cx, |shell, cx| {
-                    shell.shell.focused_panel = panel;
+                    shell.shell.focus_panel(panel);
                     cx.notify();
                 });
                 let editor = group.members[&target].editor.clone();

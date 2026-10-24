@@ -6,6 +6,19 @@ impl Shell {
         position: PanelPosition,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let group = self.shell.layout.primary_group_id(position).clone();
+        self.render_empty_group(group, cx)
+    }
+
+    pub(super) fn render_empty_group(
+        &self,
+        group: super::super::TabGroupId,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let Some(panel) = self.shell.layout.group(&group) else {
+            return div();
+        };
+        let position = panel.position;
         if position == PanelPosition::Main {
             return self.render_main_empty_panel(cx);
         }
@@ -22,7 +35,9 @@ impl Shell {
         )
         .child(
             div()
-                .id(("open-tool", panel_key(position)))
+                .id(ElementId::Name(
+                    format!("open-tool-{}", group.as_str()).into(),
+                ))
                 .mt_2()
                 .px_2()
                 .py_1()
@@ -31,8 +46,8 @@ impl Shell {
                 .border_color(theme::colors().border_default)
                 .text_size(px(11.0))
                 .hover(|style| style.bg(theme::colors().button_background_hover))
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.open_tool_picker(position, cx);
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    this.open_tool_picker(group.clone(), event.position(), window, cx);
                 }))
                 .child(self.t("panel.open-tool")),
         )
@@ -49,8 +64,13 @@ impl Shell {
             panel_empty_state("F", "Document", "Select the document tab to edit")
         }
     }
-    pub(super) fn render_tool_content(&self, view: &ViewId, _: &mut Context<Self>) -> gpui::Div {
-        match self.views.get(view) {
+    pub(super) fn render_tool_content(
+        &self,
+        view: &ViewId,
+        instance: &crate::extension_ui::ViewInstanceId,
+        _: &mut Context<Self>,
+    ) -> gpui::Div {
+        match self.feature_registry.instance_view(instance) {
             Some(view) => div().flex().flex_1().min_h(px(0.0)).child(view.clone()),
             None => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
         }

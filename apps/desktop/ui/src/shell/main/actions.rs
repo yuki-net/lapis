@@ -14,7 +14,7 @@ impl Shell {
             cx,
         );
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -26,7 +26,7 @@ impl Shell {
     ) {
         self.toggle_panel(PanelPosition::Bottom, cx);
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -42,19 +42,7 @@ impl Shell {
             cx,
         );
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
-        cx.notify();
-    }
-
-    pub(crate) fn select_view(
-        &mut self,
-        position: PanelPosition,
-        view: ViewId,
-        cx: &mut Context<Self>,
-    ) {
-        self.shell.focused_panel = position;
-        self.activate_panel_view(position, view, cx);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -83,7 +71,7 @@ impl Shell {
     pub(crate) fn toggle_header_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         self.toggle_panel(position, cx);
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -97,7 +85,7 @@ impl Shell {
         self.shell
             .panel_mut(position)
             .activate_tool_without_open(view);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -107,7 +95,7 @@ impl Shell {
         }
         self.shell.panel_mut(position).active = None;
         self.request_panel_open(position, false, cx);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -178,13 +166,25 @@ impl Shell {
         if let Some((next_generation, duration)) = next {
             self.schedule_panel_transition(position, next_generation, duration, cx);
         }
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn open_tool_picker(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
-        self.shell.tool_picker = Some(position);
+    pub(crate) fn open_tool_picker(
+        &mut self,
+        group: super::super::TabGroupId,
+        anchor: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shell.layout.group(&group).is_none() {
+            return;
+        }
+        self.shell.focused_group = group.clone();
+        self.shell.tool_picker = Some(group);
+        self.shell.tool_picker_anchor = anchor;
         self.shell.set_tool_picker_query(String::new());
+        window.focus(&self.focus_handle);
         cx.notify();
     }
 
@@ -229,7 +229,7 @@ impl Shell {
         );
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -254,9 +254,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.request_panel_open(position, true, cx);
-        self.shell.focused_panel = position;
-        self.shell.panel_mut(position).activate_without_open(tab);
-        self.refresh_feature_activation();
+        let group = self
+            .shell
+            .layout
+            .group_for_tab(&tab)
+            .unwrap_or_else(|| self.shell.layout.primary_group_id(position).clone());
+        self.shell.open_group_tab(&group, tab);
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -268,9 +272,13 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let PanelTab::Document(document_id) = tab else {
-            self.shell.panel_mut(position).remove(&tab);
+            if let Some(group) = self.shell.layout.group_for_tab(&tab) {
+                self.shell.layout.group_mut(&group).unwrap().remove(&tab);
+                self.feature_registry
+                    .close_view_instance(&tab.instance_id());
+            }
             if !self.close_empty_panel(position, cx) {
-                self.refresh_feature_activation();
+                self.refresh_feature_activation(cx);
                 cx.notify();
             }
             return;
@@ -279,24 +287,63 @@ impl Shell {
         self.request_document_close(document_id, window, cx);
     }
 
-    pub(crate) fn close_tool_picker(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_panel_controls(&mut self, cx: &mut Context<Self>) {
+        self.shell.show_panel_controls = !self.shell.show_panel_controls;
+        cx.notify();
+    }
+
+    pub(crate) fn close_tool_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.shell.tool_picker.take().is_some() {
             self.shell.set_tool_picker_query(String::new());
+            window.focus(&self.focus_handle);
             cx.notify();
         }
     }
 
     pub(crate) fn select_tool_from_picker(
         &mut self,
-        position: PanelPosition,
+        group: super::super::TabGroupId,
         view: ViewId,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.shell.focused_panel = position;
-        self.activate_panel_view(position, view, cx);
+        let Some(target) = self.shell.layout.group(&group) else {
+            self.close_tool_picker(window, cx);
+            return;
+        };
+        let position = target.position;
+        let Some(instance_policy) = self
+            .feature_registry
+            .tool_contributions(position)
+            .into_iter()
+            .find(|contribution| contribution.view.as_ref() == Some(&view))
+            .map(|contribution| contribution.instance_policy)
+        else {
+            return;
+        };
+        let tab = match instance_policy {
+            crate::extension_ui::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+            crate::extension_ui::ToolInstancePolicy::Multiple => {
+                let Ok(instance) = self.shell.next_tool_instance(&view) else {
+                    return;
+                };
+                PanelTab::tool_instance(view.clone(), instance)
+            }
+        };
+        if !self
+            .feature_registry
+            .can_create_view(&view, instance_policy)
+        {
+            return;
+        }
+        if !self.shell.open_group_tab(&group, tab) {
+            return;
+        }
+        self.synchronize_view_instances(cx);
         self.shell.tool_picker = None;
         self.shell.set_tool_picker_query(String::new());
-        self.refresh_feature_activation();
+        window.focus(&self.focus_handle);
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -312,24 +359,41 @@ impl Shell {
 
         let key = event.keystroke.key.as_str();
         if key == "escape" {
-            self.close_tool_picker(cx);
+            self.close_tool_picker(window, cx);
             return;
         }
         if key == "backspace" {
-            self.shell.tool_picker_query.pop();
+            let mut query = self.shell.tool_picker_query.clone();
+            query.pop();
+            self.shell.set_tool_picker_query(query);
             cx.notify();
             return;
         }
         if key == "enter" {
-            if let Some(position) = self.shell.tool_picker
-                && let Some(view) = self
-                    .feature_registry
-                    .panel_contributions(position)
-                    .into_iter()
-                    .find(|contribution| self.tool_matches(contribution))
-                    .and_then(|contribution| contribution.view.clone())
+            if let Some(group) = self.shell.tool_picker.clone()
+                && let Some((view, _)) = self
+                    .picker_views(&group)
+                    .get(self.shell.tool_picker_selected)
             {
-                self.select_tool_from_picker(position, view, cx);
+                self.select_tool_from_picker(group, view.clone(), window, cx);
+            }
+            return;
+        }
+        if matches!(key, "down" | "arrowdown" | "up" | "arrowup") {
+            let count = self
+                .picker_views(self.shell.tool_picker.as_ref().unwrap())
+                .len();
+            if count > 0 {
+                self.shell.tool_picker_selected = if matches!(key, "down" | "arrowdown") {
+                    (self.shell.tool_picker_selected + 1) % count
+                } else {
+                    self.shell
+                        .tool_picker_selected
+                        .checked_sub(1)
+                        .unwrap_or(count - 1)
+                };
+                window.prevent_default();
+                cx.notify();
             }
             return;
         }
@@ -346,7 +410,9 @@ impl Shell {
             .next()
             .filter(|_| key.len() == 1)
         {
-            self.shell.tool_picker_query.push(character);
+            let mut query = self.shell.tool_picker_query.clone();
+            query.push(character);
+            self.shell.set_tool_picker_query(query);
             window.prevent_default();
             cx.notify();
         }
@@ -367,6 +433,29 @@ impl Shell {
         title.contains(&query) || view.contains(&query)
     }
 
+    fn picker_views(
+        &self,
+        group: &super::super::TabGroupId,
+    ) -> Vec<(ViewId, crate::extension_ui::ToolInstancePolicy)> {
+        let Some(target) = self.shell.layout.group(group) else {
+            return Vec::new();
+        };
+        self.feature_registry
+            .tool_contributions(target.position)
+            .into_iter()
+            .filter(|contribution| self.tool_matches(contribution))
+            .filter(|contribution| {
+                contribution.view.as_ref().is_some_and(|view| {
+                    self.feature_registry
+                        .can_create_view(view, contribution.instance_policy)
+                })
+            })
+            .filter_map(|contribution| {
+                Some((contribution.view.clone()?, contribution.instance_policy))
+            })
+            .collect()
+    }
+
     pub(crate) fn move_panel_tab(
         &mut self,
         source: PanelPosition,
@@ -378,7 +467,7 @@ impl Shell {
             return;
         }
         self.shell.move_tab(source, target, tab);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 }

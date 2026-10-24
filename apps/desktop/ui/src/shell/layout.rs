@@ -155,6 +155,7 @@ impl DockLayout {
         self.groups.get_mut(id)
     }
 
+<<<<<<< HEAD
     pub(crate) fn group_for_tab(&self, tab: &PanelTab) -> Option<TabGroupId> {
         self.groups
             .iter()
@@ -168,6 +169,8 @@ impl DockLayout {
             .collect()
     }
 
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
     pub(crate) fn primary_group_id(&self, position: PanelPosition) -> &TabGroupId {
         self.primary_groups
             .get(&position)
@@ -268,9 +271,12 @@ impl DockLayout {
         if !self.groups.contains_key(source) || !self.groups.contains_key(target) {
             return Err(LayoutError::GroupNotFound);
         }
+<<<<<<< HEAD
         if !self.group(source).is_some_and(|group| group.contains(tab)) {
             return Err(LayoutError::TabNotFound);
         }
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
         if source == target {
             self.groups
                 .get_mut(target)
@@ -294,11 +300,14 @@ impl DockLayout {
         debug_assert!(self.validate().is_ok());
         LayoutViewState {
             version: 1,
+<<<<<<< HEAD
             anchors: self
                 .primary_groups
                 .iter()
                 .map(|(position, id)| (panel_position_name(*position).to_owned(), id.as_str()))
                 .collect(),
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             root: capture_node(&self.root),
             groups: self
                 .leaf_group_ids()
@@ -346,10 +355,16 @@ impl DockLayout {
                 let Some(tab) = parse_tab(raw) else {
                     continue;
                 };
+<<<<<<< HEAD
                 if !seen_tabs.insert(tab.instance_id()) {
                     return false;
                 }
                 tabs.push(tab);
+=======
+                if seen_tabs.insert(tab.clone()) {
+                    tabs.push(tab);
+                }
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             }
             let active = saved
                 .active_tab
@@ -386,6 +401,7 @@ impl DockLayout {
             let position = groups.get(id).expect("leaf group checked above").position;
             primary_groups.entry(position).or_insert_with(|| id.clone());
         }
+<<<<<<< HEAD
         if !state.anchors.is_empty() {
             primary_groups.clear();
             for (position, id) in &state.anchors {
@@ -408,6 +424,8 @@ impl DockLayout {
                 }
             }
         }
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
         let next_group_id = groups
             .keys()
             .map(|id| id.0)
@@ -429,9 +447,12 @@ impl DockLayout {
     }
 
     pub(crate) fn validate(&self) -> Result<(), LayoutError> {
+<<<<<<< HEAD
         if !valid_ratios(&self.root) {
             return Err(LayoutError::InvalidRatio);
         }
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
         let mut ids = Vec::new();
         collect_leaf_ids(&self.root, &mut ids);
         if ids.is_empty() || ids.iter().collect::<BTreeSet<_>>().len() != ids.len() {
@@ -450,16 +471,23 @@ impl DockLayout {
         }
         let mut seen_tabs = HashSet::new();
         for group in self.groups.values() {
+<<<<<<< HEAD
             if !group.size.is_finite() || group.size != panel_size(group.position, group.size) {
                 return Err(LayoutError::InvalidTree);
             }
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             if let Some(active) = &group.active
                 && !group.tabs.contains(active)
             {
                 return Err(LayoutError::InvalidTree);
             }
             for tab in &group.tabs {
+<<<<<<< HEAD
                 if tab.instance_id().as_str().is_empty() || !seen_tabs.insert(tab.instance_id()) {
+=======
+                if !seen_tabs.insert(tab) {
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
                     return Err(LayoutError::InvalidTree);
                 }
             }
@@ -478,6 +506,7 @@ fn collect_leaf_ids(node: &LayoutNode, ids: &mut Vec<TabGroupId>) {
     }
 }
 
+<<<<<<< HEAD
 fn valid_ratios(node: &LayoutNode) -> bool {
     match node {
         LayoutNode::Tabs(_) => true,
@@ -495,6 +524,8 @@ fn valid_ratios(node: &LayoutNode) -> bool {
     }
 }
 
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
 #[allow(dead_code)]
 fn contains_leaf(node: &LayoutNode, target: &TabGroupId) -> bool {
     match node {
@@ -665,7 +696,10 @@ mod tests {
         let before = layout.capture_view_state();
         let invalid = LayoutViewState {
             version: 1,
+<<<<<<< HEAD
             anchors: Default::default(),
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             root: LayoutNodeViewState::Tabs {
                 group: "group-999".into(),
             },
@@ -774,6 +808,7 @@ mod tests {
             vec![PanelTab::tool("known-view")]
         );
     }
+<<<<<<< HEAD
 
     #[test]
     fn anchor_identity_and_group_placement_survive_round_trip() {
@@ -825,4 +860,6 @@ mod tests {
         layout.panel_mut(PanelPosition::Left).active = Some(PanelTab::tool("missing"));
         assert_eq!(layout.validate(), Err(LayoutError::InvalidTree));
     }
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
 }

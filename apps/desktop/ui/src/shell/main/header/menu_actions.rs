@@ -82,6 +82,7 @@ impl Shell {
             MenuAction::ToggleRightPanel => {
                 self.toggle_header_panel(crate::extension_ui::PanelPosition::Right, cx)
             }
+            MenuAction::TogglePanelControls => self.toggle_panel_controls(cx),
             MenuAction::Placeholder => {}
         }
     }
