@@ -109,6 +109,15 @@ impl TerminalRow {
         }
     }
 
+    /// テスト用：指定したテキストで埋められた行を作成する。
+    pub fn from_text(columns: u16, text: &str) -> Self {
+        let mut row = Self::empty(columns);
+        if !text.is_empty() {
+            row.cells[0].text = text.to_owned();
+        }
+        row
+    }
+
     pub fn plain_text(&self) -> String {
         self.cells
             .iter()

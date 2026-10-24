@@ -110,7 +110,8 @@ impl Render for TerminalFeature {
             .map(|terminal| (terminal.id.clone(), terminal.status))
             .collect::<Vec<_>>();
         let discovered = self.discovered.clone();
-        let screen_for_clipboard = screen_ref.cloned();
+        // clipboard用：ボタン押下時にだけplain_textを生成する
+        let screen_for_clipboard = screen_ref.map(|s| s.plain_text());
         div()
             .flex()
             .flex_col()
@@ -164,9 +165,9 @@ impl Render for TerminalFeature {
                     )))
                     .child(action_button("Copy screen", false).on_click(cx.listener(
                         move |_, _, _, cx| {
-                            if let Some(screen) = &screen_for_clipboard {
+                            if let Some(text) = &screen_for_clipboard {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    screen.plain_text(),
+                                    text.clone(),
                                 ));
                             }
                         },

@@ -236,6 +236,15 @@ pub(crate) fn normalized_size(size: TerminalSize) -> TerminalSize {
 /// scrollbackの差分を内容で計算する。
 /// lengthが同じでも内容が変わっているケース（drop + append）を検出する。
 /// 安全に差分化できない場合はresetを返す。
+///
+/// アルゴリズム:
+/// 1. 共通prefix（先頭から一致する行）を検出
+/// 2. 残りのold suffixとnew suffixを比較
+/// 3. 残りのold suffixとnew prefixが一致する部分（重なり）を検出
+///
+/// 例: old = [A, B, C, D], new = [C, D, E, F]
+///   → prefix=0, oldの[C, D] == newの[C, D]（重なり2行）
+///   → dropped = 2 (A, B), rows = [E, F]
 fn compute_scrollback_delta(
     old: &[TerminalRow],
     new: &[TerminalRow],
@@ -252,7 +261,7 @@ fn compute_scrollback_delta(
         return None;
     }
 
-    // 空からあるへ、またはあるから空へ
+    // 空からあるへ
     if old_len == 0 {
         return Some(TerminalScrollbackDelta {
             reset: false,
@@ -260,6 +269,7 @@ fn compute_scrollback_delta(
             rows: new.to_vec(),
         });
     }
+    // あるから空へ
     if new_len == 0 {
         return Some(TerminalScrollbackDelta {
             reset: true,
@@ -268,61 +278,60 @@ fn compute_scrollback_delta(
         });
     }
 
-    // 末尾が一致する部分を探して、drop数とappend数を計算する
-    // 例: old = [A, B, C, D], new = [C, D, E, F]
-    // → dropped = 2 (A, B), rows = [E, F]
-
-    // 共通接尾辞の長さを求める
-    // oldの末尾とnewの末尾が一致する部分を探す
-    let mut common_suffix = 0;
+    // 1. 共通prefixの長さを求める
+    let mut prefix = 0;
     let min_len = old_len.min(new_len);
-    while common_suffix < min_len
-        && old[old_len - 1 - common_suffix] == new[new_len - 1 - common_suffix]
-    {
-        common_suffix += 1;
+    while prefix < min_len && old[prefix] == new[prefix] {
+        prefix += 1;
     }
 
-    // 共通接尾辞の手前が一致しているか確認
-    // oldの共通分の手前とnewの共通分の手前が一致すれば、純粋なappend/drop
-    let old_prefix_len = old_len - common_suffix;
-    let new_prefix_len = new_len - common_suffix;
+    // 残りのスライス
+    let old_rest = &old[prefix..];
+    let new_rest = &new[prefix..];
+    let old_rest_len = old_rest.len();
+    let new_rest_len = new_rest.len();
 
-    if old_prefix_len == new_prefix_len {
-        // 長さが同じで内容も同じ → 変更なし（すでにold == newでNoneを返している）
-        // ここには来ない
+    // どちらも残りが空 → 変更なし（すでにold==newでNoneを返している）
+    if old_rest_len == 0 && new_rest_len == 0 {
+        return None;
+    }
+
+    // 2. 純粋なappend: oldの残りが空
+    if old_rest_len == 0 {
         return Some(TerminalScrollbackDelta {
-            reset: true,
+            reset: false,
             dropped: 0,
-            rows: new.to_vec(),
+            rows: new_rest.to_vec(),
         });
     }
 
-    let dropped = old_prefix_len.max(new_prefix_len) - old_prefix_len.min(new_prefix_len);
-
-    // newの末尾からcommon_suffix分を除いたものが追加された行
-    let appended_start = new_len - common_suffix;
-    let appended_rows = if appended_start < new_len {
-        new[appended_start..].to_vec()
-    } else {
-        Vec::new()
-    };
-
-    // dropped > 0 かつ appended_rows が空でない、またはその逆
-    // 安全に差分化できるか確認
-    if dropped + appended_rows.len() == old_prefix_len.max(new_prefix_len) {
-        Some(TerminalScrollbackDelta {
+    // 3. 純粋なdrop: newの残りが空
+    if new_rest_len == 0 {
+        return Some(TerminalScrollbackDelta {
             reset: false,
-            dropped: dropped as u16,
-            rows: appended_rows,
-        })
-    } else {
-        // 安全に差分化できない場合はreset
-        Some(TerminalScrollbackDelta {
-            reset: true,
-            dropped: 0,
-            rows: new.to_vec(),
-        })
+            dropped: old_rest_len as u16,
+            rows: Vec::new(),
+        });
     }
+
+    // 4. drop + append: old_restのsuffixとnew_restのprefixの重なりを検出
+    let max_overlap = old_rest_len.min(new_rest_len);
+    let mut overlap = 0;
+    for candidate in (1..=max_overlap).rev() {
+        if old_rest[old_rest_len - candidate..] == new_rest[..candidate] {
+            overlap = candidate;
+            break;
+        }
+    }
+
+    let dropped = old_rest_len - overlap;
+    let appended_rows = new_rest[overlap..].to_vec();
+
+    Some(TerminalScrollbackDelta {
+        reset: false,
+        dropped: dropped as u16,
+        rows: appended_rows,
+    })
 }
 
 fn engine_size(size: TerminalSize) -> wezterm_term::TerminalSize {

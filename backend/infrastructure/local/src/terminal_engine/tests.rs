@@ -319,39 +319,90 @@ fn reply_write_and_flush_failures_do_not_lose_delta_or_revision() {
 
 #[test]
 fn scrollback_delta_detects_drop_plus_append() {
-    // 小さな画面で大量出力してscrollbackを作成
-    let (mut engine, _writes) = engine();
+    use super::compute_scrollback_delta;
 
-    // 4行の画面に20行出力 → scrollbackに16行
-    for i in 0..20 {
-        engine.process(format!("line{}\n", i).as_bytes());
+    // drop + append ケース: old = [A, B, C, D], new = [C, D, E, F]
+    // → dropped = 2, rows = [E, F]
+    let row_a = TerminalRow::from_text(40, "A");
+    let row_b = TerminalRow::from_text(40, "B");
+    let row_c = TerminalRow::from_text(40, "C");
+    let row_d = TerminalRow::from_text(40, "D");
+    let row_e = TerminalRow::from_text(40, "E");
+    let row_f = TerminalRow::from_text(40, "F");
+
+    let old = vec![row_a, row_b, row_c.clone(), row_d.clone()];
+    let new = vec![row_c.clone(), row_d.clone(), row_e.clone(), row_f.clone()];
+
+    let delta = compute_scrollback_delta(&old, &new).expect("should detect drop+append");
+
+    assert!(!delta.reset, "drop+append should not fall back to reset");
+    assert_eq!(delta.dropped, 2, "should drop 2 rows (A, B)");
+    assert_eq!(delta.rows.len(), 2, "should append 2 rows (E, F)");
+    // delta.rowsはnewのoverlap以降なので[E, F]
+    assert!(delta.rows[0].plain_text().starts_with("E"));
+    assert!(delta.rows[1].plain_text().starts_with("F"));
+}
+
+#[test]
+fn scrollback_delta_at_max_length() {
+    use super::compute_scrollback_delta;
+
+    // MAX_SCROLLBACK_LINES到達後、scrollbackが2000→2000でもdeltaが生成されることを確認
+    let mut old = Vec::with_capacity(100);
+    for i in 0..100 {
+        old.push(TerminalRow::from_text(40, &format!("line{}", i)));
     }
 
-    let screen1 = engine.screen();
-    assert!(
-        !screen1.scrollback.is_empty(),
-        "scrollback should have rows"
-    );
-
-    // さらに出力 → 古い行がdropされて新しい行がappendされる
-    for i in 20..30 {
-        engine.process(format!("line{}\n", i).as_bytes());
+    // 古い2行がdropされて新しい2行がappendされる
+    let mut new = Vec::with_capacity(100);
+    for i in 2..102 {
+        new.push(TerminalRow::from_text(40, &format!("line{}", i)));
     }
 
-    let screen2 = engine.screen();
-    let _scrollback2_len = screen2.scrollback.len();
+    let delta = compute_scrollback_delta(&old, &new).expect("should detect delta at max length");
 
-    // scrollbackが更新されていることを確認
-    // 最後の行が新しい内容であることを確認
-    let last_row_text = screen2
-        .scrollback
-        .last()
-        .map(|r| r.plain_text())
-        .unwrap_or_default();
-    assert!(
-        last_row_text.contains("line"),
-        "scrollback should contain line content"
-    );
+    assert!(!delta.reset, "should not reset at max length");
+    assert_eq!(delta.dropped, 2, "should drop 2 rows");
+    assert_eq!(delta.rows.len(), 2, "should append 2 rows");
+}
+
+#[test]
+fn scrollback_delta_pure_append() {
+    use super::compute_scrollback_delta;
+
+    // 純粋なappend: old = [A, B], new = [A, B, C]
+    let row_a = TerminalRow::from_text(40, "A");
+    let row_b = TerminalRow::from_text(40, "B");
+    let row_c = TerminalRow::from_text(40, "C");
+
+    let old = vec![row_a.clone(), row_b.clone()];
+    let new = vec![row_a, row_b, row_c.clone()];
+
+    let delta = compute_scrollback_delta(&old, &new).expect("should detect append");
+
+    assert!(!delta.reset);
+    assert_eq!(delta.dropped, 0, "should not drop any rows");
+    assert_eq!(delta.rows.len(), 1, "should append 1 row");
+    assert!(delta.rows[0].plain_text().starts_with("C"));
+}
+
+#[test]
+fn scrollback_delta_pure_drop() {
+    use super::compute_scrollback_delta;
+
+    // 純粋なdrop: old = [A, B, C], new = [A, B]
+    let row_a = TerminalRow::from_text(40, "A");
+    let row_b = TerminalRow::from_text(40, "B");
+    let row_c = TerminalRow::from_text(40, "C");
+
+    let old = vec![row_a.clone(), row_b.clone(), row_c];
+    let new = vec![row_a, row_b];
+
+    let delta = compute_scrollback_delta(&old, &new).expect("should detect drop");
+
+    assert!(!delta.reset);
+    assert_eq!(delta.dropped, 1, "should drop 1 row");
+    assert!(delta.rows.is_empty(), "should not append any rows");
 }
 
 #[test]
