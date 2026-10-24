@@ -287,6 +287,7 @@ impl TerminalBackend for LocalTerminalBackend {
                 RawTerminalEvent::Failed(message) => events.push(TerminalEvent::Failed(message)),
             }
         }
+        // Engine処理後のfailureを収集し、Delta/revisionを失わないようにする。
         events.extend(terminal.engine.take_failures().map(TerminalEvent::Failed));
         if !terminal.exited
             && terminal.reader_finished.load(Ordering::Acquire)
