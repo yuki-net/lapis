@@ -10,11 +10,16 @@
 - コメント・ドキュメント・説明は日本語で簡潔に書く。識別子・API・技術用語は無理に日本語化しない。
 
 ## Git・ブランチ運用
-- **ブランチ作成**: `develop` から作業ブランチを分岐し、PR先も `develop` とする（Stacked PR時は依存元ブランチ）。
+- **ブランチ作成**: 最新の `origin/develop` から作業ブランチを分岐する。
+  - **Stacked PR**: 依存元ブランチから分岐し、PR作成時も `--base <依存元ブランチ>` を指定してGitHubのネイティブStack機能に連動させる。
 - **ブランチ命名**: `<type>/<概要>` または `<type>/<issue番号>-<概要>`
   - `type` はGitHubラベルや一般的な区分（`feat`, `fix`, `refactor`, `docs`, `chore` 等）に準拠。
   - 例: `feat/issue-123-terminal`, `fix/remote-reconnect`, `refactor/desktop-state`
-- **PR・Issue作成**: 指示を受けて作成する場合は原則 **Draft PR** とし、リポジトリのテンプレート（`.github/` 配下）のフォーマットに従う。作成時は適切なラベルを付与し、作業者をアサイン（`@me`）する。
+- **PR・Issue作成・更新**:
+  - 指示を受けて新規作成する場合は差分確認のため原則 **Draft PR** とする（テンプレート準拠、ラベル付与、`@me` アサイン）。
+  - 実装・検証が完了したら **Open（Ready for review）** にし、以降の追加修正やレビュー対応で勝手に Draft へ戻さない。
+- **PR・Issue参照表記**:
+  - フルURLは使用せず、リポジトリ内は `PR #<番号>` または `Issue #<番号>`（例: `PR #63`, `Issue #32`）、外部は `owner/repo#<番号>` で統一する（Issue解決の `Fixes #123` 等を除く）。
 
 ## 実装・技術制約
 - **Desktop (GPUI)**: 描画処理・UIスレッド中にブロッキングI/Oを行わない。
