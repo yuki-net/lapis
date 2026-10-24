@@ -111,7 +111,7 @@ impl TerminalEngine {
                 .collect(),
             cursor: screen.cursor,
             modes: screen.modes,
-            scrollback: Vec::new(),
+            scrollback: None,
         };
         self.last_screen = screen;
         delta
@@ -136,7 +136,7 @@ impl TerminalEngine {
                 .collect(),
             cursor: screen.cursor,
             modes: screen.modes,
-            scrollback: Vec::new(),
+            scrollback: None,
         };
         self.last_screen = screen.clone();
         (screen, delta)
