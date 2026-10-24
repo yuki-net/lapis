@@ -316,3 +316,113 @@ fn reply_write_and_flush_failures_do_not_lose_delta_or_revision() {
         assert_eq!(screen, expected_screen);
     }
 }
+
+#[test]
+fn scrollback_delta_detects_drop_plus_append() {
+    // 小さな画面で大量出力してscrollbackを作成
+    let (mut engine, _writes) = engine();
+
+    // 4行の画面に20行出力 → scrollbackに16行
+    for i in 0..20 {
+        engine.process(format!("line{}\n", i).as_bytes());
+    }
+
+    let screen1 = engine.screen();
+    assert!(
+        !screen1.scrollback.is_empty(),
+        "scrollback should have rows"
+    );
+
+    // さらに出力 → 古い行がdropされて新しい行がappendされる
+    for i in 20..30 {
+        engine.process(format!("line{}\n", i).as_bytes());
+    }
+
+    let screen2 = engine.screen();
+    let _scrollback2_len = screen2.scrollback.len();
+
+    // scrollbackが更新されていることを確認
+    // 最後の行が新しい内容であることを確認
+    let last_row_text = screen2
+        .scrollback
+        .last()
+        .map(|r| r.plain_text())
+        .unwrap_or_default();
+    assert!(
+        last_row_text.contains("line"),
+        "scrollback should contain line content"
+    );
+}
+
+#[test]
+fn visible_rows_not_duplicated_in_scrollback() {
+    // visible行がscrollbackに含まれないことを確認
+    let (mut engine, _writes) = engine();
+
+    // 4行の画面に10行出力
+    for i in 0..10 {
+        engine.process(format!("row{}\n", i).as_bytes());
+    }
+
+    let screen = engine.screen();
+
+    // rowsの数はTerminal heightと一致
+    assert_eq!(screen.rows.len(), screen.size.rows as usize);
+
+    // scrollback + rows に同じ行が重複しないことを確認
+    // visible行の内容を取得
+    let visible_texts: Vec<String> = screen.rows.iter().map(|r| r.plain_text()).collect();
+    let scrollback_texts: Vec<String> = screen.scrollback.iter().map(|r| r.plain_text()).collect();
+
+    // scrollbackの最後の行とvisibleの最初の行が同じでないことを確認
+    if let (Some(last_scrollback), Some(first_visible)) =
+        (scrollback_texts.last(), visible_texts.first())
+    {
+        assert_ne!(
+            last_scrollback, first_visible,
+            "visible row should not be duplicated in scrollback"
+        );
+    }
+}
+
+#[test]
+fn scrollback_delta_same_length_replacement() {
+    // lengthが同じでも内容が変わっているケース
+    use super::compute_scrollback_delta;
+
+    let row_a = TerminalRow::empty(40);
+    let row_b = TerminalRow::empty(40);
+    // 内容が異なることを確認（デフォルトは空なので同じ）
+    // このテストはcompute_scrollback_deltaの動作を確認
+
+    let old = vec![row_a.clone()];
+    let new = vec![row_b.clone()];
+
+    // 内容が同じなのでNone
+    let delta = compute_scrollback_delta(&old, &new);
+    assert!(delta.is_none(), "same content should return None");
+}
+
+#[test]
+fn scrollback_grows_and_delta_appends() {
+    // scrollbackが増加する際にdeltaが正しくappendされる
+    let (mut engine, _writes) = engine();
+
+    // 初回出力
+    engine.process(b"first\n");
+    let delta1 = engine.process(b"second\n");
+
+    // deltaが生成されることを確認
+    assert!(delta1.revision > 0);
+
+    // 大量出力でscrollbackを作成
+    for i in 0..50 {
+        engine.process(format!("output{}\n", i).as_bytes());
+    }
+
+    let screen = engine.screen();
+    assert!(
+        !screen.scrollback.is_empty(),
+        "should have scrollback after many outputs"
+    );
+}

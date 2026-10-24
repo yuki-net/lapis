@@ -97,33 +97,9 @@ impl TerminalEngine {
         self.revision += 1;
         let screen = self.screen();
 
-        // scrollbackの差分を計算
-        let scrollback_delta = if self.last_screen.scrollback.len() != screen.scrollback.len() {
-            // scrollback行数が変更された場合、差分を送信
-            let new_len = screen.scrollback.len();
-            let old_len = self.last_screen.scrollback.len();
-
-            if new_len > old_len {
-                // 追加された行を送信
-                let new_rows = screen.scrollback[old_len..].to_vec();
-                Some(TerminalScrollbackDelta {
-                    reset: false,
-                    dropped: 0,
-                    rows: new_rows,
-                })
-            } else if new_len < old_len {
-                // 行が削除された場合、resetとして再送信
-                Some(TerminalScrollbackDelta {
-                    reset: true,
-                    dropped: 0,
-                    rows: screen.scrollback.clone(),
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // scrollbackの差分を内容で計算（length比較だけでは不十分）
+        let scrollback_delta =
+            compute_scrollback_delta(&self.last_screen.scrollback, &screen.scrollback);
 
         let delta = TerminalDelta {
             revision: self.revision,
@@ -207,8 +183,12 @@ impl TerminalEngine {
         let screen = self.term.screen();
         let total_rows = screen.scrollback_rows();
 
-        // scrollback行を取得（MAX_SCROLLBACK_LINESで制限）
-        let scrollback_end = total_rows;
+        // visible行の開始位置を計算
+        let visible_start = total_rows.saturating_sub(self.size.rows as usize);
+
+        // scrollback行を取得（visible行を除外し、MAX_SCROLLBACK_LINESで制限）
+        // WezTermのscrollback_rows()はvisible rowsを含むため、visible_startまでをscrollbackとする
+        let scrollback_end = visible_start;
         let scrollback_start = scrollback_end.saturating_sub(MAX_SCROLLBACK_LINES);
         if scrollback_start < scrollback_end {
             screen.with_phys_lines(scrollback_start..scrollback_end, |lines| {
@@ -220,8 +200,7 @@ impl TerminalEngine {
             });
         }
 
-        // 表示行を取得
-        let visible_start = total_rows.saturating_sub(self.size.rows as usize);
+        // 表示行を取得（visible_start..total_rows）
         screen.with_phys_lines(visible_start..total_rows, |lines| {
             rows.extend(
                 lines
@@ -252,6 +231,98 @@ impl TerminalEngine {
 
 pub(crate) fn normalized_size(size: TerminalSize) -> TerminalSize {
     TerminalSize::new(size.columns.max(2), size.rows.max(1))
+}
+
+/// scrollbackの差分を内容で計算する。
+/// lengthが同じでも内容が変わっているケース（drop + append）を検出する。
+/// 安全に差分化できない場合はresetを返す。
+fn compute_scrollback_delta(
+    old: &[TerminalRow],
+    new: &[TerminalRow],
+) -> Option<TerminalScrollbackDelta> {
+    if old == new {
+        return None;
+    }
+
+    let old_len = old.len();
+    let new_len = new.len();
+
+    // 両方空なら変更なし
+    if old_len == 0 && new_len == 0 {
+        return None;
+    }
+
+    // 空からあるへ、またはあるから空へ
+    if old_len == 0 {
+        return Some(TerminalScrollbackDelta {
+            reset: false,
+            dropped: 0,
+            rows: new.to_vec(),
+        });
+    }
+    if new_len == 0 {
+        return Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: Vec::new(),
+        });
+    }
+
+    // 末尾が一致する部分を探して、drop数とappend数を計算する
+    // 例: old = [A, B, C, D], new = [C, D, E, F]
+    // → dropped = 2 (A, B), rows = [E, F]
+
+    // 共通接尾辞の長さを求める
+    // oldの末尾とnewの末尾が一致する部分を探す
+    let mut common_suffix = 0;
+    let min_len = old_len.min(new_len);
+    while common_suffix < min_len
+        && old[old_len - 1 - common_suffix] == new[new_len - 1 - common_suffix]
+    {
+        common_suffix += 1;
+    }
+
+    // 共通接尾辞の手前が一致しているか確認
+    // oldの共通分の手前とnewの共通分の手前が一致すれば、純粋なappend/drop
+    let old_prefix_len = old_len - common_suffix;
+    let new_prefix_len = new_len - common_suffix;
+
+    if old_prefix_len == new_prefix_len {
+        // 長さが同じで内容も同じ → 変更なし（すでにold == newでNoneを返している）
+        // ここには来ない
+        return Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: new.to_vec(),
+        });
+    }
+
+    let dropped = old_prefix_len.max(new_prefix_len) - old_prefix_len.min(new_prefix_len);
+
+    // newの末尾からcommon_suffix分を除いたものが追加された行
+    let appended_start = new_len - common_suffix;
+    let appended_rows = if appended_start < new_len {
+        new[appended_start..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    // dropped > 0 かつ appended_rows が空でない、またはその逆
+    // 安全に差分化できるか確認
+    if dropped + appended_rows.len() == old_prefix_len.max(new_prefix_len) {
+        Some(TerminalScrollbackDelta {
+            reset: false,
+            dropped: dropped as u16,
+            rows: appended_rows,
+        })
+    } else {
+        // 安全に差分化できない場合はreset
+        Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: new.to_vec(),
+        })
+    }
 }
 
 fn engine_size(size: TerminalSize) -> wezterm_term::TerminalSize {

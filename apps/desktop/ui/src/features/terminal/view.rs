@@ -9,56 +9,20 @@ use lapis_terminal::{TerminalCell, TerminalColor, TerminalRow, TerminalShell};
 impl Render for TerminalFeature {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_id();
-        let screen = self.active_screen().cloned();
-
-        // virtualization: 表示中の行のみを処理
-        let total_rows = screen
-            .as_ref()
-            .map(|s| s.scrollback.len() + s.rows.len())
-            .unwrap_or(0);
-        let visible_range = if total_rows > 0 {
-            let handle = self.scroll.handle();
-            let height = handle.bounds().size.height;
-            let offset = handle.offset();
-
-            if height > px(0.0) {
-                let row_height = 16.0;
-                let visible_rows = (height.to_f64() / row_height).ceil() as usize;
-                let first_visible = ((-offset.y).to_f64() / row_height).floor() as usize;
-                let last_visible = (first_visible + visible_rows + 2).min(total_rows);
-                first_visible..last_visible
-            } else {
-                0..total_rows
-            }
-        } else {
-            0..0
-        };
-
-        // 表示行のみを収集
-        let rows: Vec<TerminalRow> = screen
-            .as_ref()
-            .map(|screen| {
-                let scrollback_len = screen.scrollback.len();
-                let mut rows = Vec::new();
-
-                for i in visible_range.clone() {
-                    if i < scrollback_len {
-                        rows.push(screen.scrollback[i].clone());
-                    } else if i >= scrollback_len && i < scrollback_len + screen.rows.len() {
-                        rows.push(screen.rows[i - scrollback_len].clone());
-                    }
-                }
-                rows
-            })
-            .unwrap_or_default();
-
-        let cursor = screen.as_ref().map(|screen| {
-            let mut cursor = screen.cursor;
+        // visible_outputの更新に必要な値だけを先に取得
+        let screen_for_cursor = self.active_screen().map(|s| {
+            let mut cursor = s.cursor;
             cursor.row = cursor
                 .row
-                .saturating_add(u16::try_from(screen.scrollback.len()).unwrap_or(u16::MAX));
+                .saturating_add(u16::try_from(s.scrollback.len()).unwrap_or(u16::MAX));
             cursor
         });
+        let total_rows = self
+            .active_screen()
+            .map(|s| s.scrollback.len() + s.rows.len())
+            .unwrap_or(0);
+
+        // visible_outputの更新（borrowを解放してから）
         let output = self
             .terminals
             .iter()
@@ -67,7 +31,7 @@ impl Render for TerminalFeature {
         if output != self.visible_output {
             self.visible_output = output;
             if self.focus.is_focused(window)
-                && let Some(row) = cursor.map(|cursor| cursor.row)
+                && let Some(row) = screen_for_cursor.map(|cursor| cursor.row)
             {
                 let handle = self.scroll.handle();
                 let height = handle.bounds().size.height;
@@ -84,6 +48,60 @@ impl Render for TerminalFeature {
                 }
             }
         }
+
+        // 参照で読み、visible rowsだけcloneする
+        let screen_ref = self.active_screen();
+
+        // virtualization: 表示中の行のみを処理
+        let row_height = 16.0_f32;
+
+        let visible_range = if total_rows > 0 {
+            let handle = self.scroll.handle();
+            let height = handle.bounds().size.height;
+            let offset = handle.offset();
+
+            if height > px(0.0) {
+                let visible_rows = (height.to_f64() / 16.0).ceil() as usize;
+                let first_visible = ((-offset.y).to_f64() / 16.0).floor() as usize;
+                // overscanを2行に限定
+                let overscan = 2;
+                let last_visible = (first_visible + visible_rows + overscan).min(total_rows);
+                first_visible..last_visible
+            } else {
+                // height未確定時はvisible screen相当 + overscanのみ
+                let fallback_visible = screen_ref.map(|s| s.rows.len()).unwrap_or(24);
+                (total_rows.saturating_sub(fallback_visible))..total_rows
+            }
+        } else {
+            0..0
+        };
+
+        // top/bottom spacerの高さを計算
+        let top_spacer_height = px(visible_range.start as f32 * row_height);
+        let bottom_spacer_height = if visible_range.end < total_rows {
+            px((total_rows - visible_range.end) as f32 * row_height)
+        } else {
+            px(0.0)
+        };
+
+        // 表示行のみを収集
+        let rows: Vec<TerminalRow> = screen_ref
+            .map(|screen| {
+                let scrollback_len = screen.scrollback.len();
+                let mut rows = Vec::with_capacity(visible_range.len());
+
+                for i in visible_range.clone() {
+                    if i < scrollback_len {
+                        rows.push(screen.scrollback[i].clone());
+                    } else if i >= scrollback_len && i < scrollback_len + screen.rows.len() {
+                        rows.push(screen.rows[i - scrollback_len].clone());
+                    }
+                }
+                rows
+            })
+            .unwrap_or_default();
+
+        let cursor = screen_for_cursor;
         let entity = cx.entity();
         let focus = self.focus.clone();
         let tabs = self
@@ -92,6 +110,7 @@ impl Render for TerminalFeature {
             .map(|terminal| (terminal.id.clone(), terminal.status))
             .collect::<Vec<_>>();
         let discovered = self.discovered.clone();
+        let screen_for_clipboard = screen_ref.cloned();
         div()
             .flex()
             .flex_col()
@@ -145,7 +164,7 @@ impl Render for TerminalFeature {
                     )))
                     .child(action_button("Copy screen", false).on_click(cx.listener(
                         move |_, _, _, cx| {
-                            if let Some(screen) = &screen {
+                            if let Some(screen) = &screen_for_clipboard {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                     screen.plain_text(),
                                 ));
@@ -194,7 +213,16 @@ impl Render for TerminalFeature {
                             gpui::MouseButton::Left,
                             cx.listener(|this, _, window, _| window.focus(&this.focus)),
                         )
+                        // top spacer: 見えていない上部行の高さを確保
+                        .when(top_spacer_height > px(0.0), |el| {
+                            el.child(div().h(top_spacer_height))
+                        })
+                        // visible rowsのみ描画
                         .children(rows.into_iter().map(render_row))
+                        // bottom spacer: 見えていない下部行の高さを確保
+                        .when(bottom_spacer_height > px(0.0), |el| {
+                            el.child(div().h(bottom_spacer_height))
+                        })
                         .child(
                             canvas(
                                 move |_, _, _| (),
@@ -208,12 +236,14 @@ impl Render for TerminalFeature {
                                         && cursor.is_some_and(|cursor| cursor.visible)
                                     {
                                         let cursor = cursor.expect("cursor is visible");
+                                        // cursor位置はspacer分を考慮
+                                        let cursor_y = px(f32::from(cursor.row) * 16.0);
                                         window.paint_quad(gpui::fill(
                                             gpui::Bounds::new(
                                                 bounds.origin
                                                     + gpui::point(
                                                         px(f32::from(cursor.column) * 7.8),
-                                                        px(f32::from(cursor.row) * 16.0),
+                                                        cursor_y,
                                                     ),
                                                 gpui::size(px(7.8), px(16.0)),
                                             ),
