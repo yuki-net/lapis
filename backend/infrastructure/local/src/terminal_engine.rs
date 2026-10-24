@@ -305,13 +305,29 @@ fn compute_scrollback_delta(
         });
     }
 
-    // 3. 純粋なdrop: newの残りが空
+    // 3. newの残りが空 → oldのprefixがnew全体と一致している
+    // 2つのケース:
+    //   a) 先頭drop: old = [A, B, C], new = [B, C] → prefix=0, dropped=1
+    //      newがoldのsuffixと一致するので、droppedは正しい
+    //   b) 末尾truncate: old = [A, B, C], new = [A, B] → prefix=2, dropped=1
+    //      newがoldのprefixと一致するので、これは末尾truncate
+    //      Client側でdrain(..1)すると[B, C]になって誤り→reset
     if new_rest_len == 0 {
-        return Some(TerminalScrollbackDelta {
-            reset: false,
-            dropped: old_rest_len as u16,
-            rows: Vec::new(),
-        });
+        if prefix == 0 {
+            // 先頭drop: newはoldのsuffix。droppedはscrollback先頭から削除する行数
+            return Some(TerminalScrollbackDelta {
+                reset: false,
+                dropped: old_rest_len as u16,
+                rows: Vec::new(),
+            });
+        } else {
+            // 末尾truncate: newはoldのprefix。incrementalに表現できない→reset
+            return Some(TerminalScrollbackDelta {
+                reset: true,
+                dropped: 0,
+                rows: new.to_vec(),
+            });
+        }
     }
 
     // 4. drop + append: old_restのsuffixとnew_restのprefixの重なりを検出

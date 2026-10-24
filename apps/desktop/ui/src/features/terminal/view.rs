@@ -22,30 +22,66 @@ impl Render for TerminalFeature {
             .map(|s| s.scrollback.len() + s.rows.len())
             .unwrap_or(0);
 
-        // visible_outputの更新（borrowを解放してから）
+        // visible_outputの更新とcursor-follow scroll
         let output = self
             .terminals
             .iter()
             .find(|terminal| Some(&terminal.id) == active.as_ref())
             .map(|terminal| (terminal.id.clone(), terminal.revision));
-        if output != self.visible_output {
-            self.visible_output = output;
-            if self.focus.is_focused(window)
-                && let Some(row) = screen_for_cursor.map(|cursor| cursor.row)
-            {
-                let handle = self.scroll.handle();
-                let height = handle.bounds().size.height;
-                if height > px(0.0) {
-                    let mut offset = handle.offset();
-                    let top = px(f32::from(row) * 16.0);
-                    let bottom = top + px(16.0);
-                    if top + offset.y < px(0.0) {
-                        offset.y = -top;
-                    } else if bottom + offset.y > height {
-                        offset.y = height - bottom;
-                    }
-                    handle.set_offset(offset);
+
+        // 現在の状態に基づいて処理を分岐
+        let needs_scroll_follow = match &self.visible_output {
+            None => {
+                // 未処理状態：outputが変更されたか確認
+                if output.is_some() {
+                    // outputが変更されたので、scroll-followを試みる
+                    self.visible_output = Some(None); // pending状態に
+                    true
+                } else {
+                    false
                 }
+            }
+            Some(None) => {
+                // scroll pending状態：前回のscrollが未完成なので再試行
+                true
+            }
+            Some(Some((id, revision))) => {
+                // 完了状態：outputが変更されたか確認
+                if output.as_ref() != Some(&(id.clone(), *revision)) {
+                    self.visible_output = Some(None); // pending状態に
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        if needs_scroll_follow
+            && self.focus.is_focused(window)
+            && let Some(row) = screen_for_cursor.map(|cursor| cursor.row)
+        {
+            let handle = self.scroll.handle();
+            let height = handle.bounds().size.height;
+            if height > px(0.0) {
+                // scrollが成功したので、完了状態に更新
+                if let Some((id, rev)) = output {
+                    self.visible_output = Some(Some((id, rev)));
+                }
+                let mut offset = handle.offset();
+                let top = px(f32::from(row) * 16.0);
+                let bottom = top + px(16.0);
+                if top + offset.y < px(0.0) {
+                    offset.y = -top;
+                } else if bottom + offset.y > height {
+                    offset.y = height - bottom;
+                }
+                handle.set_offset(offset);
+            }
+            // height == 0の場合はpending状態を維持したまま（次frameで再試行）
+        } else if needs_scroll_follow {
+            // scroll不要な場合（focusなしまたはcursorなし）はpendingを解除
+            if let Some((id, rev)) = output {
+                self.visible_output = Some(Some((id, rev)));
             }
         }
 

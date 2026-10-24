@@ -121,7 +121,11 @@ pub(crate) struct TerminalFeature {
     selected_by_context: HashMap<(Option<PathBuf>, ConversationId), lapis_terminal::TerminalId>,
     pub(super) focus: gpui::FocusHandle,
     pub(super) marked: String,
-    pub(super) visible_output: Option<(lapis_terminal::TerminalId, u64)>,
+    /// Terminal出力の表示状態。
+    /// None = 未処理（output変更を検知していない）
+    /// Some(None) = scroll pending（outputは変更済みだがscroll-followが未完了）
+    /// Some(Some((id, revision))) = 完了（scroll-followが成功した）
+    pub(super) visible_output: Option<Option<(lapis_terminal::TerminalId, u64)>>,
     pub(super) root: Option<std::path::PathBuf>,
     conversation: ConversationId,
     requests: TerminalRequests,
@@ -149,7 +153,7 @@ impl TerminalFeature {
             selected_by_context: HashMap::new(),
             focus: cx.focus_handle(),
             marked: String::new(),
-            visible_output: None,
+            visible_output: None, // None = 未処理
             root,
             conversation,
             requests: TerminalRequests::default(),
