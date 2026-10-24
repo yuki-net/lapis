@@ -150,6 +150,9 @@ pub struct LayoutViewState {
     pub version: u16,
     pub root: LayoutNodeViewState,
     pub groups: Vec<LayoutGroupViewState>,
+    /// 既存HeaderのZone操作先。Group数の上限ではない。旧形式では空。
+    #[serde(default)]
+    pub anchors: std::collections::BTreeMap<String, String>,
 }
 
 fn layout_view_state_version() -> u16 {

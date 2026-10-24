@@ -288,10 +288,6 @@ impl ShellState {
     }
 
     pub fn move_tab(&mut self, source: PanelPosition, target: PanelPosition, tab: PanelTab) {
-        if source == target {
-            self.panel_mut(target).activate_without_open(tab);
-            return;
-        }
         let source_id = self.layout.primary_group_id(source).clone();
         let target_id = self.layout.primary_group_id(target).clone();
         let _ = self.layout.move_tab(&source_id, &target_id, &tab);
