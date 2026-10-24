@@ -77,6 +77,7 @@ Tree選択・Hover・Detailsと通常時/表示時/Pick中のCPU・メモリ・C
 短時間の環境依存サンプルであり、GPU時間・複数モニターの実操作・継続性能は別途確認する。
 
 Document タブは ↗ / ↩ ボタンで取り外し・Root へ再ドックできる。Windows ではタブを Window 外で離すと取り外し、同じグループの別 Window の Panel 上で離すと再ドックする。Escape で取り消す。移動で空になった子 Window は手動で閉じる。Tool の Window 間移動と、再起動後の Window 配置復元は未対応。
+
 ## Terminal
 
 Terminal の描画は `lapis_terminal::TerminalScreen` を直接読む。Desktop UI は
@@ -88,3 +89,9 @@ Terminal Session の所有者は Host であり、Client の切断や Panel の 
 表示だけでは resize せず、明示的な resize 操作の結果を全 Client へ反映する。
 Scrollback は Host の Model に含まれる履歴を画面の前に描画し、Client 側で VT/ANSI
 を再解釈しない。履歴の上限と再同期は Protocol の Snapshot / Delta 契約に従う。
+
+## Layout の責務
+
+Shell の表示配置は `DockLayout` が `Split` と `TabGroup` の木として所有する。`PanelPosition` は既存Headerの領域操作へ接続する互換アンカーであり、内部のTabGroup数を制限するものではない。`ViewInstanceId` はViewの種類を表す `ViewId` と別の値で、同じ種類のViewを複数配置できる。
+
+Layoutの変更はタブの表示上の配置だけを変更し、Document・Terminal・AgentなどHost上のResourceを終了・複製しない。`Hide`、`Close View`、`Detach`、`Terminate Resource` は別の操作として扱う。復元では不正なLayoutを拒否し、旧`panels`形式へフォールバックする。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、有効な配置を維持する。

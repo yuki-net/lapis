@@ -74,6 +74,13 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 `scripts/test_window_host.ps1` は隔離した Workspace と設定で Native Window の生成・共有編集・再ドック・グループ分離・終了・再生成と CPU の短時間サンプルを検証する。Windows では自プロセスのテスト Window だけに Mouse / Key メッセージを送り、Escape、Window 外への取り外し、重なった Window の再ドック、子同士の移動、別グループへの拒否、文書領域の高さも確認する。対象 Window の表示と重なり順はこの明示的な smoke モードだけで操作する。保存確認ダイアログ・IME・複数 DPI のモニターをまたぐ実操作と継続性能は別途確認する。
 
+## Desktop の可変 Layout
+
+- `apps/desktop/ui/src/shell/layout.rs` の `DockLayout` が、`Split` と `TabGroup` の木、Groupごとのタブ順・Active・表示状態を所有する。Panelは配置先であり、FeatureやHost Resourceの所有者ではない。
+- `ViewId` はViewの種類、`ViewInstanceId` は開いている個体を表す。タブの非表示・移動・取り外しは、HostのDocument・Terminal・Agentの終了や複製を発生させない。
+- `ConversationViewState.layout` はLayoutの保存値。不正なGroup ID・位置・比率、非有限のサイズ、重複Group/leaf、木とGroupの不一致、Main/Left/Bottom/Rightの互換アンカー欠落は全体を拒否し、旧`panels`形式へフォールバックする。有限のサイズは旧形式と同じ範囲へ補正する。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、Layoutの復元は継続する。互換アンカーはHeaderの操作先を保証するもので、Group数の上限ではない。
+- 通常のHeader操作は互換アンカーを対象にするが、可変Splitの内部構造へ固定4Panelや左右の列数制限を埋め込まない。制限が必要な場合はUI操作ポリシーで拒否し、Layoutモデル自体を狭めない。
+
 ## 依存の検査
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。

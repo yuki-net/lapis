@@ -10,17 +10,17 @@ impl Shell {
     ) {
         let now = std::time::Instant::now();
         let can_resize = match target {
-            ResizeTarget::Left => !self.shell.left_panel.is_transitioning(),
-            ResizeTarget::Right => !self.shell.right_panel.is_transitioning(),
-            ResizeTarget::Bottom => !self.shell.bottom_panel.is_transitioning(),
+            ResizeTarget::Left => !self.shell.panel(PanelPosition::Left).is_transitioning(),
+            ResizeTarget::Right => !self.shell.panel(PanelPosition::Right).is_transitioning(),
+            ResizeTarget::Bottom => !self.shell.panel(PanelPosition::Bottom).is_transitioning(),
         };
         if !can_resize {
             return;
         }
 
         let gap = f32::from(tokens::spacing::GAP);
-        let bottom_size = self.shell.bottom_panel.effective_size(now);
-        let bottom_visible = self.shell.bottom_panel.is_visible(now);
+        let bottom_size = self.shell.panel(PanelPosition::Bottom).effective_size(now);
+        let bottom_visible = self.shell.panel(PanelPosition::Bottom).is_visible(now);
         let bottom_handle_y = f32::from(viewport.height)
             - f32::from(tokens::size::STATUS_BAR_HEIGHT)
             - bottom_size
@@ -37,19 +37,20 @@ impl Shell {
             ResizeTarget::Left | ResizeTarget::Right => ResizeMode::PanelWidth,
             ResizeTarget::Bottom => {
                 let start_x = f32::from(start_pos.x);
-                let left_restore_edge = gap + self.shell.left_panel.effective_size(now) + gap;
+                let left_restore_edge =
+                    gap + self.shell.panel(PanelPosition::Left).effective_size(now) + gap;
                 let right_restore_edge = f32::from(viewport.width)
                     - gap
-                    - self.shell.right_panel.effective_size(now)
+                    - self.shell.panel(PanelPosition::Right).effective_size(now)
                     - gap;
 
                 if self.shell.bottom_span_left
-                    && self.shell.left_panel.is_visible(now)
+                    && self.shell.panel(PanelPosition::Left).is_visible(now)
                     && start_x <= left_restore_edge
                 {
                     ResizeMode::RestoreLeft
                 } else if self.shell.bottom_span_right
-                    && self.shell.right_panel.is_visible(now)
+                    && self.shell.panel(PanelPosition::Right).is_visible(now)
                     && start_x >= right_restore_edge
                 {
                     ResizeMode::RestoreRight
@@ -204,7 +205,7 @@ impl Shell {
     ) {
         let current_raw = mouse_x - gap;
         if current_raw < min_w * 0.5 {
-            if self.shell.left_panel.open {
+            if self.shell.panel(PanelPosition::Left).open {
                 self.request_panel_open_with_duration(
                     PanelPosition::Left,
                     false,
@@ -216,14 +217,14 @@ impl Shell {
             return;
         }
 
-        let right_width = if self.shell.right_panel.is_visible(now) {
-            self.shell.right_panel.effective_size(now) + gap
+        let right_width = if self.shell.panel(PanelPosition::Right).is_visible(now) {
+            self.shell.panel(PanelPosition::Right).effective_size(now) + gap
         } else {
             0.0
         };
         let max_left = (viewport_width - gap * 3.0 - right_width - min_w).max(min_w);
-        self.shell.left_panel.size = current_raw.clamp(min_w, max_left);
-        if !self.shell.left_panel.open {
+        self.shell.panel_mut(PanelPosition::Left).size = current_raw.clamp(min_w, max_left);
+        if !self.shell.panel(PanelPosition::Left).open {
             self.request_panel_open_with_duration(
                 PanelPosition::Left,
                 true,
@@ -245,7 +246,7 @@ impl Shell {
     ) {
         let current_raw = viewport_width - mouse_x - gap;
         if current_raw < min_w * 0.5 {
-            if self.shell.right_panel.open {
+            if self.shell.panel(PanelPosition::Right).open {
                 self.request_panel_open_with_duration(
                     PanelPosition::Right,
                     false,
@@ -257,14 +258,14 @@ impl Shell {
             return;
         }
 
-        let left_width = if self.shell.left_panel.is_visible(now) {
-            self.shell.left_panel.effective_size(now) + gap
+        let left_width = if self.shell.panel(PanelPosition::Left).is_visible(now) {
+            self.shell.panel(PanelPosition::Left).effective_size(now) + gap
         } else {
             0.0
         };
         let max_right = (viewport_width - gap * 3.0 - left_width - min_w).max(min_w);
-        self.shell.right_panel.size = current_raw.clamp(min_w, max_right);
-        if !self.shell.right_panel.open {
+        self.shell.panel_mut(PanelPosition::Right).size = current_raw.clamp(min_w, max_right);
+        if !self.shell.panel(PanelPosition::Right).open {
             self.request_panel_open_with_duration(
                 PanelPosition::Right,
                 true,
@@ -285,7 +286,7 @@ impl Shell {
     ) {
         let current_raw = viewport_height - mouse_y - gap;
         if current_raw < min_h * 0.5 {
-            if self.shell.bottom_panel.open {
+            if self.shell.panel(PanelPosition::Bottom).open {
                 self.request_panel_open_with_duration(
                     PanelPosition::Bottom,
                     false,
@@ -299,8 +300,8 @@ impl Shell {
 
         let header_height = f32::from(tokens::size::TITLE_BAR_HEIGHT) + gap;
         let max_bottom = (viewport_height - header_height - min_h - gap * 2.0).max(min_h);
-        self.shell.bottom_panel.size = current_raw.clamp(min_h, max_bottom);
-        if !self.shell.bottom_panel.open {
+        self.shell.panel_mut(PanelPosition::Bottom).size = current_raw.clamp(min_h, max_bottom);
+        if !self.shell.panel(PanelPosition::Bottom).open {
             self.request_panel_open_with_duration(
                 PanelPosition::Bottom,
                 true,

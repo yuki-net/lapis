@@ -50,7 +50,7 @@ impl Shell {
             .enumerate()
             .map(|(index, tab)| {
                 let label = match tab {
-                    PanelTab::Tool(view) => self
+                    PanelTab::Tool { view, .. } => self
                         .feature_registry
                         .panel_contributions(panel.position)
                         .into_iter()
@@ -83,7 +83,7 @@ impl Shell {
                             )
                             .icon
                         }),
-                    PanelTab::Tool(_) => None,
+                    PanelTab::Tool { .. } => None,
                 };
                 let tab = tab.clone();
                 let close_tab = tab.clone();
@@ -162,7 +162,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, window, cx| {
                         this.shell.focused_panel = position;
                         match tab.clone() {
-                            PanelTab::Tool(view) => this.select_view(position, view, cx),
+                            PanelTab::Tool { view, .. } => this.select_view(position, view, cx),
                             PanelTab::Document(document_id) => {
                                 this.select_panel_tab(
                                     position,

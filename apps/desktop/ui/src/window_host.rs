@@ -106,7 +106,7 @@ impl WindowGroup {
         }
         self.layout.tabs.retain(|tab, _| match tab {
             PanelTab::Document(id) => snapshot.tabs.iter().any(|tab| &tab.id == id),
-            PanelTab::Tool(_) => true,
+            PanelTab::Tool { .. } => true,
         });
         for tab in &snapshot.tabs {
             let owner = snapshot
@@ -374,7 +374,7 @@ impl DesktopRoot {
         self.group.update(cx, |group, _| {
             group.layout.tabs.retain(|tab, (owner, _)| {
                 *owner != ROOT_HOST
-                    || !matches!(tab, PanelTab::Tool(_))
+                    || !matches!(tab, PanelTab::Tool { .. })
                     || placements.iter().any(|(present, _)| present == tab)
             });
             for (tab, panel) in placements {

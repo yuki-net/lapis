@@ -2,13 +2,9 @@ use std::time::{Duration, Instant};
 
 use lapis_desktop_client::DocumentTab;
 
-use crate::{
-    extension_ui::{FeatureRegistry, PanelPosition},
-    features::id,
-    tokens,
-};
+use crate::extension_ui::{FeatureRegistry, PanelPosition};
 
-use super::{panel::PanelHost, tab_state::PanelTab};
+use super::{DockLayout, PanelHost, PanelTab};
 
 const PANEL_SPAN_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 
@@ -140,10 +136,7 @@ pub(crate) enum ResizeTarget {
 #[derive(Clone)]
 pub(crate) struct ShellState {
     pub focused_panel: PanelPosition,
-    pub main_panel: PanelHost,
-    pub left_panel: PanelHost,
-    pub bottom_panel: PanelHost,
-    pub right_panel: PanelHost,
+    pub layout: DockLayout,
     pub bottom_span_left: bool,
     pub bottom_span_right: bool,
     pub bottom_span_left_transition: Option<PanelSpanTransition>,
@@ -168,25 +161,7 @@ impl Default for ShellState {
     fn default() -> Self {
         Self {
             focused_panel: PanelPosition::Main,
-            main_panel: PanelHost::new(PanelPosition::Main, Vec::new(), true, 0.0),
-            left_panel: PanelHost::new(
-                PanelPosition::Left,
-                vec![PanelTab::tool(id::VIEW_FILES)],
-                true,
-                f32::from(tokens::size::TOOL_ISLAND_WIDTH),
-            ),
-            bottom_panel: PanelHost::new(
-                PanelPosition::Bottom,
-                Vec::new(),
-                false,
-                f32::from(tokens::size::BOTTOM_PANEL_HEIGHT),
-            ),
-            right_panel: PanelHost::new(
-                PanelPosition::Right,
-                Vec::new(),
-                false,
-                f32::from(tokens::size::SIDE_PANEL_WIDTH),
-            ),
+            layout: DockLayout::default(),
             bottom_span_left: false,
             bottom_span_right: false,
             bottom_span_left_transition: None,
@@ -262,39 +237,19 @@ impl ShellState {
                 .is_some_and(|transition| transition.is_active(now))
     }
     pub fn panel(&self, position: PanelPosition) -> &PanelHost {
-        match position {
-            PanelPosition::Main => &self.main_panel,
-            PanelPosition::Left => &self.left_panel,
-            PanelPosition::Bottom => &self.bottom_panel,
-            PanelPosition::Right => &self.right_panel,
-        }
+        self.layout.panel(position)
     }
 
     pub fn panel_mut(&mut self, position: PanelPosition) -> &mut PanelHost {
-        match position {
-            PanelPosition::Main => &mut self.main_panel,
-            PanelPosition::Left => &mut self.left_panel,
-            PanelPosition::Bottom => &mut self.bottom_panel,
-            PanelPosition::Right => &mut self.right_panel,
-        }
+        self.layout.panel_mut(position)
     }
 
-    pub fn panels(&self) -> [&PanelHost; 4] {
-        [
-            &self.main_panel,
-            &self.left_panel,
-            &self.bottom_panel,
-            &self.right_panel,
-        ]
+    pub fn panels(&self) -> Vec<&PanelHost> {
+        self.layout.panels()
     }
 
-    pub fn panels_mut(&mut self) -> [&mut PanelHost; 4] {
-        [
-            &mut self.main_panel,
-            &mut self.left_panel,
-            &mut self.bottom_panel,
-            &mut self.right_panel,
-        ]
+    pub fn panels_mut(&mut self) -> impl Iterator<Item = &mut PanelHost> {
+        self.layout.panels_mut()
     }
 
     pub fn set_tool_picker_query(&mut self, query: impl Into<String>) {
@@ -309,7 +264,7 @@ impl ShellState {
         for panel in self.panels_mut() {
             panel.tabs.retain(|tab| match tab {
                 PanelTab::Document(id) => valid.contains(&id),
-                PanelTab::Tool(_) => true,
+                PanelTab::Tool { .. } => true,
             });
             if let Some(active) = &panel.active
                 && !panel.tabs.contains(active)
@@ -320,7 +275,7 @@ impl ShellState {
         for document in documents {
             let tab = PanelTab::Document(document.id.clone());
             if !self.panels().iter().any(|panel| panel.contains(&tab)) {
-                self.main_panel.tabs.push(tab.clone());
+                self.panel_mut(PanelPosition::Main).tabs.push(tab.clone());
             }
             if document.active {
                 for panel in self.panels_mut() {
@@ -334,11 +289,12 @@ impl ShellState {
 
     pub fn move_tab(&mut self, source: PanelPosition, target: PanelPosition, tab: PanelTab) {
         if source == target {
-            self.panel_mut(target).activate(tab);
+            self.panel_mut(target).activate_without_open(tab);
             return;
         }
-        self.panel_mut(source).remove(&tab);
-        self.panel_mut(target).activate(tab);
+        let source_id = self.layout.primary_group_id(source).clone();
+        let target_id = self.layout.primary_group_id(target).clone();
+        let _ = self.layout.move_tab(&source_id, &target_id, &tab);
     }
 
     pub fn synchronize_activation(&self, registry: &mut FeatureRegistry) {
@@ -356,7 +312,7 @@ impl ShellState {
 
 #[cfg(test)]
 mod tests {
-    use crate::extension_ui::ViewId;
+    use crate::{extension_ui::ViewId, features::id, tokens};
     use std::time::{Duration, Instant};
 
     use super::*;
@@ -366,12 +322,15 @@ mod tests {
         let state = ShellState::default();
 
         assert_eq!(state.panels().len(), 4);
-        assert!(state.main_panel.open);
-        assert!(state.left_panel.open);
-        assert!(!state.bottom_panel.open);
-        assert!(!state.right_panel.open);
+        assert!(state.panel(PanelPosition::Main).open);
+        assert!(state.panel(PanelPosition::Left).open);
+        assert!(!state.panel(PanelPosition::Bottom).open);
+        assert!(!state.panel(PanelPosition::Right).open);
         assert_eq!(
-            state.left_panel.active_tool().map(ViewId::as_str),
+            state
+                .panel(PanelPosition::Left)
+                .active_tool()
+                .map(ViewId::as_str),
             Some(id::VIEW_FILES)
         );
     }
@@ -466,9 +425,9 @@ mod tests {
 
         state.move_tab(PanelPosition::Left, PanelPosition::Main, tab.clone());
 
-        assert!(!state.left_panel.contains(&tab));
-        assert!(state.main_panel.contains(&tab));
-        assert_eq!(state.main_panel.active, Some(tab));
+        assert!(!state.panel(PanelPosition::Left).contains(&tab));
+        assert!(state.panel(PanelPosition::Main).contains(&tab));
+        assert_eq!(state.panel(PanelPosition::Main).active, Some(tab));
     }
 
     #[test]
@@ -478,26 +437,31 @@ mod tests {
 
         state.move_tab(PanelPosition::Left, PanelPosition::Right, tab.clone());
 
-        assert!(!state.left_panel.contains(&tab));
-        assert!(state.right_panel.contains(&tab));
+        assert!(!state.panel(PanelPosition::Left).contains(&tab));
+        assert!(state.panel(PanelPosition::Right).contains(&tab));
     }
 
     #[test]
     fn removing_tabs_keeps_panel_open_and_selects_adjacent_tabs() {
         let mut state = ShellState::default();
-        state.main_panel.activate_tool(ViewId::new(id::VIEW_FILES));
         state
-            .main_panel
+            .panel_mut(PanelPosition::Main)
+            .activate_tool(ViewId::new(id::VIEW_FILES));
+        state
+            .panel_mut(PanelPosition::Main)
             .activate_tool(ViewId::new(id::VIEW_TERMINAL));
         let files = PanelTab::tool(id::VIEW_FILES);
         let terminal = PanelTab::tool(id::VIEW_TERMINAL);
 
-        assert!(state.main_panel.remove(&files));
-        assert_eq!(state.main_panel.active, Some(terminal.clone()));
-        assert!(state.main_panel.remove(&terminal));
-        assert!(state.main_panel.open);
-        assert!(state.main_panel.tabs.is_empty());
-        assert_eq!(state.main_panel.active, None);
+        assert!(state.panel_mut(PanelPosition::Main).remove(&files));
+        assert_eq!(
+            state.panel(PanelPosition::Main).active,
+            Some(terminal.clone())
+        );
+        assert!(state.panel_mut(PanelPosition::Main).remove(&terminal));
+        assert!(state.panel(PanelPosition::Main).open);
+        assert!(state.panel(PanelPosition::Main).tabs.is_empty());
+        assert_eq!(state.panel(PanelPosition::Main).active, None);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use crate::shell::panel_size;
 use crate::{
     extension_ui::{FeatureRegistry, PanelPosition, ViewId},
     features::id,
@@ -7,6 +8,7 @@ use lapis_desktop_client::{ConversationViewState, DocumentTab, PanelViewState};
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {
+        layout: Some(shell.layout.capture_view_state()),
         panels: shell
             .panels()
             .into_iter()
@@ -19,20 +21,20 @@ pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
             })
             .collect(),
         active_tool: shell
-            .left_panel
+            .panel(PanelPosition::Left)
             .active_tool()
             .map_or_else(|| "files".to_owned(), |view| view.as_str().to_owned()),
         side_panel: shell
-            .right_panel
+            .panel(PanelPosition::Right)
             .active_tool()
             .map(|view| view.as_str().to_owned()),
         bottom_panel: shell
-            .bottom_panel
+            .panel(PanelPosition::Bottom)
             .active_tool()
             .map(|view| view.as_str().to_owned()),
-        tool_width: shell.left_panel.size,
-        side_width: shell.right_panel.size,
-        bottom_height: shell.bottom_panel.size,
+        tool_width: shell.panel(PanelPosition::Left).size,
+        side_width: shell.panel(PanelPosition::Right).size,
+        bottom_height: shell.panel(PanelPosition::Bottom).size,
     }
 }
 
@@ -42,6 +44,29 @@ pub(crate) fn apply_view_state(
     documents: &[DocumentTab],
     registry: &FeatureRegistry,
 ) {
+    if let Some(layout) = view.layout.as_ref()
+        && shell.layout.restore_view_state(layout, |raw| {
+            let tab = deserialize_panel_tab(raw)?;
+            match &tab {
+                PanelTab::Document(id) => documents.iter().any(|document| &document.id == id),
+                PanelTab::Tool { view, .. } => [
+                    PanelPosition::Main,
+                    PanelPosition::Left,
+                    PanelPosition::Bottom,
+                    PanelPosition::Right,
+                ]
+                .into_iter()
+                .flat_map(|position| registry.panel_contributions(position))
+                .any(|contribution| contribution.view.as_ref() == Some(view)),
+            }
+            .then_some(tab)
+        })
+    {
+        shell
+            .panel_mut(PanelPosition::Main)
+            .set_open_immediate(true);
+        return;
+    }
     if !view.panels.is_empty() {
         let valid_documents = documents
             .iter()
@@ -60,18 +85,19 @@ pub(crate) fn apply_view_state(
             panel.tabs = panel_view
                 .tabs
                 .into_iter()
-                .filter_map(deserialize_panel_tab)
+                .filter_map(|value| deserialize_panel_tab(&value))
                 .filter(|tab| match tab {
                     PanelTab::Document(id) => valid_documents.contains(id),
-                    PanelTab::Tool(view) => valid_tools.contains(view),
+                    PanelTab::Tool { view, .. } => valid_tools.contains(view),
                 })
                 .collect();
             panel.active = panel_view
                 .active_tab
+                .as_deref()
                 .and_then(deserialize_panel_tab)
                 .filter(|tab| match tab {
                     PanelTab::Document(id) => valid_documents.contains(id),
-                    PanelTab::Tool(view) => valid_tools.contains(view),
+                    PanelTab::Tool { view, .. } => valid_tools.contains(view),
                 });
             if panel.active.is_none() {
                 panel.active = panel.tabs.first().cloned();
@@ -79,12 +105,14 @@ pub(crate) fn apply_view_state(
             panel.set_open_immediate(position == PanelPosition::Main || panel_view.open);
             panel.size = panel_size(position, panel_view.size);
         }
-        shell.main_panel.set_open_immediate(true);
+        shell
+            .panel_mut(PanelPosition::Main)
+            .set_open_immediate(true);
         return;
     }
 
     shell
-        .left_panel
+        .panel_mut(PanelPosition::Left)
         .activate_tool(ViewId::new(match view.active_tool.as_str() {
             "search" | id::VIEW_SEARCH => id::VIEW_SEARCH,
             "git" | id::VIEW_GIT => id::VIEW_GIT,
@@ -93,33 +121,47 @@ pub(crate) fn apply_view_state(
             }
             _ => id::VIEW_FILES,
         }));
-    shell.left_panel.size = view.tool_width.clamp(190.0, 380.0);
-    shell.right_panel.size = view.side_width.clamp(260.0, 480.0);
-    shell.bottom_panel.size = view.bottom_height.clamp(140.0, 360.0);
+    shell.panel_mut(PanelPosition::Left).size = panel_size(PanelPosition::Left, view.tool_width);
+    shell.panel_mut(PanelPosition::Right).size = panel_size(PanelPosition::Right, view.side_width);
+    shell.panel_mut(PanelPosition::Bottom).size =
+        panel_size(PanelPosition::Bottom, view.bottom_height);
     if let Some(side) = view.side_panel {
-        shell.right_panel.activate_tool(ViewId::new(side));
+        shell
+            .panel_mut(PanelPosition::Right)
+            .activate_tool(ViewId::new(side));
     } else {
-        shell.right_panel.set_open_immediate(false);
+        shell
+            .panel_mut(PanelPosition::Right)
+            .set_open_immediate(false);
     }
     if let Some(bottom) = view.bottom_panel {
-        shell.bottom_panel.activate_tool(ViewId::new(bottom));
+        shell
+            .panel_mut(PanelPosition::Bottom)
+            .activate_tool(ViewId::new(bottom));
     }
 }
 
 fn serialize_panel_tab(tab: &PanelTab) -> String {
     match tab {
         PanelTab::Document(id) => format!("document:{}", id.as_str()),
-        PanelTab::Tool(view) => format!("tool:{}", view.as_str()),
+        PanelTab::Tool { view, instance } => {
+            format!("tool:{}:{}", view.as_str(), instance.as_str())
+        }
     }
 }
 
-fn deserialize_panel_tab(value: String) -> Option<PanelTab> {
+fn deserialize_panel_tab(value: &str) -> Option<PanelTab> {
     if let Some(id) = value.strip_prefix("document:") {
         return Some(PanelTab::Document(lapis_editor_core::DocumentId::new(id)));
     }
-    Some(PanelTab::Tool(ViewId::new(
-        value.strip_prefix("tool:").unwrap_or(&value),
-    )))
+    let value = value.strip_prefix("tool:").unwrap_or(value);
+    if let Some((view, instance)) = value.split_once(':') {
+        return Some(PanelTab::tool_instance(
+            ViewId::new(view),
+            instance.to_owned(),
+        ));
+    }
+    Some(PanelTab::tool(ViewId::new(value)))
 }
 
 fn panel_position(value: &str) -> Option<PanelPosition> {
@@ -138,14 +180,5 @@ fn panel_position_name(position: PanelPosition) -> &'static str {
         PanelPosition::Left => "left-panel",
         PanelPosition::Bottom => "bottom-panel",
         PanelPosition::Right => "right-panel",
-    }
-}
-
-fn panel_size(position: PanelPosition, value: f32) -> f32 {
-    match position {
-        PanelPosition::Main => 0.0,
-        PanelPosition::Left => value.clamp(190.0, 380.0),
-        PanelPosition::Bottom => value.clamp(140.0, 360.0),
-        PanelPosition::Right => value.clamp(260.0, 480.0),
     }
 }

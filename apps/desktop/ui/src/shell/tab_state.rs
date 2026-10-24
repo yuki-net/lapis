@@ -1,10 +1,30 @@
 use crate::extension_ui::{PanelPosition, ViewId};
 use lapis_editor_core::DocumentId;
 
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ViewInstanceId(String);
+
+impl ViewInstanceId {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub(crate) fn shared_tool(view: &ViewId) -> Self {
+        Self::new(format!("shared:{}", view.as_str()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {
     Document(DocumentId),
-    Tool(ViewId),
+    Tool {
+        view: ViewId,
+        instance: ViewInstanceId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -45,14 +65,47 @@ impl TabDragState {
 
 impl PanelTab {
     pub(crate) fn tool(view: impl Into<ViewId>) -> Self {
-        Self::Tool(view.into())
+        let view = view.into();
+        Self::Tool {
+            instance: ViewInstanceId::shared_tool(&view),
+            view,
+        }
+    }
+
+    pub(crate) fn tool_instance(
+        view: impl Into<ViewId>,
+        instance: impl Into<ViewInstanceId>,
+    ) -> Self {
+        Self::Tool {
+            view: view.into(),
+            instance: instance.into(),
+        }
     }
 
     pub(crate) fn view_id(&self) -> Option<&ViewId> {
         match self {
-            Self::Tool(view) => Some(view),
+            Self::Tool { view, .. } => Some(view),
             Self::Document(_) => None,
         }
+    }
+
+    pub(crate) fn instance_id(&self) -> ViewInstanceId {
+        match self {
+            Self::Tool { instance, .. } => instance.clone(),
+            Self::Document(id) => ViewInstanceId::new(format!("document:{}", id.as_str())),
+        }
+    }
+}
+
+impl From<String> for ViewInstanceId {
+    fn from(value: String) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<&str> for ViewInstanceId {
+    fn from(value: &str) -> Self {
+        Self::new(value)
     }
 }
 

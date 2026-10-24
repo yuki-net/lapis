@@ -14,7 +14,7 @@ impl Shell {
                 .flex_1()
                 .min_h(px(0.0))
                 .p(tokens::spacing::GAP)
-                .child(self.render_panel_window(&self.shell.main_panel, cx));
+                .child(self.render_panel_window(self.shell.panel(PanelPosition::Main), cx));
         }
         let now = std::time::Instant::now();
         if self
@@ -28,18 +28,18 @@ impl Shell {
         }
 
         let gap = f32::from(tokens::spacing::GAP);
-        let left_size = self.shell.left_panel.effective_size(now);
-        let right_size = self.shell.right_panel.effective_size(now);
-        let bottom_size = self.shell.bottom_panel.effective_size(now);
+        let left_size = self.shell.panel(PanelPosition::Left).effective_size(now);
+        let right_size = self.shell.panel(PanelPosition::Right).effective_size(now);
+        let bottom_size = self.shell.panel(PanelPosition::Bottom).effective_size(now);
         let body_height = (f32::from(window.viewport_size().height)
             - f32::from(tokens::size::TITLE_BAR_HEIGHT)
             - f32::from(tokens::size::STATUS_BAR_HEIGHT)
             - gap * 2.0)
             .max(0.0);
 
-        let left_visible = self.shell.left_panel.is_visible(now);
-        let right_visible = self.shell.right_panel.is_visible(now);
-        let bottom_visible = self.shell.bottom_panel.is_visible(now);
+        let left_visible = self.shell.panel(PanelPosition::Left).is_visible(now);
+        let right_visible = self.shell.panel(PanelPosition::Right).is_visible(now);
+        let bottom_visible = self.shell.panel(PanelPosition::Bottom).is_visible(now);
         let span_left = bottom_visible && left_visible && self.shell.bottom_spans_left_layout(now);
         let span_right =
             bottom_visible && right_visible && self.shell.bottom_spans_right_layout(now);
@@ -86,19 +86,21 @@ impl Shell {
                     .min_h(px(0.0))
                     .min_w(px(0.0))
                     .child(self.render_panel_window_frame(
-                        &self.shell.left_panel,
+                        self.shell.panel(PanelPosition::Left),
                         Some(left_size),
                         cx,
                     ))
-                    .when(!self.shell.left_panel.is_transitioning(), |top| {
-                        top.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
-                    })
+                    .when(
+                        !self.shell.panel(PanelPosition::Left).is_transitioning(),
+                        |top| top.child(self.render_resize_handle(ResizeTarget::Left, false, cx)),
+                    )
                     .child(self.render_main_flex(cx))
-                    .when(!self.shell.right_panel.is_transitioning(), |top| {
-                        top.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
-                    })
+                    .when(
+                        !self.shell.panel(PanelPosition::Right).is_transitioning(),
+                        |top| top.child(self.render_resize_handle(ResizeTarget::Right, false, cx)),
+                    )
                     .child(self.render_panel_window_frame(
-                        &self.shell.right_panel,
+                        self.shell.panel(PanelPosition::Right),
                         Some(right_size),
                         cx,
                     ));
@@ -119,24 +121,32 @@ impl Shell {
                     .min_h(px(0.0))
                     .min_w(px(0.0))
                     .child(self.render_panel_window_frame(
-                        &self.shell.left_panel,
+                        self.shell.panel(PanelPosition::Left),
                         Some(left_size),
                         cx,
                     ))
-                    .when(!self.shell.left_panel.is_transitioning(), |top| {
-                        top.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
-                    })
+                    .when(
+                        !self.shell.panel(PanelPosition::Left).is_transitioning(),
+                        |top| top.child(self.render_resize_handle(ResizeTarget::Left, false, cx)),
+                    )
                     .child(self.render_main_flex(cx));
 
                 root()
                     .flex()
                     .child(self.render_bottom_stack(top, bottom_size, left_inset, 0.0, cx))
                     .when(right_visible, |body| {
-                        body.when(!self.shell.right_panel.is_transitioning(), |body| {
-                            body.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
-                        })
+                        body.when(
+                            !self.shell.panel(PanelPosition::Right).is_transitioning(),
+                            |body| {
+                                body.child(self.render_resize_handle(
+                                    ResizeTarget::Right,
+                                    false,
+                                    cx,
+                                ))
+                            },
+                        )
                         .child(self.render_side_panel(
-                            &self.shell.right_panel,
+                            self.shell.panel(PanelPosition::Right),
                             right_size,
                             right_shortening,
                             right_height,
@@ -152,11 +162,12 @@ impl Shell {
                     .min_h(px(0.0))
                     .min_w(px(0.0))
                     .child(self.render_main_flex(cx))
-                    .when(!self.shell.right_panel.is_transitioning(), |top| {
-                        top.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
-                    })
+                    .when(
+                        !self.shell.panel(PanelPosition::Right).is_transitioning(),
+                        |top| top.child(self.render_resize_handle(ResizeTarget::Right, false, cx)),
+                    )
                     .child(self.render_panel_window_frame(
-                        &self.shell.right_panel,
+                        self.shell.panel(PanelPosition::Right),
                         Some(right_size),
                         cx,
                     ));
@@ -165,14 +176,14 @@ impl Shell {
                     .flex()
                     .when(left_visible, |body| {
                         body.child(self.render_side_panel(
-                            &self.shell.left_panel,
+                            self.shell.panel(PanelPosition::Left),
                             left_size,
                             left_shortening,
                             left_height,
                             cx,
                         ))
                         .when(
-                            !self.shell.left_panel.is_transitioning(),
+                            !self.shell.panel(PanelPosition::Left).is_transitioning(),
                             |body| {
                                 body.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
                             },
@@ -199,14 +210,14 @@ impl Shell {
                     .flex()
                     .when(left_visible, |body| {
                         body.child(self.render_side_panel(
-                            &self.shell.left_panel,
+                            self.shell.panel(PanelPosition::Left),
                             left_size,
                             left_shortening,
                             left_height,
                             cx,
                         ))
                         .when(
-                            !self.shell.left_panel.is_transitioning(),
+                            !self.shell.panel(PanelPosition::Left).is_transitioning(),
                             |body| {
                                 body.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
                             },
@@ -214,11 +225,18 @@ impl Shell {
                     })
                     .child(center)
                     .when(right_visible, |body| {
-                        body.when(!self.shell.right_panel.is_transitioning(), |body| {
-                            body.child(self.render_resize_handle(ResizeTarget::Right, false, cx))
-                        })
+                        body.when(
+                            !self.shell.panel(PanelPosition::Right).is_transitioning(),
+                            |body| {
+                                body.child(self.render_resize_handle(
+                                    ResizeTarget::Right,
+                                    false,
+                                    cx,
+                                ))
+                            },
+                        )
                         .child(self.render_side_panel(
-                            &self.shell.right_panel,
+                            self.shell.panel(PanelPosition::Right),
                             right_size,
                             right_shortening,
                             right_height,
@@ -238,7 +256,7 @@ impl Shell {
             .min_h(px(0.0))
             .min_w(tokens::size::PANEL_MIN_WIDTH)
             .overflow_hidden()
-            .child(self.render_panel_window(&self.shell.main_panel, cx))
+            .child(self.render_panel_window(self.shell.panel(PanelPosition::Main), cx))
     }
 
     fn render_side_panel(
@@ -274,7 +292,11 @@ impl Shell {
                 row.child(div().w(px(left_inset)).h_full().flex_shrink_0())
             })
             .child(div().h_full().flex().flex_1().min_w(px(0.0)).child(
-                self.render_panel_window_frame(&self.shell.bottom_panel, Some(bottom_size), cx),
+                self.render_panel_window_frame(
+                    self.shell.panel(PanelPosition::Bottom),
+                    Some(bottom_size),
+                    cx,
+                ),
             ))
             .when(right_inset > 0.0, |row| {
                 row.child(div().w(px(right_inset)).h_full().flex_shrink_0())
@@ -288,9 +310,10 @@ impl Shell {
             .min_h(px(0.0))
             .min_w(px(0.0))
             .child(top)
-            .when(!self.shell.bottom_panel.is_transitioning(), |stack| {
-                stack.child(self.render_resize_handle(ResizeTarget::Bottom, true, cx))
-            })
+            .when(
+                !self.shell.panel(PanelPosition::Bottom).is_transitioning(),
+                |stack| stack.child(self.render_resize_handle(ResizeTarget::Bottom, true, cx)),
+            )
             .child(bottom)
     }
 }
