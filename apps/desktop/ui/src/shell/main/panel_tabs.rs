@@ -8,19 +8,9 @@ impl Shell {
         panel: &PanelHost,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let group = self.shell.layout.primary_group_id(panel.position).clone();
-        self.render_tool_panel_header_for_group(panel, group, cx)
-    }
-
-    pub(super) fn render_tool_panel_header_for_group(
-        &self,
-        panel: &PanelHost,
-        group: super::super::TabGroupId,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
         let position = panel.position;
-        let is_panel_focused = self.shell.focused_group == group;
-        let scroll_state = self.scroll_states.panel_tabs(&group);
+        let is_panel_focused = self.shell.focused_panel == position;
+        let scroll_state = self.scroll_states.panel_tabs(position);
         let max_offset = scroll_state.handle().max_offset();
         let offset = scroll_state.handle().offset();
         let has_overflow = max_offset.width > px(0.0);
@@ -29,10 +19,10 @@ impl Shell {
         let has_tabs = !panel.tabs.is_empty();
 
         let add_button = |id_suffix: &'static str| {
-            let target = group.clone();
             div()
-                .id(ElementId::Name(
-                    format!("open-tool-{}-{id_suffix}", group.as_str()).into(),
+                .id((
+                    "open-tool-tab",
+                    panel_key(position) * 10 + if id_suffix == "inline" { 1 } else { 2 },
                 ))
                 .flex_shrink_0()
                 .size(px(24.0))
@@ -47,8 +37,9 @@ impl Shell {
                         .bg(theme::colors().button_background_hover)
                         .text_color(theme::colors().text_primary)
                 })
-                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    this.open_tool_picker(target.clone(), event.position(), window, cx);
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.shell.focused_panel = position;
+                    this.open_tool_picker(position, cx);
                 }))
                 .child("+")
         };
@@ -128,9 +119,7 @@ impl Shell {
                 };
 
                 div()
-                    .id(ElementId::Name(
-                        format!("panel-tab-{}-{index}", group.as_str()).into(),
-                    ))
+                    .id(("panel-tab", panel_key(position) * 100 + index as u32))
                     .h(px(26.0))
                     .px(px(4.0))
                     .gap(px(3.0))
@@ -170,16 +159,19 @@ impl Shell {
                             )
                         })
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
-                        PanelTab::Tool { .. } => this.select_panel_tab(position, tab.clone(), cx),
-                        PanelTab::Document(document_id) => {
-                            this.select_panel_tab(
-                                position,
-                                PanelTab::Document(document_id.clone()),
-                                cx,
-                            );
-                            cx.emit(UiCommand::ActivateDocument(document_id));
-                            let _ = window;
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.shell.focused_panel = position;
+                        match tab.clone() {
+                            PanelTab::Tool { view, .. } => this.select_view(position, view, cx),
+                            PanelTab::Document(document_id) => {
+                                this.select_panel_tab(
+                                    position,
+                                    PanelTab::Document(document_id.clone()),
+                                    cx,
+                                );
+                                cx.emit(UiCommand::ActivateDocument(document_id));
+                                let _ = window;
+                            }
                         }
                     }))
                     .when_some(file_icon, |tab_el, icon| {
@@ -189,9 +181,7 @@ impl Shell {
                     .when(movable, |element| {
                         element.child(
                             div()
-                                .id(ElementId::Name(
-                                    format!("detach-tab-{}-{index}", group.as_str()).into(),
-                                ))
+                                .id(("detach-tab", panel_key(position) * 100 + index as u32))
                                 .px(px(3.0))
                                 .child(if self.detached { "↩" } else { "↗" })
                                 .on_mouse_down(
@@ -210,9 +200,7 @@ impl Shell {
                     })
                     .child(
                         div()
-                            .id(ElementId::Name(
-                                format!("close-tab-{}-{index}", group.as_str()).into(),
-                            ))
+                            .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
                             .size(px(11.0))
                             .flex()
                             .items_center()
@@ -249,9 +237,9 @@ impl Shell {
             .items_center()
             .child(
                 scroll_viewport(
-                    ElementId::Name(format!("panel-tabs-{}", group.as_str()).into()),
+                    ("panel-tabs", panel_key(position)),
                     ScrollAxis::Horizontal,
-                    &scroll_state,
+                    scroll_state,
                     div()
                         .flex()
                         .items_center()

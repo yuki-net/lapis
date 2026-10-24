@@ -1,7 +1,22 @@
 use crate::extension_ui::{PanelPosition, ViewId};
 use lapis_editor_core::DocumentId;
 
-pub(crate) use crate::extension_ui::ViewInstanceId;
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct ViewInstanceId(String);
+
+impl ViewInstanceId {
+    pub(crate) fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub(crate) fn shared_tool(view: &ViewId) -> Self {
+        Self::new(format!("shared:{}", view.as_str()))
+    }
+
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {

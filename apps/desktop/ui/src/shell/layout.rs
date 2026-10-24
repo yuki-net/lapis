@@ -19,7 +19,7 @@ const REQUIRED_ANCHORS: [PanelPosition; 4] = [
 /// A leaf in the layout tree is a tab group. The tree deliberately has no
 /// fixed number of panels; the four positions are only compatibility anchors
 /// used by the existing header commands.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct TabGroupId(u64);
 
 impl TabGroupId {
@@ -61,7 +61,6 @@ pub(crate) enum LayoutError {
     InvalidRatio,
     MainGroupRequired,
     InvalidTree,
-    TabNotFound,
 }
 
 /// Owns placement and visibility state only. A `PanelHost` may contain a
@@ -155,22 +154,6 @@ impl DockLayout {
         self.groups.get_mut(id)
     }
 
-<<<<<<< HEAD
-    pub(crate) fn group_for_tab(&self, tab: &PanelTab) -> Option<TabGroupId> {
-        self.groups
-            .iter()
-            .find_map(|(id, group)| group.contains(tab).then(|| id.clone()))
-    }
-
-    pub(crate) fn placements(&self) -> Vec<(PanelTab, TabGroupId)> {
-        self.groups
-            .iter()
-            .flat_map(|(id, group)| group.tabs.iter().cloned().map(move |tab| (tab, id.clone())))
-            .collect()
-    }
-
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
     pub(crate) fn primary_group_id(&self, position: PanelPosition) -> &TabGroupId {
         self.primary_groups
             .get(&position)
@@ -271,12 +254,6 @@ impl DockLayout {
         if !self.groups.contains_key(source) || !self.groups.contains_key(target) {
             return Err(LayoutError::GroupNotFound);
         }
-<<<<<<< HEAD
-        if !self.group(source).is_some_and(|group| group.contains(tab)) {
-            return Err(LayoutError::TabNotFound);
-        }
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
         if source == target {
             self.groups
                 .get_mut(target)
@@ -300,14 +277,6 @@ impl DockLayout {
         debug_assert!(self.validate().is_ok());
         LayoutViewState {
             version: 1,
-<<<<<<< HEAD
-            anchors: self
-                .primary_groups
-                .iter()
-                .map(|(position, id)| (panel_position_name(*position).to_owned(), id.as_str()))
-                .collect(),
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             root: capture_node(&self.root),
             groups: self
                 .leaf_group_ids()
@@ -355,16 +324,9 @@ impl DockLayout {
                 let Some(tab) = parse_tab(raw) else {
                     continue;
                 };
-<<<<<<< HEAD
-                if !seen_tabs.insert(tab.instance_id()) {
-                    return false;
-                }
-                tabs.push(tab);
-=======
                 if seen_tabs.insert(tab.clone()) {
                     tabs.push(tab);
                 }
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             }
             let active = saved
                 .active_tab
@@ -401,31 +363,6 @@ impl DockLayout {
             let position = groups.get(id).expect("leaf group checked above").position;
             primary_groups.entry(position).or_insert_with(|| id.clone());
         }
-<<<<<<< HEAD
-        if !state.anchors.is_empty() {
-            primary_groups.clear();
-            for (position, id) in &state.anchors {
-                let (Some(position), Some(id)) = (panel_position(position), TabGroupId::parse(id))
-                else {
-                    return false;
-                };
-                if primary_groups.insert(position, id).is_some() {
-                    return false;
-                }
-            }
-        } else {
-            // v1の旧保存値では、残っている既定Anchor IDを優先して移行する。
-            for (position, id) in &DockLayout::default().primary_groups {
-                if groups
-                    .get(id)
-                    .is_some_and(|group| group.position == *position)
-                {
-                    primary_groups.insert(*position, id.clone());
-                }
-            }
-        }
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
         let next_group_id = groups
             .keys()
             .map(|id| id.0)
@@ -447,12 +384,6 @@ impl DockLayout {
     }
 
     pub(crate) fn validate(&self) -> Result<(), LayoutError> {
-<<<<<<< HEAD
-        if !valid_ratios(&self.root) {
-            return Err(LayoutError::InvalidRatio);
-        }
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
         let mut ids = Vec::new();
         collect_leaf_ids(&self.root, &mut ids);
         if ids.is_empty() || ids.iter().collect::<BTreeSet<_>>().len() != ids.len() {
@@ -471,23 +402,13 @@ impl DockLayout {
         }
         let mut seen_tabs = HashSet::new();
         for group in self.groups.values() {
-<<<<<<< HEAD
-            if !group.size.is_finite() || group.size != panel_size(group.position, group.size) {
-                return Err(LayoutError::InvalidTree);
-            }
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             if let Some(active) = &group.active
                 && !group.tabs.contains(active)
             {
                 return Err(LayoutError::InvalidTree);
             }
             for tab in &group.tabs {
-<<<<<<< HEAD
-                if tab.instance_id().as_str().is_empty() || !seen_tabs.insert(tab.instance_id()) {
-=======
                 if !seen_tabs.insert(tab) {
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
                     return Err(LayoutError::InvalidTree);
                 }
             }
@@ -506,26 +427,6 @@ fn collect_leaf_ids(node: &LayoutNode, ids: &mut Vec<TabGroupId>) {
     }
 }
 
-<<<<<<< HEAD
-fn valid_ratios(node: &LayoutNode) -> bool {
-    match node {
-        LayoutNode::Tabs(_) => true,
-        LayoutNode::Split {
-            ratio,
-            first,
-            second,
-            ..
-        } => {
-            ratio.is_finite()
-                && (0.1..=0.9).contains(ratio)
-                && valid_ratios(first)
-                && valid_ratios(second)
-        }
-    }
-}
-
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
 #[allow(dead_code)]
 fn contains_leaf(node: &LayoutNode, target: &TabGroupId) -> bool {
     match node {
@@ -696,10 +597,6 @@ mod tests {
         let before = layout.capture_view_state();
         let invalid = LayoutViewState {
             version: 1,
-<<<<<<< HEAD
-            anchors: Default::default(),
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
             root: LayoutNodeViewState::Tabs {
                 group: "group-999".into(),
             },
@@ -808,58 +705,4 @@ mod tests {
             vec![PanelTab::tool("known-view")]
         );
     }
-<<<<<<< HEAD
-
-    #[test]
-    fn anchor_identity_and_group_placement_survive_round_trip() {
-        let mut layout = DockLayout::default();
-        let left = layout.primary_group_id(PanelPosition::Left).clone();
-        let second = layout
-            .split_group(&left, SplitDirection::Horizontal, 0.5)
-            .unwrap();
-        layout
-            .primary_groups
-            .insert(PanelPosition::Left, second.clone());
-        let tab = PanelTab::tool_instance("terminal", "stable-resource-view");
-        layout.group_mut(&left).unwrap().activate(tab.clone());
-        layout.move_tab(&left, &second, &tab).unwrap();
-        let saved = layout.capture_view_state();
-        let mut restored = DockLayout::default();
-        assert!(restored.restore_view_state(&saved, |raw| {
-            let (view, instance) = raw.strip_prefix("tool:")?.split_once(':')?;
-            Some(PanelTab::tool_instance(view, instance))
-        }));
-        assert_eq!(restored.primary_group_id(PanelPosition::Left), &second);
-        assert_eq!(restored.group_for_tab(&tab), Some(second));
-        assert_eq!(restored.capture_view_state(), saved);
-    }
-
-    #[test]
-    fn duplicate_instance_identity_is_rejected_even_for_different_definitions() {
-        let mut layout = DockLayout::default();
-        let mut saved = layout.capture_view_state();
-        saved.groups[0].tabs = vec!["first".into(), "second".into()];
-        let before = layout.capture_view_state();
-        assert!(
-            !layout.restore_view_state(&saved, |view| Some(PanelTab::tool_instance(
-                view,
-                "same-instance"
-            )))
-        );
-        assert_eq!(layout.capture_view_state(), before);
-    }
-
-    #[test]
-    fn invalid_ratio_and_active_placement_are_part_of_the_common_contract() {
-        let mut layout = DockLayout::default();
-        if let LayoutNode::Split { ratio, .. } = &mut layout.root {
-            *ratio = f32::NAN;
-        }
-        assert_eq!(layout.validate(), Err(LayoutError::InvalidRatio));
-        let mut layout = DockLayout::default();
-        layout.panel_mut(PanelPosition::Left).active = Some(PanelTab::tool("missing"));
-        assert_eq!(layout.validate(), Err(LayoutError::InvalidTree));
-    }
-=======
->>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
 }

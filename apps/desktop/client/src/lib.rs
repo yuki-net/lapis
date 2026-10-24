@@ -22,11 +22,8 @@ use lapis_lsp::{
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_task::{TaskControl, TaskError, TaskMode};
 use lapis_terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSize,
-    TerminalSnapshot, TerminalStatus,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus,
 };
-#[cfg(test)]
-use lapis_terminal::{TerminalDelta, TerminalRow, TerminalRowUpdate, TerminalScreen};
 use lapis_workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 use serde::{Deserialize, Serialize};
 
@@ -131,9 +128,6 @@ pub struct ConversationViewState {
     /// 可変Split/TabGroupレイアウト。旧保存値では`None`のままです。
     #[serde(default)]
     pub layout: Option<LayoutViewState>,
-    /// Panel開閉ボタン群の表示設定。非表示でもViewメニューから復元できる。
-    #[serde(default = "default_show_panel_controls")]
-    pub show_panel_controls: bool,
     /// 新しいレイアウト形式。位置ごとのタブ・選択状態・サイズを一律で保持する。
     pub panels: Vec<PanelViewState>,
     // 旧セッションとの互換読み込み用。次回保存時は panels が正とする。
@@ -145,10 +139,6 @@ pub struct ConversationViewState {
     pub bottom_height: f32,
 }
 
-fn default_show_panel_controls() -> bool {
-    true
-}
-
 /// UIフレームワークに依存しないDesktopレイアウトの保存値です。
 /// Viewの配置だけを保存し、Host上のDocumentやTerminalの所有権は保存しません。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -157,9 +147,6 @@ pub struct LayoutViewState {
     pub version: u16,
     pub root: LayoutNodeViewState,
     pub groups: Vec<LayoutGroupViewState>,
-    /// 既存HeaderのZone操作先。Group数の上限ではない。旧形式では空。
-    #[serde(default)]
-    pub anchors: std::collections::BTreeMap<String, String>,
 }
 
 fn layout_view_state_version() -> u16 {
@@ -202,7 +189,6 @@ impl Default for ConversationViewState {
     fn default() -> Self {
         Self {
             layout: None,
-            show_panel_controls: true,
             panels: Vec::new(),
             active_tool: "files".to_owned(),
             side_panel: None,
@@ -454,11 +440,13 @@ impl TerminalSession {
                 } else {
                     TerminalStatus::Exited
                 },
-                revision: 0,
-                screen: lapis_terminal::TerminalScreen::empty(TerminalSize::new(
-                    terminal.columns,
-                    terminal.rows,
-                )),
+                columns: terminal.columns,
+                rows: terminal.rows,
+                output: Vec::new(),
+                output_sequence: 0,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
             })
             .collect();
     }
@@ -501,8 +489,13 @@ impl TerminalSession {
             id: id.clone(),
             cwd: cwd.to_owned(),
             status: TerminalStatus::Running,
-            revision: 0,
-            screen: lapis_terminal::TerminalScreen::empty(TerminalSize::new(columns, rows)),
+            columns,
+            rows,
+            output: Vec::new(),
+            output_sequence: 0,
+            output_truncated: false,
+            output_offset: 0,
+            screen: None,
         });
         Ok(id)
     }
@@ -526,15 +519,11 @@ impl TerminalSession {
     }
 
     pub fn input(&self, id: &TerminalId, text: &str) -> Result<(), TerminalError> {
-        self.input_semantic(id, TerminalInput::Text(text.to_owned()))
+        self.input_bytes(id, text.as_bytes())
     }
 
-    pub fn input_semantic(
-        &self,
-        id: &TerminalId,
-        input: TerminalInput,
-    ) -> Result<(), TerminalError> {
-        self.backend.input(id, &input)
+    pub fn input_bytes(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
+        self.backend.input(id, bytes)
     }
 
     pub fn resize(
@@ -543,14 +532,14 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<(), TerminalError> {
-        let delta = self.backend.resize(id, columns, rows)?;
+        self.backend.resize(id, columns, rows)?;
         if let Some(terminal) = self
             .terminals
             .iter_mut()
             .find(|terminal| terminal.id == *id)
         {
-            terminal.screen.apply_delta(&delta)?;
-            terminal.revision = delta.revision;
+            terminal.columns = columns;
+            terminal.rows = rows;
         }
         Ok(())
     }
@@ -574,28 +563,40 @@ impl TerminalSession {
             if terminal.status != TerminalStatus::Running {
                 continue;
             }
-            let mut resync = false;
             for event in self.backend.poll(&terminal.id)? {
                 match event {
-                    TerminalEvent::Snapshot(snapshot) => {
-                        if snapshot.id != terminal.id || snapshot.revision < terminal.revision {
+                    TerminalEvent::Snapshot(mut snapshot) => {
+                        if snapshot.id != terminal.id
+                            || snapshot.output_sequence < terminal.output_sequence
+                        {
                             continue;
+                        }
+                        const OUTPUT_LIMIT: usize = 256 * 1024;
+                        if snapshot.output.len() > OUTPUT_LIMIT {
+                            snapshot.output_offset = snapshot
+                                .output_offset
+                                .saturating_add((snapshot.output.len() - OUTPUT_LIMIT) as u64);
+                            snapshot
+                                .output
+                                .drain(..snapshot.output.len() - OUTPUT_LIMIT);
+                            snapshot.output_truncated = true;
                         }
                         *terminal = snapshot;
                     }
-                    TerminalEvent::Delta(delta) => {
-                        if delta.revision <= terminal.revision {
+                    TerminalEvent::Output(output) => {
+                        if output.sequence <= terminal.output_sequence {
                             continue;
                         }
-                        if delta.revision != terminal.revision.saturating_add(1) {
-                            resync = true;
-                            break;
+                        terminal.output.extend(output.data);
+                        terminal.output_sequence = output.sequence;
+                        const OUTPUT_LIMIT: usize = 256 * 1024;
+                        if terminal.output.len() > OUTPUT_LIMIT {
+                            let start = terminal.output.len() - OUTPUT_LIMIT;
+                            terminal.output.drain(..start);
+                            terminal.output_offset =
+                                terminal.output_offset.saturating_add(start as u64);
+                            terminal.output_truncated = true;
                         }
-                        if terminal.screen.apply_delta(&delta).is_err() {
-                            resync = true;
-                            break;
-                        }
-                        terminal.revision = delta.revision;
                     }
                     TerminalEvent::Exited { .. } => terminal.status = TerminalStatus::Exited,
                     TerminalEvent::Failed(_) => {
@@ -604,15 +605,28 @@ impl TerminalSession {
                 }
                 changed = true;
             }
-            if resync {
-                let id = terminal.id.clone();
-                let cwd = terminal.cwd.clone();
-                let snapshot = self.backend.attach(&cwd, &id)?;
-                if snapshot.id != id || snapshot.revision < terminal.revision {
-                    return Err(TerminalError::new("terminal snapshot resync failed"));
+            if terminal.screen.as_ref().is_some_and(|screen| {
+                if screen.output_end < terminal.output_offset {
+                    return true;
                 }
-                *terminal = snapshot;
-                changed = true;
+                let suffix = (screen.output_end - terminal.output_offset) as usize;
+                terminal.output.get(suffix..).is_some_and(|bytes| {
+                    bytes
+                        .windows(7)
+                        .any(|window| window == b"\x1b[?1049" || window == b"\x1b[?1047")
+                        || bytes.windows(5).any(|window| window == b"\x1b[?47")
+                })
+            }) {
+                // buffer欠落や通常/代替画面の切替時は、Hostの現在画面を取り直す。
+                match self.backend.attach(&terminal.cwd, &terminal.id) {
+                    Ok(snapshot) => {
+                        *terminal = snapshot;
+                        changed = true;
+                    }
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                    }
+                }
             }
         }
         match attach_error {
@@ -2386,16 +2400,11 @@ mod tests {
             Err(TerminalError::new("unavailable"))
         }
 
-        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
             Err(TerminalError::new("unavailable"))
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            _columns: u16,
-            _rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
             Err(TerminalError::new("unavailable"))
         }
 
@@ -2422,17 +2431,12 @@ mod tests {
             Ok(TerminalId::new("scripted-terminal"))
         }
 
-        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
             Ok(())
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            columns: u16,
-            rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
-            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            Ok(())
         }
 
         fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -2441,60 +2445,6 @@ mod tests {
 
         fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
             Ok(())
-        }
-    }
-
-    struct GapRecoveringTerminalBackend {
-        events: Mutex<Vec<TerminalEvent>>,
-        attach_count: Mutex<usize>,
-    }
-
-    impl TerminalBackend for GapRecoveringTerminalBackend {
-        fn start(
-            &self,
-            _cwd: &Path,
-            _columns: u16,
-            _rows: u16,
-        ) -> Result<TerminalId, TerminalError> {
-            Ok(TerminalId::new("gap-terminal"))
-        }
-
-        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
-            Ok(())
-        }
-
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            columns: u16,
-            rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
-            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
-        }
-
-        fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-            Ok(self.events.lock().unwrap().drain(..).collect())
-        }
-
-        fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
-            Ok(())
-        }
-
-        fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
-            let mut count = self.attach_count.lock().unwrap();
-            if *count == 0 {
-                *count += 1;
-                return Err(TerminalError::new("not attached yet"));
-            }
-            let mut screen = TerminalScreen::empty(TerminalSize::new(80, 24));
-            screen.rows[0] = model_row(80, "resynced");
-            Ok(TerminalSnapshot {
-                id: id.clone(),
-                cwd: cwd.to_owned(),
-                status: TerminalStatus::Running,
-                revision: 2,
-                screen,
-            })
         }
     }
 
@@ -2510,26 +2460,22 @@ mod tests {
             panic!("refresh must never start a terminal")
         }
 
-        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
+        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
             unreachable!("refresh does not send terminal input")
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            _columns: u16,
-            _rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
             unreachable!("refresh does not resize terminals")
         }
 
         fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
             if id.as_str() == "recoverable" {
-                Ok(vec![TerminalEvent::Delta(model_delta(
-                    1,
-                    TerminalSize::new(80, 24),
-                    "later terminal",
-                ))])
+                Ok(vec![TerminalEvent::Output(
+                    lapis_terminal::TerminalOutput {
+                        sequence: 1,
+                        data: b"later terminal".to_vec(),
+                    },
+                )])
             } else {
                 Ok(Vec::new())
             }
@@ -2547,31 +2493,14 @@ mod tests {
                 id: id.clone(),
                 cwd: cwd.to_owned(),
                 status: TerminalStatus::Running,
-                revision: 0,
-                screen: TerminalScreen::empty(TerminalSize::new(80, 24)),
+                columns: 80,
+                rows: 24,
+                output: Vec::new(),
+                output_sequence: 0,
+                output_truncated: false,
+                output_offset: 0,
+                screen: None,
             })
-        }
-    }
-
-    fn model_row(columns: u16, text: &str) -> TerminalRow {
-        let mut row = TerminalRow::empty(columns);
-        for (column, character) in text.chars().take(columns as usize).enumerate() {
-            row.cells[column].text = character.to_string();
-        }
-        row
-    }
-
-    fn model_delta(revision: u64, size: TerminalSize, text: &str) -> TerminalDelta {
-        TerminalDelta {
-            revision,
-            size,
-            changed_rows: vec![TerminalRowUpdate {
-                row: 0,
-                value: model_row(size.columns, text),
-            }],
-            cursor: Default::default(),
-            modes: Default::default(),
-            scrollback: None,
         }
     }
 
@@ -3003,13 +2932,7 @@ mod tests {
 
         assert_eq!(terminals.terminals().len(), 1);
         assert_eq!(terminals.terminals()[0].status, TerminalStatus::Exited);
-        assert!(
-            terminals.terminals()[0]
-                .screen
-                .plain_text()
-                .trim()
-                .is_empty()
-        );
+        assert!(terminals.terminals()[0].output.is_empty());
         assert!(!terminals.refresh().unwrap());
 
         terminals.restore_summaries(&[RestoredTerminal {
@@ -3059,11 +2982,7 @@ mod tests {
             TerminalStatus::Disconnected
         );
         assert_eq!(terminals.terminals()[1].status, TerminalStatus::Running);
-        assert!(
-            terminals.terminals()[1].screen.rows[0]
-                .plain_text()
-                .starts_with("later terminal")
-        );
+        assert_eq!(terminals.terminals()[1].output, b"later terminal");
     }
 
     #[test]
@@ -3073,15 +2992,10 @@ mod tests {
             fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
                 panic!("restore must never start a process")
             }
-            fn input(&self, _: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
+            fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
                 unreachable!()
             }
-            fn resize(
-                &self,
-                _: &TerminalId,
-                _: u16,
-                _: u16,
-            ) -> Result<TerminalDelta, TerminalError> {
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
                 unreachable!()
             }
             fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -3100,12 +3014,13 @@ mod tests {
                     id: id.clone(),
                     cwd: cwd.to_owned(),
                     status: TerminalStatus::Running,
-                    revision: 7,
-                    screen: {
-                        let mut screen = TerminalScreen::empty(TerminalSize::new(100, 28));
-                        screen.rows[0] = model_row(100, "already running");
-                        screen
-                    },
+                    columns: 100,
+                    rows: 28,
+                    output: b"already running".to_vec(),
+                    output_sequence: 7,
+                    output_truncated: false,
+                    output_offset: 0,
+                    screen: None,
                 })
             }
         }
@@ -3120,25 +3035,39 @@ mod tests {
         assert_eq!(session.terminals()[0].status, TerminalStatus::Disconnected);
         session.refresh().unwrap();
         assert_eq!(session.terminals()[0].id.as_str(), "host-terminal");
-        assert!(
-            session.terminals()[0].screen.rows[0]
-                .plain_text()
-                .starts_with("already running")
-        );
-        assert_eq!(session.terminals()[0].revision, 7);
+        assert_eq!(session.terminals()[0].output, b"already running");
+        assert_eq!(session.terminals()[0].output_sequence, 7);
         assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
     }
 
     #[test]
-    fn terminal_session_applies_ordered_model_deltas_and_revision() {
+    fn terminal_session_keeps_ordered_raw_output_and_watermark() {
         let backend = Arc::new(ScriptedTerminalBackend {
             events: Mutex::new(vec![
-                TerminalEvent::Delta(model_delta(1, TerminalSize::new(120, 30), "red")),
-                TerminalEvent::Delta(model_delta(2, TerminalSize::new(120, 30), "cursor")),
-                TerminalEvent::Delta(model_delta(3, TerminalSize::new(120, 30), "cleared")),
-                TerminalEvent::Delta(model_delta(4, TerminalSize::new(120, 30), "e")),
-                TerminalEvent::Delta(model_delta(5, TerminalSize::new(120, 30), "é")),
-                TerminalEvent::Delta(model_delta(6, TerminalSize::new(120, 30), "done")),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 1,
+                    data: b"\x1b[31mred\x1b[0m".to_vec(),
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 2,
+                    data: b"\x1b[2;4H".to_vec(),
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 3,
+                    data: b"\x1b[2J".to_vec(),
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 4,
+                    data: vec![0xe3],
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 5,
+                    data: vec![0x81, 0x82],
+                }),
+                TerminalEvent::Output(lapis_terminal::TerminalOutput {
+                    sequence: 6,
+                    data: vec![0xff, 0x00],
+                }),
             ]),
         });
         let mut terminals = TerminalSession::new(backend);
@@ -3146,31 +3075,12 @@ mod tests {
 
         assert!(terminals.refresh().unwrap());
         let terminal = &terminals.terminals()[0];
-        assert_eq!(terminal.screen.rows[0].plain_text().trim_end(), "done");
-        assert_eq!(terminal.revision, 6);
-    }
-
-    #[test]
-    fn terminal_session_resyncs_from_a_snapshot_after_a_delta_gap() {
-        let backend = Arc::new(GapRecoveringTerminalBackend {
-            events: Mutex::new(vec![TerminalEvent::Delta(model_delta(
-                2,
-                TerminalSize::new(80, 24),
-                "stale delta",
-            ))]),
-            attach_count: Mutex::new(0),
-        });
-        let mut terminals = TerminalSession::new(backend);
-        terminals.start(Path::new("repo"), 80, 24).unwrap();
-
-        assert!(terminals.refresh().unwrap());
-        assert_eq!(terminals.terminals()[0].revision, 2);
         assert_eq!(
-            terminals.terminals()[0].screen.rows[0]
-                .plain_text()
-                .trim_end(),
-            "resynced"
+            terminal.output,
+            b"\x1b[31mred\x1b[0m\x1b[2;4H\x1b[2J\xe3\x81\x82\xff\x00"
         );
+        assert_eq!(terminal.output_sequence, 6);
+        assert!(!terminal.output_truncated);
     }
 
     #[test]
