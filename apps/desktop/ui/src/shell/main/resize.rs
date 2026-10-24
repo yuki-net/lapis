@@ -223,7 +223,9 @@ impl Shell {
             0.0
         };
         let max_left = (viewport_width - gap * 3.0 - right_width - min_w).max(min_w);
-        self.shell.panel_mut(PanelPosition::Left).size = current_raw.clamp(min_w, max_left);
+        self.shell
+            .panel_mut(PanelPosition::Left)
+            .resize(current_raw.clamp(min_w, max_left));
         if !self.shell.panel(PanelPosition::Left).open {
             self.request_panel_open_with_duration(
                 PanelPosition::Left,
@@ -264,7 +266,9 @@ impl Shell {
             0.0
         };
         let max_right = (viewport_width - gap * 3.0 - left_width - min_w).max(min_w);
-        self.shell.panel_mut(PanelPosition::Right).size = current_raw.clamp(min_w, max_right);
+        self.shell
+            .panel_mut(PanelPosition::Right)
+            .resize(current_raw.clamp(min_w, max_right));
         if !self.shell.panel(PanelPosition::Right).open {
             self.request_panel_open_with_duration(
                 PanelPosition::Right,
@@ -300,7 +304,9 @@ impl Shell {
 
         let header_height = f32::from(tokens::size::TITLE_BAR_HEIGHT) + gap;
         let max_bottom = (viewport_height - header_height - min_h - gap * 2.0).max(min_h);
-        self.shell.panel_mut(PanelPosition::Bottom).size = current_raw.clamp(min_h, max_bottom);
+        self.shell
+            .panel_mut(PanelPosition::Bottom)
+            .resize(current_raw.clamp(min_h, max_bottom));
         if !self.shell.panel(PanelPosition::Bottom).open {
             self.request_panel_open_with_duration(
                 PanelPosition::Bottom,
@@ -348,5 +354,45 @@ impl Shell {
             self.shell.resize_mode = None;
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct DocumentFixture;
+    impl Render for DocumentFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn resize_on_large_viewport_and_narrow_right_keeps_restorable_layout(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let document = cx.new(|_| DocumentFixture);
+            let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
+            shell.update(cx, |shell, cx| {
+                let now = std::time::Instant::now();
+                shell.resize_left_width(1800.0, 4000.0, 4.0, 200.0, now, cx);
+                shell.resize_right_width(2200.0, 4000.0, 4.0, 200.0, now, cx);
+                shell.resize_bottom_height(200.0, 2000.0, 4.0, 120.0, cx);
+                assert_eq!(shell.shell.panel(PanelPosition::Left).size, 380.0);
+                assert_eq!(shell.shell.panel(PanelPosition::Right).size, 480.0);
+                assert_eq!(shell.shell.panel(PanelPosition::Bottom).size, 360.0);
+                shell.resize_right_width(3766.0, 4000.0, 4.0, 200.0, now, cx);
+                assert_eq!(shell.shell.panel(PanelPosition::Right).size, 260.0);
+                let saved = shell.shell.layout.capture_view_state();
+                let mut restored = crate::shell::DockLayout::default();
+                assert!(restored.restore_view_state(&saved, |raw| {
+                    raw.strip_prefix("tool:")
+                        .and_then(|raw| raw.split_once(':'))
+                        .map(|(view, instance)| PanelTab::tool_instance(view, instance))
+                }));
+                assert_eq!(restored.capture_view_state(), saved);
+            });
+        });
     }
 }

@@ -30,6 +30,10 @@ pub(crate) struct PanelHost {
 }
 
 impl PanelHost {
+    pub(crate) fn resize(&mut self, size: f32) {
+        self.size = panel_size(self.position, size);
+    }
+
     pub(super) fn new(position: PanelPosition, tabs: Vec<PanelTab>, open: bool, size: f32) -> Self {
         let active = tabs.first().cloned();
         let size = panel_size(position, size);
