@@ -4,9 +4,9 @@ use std::{
 };
 
 use lapis_terminal::{
-    TerminalCell, TerminalColor, TerminalCursor, TerminalDelta, TerminalError, TerminalInput,
-    TerminalKey, TerminalModes, TerminalModifiers, TerminalRevision, TerminalRow,
-    TerminalRowUpdate, TerminalScreen, TerminalSize,
+    MAX_SCROLLBACK_LINES, TerminalCell, TerminalColor, TerminalCursor, TerminalDelta,
+    TerminalError, TerminalInput, TerminalKey, TerminalModes, TerminalModifiers, TerminalRevision,
+    TerminalRow, TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta, TerminalSize,
 };
 use wezterm_surface::CursorVisibility;
 use wezterm_term::{
@@ -96,6 +96,35 @@ impl TerminalEngine {
         self.term.advance_bytes(data);
         self.revision += 1;
         let screen = self.screen();
+
+        // scrollbackの差分を計算
+        let scrollback_delta = if self.last_screen.scrollback.len() != screen.scrollback.len() {
+            // scrollback行数が変更された場合、差分を送信
+            let new_len = screen.scrollback.len();
+            let old_len = self.last_screen.scrollback.len();
+
+            if new_len > old_len {
+                // 追加された行を送信
+                let new_rows = screen.scrollback[old_len..].to_vec();
+                Some(TerminalScrollbackDelta {
+                    reset: false,
+                    dropped: 0,
+                    rows: new_rows,
+                })
+            } else if new_len < old_len {
+                // 行が削除された場合、resetとして再送信
+                Some(TerminalScrollbackDelta {
+                    reset: true,
+                    dropped: 0,
+                    rows: screen.scrollback.clone(),
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         let delta = TerminalDelta {
             revision: self.revision,
             size: self.size,
@@ -111,7 +140,7 @@ impl TerminalEngine {
                 .collect(),
             cursor: screen.cursor,
             modes: screen.modes,
-            scrollback: None,
+            scrollback: scrollback_delta,
         };
         self.last_screen = screen;
         delta
@@ -122,6 +151,18 @@ impl TerminalEngine {
         self.term.resize(engine_size(self.size));
         self.revision += 1;
         let screen = self.screen();
+
+        // resize時はscrollbackをresetとして再送信
+        let scrollback_delta = if !screen.scrollback.is_empty() {
+            Some(TerminalScrollbackDelta {
+                reset: true,
+                dropped: 0,
+                rows: screen.scrollback.clone(),
+            })
+        } else {
+            None
+        };
+
         let delta = TerminalDelta {
             revision: self.revision,
             size: self.size,
@@ -136,7 +177,7 @@ impl TerminalEngine {
                 .collect(),
             cursor: screen.cursor,
             modes: screen.modes,
-            scrollback: None,
+            scrollback: scrollback_delta,
         };
         self.last_screen = screen.clone();
         (screen, delta)
@@ -162,17 +203,33 @@ impl TerminalEngine {
 
     fn screen(&self) -> TerminalScreen {
         let mut rows = Vec::with_capacity(self.size.rows as usize);
+        let mut scrollback = Vec::new();
         let screen = self.term.screen();
-        let start = screen
-            .scrollback_rows()
-            .saturating_sub(self.size.rows as usize);
-        screen.with_phys_lines(start..screen.scrollback_rows(), |lines| {
+        let total_rows = screen.scrollback_rows();
+
+        // scrollback行を取得（MAX_SCROLLBACK_LINESで制限）
+        let scrollback_end = total_rows;
+        let scrollback_start = scrollback_end.saturating_sub(MAX_SCROLLBACK_LINES);
+        if scrollback_start < scrollback_end {
+            screen.with_phys_lines(scrollback_start..scrollback_end, |lines| {
+                scrollback.extend(
+                    lines
+                        .iter()
+                        .map(|line| row_from_engine(line, self.size.columns)),
+                );
+            });
+        }
+
+        // 表示行を取得
+        let visible_start = total_rows.saturating_sub(self.size.rows as usize);
+        screen.with_phys_lines(visible_start..total_rows, |lines| {
             rows.extend(
                 lines
                     .iter()
                     .map(|line| row_from_engine(line, self.size.columns)),
             );
         });
+
         let cursor = self.term.cursor_pos();
         TerminalScreen {
             size: self.size,
@@ -188,7 +245,7 @@ impl TerminalEngine {
                 bracketed_paste: self.term.bracketed_paste_enabled(),
                 alternate_screen: self.term.is_alt_screen_active(),
             },
-            scrollback: Vec::new(),
+            scrollback,
         }
     }
 }

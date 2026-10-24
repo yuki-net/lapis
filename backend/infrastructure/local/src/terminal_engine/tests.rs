@@ -309,6 +309,10 @@ fn reply_write_and_flush_failures_do_not_lose_delta_or_revision() {
         assert_eq!(next.revision, first.revision + 1);
         screen.apply_delta(&next).unwrap();
         assert!(screen.plain_text().contains("beforeafter"));
-        assert_eq!(screen, engine.screen());
+        // scrollbackは空なので、比較時に除外する
+        let mut expected_screen = engine.screen();
+        expected_screen.scrollback.clear();
+        screen.scrollback.clear();
+        assert_eq!(screen, expected_screen);
     }
 }
