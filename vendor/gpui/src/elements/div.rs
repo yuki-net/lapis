@@ -1549,7 +1549,12 @@ impl Interactivity {
             cx,
             |inspector_state: &mut Option<DivInspectorState>, _window| {
                 if let Some(inspector_state) = inspector_state {
-                    self.base_style = inspector_state.base_style.clone();
+                    if _window.inspector_is_external() {
+                        // 外部Inspectorは読み取り用。古いStyleで対象の再描画を上書きしない。
+                        inspector_state.base_style.clone_from(&self.base_style);
+                    } else {
+                        self.base_style = inspector_state.base_style.clone();
+                    }
                 } else {
                     *inspector_state = Some(DivInspectorState {
                         base_style: self.base_style.clone(),
@@ -2089,8 +2094,9 @@ impl Interactivity {
         if !drop_listeners.is_empty() {
             let hitbox = hitbox.clone();
             window.on_mouse_event({
-                move |_: &MouseUpEvent, phase, window, cx| {
+                move |event: &MouseUpEvent, phase, window, cx| {
                     if let Some(drag) = &cx.active_drag
+                        && crate::drag_ends_on_mouse_up(drag.button, event.button)
                         && phase == DispatchPhase::Bubble
                         && hitbox.is_hovered(window)
                     {

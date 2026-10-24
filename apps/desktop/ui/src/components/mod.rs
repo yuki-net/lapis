@@ -13,6 +13,8 @@ pub(crate) use floating::{floating_panel, floating_tree};
 pub(crate) use icon::{FileIcon, FileIconId, Icon, IconAssets, IconName};
 pub(crate) use icon_button::{ButtonSize, action_button, button, header_button, icon_button};
 pub(crate) use menu::{MenuItemSpec, menu_item, menu_surface};
+#[cfg(debug_assertions)]
+pub(crate) use scroll::scroll_surface;
 pub(crate) use scroll::{ScrollState, scroll_viewport};
 pub(crate) use separator::separator;
-pub(crate) use surface::{SurfaceVariant, surface};
+pub(crate) use surface::{SurfaceVariant, panel_header, panel_surface, surface};

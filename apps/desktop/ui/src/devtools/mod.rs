@@ -1,7 +1,13 @@
 mod div_inspector;
+mod inspection;
 mod inspector_controller;
 mod inspector_window;
+pub(crate) mod native_smoke;
+mod overlay;
 mod style_view;
+#[cfg(test)]
+mod tests;
+mod tree_state;
 mod tree_view;
 
 use gpui::{App, DivInspectorState, Window};

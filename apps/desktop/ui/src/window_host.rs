@@ -1,6 +1,7 @@
 //! OS Window と Feature の所有を分離する。Detached は既存 worker を共有する。
 use std::collections::HashMap;
 
+pub(crate) mod chrome;
 mod close;
 pub(crate) mod drag;
 pub(crate) mod drag_preview;

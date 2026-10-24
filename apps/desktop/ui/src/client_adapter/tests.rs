@@ -47,6 +47,7 @@ impl Fixture {
             editor,
             conversation,
             lsp: LspSession::new(port.clone()),
+
             edit_chain: EditChain::default(),
             git: port,
             snapshot_sequence: 0,
@@ -370,6 +371,14 @@ fn lost_worker_reply_is_uncertain_even_when_one_close_committed() {
         receiver.recv_timeout(Duration::from_secs(2)),
         Err(mpsc::RecvTimeoutError::Disconnected)
     ));
+    // 返信senderの破棄とworker queueの破棄は別。unwind中に受理された要求も
+    // 実行されず切断されることを待ってから、以降の受理拒否を確認する。
+    if let Ok(reply) = worker.try_request(|client| client.snapshot()) {
+        assert!(matches!(
+            reply.recv_timeout(Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ));
+    }
     assert!(worker.try_request(|client| client.snapshot()).is_err());
     let state = fixture.0.lock().unwrap();
     assert_eq!(state.closed.len(), 1);

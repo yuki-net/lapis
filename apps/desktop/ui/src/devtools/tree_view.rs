@@ -1,61 +1,57 @@
-use std::collections::{HashMap, HashSet};
-
-use gpui::{
-    Div, Inspector, InspectorElementId, InspectorElementNode, Stateful, div, prelude::*, px,
-};
+use gpui::{Div, Inspector, InspectorElementId, Stateful, div, prelude::*, px};
 
 use crate::{
-    components::{ScrollAxis, scroll_viewport},
+    components::{ScrollAxis, panel_header, scroll_surface},
     theme,
 };
 
+use super::tree_state::TreeRow;
 use super::{inspector_controller::InspectorController, style_view::detail_row};
 
-#[derive(Clone)]
-struct TreeRow {
-    node: InspectorElementNode,
-    depth: usize,
-    has_children: bool,
-}
-
 pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Inspector>) -> Div {
-    let rows = visible_rows(inspector);
+    let entity = cx.entity_id();
+    let rows = InspectorController::tree_rows(inspector, entity, cx);
     let node_count = inspector.element_tree().len();
     let revision = inspector.tree_revision();
     let active = inspector.active_element_id().cloned();
-    let scroll_state = InspectorController::tree_scroll(cx);
+    let scroll_state = InspectorController::tree_scroll(entity, cx);
 
-    let tree_content = div()
-        .py_1()
-        .when(rows.is_empty(), |element| {
-            element.child(
-                div()
-                    .p_3()
-                    .text_size(px(11.0))
-                    .text_color(theme::colors().text_secondary)
-                    .child("対象ウィンドウを描画するとツリーが表示されます"),
-            )
+    let tree_content = if rows.is_empty() {
+        div()
+            .p_3()
+            .text_size(px(11.))
+            .text_color(theme::colors().text_secondary)
+            .child("対象ウィンドウを描画するとツリーが表示されます")
+            .into_any_element()
+    } else {
+        let engine = cx.entity();
+        let list = InspectorController::tree_list(entity, cx);
+        let width_index = InspectorController::tree_width_index(entity, cx);
+        let wheel_state = scroll_state.clone();
+        gpui::uniform_list("inspector-tree-list", rows.len(), move |range, _, cx| {
+            engine.update(cx, |_, cx| {
+                range
+                    .map(|index| render_tree_row(index, &rows[index], active.as_ref(), cx))
+                    .collect::<Vec<_>>()
+            })
         })
-        .children(
-            rows.into_iter()
-                .enumerate()
-                .map(|(index, row)| render_tree_row(index, row, active.as_ref(), inspector, cx)),
-        );
+        .size_full()
+        .py_1()
+        .with_width_from_item(Some(width_index))
+        .with_horizontal_sizing_behavior(gpui::ListHorizontalSizingBehavior::Unconstrained)
+        .track_scroll(list)
+        .on_scroll_wheel(move |_, _, _| wheel_state.reveal())
+        .into_any_element()
+    };
 
     div()
         .size_full()
         .flex()
         .flex_col()
         .child(
-            div()
-                .h(px(38.0))
-                .flex_none()
-                .flex()
-                .items_center()
+            panel_header()
                 .justify_between()
                 .px_3()
-                .border_b_1()
-                .border_color(theme::colors().border_default)
                 .child("Element tree")
                 .child(
                     div()
@@ -65,14 +61,9 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                 ),
         )
         .child(
-            scroll_viewport(
-                "inspector-tree-scroll",
-                ScrollAxis::Both,
-                &scroll_state,
-                tree_content,
-            )
-            .min_h(px(0.0))
-            .flex_1(),
+            scroll_surface(ScrollAxis::Both, &scroll_state, tree_content)
+                .min_h(px(0.0))
+                .flex_1(),
         )
 }
 pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
@@ -108,52 +99,17 @@ pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
     )
 }
 
-fn visible_rows(inspector: &Inspector) -> Vec<TreeRow> {
-    let nodes = inspector.element_tree();
-    let parents_with_children = nodes
-        .iter()
-        .filter_map(|node| node.parent.clone())
-        .collect::<HashSet<_>>();
-    let mut depths = HashMap::<InspectorElementId, usize>::new();
-    let mut visible = HashMap::<InspectorElementId, bool>::new();
-    let mut rows = Vec::with_capacity(nodes.len());
-
-    for node in nodes {
-        let depth = node
-            .parent
-            .as_ref()
-            .and_then(|parent| depths.get(parent).copied())
-            .map_or(0, |depth| depth + 1);
-        let is_visible = node.parent.as_ref().is_none_or(|parent| {
-            visible.get(parent).copied().unwrap_or(true)
-                && !inspector.is_tree_node_collapsed(parent)
-        });
-        depths.insert(node.id.clone(), depth);
-        visible.insert(node.id.clone(), is_visible);
-
-        if is_visible {
-            rows.push(TreeRow {
-                node: node.clone(),
-                depth,
-                has_children: parents_with_children.contains(&node.id),
-            });
-        }
-    }
-    rows
-}
-
 fn render_tree_row(
     index: usize,
-    row: TreeRow,
+    row: &TreeRow,
     active: Option<&InspectorElementId>,
-    inspector: &mut Inspector,
     cx: &mut gpui::Context<Inspector>,
 ) -> Stateful<Div> {
     let id = row.node.id.clone();
     let hover_id = id.clone();
     let toggle_id = id.clone();
     let selected = active == Some(&id);
-    let collapsed = inspector.is_tree_node_collapsed(&id);
+    let collapsed = row.collapsed;
     let global_id = row.node.id.path.global_id.to_string();
 
     div()
@@ -182,8 +138,12 @@ fn render_tree_row(
                     ""
                 })
                 .when(row.has_children, |element| {
-                    element.on_click(cx.listener(move |inspector, _, _, cx| {
-                        inspector.toggle_tree_node(toggle_id.clone());
+                    element.on_click(cx.listener(move |_, _, _, cx| {
+                        InspectorController::toggle_tree_node(
+                            toggle_id.clone(),
+                            cx.entity_id(),
+                            cx,
+                        );
                         cx.stop_propagation();
                         cx.notify();
                     }))
@@ -211,13 +171,15 @@ fn render_tree_row(
         })
         .on_hover(cx.listener(move |_, hovered: &bool, _, cx| {
             let id = hovered.then(|| hover_id.clone());
-            cx.defer(move |cx| {
-                InspectorController::hover_element(id, cx);
+            InspectorController::defer(cx, move |entity, cx| {
+                InspectorController::hover_element(id, entity, cx);
             });
         }))
         .on_click(cx.listener(move |_, _, _, cx| {
             let id = id.clone();
-            cx.defer(move |cx| InspectorController::select_element(id, cx));
+            InspectorController::defer(cx, move |entity, cx| {
+                InspectorController::select_element(id, entity, cx)
+            });
         }))
 }
 

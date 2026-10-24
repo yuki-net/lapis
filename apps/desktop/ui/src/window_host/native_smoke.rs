@@ -72,6 +72,10 @@ pub(crate) fn run_native_smoke(
     cx.spawn(async move |this, cx| {
         // 起動直後の描画とidleのCPUサンプルを分ける。
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+        #[cfg(debug_assertions)]
+        if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            crate::devtools::native_smoke::run(handle, cx).await;
+        }
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
@@ -93,6 +97,22 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         wait_for(&this, cx, None).await;
+        #[cfg(debug_assertions)]
+        if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            let child = this
+                .update(cx, |root, cx| {
+                    root.group
+                        .read(cx)
+                        .members
+                        .iter()
+                        .find(|(host, _)| **host != ROOT_HOST)
+                        .unwrap()
+                        .1
+                        .handle
+                })
+                .unwrap();
+            crate::devtools::native_smoke::check_pair(handle, child, cx).await;
+        }
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 2);
             eprintln!("SMOKE drag outside creates native window OK");
@@ -273,7 +293,7 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         wait_for(&this, cx, None).await;
-        let (child, handle) = this
+        let (child, closing_child_handle) = this
             .update(cx, |root, cx| {
                 let snapshot = root.group.read(cx).latest.as_ref().unwrap();
                 assert!(
@@ -405,7 +425,7 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         let (saved_conversation, stale_snapshot) = wait_client(saved_conversation).await.unwrap();
-        handle
+        closing_child_handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| {
                     root.close_hosts(child, None, window, cx);
@@ -501,13 +521,21 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         wait_client(restored).await.unwrap();
-        handle
+        #[cfg(debug_assertions)]
+        let closing_inspector = std::env::var_os("LAPIS_INSPECTOR_SMOKE")
+            .map(|_| crate::devtools::native_smoke::open_for_target(closing_child_handle, cx));
+        closing_child_handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(child, None, window, cx))
             })
             .unwrap()
             .unwrap();
         wait_for(&this, cx, None).await;
+        #[cfg(debug_assertions)]
+        if let Some(viewer) = closing_inspector {
+            assert!(viewer.update(cx, |_, _, _| ()).is_err());
+            eprintln!("INSPECTOR_NATIVE_TARGET_CLOSE_PASS");
+        }
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 1);
             assert_eq!(
@@ -571,6 +599,8 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap()
             .unwrap();
+        // NewWindowはworker完了後に開くため、独立Root生成を待ってから検査する。
+        wait_for(&this, cx, Some(3)).await;
         let (handle, peer) = this
             .update(cx, |root, cx| {
                 let own_id = cx.entity_id();
@@ -634,8 +664,15 @@ pub(crate) fn run_native_smoke(
                     )
                 })
                 .unwrap();
-            let point = show_drop_target(target, &target_shell, cx);
-            simulate_tab_drag(&this, &source_shell, source, false, Some(point), cx).await;
+            simulate_tab_drag(
+                &this,
+                &source_shell,
+                source,
+                false,
+                Some((target, &target_shell)),
+                cx,
+            )
+            .await;
             wait_for(&this, cx, None).await;
             this.update(cx, |root, cx| {
                 assert_eq!(
@@ -647,21 +684,55 @@ pub(crate) fn run_native_smoke(
             })
             .unwrap();
         }
+        #[cfg(debug_assertions)]
+        let peer_inspector = if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            let targets = this
+                .update(cx, |root, cx| {
+                    root.group
+                        .read(cx)
+                        .members
+                        .values()
+                        .map(|member| member.handle)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap();
+            for target in targets {
+                crate::devtools::native_smoke::open_for_target(target, cx);
+            }
+            let target = peer
+                .update(cx, |root, cx| {
+                    root.group.read(cx).members[&ROOT_HOST].handle
+                })
+                .unwrap();
+            Some(crate::devtools::native_smoke::open_for_target(target, cx))
+        } else {
+            None
+        };
+        #[cfg(not(debug_assertions))]
+        let peer_inspector: Option<gpui::AnyWindowHandle> = None;
+        let remaining_windows = 1 + usize::from(peer_inspector.is_some());
         handle
             .update(cx, |_, window, cx| {
                 this.update(cx, |root, cx| root.close_hosts(0, None, window, cx))
             })
             .unwrap()
             .unwrap();
-        wait_for(&peer.downgrade(), cx, Some(1)).await;
+        wait_for(&peer.downgrade(), cx, Some(remaining_windows)).await;
         let handle = peer
             .update(cx, |other, cx| {
                 assert_eq!(other.group.read(cx).members.len(), 1);
-                assert_eq!(cx.windows().len(), 1);
+                assert_eq!(cx.windows().len(), remaining_windows);
                 other.group.read(cx).members[&0].handle
             })
             .unwrap();
         eprintln!("SMOKE independent group, foreign transfer rejection and root cascade OK");
+        if let Some(viewer) = peer_inspector {
+            viewer
+                .update(cx, |_, window, _| window.remove_window())
+                .unwrap();
+            wait_for(&peer.downgrade(), cx, Some(1)).await;
+            eprintln!("INSPECTOR_NATIVE_ROOT_CASCADE_PASS");
+        }
         let peer_path = shared_path.clone();
         peer.update(cx, |other, cx| {
             other.editor.update(cx, |editor, cx| {
@@ -669,8 +740,11 @@ pub(crate) fn run_native_smoke(
                     false,
                     move |client| {
                         client
-                            .editor
-                            .open_workspace(peer_path.parent().unwrap().to_owned())
+                            .conversation
+                            .open_project(
+                                &mut client.editor,
+                                peer_path.parent().unwrap().to_owned(),
+                            )
                             .map_err(|e| e.to_string())?;
                         client
                             .editor
@@ -712,8 +786,9 @@ pub(crate) fn run_native_smoke(
                                             false,
                                             move |client| {
                                                 client
-                                                    .editor
-                                                    .open_workspace(
+                                                    .conversation
+                                                    .open_project(
+                                                        &mut client.editor,
                                                         path.parent().unwrap().to_owned(),
                                                     )
                                                     .map_err(|e| e.to_string())?;
@@ -739,6 +814,10 @@ pub(crate) fn run_native_smoke(
                 assert_eq!(other.editor.read(cx).document_id(), Some(id.clone()))
             })
             .unwrap();
+        #[cfg(all(target_os = "windows", debug_assertions))]
+        if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            crate::devtools::native_smoke::check_toolbar_hit_test_for_target(handle, cx).await;
+        }
         handle
             .update(cx, |_, window, cx| {
                 peer.update(cx, |other, cx| other.close_application(window, cx))
@@ -756,7 +835,7 @@ async fn simulate_tab_drag(
     shell: &Entity<Shell>,
     handle: gpui::AnyWindowHandle,
     cancel: bool,
-    destination: Option<drag::ScreenPoint>,
+    destination: Option<(gpui::AnyWindowHandle, &Entity<Shell>)>,
     cx: &mut gpui::AsyncApp,
 ) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -798,15 +877,6 @@ async fn simulate_tab_drag(
         })
         .unwrap();
     let hwnd = HWND(hwnd as *mut _);
-    if let Some(destination) = destination {
-        let mut point = windows::Win32::Foundation::POINT {
-            x: destination.x,
-            y: destination.y,
-        };
-        assert!(unsafe { ScreenToClient(hwnd, &mut point) }.as_bool());
-        end =
-            LPARAM(((point.y as i16 as u16 as u32) << 16 | point.x as i16 as u16 as u32) as isize);
-    }
     // smoke モードの自プロセス Window のみにイベントを送る。
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), start) }.unwrap();
     let moved = LPARAM(start.0 + 20);
@@ -826,6 +896,18 @@ async fn simulate_tab_drag(
         }
         .unwrap();
         wait_for_drag_state(cx, false, original_window_count).await;
+    }
+    // sourceの選択によるactivateが終わった後でdrop先を最前面にする。
+    // 先に上げるとRootのactivateが覆い、別Windowへのdropを検証できない。
+    if let Some((target, shell)) = destination {
+        let destination = show_drop_target(target, shell, cx);
+        let mut point = windows::Win32::Foundation::POINT {
+            x: destination.x,
+            y: destination.y,
+        };
+        assert!(unsafe { ScreenToClient(hwnd, &mut point) }.as_bool());
+        end =
+            LPARAM(((point.y as i16 as u16 as u32) << 16 | point.x as i16 as u16 as u32) as isize);
     }
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
     wait_for_drag_state(
@@ -928,24 +1010,45 @@ async fn verify_drag_routes(
             )
         })
         .unwrap();
-    let point = show_drop_target(second_handle, &second_shell, cx);
-    simulate_tab_drag(root, &first_shell, first_handle, false, Some(point), cx).await;
+    simulate_tab_drag(
+        root,
+        &first_shell,
+        first_handle,
+        false,
+        Some((second_handle, &second_shell)),
+        cx,
+    )
+    .await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);
         assert!(root.group.read(cx).documents(first).is_empty());
     })
     .unwrap();
-    let point = show_drop_target(handle, &root_shell, cx);
-    simulate_tab_drag(root, &second_shell, second_handle, false, Some(point), cx).await;
+    simulate_tab_drag(
+        root,
+        &second_shell,
+        second_handle,
+        false,
+        Some((handle, &root_shell)),
+        cx,
+    )
+    .await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert!(root.group.read(cx).documents(ROOT_HOST).contains(id));
         assert_eq!(root.editor.read(cx).document_id().as_ref(), Some(id));
     })
     .unwrap();
-    let point = show_drop_target(second_handle, &second_shell, cx);
-    simulate_tab_drag(root, &root_shell, handle, false, Some(point), cx).await;
+    simulate_tab_drag(
+        root,
+        &root_shell,
+        handle,
+        false,
+        Some((second_handle, &second_shell)),
+        cx,
+    )
+    .await;
     wait_for(root, cx, None).await;
     root.update(cx, |root, cx| {
         assert_eq!(root.group.read(cx).documents(second), vec![id.clone()]);

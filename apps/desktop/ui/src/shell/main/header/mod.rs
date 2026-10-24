@@ -1,14 +1,10 @@
 mod center;
 pub(super) mod controls;
-mod drag;
 mod left;
 mod menu;
 mod menu_actions;
 mod menu_definition;
 mod right;
-mod window_controls;
-
-use drag::apply_drag_region;
 
 use super::*;
 
@@ -16,30 +12,14 @@ impl Shell {
     /// Composes the persistent application header, separating app content (left/center/right)
     /// from OS window controls (minimize/maximize/close).
     pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        apply_drag_region(
-            div()
-                .h(tokens::size::TITLE_BAR_HEIGHT)
-                .w_full()
-                .flex_shrink_0()
-                .flex()
-                .flex_row()
-                .items_center()
-                .bg(theme::colors().background_primary)
-                // Mac OS
-                .when(cfg!(target_os = "macos"), |this| {
-                    this.child(div().w(px(80.0)).flex_shrink_0())
-                        .child(self.render_app_header(cx))
-                })
-                // Windows and Linux
-                .when(!cfg!(target_os = "macos"), |this| {
-                    this.child(self.render_app_header(cx))
-                        .child(self.render_window_controls(cx))
-                }),
+        crate::window_host::chrome::title_bar(
+            self.render_app_header(cx),
+            cx.listener(|_, _, _, cx| cx.emit(UiCommand::CloseWindow)),
         )
     }
 
     /// Renders the application header sections, or only the workspace title in detached windows.
-    fn render_app_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_app_header(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex_1()
             .h_full()

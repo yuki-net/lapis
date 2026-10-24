@@ -5,7 +5,7 @@ use crate::{
     commands::UiCommand,
     components::{
         Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, panel_empty_state,
-        panel_empty_state_element, scroll_viewport, surface,
+        panel_empty_state_element, scroll_viewport,
     },
     extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, ThemeId, UiSlot, ViewId},
     features::{self, id},
@@ -20,7 +20,7 @@ use crate::{
 use gpui::{
     AnyView, App, ClickEvent, Context, CursorStyle, ElementId, FocusHandle, Focusable,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
-    Timer, Window, WindowControlArea, div, point, prelude::*, px, relative,
+    Timer, Window, div, point, prelude::*, px, relative,
 };
 use lapis_workspace::FileEntryKind;
 use std::{cell::RefCell, collections::HashMap, time::Duration};

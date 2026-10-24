@@ -1,0 +1,63 @@
+diff --git a/src/platform/windows/events.rs b/src/platform/windows/events.rs
+--- a/src/platform/windows/events.rs
++++ b/src/platform/windows/events.rs
+@@ -45,0 +46 @@ impl WindowsWindowInner {
++            WM_MOVING | WM_SIZING => self.handle_size_move_progress(handle),
+@@ -146,2 +147,3 @@ impl WindowsWindowInner {
+-        if let Some(mut callback) = lock.callbacks.moved.take() {
+-            drop(lock);
++        let moved_callback = lock.callbacks.moved.take();
++        drop(lock);
++        if let Some(mut callback) = moved_callback {
+@@ -151 +153,6 @@ impl WindowsWindowInner {
+-        Some(0)
++
++        // Windows enters a modal message loop while a native title-bar drag is active.
++        // `WM_TIMER` is low priority in that loop and can be starved by a continuous stream
++        // of move messages, leaving the client content visibly behind the window frame.
++        // Request a frame for each position update instead of relying only on that timer.
++        self.draw_window(handle, false)
+@@ -240,0 +248,14 @@ impl WindowsWindowInner {
++    fn handle_size_move_progress(&self, handle: HWND) -> Option<isize> {
++        // Native move/resize enters a modal Windows message loop. `WM_TIMER`
++        // is low priority and can be starved while `WM_MOVING` / `WM_SIZING`
++        // keep arriving, so process GPUI work on those progress messages too.
++        for runnable in self.main_receiver.drain() {
++            runnable.run();
++        }
++        self.draw_window(handle, false);
++
++        // Continue through DefWindowProcW so Windows can apply the RECT carried
++        // by WM_MOVING / WM_SIZING.
++        None
++    }
++
+@@ -955,0 +977,14 @@ impl WindowsWindowInner {
++        if matches!(
++            wparam.0 as u32,
++            HTCAPTION
++                | HTLEFT
++                | HTRIGHT
++                | HTTOP
++                | HTBOTTOM
++                | HTTOPLEFT
++                | HTTOPRIGHT
++                | HTBOTTOMLEFT
++                | HTBOTTOMRIGHT
++        ) {
++            return None;
++        }
+diff --git a/src/platform/windows/directx_devices.rs b/src/platform/windows/directx_devices.rs
+--- a/src/platform/windows/directx_devices.rs
++++ b/src/platform/windows/directx_devices.rs
+@@ -95,0 +96,10 @@ fn check_debug_layer_available() -> bool {
++        // The DirectX debug layer performs validation on the rendering path and
++        // can make interactive development builds visibly stutter. Keep it
++        // opt-in so a normal debug build has production-like frame pacing.
++        let enabled = std::env::var("LAPIS_GPUI_DX_DEBUG")
++            .map(|value| matches!(value.as_str(), "1" | "true" | "TRUE"))
++            .unwrap_or(false);
++        if !enabled {
++            return false;
++        }
++

@@ -80,7 +80,7 @@ jobs:
           # TODO: DesktopのmacOSサポートを保証する段階で有効化する。
           # - macos-14
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Check out repository
@@ -119,6 +119,20 @@ jobs:
 
       - name: Build Desktop
         run: python scripts/check.py desktop build
+
+      - name: Verify GPUI patches
+        shell: pwsh
+        run: |
+          foreach ($patch in @('external-inspector', 'windows', 'drag')) {
+            git apply --unidiff-zero --ignore-space-change --check --reverse --directory=vendor/gpui "patches/gpui-0.2.2-$patch.patch"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Build Release Desktop
+        run: cargo build -p lapis --release --locked
+
+      - name: Test Release Inspector boundary
+        run: cargo test -p lapis-desktop-ui --release release_build_does_not_register_inspector_command --locked
 
   mobile:
     name: Mobile

@@ -277,14 +277,7 @@ impl Shell {
             );
         }
 
-        div()
-            .h(px(34.0))
-            .px(tokens::spacing::XS)
-            .py(px(3.0))
-            .flex_shrink_0()
-            .flex()
-            .items_center()
-            .gap(tokens::spacing::XS)
+        crate::components::panel_header()
             .child(tab_container)
             .when(has_tabs && has_overflow && !self.detached, |bar| {
                 bar.child(add_button("fixed"))

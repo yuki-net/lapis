@@ -48,10 +48,19 @@ impl Default for ScrollState {
 }
 
 impl ScrollState {
+    #[cfg(all(test, debug_assertions))]
+    pub(crate) fn shares_state_with(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.inner, &other.inner)
+    }
+
     pub(crate) fn new() -> Self {
+        Self::with_handle(ScrollHandle::new())
+    }
+
+    pub(crate) fn with_handle(handle: ScrollHandle) -> Self {
         Self {
             inner: Rc::new(ScrollStateInner {
-                handle: ScrollHandle::new(),
+                handle,
                 visible_until: Cell::new(None),
                 drag: RefCell::new(None),
             }),
@@ -62,7 +71,7 @@ impl ScrollState {
         self.inner.handle.clone()
     }
 
-    fn reveal(&self) {
+    pub(crate) fn reveal(&self) {
         self.reveal_at(Instant::now());
     }
 
@@ -182,6 +191,15 @@ pub(crate) fn scroll_viewport(
         ScrollAxis::Both => viewport.overflow_scroll(),
     };
 
+    scroll_surface(axis, state, viewport)
+}
+
+/// 独自のスクロール要素（uniform_list等）にも既存のスクロールバーを重ねる。
+pub(crate) fn scroll_surface(
+    axis: ScrollAxis,
+    state: &ScrollState,
+    viewport: impl IntoElement,
+) -> gpui::Div {
     div()
         .relative()
         .size_full()
