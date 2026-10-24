@@ -4,7 +4,6 @@ use crate::{
 };
 
 mod input;
-mod screen;
 mod state;
 mod view;
 

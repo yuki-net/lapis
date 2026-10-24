@@ -2,6 +2,7 @@ use super::TerminalFeature;
 use gpui::{
     Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection, Window,
 };
+use lapis_terminal::{TerminalInput, TerminalKey, TerminalKeyEvent, TerminalModifiers};
 use std::ops::Range;
 
 impl TerminalFeature {
@@ -20,75 +21,64 @@ impl TerminalFeature {
         if !self.marked.is_empty() {
             return;
         }
-        let application_cursor = self
-            .active_screen()
-            .is_some_and(|screen| screen.application_cursor());
-        if let Some(bytes) = key_bytes(key, application_cursor) {
-            self.send_text(bytes, cx);
+        if let Some(event) = semantic_key(key) {
+            self.send_input(TerminalInput::Key(event), cx);
             cx.stop_propagation();
         }
     }
 }
 
-fn key_bytes(key: &gpui::Keystroke, application_cursor: bool) -> Option<String> {
-    let text = key.key.as_str();
-    if key.modifiers.control && (text == "space" || text == " ") {
-        return Some("\0".to_owned());
-    }
-    if key.modifiers.control && text.len() == 1 {
-        let byte = text.as_bytes()[0].to_ascii_uppercase();
-        if (b'@'..=b'_').contains(&byte) {
-            return Some(char::from(byte & 0x1f).to_string());
+fn semantic_key(key: &gpui::Keystroke) -> Option<TerminalKeyEvent> {
+    let name = key.key.to_ascii_lowercase();
+    let terminal_key = match name.as_str() {
+        "enter" => TerminalKey::Enter,
+        "backspace" => TerminalKey::Backspace,
+        "tab" => TerminalKey::Tab,
+        "escape" => TerminalKey::Escape,
+        "up" => TerminalKey::ArrowUp,
+        "down" => TerminalKey::ArrowDown,
+        "left" => TerminalKey::ArrowLeft,
+        "right" => TerminalKey::ArrowRight,
+        "home" => TerminalKey::Home,
+        "end" => TerminalKey::End,
+        "insert" => TerminalKey::Insert,
+        "delete" => TerminalKey::Delete,
+        "pageup" => TerminalKey::PageUp,
+        "pagedown" => TerminalKey::PageDown,
+        "f1" => TerminalKey::Function(1),
+        "f2" => TerminalKey::Function(2),
+        "f3" => TerminalKey::Function(3),
+        "f4" => TerminalKey::Function(4),
+        "f5" => TerminalKey::Function(5),
+        "f6" => TerminalKey::Function(6),
+        "f7" => TerminalKey::Function(7),
+        "f8" => TerminalKey::Function(8),
+        "f9" => TerminalKey::Function(9),
+        "f10" => TerminalKey::Function(10),
+        "f11" => TerminalKey::Function(11),
+        "f12" => TerminalKey::Function(12),
+        _ => {
+            // 通常文字とShiftのみの文字はGPUIのtext/IME入力へ渡す。
+            if !(key.modifiers.control || key.modifiers.alt || key.modifiers.platform) {
+                return None;
+            }
+            let text = key.key_char.clone().or_else(|| {
+                let mut characters = key.key.chars();
+                (characters.next().is_some() && characters.next().is_none())
+                    .then(|| key.key.clone())
+            })?;
+            TerminalKey::Character(text)
         }
-    }
-    let arrow = match text {
-        "up" => Some('A'),
-        "down" => Some('B'),
-        "right" => Some('C'),
-        "left" => Some('D'),
-        _ => None,
     };
-    if let Some(arrow) = arrow {
-        let modifier = 1
-            + u8::from(key.modifiers.shift)
-            + 2 * u8::from(key.modifiers.alt)
-            + 4 * u8::from(key.modifiers.control);
-        return Some(if modifier != 1 {
-            format!("\x1b[1;{modifier}{arrow}")
-        } else if application_cursor {
-            format!("\x1bO{arrow}")
-        } else {
-            format!("\x1b[{arrow}")
-        });
-    }
-    let bytes = match text {
-        "enter" => "\r",
-        "backspace" => "\x7f",
-        "escape" => "\x1b",
-        "tab" if key.modifiers.shift => "\x1b[Z",
-        "tab" => "\t",
-        "home" => "\x1b[H",
-        "end" => "\x1b[F",
-        "insert" => "\x1b[2~",
-        "delete" => "\x1b[3~",
-        "pageup" => "\x1b[5~",
-        "pagedown" => "\x1b[6~",
-        "f1" => "\x1bOP",
-        "f2" => "\x1bOQ",
-        "f3" => "\x1bOR",
-        "f4" => "\x1bOS",
-        "f5" => "\x1b[15~",
-        "f6" => "\x1b[17~",
-        "f7" => "\x1b[18~",
-        "f8" => "\x1b[19~",
-        "f9" => "\x1b[20~",
-        "f10" => "\x1b[21~",
-        "f11" => "\x1b[23~",
-        "f12" => "\x1b[24~",
-        _ if key.modifiers.alt => return key.key_char.as_ref().map(|text| format!("\x1b{text}")),
-        _ => return None,
-    };
-    Some(bytes.to_owned())
+    Some(TerminalKeyEvent {
+        key: terminal_key,
+        modifiers: TerminalModifiers {
+            shift: key.modifiers.shift,
+            control: key.modifiers.control,
+            alt: key.modifiers.alt,
+            super_key: key.modifiers.platform,
+        },
+    })
 }
 
 impl EntityInputHandler for TerminalFeature {
@@ -104,6 +94,7 @@ impl EntityInputHandler for TerminalFeature {
         actual.replace(range.clone());
         Some(String::from_utf16_lossy(&utf16[range]))
     }
+
     fn selected_text_range(
         &mut self,
         _: bool,
@@ -116,13 +107,16 @@ impl EntityInputHandler for TerminalFeature {
             reversed: false,
         })
     }
+
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
         (!self.marked.is_empty()).then(|| 0..self.marked.encode_utf16().count())
     }
+
     fn unmark_text(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.marked.clear();
         cx.notify();
     }
+
     fn replace_text_in_range(
         &mut self,
         _: Option<Range<usize>>,
@@ -134,6 +128,7 @@ impl EntityInputHandler for TerminalFeature {
         self.send_text(text.to_owned(), cx);
         cx.notify();
     }
+
     fn replace_and_mark_text_in_range(
         &mut self,
         _: Option<Range<usize>>,
@@ -145,6 +140,7 @@ impl EntityInputHandler for TerminalFeature {
         self.marked = text.to_owned();
         cx.notify();
     }
+
     fn bounds_for_range(
         &mut self,
         _: Range<usize>,
@@ -154,6 +150,7 @@ impl EntityInputHandler for TerminalFeature {
     ) -> Option<Bounds<Pixels>> {
         Some(bounds)
     }
+
     fn character_index_for_point(
         &mut self,
         _: Point<Pixels>,
@@ -167,33 +164,70 @@ impl EntityInputHandler for TerminalFeature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn terminal_keys_preserve_interrupt_tab_and_application_cursor_sequences() {
+    fn printable_keys_remain_on_the_gpui_text_and_ime_path() {
+        for text in ["a", "A", " ", "あ"] {
+            for shift in [false, true] {
+                let mut key = gpui::Keystroke {
+                    key: text.to_owned(),
+                    key_char: Some(text.to_owned()),
+                    ..Default::default()
+                };
+                key.modifiers.shift = shift;
+                assert_eq!(semantic_key(&key), None);
+            }
+        }
+    }
+
+    #[test]
+    fn terminal_keys_are_sent_as_semantic_events() {
         let mut key = gpui::Keystroke {
             key: "c".to_owned(),
             ..Default::default()
         };
         key.modifiers.control = true;
-        assert_eq!(key_bytes(&key, false).as_deref(), Some("\x03"));
+        assert_eq!(
+            semantic_key(&key),
+            Some(TerminalKeyEvent {
+                key: TerminalKey::Character("c".to_owned()),
+                modifiers: TerminalModifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            })
+        );
         key.modifiers.control = false;
         key.key = "up".to_owned();
-        assert_eq!(key_bytes(&key, true).as_deref(), Some("\x1bOA"));
-        key.modifiers.control = true;
-        assert_eq!(key_bytes(&key, true).as_deref(), Some("\x1b[1;5A"));
-        key.modifiers.control = false;
+        assert_eq!(
+            semantic_key(&key).map(|event| event.key),
+            Some(TerminalKey::ArrowUp)
+        );
         key.key = "tab".to_owned();
-        assert_eq!(key_bytes(&key, false).as_deref(), Some("\t"));
+        key.modifiers.shift = true;
+        assert_eq!(
+            semantic_key(&key).map(|event| event.modifiers.shift),
+            Some(true)
+        );
     }
 
     #[test]
-    fn terminal_ctrl_space_sends_nul_for_gpui_space_names() {
+    fn terminal_ctrl_space_keeps_the_character_and_modifier_meaning() {
         let mut key = gpui::Keystroke {
             key: "space".to_owned(),
+            key_char: Some(" ".to_owned()),
             ..Default::default()
         };
         key.modifiers.control = true;
-        assert_eq!(key_bytes(&key, false).as_deref(), Some("\0"));
-        key.key = " ".to_owned();
-        assert_eq!(key_bytes(&key, false).as_deref(), Some("\0"));
+        assert_eq!(
+            semantic_key(&key),
+            Some(TerminalKeyEvent {
+                key: TerminalKey::Character(" ".to_owned()),
+                modifiers: TerminalModifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            })
+        );
     }
 }

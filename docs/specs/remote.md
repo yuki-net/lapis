@@ -47,10 +47,31 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 - 接続が失われても、実行Host上のTerminalやAgentが終了したとは推測しません。
 - 再接続では権限と実行状態を再確認し、古いClient cacheを最新のsnapshotに整合させます。
 - Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。
-- Terminal出力は順序とbyte表現を保ち、通信層で勝手に整形・除去しません。
-- Terminalの画面と標準的な端末問い合わせへの応答はHostのRuntimeが所有します。snapshotにはraw outputのbyte位置と画面状態を含め、出力の保持上限を超えても現在画面を復元します。Clientは画面の切替・buffer欠落時に再同期し、問い合わせへ重複応答しません。
+- Terminalの画面・mode・端末問い合わせへの応答はHostのTerminal Engineが所有します。ClientはSnapshot / Deltaのrevisionを検証し、欠落時には最新Snapshotへ再同期します。raw VT/ANSIやbyte offsetをClientへ公開しません。
 - Messageサイズ、request数、session数、timeoutなど、必要な資源上限を設けます。
 
 ## 最低限の確認項目
 
 未認証・権限不足・Workspace外path・失効済credentialを拒否できるか、stale revisionを検出できるか、切断中の実行状態を誤認しないか、再接続時にcacheを更新できるかを検証します。実行可能な検証手段の正本はテストコードとCIです。
+## Terminal の同期契約
+
+Terminal の正規状態は Host が所有する。PTY の raw bytes は Host 内部の
+Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
+`TerminalDelta` で構成した Lapis Terminal Model を送る。Client は raw VT/ANSI
+を解釈せず、受信した screen、cursor、mode、revision を表示用 cache に適用する。
+
+- 初回 attach、再接続、revision gap、状態不一致では Snapshot を使う。
+- 通常更新は連続した `TerminalDelta.revision` の changed rows を使う。
+- Client から Host へは `TerminalInput::Text`、`Key`、`Paste` を送り、PTY bytes
+  への変換と bracketed paste の処理は Host の Terminal Engine 境界で行う。
+- attach、表示、focus、別 Client の接続では PTY size を変更しない。明示的な
+  resize 操作だけが canonical size と Engine size を更新し、全 Client に通知する。
+- Client の切断、Window の close、画面の切替は Terminal process を終了させない。
+
+この契約により、Desktop は GPUI Renderer、将来の Mobile は native Renderer として
+同じ Model を描画できる。Agent Session、ACP、Chat UI、provider 固有の handoff は
+Terminal の同期契約に含めない。
+
+Scrollback は Snapshot では bounded な履歴全体を含め、Delta では追加行と削除数を
+送る。履歴の再構成が必要な resize、alternate screen 切替、状態不一致では reset
+Delta または Snapshot を使い、Client 側で履歴が無制限に増えないようにする。

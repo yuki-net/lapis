@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use lapis_desktop_client::{RestoredTerminal, TerminalSession};
 use lapis_editor_core::ConversationId;
-use lapis_terminal::TerminalError;
 #[cfg(test)]
 use lapis_terminal::TerminalStatus;
+use lapis_terminal::{TerminalError, TerminalInput};
 
 pub(crate) struct TerminalSessions {
     pub session: TerminalSession,
@@ -121,8 +121,11 @@ pub(crate) struct TerminalFeature {
     selected_by_context: HashMap<(Option<PathBuf>, ConversationId), lapis_terminal::TerminalId>,
     pub(super) focus: gpui::FocusHandle,
     pub(super) marked: String,
-    pub(super) screens: HashMap<String, super::screen::TerminalScreen>,
-    pub(super) visible_output: Option<(lapis_terminal::TerminalId, u64)>,
+    /// Terminal出力の表示状態。
+    /// None = 未処理（output変更を検知していない）
+    /// Some(None) = scroll pending（outputは変更済みだがscroll-followが未完了）
+    /// Some(Some((id, revision))) = 完了（scroll-followが成功した）
+    pub(super) visible_output: Option<Option<(lapis_terminal::TerminalId, u64)>>,
     pub(super) root: Option<std::path::PathBuf>,
     conversation: ConversationId,
     requests: TerminalRequests,
@@ -150,8 +153,7 @@ impl TerminalFeature {
             selected_by_context: HashMap::new(),
             focus: cx.focus_handle(),
             marked: String::new(),
-            screens: HashMap::new(),
-            visible_output: None,
+            visible_output: None, // None = 未処理
             root,
             conversation,
             requests: TerminalRequests::default(),
@@ -283,15 +285,7 @@ impl TerminalFeature {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
-        let text = if self
-            .active_screen()
-            .is_some_and(|screen| screen.bracketed_paste())
-        {
-            format!("\x1b[200~{text}\x1b[201~")
-        } else {
-            text
-        };
-        self.send_text(text, cx);
+        self.send_input(TerminalInput::Paste(text), cx);
     }
 
     pub(super) fn active_id(&self) -> Option<lapis_terminal::TerminalId> {
@@ -302,26 +296,12 @@ impl TerminalFeature {
             .or_else(|| self.terminals.last().map(|terminal| terminal.id.clone()))
     }
 
-    pub(super) fn active_screen(&self) -> Option<&super::screen::TerminalScreen> {
-        self.screens.get(self.active_id()?.as_str())
-    }
-
-    pub(super) fn update_screens(&mut self) {
-        self.screens.retain(|id, _| {
-            self.terminals
-                .iter()
-                .any(|terminal| terminal.id.as_str() == id)
-        });
-        for terminal in &self.terminals {
-            match self.screens.entry(terminal.id.as_str().to_owned()) {
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().update(terminal)
-                }
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    entry.insert(super::screen::TerminalScreen::new(terminal));
-                }
-            }
-        }
+    pub(super) fn active_screen(&self) -> Option<&lapis_terminal::TerminalScreen> {
+        let active = self.active_id()?;
+        self.terminals
+            .iter()
+            .find(|terminal| terminal.id == active)
+            .map(|terminal| &terminal.screen)
     }
 
     pub(super) fn discover(&mut self, cx: &mut gpui::Context<Self>) {
@@ -390,8 +370,12 @@ impl TerminalFeature {
     }
 
     pub(super) fn send_text(&mut self, text: String, cx: &mut gpui::Context<Self>) {
+        self.send_input(TerminalInput::Text(text), cx);
+    }
+
+    pub(super) fn send_input(&mut self, input: TerminalInput, cx: &mut gpui::Context<Self>) {
         let Some(id) = self.active_id() else { return };
-        self.operate(move |session| session.input(&id, &text), cx);
+        self.operate(move |session| session.input_semantic(&id, input), cx);
     }
 
     pub(super) fn resize(&mut self, columns: u16, rows: u16, cx: &mut gpui::Context<Self>) {
@@ -510,7 +494,10 @@ impl TerminalFeature {
 mod tests {
     use super::*;
     use lapis_terminal::TerminalId;
-    use lapis_terminal::{TerminalBackend, TerminalEvent, TerminalOutput};
+    use lapis_terminal::{
+        TerminalBackend, TerminalDelta, TerminalEvent, TerminalInput, TerminalRow,
+        TerminalRowUpdate, TerminalSize,
+    };
     use std::{
         path::Path,
         sync::{
@@ -518,6 +505,28 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
         },
     };
+
+    fn model_row(columns: u16, text: &str) -> TerminalRow {
+        let mut row = TerminalRow::empty(columns);
+        for (column, character) in text.chars().take(columns as usize).enumerate() {
+            row.cells[column].text = character.to_string();
+        }
+        row
+    }
+
+    fn model_delta(revision: u64, size: TerminalSize, text: &str) -> TerminalDelta {
+        TerminalDelta {
+            revision,
+            size,
+            changed_rows: vec![TerminalRowUpdate {
+                row: 0,
+                value: model_row(size.columns, text),
+            }],
+            cursor: Default::default(),
+            modes: Default::default(),
+            scrollback: None,
+        }
+    }
 
     #[test]
     fn failed_context_admission_suppresses_polling_until_retry_is_admitted() {
@@ -585,10 +594,11 @@ mod tests {
             .unwrap();
         backend.events.lock().unwrap().insert(
             id.as_str().to_owned(),
-            vec![TerminalEvent::Output(TerminalOutput {
-                sequence: 1,
-                data: b"background output".to_vec(),
-            })],
+            vec![TerminalEvent::Delta(model_delta(
+                1,
+                TerminalSize::new(80, 24),
+                "background output",
+            ))],
         );
         let mut requests = TerminalRequests::default();
         let poll = requests.begin_poll().unwrap();
@@ -598,7 +608,11 @@ mod tests {
         assert!(!requests.finish_poll(poll));
         assert!(requests.finish_action(action));
         assert_eq!(outcome.unwrap_err(), "input failed");
-        assert_eq!(terminals[0].output, b"background output");
+        assert!(
+            terminals[0].screen.rows[0]
+                .plain_text()
+                .starts_with("background output")
+        );
         assert!(!sessions.refresh().unwrap());
     }
 
@@ -629,12 +643,17 @@ mod tests {
                 self.next.fetch_add(1, Ordering::Relaxed)
             )))
         }
-        fn input(&self, id: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+        fn input(&self, id: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
             self.inputs.lock().unwrap().push(id.clone());
             Ok(())
         }
-        fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
-            Ok(())
+        fn resize(
+            &self,
+            _: &TerminalId,
+            columns: u16,
+            rows: u16,
+        ) -> Result<TerminalDelta, TerminalError> {
+            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
         }
         fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
             Ok(self
@@ -677,10 +696,11 @@ mod tests {
         );
         backend.events.lock().unwrap().insert(
             original.as_str().to_owned(),
-            vec![TerminalEvent::Output(TerminalOutput {
-                sequence: 1,
-                data: b"inactive output".to_vec(),
-            })],
+            vec![TerminalEvent::Delta(model_delta(
+                1,
+                TerminalSize::new(80, 24),
+                "inactive output",
+            ))],
         );
         assert!(sessions.refresh().unwrap());
         assert!(sessions.session.terminals().is_empty());
@@ -716,7 +736,11 @@ mod tests {
             sessions.switch_context(Some("workspace".into()), conversation.clone(), &[]);
         assert_eq!(original_snapshot.len(), 1);
         assert_eq!(original_snapshot[0].id, original);
-        assert_eq!(original_snapshot[0].output, b"inactive output");
+        assert!(
+            original_snapshot[0].screen.rows[0]
+                .plain_text()
+                .starts_with("inactive output")
+        );
         assert_eq!(original_snapshot[0].status, TerminalStatus::Running);
         let current_snapshot = sessions.switch_context(Some("other".into()), conversation, &[]);
         assert_eq!(current_snapshot.len(), 1);
@@ -901,16 +925,17 @@ mod tests {
         backend.events.lock().unwrap().insert(
             terminal.as_str().to_owned(),
             vec![
-                TerminalEvent::Output(TerminalOutput {
-                    sequence: 1,
-                    data: b"background".to_vec(),
-                }),
+                TerminalEvent::Delta(model_delta(1, TerminalSize::new(80, 24), "background")),
                 TerminalEvent::Exited { code: Some(0) },
             ],
         );
         assert!(feature.refresh().unwrap());
         feature.switch_context(Some("workspace".into()), ConversationId::new("first"), &[]);
-        assert_eq!(feature.session.terminals()[0].output, b"background");
+        assert!(
+            feature.session.terminals()[0].screen.rows[0]
+                .plain_text()
+                .starts_with("background")
+        );
         assert_eq!(
             feature.session.terminals()[0].status,
             TerminalStatus::Exited

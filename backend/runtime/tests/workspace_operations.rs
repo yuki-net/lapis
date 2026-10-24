@@ -871,7 +871,7 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
         fn input(
             &self,
             _: &lapis_terminal::TerminalId,
-            _: &[u8],
+            _: &lapis_terminal::TerminalInput,
         ) -> Result<(), lapis_terminal::TerminalError> {
             Ok(())
         }
@@ -880,8 +880,15 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
             _: &lapis_terminal::TerminalId,
             _: u16,
             _: u16,
-        ) -> Result<(), lapis_terminal::TerminalError> {
-            Ok(())
+        ) -> Result<lapis_terminal::TerminalDelta, lapis_terminal::TerminalError> {
+            Ok(lapis_terminal::TerminalDelta {
+                revision: 1,
+                size: lapis_terminal::TerminalSize::new(80, 24),
+                changed_rows: Vec::new(),
+                cursor: Default::default(),
+                modes: Default::default(),
+                scrollback: None,
+            })
         }
         fn terminate(
             &self,

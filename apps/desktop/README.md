@@ -77,3 +77,14 @@ Tree選択・Hover・Detailsと通常時/表示時/Pick中のCPU・メモリ・C
 短時間の環境依存サンプルであり、GPU時間・複数モニターの実操作・継続性能は別途確認する。
 
 Document タブは ↗ / ↩ ボタンで取り外し・Root へ再ドックできる。Windows ではタブを Window 外で離すと取り外し、同じグループの別 Window の Panel 上で離すと再ドックする。Escape で取り消す。移動で空になった子 Window は手動で閉じる。Tool の Window 間移動と、再起動後の Window 配置復元は未対応。
+## Terminal
+
+Terminal の描画は `lapis_terminal::TerminalScreen` を直接読む。Desktop UI は
+VT/ANSI parser や PTY bytes を持たず、Host が配信した Model の rows、cell attributes、
+cursor、mode を GPUI へ変換する。入力も `TerminalInput` の semantic event として
+Client から Host へ渡し、key encoding は Host 側が現在の Terminal mode に基づいて行う。
+
+Terminal Session の所有者は Host であり、Client の切断や Panel の close では終了しない。
+表示だけでは resize せず、明示的な resize 操作の結果を全 Client へ反映する。
+Scrollback は Host の Model に含まれる履歴を画面の前に描画し、Client 側で VT/ANSI
+を再解釈しない。履歴の上限と再同期は Protocol の Snapshot / Delta 契約に従う。

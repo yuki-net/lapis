@@ -40,5 +40,7 @@ subtle = "2.6"
 tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 portable-pty = "0.9"
+wezterm-term = { git = "https://github.com/wezterm/wezterm", rev = "e2a98e1b8af156988ad0ac778658ac27b60a55fb" }
+wezterm-surface = { git = "https://github.com/wezterm/wezterm", rev = "e2a98e1b8af156988ad0ac778658ac27b60a55fb" }
 rcgen = "0.14"
 zeroize = "1.9"

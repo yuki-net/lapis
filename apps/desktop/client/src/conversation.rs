@@ -365,8 +365,8 @@ impl ConversationSession {
                     id: Some(terminal.id.clone()),
                     cwd: terminal.cwd.clone(),
                     status: terminal.status,
-                    columns: terminal.columns,
-                    rows: terminal.rows,
+                    columns: terminal.screen.size.columns,
+                    rows: terminal.screen.size.rows,
                 })
                 .collect();
         }

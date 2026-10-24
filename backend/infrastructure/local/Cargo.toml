@@ -6,6 +6,8 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+wezterm-term.workspace = true
+wezterm-surface.workspace = true
 lapis-backend-state = { path = "../../runtime" }
 lapis-document = { path = "../../../shared/models/document" }
 lapis-editor-core = { path = "../../../shared/models/editor-core" }

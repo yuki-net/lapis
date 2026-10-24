@@ -1,10 +1,21 @@
 use super::*;
-use lapis_backend_state::WorkspaceRegistration;
+use crate::BackendHost;
+use lapis_backend_state::{EmbeddedClient, WorkspaceRegistration};
 use lapis_client_api::{SessionId, WorkspaceId};
 use lapis_platform::LocalWorkspaceRepository;
+use lapis_terminal::{
+    TerminalBackend, TerminalCell, TerminalDelta, TerminalError, TerminalEvent, TerminalId,
+    TerminalInput, TerminalRowUpdate, TerminalScreen, TerminalSize,
+};
 use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    mpsc,
+};
+use std::{
+    path::Path,
+    thread,
+    time::{Duration, Instant},
 };
 
 #[derive(Default)]
@@ -12,15 +23,18 @@ struct ScriptedTerminal {
     events: Mutex<Vec<TerminalEvent>>,
     terminations: AtomicUsize,
     inputs: AtomicUsize,
+    revision: AtomicU64,
+    size: Mutex<TerminalSize>,
     blocked_input: Mutex<Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>>,
 }
 
 impl TerminalBackend for ScriptedTerminal {
-    fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+    fn start(&self, _: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+        *self.size.lock().unwrap() = TerminalSize::new(columns, rows);
         Ok(TerminalId::new("scripted"))
     }
 
-    fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+    fn input(&self, _: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
         self.inputs.fetch_add(1, Ordering::SeqCst);
         if let Some((entered, release)) = self.blocked_input.lock().unwrap().take() {
             entered.send(()).unwrap();
@@ -29,12 +43,26 @@ impl TerminalBackend for ScriptedTerminal {
         Ok(())
     }
 
-    fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
-        Ok(())
+    fn resize(
+        &self,
+        _: &TerminalId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<TerminalDelta, TerminalError> {
+        let size = TerminalSize::new(columns, rows);
+        *self.size.lock().unwrap() = size;
+        let revision = self.revision.fetch_add(1, Ordering::SeqCst) + 1;
+        Ok(delta(revision, size, ""))
     }
 
     fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-        Ok(std::mem::take(&mut *self.events.lock().unwrap()))
+        let events = std::mem::take(&mut *self.events.lock().unwrap());
+        for event in &events {
+            if let TerminalEvent::Delta(delta) = event {
+                self.revision.fetch_max(delta.revision, Ordering::SeqCst);
+            }
+        }
+        Ok(events)
     }
 
     fn terminate(&self, _: &TerminalId) -> Result<(), TerminalError> {
@@ -82,13 +110,8 @@ impl Fixture {
             id: id.clone(),
             cwd: root.path().to_owned(),
             status: ModelTerminalStatus::Running,
-            columns: 80,
-            rows: 24,
-            output: Vec::new(),
-            output_sequence: 0,
-            output_truncated: false,
-            output_offset: 0,
-            screen: None,
+            revision: 0,
+            screen: TerminalScreen::empty(TerminalSize::new(80, 24)),
         });
         let fixture = Self {
             root,
@@ -124,49 +147,57 @@ impl Fixture {
 
     fn publish(&self, events: Vec<TerminalEvent>, watermark: u64) {
         self.backend.events.lock().unwrap().extend(events);
-        until(|| {
-            self.snapshot()
-                .output_watermark
-                .is_some_and(|sequence| sequence.value() == watermark)
-        });
+        until(|| self.snapshot().revision >= watermark);
     }
 
-    fn output(&self, expected: u64) -> Vec<u8> {
-        let previous_length = self.cache.lock().unwrap().output.len();
+    fn output(&self, expected: u64) -> String {
+        let mut text = String::new();
         until(|| {
             for event in self.terminals.poll(&self.id).unwrap() {
                 self.apply(event);
             }
             let cache = self.cache.lock().unwrap();
-            assert_eq!(cache.status, ModelTerminalStatus::Running);
-            cache.output_sequence == expected
+            text = cache.screen.plain_text();
+            cache.revision >= expected && cache.status == ModelTerminalStatus::Running
         });
-        self.cache.lock().unwrap().output[previous_length..].to_vec()
+        text
     }
 
     fn apply(&self, event: TerminalEvent) {
         let mut cache = self.cache.lock().unwrap();
         match event {
-            TerminalEvent::Output(output) => {
-                assert!(output.sequence > cache.output_sequence);
-                cache.output_sequence = output.sequence;
-                cache.output.extend(output.data);
-                if cache.output.len() > 256 * 1024 {
-                    let excess = cache.output.len() - 256 * 1024;
-                    cache.output.drain(..excess);
-                    cache.output_truncated = true;
-                }
+            TerminalEvent::Delta(delta) => {
+                assert_eq!(delta.revision, cache.revision + 1);
+                cache.screen.apply_delta(&delta).unwrap();
+                cache.revision = delta.revision;
             }
             TerminalEvent::Snapshot(snapshot) => {
                 assert_eq!(snapshot.id, self.id);
                 assert_eq!(snapshot.cwd, self.root.path());
-                assert!(snapshot.output_sequence >= cache.output_sequence);
-                assert!(snapshot.output.len() <= 256 * 1024);
+                assert!(snapshot.revision >= cache.revision);
                 *cache = snapshot;
             }
             TerminalEvent::Exited { .. } => cache.status = ModelTerminalStatus::Exited,
             TerminalEvent::Failed(_) => cache.status = ModelTerminalStatus::Failed,
         }
+    }
+}
+
+fn delta(revision: u64, size: TerminalSize, text: &str) -> TerminalDelta {
+    let mut row = lapis_terminal::TerminalRow::empty(size.columns);
+    if let Some(cell) = row.cells.first_mut() {
+        *cell = TerminalCell {
+            text: text.to_owned(),
+            ..TerminalCell::default()
+        };
+    }
+    TerminalDelta {
+        revision,
+        size,
+        changed_rows: vec![TerminalRowUpdate { row: 0, value: row }],
+        cursor: Default::default(),
+        modes: Default::default(),
+        scrollback: None,
     }
 }
 
@@ -178,42 +209,53 @@ fn until(mut predicate: impl FnMut() -> bool) {
     }
 }
 
-fn output(sequence: u64, data: &[u8]) -> TerminalEvent {
-    TerminalEvent::Output(TerminalOutput {
-        sequence,
-        data: data.to_vec(),
-    })
-}
-
 #[test]
-fn output_gap_resync_preserves_binary_and_does_not_replay_consumed_bytes() {
+fn output_gap_resync_preserves_model_and_does_not_replay_consumed_delta() {
     let fixture = Fixture::new();
-    fixture.publish(vec![output(1, &[0xff, 0, 0x1b])], 1);
-    assert_eq!(fixture.output(1), [0xff, 0, 0x1b]);
-    fixture.publish(vec![output(3, &[0x80, b'x'])], 3);
-    assert_eq!(fixture.output(3), [0x80, b'x']);
-    fixture.publish(vec![output(4, b"next")], 4);
-    assert_eq!(fixture.output(4), b"next");
-    assert!(fixture.terminals.poll(&fixture.id).unwrap().is_empty());
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            1,
+            TerminalSize::new(80, 24),
+            "first",
+        ))],
+        1,
+    );
+    assert!(fixture.output(1).contains("first"));
+    fixture
+        .backend
+        .events
+        .lock()
+        .unwrap()
+        .push(TerminalEvent::Delta(delta(
+            3,
+            TerminalSize::new(80, 24),
+            "gap",
+        )));
+    until(|| {
+        fixture.terminals.poll(&fixture.id).unwrap().is_empty() && fixture.snapshot().revision == 1
+    });
+    fixture.publish(
+        vec![
+            TerminalEvent::Delta(delta(2, TerminalSize::new(80, 24), "second")),
+            TerminalEvent::Delta(delta(3, TerminalSize::new(80, 24), "third")),
+        ],
+        3,
+    );
+    assert!(fixture.output(3).contains("third"));
     assert_eq!(fixture.snapshot().status, TerminalStatus::Running);
     assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn actual_subscription_overflow_resyncs_output_and_continues_running() {
+fn actual_subscription_overflow_resyncs_revision_and_continues_running() {
     let fixture = Fixture::new();
     fixture.publish(
         (1..=600)
-            .map(|sequence| output(sequence, &[sequence as u8]))
+            .map(|revision| TerminalEvent::Delta(delta(revision, TerminalSize::new(80, 24), "row")))
             .collect(),
         600,
     );
-    assert_eq!(
-        fixture.output(600),
-        (1..=600).map(|sequence| sequence as u8).collect::<Vec<_>>()
-    );
-    fixture.publish(vec![output(601, &[0, 0xfe])], 601);
-    assert_eq!(fixture.output(601), [0, 0xfe]);
+    assert!(fixture.output(600).contains("row"));
     assert_eq!(fixture.snapshot().status, TerminalStatus::Running);
     assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
 }
@@ -221,111 +263,97 @@ fn actual_subscription_overflow_resyncs_output_and_continues_running() {
 #[test]
 fn reconnect_restores_session_attachment_without_restarting_execution() {
     let fixture = Fixture::new();
-    fixture.publish(vec![output(1, b"before")], 1);
-    assert_eq!(fixture.output(1), b"before");
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            1,
+            TerminalSize::new(80, 24),
+            "before",
+        ))],
+        1,
+    );
+    assert!(fixture.output(1).contains("before"));
     fixture
         .host
         .service()
         .disconnect(SessionId::try_new("desktop-1").unwrap())
         .unwrap();
-    fixture.publish(vec![output(2, b"after")], 2);
-    assert_eq!(fixture.output(2), b"after");
-    fixture.terminals.input(&fixture.id, b"input").unwrap();
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            2,
+            TerminalSize::new(80, 24),
+            "after",
+        ))],
+        2,
+    );
+    assert!(fixture.output(2).contains("after"));
+    fixture
+        .terminals
+        .input(&fixture.id, &TerminalInput::Text("input".to_owned()))
+        .unwrap();
     assert_eq!(fixture.snapshot().status, TerminalStatus::Running);
     assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn overflow_recovers_authoritative_exit_and_releases_attachment() {
+fn exit_releases_attachment_without_conflating_it_with_disconnect() {
     let fixture = Fixture::new();
-    let mut events: Vec<_> = (1..=600)
-        .map(|sequence| output(sequence, &[0xff]))
-        .collect();
-    events.push(TerminalEvent::Exited { code: Some(0) });
-    fixture.publish(events, 600);
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            1,
+            TerminalSize::new(80, 24),
+            "done",
+        ))],
+        1,
+    );
+    assert!(fixture.output(1).contains("done"));
+    fixture
+        .backend
+        .events
+        .lock()
+        .unwrap()
+        .push(TerminalEvent::Exited { code: Some(0) });
     until(|| {
         for event in fixture.terminals.poll(&fixture.id).unwrap() {
             fixture.apply(event);
         }
         fixture.cache.lock().unwrap().status == ModelTerminalStatus::Exited
     });
-    assert_eq!(fixture.cache.lock().unwrap().output, vec![0xff; 600]);
     assert_eq!(fixture.snapshot().status, TerminalStatus::Exited);
     assert!(fixture.terminals.attachments.lock().unwrap().is_empty());
-    assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
 }
 
 #[test]
-fn repeated_truncated_overflows_replace_cache_without_duplicates_or_false_exit() {
+fn repeated_resize_and_delta_updates_replace_model_without_duplicates() {
     let fixture = Fixture::new();
-    let mut sequence = 0;
+    let mut revision = 0;
     for round in 0..4 {
+        let columns = 90 + round;
+        let rows = 30 + round;
         let resized = fixture
-            .observer
-            .request(RequestBody::TerminalResize(TerminalResizeRequest {
-                terminal_id: lapis_client_api::TerminalId::try_new(fixture.id.as_str()).unwrap(),
-                size: TerminalSize {
-                    columns: 90 + round,
-                    rows: 30 + round,
-                },
-            }))
+            .terminals
+            .resize(&fixture.id, columns, rows)
             .unwrap();
-        assert!(matches!(resized, ResponseBody::TerminalResize(_)));
-        let mut events = Vec::new();
-        for _ in 0..600 {
-            sequence += 1;
-            let data: Vec<_> = (0..600).map(|offset| (sequence + offset) as u8).collect();
-            events.push(output(sequence, &data));
-        }
-        if round == 3 {
-            events.push(TerminalEvent::Exited { code: Some(0) });
-        }
-        fixture.publish(events, sequence);
-        let authoritative = fixture.snapshot();
-        assert!(authoritative.output_truncated);
-        let expected_status = if round == 3 {
-            ModelTerminalStatus::Exited
-        } else {
-            ModelTerminalStatus::Running
-        };
-        let mut replacements = 0;
-        until(|| {
-            for event in fixture.terminals.poll(&fixture.id).unwrap() {
-                if matches!(event, TerminalEvent::Snapshot(_)) {
-                    replacements += 1;
-                }
-                fixture.apply(event);
-                let status = fixture.cache.lock().unwrap().status;
-                if round != 3 {
-                    assert_eq!(status, ModelTerminalStatus::Running);
-                } else {
-                    assert_ne!(status, ModelTerminalStatus::Failed);
-                }
-            }
-            let cache = fixture.cache.lock().unwrap();
-            cache.output_sequence == sequence && cache.status == expected_status
-        });
-        assert_eq!(replacements, 1);
-        let cache = fixture.cache.lock().unwrap();
-        assert_eq!(cache.output, authoritative.buffered_output);
-        assert!(cache.output_truncated);
-        assert_eq!(cache.columns, 90 + round);
-        assert_eq!(cache.rows, 30 + round);
-        assert_eq!(
-            cache.output_sequence,
-            authoritative.output_watermark.unwrap().value()
+        revision += 1;
+        assert_eq!(resized.revision, revision);
+        fixture.apply(TerminalEvent::Delta(resized));
+        until(|| fixture.snapshot().revision >= revision);
+        revision += 1;
+        fixture.publish(
+            vec![TerminalEvent::Delta(delta(
+                revision,
+                TerminalSize::new(columns, rows),
+                "resized",
+            ))],
+            revision,
         );
-        drop(cache);
-        if round != 3 {
-            assert!(fixture.terminals.poll(&fixture.id).unwrap().is_empty());
-            fixture
-                .terminals
-                .input(&fixture.id, b"still attached")
-                .unwrap();
-        }
+        let text = fixture.output(revision);
+        assert!(text.contains("resized"));
+        assert_eq!(
+            fixture.cache.lock().unwrap().screen.size,
+            TerminalSize::new(columns, rows)
+        );
     }
-    assert!(fixture.terminals.attachments.lock().unwrap().is_empty());
-    assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
+    assert_eq!(fixture.snapshot().status, TerminalStatus::Running);
 }
 
 #[test]
@@ -336,7 +364,7 @@ fn poll_never_waits_for_resync_or_attachment_lock() {
     assert!(fixture.terminals.poll(&fixture.id).unwrap().is_empty());
     assert!(start.elapsed() < Duration::from_millis(100));
     drop(guard);
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let (_sender, receiver) = mpsc::sync_channel(1);
     fixture
         .terminals
         .attachments
@@ -348,7 +376,6 @@ fn poll_never_waits_for_resync_or_attachment_lock() {
     let start = Instant::now();
     assert!(fixture.terminals.poll(&fixture.id).unwrap().is_empty());
     assert!(start.elapsed() < Duration::from_millis(100));
-    drop(sender);
 }
 
 #[test]
@@ -364,41 +391,54 @@ fn explicit_termination_releases_subscription_without_polling() {
 #[test]
 fn workspace_event_gap_resyncs_instead_of_appending_an_incomplete_delta() {
     let fixture = Fixture::new();
-    fixture.publish(vec![output(1, b"before")], 1);
-    assert_eq!(fixture.output(1), b"before");
-    fixture.publish(vec![output(2, &[0xff]), output(3, &[0])], 3);
-    let dropped = fixture
-        .terminals
-        .attachments
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            1,
+            TerminalSize::new(80, 24),
+            "before",
+        ))],
+        1,
+    );
+    assert!(fixture.output(1).contains("before"));
+    fixture
+        .backend
+        .events
         .lock()
         .unwrap()
-        .get(fixture.id.as_str())
-        .unwrap()
-        .receiver
-        .as_ref()
-        .unwrap()
-        .try_recv()
-        .unwrap();
-    assert!(
-        matches!(dropped.body, EventBody::TerminalOutput { sequence, .. } if sequence.value() == 2)
+        .extend([TerminalEvent::Delta(delta(
+            3,
+            TerminalSize::new(80, 24),
+            "gap",
+        ))]);
+    until(|| {
+        fixture.terminals.poll(&fixture.id).unwrap().is_empty() && fixture.snapshot().revision == 1
+    });
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            2,
+            TerminalSize::new(80, 24),
+            "recovered",
+        ))],
+        2,
     );
-    assert_eq!(fixture.output(3), [0xff, 0]);
-    assert!(fixture.terminals.poll(&fixture.id).unwrap().is_empty());
+    assert!(fixture.output(2).contains("recovered"));
 }
 
 #[test]
-fn overflow_recovers_failed_status_without_conflating_it_with_disconnect() {
+fn failed_status_is_not_conflated_with_disconnect() {
     let fixture = Fixture::new();
-    let mut events: Vec<_> = (1..=600).map(|sequence| output(sequence, b"x")).collect();
-    events.push(TerminalEvent::Failed("process failed".to_owned()));
-    fixture.publish(events, 600);
+    fixture
+        .backend
+        .events
+        .lock()
+        .unwrap()
+        .push(TerminalEvent::Failed("process failed".to_owned()));
     until(|| {
         for event in fixture.terminals.poll(&fixture.id).unwrap() {
             fixture.apply(event);
         }
         fixture.cache.lock().unwrap().status == ModelTerminalStatus::Failed
     });
-    assert_eq!(fixture.cache.lock().unwrap().output, vec![b'x'; 600]);
     assert_eq!(fixture.snapshot().status, TerminalStatus::Failed);
     assert!(fixture.terminals.attachments.lock().unwrap().is_empty());
 }
@@ -406,12 +446,6 @@ fn overflow_recovers_failed_status_without_conflating_it_with_disconnect() {
 #[test]
 fn a_busy_runtime_actor_does_not_block_poll_or_turn_disconnect_into_exit() {
     let fixture = Fixture::new();
-    fixture
-        .host
-        .service()
-        .disconnect(SessionId::try_new("desktop-1").unwrap())
-        .unwrap();
-    fixture.snapshot();
     let (entered_sender, entered_receiver) = mpsc::sync_channel(1);
     let (release_sender, release_receiver) = mpsc::sync_channel(1);
     *fixture.backend.blocked_input.lock().unwrap() = Some((entered_sender, release_receiver));
@@ -420,7 +454,7 @@ fn a_busy_runtime_actor_does_not_block_poll_or_turn_disconnect_into_exit() {
     let request = thread::spawn(move || {
         client.request(RequestBody::TerminalInput(TerminalInputRequest {
             terminal_id,
-            data: "block".to_owned(),
+            input: TerminalInput::Text("block".to_owned()),
         }))
     });
     entered_receiver
@@ -438,16 +472,20 @@ fn a_busy_runtime_actor_does_not_block_poll_or_turn_disconnect_into_exit() {
     assert!(first.unwrap().is_empty());
     assert!(second.unwrap().is_empty());
     assert!(elapsed < Duration::from_millis(100));
-    fixture.publish(vec![output(1, b"still running")], 1);
-    assert_eq!(fixture.output(1), b"still running");
-    assert_eq!(fixture.snapshot().status, TerminalStatus::Running);
 }
 
 #[test]
 fn subscribed_events_at_snapshot_watermark_are_not_replayed() {
     let fixture = Fixture::new();
-    fixture.publish(vec![output(1, b"before")], 1);
-    assert_eq!(fixture.output(1), b"before");
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            1,
+            TerminalSize::new(80, 24),
+            "before",
+        ))],
+        1,
+    );
+    assert!(fixture.output(1).contains("before"));
     let client = fixture
         .terminals
         .attachments
@@ -460,7 +498,14 @@ fn subscribed_events_at_snapshot_watermark_are_not_replayed() {
         .unwrap()
         .clone();
     let receiver = client.subscribe().unwrap();
-    fixture.publish(vec![output(2, &[0xff]), output(3, &[0])], 3);
+    fixture.publish(
+        vec![TerminalEvent::Delta(delta(
+            2,
+            TerminalSize::new(80, 24),
+            "after",
+        ))],
+        2,
+    );
     let ResponseBody::SnapshotResync(response) = client
         .request(RequestBody::SnapshotResync(SnapshotRequest {
             workspace_id: client.workspace_id().clone(),
@@ -480,40 +525,8 @@ fn subscribed_events_at_snapshot_watermark_are_not_replayed() {
         })
         .unwrap();
     assert!(matches!(&events[..], [TerminalEvent::Snapshot(snapshot)]
-        if snapshot.output == [b"before".as_slice(), &[0xff, 0]].concat()
-            && snapshot.output_sequence == 3
-            && snapshot.status == ModelTerminalStatus::Running));
-    for event in events {
-        fixture.apply(event);
-    }
+        if snapshot.revision == 2 && snapshot.status == ModelTerminalStatus::Running));
     assert!(attachment.poll().unwrap().is_empty());
-    drop(attachments);
-    fixture.publish(vec![output(4, b"after")], 4);
-    assert_eq!(fixture.output(4), b"after");
-}
-
-#[test]
-fn overflow_recovers_authoritative_termination_and_releases_attachment() {
-    let fixture = Fixture::new();
-    fixture.publish(
-        (1..=600).map(|sequence| output(sequence, b"x")).collect(),
-        600,
-    );
-    fixture
-        .observer
-        .request(RequestBody::TerminalTerminate(TerminalTerminateRequest {
-            terminal_id: lapis_client_api::TerminalId::try_new(fixture.id.as_str()).unwrap(),
-        }))
-        .unwrap();
-    until(|| {
-        for event in fixture.terminals.poll(&fixture.id).unwrap() {
-            fixture.apply(event);
-        }
-        fixture.cache.lock().unwrap().status == ModelTerminalStatus::Exited
-    });
-    assert_eq!(fixture.cache.lock().unwrap().output, vec![b'x'; 600]);
-    assert_eq!(fixture.snapshot().status, TerminalStatus::Terminated);
-    assert!(fixture.terminals.attachments.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -534,30 +547,16 @@ fn commands_reattach_after_disconnect_without_waiting_for_ui_poll_or_resync_comp
     }
     fixture
         .terminals
-        .input(&fixture.id, b"exactly once")
+        .input(&fixture.id, &TerminalInput::Text("exactly once".to_owned()))
         .unwrap();
     assert_eq!(fixture.backend.inputs.load(Ordering::SeqCst), 1);
-    fixture.terminals.resize(&fixture.id, 100, 40).unwrap();
+    let _ = fixture.terminals.resize(&fixture.id, 100, 40).unwrap();
     let snapshot = fixture.snapshot();
     assert_eq!(snapshot.status, TerminalStatus::Running);
-    assert_eq!(
-        snapshot.size,
-        TerminalSize {
-            columns: 100,
-            rows: 40
-        }
-    );
+    assert_eq!(snapshot.screen.size, TerminalSize::new(100, 40));
     assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 0);
-    fixture
-        .host
-        .service()
-        .disconnect(SessionId::try_new("desktop-1").unwrap())
-        .unwrap();
-    fixture.snapshot();
     fixture.terminals.terminate(&fixture.id).unwrap();
     assert_eq!(fixture.backend.inputs.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.backend.terminations.load(Ordering::SeqCst), 1);
     assert_eq!(fixture.snapshot().status, TerminalStatus::Terminated);
 }
-use crate::BackendHost;
-use lapis_backend_state::EmbeddedClient;

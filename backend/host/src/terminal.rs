@@ -7,7 +7,8 @@ use lapis_client_api::{
     TerminalTerminateRequest, WorkspaceConnectRequest,
 };
 use lapis_terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalOutput, TerminalSnapshot,
+    MAX_SCROLLBACK_LINES, TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId,
+    TerminalInput, TerminalRevision, TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot,
     TerminalStatus as ModelTerminalStatus,
 };
 use std::{
@@ -32,7 +33,7 @@ struct Attachment {
     terminal_id: lapis_client_api::TerminalId,
     cwd: PathBuf,
     event_watermark: Option<u64>,
-    output_watermark: u64,
+    revision: TerminalRevision,
     recovery: Option<mpsc::Receiver<Result<Recovery, TerminalError>>>,
     retry_at: Instant,
     finished: bool,
@@ -129,38 +130,24 @@ impl Attachment {
         {
             return Err(error("terminal snapshot identity mismatch"));
         }
-        let watermark = terminal
-            .output_watermark
-            .map_or(0, |sequence| sequence.value());
-        if watermark < self.output_watermark {
-            return Err(error("terminal snapshot output watermark regressed"));
+        if terminal.revision < self.revision {
+            return Err(error("terminal snapshot revision regressed"));
         }
-        if terminal.size.columns == 0 || terminal.size.rows == 0 {
-            return Err(error("terminal snapshot size is invalid"));
-        }
-        let status = match terminal.status {
-            TerminalStatus::Exited | TerminalStatus::Terminated => ModelTerminalStatus::Exited,
-            TerminalStatus::Failed => ModelTerminalStatus::Failed,
-            TerminalStatus::Starting | TerminalStatus::Running | TerminalStatus::Disconnected => {
-                ModelTerminalStatus::Running
-            }
-        };
+        let status = model_status(terminal.status);
         let snapshot = TerminalSnapshot {
             id: TerminalId::new(self.terminal_id.as_str()),
             cwd: self.cwd.clone(),
             status,
-            columns: terminal.size.columns,
-            rows: terminal.size.rows,
-            output: terminal.buffered_output,
-            output_sequence: watermark,
-            output_truncated: terminal.output_truncated,
-            output_offset: terminal.output_offset,
+            revision: terminal.revision,
             screen: terminal.screen,
         };
-        self.output_watermark = watermark;
+        self.revision = snapshot.revision;
         self.event_watermark = Some(recovery.event_watermark);
         self.receiver = Some(recovery.receiver);
-        if status != ModelTerminalStatus::Running {
+        if matches!(
+            status,
+            ModelTerminalStatus::Exited | ModelTerminalStatus::Failed
+        ) {
             self.detach();
         }
         Ok(vec![TerminalEvent::Snapshot(snapshot)])
@@ -212,21 +199,18 @@ impl Attachment {
             }
             self.event_watermark = Some(sequence);
             match event.body {
-                EventBody::TerminalOutput {
-                    terminal_id,
-                    sequence,
-                    data,
-                } if terminal_id == self.terminal_id => {
-                    let sequence = sequence.value();
-                    if sequence <= self.output_watermark {
+                EventBody::TerminalDelta { terminal_id, delta }
+                    if terminal_id == self.terminal_id =>
+                {
+                    if delta.revision <= self.revision {
                         continue;
                     }
-                    if sequence != self.output_watermark + 1 {
+                    if delta.revision != self.revision.saturating_add(1) {
                         self.resync(SnapshotReason::EventGap)?;
                         break;
                     }
-                    self.output_watermark = sequence;
-                    events.push(TerminalEvent::Output(TerminalOutput { sequence, data }));
+                    self.revision = delta.revision;
+                    events.push(TerminalEvent::Delta(delta));
                 }
                 EventBody::TerminalStatus {
                     terminal_id,
@@ -264,7 +248,7 @@ impl HostTerminals {
         &self,
         id: &TerminalId,
         body: impl FnOnce(&lapis_client_api::TerminalId) -> RequestBody,
-    ) -> Result<(), TerminalError> {
+    ) -> Result<ResponseBody, TerminalError> {
         let attachments = self.attachments.lock().map_err(error)?;
         let attachment = attachments
             .get(id.as_str())
@@ -309,9 +293,9 @@ impl HostTerminals {
             response = client.request(request).map_err(error)?;
         }
         match response {
-            ResponseBody::TerminalInput(_)
+            response @ (ResponseBody::TerminalInput(_)
             | ResponseBody::TerminalResize(_)
-            | ResponseBody::TerminalTerminate(_) => Ok(()),
+            | ResponseBody::TerminalTerminate(_)) => Ok(response),
             ResponseBody::Error(problem) => Err(error(
                 problem.detail.as_deref().unwrap_or(problem.code.as_str()),
             )),
@@ -346,6 +330,7 @@ impl TerminalBackend for HostTerminals {
         let ResponseBody::TerminalStart(response) = response else {
             return Err(error("terminal start rejected"));
         };
+        let initial_revision = response.terminal.revision;
         let terminal_id = response.terminal.terminal_id;
         let id = TerminalId::new(terminal_id.as_str());
         self.attachments.lock().map_err(error)?.insert(
@@ -356,7 +341,7 @@ impl TerminalBackend for HostTerminals {
                 terminal_id,
                 cwd: cwd.to_owned(),
                 event_watermark: None,
-                output_watermark: 0,
+                revision: initial_revision,
                 recovery: None,
                 retry_at: Instant::now(),
                 finished: false,
@@ -375,7 +360,7 @@ impl TerminalBackend for HostTerminals {
             }))
             .map_err(error)?
         else {
-            return Err(error("Terminal一覧を取得できません"));
+            return Err(error("terminal list rejected"));
         };
         response
             .snapshot
@@ -396,14 +381,14 @@ impl TerminalBackend for HostTerminals {
             }))
             .map_err(error)?
         else {
-            return Err(error("Terminalを再アタッチできません"));
+            return Err(error("terminal attach rejected"));
         };
         let terminal = response
             .snapshot
             .terminals
             .into_iter()
             .find(|terminal| terminal.terminal_id.as_str() == id.as_str())
-            .ok_or_else(|| error("指定したTerminalはHost上に存在しません"))?;
+            .ok_or_else(|| error("terminal is not present on the Host"))?;
         let snapshot = model_snapshot(&root, terminal.clone())?;
         let mut attachment = Attachment {
             client: Some(client),
@@ -411,7 +396,7 @@ impl TerminalBackend for HostTerminals {
             terminal_id: terminal.terminal_id.clone(),
             cwd: snapshot.cwd.clone(),
             event_watermark: None,
-            output_watermark: 0,
+            revision: terminal.revision,
             recovery: None,
             retry_at: Instant::now(),
             finished: false,
@@ -430,23 +415,39 @@ impl TerminalBackend for HostTerminals {
         Ok(snapshot)
     }
 
-    fn input(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
-        let data = std::str::from_utf8(bytes).map_err(error)?.to_owned();
+    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
+        let input = input.clone();
         self.command(id, |terminal_id| {
             RequestBody::TerminalInput(TerminalInputRequest {
                 terminal_id: terminal_id.clone(),
-                data,
+                input,
             })
         })
+        .map(|_| ())
     }
 
-    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
-        self.command(id, |terminal_id| {
+    fn resize(
+        &self,
+        id: &TerminalId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<TerminalDelta, TerminalError> {
+        let response = self.command(id, |terminal_id| {
             RequestBody::TerminalResize(TerminalResizeRequest {
                 terminal_id: terminal_id.clone(),
                 size: TerminalSize { columns, rows },
             })
-        })
+        })?;
+        let ResponseBody::TerminalResize(response) = response else {
+            return Err(error("unexpected terminal resize response"));
+        };
+        let delta = snapshot_delta(&response.terminal)?;
+        if let Ok(mut attachments) = self.attachments.lock()
+            && let Some(attachment) = attachments.get_mut(id.as_str())
+        {
+            attachment.revision = attachment.revision.max(delta.revision);
+        }
+        Ok(delta)
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -458,11 +459,11 @@ impl TerminalBackend for HostTerminals {
         let attachment = attachments
             .get_mut(id.as_str())
             .ok_or_else(|| error("terminal is not attached"))?;
-        let events = attachment.poll();
+        let events = attachment.poll()?;
         if attachment.finished {
             attachments.remove(id.as_str());
         }
-        events
+        Ok(events)
     }
 
     fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
@@ -470,9 +471,19 @@ impl TerminalBackend for HostTerminals {
             RequestBody::TerminalTerminate(TerminalTerminateRequest {
                 terminal_id: terminal_id.clone(),
             })
-        })?;
+        })
+        .map(|_| ())?;
         self.attachments.lock().map_err(error)?.remove(id.as_str());
         Ok(())
+    }
+}
+
+fn model_status(status: TerminalStatus) -> ModelTerminalStatus {
+    match status {
+        TerminalStatus::Exited | TerminalStatus::Terminated => ModelTerminalStatus::Exited,
+        TerminalStatus::Failed => ModelTerminalStatus::Failed,
+        TerminalStatus::Disconnected => ModelTerminalStatus::Disconnected,
+        TerminalStatus::Starting | TerminalStatus::Running => ModelTerminalStatus::Running,
     }
 }
 
@@ -487,41 +498,59 @@ fn model_snapshot(
             .cwd
             .as_ref()
             .map_or_else(|| root.to_owned(), |cwd| root.join(cwd.as_str())),
-        status: match terminal.status {
-            TerminalStatus::Exited | TerminalStatus::Terminated => ModelTerminalStatus::Exited,
-            TerminalStatus::Failed => ModelTerminalStatus::Failed,
-            _ => ModelTerminalStatus::Running,
-        },
-        columns: terminal.size.columns,
-        rows: terminal.size.rows,
-        output: terminal.buffered_output,
-        output_sequence: terminal
-            .output_watermark
-            .map_or(0, |sequence| sequence.value()),
-        output_truncated: terminal.output_truncated,
-        output_offset: terminal.output_offset,
+        status: model_status(terminal.status),
+        revision: terminal.revision,
         screen: terminal.screen,
     })
 }
 
 fn validate_snapshot(terminal: &lapis_client_api::TerminalSnapshot) -> Result<(), TerminalError> {
-    let end = terminal
-        .output_offset
-        .checked_add(terminal.buffered_output.len() as u64)
-        .ok_or_else(|| error("Terminal output位置が不正です"))?;
-    if terminal.size.columns == 0
-        || terminal.size.columns > 512
-        || terminal.size.rows == 0
-        || terminal.size.rows > 256
-        || terminal.buffered_output.len() > 256 * 1024
-        || terminal
-            .screen
-            .as_ref()
-            .is_some_and(|screen| !(terminal.output_offset..=end).contains(&screen.output_end))
+    let screen = &terminal.screen;
+    if screen.size.columns == 0
+        || screen.size.columns > 512
+        || screen.size.rows == 0
+        || screen.size.rows > 256
+        || screen.rows.len() != screen.size.rows as usize
+        || screen
+            .rows
+            .iter()
+            .any(|row| row.cells.len() != screen.size.columns as usize)
+        || screen.scrollback.len() > MAX_SCROLLBACK_LINES
+        || screen
+            .scrollback
+            .iter()
+            .any(|row| row.cells.len() != screen.size.columns as usize)
     {
-        return Err(error("Terminal snapshotが不正です"));
+        return Err(error("terminal snapshot is invalid"));
     }
     Ok(())
+}
+
+fn snapshot_delta(
+    terminal: &lapis_client_api::TerminalSnapshot,
+) -> Result<TerminalDelta, TerminalError> {
+    validate_snapshot(terminal)?;
+    Ok(TerminalDelta {
+        revision: terminal.revision,
+        size: terminal.screen.size,
+        changed_rows: terminal
+            .screen
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(row, value)| TerminalRowUpdate {
+                row: row as u16,
+                value: value.clone(),
+            })
+            .collect(),
+        cursor: terminal.screen.cursor,
+        modes: terminal.screen.modes,
+        scrollback: Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: terminal.screen.scrollback.clone(),
+        }),
+    })
 }
 
 fn error(value: impl std::fmt::Display) -> TerminalError {
