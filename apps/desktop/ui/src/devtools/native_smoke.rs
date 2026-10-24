@@ -34,17 +34,6 @@ pub(crate) async fn run(target: AnyWindowHandle, cx: &mut AsyncApp) {
         })
         .unwrap();
     sample("visible", target, cx).await;
-    #[cfg(target_os = "windows")]
-    {
-        let viewer = cx
-            .update(|cx| {
-                cx.global::<InspectorController>()
-                    .inspector_handle(target.window_id())
-                    .unwrap()
-            })
-            .unwrap();
-        check_toolbar_hit_test(viewer, cx);
-    }
     let (viewer, inspector, selected) = target
         .update(cx, |_, window, cx| {
             assert_eq!(before, window.viewport_size());
@@ -158,6 +147,18 @@ fn check_toolbar_hit_test(viewer: AnyWindowHandle, cx: &mut AsyncApp) {
         );
     }
     eprintln!("INSPECTOR_NATIVE_TOOLBAR_PASS");
+}
+
+/// Window Hostの前面・ドラッグ検証を汚さない位置でInspectorのnative判定を行う。
+#[cfg(target_os = "windows")]
+pub(crate) async fn check_toolbar_hit_test_for_target(target: AnyWindowHandle, cx: &mut AsyncApp) {
+    let viewer = open_for_target(target, cx);
+    Timer::after(Duration::from_millis(100)).await;
+    check_toolbar_hit_test(viewer, cx);
+    viewer
+        .update(cx, |_, window, _| window.remove_window())
+        .unwrap();
+    Timer::after(Duration::from_millis(100)).await;
 }
 
 pub(crate) fn open_for_target(target: AnyWindowHandle, cx: &mut AsyncApp) -> AnyWindowHandle {

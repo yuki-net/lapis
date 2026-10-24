@@ -814,6 +814,10 @@ pub(crate) fn run_native_smoke(
                 assert_eq!(other.editor.read(cx).document_id(), Some(id.clone()))
             })
             .unwrap();
+        #[cfg(all(target_os = "windows", debug_assertions))]
+        if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
+            crate::devtools::native_smoke::check_toolbar_hit_test_for_target(handle, cx).await;
+        }
         handle
             .update(cx, |_, window, cx| {
                 peer.update(cx, |other, cx| other.close_application(window, cx))
