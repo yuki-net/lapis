@@ -4,7 +4,10 @@ mod ids;
 mod registry;
 
 pub use activation::{ActivationCondition, ActivationEvent};
-pub use contribution::{PanelPosition, PanelScrollPolicy, ScrollAxis, UiContribution, UiSlot};
+pub use contribution::{
+    PanelPosition, PanelScrollPolicy, ScrollAxis, ToolInstancePolicy, UiContribution, UiSlot,
+    ViewPlacementCapabilities, ViewVisibility,
+};
 pub use ids::{
     CommandId, FeatureId, IconId, IconThemeId, KeymapId, ThemeId, ViewId, ViewInstanceId,
     WorkspaceCapabilityId,

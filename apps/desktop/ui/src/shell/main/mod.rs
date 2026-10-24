@@ -59,7 +59,6 @@ pub(crate) struct Shell {
     pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
-    views: HashMap<ViewId, AnyView>,
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
     locale: Localizer,
@@ -113,26 +112,18 @@ impl ShellPresentation {
 
 struct ShellScrollStates {
     panel_contents: RefCell<HashMap<PanelTab, ScrollState>>,
-    panel_empty: [ScrollState; 4],
-    panel_tabs: [ScrollState; 4],
+    panel_empty: RefCell<HashMap<super::TabGroupId, ScrollState>>,
+    panel_tabs: RefCell<HashMap<super::TabGroupId, ScrollState>>,
     tool_picker: ScrollState,
 }
 impl Default for ShellScrollStates {
     fn default() -> Self {
         Self {
             panel_contents: RefCell::new(HashMap::new()),
-            panel_empty: std::array::from_fn(|_| ScrollState::new()),
-            panel_tabs: std::array::from_fn(|_| ScrollState::new()),
+            panel_empty: RefCell::new(HashMap::new()),
+            panel_tabs: RefCell::new(HashMap::new()),
             tool_picker: ScrollState::new(),
         }
-    }
-}
-fn panel_index(position: PanelPosition) -> usize {
-    match position {
-        PanelPosition::Left => 0,
-        PanelPosition::Main => 1,
-        PanelPosition::Bottom => 2,
-        PanelPosition::Right => 3,
     }
 }
 impl ShellScrollStates {
@@ -143,14 +134,39 @@ impl ShellScrollStates {
             .or_default()
             .clone()
     }
-    fn panel_empty(&self, position: PanelPosition) -> &ScrollState {
-        &self.panel_empty[panel_index(position)]
+    fn panel_empty(&self, group: &super::TabGroupId) -> ScrollState {
+        self.panel_empty
+            .borrow_mut()
+            .entry(group.clone())
+            .or_default()
+            .clone()
     }
-    fn panel_tabs(&self, position: PanelPosition) -> &ScrollState {
-        &self.panel_tabs[panel_index(position)]
+    fn panel_tabs(&self, group: &super::TabGroupId) -> ScrollState {
+        self.panel_tabs
+            .borrow_mut()
+            .entry(group.clone())
+            .or_default()
+            .clone()
     }
 }
 impl gpui::EventEmitter<UiCommand> for Shell {}
+
+#[cfg(all(test, debug_assertions))]
+mod group_scroll_tests {
+    use super::*;
+    #[test]
+    fn tab_groups_have_independent_scroll_state() {
+        let states = ShellScrollStates::default();
+        let a = super::super::TabGroupId::new(2);
+        let b = super::super::TabGroupId::new(5);
+        let first = states.panel_tabs(&a);
+        let second = states.panel_tabs(&b);
+        first.handle().set_offset(point(px(-80.0), px(0.0)));
+        assert_eq!(second.handle().offset(), point(px(0.0), px(0.0)));
+        assert!(first.shares_state_with(&states.panel_tabs(&a)));
+        assert!(!first.shares_state_with(&second));
+    }
+}
 impl Focusable for Shell {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -176,6 +192,10 @@ impl Shell {
                 });
             }
         });
+        let mut feature_registry = features::bundled_registry();
+        for (view, entity) in views {
+            feature_registry.register_shared_view(view, entity);
+        }
         Self {
             shell: ShellState::default(),
             host: 0,
@@ -187,9 +207,8 @@ impl Shell {
             panel_bounds: Default::default(),
             session: ShellPresentation::default(),
             document_view,
-            views,
             focus_handle: cx.focus_handle(),
-            feature_registry: features::bundled_registry(),
+            feature_registry,
             locale: Localizer::bundled(),
             keymap: KeymapRegistry::bundled(),
             languages: lapis_language::LanguageRegistry::bundled(),
@@ -204,6 +223,7 @@ impl Shell {
     ) {
         self.session = presentation;
         self.shell.synchronize_documents(&self.session.documents);
+        self.synchronize_view_instances(cx);
         if self.session.root.is_some() {
             self.feature_registry
                 .activate(ActivationEvent::WorkspaceOpened);
@@ -224,6 +244,14 @@ impl Shell {
     fn refresh_feature_activation(&mut self) {
         self.shell
             .synchronize_activation(&mut self.feature_registry);
+    }
+    fn synchronize_view_instances(&mut self, cx: &mut Context<Self>) {
+        for (tab, _) in self.shell.layout.placements() {
+            if let PanelTab::Tool { view, instance } = tab {
+                self.feature_registry
+                    .ensure_view_instance(&view, &instance, cx);
+            }
+        }
     }
     pub(crate) fn preview_visible(&self) -> bool {
         [
@@ -256,6 +284,7 @@ impl Shell {
             &self.session.documents,
             &self.feature_registry,
         );
+        self.synchronize_view_instances(cx);
         self.refresh_feature_activation();
         cx.notify();
     }

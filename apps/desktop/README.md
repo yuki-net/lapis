@@ -90,6 +90,13 @@ Terminal Session の所有者は Host であり、Client の切断や Panel の 
 Scrollback は Host の Model に含まれる履歴を画面の前に描画し、Client 側で VT/ANSI
 を再解釈しない。履歴の上限と再同期は Protocol の Snapshot / Delta 契約に従う。
 
+## 共通Tab操作
+
+- TabBar、TabItem、追加PickerはPanel固有の実装にせず、Shellの共通描画・`FeatureRegistry`の`UiContribution`を使う。Featureが独自のTab管理やPickerを持たない。
+- `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。
+- Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
+- HeaderのPanel開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じ操作APIで復元できる。個別Panelの非表示はタブとHost Resourceを保持する。
+
 ## Layout の責務
 
 Shell の表示配置は `DockLayout` が `Split` と `TabGroup` の木として所有する。`PanelPosition` は既存Headerの領域操作へ接続する互換アンカーであり、内部のTabGroup数を制限するものではない。`ViewInstanceId` はViewの種類を表す `ViewId` と別の値で、同じ種類のViewを複数配置できる。
