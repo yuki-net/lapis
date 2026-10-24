@@ -19,6 +19,7 @@ impl Shell {
                     let _ = released.update(cx, |shell, cx| {
                         shell.close_drag_preview(cx);
                         let Some(drag) = shell.tab_drag.release(active) else {
+                            shell.drop_target = None;
                             return;
                         };
                         let point =
@@ -33,6 +34,7 @@ impl Shell {
                             // 同じ Window 内は既存の Panel on_drop に任せる。
                             return;
                         }
+                        shell.drop_target = None;
                         if let Some(point) = point {
                             cx.emit(UiCommand::ReleaseTab(drag, point));
                         }
@@ -51,10 +53,14 @@ impl Shell {
                         return;
                     };
                     let _ = moving_shell.update(cx, |shell, cx| {
+                        let target_changed = shell.update_drop_target(event.position);
                         if let Some(preview) = shell.drag_preview {
                             let _ = preview.update(cx, |_, window, _| {
                                 crate::window_host::drag_preview::position(window, point);
                             });
+                        }
+                        if target_changed {
+                            cx.notify();
                         }
                     });
                 });
@@ -71,6 +77,7 @@ impl Shell {
 
     /// Clears a pending tab drag and stops GPUI's active drag when one was recorded.
     pub(crate) fn cancel_tab_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_target = None;
         if self.tab_drag.cancel() {
             self.close_drag_preview(cx);
             cx.stop_active_drag(window);
@@ -84,5 +91,50 @@ impl Shell {
         let _ = preview.update(cx, |_, window, _| {
             crate::window_host::drag_preview::close(window);
         });
+    }
+
+    fn update_drop_target(&mut self, point: Point<Pixels>) -> bool {
+        let Some(drag) = self.tab_drag.current() else {
+            return self.drop_target.take().is_some();
+        };
+        if !drag.belongs_to(self.group) {
+            return self.drop_target.take().is_some();
+        }
+        let target = self
+            .group_bounds
+            .borrow()
+            .iter()
+            .find_map(|(group, bounds)| {
+                if !bounds.contains(&point)
+                    || bounds.size.width <= px(0.0)
+                    || bounds.size.height <= px(0.0)
+                {
+                    return None;
+                }
+                let x = f32::from(point.x - bounds.origin.x) / f32::from(bounds.size.width);
+                let y = f32::from(point.y - bounds.origin.y) / f32::from(bounds.size.height);
+                let zone = DropZone::from_normalized(x, y);
+                let mut candidate = self.shell.layout.clone();
+                let error = candidate
+                    .drop_tab(
+                        &drag.source_group,
+                        group,
+                        &drag.tab,
+                        zone,
+                        (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                    )
+                    .err();
+                Some(DropTarget {
+                    group: group.clone(),
+                    zone,
+                    error,
+                })
+            });
+        if self.drop_target == target {
+            false
+        } else {
+            self.drop_target = target;
+            true
+        }
     }
 }

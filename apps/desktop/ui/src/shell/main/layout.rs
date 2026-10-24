@@ -27,6 +27,10 @@ impl Shell {
             window.request_animation_frame();
         }
 
+        if self.shell.layout.has_variable_splits() {
+            return self.render_variable_layout(now, cx);
+        }
+
         let gap = f32::from(tokens::spacing::GAP);
         let left_size = self.shell.panel(PanelPosition::Left).effective_size(now);
         let right_size = self.shell.panel(PanelPosition::Right).effective_size(now);
@@ -243,6 +247,98 @@ impl Shell {
                             cx,
                         ))
                     })
+            }
+        }
+    }
+
+    fn render_variable_layout(&self, now: std::time::Instant, cx: &mut Context<Self>) -> gpui::Div {
+        self.render_layout_node(self.shell.layout.root(), now, cx)
+            .h_full()
+            .w_full()
+            .flex()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+    }
+
+    fn render_layout_node(
+        &self,
+        node: &LayoutNode,
+        now: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if !self.layout_node_visible(node, now) {
+            return div().size(px(0.0)).flex_shrink_0();
+        }
+        match node {
+            LayoutNode::Tabs(group) => {
+                let panel = self
+                    .shell
+                    .layout
+                    .group(group)
+                    .expect("layout leaf must have a tab group");
+                self.render_panel_window_for_group(panel, group, cx)
+            }
+            LayoutNode::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                let first_visible = self.layout_node_visible(first, now);
+                let second_visible = self.layout_node_visible(second, now);
+                let first_weight = if first_visible {
+                    if second_visible { *ratio } else { 1.0 }
+                } else {
+                    0.0
+                };
+                let second_weight = if second_visible {
+                    if first_visible { 1.0 - *ratio } else { 1.0 }
+                } else {
+                    0.0
+                };
+                let mut first = self
+                    .render_layout_node(first, now, cx)
+                    .flex_shrink_0()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0));
+                let mut second = self
+                    .render_layout_node(second, now, cx)
+                    .flex_shrink_0()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0));
+                if matches!(direction, SplitDirection::Horizontal) {
+                    first = first.w(relative(first_weight));
+                    second = second.w(relative(second_weight));
+                } else {
+                    first = first.h(relative(first_weight));
+                    second = second.h(relative(second_weight));
+                }
+                let mut split = div()
+                    .flex()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .gap(tokens::spacing::GAP)
+                    .child(first)
+                    .child(second);
+                split = match direction {
+                    SplitDirection::Horizontal => split.flex_row(),
+                    SplitDirection::Vertical => split.flex_col(),
+                };
+                split
+            }
+        }
+    }
+
+    fn layout_node_visible(&self, node: &LayoutNode, now: std::time::Instant) -> bool {
+        match node {
+            LayoutNode::Tabs(group) => self
+                .shell
+                .layout
+                .group(group)
+                .is_some_and(|panel| panel.is_visible(now)),
+            LayoutNode::Split { first, second, .. } => {
+                self.layout_node_visible(first, now) || self.layout_node_visible(second, now)
             }
         }
     }

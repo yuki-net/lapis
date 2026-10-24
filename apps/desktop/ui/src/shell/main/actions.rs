@@ -14,7 +14,7 @@ impl Shell {
             cx,
         );
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -26,7 +26,7 @@ impl Shell {
     ) {
         self.toggle_panel(PanelPosition::Bottom, cx);
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -42,7 +42,7 @@ impl Shell {
             cx,
         );
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -71,7 +71,7 @@ impl Shell {
     pub(crate) fn toggle_header_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         self.toggle_panel(position, cx);
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -85,7 +85,7 @@ impl Shell {
         self.shell
             .panel_mut(position)
             .activate_tool_without_open(view);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -95,7 +95,7 @@ impl Shell {
         }
         self.shell.panel_mut(position).active = None;
         self.request_panel_open(position, false, cx);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -166,7 +166,7 @@ impl Shell {
         if let Some((next_generation, duration)) = next {
             self.schedule_panel_transition(position, next_generation, duration, cx);
         }
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -229,7 +229,7 @@ impl Shell {
         );
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -247,25 +247,24 @@ impl Shell {
         cx.emit(UiCommand::Theme(theme));
         cx.notify();
     }
-    pub(crate) fn select_panel_tab(
+    pub(crate) fn select_panel_tab_in_group(
         &mut self,
+        group: TabGroupId,
         position: PanelPosition,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        self.request_panel_open(position, true, cx);
-        let group = self
-            .shell
-            .layout
-            .group_for_tab(&tab)
-            .unwrap_or_else(|| self.shell.layout.primary_group_id(position).clone());
+        if self.shell.layout.primary_group_id(position) == &group {
+            self.request_panel_open(position, true, cx);
+        }
         self.shell.open_group_tab(&group, tab);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn close_panel_tab(
+    pub(crate) fn close_panel_tab_in_group(
         &mut self,
+        group: TabGroupId,
         position: PanelPosition,
         tab: PanelTab,
         window: &mut Window,
@@ -277,8 +276,10 @@ impl Shell {
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
             }
-            if !self.close_empty_panel(position, cx) {
-                self.refresh_feature_activation();
+            if self.shell.layout.primary_group_id(position) != &group
+                || !self.close_empty_panel(position, cx)
+            {
+                self.refresh_feature_activation(cx);
                 cx.notify();
             }
             return;
@@ -343,7 +344,7 @@ impl Shell {
         self.shell.tool_picker = None;
         self.shell.set_tool_picker_query(String::new());
         window.focus(&self.focus_handle);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -456,18 +457,38 @@ impl Shell {
             .collect()
     }
 
-    pub(crate) fn move_panel_tab(
+    pub(crate) fn move_panel_tab_to_group(
         &mut self,
-        source: PanelPosition,
-        target: PanelPosition,
+        source: TabGroupId,
+        target: TabGroupId,
         tab: PanelTab,
+        zone: DropZone,
         cx: &mut Context<Self>,
     ) {
-        if !self.shell.panel(target).open && target != PanelPosition::Main {
-            return;
+        let target_size = self
+            .group_bounds
+            .borrow()
+            .get(&target)
+            .map(|bounds| (f32::from(bounds.size.width), f32::from(bounds.size.height)))
+            .unwrap_or((0.0, 0.0));
+        match self
+            .shell
+            .layout
+            .drop_tab(&source, &target, &tab, zone, target_size)
+        {
+            Ok(()) => {
+                self.refresh_feature_activation(cx);
+                cx.notify();
+            }
+            Err(error) => {
+                self.status = match error {
+                    LayoutError::InsufficientSpace => "分割できる最小領域を確保できません".into(),
+                    LayoutError::SideColumnLimitReached => "サイド領域は通常2列までです".into(),
+                    LayoutError::TabNotFound => "移動元のタブが見つかりません".into(),
+                    _ => "この位置にはタブを配置できません".into(),
+                };
+                cx.notify();
+            }
         }
-        self.shell.move_tab(source, target, tab);
-        self.refresh_feature_activation();
-        cx.notify();
     }
 }

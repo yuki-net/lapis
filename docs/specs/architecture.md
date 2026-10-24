@@ -68,7 +68,7 @@ Document は取り外しボタンと Root への再ドックに加え、Windows 
 
 GPUI 0.2.2 の Windows backend は MouseDown で `SetCapture`、MouseUp で `ReleaseCapture` し、GPUI は受信した Window の MouseUp 後に active drag を破棄する。Shell は元 Window の capture phase で解放を受け、`ClientToScreen` / `ScreenToClient` で各 Window の DPI をまたぐ物理座標を変換する。`WindowFromPoint` の手前の Window と描画時の Panel bounds を照合し、背後の Window へ移動しない。別グループの Lapis Window と、Lapis の Panel 以外の領域では取り消す。外部アプリ上では新 Window を生成する。新 Window は離した位置のモニターの作業領域内へ置く。GPUI の変更やイベントの定期監視は加えない。
 
-ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。ドラッグのラベル表示は元 Window の範囲内であり、Window 外の追従プレビューや移動先の強調表示は未実装。Windows 以外では既存の Window 内ドラッグとボタン操作を維持するが、Window 間ドラッグは未対応。
+ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。同一Window内の移動先は `DropZone` のOverlayで強調する。Window外の追従プレビューと別Windowの移動先の強調表示は未実装。Windows 以外では既存の Window 内ドラッグとボタン操作を維持するが、Window 間ドラッグは未対応。
 
 WindowGroup の再起動復元は未実装。後続では group / window の永続 ID、親子関係、bounds、Panel ごとのタブ順・Active Tab・サイズを、Document の復元用 ID と関連づけて保存する。現状の HostId / GPUI EntityId を永続 ID に使わない。明示 close 後の更新済み Document 一覧を保存し、閉じたタブ・Window を復活させない。既存の文書復元は OS Window の配置復元を意味しない。
 
@@ -89,6 +89,13 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
 - HeaderのPanel操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じPanel操作APIを呼び出して復元できる。
+
+## Desktop の分割・ドラッグ
+
+- ドラッグ中は`DropTarget`だけを更新し、`DropZone`のOverlayを表示する。`Split`やタブ移動はDrop確定時にだけ実行し、Escape・Focus喪失・不正Dropでは配置を変更しない。
+- 通常の左右サイド領域はUI操作として2列まで、最小領域はLayout APIの不変条件として検査する。ただし`DockLayout`の木自体に固定列数を埋め込まず、将来の広い画面向けポリシー変更を妨げない。
+- 同じWindowGroup内のDocumentは既存のDock/Undock経路へ接続する。別WindowへのTool移動はHost・Featureの寿命契約が検証されるまで受理せず、見た目だけの移動を実装しない。
+- Windowsの`SetCapture`/`ReleaseCapture`、`ClientToScreen`/`ScreenToClient`、DPI変換、`WindowFromPoint`の検証は`window_host`の責務として維持する。描画中に同期I/Oを行わず、Window生成失敗でも元のTabとResourceを保持する。
 
 ## 依存の検査
 

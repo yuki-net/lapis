@@ -1,4 +1,4 @@
-use crate::extension_ui::{PanelPosition, ViewId};
+use crate::extension_ui::ViewId;
 use lapis_editor_core::DocumentId;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -31,7 +31,7 @@ pub(crate) enum PanelTab {
 pub(crate) struct DraggedPanelTab {
     pub group: Option<gpui::EntityId>,
     pub source_host: super::window_group::HostId,
-    pub source_panel: PanelPosition,
+    pub source_group: super::TabGroupId,
     pub tab: PanelTab,
 }
 
@@ -55,6 +55,10 @@ impl TabDragState {
     /// Clears the pending drag and reports whether one existed.
     pub fn cancel(&mut self) -> bool {
         self.0.take().is_some()
+    }
+
+    pub(crate) fn current(&self) -> Option<&DraggedPanelTab> {
+        self.0.as_ref()
     }
 
     /// Consumes the pending drag, returning it only if GPUI still considers the release active.
@@ -118,7 +122,7 @@ mod tests {
         let drag = DraggedPanelTab {
             group: Some(1.into()),
             source_host: 1,
-            source_panel: PanelPosition::Main,
+            source_group: crate::shell::TabGroupId::new(1),
             tab: PanelTab::tool("terminal"),
         };
         assert!(drag.belongs_to(Some(1.into())));
@@ -132,7 +136,7 @@ mod tests {
         let drag = DraggedPanelTab {
             group: Some(1.into()),
             source_host: 0,
-            source_panel: PanelPosition::Main,
+            source_group: crate::shell::TabGroupId::new(1),
             tab: PanelTab::tool("terminal"),
         };
         state.begin(drag.clone());

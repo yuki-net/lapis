@@ -85,6 +85,12 @@ Document タブは ↗ / ↩ ボタンで取り外し・Root へ再ドックで�
 - Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
 - HeaderのPanel開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じ操作APIで復元できる。個別Panelの非表示はタブとHost Resourceを保持する。
 
+## Split とTabドラッグ
+
+- ドラッグ中は配置先の`DropZone`をハイライトするだけで、Drop確定まで`DockLayout`を変更しない。Escape、Focus喪失、不正Drop、Window生成失敗では元のTabとResourceを保持する。
+- 同じWindowGroup内のDocumentは既存のWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は実行資源の契約がないため受理せず、UIだけ成功したように見せない。
+- 左右サイドの通常操作は2列まで、最小領域を満たさないSplitは拒否する。内部のSplit木は可変であり、このUI制限をLayoutモデルへ固定しない。
+
 ## Layout の責務
 
 Shell の表示配置は `DockLayout` が `Split` と `TabGroup` の木として所有する。`PanelPosition` は既存Headerの領域操作へ接続する互換アンカーであり、内部のTabGroup数を制限するものではない。`ViewInstanceId` はViewの種類を表す `ViewId` と別の値で、同じ種類のViewを複数配置できる。

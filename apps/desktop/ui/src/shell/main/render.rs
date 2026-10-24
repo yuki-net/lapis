@@ -4,6 +4,7 @@ impl Render for Shell {
     /// Builds the window shell and input handlers, clearing panel drop bounds for the new layout pass.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.panel_bounds.borrow_mut().clear();
+        self.group_bounds.borrow_mut().clear();
         div()
             .size_full()
             .relative()

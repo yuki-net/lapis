@@ -416,9 +416,9 @@ impl DesktopRoot {
             UiCommand::DockTab(tab) => {
                 self.transfer_tab(host, ROOT_HOST, PanelPosition::Main, tab, cx)
             }
-            UiCommand::MoveTab(drag, panel) => {
+            UiCommand::MoveTab(drag, group) => {
                 if drag.group == Some(self.group.entity_id()) {
-                    self.transfer_tab(drag.source_host, host, panel, drag.tab, cx);
+                    self.transfer_tab_to_group(drag.source_host, host, group, drag.tab, cx);
                 }
             }
             UiCommand::CloseWindow => self.close_hosts(host, None, window, cx),

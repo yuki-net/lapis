@@ -340,6 +340,7 @@ impl ShellState {
         }
     }
 
+    #[cfg(test)]
     pub fn move_tab(&mut self, source: PanelPosition, target: PanelPosition, tab: PanelTab) {
         if source == target {
             self.panel_mut(target).activate_without_open(tab);
