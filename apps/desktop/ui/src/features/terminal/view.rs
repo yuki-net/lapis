@@ -10,17 +10,48 @@ impl Render for TerminalFeature {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.active_id();
         let screen = self.active_screen().cloned();
-        let rows = screen
+
+        // virtualization: 表示中の行のみを処理
+        let total_rows = screen
+            .as_ref()
+            .map(|s| s.scrollback.len() + s.rows.len())
+            .unwrap_or(0);
+        let visible_range = if total_rows > 0 {
+            let handle = self.scroll.handle();
+            let height = handle.bounds().size.height;
+            let offset = handle.offset();
+
+            if height > px(0.0) {
+                let row_height = 16.0;
+                let visible_rows = (height.to_f64() / row_height).ceil() as usize;
+                let first_visible = ((-offset.y).to_f64() / row_height).floor() as usize;
+                let last_visible = (first_visible + visible_rows + 2).min(total_rows);
+                first_visible..last_visible
+            } else {
+                0..total_rows
+            }
+        } else {
+            0..0
+        };
+
+        // 表示行のみを収集
+        let rows: Vec<TerminalRow> = screen
             .as_ref()
             .map(|screen| {
-                screen
-                    .scrollback
-                    .iter()
-                    .chain(screen.rows.iter())
-                    .cloned()
-                    .collect::<Vec<_>>()
+                let scrollback_len = screen.scrollback.len();
+                let mut rows = Vec::new();
+
+                for i in visible_range.clone() {
+                    if i < scrollback_len {
+                        rows.push(screen.scrollback[i].clone());
+                    } else if i >= scrollback_len && i < scrollback_len + screen.rows.len() {
+                        rows.push(screen.rows[i - scrollback_len].clone());
+                    }
+                }
+                rows
             })
             .unwrap_or_default();
+
         let cursor = screen.as_ref().map(|screen| {
             let mut cursor = screen.cursor;
             cursor.row = cursor

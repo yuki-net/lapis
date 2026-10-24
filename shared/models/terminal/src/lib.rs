@@ -172,7 +172,9 @@ impl TerminalScreen {
     }
 
     /// Deltaを適用して表示用のTerminal stateを更新する。
+    /// atomic: validation失敗時は元のstateが完全に変更されない。
     pub fn apply_delta(&mut self, delta: &TerminalDelta) -> Result<(), TerminalError> {
+        // 1. validate
         if delta.size.columns == 0
             || delta.size.rows == 0
             || delta.size.columns > 512
@@ -184,7 +186,94 @@ impl TerminalScreen {
             )));
         }
 
-        if self.size != delta.size {
+        // size変更時のvalidation
+        let size_changed = self.size != delta.size;
+        if size_changed {
+            // rows validation
+            for update in &delta.changed_rows {
+                if update.row >= delta.size.rows
+                    || update.value.cells.len() != delta.size.columns as usize
+                {
+                    return Err(TerminalError::new(format!(
+                        "invalid terminal delta revision {}",
+                        delta.revision
+                    )));
+                }
+            }
+        } else {
+            // rows validation
+            for update in &delta.changed_rows {
+                if update.row >= self.size.rows
+                    || update.value.cells.len() != self.size.columns as usize
+                {
+                    return Err(TerminalError::new(format!(
+                        "invalid terminal delta revision {}",
+                        delta.revision
+                    )));
+                }
+            }
+        }
+
+        // scrollback validation
+        if let Some(scrollback) = &delta.scrollback {
+            let cols = if size_changed {
+                delta.size.columns
+            } else {
+                self.size.columns
+            };
+            if scrollback
+                .rows
+                .iter()
+                .any(|row| row.cells.len() != cols as usize)
+            {
+                return Err(TerminalError::new(format!(
+                    "invalid terminal scrollback revision {}",
+                    delta.revision
+                )));
+            }
+            if !scrollback.reset {
+                let dropped = usize::from(scrollback.dropped);
+                if size_changed && dropped > 0 {
+                    return Err(TerminalError::new(format!(
+                        "terminal scrollback gap at revision {}",
+                        delta.revision
+                    )));
+                }
+                if !size_changed && dropped > self.scrollback.len() {
+                    return Err(TerminalError::new(format!(
+                        "terminal scrollback gap at revision {}",
+                        delta.revision
+                    )));
+                }
+                let new_len = if scrollback.reset {
+                    scrollback.rows.len()
+                } else {
+                    (if size_changed {
+                        0
+                    } else {
+                        self.scrollback.len()
+                    })
+                    .saturating_sub(dropped)
+                        + scrollback.rows.len()
+                };
+                if new_len > MAX_SCROLLBACK_LINES {
+                    return Err(TerminalError::new(format!(
+                        "terminal scrollback is too large at revision {}",
+                        delta.revision
+                    )));
+                }
+            } else {
+                if scrollback.rows.len() > MAX_SCROLLBACK_LINES {
+                    return Err(TerminalError::new(format!(
+                        "terminal scrollback is too large at revision {}",
+                        delta.revision
+                    )));
+                }
+            }
+        }
+
+        // 2. apply（validation済みなので安全）
+        if size_changed {
             self.size = delta.size;
             self.rows = (0..delta.size.rows)
                 .map(|_| TerminalRow::empty(delta.size.columns))
@@ -193,47 +282,17 @@ impl TerminalScreen {
         }
 
         for update in &delta.changed_rows {
-            if update.row >= self.size.rows
-                || update.value.cells.len() != self.size.columns as usize
-            {
-                return Err(TerminalError::new(format!(
-                    "invalid terminal delta revision {}",
-                    delta.revision
-                )));
-            }
             self.rows[update.row as usize] = update.value.clone();
         }
         self.cursor = delta.cursor;
         self.modes = delta.modes;
         if let Some(scrollback) = &delta.scrollback {
-            if scrollback
-                .rows
-                .iter()
-                .any(|row| row.cells.len() != self.size.columns as usize)
-            {
-                return Err(TerminalError::new(format!(
-                    "invalid terminal scrollback revision {}",
-                    delta.revision
-                )));
-            }
             if scrollback.reset {
                 self.scrollback = scrollback.rows.clone();
             } else {
                 let dropped = usize::from(scrollback.dropped);
-                if dropped > self.scrollback.len() {
-                    return Err(TerminalError::new(format!(
-                        "terminal scrollback gap at revision {}",
-                        delta.revision
-                    )));
-                }
                 self.scrollback.drain(..dropped);
                 self.scrollback.extend(scrollback.rows.clone());
-            }
-            if self.scrollback.len() > MAX_SCROLLBACK_LINES {
-                return Err(TerminalError::new(format!(
-                    "terminal scrollback is too large at revision {}",
-                    delta.revision
-                )));
             }
         }
         Ok(())
