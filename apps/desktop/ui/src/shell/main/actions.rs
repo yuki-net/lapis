@@ -14,7 +14,7 @@ impl Shell {
             cx,
         );
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -26,7 +26,7 @@ impl Shell {
     ) {
         self.toggle_panel(PanelPosition::Bottom, cx);
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -42,7 +42,7 @@ impl Shell {
             cx,
         );
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -71,7 +71,7 @@ impl Shell {
     pub(crate) fn toggle_header_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
         self.toggle_panel(position, cx);
         self.shell.command_palette_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -85,7 +85,7 @@ impl Shell {
         self.shell
             .panel_mut(position)
             .activate_tool_without_open(view);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -95,7 +95,7 @@ impl Shell {
         }
         self.shell.panel_mut(position).active = None;
         self.request_panel_open(position, false, cx);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -166,7 +166,7 @@ impl Shell {
         if let Some((next_generation, duration)) = next {
             self.schedule_panel_transition(position, next_generation, duration, cx);
         }
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -229,7 +229,7 @@ impl Shell {
         );
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -260,7 +260,7 @@ impl Shell {
             .group_for_tab(&tab)
             .unwrap_or_else(|| self.shell.layout.primary_group_id(position).clone());
         self.shell.open_group_tab(&group, tab);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -343,7 +343,7 @@ impl Shell {
         self.shell.tool_picker = None;
         self.shell.set_tool_picker_query(String::new());
         window.focus(&self.focus_handle);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 
@@ -467,7 +467,7 @@ impl Shell {
             return;
         }
         self.shell.move_tab(source, target, tab);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
 }

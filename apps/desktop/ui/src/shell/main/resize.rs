@@ -233,7 +233,7 @@ impl Shell {
                 crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
                 cx,
             );
-            self.refresh_feature_activation();
+            self.refresh_feature_activation(cx);
         }
     }
 
@@ -276,7 +276,7 @@ impl Shell {
                 crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
                 cx,
             );
-            self.refresh_feature_activation();
+            self.refresh_feature_activation(cx);
         }
     }
 
@@ -314,7 +314,7 @@ impl Shell {
                 crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
                 cx,
             );
-            self.refresh_feature_activation();
+            self.refresh_feature_activation(cx);
         }
     }
 
