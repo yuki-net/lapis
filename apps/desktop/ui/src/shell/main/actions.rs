@@ -278,7 +278,7 @@ impl Shell {
                     .close_view_instance(&tab.instance_id());
             }
             if !self.close_empty_panel(position, cx) {
-                self.refresh_feature_activation();
+                self.refresh_feature_activation(cx);
                 cx.notify();
             }
             return;
