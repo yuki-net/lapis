@@ -195,6 +195,7 @@ fn panel_position_name(position: PanelPosition) -> &'static str {
         PanelPosition::Right => "right-panel",
     }
 }
+<<<<<<< HEAD
 
 #[cfg(test)]
 mod tests {
@@ -272,3 +273,5 @@ mod tests {
         );
     }
 }
+=======
+>>>>>>> 26140e5 (refactor(desktop): validate shared layout state on current develop)
