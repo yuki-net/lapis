@@ -9,6 +9,7 @@ use lapis_desktop_client::{ConversationViewState, DocumentTab, PanelViewState};
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {
         layout: Some(shell.layout.capture_view_state()),
+        show_panel_controls: shell.show_panel_controls,
         panels: shell
             .panels()
             .into_iter()
@@ -62,12 +63,14 @@ pub(crate) fn apply_view_state(
             .then_some(tab)
         })
     {
+        shell.show_panel_controls = view.show_panel_controls;
         shell
             .panel_mut(PanelPosition::Main)
             .set_open_immediate(true);
         return;
     }
     if !view.panels.is_empty() {
+        shell.show_panel_controls = view.show_panel_controls;
         let valid_documents = documents
             .iter()
             .map(|document| document.id.clone())
@@ -111,6 +114,7 @@ pub(crate) fn apply_view_state(
         return;
     }
 
+    shell.show_panel_controls = view.show_panel_controls;
     shell
         .panel_mut(PanelPosition::Left)
         .activate_tool(ViewId::new(match view.active_tool.as_str() {

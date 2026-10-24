@@ -78,8 +78,17 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 - `apps/desktop/ui/src/shell/layout.rs` の `DockLayout` が、`Split` と `TabGroup` の木、Groupごとのタブ順・Active・表示状態を所有する。Panelは配置先であり、FeatureやHost Resourceの所有者ではない。
 - `ViewId` はViewの種類、`ViewInstanceId` は開いている個体を表す。タブの非表示・移動・取り外しは、HostのDocument・Terminal・Agentの終了や複製を発生させない。
+- Pickerの追加先・Focus・タブスクロールは`TabGroupId`単位。ZoneはHeader操作と初期配置の情報であり、個々のGroupを代用しない。削除済みGroupへの追加は拒否する。
+- `FeatureRegistry`がViewのFactory・共有Entity・個体別Entityを保持する。`Multiple`はFactory登録時だけ追加可能で、既存のFactory未対応Featureは`Shared`を維持する。個体IDは再起動・別Window・非表示Taskをまたぐ乱数IDを使い、描画処理ではEntityを生成しない。
 - `ConversationViewState.layout` はLayoutの保存値。不正なGroup ID・位置・比率、非有限のサイズ、重複Group/leaf、木とGroupの不一致、Main/Left/Bottom/Rightの互換アンカー欠落は全体を拒否し、旧`panels`形式へフォールバックする。有限のサイズは旧形式と同じ範囲へ補正する。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、Layoutの復元は継続する。互換アンカーはHeaderの操作先を保証するもので、Group数の上限ではない。
 - 通常のHeader操作は互換アンカーを対象にするが、可変Splitの内部構造へ固定4Panelや左右の列数制限を埋め込まない。制限が必要な場合はUI操作ポリシーで拒否し、Layoutモデル自体を狭めない。
+
+## Desktop の共通Tab操作
+
+- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
+- Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
+- Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
+- HeaderのPanel操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じPanel操作APIを呼び出して復元できる。
 
 ## 依存の検査
 

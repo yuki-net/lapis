@@ -12,4 +12,4 @@ pub(crate) use panel::PanelHost;
 pub(crate) use state::{
     HeaderMenuSection, PanelSpanTransition, ResizeMode, ResizeTarget, ShellState,
 };
-pub(crate) use tab_state::{DraggedPanelTab, PanelTab};
+pub(crate) use tab_state::{DraggedPanelTab, PanelTab, ViewInstanceId};
