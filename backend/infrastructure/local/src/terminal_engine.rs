@@ -291,6 +291,16 @@ fn compute_scrollback_delta(
     let old_rest_len = old_rest.len();
     let new_rest_len = new_rest.len();
 
+    // 共通prefixを残した置換はfront drop + appendでは表現できない。
+    // prefixを除いてdroppedを数えるとClientの履歴先頭を誤って削除する。
+    if prefix > 0 && old_rest_len > 0 && new_rest_len > 0 {
+        return Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: new.to_vec(),
+        });
+    }
+
     // どちらも残りが空 → 変更なし（すでにold==newでNoneを返している）
     if old_rest_len == 0 && new_rest_len == 0 {
         return None;

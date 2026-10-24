@@ -537,6 +537,39 @@ fn delta_apply_restores_scrollback_append() {
 }
 
 #[test]
+fn delta_apply_restores_scrollback_common_prefix_replacement() {
+    for (old, new) in [
+        (vec!["A", "B"], vec!["A", "C"]),
+        (vec!["A", "B", "C"], vec!["A", "X", "C"]),
+        (vec!["A", "A", "B"], vec!["A", "B", "C"]),
+    ] {
+        let size = TerminalSize::new(40, 4);
+        let mut client = TerminalScreen::empty(size);
+        client.scrollback = old
+            .iter()
+            .map(|text| TerminalRow::from_text(40, text))
+            .collect();
+        let expected: Vec<_> = new
+            .iter()
+            .map(|text| TerminalRow::from_text(40, text))
+            .collect();
+        let scrollback = compute_scrollback_delta(&client.scrollback, &expected).unwrap();
+        assert!(scrollback.reset);
+        client
+            .apply_delta(&TerminalDelta {
+                revision: 1,
+                size,
+                changed_rows: Vec::new(),
+                cursor: client.cursor,
+                modes: client.modes,
+                scrollback: Some(scrollback),
+            })
+            .unwrap();
+        assert_eq!(client.scrollback, expected, "{old:?} -> {new:?}");
+    }
+}
+
+#[test]
 fn delta_apply_restores_scrollback_front_drop() {
     use super::compute_scrollback_delta;
     use lapis_terminal::TerminalScrollbackDelta;
