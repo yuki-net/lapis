@@ -3,8 +3,8 @@ use crate::{
     components::{ScrollAxis, action_button, scroll_viewport},
     theme,
 };
-use gpui::{Context, Render, Window, canvas, div, prelude::*, px};
-use lapis_terminal::{TerminalCell, TerminalColor, TerminalRow, TerminalShell};
+use gpui::{Context, Pixels, Render, ScrollHandle, Window, canvas, div, prelude::*, px};
+use lapis_terminal::{TerminalCell, TerminalColor, TerminalId, TerminalRow, TerminalShell};
 
 impl Render for TerminalFeature {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -29,60 +29,25 @@ impl Render for TerminalFeature {
             .find(|terminal| Some(&terminal.id) == active.as_ref())
             .map(|terminal| (terminal.id.clone(), terminal.revision));
 
-        // 現在の状態に基づいて処理を分岐
-        let needs_scroll_follow = match &self.visible_output {
-            None => {
-                // 未処理状態：outputが変更されたか確認
-                if output.is_some() {
-                    // outputが変更されたので、scroll-followを試みる
-                    self.visible_output = Some(None); // pending状態に
-                    true
-                } else {
-                    false
+        let handle = self.scroll.handle();
+        if follow_output(
+            &mut self.visible_output,
+            output,
+            self.focus.is_focused(window),
+            screen_for_cursor.map(|cursor| cursor.row),
+            &handle,
+            handle.bounds().size.height,
+        ) {
+            // 今frameのlayoutを待ち、表示可能になったときだけ次のrenderを起こす。
+            // 高さ0の非表示Panelではnotifyを連鎖させず、pendingを維持する。
+            cx.on_next_frame(window, |feature, _, cx| {
+                if retry_after_layout(
+                    &feature.visible_output,
+                    feature.scroll.handle().bounds().size.height,
+                ) {
+                    cx.notify();
                 }
-            }
-            Some(None) => {
-                // scroll pending状態：前回のscrollが未完成なので再試行
-                true
-            }
-            Some(Some((id, revision))) => {
-                // 完了状態：outputが変更されたか確認
-                if output.as_ref() != Some(&(id.clone(), *revision)) {
-                    self.visible_output = Some(None); // pending状態に
-                    true
-                } else {
-                    false
-                }
-            }
-        };
-
-        if needs_scroll_follow
-            && self.focus.is_focused(window)
-            && let Some(row) = screen_for_cursor.map(|cursor| cursor.row)
-        {
-            let handle = self.scroll.handle();
-            let height = handle.bounds().size.height;
-            if height > px(0.0) {
-                // scrollが成功したので、完了状態に更新
-                if let Some((id, rev)) = output {
-                    self.visible_output = Some(Some((id, rev)));
-                }
-                let mut offset = handle.offset();
-                let top = px(f32::from(row) * 16.0);
-                let bottom = top + px(16.0);
-                if top + offset.y < px(0.0) {
-                    offset.y = -top;
-                } else if bottom + offset.y > height {
-                    offset.y = height - bottom;
-                }
-                handle.set_offset(offset);
-            }
-            // height == 0の場合はpending状態を維持したまま（次frameで再試行）
-        } else if needs_scroll_follow {
-            // scroll不要な場合（focusなしまたはcursorなし）はpendingを解除
-            if let Some((id, rev)) = output {
-                self.visible_output = Some(Some((id, rev)));
-            }
+            });
         }
 
         // 参照で読み、visible rowsだけcloneする
@@ -303,6 +268,45 @@ impl Render for TerminalFeature {
     }
 }
 
+/// trueのとき、呼出側はlayout後のframe callbackを予約する。
+fn follow_output(
+    visible_output: &mut Option<Option<(TerminalId, u64)>>,
+    output: Option<(TerminalId, u64)>,
+    focused: bool,
+    cursor_row: Option<u16>,
+    handle: &ScrollHandle,
+    height: Pixels,
+) -> bool {
+    let Some(output) = output else {
+        *visible_output = None;
+        return false;
+    };
+    if visible_output.as_ref().and_then(Option::as_ref) == Some(&output) {
+        return false;
+    }
+    *visible_output = Some(None);
+    if focused && let Some(row) = cursor_row {
+        if height <= px(0.0) {
+            return true;
+        }
+        let mut offset = handle.offset();
+        let top = px(f32::from(row) * 16.0);
+        let bottom = top + px(16.0);
+        if top + offset.y < px(0.0) {
+            offset.y = -top;
+        } else if bottom + offset.y > height {
+            offset.y = height - bottom;
+        }
+        handle.set_offset(offset);
+    }
+    *visible_output = Some(Some(output));
+    false
+}
+
+fn retry_after_layout(visible_output: &Option<Option<(TerminalId, u64)>>, height: Pixels) -> bool {
+    matches!(visible_output, Some(None)) && height > px(0.0)
+}
+
 fn render_row(row: TerminalRow) -> impl IntoElement {
     div()
         .flex()
@@ -402,4 +406,111 @@ fn indexed_color(index: u8) -> (u8, u8, u8) {
     }
     let gray = 8 + 10 * (index.saturating_sub(232));
     (gray, gray, gray)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn output(id: &str, revision: u64) -> Option<(TerminalId, u64)> {
+        Some((TerminalId::new(id), revision))
+    }
+
+    #[test]
+    fn scroll_follow_reserves_retry_then_finishes_with_unchanged_output() {
+        let mut state = None;
+        let handle = ScrollHandle::new();
+        assert!(follow_output(
+            &mut state,
+            output("first", 1),
+            true,
+            Some(120),
+            &handle,
+            px(0.0)
+        ));
+        assert_eq!(state, Some(None));
+        // 0のままならnotifyしない。layoutで高さが得られたら次frameを描画する。
+        assert!(!retry_after_layout(&state, px(0.0)));
+        assert!(retry_after_layout(&state, px(320.0)));
+        assert!(!follow_output(
+            &mut state,
+            output("first", 1),
+            true,
+            Some(120),
+            &handle,
+            px(320.0)
+        ));
+        assert_eq!(handle.offset().y, px(320.0 - 121.0 * 16.0));
+        assert_eq!(state, Some(output("first", 1)));
+        assert!(!retry_after_layout(&state, px(320.0)));
+    }
+
+    #[test]
+    fn scroll_follow_with_layout_scrolls_immediately_and_only_once() {
+        let mut state = None;
+        let handle = ScrollHandle::new();
+        assert!(!follow_output(
+            &mut state,
+            output("first", 1),
+            true,
+            Some(120),
+            &handle,
+            px(320.0)
+        ));
+        assert_eq!(state, Some(output("first", 1)));
+        assert_eq!(handle.offset().y, px(-1616.0));
+        handle.set_offset(gpui::point(px(0.0), px(0.0)));
+        assert!(!follow_output(
+            &mut state,
+            output("first", 1),
+            true,
+            Some(120),
+            &handle,
+            px(320.0)
+        ));
+        assert_eq!(handle.offset().y, px(0.0));
+    }
+
+    #[test]
+    fn scroll_follow_completes_pending_without_cursor_or_focus() {
+        for (focused, cursor) in [(true, None), (false, Some(120))] {
+            let mut state = Some(None);
+            assert!(!follow_output(
+                &mut state,
+                output("first", 1),
+                focused,
+                cursor,
+                &ScrollHandle::new(),
+                px(0.0)
+            ));
+            assert_eq!(state, Some(output("first", 1)));
+        }
+    }
+
+    #[test]
+    fn scroll_follow_retries_after_terminal_switch_and_new_snapshot_revision() {
+        let handle = ScrollHandle::new();
+        let mut state = Some(output("first", 1));
+        // tab/Task切替、元Terminalへの復帰、Attach/reconnect/resyncのrevision更新。
+        for next in [output("second", 1), output("first", 1), output("first", 2)] {
+            assert!(follow_output(
+                &mut state,
+                next.clone(),
+                true,
+                Some(120),
+                &handle,
+                px(0.0)
+            ));
+            assert!(retry_after_layout(&state, px(320.0)));
+            assert!(!follow_output(
+                &mut state,
+                next.clone(),
+                true,
+                Some(120),
+                &handle,
+                px(320.0)
+            ));
+            assert_eq!(state, Some(next));
+        }
+    }
 }
