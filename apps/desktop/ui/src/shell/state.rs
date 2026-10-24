@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 
 use lapis_desktop_client::DocumentTab;
 
-use crate::extension_ui::{FeatureRegistry, PanelPosition};
+use crate::extension_ui::{FeatureRegistry, PanelPosition, ViewInstanceId};
 
-use super::{DockLayout, PanelHost, PanelTab, TabGroupId, ViewInstanceId};
+use super::{DockLayout, PanelHost, PanelTab, TabGroupId};
 
 const PANEL_SPAN_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 

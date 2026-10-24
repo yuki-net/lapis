@@ -22,7 +22,8 @@ use lapis_lsp::{
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_task::{TaskControl, TaskError, TaskMode};
 use lapis_terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus,
+    TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
+    TerminalScreen, TerminalSize, TerminalSnapshot, TerminalStatus,
 };
 use lapis_workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 use serde::{Deserialize, Serialize};
@@ -154,6 +155,8 @@ pub struct LayoutViewState {
     pub version: u16,
     pub root: LayoutNodeViewState,
     pub groups: Vec<LayoutGroupViewState>,
+    #[serde(default)]
+    pub anchors: std::collections::BTreeMap<String, String>,
 }
 
 fn layout_view_state_version() -> u16 {
@@ -448,13 +451,11 @@ impl TerminalSession {
                 } else {
                     TerminalStatus::Exited
                 },
-                columns: terminal.columns,
-                rows: terminal.rows,
-                output: Vec::new(),
-                output_sequence: 0,
-                output_truncated: false,
-                output_offset: 0,
-                screen: None,
+                revision: 0,
+                screen: TerminalScreen::empty(TerminalSize {
+                    columns: terminal.columns,
+                    rows: terminal.rows,
+                }),
             })
             .collect();
     }
@@ -497,13 +498,8 @@ impl TerminalSession {
             id: id.clone(),
             cwd: cwd.to_owned(),
             status: TerminalStatus::Running,
-            columns,
-            rows,
-            output: Vec::new(),
-            output_sequence: 0,
-            output_truncated: false,
-            output_offset: 0,
-            screen: None,
+            revision: 0,
+            screen: TerminalScreen::empty(TerminalSize { columns, rows }),
         });
         Ok(id)
     }
@@ -531,7 +527,10 @@ impl TerminalSession {
     }
 
     pub fn input_bytes(&self, id: &TerminalId, bytes: &[u8]) -> Result<(), TerminalError> {
-        self.backend.input(id, bytes)
+        self.backend.input(
+            id,
+            &TerminalInput::Text(String::from_utf8_lossy(bytes).to_string()),
+        )
     }
 
     pub fn resize(
@@ -546,8 +545,7 @@ impl TerminalSession {
             .iter_mut()
             .find(|terminal| terminal.id == *id)
         {
-            terminal.columns = columns;
-            terminal.rows = rows;
+            terminal.screen.size = TerminalSize { columns, rows };
         }
         Ok(())
     }
@@ -573,37 +571,20 @@ impl TerminalSession {
             }
             for event in self.backend.poll(&terminal.id)? {
                 match event {
-                    TerminalEvent::Snapshot(mut snapshot) => {
-                        if snapshot.id != terminal.id
-                            || snapshot.output_sequence < terminal.output_sequence
-                        {
+                    TerminalEvent::Snapshot(snapshot) => {
+                        if snapshot.id != terminal.id {
                             continue;
-                        }
-                        const OUTPUT_LIMIT: usize = 256 * 1024;
-                        if snapshot.output.len() > OUTPUT_LIMIT {
-                            snapshot.output_offset = snapshot
-                                .output_offset
-                                .saturating_add((snapshot.output.len() - OUTPUT_LIMIT) as u64);
-                            snapshot
-                                .output
-                                .drain(..snapshot.output.len() - OUTPUT_LIMIT);
-                            snapshot.output_truncated = true;
                         }
                         *terminal = snapshot;
                     }
-                    TerminalEvent::Output(output) => {
-                        if output.sequence <= terminal.output_sequence {
-                            continue;
-                        }
-                        terminal.output.extend(output.data);
-                        terminal.output_sequence = output.sequence;
-                        const OUTPUT_LIMIT: usize = 256 * 1024;
-                        if terminal.output.len() > OUTPUT_LIMIT {
-                            let start = terminal.output.len() - OUTPUT_LIMIT;
-                            terminal.output.drain(..start);
-                            terminal.output_offset =
-                                terminal.output_offset.saturating_add(start as u64);
-                            terminal.output_truncated = true;
+                    TerminalEvent::Delta(delta) => {
+                        terminal.revision = delta.revision;
+                        terminal.screen.size = delta.size;
+                        for row_update in delta.changed_rows {
+                            if let Some(row) = terminal.screen.rows.get_mut(row_update.row as usize)
+                            {
+                                *row = row_update.value;
+                            }
                         }
                     }
                     TerminalEvent::Exited { .. } => terminal.status = TerminalStatus::Exited,
@@ -612,29 +593,6 @@ impl TerminalSession {
                     }
                 }
                 changed = true;
-            }
-            if terminal.screen.as_ref().is_some_and(|screen| {
-                if screen.output_end < terminal.output_offset {
-                    return true;
-                }
-                let suffix = (screen.output_end - terminal.output_offset) as usize;
-                terminal.output.get(suffix..).is_some_and(|bytes| {
-                    bytes
-                        .windows(7)
-                        .any(|window| window == b"\x1b[?1049" || window == b"\x1b[?1047")
-                        || bytes.windows(5).any(|window| window == b"\x1b[?47")
-                })
-            }) {
-                // buffer欠落や通常/代替画面の切替時は、Hostの現在画面を取り直す。
-                match self.backend.attach(&terminal.cwd, &terminal.id) {
-                    Ok(snapshot) => {
-                        *terminal = snapshot;
-                        changed = true;
-                    }
-                    Err(error) => {
-                        attach_error.get_or_insert_with(|| error.to_string());
-                    }
-                }
             }
         }
         match attach_error {
@@ -2408,11 +2366,16 @@ mod tests {
             Err(TerminalError::new("unavailable"))
         }
 
-        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
             Err(TerminalError::new("unavailable"))
         }
 
-        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+        fn resize(
+            &self,
+            _id: &TerminalId,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalDelta, TerminalError> {
             Err(TerminalError::new("unavailable"))
         }
 
@@ -2439,12 +2402,24 @@ mod tests {
             Ok(TerminalId::new("scripted-terminal"))
         }
 
-        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
             Ok(())
         }
 
-        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
-            Ok(())
+        fn resize(
+            &self,
+            _id: &TerminalId,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalDelta, TerminalError> {
+            Ok(TerminalDelta {
+                revision: 0,
+                size: TerminalSize::default(),
+                changed_rows: Vec::new(),
+                cursor: Default::default(),
+                modes: Default::default(),
+                scrollback: None,
+            })
         }
 
         fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -2468,25 +2443,21 @@ mod tests {
             panic!("refresh must never start a terminal")
         }
 
-        fn input(&self, _id: &TerminalId, _bytes: &[u8]) -> Result<(), TerminalError> {
+        fn input(&self, _id: &TerminalId, _input: &TerminalInput) -> Result<(), TerminalError> {
             unreachable!("refresh does not send terminal input")
         }
 
-        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+        fn resize(
+            &self,
+            _id: &TerminalId,
+            _columns: u16,
+            _rows: u16,
+        ) -> Result<TerminalDelta, TerminalError> {
             unreachable!("refresh does not resize terminals")
         }
 
-        fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-            if id.as_str() == "recoverable" {
-                Ok(vec![TerminalEvent::Output(
-                    lapis_terminal::TerminalOutput {
-                        sequence: 1,
-                        data: b"later terminal".to_vec(),
-                    },
-                )])
-            } else {
-                Ok(Vec::new())
-            }
+        fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            Ok(Vec::new())
         }
 
         fn terminate(&self, _id: &TerminalId) -> Result<(), TerminalError> {
@@ -2501,13 +2472,11 @@ mod tests {
                 id: id.clone(),
                 cwd: cwd.to_owned(),
                 status: TerminalStatus::Running,
-                columns: 80,
-                rows: 24,
-                output: Vec::new(),
-                output_sequence: 0,
-                output_truncated: false,
-                output_offset: 0,
-                screen: None,
+                revision: 0,
+                screen: TerminalScreen::empty(TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                }),
             })
         }
     }
@@ -2940,7 +2909,6 @@ mod tests {
 
         assert_eq!(terminals.terminals().len(), 1);
         assert_eq!(terminals.terminals()[0].status, TerminalStatus::Exited);
-        assert!(terminals.terminals()[0].output.is_empty());
         assert!(!terminals.refresh().unwrap());
 
         terminals.restore_summaries(&[RestoredTerminal {
@@ -2990,7 +2958,6 @@ mod tests {
             TerminalStatus::Disconnected
         );
         assert_eq!(terminals.terminals()[1].status, TerminalStatus::Running);
-        assert_eq!(terminals.terminals()[1].output, b"later terminal");
     }
 
     #[test]
@@ -3000,10 +2967,15 @@ mod tests {
             fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
                 panic!("restore must never start a process")
             }
-            fn input(&self, _: &TerminalId, _: &[u8]) -> Result<(), TerminalError> {
+            fn input(&self, _: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
                 unreachable!()
             }
-            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+            fn resize(
+                &self,
+                _: &TerminalId,
+                _: u16,
+                _: u16,
+            ) -> Result<TerminalDelta, TerminalError> {
                 unreachable!()
             }
             fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -3022,13 +2994,11 @@ mod tests {
                     id: id.clone(),
                     cwd: cwd.to_owned(),
                     status: TerminalStatus::Running,
-                    columns: 100,
-                    rows: 28,
-                    output: b"already running".to_vec(),
-                    output_sequence: 7,
-                    output_truncated: false,
-                    output_offset: 0,
-                    screen: None,
+                    revision: 0,
+                    screen: TerminalScreen::empty(TerminalSize {
+                        columns: 100,
+                        rows: 28,
+                    }),
                 })
             }
         }
@@ -3043,52 +3013,7 @@ mod tests {
         assert_eq!(session.terminals()[0].status, TerminalStatus::Disconnected);
         session.refresh().unwrap();
         assert_eq!(session.terminals()[0].id.as_str(), "host-terminal");
-        assert_eq!(session.terminals()[0].output, b"already running");
-        assert_eq!(session.terminals()[0].output_sequence, 7);
         assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
-    }
-
-    #[test]
-    fn terminal_session_keeps_ordered_raw_output_and_watermark() {
-        let backend = Arc::new(ScriptedTerminalBackend {
-            events: Mutex::new(vec![
-                TerminalEvent::Output(lapis_terminal::TerminalOutput {
-                    sequence: 1,
-                    data: b"\x1b[31mred\x1b[0m".to_vec(),
-                }),
-                TerminalEvent::Output(lapis_terminal::TerminalOutput {
-                    sequence: 2,
-                    data: b"\x1b[2;4H".to_vec(),
-                }),
-                TerminalEvent::Output(lapis_terminal::TerminalOutput {
-                    sequence: 3,
-                    data: b"\x1b[2J".to_vec(),
-                }),
-                TerminalEvent::Output(lapis_terminal::TerminalOutput {
-                    sequence: 4,
-                    data: vec![0xe3],
-                }),
-                TerminalEvent::Output(lapis_terminal::TerminalOutput {
-                    sequence: 5,
-                    data: vec![0x81, 0x82],
-                }),
-                TerminalEvent::Output(lapis_terminal::TerminalOutput {
-                    sequence: 6,
-                    data: vec![0xff, 0x00],
-                }),
-            ]),
-        });
-        let mut terminals = TerminalSession::new(backend);
-        terminals.start(Path::new("repo"), 120, 30).unwrap();
-
-        assert!(terminals.refresh().unwrap());
-        let terminal = &terminals.terminals()[0];
-        assert_eq!(
-            terminal.output,
-            b"\x1b[31mred\x1b[0m\x1b[2;4H\x1b[2J\xe3\x81\x82\xff\x00"
-        );
-        assert_eq!(terminal.output_sequence, 6);
-        assert!(!terminal.output_truncated);
     }
 
     #[test]

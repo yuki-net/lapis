@@ -375,7 +375,14 @@ impl TerminalFeature {
 
     pub(super) fn send_input(&mut self, input: TerminalInput, cx: &mut gpui::Context<Self>) {
         let Some(id) = self.active_id() else { return };
-        self.operate(move |session| session.input_semantic(&id, input), cx);
+        self.operate(
+            move |session| match input {
+                TerminalInput::Text(text) => session.input(&id, &text),
+                TerminalInput::Key(_key) => session.input(&id, ""),
+                TerminalInput::Paste(text) => session.input(&id, &text),
+            },
+            cx,
+        );
     }
 
     pub(super) fn resize(&mut self, columns: u16, rows: u16, cx: &mut gpui::Context<Self>) {
