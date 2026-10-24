@@ -7,6 +7,16 @@ use super::{
     tab_state::PanelTab,
 };
 
+pub(crate) fn panel_size(position: PanelPosition, value: f32) -> f32 {
+    let value = if value.is_finite() { value } else { 0.0 };
+    match position {
+        PanelPosition::Main => 0.0,
+        PanelPosition::Left => value.clamp(190.0, 380.0),
+        PanelPosition::Bottom => value.clamp(140.0, 360.0),
+        PanelPosition::Right => value.clamp(260.0, 480.0),
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PanelHost {
     pub position: PanelPosition,
@@ -20,8 +30,13 @@ pub(crate) struct PanelHost {
 }
 
 impl PanelHost {
+    pub(crate) fn resize(&mut self, size: f32) {
+        self.size = panel_size(self.position, size);
+    }
+
     pub(super) fn new(position: PanelPosition, tabs: Vec<PanelTab>, open: bool, size: f32) -> Self {
         let active = tabs.first().cloned();
+        let size = panel_size(position, size);
         Self {
             position,
             tabs,
@@ -47,11 +62,11 @@ impl PanelHost {
     }
 
     pub fn activate_tool(&mut self, view: ViewId) {
-        self.activate(PanelTab::Tool(view));
+        self.activate(PanelTab::tool(view));
     }
 
     pub fn activate_tool_without_open(&mut self, view: ViewId) {
-        self.activate_without_open(PanelTab::Tool(view));
+        self.activate_without_open(PanelTab::tool(view));
     }
 
     pub fn set_open_immediate(&mut self, open: bool) {

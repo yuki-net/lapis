@@ -227,17 +227,17 @@ impl Shell {
     }
     pub(crate) fn preview_visible(&self) -> bool {
         [
-            &self.shell.left_panel,
-            &self.shell.main_panel,
-            &self.shell.bottom_panel,
-            &self.shell.right_panel,
+            self.shell.panel(PanelPosition::Left),
+            self.shell.panel(PanelPosition::Main),
+            self.shell.panel(PanelPosition::Bottom),
+            self.shell.panel(PanelPosition::Right),
         ]
         .into_iter()
         .any(|panel| {
             panel.open
                 && matches!(
                     panel.active.as_ref(),
-                    Some(PanelTab::Tool(view)) if view.as_str() == id::VIEW_PREVIEW
+                    Some(PanelTab::Tool { view, .. }) if view.as_str() == id::VIEW_PREVIEW
                 )
         })
     }

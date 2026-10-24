@@ -31,7 +31,11 @@ impl Shell {
                 panel_toggle_button(
                     "toggle-left-panel",
                     controls::PanelPosition::Left,
-                    panel_state(self.shell.left_panel.open),
+                    panel_state(
+                        self.shell
+                            .panel(crate::extension_ui::PanelPosition::Left)
+                            .open,
+                    ),
                 )
                 .on_click(cx.listener(|this, _, _, cx| {
                     this.toggle_header_panel(crate::extension_ui::PanelPosition::Left, cx);
@@ -41,7 +45,11 @@ impl Shell {
                 panel_toggle_button(
                     "toggle-bottom-panel",
                     controls::PanelPosition::Bottom,
-                    if self.shell.bottom_panel.open {
+                    if self
+                        .shell
+                        .panel(crate::extension_ui::PanelPosition::Bottom)
+                        .open
+                    {
                         controls::PanelState::Open
                     } else {
                         controls::PanelState::Close
@@ -56,7 +64,11 @@ impl Shell {
                 panel_toggle_button(
                     "toggle-right-panel",
                     controls::PanelPosition::Right,
-                    panel_state(self.shell.right_panel.open),
+                    panel_state(
+                        self.shell
+                            .panel(crate::extension_ui::PanelPosition::Right)
+                            .open,
+                    ),
                 )
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.toggle_header_panel(crate::extension_ui::PanelPosition::Right, cx);

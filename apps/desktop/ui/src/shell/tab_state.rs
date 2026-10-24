@@ -1,10 +1,15 @@
 use crate::extension_ui::{PanelPosition, ViewId};
 use lapis_editor_core::DocumentId;
 
+pub(crate) use crate::extension_ui::ViewInstanceId;
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {
     Document(DocumentId),
-    Tool(ViewId),
+    Tool {
+        view: ViewId,
+        instance: ViewInstanceId,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -45,13 +50,34 @@ impl TabDragState {
 
 impl PanelTab {
     pub(crate) fn tool(view: impl Into<ViewId>) -> Self {
-        Self::Tool(view.into())
+        let view = view.into();
+        Self::Tool {
+            instance: ViewInstanceId::shared_tool(&view),
+            view,
+        }
+    }
+
+    pub(crate) fn tool_instance(
+        view: impl Into<ViewId>,
+        instance: impl Into<ViewInstanceId>,
+    ) -> Self {
+        Self::Tool {
+            view: view.into(),
+            instance: instance.into(),
+        }
     }
 
     pub(crate) fn view_id(&self) -> Option<&ViewId> {
         match self {
-            Self::Tool(view) => Some(view),
+            Self::Tool { view, .. } => Some(view),
             Self::Document(_) => None,
+        }
+    }
+
+    pub(crate) fn instance_id(&self) -> ViewInstanceId {
+        match self {
+            Self::Tool { instance, .. } => instance.clone(),
+            Self::Document(id) => ViewInstanceId::new(format!("document:{}", id.as_str())),
         }
     }
 }

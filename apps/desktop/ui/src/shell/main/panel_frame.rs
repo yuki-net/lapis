@@ -60,7 +60,7 @@ impl Shell {
         };
 
         let (content, scroll_policy) = match panel.active.as_ref() {
-            Some(PanelTab::Tool(view)) => {
+            Some(PanelTab::Tool { view, .. }) => {
                 let policy = self
                     .feature_registry
                     .panel_contributions(position)

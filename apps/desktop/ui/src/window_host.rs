@@ -106,7 +106,7 @@ impl WindowGroup {
         }
         self.layout.tabs.retain(|tab, _| match tab {
             PanelTab::Document(id) => snapshot.tabs.iter().any(|tab| &tab.id == id),
-            PanelTab::Tool(_) => true,
+            PanelTab::Tool { .. } => true,
         });
         for tab in &snapshot.tabs {
             let owner = snapshot
@@ -350,6 +350,7 @@ impl DesktopRoot {
             snapshot.active = self.editor.read(cx).document_id();
             let local = self.editor.read(cx).local_snapshot(&snapshot);
             self.apply_snapshot(&local, cx);
+            self.record_window_layout(cx);
             apply_panel_layout(&self.group, ROOT_HOST, &self.shell, cx);
             self.schedule_persist(cx);
         }
@@ -357,27 +358,14 @@ impl DesktopRoot {
 
     /// Records root panel placements and removes absent root tools while preserving detached ownership.
     pub(crate) fn record_window_layout(&mut self, cx: &mut Context<Self>) {
-        let placements = self
-            .shell
-            .read(cx)
-            .shell
-            .panels()
-            .into_iter()
-            .flat_map(|panel| {
-                panel
-                    .tabs
-                    .iter()
-                    .cloned()
-                    .map(move |tab| (tab, panel.position))
-            })
-            .collect::<Vec<_>>();
+        let placements = self.shell.read(cx).shell.layout.placements();
         self.group.update(cx, |group, _| {
             group.layout.tabs.retain(|tab, (owner, _)| {
                 *owner != ROOT_HOST
-                    || !matches!(tab, PanelTab::Tool(_))
+                    || !matches!(tab, PanelTab::Tool { .. })
                     || placements.iter().any(|(present, _)| present == tab)
             });
-            for (tab, panel) in placements {
+            for (tab, target_group) in placements {
                 if let PanelTab::Document(id) = &tab
                     && group
                         .latest
@@ -386,9 +374,13 @@ impl DesktopRoot {
                 {
                     continue;
                 }
-                let (owner, position) = group.layout.tabs.entry(tab).or_insert((ROOT_HOST, panel));
+                let (owner, position) = group
+                    .layout
+                    .tabs
+                    .entry(tab)
+                    .or_insert((ROOT_HOST, target_group.clone()));
                 if *owner == ROOT_HOST {
-                    *position = panel;
+                    *position = target_group;
                 }
             }
         });
@@ -468,11 +460,42 @@ impl DesktopRoot {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
+        let Some(member) = self.group.read(cx).members.get(&target) else {
+            return;
+        };
+        let target_group = member
+            .shell
+            .read(cx)
+            .shell
+            .layout
+            .primary_group_id(panel)
+            .clone();
+        self.transfer_tab_to_group(source, target, target_group, tab, cx);
+    }
+
+    fn transfer_tab_to_group(
+        &mut self,
+        source: HostId,
+        target: HostId,
+        target_group: crate::shell::TabGroupId,
+        tab: PanelTab,
+        cx: &mut Context<Self>,
+    ) {
         if !self.can_move_tab(source, &tab, cx)
             || !self.group.read(cx).members.contains_key(&target)
         {
             return;
         }
+        let Some(panel) = self.group.read(cx).members[&target]
+            .shell
+            .read(cx)
+            .shell
+            .layout
+            .group(&target_group)
+            .map(|group| group.position)
+        else {
+            return;
+        };
         let view = match &tab {
             PanelTab::Document(id) => self
                 .group
@@ -489,7 +512,7 @@ impl DesktopRoot {
             editor.update(cx, |editor, _| editor.seed_view(view));
         }
         self.group.update(cx, |group, cx| {
-            if group.layout.move_tab(source, target, panel, &tab) {
+            if group.layout.move_tab(source, target, target_group, &tab) {
                 group.members[&target].shell.update(cx, |shell, cx| {
                     shell.shell.focused_panel = panel;
                     cx.notify();
@@ -582,22 +605,25 @@ fn apply_panel_layout(
         .tabs
         .iter()
         .filter(|(_, (owner, _))| *owner == host)
-        .map(|(tab, (_, panel))| (tab.clone(), *panel))
+        .map(|(tab, (_, target_group))| (tab.clone(), target_group.clone()))
         .collect::<Vec<_>>();
     shell.update(cx, |shell, cx| {
         let mut changed = false;
         for (tab, target) in placements {
-            let source = shell
-                .shell
-                .panels()
-                .into_iter()
-                .find(|panel| panel.contains(&tab))
-                .map(|panel| panel.position);
+            let source = shell.shell.layout.group_for_tab(&tab);
+            let target = if shell.shell.layout.group(&target).is_some() {
+                target
+            } else {
+                shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone()
+            };
             if let Some(source) = source
                 && source != target
             {
-                shell.shell.move_tab(source, target, tab);
-                changed = true;
+                changed |= shell.shell.layout.move_tab(&source, &target, &tab).is_ok();
             }
         }
         if changed {
