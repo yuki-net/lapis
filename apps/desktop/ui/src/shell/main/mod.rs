@@ -233,14 +233,14 @@ impl Shell {
             .and_then(|path| self.languages.detect_path(path));
         self.feature_registry
             .activate(ActivationEvent::LanguageChanged(language));
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
     pub(crate) fn t(&self, key: &str) -> String {
         self.locale
             .resolve(&lapis_localization::MessageId::new(key))
     }
-    fn refresh_feature_activation(&mut self) {
+    fn refresh_feature_activation(&mut self, _cx: &mut Context<Self>) {
         self.shell
             .synchronize_activation(&mut self.feature_registry);
     }
@@ -284,7 +284,7 @@ impl Shell {
             &self.feature_registry,
         );
         self.synchronize_view_instances(cx);
-        self.refresh_feature_activation();
+        self.refresh_feature_activation(cx);
         cx.notify();
     }
     pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {

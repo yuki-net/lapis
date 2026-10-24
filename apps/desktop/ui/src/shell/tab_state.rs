@@ -1,22 +1,5 @@
-use crate::extension_ui::ViewId;
+use crate::extension_ui::{ViewId, ViewInstanceId};
 use lapis_editor_core::DocumentId;
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub(crate) struct ViewInstanceId(String);
-
-impl ViewInstanceId {
-    pub(crate) fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    pub(crate) fn shared_tool(view: &ViewId) -> Self {
-        Self::new(format!("shared:{}", view.as_str()))
-    }
-
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {
@@ -98,18 +81,6 @@ impl PanelTab {
             Self::Tool { instance, .. } => instance.clone(),
             Self::Document(id) => ViewInstanceId::new(format!("document:{}", id.as_str())),
         }
-    }
-}
-
-impl From<String> for ViewInstanceId {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<&str> for ViewInstanceId {
-    fn from(value: &str) -> Self {
-        Self::new(value)
     }
 }
 
