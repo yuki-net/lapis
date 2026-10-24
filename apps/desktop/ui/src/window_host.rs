@@ -481,7 +481,8 @@ impl DesktopRoot {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        if !self.can_move_tab(source, &tab, cx)
+        if self.group.read(cx).closing
+            || !self.can_move_tab(source, &tab, cx)
             || !self.group.read(cx).members.contains_key(&target)
         {
             return;

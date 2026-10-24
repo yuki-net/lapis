@@ -477,6 +477,7 @@ impl Shell {
             .drop_tab(&source, &target, &tab, zone, target_size)
         {
             Ok(()) => {
+                self.shell.focused_group = target.clone();
                 self.refresh_feature_activation(cx);
                 cx.notify();
             }
