@@ -10,7 +10,7 @@
 - コメント・ドキュメント・説明は日本語で簡潔に書く。識別子・API・技術用語は無理に日本語化しない。
 
 ## Git・ブランチ運用
-- **ブランチ作成**: 最新の `origin/develop` から作業ブランチを分岐する。
+- **ブランチ作成**: `git fetch origin develop` で最新化し、`origin/develop` から作業ブランチを分岐する。
   - **Stacked PR**: 依存元ブランチから分岐し、PR作成時も `--base <依存元ブランチ>` を指定してGitHubのネイティブStack機能に連動させる。
 - **ブランチ命名**: `<type>/<概要>` または `<type>/<issue番号>-<概要>`
   - `type` はGitHubラベルや一般的な区分（`feat`, `fix`, `refactor`, `docs`, `chore` 等）に準拠。
