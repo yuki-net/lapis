@@ -334,7 +334,7 @@ impl Render for CachedTarget {
 fn idle_inspector_keeps_cached_descendants(cx: &mut TestAppContext) {
     let child = cx.new(|_| Target {
         width: px(200.),
-        child: true,
+        child: false,
     });
     let target = cx.add_window(|_, _| CachedTarget(child));
     let inspector = cx
