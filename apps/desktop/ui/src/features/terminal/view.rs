@@ -64,10 +64,7 @@ impl Render for TerminalFeature {
             if height > px(0.0) {
                 let visible_rows = (height.to_f64() / 16.0).ceil() as usize;
                 let first_visible = ((-offset.y).to_f64() / 16.0).floor() as usize;
-                // overscanを2行に限定
-                let overscan = 2;
-                let last_visible = (first_visible + visible_rows + overscan).min(total_rows);
-                first_visible..last_visible
+                visible_row_range(total_rows, visible_rows, first_visible)
             } else {
                 // height未確定時はvisible screen相当 + overscanのみ
                 let fallback_visible = screen_ref.map(|s| s.rows.len()).unwrap_or(24);
@@ -111,8 +108,6 @@ impl Render for TerminalFeature {
             .map(|terminal| (terminal.id.clone(), terminal.status))
             .collect::<Vec<_>>();
         let discovered = self.discovered.clone();
-        // clipboard用：ボタン押下時にだけplain_textを生成する
-        let screen_for_clipboard = screen_ref.map(|s| s.plain_text());
         div()
             .flex()
             .flex_col()
@@ -165,10 +160,10 @@ impl Render for TerminalFeature {
                         },
                     )))
                     .child(action_button("Copy screen", false).on_click(cx.listener(
-                        move |_, _, _, cx| {
-                            if let Some(text) = &screen_for_clipboard {
+                        |this, _, _, cx| {
+                            if let Some(screen) = this.active_screen() {
                                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    text.clone(),
+                                    screen.plain_text(),
                                 ));
                             }
                         },
@@ -307,6 +302,21 @@ fn retry_after_layout(visible_output: &Option<Option<(TerminalId, u64)>>, height
     matches!(visible_output, Some(None)) && height > px(0.0)
 }
 
+fn visible_row_range(
+    total_rows: usize,
+    visible_rows: usize,
+    calculated_first: usize,
+) -> std::ops::Range<usize> {
+    // Terminal切替や履歴reset後に古いoffsetが残っても、最終画面の範囲へ収める。
+    let max_first = total_rows.saturating_sub(visible_rows);
+    let first = calculated_first.min(max_first);
+    let last = first
+        .saturating_add(visible_rows)
+        .saturating_add(2)
+        .min(total_rows);
+    first..last
+}
+
 fn render_row(row: TerminalRow) -> impl IntoElement {
     div()
         .flex()
@@ -411,6 +421,18 @@ fn indexed_color(index: u8) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_row_range_clamps_old_offsets_and_keeps_overscan() {
+        for (total, visible, first, expected) in [
+            (100, 20, 10, 10..32),
+            (20, 10, 1_000, 10..20),
+            (5, 20, 1_000, 0..5),
+            (0, 20, 1_000, 0..0),
+        ] {
+            assert_eq!(visible_row_range(total, visible, first), expected);
+        }
+    }
 
     fn output(id: &str, revision: u64) -> Option<(TerminalId, u64)> {
         Some((TerminalId::new(id), revision))

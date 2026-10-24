@@ -500,40 +500,41 @@ fn scrollback_grows_and_delta_appends() {
     );
 }
 
+fn assert_scrollback_roundtrip(
+    old: &[&str],
+    new: &[&str],
+) -> lapis_terminal::TerminalScrollbackDelta {
+    let size = TerminalSize::new(40, 4);
+    let rows = |texts: &[&str]| {
+        texts
+            .iter()
+            .map(|text| TerminalRow::from_text(40, text))
+            .collect()
+    };
+    let mut client = TerminalScreen::empty(size);
+    client.scrollback = rows(old);
+    let mut expected = client.clone();
+    expected.scrollback = rows(new);
+    let scrollback = compute_scrollback_delta(&client.scrollback, &expected.scrollback)
+        .expect("scrollback must change");
+    client
+        .apply_delta(&TerminalDelta {
+            revision: 1,
+            size,
+            changed_rows: Vec::new(),
+            cursor: client.cursor,
+            modes: client.modes,
+            scrollback: Some(scrollback.clone()),
+        })
+        .unwrap();
+    assert_eq!(client, expected, "{old:?} -> {new:?}");
+    scrollback
+}
+
 #[test]
 fn delta_apply_restores_scrollback_append() {
-    // compute_scrollback_delta + apply_delta でscrollbackがnewと一致することを確認
-    use super::compute_scrollback_delta;
-    use lapis_terminal::TerminalScrollbackDelta;
-
-    let row_a = TerminalRow::from_text(40, "A");
-    let row_b = TerminalRow::from_text(40, "B");
-    let row_c = TerminalRow::from_text(40, "C");
-
-    let old = vec![row_a.clone()];
-    let new = vec![row_a.clone(), row_b.clone(), row_c.clone()];
-
-    let delta = compute_scrollback_delta(&old, &new).expect("should detect append");
-
-    // Client側のscrollbackをoldで初期化
-    let mut client_scrollback = old.clone();
-    let TerminalScrollbackDelta {
-        reset,
-        dropped,
-        rows,
-    } = delta;
-    if reset {
-        client_scrollback = rows;
-    } else {
-        let dropped = usize::from(dropped);
-        client_scrollback.drain(..dropped);
-        client_scrollback.extend(rows);
-    }
-
-    assert_eq!(
-        client_scrollback, new,
-        "append: apply result should match new"
-    );
+    assert!(!assert_scrollback_roundtrip(&["A"], &["A", "B", "C"]).reset);
+    assert!(!assert_scrollback_roundtrip(&["A", "B"], &["A", "B", "C"]).reset);
 }
 
 #[test]
@@ -542,171 +543,35 @@ fn delta_apply_restores_scrollback_common_prefix_replacement() {
         (vec!["A", "B"], vec!["A", "C"]),
         (vec!["A", "B", "C"], vec!["A", "X", "C"]),
         (vec!["A", "A", "B"], vec!["A", "B", "C"]),
+        (vec!["A", "B", "C"], vec!["A", "X", "Y"]),
     ] {
-        let size = TerminalSize::new(40, 4);
-        let mut client = TerminalScreen::empty(size);
-        client.scrollback = old
-            .iter()
-            .map(|text| TerminalRow::from_text(40, text))
-            .collect();
-        let expected: Vec<_> = new
-            .iter()
-            .map(|text| TerminalRow::from_text(40, text))
-            .collect();
-        let scrollback = compute_scrollback_delta(&client.scrollback, &expected).unwrap();
-        assert!(scrollback.reset);
-        client
-            .apply_delta(&TerminalDelta {
-                revision: 1,
-                size,
-                changed_rows: Vec::new(),
-                cursor: client.cursor,
-                modes: client.modes,
-                scrollback: Some(scrollback),
-            })
-            .unwrap();
-        assert_eq!(client.scrollback, expected, "{old:?} -> {new:?}");
+        assert!(assert_scrollback_roundtrip(&old, &new).reset);
     }
 }
 
 #[test]
 fn delta_apply_restores_scrollback_front_drop() {
-    use super::compute_scrollback_delta;
-    use lapis_terminal::TerminalScrollbackDelta;
-
-    let row_a = TerminalRow::from_text(40, "A");
-    let row_b = TerminalRow::from_text(40, "B");
-    let row_c = TerminalRow::from_text(40, "C");
-
-    let old = vec![row_a, row_b.clone(), row_c.clone()];
-    let new = vec![row_b, row_c];
-
-    let delta = compute_scrollback_delta(&old, &new).expect("should detect front drop");
-
-    let mut client_scrollback = old.clone();
-    let TerminalScrollbackDelta {
-        reset,
-        dropped,
-        rows,
-    } = delta;
-    if reset {
-        client_scrollback = rows;
-    } else {
-        let dropped = usize::from(dropped);
-        client_scrollback.drain(..dropped);
-        client_scrollback.extend(rows);
-    }
-
-    assert_eq!(
-        client_scrollback, new,
-        "front drop: apply result should match new"
-    );
+    let delta = assert_scrollback_roundtrip(&["A", "B", "C"], &["B", "C"]);
+    assert!(!delta.reset);
+    assert_eq!(delta.dropped, 1);
 }
 
 #[test]
 fn delta_apply_restores_scrollback_drop_plus_append() {
-    use super::compute_scrollback_delta;
-    use lapis_terminal::TerminalScrollbackDelta;
-
-    let row_a = TerminalRow::from_text(40, "A");
-    let row_b = TerminalRow::from_text(40, "B");
-    let row_c = TerminalRow::from_text(40, "C");
-    let row_d = TerminalRow::from_text(40, "D");
-    let row_e = TerminalRow::from_text(40, "E");
-    let row_f = TerminalRow::from_text(40, "F");
-
-    let old = vec![row_a, row_b, row_c.clone(), row_d.clone()];
-    let new = vec![row_c.clone(), row_d.clone(), row_e.clone(), row_f.clone()];
-
-    let delta = compute_scrollback_delta(&old, &new).expect("should detect drop+append");
-
-    let mut client_scrollback = old.clone();
-    let TerminalScrollbackDelta {
-        reset,
-        dropped,
-        rows,
-    } = delta;
-    if reset {
-        client_scrollback = rows;
-    } else {
-        let dropped = usize::from(dropped);
-        client_scrollback.drain(..dropped);
-        client_scrollback.extend(rows);
-    }
-
-    assert_eq!(
-        client_scrollback, new,
-        "drop+append: apply result should match new"
-    );
+    let delta = assert_scrollback_roundtrip(&["A", "B", "C", "D"], &["C", "D", "E", "F"]);
+    assert!(!delta.reset);
+    assert_eq!(delta.dropped, 2);
+    assert_eq!(delta.rows.len(), 2);
 }
 
 #[test]
 fn delta_apply_restores_scrollback_bounded_shift() {
-    // bounded same-length shift: [A, B, C] → [B, C, D]
-    use super::compute_scrollback_delta;
-    use lapis_terminal::TerminalScrollbackDelta;
-
-    let row_a = TerminalRow::from_text(40, "A");
-    let row_b = TerminalRow::from_text(40, "B");
-    let row_c = TerminalRow::from_text(40, "C");
-    let row_d = TerminalRow::from_text(40, "D");
-
-    let old = vec![row_a, row_b.clone(), row_c.clone()];
-    let new = vec![row_b.clone(), row_c.clone(), row_d.clone()];
-
-    let delta = compute_scrollback_delta(&old, &new).expect("should detect bounded shift");
-
-    let mut client_scrollback = old.clone();
-    let TerminalScrollbackDelta {
-        reset,
-        dropped,
-        rows,
-    } = delta;
-    if reset {
-        client_scrollback = rows;
-    } else {
-        let dropped = usize::from(dropped);
-        client_scrollback.drain(..dropped);
-        client_scrollback.extend(rows);
-    }
-
-    assert_eq!(
-        client_scrollback, new,
-        "bounded shift: apply result should match new"
-    );
+    let delta = assert_scrollback_roundtrip(&["A", "B", "C"], &["B", "C", "D"]);
+    assert!(!delta.reset);
+    assert_eq!(delta.dropped, 1);
 }
 
 #[test]
 fn delta_apply_restores_scrollback_tail_truncate() {
-    // tail truncate: [A, B, C] → [A, B] はresetで表現
-    use super::compute_scrollback_delta;
-    use lapis_terminal::TerminalScrollbackDelta;
-
-    let row_a = TerminalRow::from_text(40, "A");
-    let row_b = TerminalRow::from_text(40, "B");
-    let row_c = TerminalRow::from_text(40, "C");
-
-    let old = vec![row_a.clone(), row_b.clone(), row_c];
-    let new = vec![row_a, row_b];
-
-    let delta = compute_scrollback_delta(&old, &new).expect("should detect tail truncate");
-
-    let mut client_scrollback = old.clone();
-    let TerminalScrollbackDelta {
-        reset,
-        dropped,
-        rows,
-    } = delta;
-    if reset {
-        client_scrollback = rows;
-    } else {
-        let dropped = usize::from(dropped);
-        client_scrollback.drain(..dropped);
-        client_scrollback.extend(rows);
-    }
-
-    assert_eq!(
-        client_scrollback, new,
-        "tail truncate: apply result should match new"
-    );
+    assert!(assert_scrollback_roundtrip(&["A", "B", "C"], &["A", "B"]).reset);
 }

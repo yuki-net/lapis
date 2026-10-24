@@ -254,30 +254,23 @@ impl TerminalScreen {
                         delta.revision
                     )));
                 }
-                let new_len = if scrollback.reset {
-                    scrollback.rows.len()
+                let base_len = if size_changed {
+                    0
                 } else {
-                    (if size_changed {
-                        0
-                    } else {
-                        self.scrollback.len()
-                    })
-                    .saturating_sub(dropped)
-                        + scrollback.rows.len()
+                    self.scrollback.len()
                 };
+                let new_len = base_len.saturating_sub(dropped) + scrollback.rows.len();
                 if new_len > MAX_SCROLLBACK_LINES {
                     return Err(TerminalError::new(format!(
                         "terminal scrollback is too large at revision {}",
                         delta.revision
                     )));
                 }
-            } else {
-                if scrollback.rows.len() > MAX_SCROLLBACK_LINES {
-                    return Err(TerminalError::new(format!(
-                        "terminal scrollback is too large at revision {}",
-                        delta.revision
-                    )));
-                }
+            } else if scrollback.rows.len() > MAX_SCROLLBACK_LINES {
+                return Err(TerminalError::new(format!(
+                    "terminal scrollback is too large at revision {}",
+                    delta.revision
+                )));
             }
         }
 
