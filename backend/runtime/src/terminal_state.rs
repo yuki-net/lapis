@@ -514,6 +514,28 @@ mod tests {
     }
 
     #[test]
+    fn reply_failure_snapshot_keeps_the_last_published_screen_and_revision() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, workspace, session, _) = start_registry(backend.clone());
+        backend.events.lock().unwrap().insert(
+            "source-1".to_owned(),
+            Ok(vec![
+                TerminalEvent::Delta(full_delta(1, TerminalSize::new(80, 24), "query output")),
+                TerminalEvent::Failed("reply write failure".to_owned()),
+            ]),
+        );
+        let published = registry.poll().unwrap();
+        assert!(matches!(&published[..], [
+            EventBody::TerminalDelta { delta, .. },
+            EventBody::TerminalStatus { status: TerminalStatus::Failed, .. }
+        ] if delta.revision == 1));
+        let snapshots = registry.snapshots_for_session(&session, &workspace);
+        assert_eq!(snapshots[0].revision, 1);
+        assert_eq!(snapshots[0].status, TerminalStatus::Failed);
+        assert!(snapshots[0].screen.plain_text().contains("query output"));
+    }
+
+    #[test]
     fn transient_poll_errors_preserve_running_and_provider_snapshots_replace_mapped_state() {
         let backend = Arc::new(ScriptedSource::default());
         let mut registry = TerminalRegistry::new(Some(backend.clone()));

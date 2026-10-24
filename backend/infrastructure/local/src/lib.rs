@@ -33,7 +33,7 @@ use lapis_task_runner::{
 use lapis_terminal::TerminalScreen;
 use lapis_terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-    TerminalKey, TerminalKeyEvent, TerminalModifiers, TerminalSize,
+    TerminalSize,
 };
 use lapis_workspace::WorkspaceRepository;
 use lapis_workspace::{
@@ -91,7 +91,6 @@ impl<T> LoopbackBackend<T> {
 
 struct LiveTerminal {
     master: Box<dyn portable_pty::MasterPty + Send>,
-    writer: Box<dyn Write + Send>,
     child: Box<dyn portable_pty::Child + Send>,
     receiver: mpsc::Receiver<RawTerminalEvent>,
     engine: TerminalEngine,
@@ -226,10 +225,9 @@ impl TerminalBackend for LocalTerminalBackend {
             id.as_str().to_owned(),
             LiveTerminal {
                 master: pair.master,
-                writer,
                 child,
                 receiver,
-                engine: TerminalEngine::new(size),
+                engine: TerminalEngine::new(size, writer),
                 pending_events: std::collections::VecDeque::new(),
                 reader_finished,
                 exited: false,
@@ -243,12 +241,7 @@ impl TerminalBackend for LocalTerminalBackend {
         let terminal = terminals
             .get_mut(id.as_str())
             .ok_or_else(|| TerminalError::new("Terminal not found"))?;
-        let bytes = encode_input(&terminal.engine, input)?;
-        terminal
-            .writer
-            .write_all(&bytes)
-            .and_then(|()| terminal.writer.flush())
-            .map_err(|error| TerminalError::new(error.to_string()))
+        terminal.engine.input(input)
     }
 
     fn resize(
@@ -288,19 +281,13 @@ impl TerminalBackend for LocalTerminalBackend {
             match event {
                 RawTerminalEvent::Output(data) if !data.is_empty() => {
                     let delta = terminal.engine.process(&data);
-                    for reply in terminal.engine.take_replies() {
-                        terminal
-                            .writer
-                            .write_all(&reply)
-                            .and_then(|()| terminal.writer.flush())
-                            .map_err(|error| TerminalError::new(error.to_string()))?;
-                    }
                     events.push(TerminalEvent::Delta(delta));
                 }
                 RawTerminalEvent::Output(_) => {}
                 RawTerminalEvent::Failed(message) => events.push(TerminalEvent::Failed(message)),
             }
         }
+        events.extend(terminal.engine.take_failures().map(TerminalEvent::Failed));
         if !terminal.exited
             && terminal.reader_finished.load(Ordering::Acquire)
             && let Some(status) = terminal
@@ -327,144 +314,6 @@ impl TerminalBackend for LocalTerminalBackend {
             .map_err(|error| TerminalError::new(error.to_string()))?;
         terminal.exited = true;
         Ok(())
-    }
-}
-
-fn encode_input(engine: &TerminalEngine, input: &TerminalInput) -> Result<Vec<u8>, TerminalError> {
-    match input {
-        TerminalInput::Text(text) => Ok(text.as_bytes().to_vec()),
-        TerminalInput::Paste(text) => {
-            if engine
-                .mode()
-                .contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
-            {
-                Ok(format!("\x1b[200~{text}\x1b[201~").into_bytes())
-            } else {
-                Ok(text.as_bytes().to_vec())
-            }
-        }
-        TerminalInput::Key(event) => encode_key(engine, event),
-    }
-}
-
-fn encode_key(engine: &TerminalEngine, event: &TerminalKeyEvent) -> Result<Vec<u8>, TerminalError> {
-    let modifiers = event.modifiers;
-    let modifier = modifier_parameter(modifiers);
-    let application_cursor = engine
-        .mode()
-        .contains(alacritty_terminal::term::TermMode::APP_CURSOR);
-    let kitty_keyboard = engine
-        .mode()
-        .contains(alacritty_terminal::term::TermMode::KITTY_KEYBOARD_PROTOCOL);
-    let csi = |body: &str, suffix: char| {
-        if modifier == 1 {
-            format!("\x1b[{body}{suffix}").into_bytes()
-        } else {
-            format!("\x1b[{body};{modifier}{suffix}").into_bytes()
-        }
-    };
-    let mut bytes = match &event.key {
-        TerminalKey::Character(text) => {
-            if modifiers.control {
-                if let Some(byte) = control_byte(text) {
-                    vec![byte]
-                } else {
-                    text.as_bytes().to_vec()
-                }
-            } else {
-                text.as_bytes().to_vec()
-            }
-        }
-        TerminalKey::Enter if modifier == 1 => vec![b'\r'],
-        TerminalKey::Backspace if modifier == 1 => vec![0x7f],
-        TerminalKey::Backspace if modifiers.control && !modifiers.alt => vec![0x08],
-        TerminalKey::Tab if modifier == 1 => vec![b'\t'],
-        TerminalKey::Tab if modifiers.shift && !modifiers.control && !modifiers.alt => {
-            b"\x1b[Z".to_vec()
-        }
-        TerminalKey::Escape if modifier == 1 => vec![0x1b],
-        TerminalKey::ArrowUp => arrow_sequence(b'A', application_cursor, modifier),
-        TerminalKey::ArrowDown => arrow_sequence(b'B', application_cursor, modifier),
-        TerminalKey::ArrowRight => arrow_sequence(b'C', application_cursor, modifier),
-        TerminalKey::ArrowLeft => arrow_sequence(b'D', application_cursor, modifier),
-        TerminalKey::Home => {
-            if modifier == 1 {
-                b"\x1b[H".to_vec()
-            } else {
-                format!("\x1b[1;{modifier}H").into_bytes()
-            }
-        }
-        TerminalKey::End => {
-            if modifier == 1 {
-                b"\x1b[F".to_vec()
-            } else {
-                format!("\x1b[1;{modifier}F").into_bytes()
-            }
-        }
-        TerminalKey::Insert => csi("2", '~'),
-        TerminalKey::Delete => csi("3", '~'),
-        TerminalKey::PageUp => csi("5", '~'),
-        TerminalKey::PageDown => csi("6", '~'),
-        TerminalKey::Function(number @ 1..=4) => {
-            let suffix = b'P' + (number - 1);
-            if modifier == 1 {
-                format!("\x1bO{}", suffix as char).into_bytes()
-            } else {
-                format!("\x1b[1;{modifier}{}", suffix as char).into_bytes()
-            }
-        }
-        TerminalKey::Function(number @ 5..=12) => {
-            let base = [15, 17, 18, 19, 20, 21, 23, 24][(*number - 5) as usize];
-            csi(&base.to_string(), '~')
-        }
-        TerminalKey::Enter | TerminalKey::Backspace | TerminalKey::Tab | TerminalKey::Escape => {
-            if kitty_keyboard {
-                let code = match &event.key {
-                    TerminalKey::Enter => 13,
-                    TerminalKey::Backspace => 127,
-                    TerminalKey::Tab => 9,
-                    TerminalKey::Escape => 27,
-                    _ => unreachable!(),
-                };
-                format!("\x1b[{code};{modifier}u").into_bytes()
-            } else {
-                vec![]
-            }
-        }
-        _ => Vec::new(),
-    };
-    if modifiers.alt && !matches!(&event.key, TerminalKey::Escape) && !kitty_keyboard {
-        bytes.insert(0, 0x1b);
-    }
-    Ok(bytes)
-}
-
-fn modifier_parameter(modifiers: TerminalModifiers) -> u8 {
-    1 + u8::from(modifiers.shift)
-        + 2 * u8::from(modifiers.alt)
-        + 4 * u8::from(modifiers.control)
-        + 8 * u8::from(modifiers.super_key)
-}
-
-fn control_byte(text: &str) -> Option<u8> {
-    let byte = text.as_bytes().first().copied()?;
-    if text.len() != 1 {
-        return None;
-    }
-    if byte == b' ' || byte == b'@' {
-        return Some(0);
-    }
-    let upper = byte.to_ascii_uppercase();
-    (b'@'..=b'_').contains(&upper).then_some(upper & 0x1f)
-}
-
-fn arrow_sequence(arrow: u8, application_cursor: bool, modifier: u8) -> Vec<u8> {
-    if modifier == 1 && application_cursor {
-        format!("\x1bO{}", arrow as char).into_bytes()
-    } else if modifier == 1 {
-        format!("\x1b[{}", arrow as char).into_bytes()
-    } else {
-        format!("\x1b[1;{modifier}{}", arrow as char).into_bytes()
     }
 }
 

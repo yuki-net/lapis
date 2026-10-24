@@ -58,6 +58,10 @@ fn semantic_key(key: &gpui::Keystroke) -> Option<TerminalKeyEvent> {
         "f11" => TerminalKey::Function(11),
         "f12" => TerminalKey::Function(12),
         _ => {
+            // 通常文字とShiftのみの文字はGPUIのtext/IME入力へ渡す。
+            if !(key.modifiers.control || key.modifiers.alt || key.modifiers.platform) {
+                return None;
+            }
             let text = key.key_char.clone().or_else(|| {
                 let mut characters = key.key.chars();
                 (characters.next().is_some() && characters.next().is_none())
@@ -160,6 +164,21 @@ impl EntityInputHandler for TerminalFeature {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn printable_keys_remain_on_the_gpui_text_and_ime_path() {
+        for text in ["a", "A", " ", "あ"] {
+            for shift in [false, true] {
+                let mut key = gpui::Keystroke {
+                    key: text.to_owned(),
+                    key_char: Some(text.to_owned()),
+                    ..Default::default()
+                };
+                key.modifiers.shift = shift;
+                assert_eq!(semantic_key(&key), None);
+            }
+        }
+    }
 
     #[test]
     fn terminal_keys_are_sent_as_semantic_events() {
