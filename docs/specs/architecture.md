@@ -79,7 +79,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `apps/desktop/ui/src/shell/layout.rs` の `DockLayout` が、`Split` と `TabGroup` の木、Groupごとのタブ順・Active・表示状態を所有する。Panelは配置先であり、FeatureやHost Resourceの所有者ではない。
 - `ViewId` はViewの種類、`ViewInstanceId` は開いている個体を表す。タブの非表示・移動・取り外しは、HostのDocument・Terminal・Agentの終了や複製を発生させない。
 - `ConversationViewState.layout` はLayoutの保存値。不正なGroup ID・位置・比率、非有限のサイズ、重複Group/leaf、木とGroupの不一致、Main/Left/Bottom/Rightの互換アンカー欠落は全体を拒否し、旧`panels`形式へフォールバックする。有限のサイズは旧形式と同じ範囲へ補正する。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、Layoutの復元は継続する。互換アンカーはHeaderの操作先を保証するもので、Group数の上限ではない。
-- 通常のHeader操作は互換アンカーを対象にするが、可変Splitの内部構造へ固定4Panelや左右の列数制限を埋め込まない。制限が必要な場合はUI操作ポリシーで拒否し、Layoutモデル自体を狭めない。
+- Headerの3つの開閉操作は対応Zone全体を対象とし、個別GroupのHideとは分ける。Zoneを閉じる直前に表示していたGroupは`zone_hidden`として保存し、復元時も個別Hideを保つ。全Groupを個別Hideした場合はアンカーまたはGroupの復元操作を入口にする。可変Splitの内部構造へ固定4Panelや左右の列数制限を埋め込まない。制限が必要な場合はUI操作ポリシーで拒否し、Layoutモデル自体を狭めない。
 - `LayoutViewState.anchors`は互換Headerの操作先IDを保存する。未記録の旧形式は既定IDを優先して移行する。復元・変更は同じ不変条件（Anchor参照、Group/個体IDの一意性、Active所属、比率）を検証し、失敗時に現状態を部分適用しない。旧形式へのフォールバックでは以前の可変Groupを残さず、利用可能なDocumentを一度だけ配置する。これはResourceの再生成・終了を意味しない。
 
 ## 依存の検査

@@ -179,6 +179,9 @@ pub struct LayoutGroupViewState {
     pub tabs: Vec<String>,
     pub active_tab: Option<String>,
     pub open: bool,
+    /// Zone全体を隠す前に表示されていたGroup。個別Hideとは区別する。
+    #[serde(default)]
+    pub zone_hidden: bool,
     pub size: f32,
 }
 

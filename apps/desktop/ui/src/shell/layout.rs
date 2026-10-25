@@ -147,6 +147,70 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
+    #[allow(dead_code)]
+    pub(crate) fn zone_open(&self, position: PanelPosition) -> bool {
+        self.groups
+            .values()
+            .any(|group| group.position == position && group.requested_open())
+    }
+
+    /// ZoneのToggleは個別Hideを保ち、タブやResourceの寿命には触れない。
+    #[allow(dead_code)]
+    pub(crate) fn request_zone_open(
+        &mut self,
+        position: PanelPosition,
+        open: bool,
+        duration: std::time::Duration,
+        now: std::time::Instant,
+    ) -> Vec<(TabGroupId, u64, std::time::Duration)> {
+        if position == PanelPosition::Main {
+            return Vec::new();
+        }
+        let restoring = self
+            .groups
+            .values()
+            .any(|group| group.position == position && group.zone_hidden);
+        let primary = self.primary_group_id(position).clone();
+        self.groups
+            .iter_mut()
+            .filter_map(|(id, group)| {
+                if group.position != position {
+                    return None;
+                }
+                let desired = if open {
+                    group.requested_open()
+                        || if restoring {
+                            group.zone_hidden
+                        } else {
+                            id == &primary
+                        }
+                } else {
+                    group.zone_hidden = group.requested_open();
+                    false
+                };
+                group
+                    .request_open_with_duration(desired, duration, now)
+                    .map(|(generation, duration)| (id.clone(), generation, duration))
+            })
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn request_group_open(
+        &mut self,
+        id: &TabGroupId,
+        open: bool,
+        duration: std::time::Duration,
+        now: std::time::Instant,
+    ) -> Result<Option<(u64, std::time::Duration)>, LayoutError> {
+        let group = self.groups.get_mut(id).ok_or(LayoutError::GroupNotFound)?;
+        if group.position == PanelPosition::Main && !open {
+            return Err(LayoutError::MainGroupRequired);
+        }
+        group.zone_hidden = false;
+        Ok(group.request_open_with_duration(open, duration, now))
+    }
+
     pub(crate) fn group(&self, id: &TabGroupId) -> Option<&PanelHost> {
         self.groups.get(id)
     }
@@ -309,7 +373,8 @@ impl DockLayout {
                     position: panel_position_name(group.position).to_owned(),
                     tabs: group.tabs.iter().map(serialize_tab).collect(),
                     active_tab: group.active.as_ref().map(serialize_tab),
-                    open: group.open,
+                    open: group.requested_open(),
+                    zone_hidden: group.zone_hidden,
                     size: group.size,
                 })
                 .collect(),
@@ -368,6 +433,7 @@ impl DockLayout {
             );
             group.active = active;
             group.set_open_immediate(position == PanelPosition::Main || saved.open);
+            group.zone_hidden = saved.zone_hidden;
             groups.insert(id, group);
         }
         let Some(root) = restore_node(&state.root, &groups) else {
@@ -450,6 +516,9 @@ impl DockLayout {
         }
         let mut seen_tabs = HashSet::new();
         for group in self.groups.values() {
+            if group.position == PanelPosition::Main && group.zone_hidden {
+                return Err(LayoutError::InvalidTree);
+            }
             if !group.size.is_finite() || group.size != panel_size(group.position, group.size) {
                 return Err(LayoutError::InvalidTree);
             }
@@ -604,6 +673,68 @@ fn panel_position_name(position: PanelPosition) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zone_toggle_preserves_individual_columns_and_restores_after_restart() {
+        let mut layout = DockLayout::default();
+        let now = std::time::Instant::now();
+        let duration = std::time::Duration::ZERO;
+        let a = layout.primary_group_id(PanelPosition::Left).clone();
+        let b = layout
+            .split_group(&a, SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        let tab = PanelTab::tool_instance("terminal", "kept-terminal");
+        layout.group_mut(&b).unwrap().activate(tab.clone());
+        layout.request_group_open(&b, false, duration, now).unwrap();
+        layout.request_zone_open(PanelPosition::Left, false, duration, now);
+        assert!(!layout.zone_open(PanelPosition::Left));
+        let saved = layout.capture_view_state();
+        let mut restored = DockLayout::default();
+        assert!(restored.restore_view_state(&saved, |raw| {
+            if raw.contains("kept-terminal") {
+                Some(tab.clone())
+            } else {
+                Some(PanelTab::tool(crate::features::id::VIEW_FILES))
+            }
+        }));
+        restored.request_zone_open(PanelPosition::Left, true, duration, now);
+        assert!(restored.group(&a).unwrap().requested_open());
+        assert!(!restored.group(&b).unwrap().requested_open());
+        assert!(restored.group(&b).unwrap().contains(&tab));
+        restored
+            .request_group_open(&a, false, duration, now)
+            .unwrap();
+        assert!(!restored.zone_open(PanelPosition::Left));
+        restored
+            .request_group_open(&b, true, duration, now)
+            .unwrap();
+        assert!(restored.zone_open(PanelPosition::Left));
+        assert!(restored.group(&b).unwrap().contains(&tab));
+        let main = restored.primary_group_id(PanelPosition::Main).clone();
+        assert_eq!(
+            restored.request_group_open(&main, false, duration, now),
+            Err(LayoutError::MainGroupRequired)
+        );
+        assert!(restored.validate().is_ok());
+    }
+
+    #[test]
+    fn queued_zone_toggle_persists_the_requested_visibility() {
+        let mut layout = DockLayout::default();
+        let now = std::time::Instant::now();
+        let duration = std::time::Duration::from_secs(1);
+        layout.request_zone_open(PanelPosition::Left, false, duration, now);
+        layout.request_zone_open(PanelPosition::Left, true, duration, now);
+        assert!(layout.zone_open(PanelPosition::Left));
+        let saved = layout.capture_view_state();
+        let left = saved
+            .groups
+            .iter()
+            .find(|group| group.position == "left-panel")
+            .unwrap();
+        assert!(left.open);
+        assert!(!left.zone_hidden);
+    }
 
     #[test]
     fn default_layout_has_legacy_anchors_but_uses_a_tree() {

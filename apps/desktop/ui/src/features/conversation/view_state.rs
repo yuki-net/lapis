@@ -211,6 +211,7 @@ mod tests {
             tabs: vec![],
             active_tab: None,
             open: true,
+            zone_hidden: false,
             size: 0.0,
         });
         previous.root = LayoutNodeViewState::Split {
