@@ -58,6 +58,14 @@ pub(crate) fn run_native_smoke(
 ) {
     let id = root.editor.read(cx).document_id().unwrap();
     let shared_path = root.editor.read(cx).document().path().unwrap().to_owned();
+    let shared_task = root
+        .group
+        .read(cx)
+        .latest
+        .as_ref()
+        .unwrap()
+        .conversation
+        .clone();
     let expected_documents = root
         .group
         .read(cx)
@@ -76,6 +84,7 @@ pub(crate) fn run_native_smoke(
         if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
             crate::devtools::native_smoke::run(handle, cx).await;
         }
+        verify_workbench_routes(&this, handle, cx).await;
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
@@ -402,7 +411,7 @@ pub(crate) fn run_native_smoke(
             .clone()
             .expect("persistence must be retried after the synchronization latch is cleared");
         this.update(cx, |root, cx| {
-            let expected = root.shell.read(cx).view_state();
+            let expected = root.persisted_view(cx).layout;
             let active = saved_view
                 .1
                 .iter()
@@ -734,6 +743,7 @@ pub(crate) fn run_native_smoke(
             eprintln!("INSPECTOR_NATIVE_ROOT_CASCADE_PASS");
         }
         let peer_path = shared_path.clone();
+        let peer_task = shared_task.clone();
         peer.update(cx, |other, cx| {
             other.editor.update(cx, |editor, cx| {
                 editor.submit(
@@ -741,10 +751,7 @@ pub(crate) fn run_native_smoke(
                     move |client| {
                         client
                             .conversation
-                            .open_project(
-                                &mut client.editor,
-                                peer_path.parent().unwrap().to_owned(),
-                            )
+                            .switch(&peer_task, &mut client.editor)
                             .map_err(|e| e.to_string())?;
                         client
                             .editor
@@ -780,6 +787,7 @@ pub(crate) fn run_native_smoke(
                                     return None;
                                 }
                                 let path = shared_path.clone();
+                                let task = shared_task.clone();
                                 entity.update(cx, |other, cx| {
                                     other.editor.update(cx, |editor, cx| {
                                         editor.submit(
@@ -787,10 +795,7 @@ pub(crate) fn run_native_smoke(
                                             move |client| {
                                                 client
                                                     .conversation
-                                                    .open_project(
-                                                        &mut client.editor,
-                                                        path.parent().unwrap().to_owned(),
-                                                    )
+                                                    .switch(&task, &mut client.editor)
                                                     .map_err(|e| e.to_string())?;
                                                 client
                                                     .editor
@@ -940,10 +945,10 @@ fn show_drop_target(
 ) -> drag::ScreenPoint {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, POINT},
         UI::WindowsAndMessaging::{
-            HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
-            ShowWindow,
+            GetClassNameW, HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SetWindowPos, ShowWindow, WindowFromPoint,
         },
     };
     handle
@@ -970,9 +975,18 @@ fn show_drop_target(
             }
             .unwrap();
             let point = drag::screen_position(position, window).unwrap();
+            let hit = unsafe {
+                WindowFromPoint(POINT {
+                    x: point.x,
+                    y: point.y,
+                })
+            };
+            let mut class = [0u16; 256];
+            let length = unsafe { GetClassNameW(hit, &mut class) } as usize;
             assert!(
                 drag::is_source_window(window, point),
-                "Native hit test did not select the fixture window"
+                "Native hit test did not select the fixture window: hit class={}",
+                String::from_utf16_lossy(&class[..length]),
             );
             point
         })
@@ -1010,6 +1024,7 @@ async fn verify_drag_routes(
             )
         })
         .unwrap();
+    wait_for(root, cx, Some(3)).await;
     simulate_tab_drag(
         root,
         &first_shell,
@@ -1062,6 +1077,164 @@ async fn verify_drag_routes(
         })
         .unwrap();
     wait_for(root, cx, Some(2)).await;
+}
+
+async fn verify_workbench_routes(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    let setup = root
+        .update(cx, |root, cx| {
+            let view = root.persisted_view(cx);
+            root.worker.request(move |client| {
+                client.persist_view(view)?;
+                let a = client.conversation.active_id().clone();
+                let project = client.conversation.projects()[0].id().clone();
+                let path = client.editor.workspace_root().unwrap().to_owned();
+                let b = client
+                    .conversation
+                    .create_task(&mut client.editor, &project, path, None)
+                    .map_err(|error| error.to_string())?;
+                client
+                    .conversation
+                    .switch(&a, &mut client.editor)
+                    .map_err(|error| error.to_string())?;
+                Ok((a, b, client.snapshot()?))
+            })
+        })
+        .unwrap();
+    let (a, b, snapshot) = wait_client(setup).await.unwrap();
+    root.update(cx, |root, cx| {
+        root.group
+            .update(cx, |group, cx| group.publish(snapshot, cx));
+        root.synchronize_group(cx);
+    })
+    .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    let before = root
+        .update(cx, |root, cx| {
+            (
+                root.shell.read(cx).view_state(),
+                root.editor.read(cx).document_id(),
+                root.group
+                    .read(cx)
+                    .latest
+                    .as_ref()
+                    .unwrap()
+                    .workspace
+                    .clone(),
+            )
+        })
+        .unwrap();
+    for selected in [&b, &a, &b] {
+        handle
+            .update(cx, |_, window, cx| {
+                root.update(cx, |root, cx| {
+                    root.command(UiCommand::SelectTask(selected.clone()), window, cx)
+                })
+                .unwrap();
+            })
+            .unwrap();
+        wait_for(root, cx, Some(1)).await;
+        root.update(cx, |root, cx| {
+            assert_eq!(
+                root.persisted_view(cx)
+                    .layout
+                    .workbench
+                    .selected_task
+                    .as_ref(),
+                Some(selected)
+            );
+            assert_eq!(root.shell.read(cx).view_state(), before.0);
+            assert_eq!(root.editor.read(cx).document_id(), before.1);
+            assert_eq!(
+                root.group.read(cx).latest.as_ref().unwrap().workspace,
+                before.2
+            );
+            assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
+        })
+        .unwrap();
+    }
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.command(
+                    UiCommand::SetWorkbenchMode(crate::workbench::WorkbenchMode::Agent),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    root.update(cx, |root, cx| {
+        assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, b);
+        assert_eq!(
+            root.persisted_view(cx).layout.workbench.mode,
+            lapis_desktop_client::WorkbenchModeState::Agent
+        );
+    })
+    .unwrap();
+    for mode in [
+        crate::workbench::WorkbenchMode::Ide,
+        crate::workbench::WorkbenchMode::Agent,
+    ] {
+        handle
+            .update(cx, |_, window, cx| {
+                root.update(cx, |root, cx| {
+                    root.command(UiCommand::SetWorkbenchMode(mode), window, cx)
+                })
+                .unwrap();
+            })
+            .unwrap();
+        wait_for(root, cx, Some(1)).await;
+        root.update(cx, |root, cx| {
+            let expected = if mode == crate::workbench::WorkbenchMode::Ide {
+                &a
+            } else {
+                &b
+            };
+            assert_eq!(
+                &root.group.read(cx).latest.as_ref().unwrap().conversation,
+                expected
+            );
+            if mode == crate::workbench::WorkbenchMode::Ide {
+                assert_eq!(root.editor.read(cx).document_id(), before.1);
+                assert_eq!(root.shell.read(cx).view_state(), before.0);
+            }
+        })
+        .unwrap();
+    }
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.command(UiCommand::SelectTask(a.clone()), window, cx)
+            })
+            .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.command(
+                    UiCommand::SetWorkbenchMode(crate::workbench::WorkbenchMode::Ide),
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    root.update(cx, |root, cx| {
+        assert_eq!(root.persisted_view(cx).layout.workbench.mode, lapis_desktop_client::WorkbenchModeState::Ide);
+        assert_eq!(root.editor.read(cx).document_id(), before.1);
+        assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
+        eprintln!("SMOKE IDE Task A/B/A keeps documents and workspace; Agent mode restores task context OK");
+    }).unwrap();
 }
 
 async fn wait_for(root: &WeakEntity<DesktopRoot>, cx: &mut gpui::AsyncApp, windows: Option<usize>) {

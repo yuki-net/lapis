@@ -20,6 +20,7 @@ pub(crate) enum ConversationEvent {
 pub(crate) struct ConversationFeature {
     pub(crate) records: Vec<ConversationRecord>,
     pub(crate) active: Option<ConversationId>,
+    pub(crate) context: Option<ConversationId>,
     projects: Vec<Project>,
     selected_project: Option<ProjectId>,
     primary: Option<PathBuf>,
@@ -32,6 +33,7 @@ impl ConversationFeature {
         Self {
             records: Vec::new(),
             active: None,
+            context: None,
             projects: Vec::new(),
             selected_project: None,
             primary: None,
@@ -217,21 +219,26 @@ impl Render for ConversationFeature {
         if let Some(record) = self
             .records
             .iter()
-            .find(|record| Some(&record.id) == self.active.as_ref())
+            .find(|record| Some(&record.id) == self.context.as_ref())
             && let Some(environment) = &record.environment
         {
-            view = view.child("操作対象（Editor / Terminal / Git）").child(
-                action_button(
-                    format!(
-                        "Primary: {}",
-                        environment.root(SourceRole::Primary).unwrap().display()
-                    ),
-                    record.source_role == SourceRole::Primary,
-                )
-                .on_click(cx.listener(|_, _, _, cx| {
-                    cx.emit(ConversationEvent::Source(SourceRole::Primary))
-                })),
-            );
+            view = view
+                .child(format!(
+                    "操作対象（Editor / Terminal / Git）: {}",
+                    record.title
+                ))
+                .child(
+                    action_button(
+                        format!(
+                            "Primary: {}",
+                            environment.root(SourceRole::Primary).unwrap().display()
+                        ),
+                        record.source_role == SourceRole::Primary,
+                    )
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        cx.emit(ConversationEvent::Source(SourceRole::Primary))
+                    })),
+                );
             if let Some(sub) = environment.root(SourceRole::Sub) {
                 view = view.child(
                     action_button(

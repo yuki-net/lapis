@@ -84,7 +84,8 @@ impl Shell {
             div().w(px(panel_size)).h_full()
         };
 
-        let (content, scroll_policy) = match panel.active.as_ref() {
+        let active = self.shell.visible_active(panel);
+        let (content, scroll_policy) = match active {
             Some(PanelTab::Tool { view, instance }) => {
                 let policy = self
                     .feature_registry
@@ -113,7 +114,7 @@ impl Shell {
 
         let body = match scroll_policy {
             PanelScrollPolicy::Panel(axis) => {
-                let state = panel.active.as_ref().map_or_else(
+                let state = active.map_or_else(
                     || self.scroll_states.panel_empty(&group),
                     |tab| self.scroll_states.panel_content(tab),
                 );

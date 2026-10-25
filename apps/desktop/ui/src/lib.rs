@@ -14,5 +14,6 @@ mod shell;
 pub mod theme;
 pub mod tokens;
 mod window_host;
+mod workbench;
 
 pub use app::{DesktopServices, InitialView, run};

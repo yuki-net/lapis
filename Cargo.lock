@@ -3293,6 +3293,7 @@ dependencies = [
  "lapis-terminal",
  "lapis-workspace",
  "serde",
+ "serde_json",
  "tempfile",
 ]
 

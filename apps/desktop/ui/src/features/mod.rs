@@ -38,6 +38,10 @@ pub mod id {
     pub const COMMAND_TOGGLE_BOTTOM: &str = "lapis.command.toggle-bottom-panel";
     pub const COMMAND_TOGGLE_ASSISTANT: &str = "lapis.command.toggle-assistant";
     pub const COMMAND_TOGGLE_PANEL_CONTROLS: &str = "lapis.command.toggle-panel-controls";
+    pub const COMMAND_WORKBENCH_IDE: &str = "lapis.command.workbench-ide";
+    pub const COMMAND_WORKBENCH_AGENT: &str = "lapis.command.workbench-agent";
+    pub const COMMAND_BIND_VIEW_SHARED: &str = "lapis.command.bind-view-shared";
+    pub const COMMAND_BIND_VIEW_TASK: &str = "lapis.command.bind-view-task";
     pub const COMMAND_START_CODEX: &str = "lapis.command.start-codex";
     pub const COMMAND_START_TERMINAL: &str = "lapis.command.start-terminal";
     #[cfg(debug_assertions)]
@@ -70,6 +74,30 @@ pub fn bundled_registry() -> FeatureRegistry {
                 "command.toggle-panel-controls",
                 "panel",
                 40,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_WORKBENCH_IDE,
+                "command.workbench-ide",
+                "panel",
+                41,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_WORKBENCH_AGENT,
+                "command.workbench-agent",
+                "panel",
+                42,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_BIND_VIEW_SHARED,
+                "command.bind-view-shared",
+                "panel",
+                43,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_BIND_VIEW_TASK,
+                "command.bind-view-task",
+                "panel",
+                44,
             )),
         FeatureDescriptor::core(id::FEATURE_COMMAND_SEARCH).contributes(
             crate::extension_ui::UiContribution::view(
@@ -244,6 +272,26 @@ mod tests {
                     .as_ref()
                     .is_none_or(|view| view.as_str() != id::VIEW_SETTINGS))
         );
+    }
+
+    #[test]
+    fn workbench_commands_are_registered_through_the_core_registry() {
+        let registry = bundled_registry();
+        let commands = registry
+            .contributions(UiSlot::CommandPalette)
+            .into_iter()
+            .filter_map(|contribution| contribution.command.as_ref())
+            .map(|command| command.as_str().to_owned())
+            .collect::<Vec<_>>();
+
+        for command in [
+            id::COMMAND_WORKBENCH_IDE,
+            id::COMMAND_WORKBENCH_AGENT,
+            id::COMMAND_BIND_VIEW_SHARED,
+            id::COMMAND_BIND_VIEW_TASK,
+        ] {
+            assert!(commands.iter().any(|registered| registered == command));
+        }
     }
 
     #[cfg(debug_assertions)]

@@ -8,6 +8,127 @@ use std::{path::PathBuf, sync::Arc};
 struct NoDialog;
 
 #[test]
+fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
+    use lapis_desktop_client::{ConversationViewState, WorkbenchModeState, WorkbenchViewState};
+
+    let directory = tempfile::tempdir().unwrap();
+    let primary = directory.path().join("a");
+    let other = directory.path().join("b");
+    std::fs::create_dir(&primary).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    let primary = primary.canonicalize().unwrap();
+    let other = other.canonicalize().unwrap();
+    std::fs::write(primary.join("note.ts"), "base").unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(
+            directory.path().join("editor.json"),
+        )),
+        host.documents(),
+    );
+    editor.open_workspace(primary.clone()).unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(
+        directory.path().join("tasks.json"),
+    ));
+    let mut tasks = ConversationSession::new(repository.clone(), editor.snapshot());
+    let a = tasks.active_id().clone();
+    let project = tasks.projects()[0].id().clone();
+    tasks
+        .register_source(&mut editor, &project, other.clone())
+        .unwrap();
+    let b = tasks
+        .create_task(&mut editor, &project, other.clone(), None)
+        .unwrap();
+    tasks.switch(&a, &mut editor).unwrap();
+    editor.open_path(primary.join("note.ts")).unwrap();
+    editor.replace_range(0..4, "dirty task a").unwrap();
+    let before = editor.snapshot();
+    let tabs = editor.tabs();
+    let workspace = editor.workspace_id().cloned();
+    let mut terminals = TerminalSession::new(host.terminals());
+    let terminal = terminals.start(&primary, 80, 24).unwrap();
+    let expected = host.documents().workspace(&other).unwrap();
+    for selected in [&b, &a, &b, &a] {
+        let resolved = tasks.task_workspace_id(selected, &editor).unwrap();
+        if selected == &b {
+            assert_eq!(resolved, Some(expected.clone()));
+        }
+        let view = ConversationViewState {
+            workbench: WorkbenchViewState {
+                mode: WorkbenchModeState::Ide,
+                selected_task: Some(selected.clone()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        tasks
+            .capture(&mut editor, view, None, terminals.terminals())
+            .unwrap();
+        assert_eq!(tasks.active_id(), &a);
+        assert_eq!(editor.snapshot(), before);
+        assert_eq!(editor.tabs(), tabs);
+        assert_eq!(editor.workspace_id(), workspace.as_ref());
+        assert_eq!(terminals.terminals()[0].id, terminal);
+        assert_eq!(terminals.terminals()[0].cwd, primary);
+    }
+    tasks
+        .capture_with_terminals(&mut editor, tasks.active_view().clone(), None, None)
+        .unwrap();
+    assert_eq!(tasks.active_record().unwrap().terminals.len(), 1);
+    assert_eq!(
+        tasks.active_record().unwrap().terminals[0].id.as_ref(),
+        Some(&terminal)
+    );
+    let terminal_b = terminals.start(&other, 80, 24).unwrap();
+    let bound = terminals
+        .terminals()
+        .iter()
+        .find(|value| value.id == terminal_b)
+        .unwrap()
+        .clone();
+    tasks
+        .capture_bound(
+            &mut editor,
+            tasks.active_view().clone(),
+            None,
+            Some(&b),
+            Some(&[bound]),
+        )
+        .unwrap();
+    assert_eq!(tasks.active_id(), &a);
+    assert_eq!(editor.snapshot(), before);
+    assert_eq!(
+        tasks.active_record().unwrap().terminals[0].id.as_ref(),
+        Some(&terminal)
+    );
+    assert_eq!(
+        tasks
+            .records()
+            .iter()
+            .find(|record| record.id == b)
+            .unwrap()
+            .terminals[0]
+            .id
+            .as_ref(),
+        Some(&terminal_b)
+    );
+    let reloaded = ConversationSession::new(repository, Default::default());
+    assert_eq!(reloaded.active_id(), &a);
+    assert_eq!(
+        reloaded.active_view().workbench.selected_task.as_ref(),
+        Some(&a)
+    );
+    assert_eq!(
+        std::fs::read_to_string(primary.join("note.ts")).unwrap(),
+        "base"
+    );
+    terminals.terminate(&terminal).unwrap();
+    terminals.terminate(&terminal_b).unwrap();
+}
+
+#[test]
 fn unchanged_window_adopts_latest_task_on_capture_and_switch_without_forking_or_overwriting() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();

@@ -2,6 +2,8 @@ use crate::extension_ui::ThemeId;
 use lapis_editor_core::DocumentId;
 use std::path::PathBuf;
 
+use crate::workbench::{ViewInstanceKey, ViewScope, WorkbenchMode};
+
 #[derive(Clone)]
 pub(crate) enum UiCommand {
     NewDocument,
@@ -31,6 +33,13 @@ pub(crate) enum UiCommand {
     Paste,
     ActivateDocument(DocumentId),
     CloseDocument(DocumentId),
+    SelectTask(lapis_editor_core::ConversationId),
+    SetWorkbenchMode(WorkbenchMode),
+    BindViewToSelectedTask(crate::workbench::ViewInstanceKey),
+    SetViewBinding {
+        view: ViewInstanceKey,
+        scope: ViewScope,
+    },
     Theme(ThemeId),
     QuickSearch,
 }

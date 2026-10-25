@@ -136,6 +136,7 @@ pub(crate) enum ResizeTarget {
 #[derive(Clone)]
 pub(crate) struct ShellState {
     pub focused_group: TabGroupId,
+    pub(crate) hidden_views: std::collections::HashSet<ViewInstanceId>,
     pub layout: DockLayout,
     pub bottom_span_left: bool,
     pub bottom_span_right: bool,
@@ -163,6 +164,7 @@ impl Default for ShellState {
     fn default() -> Self {
         Self {
             focused_group: TabGroupId::new(1),
+            hidden_views: Default::default(),
             layout: DockLayout::default(),
             bottom_span_left: false,
             bottom_span_right: false,
@@ -189,6 +191,17 @@ impl Default for ShellState {
 }
 
 impl ShellState {
+    pub(crate) fn view_visible(&self, tab: &PanelTab) -> bool {
+        !self.hidden_views.contains(&tab.instance_id())
+    }
+
+    pub(crate) fn visible_active<'a>(&self, panel: &'a PanelHost) -> Option<&'a PanelTab> {
+        panel
+            .active
+            .as_ref()
+            .filter(|tab| self.view_visible(tab))
+            .or_else(|| panel.tabs.iter().find(|tab| self.view_visible(tab)))
+    }
     /// 消えた追加先へ操作を適用しない。共有Viewは個体を保って移動する。
     pub(crate) fn open_group_tab(&mut self, group: &TabGroupId, tab: PanelTab) -> bool {
         if self.layout.group(group).is_none() {
@@ -348,7 +361,11 @@ impl ShellState {
             self.panels()
                 .into_iter()
                 .filter(|panel| panel.open)
-                .filter_map(|panel| panel.active.as_ref().and_then(PanelTab::view_id).cloned()),
+                .filter_map(|panel| {
+                    self.visible_active(panel)
+                        .and_then(PanelTab::view_id)
+                        .cloned()
+                }),
         );
     }
 }

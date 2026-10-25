@@ -134,6 +134,9 @@ pub struct ConversationViewState {
     /// Panel開閉ボタン群の表示設定。非表示でもViewメニューから復元できる。
     #[serde(default = "default_show_panel_controls")]
     pub show_panel_controls: bool,
+    /// TaskごとのLayoutと同じ保存境界で復元するWorkbench表示ポリシー。
+    #[serde(default)]
+    pub workbench: WorkbenchViewState,
     /// 新しいレイアウト形式。位置ごとのタブ・選択状態・サイズを一律で保持する。
     pub panels: Vec<PanelViewState>,
     // 旧セッションとの互換読み込み用。次回保存時は panels が正とする。
@@ -147,6 +150,50 @@ pub struct ConversationViewState {
 
 fn default_show_panel_controls() -> bool {
     true
+}
+
+/// UIの表示ポリシーを保存するための、GPUIに依存しない値です。
+/// Host Resourceの所有権や実行中Sessionは含めません。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchViewState {
+    pub mode: WorkbenchModeState,
+    pub selected_task: Option<ConversationId>,
+    pub bindings: Vec<ViewBindingState>,
+    pub ide_layout: Option<WorkbenchLayoutState>,
+    pub ide_context: Option<ConversationId>,
+    pub task_layouts: std::collections::BTreeMap<ConversationId, WorkbenchLayoutState>,
+}
+
+/// 配置だけを保持し、TaskやResourceのSnapshotを再帰的に複製しない。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkbenchLayoutState {
+    pub layout: Option<LayoutViewState>,
+    pub panels: Vec<PanelViewState>,
+    pub show_panel_controls: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkbenchModeState {
+    #[default]
+    Ide,
+    Agent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewBindingState {
+    pub view: String,
+    pub scope: ViewScopeState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ViewScopeState {
+    SharedWorkbench,
+    Task(lapis_editor_core::ConversationId),
+    FollowSelectedTask,
+    Resource(String),
 }
 
 /// UIフレームワークに依存しないDesktopレイアウトの保存値です。
@@ -206,6 +253,7 @@ impl Default for ConversationViewState {
         Self {
             layout: None,
             show_panel_controls: true,
+            workbench: WorkbenchViewState::default(),
             panels: Vec::new(),
             active_tool: "files".to_owned(),
             side_panel: None,
@@ -2155,6 +2203,13 @@ mod tests {
     use lapis_workspace::FileEntryKind;
 
     use super::*;
+
+    #[test]
+    fn old_conversation_view_defaults_workbench_state() {
+        let view: ConversationViewState =
+            serde_json::from_str(r#"{"active_tool":"files"}"#).unwrap();
+        assert_eq!(view.workbench, WorkbenchViewState::default());
+    }
 
     #[test]
     fn settings_read_cache_does_not_wait_for_persistence_io() {

@@ -84,6 +84,10 @@ impl PanelTab {
             Self::Document(id) => ViewInstanceId::new(format!("document:{}", id.as_str())),
         }
     }
+
+    pub(crate) fn stable_view_key(&self) -> String {
+        self.instance_id().as_str().to_owned()
+    }
 }
 
 #[cfg(test)]

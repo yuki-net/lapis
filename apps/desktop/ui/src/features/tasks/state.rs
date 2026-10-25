@@ -70,6 +70,13 @@ impl TasksFeature {
     pub(crate) fn set_selected_text(&mut self, text: Option<String>) {
         self.selected_text = text;
     }
+
+    /// TaskはAgent Sessionを持たなくても成立する。Assistant表示だけを
+    /// 選択中Taskへ絞り、別Taskの実行を勝手に追加・複製しない。
+    pub(super) fn visible_records(&self) -> Vec<&TaskSnapshot> {
+        records_for_conversation(&self.records, self.conversation.as_ref())
+    }
+
     pub(crate) fn set_workspace(&mut self, workspace: Option<WorkspaceId>, cx: &mut Context<Self>) {
         if self.workspace == workspace {
             return;
@@ -142,14 +149,11 @@ impl TasksFeature {
                 match result {
                     Ok((records, selected)) => {
                         tasks.records = records;
-                        tasks.selected_execution = selected
-                            .or_else(|| tasks.selected_execution.clone())
-                            .or_else(|| {
-                                tasks
-                                    .records
-                                    .first()
-                                    .map(|record| record.execution.id.clone())
-                            });
+                        tasks.selected_execution = select_visible_execution(
+                            &tasks.visible_records(),
+                            selected,
+                            tasks.selected_execution.clone(),
+                        );
                         if !is_refresh || tasks.message_from_refresh {
                             tasks.message.clear();
                             tasks.message_from_refresh = false;
@@ -190,13 +194,24 @@ impl TasksFeature {
         );
     }
     pub(super) fn select_execution(&mut self, id: ExecutionId, cx: &mut Context<Self>) {
-        self.selected_execution = Some(id);
+        self.selected_execution = select_visible_execution(
+            &self.visible_records(),
+            Some(id),
+            self.selected_execution.clone(),
+        );
         cx.notify();
     }
     pub(super) fn control_selected_task(&mut self, control: TaskControl, cx: &mut Context<Self>) {
         let Some(id) = self.selected_execution.clone() else {
             return;
         };
+        if !self
+            .visible_records()
+            .iter()
+            .any(|record| record.execution.id == id)
+        {
+            return;
+        }
         self.operation(
             move |session, _| {
                 session
@@ -224,5 +239,110 @@ pub(super) fn task_status_color(status: ExecutionStatus) -> gpui::Rgba {
             theme::colors().warning_text
         }
         _ => theme::colors().info_text,
+    }
+}
+
+fn records_for_conversation<'a>(
+    records: &'a [TaskSnapshot],
+    conversation: Option<&lapis_editor_core::ConversationId>,
+) -> Vec<&'a TaskSnapshot> {
+    records
+        .iter()
+        .filter(|record| conversation.is_none_or(|id| &record.task.conversation_id == id))
+        .collect()
+}
+
+fn select_visible_execution(
+    records: &[&TaskSnapshot],
+    requested: Option<ExecutionId>,
+    previous: Option<ExecutionId>,
+) -> Option<ExecutionId> {
+    let visible = |id: &ExecutionId| records.iter().any(|record| &record.execution.id == id);
+    requested
+        .filter(visible)
+        .or_else(|| previous.filter(visible))
+        .or_else(|| records.first().map(|record| record.execution.id.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lapis_editor_core::{ConversationId, TaskId};
+    use lapis_task::{ExecutionSnapshot, Task};
+
+    fn session(conversation: &str, id: &str) -> TaskSnapshot {
+        TaskSnapshot {
+            task: Task {
+                id: TaskId::new(id),
+                conversation_id: ConversationId::new(conversation),
+                title: id.into(),
+                prompt: String::new(),
+                created_at_ms: 0,
+            },
+            execution: ExecutionSnapshot {
+                id: ExecutionId::new(id),
+                task_id: TaskId::new(id),
+                workspace_id: WorkspaceId::new("workspace"),
+                worktree_id: None,
+                runner: "codex".into(),
+                mode: TaskMode::Default,
+                status: ExecutionStatus::Running,
+                started_at_ms: None,
+                completed_at_ms: None,
+                external_thread_id: None,
+                failure: None,
+            },
+            events: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn task_without_agent_sessions_is_valid() {
+        let records = vec![
+            session("task-a", "execution-a"),
+            session("task-b", "execution-b"),
+        ];
+        assert!(
+            records_for_conversation(&records, Some(&ConversationId::new("task-without-session")))
+                .is_empty()
+        );
+        let visible = records_for_conversation(&records, Some(&ConversationId::new("task-a")));
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].execution.id.as_str(), "execution-a");
+        assert_eq!(records_for_conversation(&records, None).len(), 2);
+    }
+
+    #[test]
+    fn execution_selection_never_crosses_the_visible_task() {
+        let records = vec![
+            session("task-b", "foreign"),
+            session("task-a", "first"),
+            session("task-a", "second"),
+        ];
+        let visible = records_for_conversation(&records, Some(&ConversationId::new("task-a")));
+        assert_eq!(
+            select_visible_execution(&visible, Some(ExecutionId::new("foreign")), None),
+            Some(ExecutionId::new("first"))
+        );
+        assert_eq!(
+            select_visible_execution(&visible, None, Some(ExecutionId::new("foreign"))),
+            Some(ExecutionId::new("first"))
+        );
+        assert_eq!(
+            select_visible_execution(&visible, None, Some(ExecutionId::new("second"))),
+            Some(ExecutionId::new("second"))
+        );
+        assert_eq!(
+            select_visible_execution(
+                &visible,
+                Some(ExecutionId::new("first")),
+                Some(ExecutionId::new("second"))
+            ),
+            Some(ExecutionId::new("first"))
+        );
+        assert_eq!(
+            select_visible_execution(&[], Some(ExecutionId::new("foreign")), None),
+            None
+        );
     }
 }

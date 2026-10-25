@@ -21,6 +21,7 @@ use crate::{
         terminal::TerminalFeature,
     },
     shell::main::{Shell, ShellPresentation},
+    workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
 };
 use gpui::{
     AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
@@ -47,6 +48,8 @@ type PersistSignature = (
         f32,
     )>,
     lapis_desktop_client::ConversationViewState,
+    Option<lapis_editor_core::ConversationId>,
+    Vec<lapis_desktop_client::RestoredTerminal>,
 );
 
 pub(crate) struct DesktopRoot {
@@ -77,6 +80,12 @@ pub(crate) struct DesktopRoot {
     persist_task: Option<gpui::Task<()>>,
     persist_signature: Option<PersistSignature>,
     native_smoke_requested: bool,
+    workbench: WorkbenchState,
+    task_context_gate: crate::client_adapter::ResponseGate,
+    task_context: Option<(
+        lapis_editor_core::ConversationId,
+        Option<std::path::PathBuf>,
+    )>,
 }
 
 impl DesktopRoot {
@@ -352,6 +361,10 @@ impl DesktopRoot {
                     );
                     return;
                 }
+                if let ConversationEvent::Switch(id) = event.clone() {
+                    root.dispatch_workbench_command(UiCommand::SelectTask(id), cx);
+                    return;
+                }
                 let event = event.clone();
                 let view = root.persisted_view(cx);
                 root.editor.update(cx, |editor, cx| {
@@ -450,6 +463,7 @@ impl DesktopRoot {
                 root.sync_preview(cx);
                 root.schedule_persist(cx);
             }),
+            cx.observe(&terminal, |root, _, cx| root.schedule_persist(cx)),
         ];
 
         let weak = cx.entity().downgrade();
@@ -505,6 +519,9 @@ impl DesktopRoot {
             persist_task: None,
             persist_signature: None,
             native_smoke_requested: initial.native_window_smoke,
+            workbench: WorkbenchState::default(),
+            task_context: None,
+            task_context_gate: Default::default(),
         }
     }
 
@@ -533,7 +550,12 @@ impl DesktopRoot {
     /// Updates root feature contexts and shell presentation from a snapshot filtered for this host.
     /// Restores the saved shell layout when the active conversation changes.
     pub(crate) fn apply_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
-        let switched = self.conversation.read(cx).active.as_ref() != Some(&snapshot.conversation);
+        let switched = self.workbench.context_task() != Some(&snapshot.conversation);
+        let workbench_view = self.workbench.apply_task_snapshot(
+            snapshot.conversation.clone(),
+            snapshot.view.clone(),
+            switched,
+        );
         let record = snapshot
             .conversations
             .iter()
@@ -555,37 +577,82 @@ impl DesktopRoot {
                     .unwrap_or_default()
             ));
         });
-        self.tasks.update(cx, |tasks, cx| {
-            tasks.set_conversation(snapshot.conversation.clone());
-            tasks.set_workspace(snapshot.workspace.clone(), cx);
-            if switched {
-                tasks.selected_execution =
-                    record.and_then(|record| record.selected_execution.clone());
-            }
-        });
+        let selected = self
+            .workbench
+            .selected_task()
+            .cloned()
+            .filter(|id| snapshot.conversations.iter().any(|record| &record.id == id))
+            .unwrap_or_else(|| snapshot.conversation.clone());
+        if self.workbench.selected_task() != Some(&selected) {
+            self.workbench
+                .select_task(selected.clone(), snapshot.view.clone());
+        }
+        let tasks_key = ViewInstanceKey::new(
+            crate::shell::PanelTab::tool(id::VIEW_ASSISTANT).stable_view_key(),
+        )
+        .unwrap();
+        let task_reference = self
+            .workbench
+            .task_reference(&tasks_key)
+            .cloned()
+            .unwrap_or_else(|| selected.clone());
+        self.sync_task_context(snapshot, &task_reference, cx);
         self.search.update(cx, |search, cx| {
             search.set_workspace(snapshot.root.clone(), cx)
         });
         self.settings.update(cx, |settings, cx| {
             settings.set_workspace(snapshot.root.clone(), cx)
         });
+        let terminal_key =
+            ViewInstanceKey::new(crate::shell::PanelTab::tool(id::VIEW_TERMINAL).stable_view_key())
+                .unwrap();
+        let terminal_scope = self.workbench.view_scope(&terminal_key);
+        let resource = match terminal_scope {
+            Some(ViewScope::Resource(resource)) => {
+                Some(lapis_terminal::TerminalId::new(resource.clone()))
+            }
+            _ => None,
+        };
+        let terminal_task = match terminal_scope {
+            Some(ViewScope::Task(task)) => task.clone(),
+            Some(ViewScope::FollowSelectedTask) => selected.clone(),
+            Some(ViewScope::Resource(resource)) => snapshot
+                .conversations
+                .iter()
+                .find(|record| {
+                    record.terminals.iter().any(|terminal| {
+                        terminal
+                            .id
+                            .as_ref()
+                            .is_some_and(|id| id.as_str() == resource)
+                    })
+                })
+                .map(|record| record.id.clone())
+                .unwrap_or_else(|| self.terminal.read(cx).context_task().clone()),
+            _ => self.terminal.read(cx).context_task().clone(),
+        };
+        let terminal_record = snapshot
+            .conversations
+            .iter()
+            .find(|record| record.id == terminal_task);
         self.terminal.update(cx, |terminal, cx| {
+            terminal.bind_resource(resource);
             terminal.set_context(
-                snapshot.root.clone(),
-                snapshot.conversation.clone(),
-                record
-                    .filter(|record| record.workspace.root == snapshot.root)
+                terminal_record.and_then(|record| record.workspace.root.clone()),
+                terminal_task,
+                terminal_record
                     .map(|record| record.terminals.clone())
                     .unwrap_or_default(),
                 cx,
             )
         });
         self.conversation.update(cx, |conversation, cx| {
+            conversation.context = Some(snapshot.conversation.clone());
             conversation.update(
                 snapshot.conversations.clone(),
                 snapshot.projects.clone(),
                 snapshot.project_error.clone(),
-                snapshot.conversation.clone(),
+                selected,
                 cx,
             )
         });
@@ -619,22 +686,365 @@ impl DesktopRoot {
                 .filter_map(|record| record.workspace.root.clone())
                 .collect(),
         };
+        let retained = self.workbench.retained_views();
+        let hidden = self.workbench.hidden_views();
         self.shell.update(cx, |shell, cx| {
             shell.update_presentation(presentation, cx);
-            if switched {
-                shell.restore_view(snapshot.view.clone(), cx);
+            if let Some(view) = workbench_view {
+                shell.restore_workbench_view(view, &retained, cx);
             }
+            shell.apply_scope_visibility(hidden, cx);
         });
         self.sync_preview(cx);
     }
 
+    fn sync_task_context(
+        &mut self,
+        snapshot: &ClientSnapshot,
+        selected: &lapis_editor_core::ConversationId,
+        cx: &mut Context<Self>,
+    ) {
+        let record = snapshot
+            .conversations
+            .iter()
+            .find(|record| &record.id == selected);
+        let key = (
+            selected.clone(),
+            record.and_then(|record| record.workspace.root.clone()),
+        );
+        if self.task_context.as_ref() == Some(&key) {
+            return;
+        }
+        self.task_context = Some(key.clone());
+        self.task_context_gate.invalidate();
+        let token = self.task_context_gate.issue();
+        self.tasks.update(cx, |tasks, cx| {
+            tasks.set_conversation(selected.clone());
+            tasks.set_workspace(None, cx);
+        });
+        let selected_execution = record.and_then(|record| record.selected_execution.clone());
+        let task = selected.clone();
+        let admitted = self.worker.submit(
+            cx,
+            move |client| {
+                client
+                    .conversation
+                    .task_workspace_id(&task, &client.editor)
+                    .map_err(|error| error.to_string())
+            },
+            move |root, result, cx| {
+                // A→B→Aや作業ソース変更後の古い解決結果を適用しない。
+                if !root.task_context_gate.accept(token) || root.task_context.as_ref() != Some(&key)
+                {
+                    return;
+                }
+                match result {
+                    Ok(workspace) => root.tasks.update(cx, |tasks, cx| {
+                        tasks.set_workspace(workspace, cx);
+                        tasks.selected_execution = selected_execution;
+                    }),
+                    Err(error) => {
+                        root.set_status(error, cx);
+                    }
+                }
+            },
+        );
+        if let Err(error) = admitted {
+            self.set_status(error, cx);
+        }
+    }
+
+    /// Task切替前のUI状態だけをWorkbenchへ保存します。Editor/Terminalの
+    /// Resource所有権や実行中Sessionはこの経路から変更しません。
+    fn capture_workbench_view(&mut self, cx: &gpui::App) {
+        let task = self.workbench.context_task().cloned();
+        let view = self.shell.read(cx).view_state();
+        self.workbench.prepare_task_switch(task.as_ref(), &view);
+    }
+
+    /// 左のTask一覧、Command、ショートカットが共有するTask選択APIです。
+    fn select_task(&mut self, id: lapis_editor_core::ConversationId, cx: &mut Context<Self>) {
+        if self.group.read(cx).closing || self.group.read(cx).synchronization_required {
+            self.set_status(
+                "終了・再同期処理の完了後にTaskを選択してください".into(),
+                cx,
+            );
+            return;
+        }
+        if self.editor.read(cx).context_transition_pending()
+            || (self.workbench.mode() == WorkbenchMode::Agent && self.editor.read(cx).has_pending())
+        {
+            self.set_status("処理の完了後にTaskを選択してください".into(), cx);
+            return;
+        }
+        if self.workbench.mode() == WorkbenchMode::Ide {
+            let Some(snapshot) = self.group.read(cx).latest.clone() else {
+                return;
+            };
+            let Some(record) = snapshot.conversations.iter().find(|record| record.id == id) else {
+                self.set_status("Taskが見つかりません".into(), cx);
+                return;
+            };
+            self.workbench.select_task(id, record.view.clone());
+            self.synchronize_group(cx);
+            return;
+        }
+        if self.workbench.context_task() == Some(&id) {
+            return;
+        }
+        if self.group.read(cx).members.len() > 1 || self.group.read(cx).closing {
+            self.set_status(
+                "別Windowのタブを閉じるか再ドックしてからTaskを切り替えてください".into(),
+                cx,
+            );
+            return;
+        }
+        self.capture_workbench_view(cx);
+        let view = self.persisted_view(cx);
+        self.editor.update(cx, |editor, cx| {
+            editor.submit(
+                false,
+                move |client| {
+                    client.persist_view(view)?;
+                    client
+                        .conversation
+                        .switch(&id, &mut client.editor)
+                        .map(|_| ())
+                        .map_err(|error| error.to_string())
+                },
+                cx,
+            )
+        });
+    }
+
+    fn dispatch_workbench_command(&mut self, command: UiCommand, cx: &mut Context<Self>) {
+        match command {
+            UiCommand::BindViewToSelectedTask(view) => self.bind_view_to_selected_task(view, cx),
+            UiCommand::SelectTask(id) => self.select_task(id, cx),
+            UiCommand::SetWorkbenchMode(mode) => self.set_workbench_mode(mode, cx),
+            UiCommand::SetViewBinding { view, scope } => self.set_view_binding(view, scope, cx),
+            _ => {}
+        }
+    }
+
+    /// Mode変更もTask選択と同じWorkbench APIを経由します。
+    fn set_workbench_mode(&mut self, mode: WorkbenchMode, cx: &mut Context<Self>) {
+        if self.workbench.mode() == mode {
+            return;
+        }
+        if self.group.read(cx).closing
+            || self.group.read(cx).synchronization_required
+            || self.editor.read(cx).has_pending()
+        {
+            self.set_status("処理の完了後にModeを切り替えてください".into(), cx);
+            return;
+        }
+        let task = self.workbench.context_task().cloned();
+        let current = self.shell.read(cx).view_state();
+        let mut candidate = self.workbench.clone();
+        let restored = candidate.set_mode(mode, task.as_ref(), &current);
+        let target = candidate.mode_context().cloned();
+        if target == task || target.is_none() {
+            self.workbench = candidate;
+            if let Some(view) = restored {
+                self.restore_workbench_layout(view, cx);
+            }
+            self.schedule_persist(cx);
+            return;
+        }
+        if self.group.read(cx).members.len() > 1 {
+            self.set_status(
+                "別Windowのタブを閉じるか再ドックしてからModeを切り替えてください".into(),
+                cx,
+            );
+            return;
+        }
+        let previous = self.persisted_view(cx);
+        if !self
+            .editor
+            .update(cx, |editor, _| editor.begin_context_transition())
+        {
+            return;
+        }
+        let target = target.unwrap();
+        let admitted = self.worker.submit(
+            cx,
+            move |client| {
+                let result = client.persist_view(previous).and_then(|_| {
+                    client
+                        .conversation
+                        .switch(&target, &mut client.editor)
+                        .map_err(|error| error.to_string())
+                });
+                // 失敗時も確認済みの実状態を通知し、部分成功や切断を表示終了と混同しない。
+                Ok((result, client.reconcile_snapshot()))
+            },
+            move |root, outcome, cx| {
+                let (result, snapshot) = match outcome {
+                    Ok(outcome) => outcome,
+                    Err(error) => {
+                        root.editor
+                            .update(cx, |editor, cx| editor.finish_context_transition(None, cx));
+                        root.group.update(cx, |group, cx| {
+                            group.synchronization_required = true;
+                            group.status = error;
+                            cx.notify();
+                        });
+                        return;
+                    }
+                };
+                let success = result.is_ok();
+                if success {
+                    root.workbench = candidate;
+                }
+                root.editor.update(cx, |editor, cx| {
+                    editor.finish_context_transition(Some(&snapshot), cx)
+                });
+                root.group
+                    .update(cx, |group, cx| group.publish(snapshot, cx));
+                root.synchronize_group(cx);
+                if success {
+                    if mode == WorkbenchMode::Ide
+                        && let Some(view) = restored
+                    {
+                        root.restore_workbench_layout(view, cx);
+                    }
+                    root.schedule_persist(cx);
+                } else if let Err(error) = result {
+                    root.set_status(error, cx);
+                }
+            },
+        );
+        if let Err(error) = admitted {
+            self.editor
+                .update(cx, |editor, cx| editor.finish_context_transition(None, cx));
+            self.set_status(error, cx);
+        }
+    }
+
+    fn bind_view_to_selected_task(&mut self, view: ViewInstanceKey, cx: &mut Context<Self>) {
+        if let Some(task) = self.workbench.selected_task().cloned() {
+            self.set_view_binding(view, ViewScope::Task(task), cx);
+        }
+    }
+
+    fn sync_view_scopes(&mut self, cx: &mut Context<Self>) {
+        for (tab, _) in self.shell.read(cx).shell.layout.placements() {
+            let key = ViewInstanceKey::new(tab.stable_view_key()).unwrap();
+            let scope = if tab
+                .view_id()
+                .is_some_and(|view| view.as_str() == id::VIEW_ASSISTANT)
+            {
+                ViewScope::FollowSelectedTask
+            } else if (self.workbench.mode() == WorkbenchMode::Agent
+                || matches!(tab, crate::shell::PanelTab::Document(_)))
+                && let Some(task) = self.workbench.context_task().cloned()
+            {
+                ViewScope::Task(task)
+            } else {
+                ViewScope::SharedWorkbench
+            };
+            self.workbench.ensure_view_binding(key, scope);
+        }
+        let hidden = self.workbench.hidden_views();
+        self.shell
+            .update(cx, |shell, cx| shell.apply_scope_visibility(hidden, cx));
+    }
+
+    fn restore_workbench_layout(
+        &mut self,
+        view: lapis_desktop_client::ConversationViewState,
+        cx: &mut Context<Self>,
+    ) {
+        let retained = self.workbench.retained_views();
+        let hidden = self.workbench.hidden_views();
+        self.shell.update(cx, |shell, cx| {
+            shell.restore_workbench_view(view, &retained, cx);
+            shell.apply_scope_visibility(hidden, cx);
+        });
+    }
+
+    /// View所属の変更は表示状態だけに限定し、Host Resourceの終了・複製を行いません。
+    fn set_view_binding(
+        &mut self,
+        view: ViewInstanceKey,
+        scope: ViewScope,
+        cx: &mut Context<Self>,
+    ) {
+        let key = view.clone();
+        if !self
+            .shell
+            .read(cx)
+            .shell
+            .layout
+            .placements()
+            .iter()
+            .any(|(tab, _)| tab.stable_view_key() == view.as_str())
+        {
+            self.set_status("表示対象のViewがありません".into(), cx);
+            return;
+        }
+        if let ViewScope::Task(task) = &scope
+            && !self
+                .conversation
+                .read(cx)
+                .records
+                .iter()
+                .any(|record| &record.id == task)
+        {
+            self.set_status("所属先のTaskがありません".into(), cx);
+            return;
+        }
+        if let ViewScope::Resource(resource) = &scope {
+            let terminal_key = crate::shell::PanelTab::tool(id::VIEW_TERMINAL).stable_view_key();
+            let supported = view.as_str() == terminal_key
+                && (self
+                    .terminal
+                    .read(cx)
+                    .summaries()
+                    .iter()
+                    .any(|terminal| terminal.id.as_str() == resource)
+                    || self.conversation.read(cx).records.iter().any(|record| {
+                        record.terminals.iter().any(|terminal| {
+                            terminal
+                                .id
+                                .as_ref()
+                                .is_some_and(|id| id.as_str() == resource)
+                        })
+                    }));
+            if !supported {
+                self.set_status("このViewのResource固定参照には対応していません".into(), cx);
+                return;
+            }
+        }
+        self.workbench.bind_view(view, scope);
+        debug_assert!(self.workbench.view_scope(&key).is_some());
+        self.sync_view_scopes(cx);
+        self.synchronize_group(cx);
+        self.schedule_persist(cx);
+        cx.notify();
+    }
+
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
     pub(crate) fn persisted_view(&self, cx: &gpui::App) -> PersistedView {
+        let mut layout = self.shell.read(cx).view_state();
+        self.workbench.persisted_view(&mut layout);
         PersistedView {
             document: self.editor.read(cx).view_state(),
-            layout: self.shell.read(cx).view_state(),
-            execution: self.tasks.read(cx).selected_execution.clone(),
+            layout,
+            execution: if self.workbench.selected_task() == self.workbench.context_task() {
+                self.tasks.read(cx).selected_execution.clone()
+            } else {
+                // IDEで別Taskを選択しても、作業中Taskの実行参照を上書きしない。
+                self.conversation
+                    .read(cx)
+                    .records
+                    .iter()
+                    .find(|record| Some(&record.id) == self.workbench.context_task())
+                    .and_then(|record| record.selected_execution.clone())
+            },
             terminals: self.terminal.read(cx).summaries(),
+            terminal_owner: self.terminal.read(cx).persistence_owner(),
             input: self
                 .editor
                 .read(cx)
@@ -652,6 +1062,11 @@ impl DesktopRoot {
     /// Debounces persistence by 500 milliseconds when document versions, editor view, or layout change.
     /// Skips the write while closing; asynchronous persistence errors become status messages.
     pub(crate) fn schedule_persist(&mut self, cx: &mut Context<Self>) {
+        self.sync_view_scopes(cx);
+        let mut layout = self.shell.read(cx).view_state();
+        let task = self.workbench.context_task().cloned();
+        self.workbench.prepare_task_switch(task.as_ref(), &layout);
+        self.workbench.persisted_view(&mut layout);
         let versions = self
             .group
             .read(cx)
@@ -671,10 +1086,29 @@ impl DesktopRoot {
                     .collect()
             })
             .unwrap_or_default();
+        let terminal = self.terminal.read(cx);
+        let owner = terminal.persistence_owner();
+        let summaries = if owner.is_some() {
+            terminal
+                .summaries()
+                .iter()
+                .map(|terminal| lapis_desktop_client::RestoredTerminal {
+                    id: Some(terminal.id.clone()),
+                    cwd: terminal.cwd.clone(),
+                    status: terminal.status,
+                    columns: terminal.screen.size.columns,
+                    rows: terminal.screen.size.rows,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let signature = (
             versions,
             self.editor.read(cx).view_state(),
-            self.shell.read(cx).view_state(),
+            layout,
+            owner,
+            summaries,
         );
         if self.persist_signature.as_ref() == Some(&signature) {
             return;
@@ -936,6 +1370,10 @@ impl DesktopRoot {
                 window.focus(&self.editor.focus_handle(cx));
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
+            UiCommand::SelectTask(id) => self.select_task(id, cx),
+            UiCommand::SetWorkbenchMode(mode) => self.set_workbench_mode(mode, cx),
+            UiCommand::SetViewBinding { view, scope } => self.set_view_binding(view, scope, cx),
+            UiCommand::BindViewToSelectedTask(view) => self.bind_view_to_selected_task(view, cx),
             UiCommand::Undo => self
                 .editor
                 .update(cx, |editor, cx| editor.undo(&crate::app::Undo, window, cx)),

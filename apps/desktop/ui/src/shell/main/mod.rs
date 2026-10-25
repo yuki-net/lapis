@@ -288,6 +288,68 @@ impl Shell {
         self.refresh_feature_activation(cx);
         cx.notify();
     }
+    pub(crate) fn apply_scope_visibility(
+        &mut self,
+        hidden: std::collections::HashSet<crate::extension_ui::ViewInstanceId>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shell.hidden_views != hidden {
+            self.shell.hidden_views = hidden;
+            self.refresh_feature_activation(cx);
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn restore_workbench_view(
+        &mut self,
+        view: lapis_desktop_client::ConversationViewState,
+        retained: &std::collections::HashSet<crate::extension_ui::ViewInstanceId>,
+        cx: &mut Context<Self>,
+    ) {
+        let tabs = self
+            .shell
+            .layout
+            .placements()
+            .into_iter()
+            .filter_map(|(tab, group)| {
+                if !matches!(tab, PanelTab::Tool { .. }) || !retained.contains(&tab.instance_id()) {
+                    return None;
+                }
+                self.shell
+                    .layout
+                    .group(&group)
+                    .map(|panel| (tab, group.clone(), panel.position, panel.open))
+            })
+            .collect::<Vec<_>>();
+        self.restore_view(view, cx);
+        for (tab, group, position, open) in tabs {
+            if self.shell.layout.group_for_tab(&tab).is_some() {
+                continue;
+            }
+            let group = if self
+                .shell
+                .layout
+                .group(&group)
+                .is_some_and(|panel| panel.position == position)
+            {
+                group
+            } else {
+                self.shell.layout.primary_group_id(position).clone()
+            };
+            if let Some(panel) = self.shell.layout.group_mut(&group) {
+                let active = panel.active.clone();
+                panel.activate_without_open(tab);
+                if active.is_some() {
+                    panel.active = active;
+                }
+                if open {
+                    panel.set_open_immediate(true);
+                }
+            }
+        }
+        self.refresh_feature_activation(cx);
+    }
+
     pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {
         self.status = status;
         cx.notify();

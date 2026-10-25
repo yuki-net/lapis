@@ -102,6 +102,7 @@ pub(crate) struct Editor {
     recovery: bool,
     recovering: bool,
     enabled: bool,
+    context_transition: bool,
     edit_epoch: Option<crate::client_adapter::EditEpoch>,
     in_flight: usize,
     group_sync_pending: bool,
@@ -160,6 +161,7 @@ impl Editor {
             recovery: false,
             recovering: false,
             enabled: true,
+            context_transition: false,
             edit_epoch: None,
             in_flight: 0,
             group_sync_pending: false,
@@ -223,7 +225,7 @@ impl Editor {
         operation: impl FnOnce(&mut DocumentClient) -> Result<(), String> + Send + 'static,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.enabled {
+        if !self.enabled || self.context_transition {
             return false;
         }
         if self.recovery && !self.recovering {
@@ -366,6 +368,39 @@ impl Editor {
         }
     }
 
+    /// Workspace切替を通常の入力・Closeと同じ待ち処理の境界で保護する。
+    pub(crate) fn begin_context_transition(&mut self) -> bool {
+        if !self.enabled || self.has_pending() || self.recovery {
+            return false;
+        }
+        self.generation += 1;
+        self.context_transition = true;
+        self.in_flight += 1;
+        true
+    }
+
+    pub(crate) fn context_transition_pending(&self) -> bool {
+        self.context_transition
+    }
+
+    pub(crate) fn finish_context_transition(
+        &mut self,
+        snapshot: Option<&ClientSnapshot>,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.context_transition {
+            return;
+        }
+        self.context_transition = false;
+        self.in_flight = self.in_flight.saturating_sub(1);
+        if let Some(snapshot) = snapshot {
+            self.edit_epoch = Some(snapshot.edit_epoch);
+            self.accept_snapshot(snapshot, false, cx);
+        }
+        self.notify_idle(cx);
+        cx.notify();
+    }
+
     /// 古い世代の応答も含め、待ち処理の解消をHostへ通知する。
     fn notify_idle(&mut self, cx: &mut Context<Self>) {
         if self.in_flight == 0 && self.group_sync_pending {
@@ -472,7 +507,7 @@ impl Editor {
         text: &str,
         cx: &mut Context<Self>,
     ) -> Result<bool, DocumentError> {
-        if !self.enabled {
+        if !self.enabled || self.context_transition {
             return Ok(false);
         }
         let Some(id) = self.document_id.clone() else {
