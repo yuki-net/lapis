@@ -1,6 +1,24 @@
 use super::*;
 
 impl Shell {
+    pub(super) fn tab_title(&self, position: PanelPosition, tab: &PanelTab) -> String {
+        match tab {
+            PanelTab::Tool { view, .. } => self
+                .feature_registry
+                .panel_contributions(position)
+                .into_iter()
+                .find(|contribution| contribution.view.as_ref() == Some(view))
+                .map(|contribution| self.locale.resolve(&contribution.title))
+                .unwrap_or_else(|| view.as_str().to_owned()),
+            PanelTab::Document(document_id) => self
+                .session
+                .tabs()
+                .into_iter()
+                .find(|document| document.id == *document_id)
+                .map(|document| document.display_name)
+                .unwrap_or_else(|| "Document".to_owned()),
+        }
+    }
     /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
     /// Detached windows omit the tool-add button.
     pub(super) fn render_tool_panel_header(
@@ -8,21 +26,30 @@ impl Shell {
         panel: &PanelHost,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        let group = self.shell.layout.primary_group_id(panel.position).clone();
+        self.render_tool_panel_header_for_group(panel, group, cx)
+    }
+
+    pub(super) fn render_tool_panel_header_for_group(
+        &self,
+        panel: &PanelHost,
+        group: super::super::TabGroupId,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
         let position = panel.position;
-        let is_panel_focused = self.shell.focused_panel == position;
-        let scroll_state = self.scroll_states.panel_tabs(position);
+        let is_panel_focused = self.shell.focused_group == group;
+        let scroll_state = self.scroll_states.panel_tabs(&group);
         let max_offset = scroll_state.handle().max_offset();
         let offset = scroll_state.handle().offset();
         let has_overflow = max_offset.width > px(0.0);
         let show_right_gradient = has_overflow && -offset.x < max_offset.width - px(1.0);
         let show_left_gradient = has_overflow && -offset.x > px(1.0);
-        let has_tabs = !panel.tabs.is_empty();
 
         let add_button = |id_suffix: &'static str| {
+            let target = group.clone();
             div()
-                .id((
-                    "open-tool-tab",
-                    panel_key(position) * 10 + if id_suffix == "inline" { 1 } else { 2 },
+                .id(ElementId::Name(
+                    format!("open-tool-{}-{id_suffix}", group.as_str()).into(),
                 ))
                 .flex_shrink_0()
                 .size(px(24.0))
@@ -37,9 +64,8 @@ impl Shell {
                         .bg(theme::colors().button_background_hover)
                         .text_color(theme::colors().text_primary)
                 })
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.shell.focused_panel = position;
-                    this.open_tool_picker(position, cx);
+                .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                    this.open_tool_picker(target.clone(), event.position(), window, cx);
                 }))
                 .child("+")
         };
@@ -49,22 +75,7 @@ impl Shell {
             .iter()
             .enumerate()
             .map(|(index, tab)| {
-                let label = match tab {
-                    PanelTab::Tool { view, .. } => self
-                        .feature_registry
-                        .panel_contributions(panel.position)
-                        .into_iter()
-                        .find(|contribution| contribution.view.as_ref() == Some(view))
-                        .map(|contribution| self.locale.resolve(&contribution.title))
-                        .unwrap_or_else(|| view.as_str().to_owned()),
-                    PanelTab::Document(document_id) => self
-                        .session
-                        .tabs()
-                        .into_iter()
-                        .find(|document| document.id == *document_id)
-                        .map(|document| document.display_name)
-                        .unwrap_or_else(|| "Document".to_owned()),
-                };
+                let label = self.tab_title(panel.position, tab);
                 let active = panel.active.as_ref() == Some(tab);
                 let file_icon = match tab {
                     PanelTab::Document(document_id) => self
@@ -119,7 +130,9 @@ impl Shell {
                 };
 
                 div()
-                    .id(("panel-tab", panel_key(position) * 100 + index as u32))
+                    .id(ElementId::Name(
+                        format!("panel-tab-{}-{index}", group.as_str()).into(),
+                    ))
                     .h(px(26.0))
                     .px(px(4.0))
                     .gap(px(3.0))
@@ -159,19 +172,16 @@ impl Shell {
                             )
                         })
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.shell.focused_panel = position;
-                        match tab.clone() {
-                            PanelTab::Tool { view, .. } => this.select_view(position, view, cx),
-                            PanelTab::Document(document_id) => {
-                                this.select_panel_tab(
-                                    position,
-                                    PanelTab::Document(document_id.clone()),
-                                    cx,
-                                );
-                                cx.emit(UiCommand::ActivateDocument(document_id));
-                                let _ = window;
-                            }
+                    .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
+                        PanelTab::Tool { .. } => this.select_panel_tab(position, tab.clone(), cx),
+                        PanelTab::Document(document_id) => {
+                            this.select_panel_tab(
+                                position,
+                                PanelTab::Document(document_id.clone()),
+                                cx,
+                            );
+                            cx.emit(UiCommand::ActivateDocument(document_id));
+                            let _ = window;
                         }
                     }))
                     .when_some(file_icon, |tab_el, icon| {
@@ -181,7 +191,9 @@ impl Shell {
                     .when(movable, |element| {
                         element.child(
                             div()
-                                .id(("detach-tab", panel_key(position) * 100 + index as u32))
+                                .id(ElementId::Name(
+                                    format!("detach-tab-{}-{index}", group.as_str()).into(),
+                                ))
                                 .px(px(3.0))
                                 .child(if self.detached { "↩" } else { "↗" })
                                 .on_mouse_down(
@@ -200,7 +212,9 @@ impl Shell {
                     })
                     .child(
                         div()
-                            .id(("close-panel-tab", panel_key(position) * 100 + index as u32))
+                            .id(ElementId::Name(
+                                format!("close-tab-{}-{index}", group.as_str()).into(),
+                            ))
                             .size(px(11.0))
                             .flex()
                             .items_center()
@@ -224,7 +238,7 @@ impl Shell {
             })
             .collect();
 
-        if has_tabs && !has_overflow && !self.detached {
+        if !has_overflow && !self.detached {
             tab_items.push(add_button("inline").into_any_element());
         }
 
@@ -237,9 +251,9 @@ impl Shell {
             .items_center()
             .child(
                 scroll_viewport(
-                    ("panel-tabs", panel_key(position)),
+                    ElementId::Name(format!("panel-tabs-{}", group.as_str()).into()),
                     ScrollAxis::Horizontal,
-                    scroll_state,
+                    &scroll_state,
                     div()
                         .flex()
                         .items_center()
@@ -279,7 +293,7 @@ impl Shell {
 
         crate::components::panel_header()
             .child(tab_container)
-            .when(has_tabs && has_overflow && !self.detached, |bar| {
+            .when(has_overflow && !self.detached, |bar| {
                 bar.child(add_button("fixed"))
             })
     }

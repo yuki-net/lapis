@@ -37,6 +37,7 @@ pub mod id {
     pub const COMMAND_TOGGLE_PREVIEW: &str = "lapis.command.toggle-preview";
     pub const COMMAND_TOGGLE_BOTTOM: &str = "lapis.command.toggle-bottom-panel";
     pub const COMMAND_TOGGLE_ASSISTANT: &str = "lapis.command.toggle-assistant";
+    pub const COMMAND_TOGGLE_PANEL_CONTROLS: &str = "lapis.command.toggle-panel-controls";
     pub const COMMAND_START_CODEX: &str = "lapis.command.start-codex";
     pub const COMMAND_START_TERMINAL: &str = "lapis.command.start-terminal";
     #[cfg(debug_assertions)]
@@ -58,13 +59,18 @@ pub mod id {
 pub fn bundled_registry() -> FeatureRegistry {
     let mut registry = FeatureRegistry::default();
     let descriptors = vec![
-        FeatureDescriptor::core(id::FEATURE_SHELL).contributes(
-            crate::extension_ui::UiContribution::settings_view(
+        FeatureDescriptor::core(id::FEATURE_SHELL)
+            .contributes(crate::extension_ui::UiContribution::settings_view(
                 id::VIEW_SETTINGS,
                 "view.settings",
                 "settings",
-            ),
-        ),
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_TOGGLE_PANEL_CONTROLS,
+                "command.toggle-panel-controls",
+                "panel",
+                40,
+            )),
         FeatureDescriptor::core(id::FEATURE_COMMAND_SEARCH).contributes(
             crate::extension_ui::UiContribution::view(
                 id::VIEW_COMMAND_SEARCH,

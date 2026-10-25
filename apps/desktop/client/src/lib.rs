@@ -131,6 +131,9 @@ pub struct ConversationViewState {
     /// 可変Split/TabGroupレイアウト。旧保存値では`None`のままです。
     #[serde(default)]
     pub layout: Option<LayoutViewState>,
+    /// Panel開閉ボタン群の表示設定。非表示でもViewメニューから復元できる。
+    #[serde(default = "default_show_panel_controls")]
+    pub show_panel_controls: bool,
     /// 新しいレイアウト形式。位置ごとのタブ・選択状態・サイズを一律で保持する。
     pub panels: Vec<PanelViewState>,
     // 旧セッションとの互換読み込み用。次回保存時は panels が正とする。
@@ -140,6 +143,10 @@ pub struct ConversationViewState {
     pub tool_width: f32,
     pub side_width: f32,
     pub bottom_height: f32,
+}
+
+fn default_show_panel_controls() -> bool {
+    true
 }
 
 /// UIフレームワークに依存しないDesktopレイアウトの保存値です。
@@ -198,6 +205,7 @@ impl Default for ConversationViewState {
     fn default() -> Self {
         Self {
             layout: None,
+            show_panel_controls: true,
             panels: Vec::new(),
             active_tool: "files".to_owned(),
             side_panel: None,

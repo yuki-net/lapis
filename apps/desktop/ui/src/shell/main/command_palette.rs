@@ -94,6 +94,7 @@ impl Shell {
             id::COMMAND_TOGGLE_ASSISTANT => {
                 self.toggle_assistant(&ToggleAssistant, window, cx);
             }
+            id::COMMAND_TOGGLE_PANEL_CONTROLS => self.toggle_panel_controls(cx),
             #[cfg(debug_assertions)]
             id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector_window(window, cx),
             _ => {

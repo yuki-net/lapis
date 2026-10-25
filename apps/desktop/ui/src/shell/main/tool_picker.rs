@@ -3,34 +3,25 @@ use super::*;
 impl Shell {
     pub(crate) fn render_tool_picker(
         &self,
-        position: PanelPosition,
+        group: super::super::TabGroupId,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let query = self.shell.tool_picker_query.trim().to_lowercase();
         let tools = self
-            .feature_registry
-            .tool_contributions(position)
+            .picker_contributions(&group)
             .into_iter()
-            .filter(|contribution| {
-                if query.is_empty() {
-                    return true;
-                }
-                let title = self.locale.resolve(&contribution.title).to_lowercase();
-                let view = contribution
-                    .view
-                    .as_ref()
-                    .map(|view| view.as_str().to_lowercase())
-                    .unwrap_or_default();
-                title.contains(&query) || view.contains(&query)
-            })
             .filter_map(|contribution| {
                 Some((
                     contribution.view.clone()?,
                     self.locale.resolve(&contribution.title),
                     contribution.icon.as_str().to_owned(),
+                    contribution
+                        .category
+                        .as_ref()
+                        .map(|category| self.locale.resolve(category)),
                 ))
             })
             .collect::<Vec<_>>();
+        let selected = self.shell.tool_picker_selected;
 
         let picker_content = div()
             .p(tokens::spacing::SM)
@@ -62,29 +53,43 @@ impl Shell {
                     )),
             )
             .child(div().h(px(1.0)).my_1().bg(theme::colors().border_default))
-            .children(tools.into_iter().map(|(view, title, icon)| {
-                div()
-                    .id(ElementId::Name(
-                        format!("tool-picker-{}", view.as_str()).into(),
-                    ))
-                    .w_full()
-                    .px(tokens::spacing::XS)
-                    .py(px(2.0))
-                    .rounded(tokens::radius::MENU_ITEM)
-                    .flex()
-                    .items_center()
-                    .gap(tokens::spacing::XS)
-                    .hover(|style| style.bg(theme::colors().button_background_hover))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_tool_from_picker(position, view.clone(), cx);
-                    }))
-                    .child(icon)
-                    .child(title)
-            }));
+            .children(tools.into_iter().enumerate().map(
+                |(index, (view, title, icon, category))| {
+                    let group = group.clone();
+                    div()
+                        .id(ElementId::Name(
+                            format!("tool-picker-{}", view.as_str()).into(),
+                        ))
+                        .w_full()
+                        .px(tokens::spacing::XS)
+                        .py(px(2.0))
+                        .rounded(tokens::radius::MENU_ITEM)
+                        .flex()
+                        .items_center()
+                        .gap(tokens::spacing::XS)
+                        .when(index == selected, |item| {
+                            item.bg(theme::colors().button_background_selected)
+                        })
+                        .hover(|style| style.bg(theme::colors().button_background_hover))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_tool_from_picker(group.clone(), view.clone(), window, cx);
+                        }))
+                        .child(Icon::new(IconName::for_tool(&icon)))
+                        .when_some(category, |item, category| {
+                            item.child(
+                                div()
+                                    .text_size(tokens::typography::FONT_XS)
+                                    .text_color(theme::colors().text_tertiary)
+                                    .child(format!("{category} · ")),
+                            )
+                        })
+                        .child(title)
+                },
+            ));
 
         crate::components::floating_tree(
             self.shell.tool_picker_anchor,
-            point(px(-20.0), tokens::spacing::GAP),
+            point(px(0.0), tokens::spacing::GAP),
         )
         .child(
             crate::components::floating_panel(
@@ -93,8 +98,8 @@ impl Shell {
             )
             .w(px(250.0))
             .max_h(px(520.0))
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.close_tool_picker(cx);
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                this.close_tool_picker(window, cx);
             }))
             .child(
                 scroll_viewport(
