@@ -21,7 +21,7 @@
   "command.workbench-ide": "IDE Workbench",
   "command.workbench-agent": "Agent Workbench",
   "command.bind-view-shared": "ViewをWorkbenchで共有",
-  "command.bind-view-task": "選択中TaskにViewを追従",
+  "command.bind-view-task": "Viewを現在選択中のTaskに固定",
   "command.dev.toggle-inspector": "開発: インスペクターを切替",
   "menu.file": "ファイル",
   "menu.edit": "編集",

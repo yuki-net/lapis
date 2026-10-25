@@ -895,7 +895,8 @@ impl DesktopRoot {
                 };
                 let success = result.is_ok();
                 if success {
-                    root.workbench = candidate;
+                    let current = root.shell.read(cx).view_state();
+                    root.workbench.commit_mode_transition(candidate, &current);
                 }
                 root.editor.update(cx, |editor, cx| {
                     editor.finish_context_transition(Some(&snapshot), cx)
@@ -1117,8 +1118,12 @@ impl DesktopRoot {
         self.persist_task = Some(cx.spawn(async move |this, cx| {
             gpui::Timer::after(std::time::Duration::from_millis(500)).await;
             let _ = this.update(cx, |root, cx| {
-                if root.group.read(cx).closing || root.group.read(cx).synchronization_required {
+                if root.group.read(cx).closing
+                    || root.group.read(cx).synchronization_required
+                    || root.editor.read(cx).has_in_flight()
+                {
                     // 指紋はデバウンス用であり、見送った書き込みは再同期後に再試行できるようにする。
+                    // Workspace切替の確認前の表示を、Worker側の新Taskへ保存しない。
                     root.persist_signature = None;
                     return;
                 }

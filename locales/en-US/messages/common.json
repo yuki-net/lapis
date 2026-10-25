@@ -21,7 +21,7 @@
   "command.workbench-ide": "IDE Workbench",
   "command.workbench-agent": "Agent Workbench",
   "command.bind-view-shared": "Share View Across Workbench",
-  "command.bind-view-task": "Follow Selected Task",
+  "command.bind-view-task": "Bind View to Selected Task",
   "command.dev.toggle-inspector": "dev: Toggle Inspector",
   "menu.file": "File",
   "menu.edit": "Edit",

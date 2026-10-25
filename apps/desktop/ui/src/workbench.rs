@@ -226,6 +226,21 @@ impl WorkbenchState {
         }
     }
 
+    /// Worker待ちの間に受理した表示変更は、古い候補Snapshotで上書きしない。
+    pub(crate) fn commit_mode_transition(
+        &mut self,
+        mut candidate: Self,
+        current_view: &ConversationViewState,
+    ) {
+        let task = self.context_task.clone();
+        self.capture_current(task.as_ref(), current_view);
+        candidate.bindings = self.bindings.clone();
+        candidate.ide_view = self.ide_view.clone();
+        candidate.ide_context = self.ide_context.clone();
+        candidate.task_views = self.task_views.clone();
+        *self = candidate;
+    }
+
     /// Viewの表示上の所属だけを変更します。HostのResourceには触れません。
     pub(crate) fn bind_view(&mut self, view: ViewInstanceKey, scope: ViewScope) {
         self.bindings.insert(view, scope);
@@ -483,6 +498,32 @@ mod tests {
             Some(view("latest-ide"))
         );
         assert_eq!(state.view_scope(&key), Some(&ViewScope::Task(a)));
+    }
+
+    #[test]
+    fn completing_mode_switch_preserves_binding_and_layout_accepted_while_worker_pending() {
+        let a = ConversationId::new("task-a");
+        let b = ConversationId::new("task-b");
+        let mut state = WorkbenchState::default();
+        state.apply_task_snapshot(a.clone(), view("initial-a"), true);
+        state.select_task(b.clone(), view("initial-b"));
+        let mut pending = state.clone();
+        assert_eq!(
+            pending.set_mode(WorkbenchMode::Agent, Some(&a), &view("ide-before")),
+            Some(view("initial-b"))
+        );
+        let key = ViewInstanceKey::new("terminal:independent").unwrap();
+        state.bind_view(key.clone(), ViewScope::Task(b.clone()));
+        state.commit_mode_transition(pending, &view("ide-during-worker"));
+        assert_eq!(state.mode(), WorkbenchMode::Agent);
+        assert_eq!(state.view_scope(&key), Some(&ViewScope::Task(b.clone())));
+        assert_eq!(state.task_view(&b), Some(&view("initial-b")));
+        state.apply_task_snapshot(b.clone(), view("stale-b"), true);
+        assert_eq!(
+            state.set_mode(WorkbenchMode::Ide, Some(&b), &view("agent-edited")),
+            Some(view("ide-during-worker"))
+        );
+        assert_eq!(state.view_scope(&key), Some(&ViewScope::Task(b)));
     }
 
     #[test]
