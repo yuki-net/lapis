@@ -351,25 +351,24 @@ impl Shell {
         cx.emit(UiCommand::Theme(theme));
         cx.notify();
     }
-    pub(crate) fn select_panel_tab(
+    pub(crate) fn select_panel_tab_in_group(
         &mut self,
+        group: TabGroupId,
         position: PanelPosition,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        self.request_panel_open(position, true, cx);
-        let group = self
-            .shell
-            .layout
-            .group_for_tab(&tab)
-            .unwrap_or_else(|| self.shell.layout.primary_group_id(position).clone());
+        if self.shell.layout.primary_group_id(position) == &group {
+            self.request_panel_open(position, true, cx);
+        }
         self.shell.open_group_tab(&group, tab);
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn close_panel_tab(
+    pub(crate) fn close_panel_tab_in_group(
         &mut self,
+        group: TabGroupId,
         position: PanelPosition,
         tab: PanelTab,
         window: &mut Window,
@@ -381,7 +380,9 @@ impl Shell {
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
             }
-            if !self.close_empty_panel(position, cx) {
+            if self.shell.layout.primary_group_id(position) != &group
+                || !self.close_empty_panel(position, cx)
+            {
                 self.refresh_feature_activation(cx);
                 cx.notify();
             }
@@ -569,19 +570,106 @@ impl Shell {
             .collect()
     }
 
-    pub(crate) fn move_panel_tab(
+    pub(crate) fn move_panel_tab_to_group(
         &mut self,
-        source: PanelPosition,
-        target: PanelPosition,
+        source: TabGroupId,
+        target: TabGroupId,
         tab: PanelTab,
+        zone: DropZone,
         cx: &mut Context<Self>,
     ) {
-        if !self.shell.panel(target).open && target != PanelPosition::Main {
-            return;
+        let target_size = self
+            .group_bounds
+            .borrow()
+            .get(&target)
+            .map(|bounds| (f32::from(bounds.size.width), f32::from(bounds.size.height)))
+            .unwrap_or((0.0, 0.0));
+        match self
+            .shell
+            .layout
+            .drop_tab(&source, &target, &tab, zone, target_size)
+        {
+            Ok(()) => {
+                if let Some(group) = self.shell.layout.group_for_tab(&tab) {
+                    self.shell.focused_group = group;
+                }
+                self.refresh_feature_activation(cx);
+                cx.notify();
+            }
+            Err(error) => {
+                self.status = match error {
+                    LayoutError::InsufficientSpace => "分割できる最小領域を確保できません".into(),
+                    LayoutError::SideColumnLimitReached => "サイド領域は通常2列までです".into(),
+                    LayoutError::TabNotFound => "移動元のタブが見つかりません".into(),
+                    _ => "この位置にはタブを配置できません".into(),
+                };
+                cx.notify();
+            }
         }
-        self.shell.move_tab(source, target, tab);
-        self.refresh_feature_activation(cx);
-        cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+    struct DocumentFixture;
+    impl Render for DocumentFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn committed_drop_focuses_the_group_that_contains_the_tab(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            for zone in [
+                DropZone::Center,
+                DropZone::Left,
+                DropZone::Right,
+                DropZone::Top,
+                DropZone::Bottom,
+            ] {
+                let document = cx.new(|_| DocumentFixture);
+                let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
+                shell.update(cx, |shell, cx| {
+                    let source = shell
+                        .shell
+                        .layout
+                        .primary_group_id(PanelPosition::Left)
+                        .clone();
+                    let target = shell
+                        .shell
+                        .layout
+                        .primary_group_id(PanelPosition::Main)
+                        .clone();
+                    let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
+                    shell.group_bounds.borrow_mut().insert(
+                        target.clone(),
+                        gpui::Bounds::new(
+                            point(px(0.0), px(0.0)),
+                            gpui::size(px(900.0), px(600.0)),
+                        ),
+                    );
+                    shell.move_panel_tab_to_group(source, target.clone(), tab.clone(), zone, cx);
+                    let actual = shell.shell.layout.group_for_tab(&tab).unwrap();
+                    assert_eq!(shell.shell.focused_group, actual);
+                    if zone != DropZone::Center {
+                        assert_ne!(actual, target);
+                    }
+                    assert_eq!(
+                        shell
+                            .shell
+                            .layout
+                            .placements()
+                            .iter()
+                            .filter(|(placed, _)| placed == &tab)
+                            .count(),
+                        1
+                    );
+                    assert!(shell.shell.layout.validate().is_ok());
+                });
+            }
+        });
     }
 }
 

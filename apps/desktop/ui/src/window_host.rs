@@ -416,9 +416,9 @@ impl DesktopRoot {
             UiCommand::DockTab(tab) => {
                 self.transfer_tab(host, ROOT_HOST, PanelPosition::Main, tab, cx)
             }
-            UiCommand::MoveTab(drag, panel) => {
+            UiCommand::MoveTab(drag, group) => {
                 if drag.group == Some(self.group.entity_id()) {
-                    self.transfer_tab(drag.source_host, host, panel, drag.tab, cx);
+                    self.transfer_tab_to_group(drag.source_host, host, group, drag.tab, cx);
                 }
             }
             UiCommand::CloseWindow => self.close_hosts(host, None, window, cx),
@@ -481,19 +481,20 @@ impl DesktopRoot {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        if !self.can_move_tab(source, &tab, cx)
+        if self.group.read(cx).closing
+            || !self.can_move_tab(source, &tab, cx)
             || !self.group.read(cx).members.contains_key(&target)
         {
             return;
         }
-        let Some(panel) = self.group.read(cx).members[&target]
+        if self.group.read(cx).members[&target]
             .shell
             .read(cx)
             .shell
             .layout
             .group(&target_group)
-            .map(|group| group.position)
-        else {
+            .is_none()
+        {
             return;
         };
         let view = match &tab {
@@ -511,10 +512,11 @@ impl DesktopRoot {
             let editor = member.editor.clone();
             editor.update(cx, |editor, _| editor.seed_view(view));
         }
+        let focus_group = target_group.clone();
         self.group.update(cx, |group, cx| {
             if group.layout.move_tab(source, target, target_group, &tab) {
                 group.members[&target].shell.update(cx, |shell, cx| {
-                    shell.shell.focus_panel(panel);
+                    shell.shell.focused_group = focus_group;
                     cx.notify();
                 });
                 let editor = group.members[&target].editor.clone();

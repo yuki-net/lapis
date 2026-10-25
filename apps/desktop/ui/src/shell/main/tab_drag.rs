@@ -18,7 +18,9 @@ impl Shell {
                     let active = cx.has_active_drag();
                     let _ = released.update(cx, |shell, cx| {
                         shell.close_drag_preview(cx);
-                        let Some(drag) = shell.tab_drag.release(active) else {
+                        let drag = shell.release_tab_drag_at(event.position, active);
+                        cx.notify();
+                        let Some(drag) = drag else {
                             return;
                         };
                         let point =
@@ -33,6 +35,7 @@ impl Shell {
                             // 同じ Window 内は既存の Panel on_drop に任せる。
                             return;
                         }
+                        shell.drop_target = None;
                         if let Some(point) = point {
                             cx.emit(UiCommand::ReleaseTab(drag, point));
                         }
@@ -51,10 +54,14 @@ impl Shell {
                         return;
                     };
                     let _ = moving_shell.update(cx, |shell, cx| {
+                        let target_changed = shell.update_drop_target(event.position);
                         if let Some(preview) = shell.drag_preview {
                             let _ = preview.update(cx, |_, window, _| {
                                 crate::window_host::drag_preview::position(window, point);
                             });
+                        }
+                        if target_changed {
+                            cx.notify();
                         }
                     });
                 });
@@ -71,6 +78,7 @@ impl Shell {
 
     /// Clears a pending tab drag and stops GPUI's active drag when one was recorded.
     pub(crate) fn cancel_tab_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_target = None;
         if self.tab_drag.cancel() {
             self.close_drag_preview(cx);
             cx.stop_active_drag(window);
@@ -83,6 +91,137 @@ impl Shell {
         };
         let _ = preview.update(cx, |_, window, _| {
             crate::window_host::drag_preview::close(window);
+        });
+    }
+
+    fn update_drop_target(&mut self, point: Point<Pixels>) -> bool {
+        let Some(drag) = self.tab_drag.current() else {
+            return self.drop_target.take().is_some();
+        };
+        if !drag.belongs_to(self.group) {
+            return self.drop_target.take().is_some();
+        }
+        let target = self
+            .group_bounds
+            .borrow()
+            .iter()
+            .find_map(|(group, bounds)| {
+                if !bounds.contains(&point)
+                    || bounds.size.width <= px(0.0)
+                    || bounds.size.height <= px(0.0)
+                {
+                    return None;
+                }
+                let x = f32::from(point.x - bounds.origin.x) / f32::from(bounds.size.width);
+                let y = f32::from(point.y - bounds.origin.y) / f32::from(bounds.size.height);
+                let zone = DropZone::from_normalized(x, y);
+                let mut candidate = self.shell.layout.clone();
+                let error = candidate
+                    .drop_tab(
+                        &drag.source_group,
+                        group,
+                        &drag.tab,
+                        zone,
+                        (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                    )
+                    .err();
+                Some(DropTarget {
+                    group: group.clone(),
+                    zone,
+                    error,
+                })
+            });
+        if self.drop_target == target {
+            false
+        } else {
+            self.drop_target = target;
+            true
+        }
+    }
+
+    fn release_tab_drag_at(
+        &mut self,
+        point: Point<Pixels>,
+        active: bool,
+    ) -> Option<DraggedPanelTab> {
+        // 最後のMouseMoveと異なる座標で離しても、古いOverlayを残さない。
+        if active {
+            self.update_drop_target(point);
+        }
+        let drag = self.tab_drag.release(active);
+        if drag.is_none() {
+            self.drop_target = None;
+        }
+        drag
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct DocumentFixture;
+    impl Render for DocumentFixture {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    #[gpui::test]
+    fn releasing_in_a_gap_clears_preview_without_committing_and_allows_next_drag(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            let document = cx.new(|_| DocumentFixture);
+            let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
+            shell.update(cx, |shell, _| {
+                shell.group = Some(1.into());
+                let source = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Left)
+                    .clone();
+                let target = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
+                let before = shell.shell.layout.capture_view_state();
+                let drag = DraggedPanelTab {
+                    group: shell.group,
+                    source_host: 0,
+                    source_group: source,
+                    tab,
+                };
+                shell.group_bounds.borrow_mut().insert(
+                    target.clone(),
+                    gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0))),
+                );
+                shell.tab_drag.begin(drag.clone());
+                assert!(shell.update_drop_target(point(px(20.0), px(300.0))));
+                assert!(shell.drop_target.is_some());
+                assert!(
+                    shell
+                        .release_tab_drag_at(point(px(950.0), px(650.0)), true)
+                        .is_some()
+                );
+                assert!(shell.drop_target.is_none());
+                assert_eq!(shell.shell.layout.capture_view_state(), before);
+                shell.tab_drag.begin(drag);
+                assert!(
+                    shell
+                        .release_tab_drag_at(point(px(450.0), px(300.0)), true)
+                        .is_some()
+                );
+                assert_eq!(
+                    shell
+                        .drop_target
+                        .as_ref()
+                        .map(|drop| (&drop.group, drop.zone)),
+                    Some((&target, DropZone::Center))
+                );
+                assert_eq!(shell.shell.layout.capture_view_state(), before);
+            });
         });
     }
 }

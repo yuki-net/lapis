@@ -624,10 +624,10 @@ pub(crate) fn run_native_smoke(
                                         crate::shell::DraggedPanelTab {
                                             group: Some(own_group),
                                             source_host: 0,
-                                            source_panel: PanelPosition::Main,
+                                            source_group: crate::shell::TabGroupId::new(1),
                                             tab: PanelTab::Document(id.clone()),
                                         },
-                                        PanelPosition::Main,
+                                        crate::shell::TabGroupId::new(1),
                                     ),
                                     window,
                                     cx,
