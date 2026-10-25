@@ -51,3 +51,5 @@
 ## アーキテクチャ
 - 状態の所有・配置・依存方向は `docs/specs/architecture.md` を正本とし、領域固有の判断はその `README.md` を参照する。
 - 変更時は `python scripts/check_architecture.py` を実行し、例外を増やして回避しない。
+
+DesktopのLayoutを変更するときは、Panel/Featureごとの独自Tab管理を追加せず、`apps/desktop/ui/src/shell/layout.rs` の共通Layout APIと、`apps/desktop/README.md` および `docs/specs/architecture.md` の責務分離を先に確認する。

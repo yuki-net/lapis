@@ -60,7 +60,7 @@ impl Shell {
         };
 
         let (content, scroll_policy) = match panel.active.as_ref() {
-            Some(PanelTab::Tool(view)) => {
+            Some(PanelTab::Tool { view, instance }) => {
                 let policy = self
                     .feature_registry
                     .panel_contributions(position)
@@ -69,7 +69,8 @@ impl Shell {
                     .map(|contribution| contribution.scroll_policy)
                     .unwrap_or(PanelScrollPolicy::Disabled);
                 (
-                    self.render_tool_content(view, cx).into_any_element(),
+                    self.render_tool_content(view, instance, cx)
+                        .into_any_element(),
                     policy,
                 )
             }
@@ -88,7 +89,10 @@ impl Shell {
         let body = match scroll_policy {
             PanelScrollPolicy::Panel(axis) => {
                 let state = panel.active.as_ref().map_or_else(
-                    || self.scroll_states.panel_empty(position).clone(),
+                    || {
+                        self.scroll_states
+                            .panel_empty(self.shell.layout.primary_group_id(position))
+                    },
                     |tab| self.scroll_states.panel_content(tab),
                 );
                 scroll_viewport(

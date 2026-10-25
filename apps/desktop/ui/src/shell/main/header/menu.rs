@@ -105,8 +105,33 @@ impl Shell {
             .left(px(184.0))
             .top(px(0.0))
             .w(px(250.0))
+            .max_h(px(360.0))
+            .overflow_y_scroll()
             .p(tokens::spacing::XS)
             .children(children)
+            .when(menu == MenuId::View, |surface| {
+                surface.child(separator()).children(
+                    self.group_visibility_entries()
+                        .into_iter()
+                        .map(|(group, label, _)| {
+                            let id = format!("group-visibility-{}", group.as_str());
+                            menu_item(MenuItemSpec {
+                                id: id.into(),
+                                label: label.into(),
+                                shortcut: None,
+                                icon: None,
+                                enabled: true,
+                            })
+                            .on_click(cx.listener(
+                                move |this, _, window, cx| {
+                                    this.toggle_group_visibility(group.clone(), cx);
+                                    this.close_header_menu(cx);
+                                    window.focus(&this.focus_handle);
+                                },
+                            ))
+                        }),
+                )
+            })
     }
 
     fn render_header_item(

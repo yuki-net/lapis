@@ -128,6 +128,12 @@ pub enum DocumentCloseDisposition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConversationViewState {
+    /// 可変Split/TabGroupレイアウト。旧保存値では`None`のままです。
+    #[serde(default)]
+    pub layout: Option<LayoutViewState>,
+    /// Panel開閉ボタン群の表示設定。非表示でもViewメニューから復元できる。
+    #[serde(default = "default_show_panel_controls")]
+    pub show_panel_controls: bool,
     /// 新しいレイアウト形式。位置ごとのタブ・選択状態・サイズを一律で保持する。
     pub panels: Vec<PanelViewState>,
     // 旧セッションとの互換読み込み用。次回保存時は panels が正とする。
@@ -137,6 +143,53 @@ pub struct ConversationViewState {
     pub tool_width: f32,
     pub side_width: f32,
     pub bottom_height: f32,
+}
+
+fn default_show_panel_controls() -> bool {
+    true
+}
+
+/// UIフレームワークに依存しないDesktopレイアウトの保存値です。
+/// Viewの配置だけを保存し、Host上のDocumentやTerminalの所有権は保存しません。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayoutViewState {
+    #[serde(default = "layout_view_state_version")]
+    pub version: u16,
+    pub root: LayoutNodeViewState,
+    pub groups: Vec<LayoutGroupViewState>,
+    /// 既存HeaderのZone操作先。Group数の上限ではない。旧形式では空。
+    #[serde(default)]
+    pub anchors: std::collections::BTreeMap<String, String>,
+}
+
+fn layout_view_state_version() -> u16 {
+    1
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum LayoutNodeViewState {
+    Tabs {
+        group: String,
+    },
+    Split {
+        direction: String,
+        ratio: f32,
+        first: Box<LayoutNodeViewState>,
+        second: Box<LayoutNodeViewState>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LayoutGroupViewState {
+    pub id: String,
+    pub position: String,
+    pub tabs: Vec<String>,
+    pub active_tab: Option<String>,
+    pub open: bool,
+    /// Zone全体を隠す前に表示されていたGroup。個別Hideとは区別する。
+    #[serde(default)]
+    pub zone_hidden: bool,
+    pub size: f32,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -151,6 +204,8 @@ pub struct PanelViewState {
 impl Default for ConversationViewState {
     fn default() -> Self {
         Self {
+            layout: None,
+            show_panel_controls: true,
             panels: Vec::new(),
             active_tool: "files".to_owned(),
             side_panel: None,

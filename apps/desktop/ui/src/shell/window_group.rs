@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use super::PanelTab;
-use crate::extension_ui::PanelPosition;
+use super::{PanelTab, TabGroupId};
 
 pub(crate) type HostId = u64;
 pub(crate) const ROOT_HOST: HostId = 0;
@@ -10,7 +9,7 @@ pub(crate) const ROOT_HOST: HostId = 0;
 pub(crate) struct GroupLayout {
     next_host: HostId,
     pub(crate) windows: HashMap<HostId, Option<HostId>>,
-    pub(crate) tabs: HashMap<PanelTab, (HostId, PanelPosition)>,
+    pub(crate) tabs: HashMap<PanelTab, (HostId, TabGroupId)>,
 }
 
 impl GroupLayout {
@@ -38,7 +37,7 @@ impl GroupLayout {
         } else {
             ROOT_HOST
         };
-        self.tabs.entry(tab).or_insert((owner, PanelPosition::Main));
+        self.tabs.entry(tab).or_insert((owner, TabGroupId::new(1)));
     }
 
     /// Updates placement and returns true when the target exists and the source owns the tab.
@@ -47,7 +46,7 @@ impl GroupLayout {
         &mut self,
         source: HostId,
         target: HostId,
-        panel: PanelPosition,
+        group: TabGroupId,
         tab: &PanelTab,
     ) -> bool {
         if !self.windows.contains_key(&target)
@@ -55,7 +54,7 @@ impl GroupLayout {
         {
             return false;
         }
-        self.tabs.insert(tab.clone(), (target, panel));
+        self.tabs.insert(tab.clone(), (target, group));
         true
     }
 
@@ -77,9 +76,9 @@ mod tests {
         let tab = PanelTab::tool("future-movable-tool");
         group.register_tab(tab.clone(), child);
         assert_eq!(group.tabs[&tab].0, child);
-        assert!(group.move_tab(child, ROOT_HOST, PanelPosition::Bottom, &tab));
+        assert!(group.move_tab(child, ROOT_HOST, TabGroupId::new(3), &tab));
         group.register_tab(tab.clone(), child);
-        assert_eq!(group.tabs[&tab], (ROOT_HOST, PanelPosition::Bottom));
+        assert_eq!(group.tabs[&tab], (ROOT_HOST, TabGroupId::new(3)));
         group.remove_window(child);
         let late_tab = PanelTab::tool("late-result");
         group.register_tab(late_tab.clone(), child);
@@ -91,15 +90,14 @@ mod tests {
         let mut a = GroupLayout::new();
         let mut b = GroupLayout::new();
         let tab = PanelTab::tool("terminal");
-        a.tabs
-            .insert(tab.clone(), (ROOT_HOST, PanelPosition::Bottom));
+        a.tabs.insert(tab.clone(), (ROOT_HOST, TabGroupId::new(3)));
         let child = a.add_window();
-        assert!(a.move_tab(ROOT_HOST, child, PanelPosition::Main, &tab));
-        assert!(!b.move_tab(child, ROOT_HOST, PanelPosition::Main, &tab));
-        assert!(!a.move_tab(ROOT_HOST, child, PanelPosition::Main, &tab));
+        assert!(a.move_tab(ROOT_HOST, child, TabGroupId::new(1), &tab));
+        assert!(!b.move_tab(child, ROOT_HOST, TabGroupId::new(1), &tab));
+        assert!(!a.move_tab(ROOT_HOST, child, TabGroupId::new(1), &tab));
         let sibling = a.add_window();
-        assert!(a.move_tab(child, sibling, PanelPosition::Main, &tab));
-        assert!(a.move_tab(sibling, ROOT_HOST, PanelPosition::Bottom, &tab));
+        assert!(a.move_tab(child, sibling, TabGroupId::new(1), &tab));
+        assert!(a.move_tab(sibling, ROOT_HOST, TabGroupId::new(3), &tab));
     }
 
     #[test]
@@ -107,10 +105,25 @@ mod tests {
         let mut group = GroupLayout::new();
         let child = group.add_window();
         let tab = PanelTab::tool("task");
-        group.tabs.insert(tab.clone(), (child, PanelPosition::Main));
+        group.tabs.insert(tab.clone(), (child, TabGroupId::new(1)));
         group.remove_window(child);
         assert!(!group.tabs.contains_key(&tab));
         assert_eq!(group.windows.len(), 1);
         assert!(group.add_window() > child);
+    }
+
+    #[test]
+    fn two_groups_in_one_zone_keep_distinct_window_placements() {
+        let mut group = GroupLayout::new();
+        let child = group.add_window();
+        let tab = PanelTab::tool("future-resource-view");
+        group.register_tab(tab.clone(), ROOT_HOST);
+        assert!(group.move_tab(ROOT_HOST, ROOT_HOST, TabGroupId::new(5), &tab));
+        assert_eq!(group.tabs[&tab].1, TabGroupId::new(5));
+        assert!(group.move_tab(ROOT_HOST, child, TabGroupId::new(6), &tab));
+        assert!(group.move_tab(child, ROOT_HOST, TabGroupId::new(5), &tab));
+        assert_eq!(group.tabs[&tab], (ROOT_HOST, TabGroupId::new(5)));
+        assert!(!group.move_tab(child, ROOT_HOST, TabGroupId::new(7), &tab));
+        assert_eq!(group.tabs[&tab].1, TabGroupId::new(5));
     }
 }

@@ -20,6 +20,7 @@ pub(crate) enum MenuAction {
     ToggleLeftPanel,
     ToggleBottomPanel,
     ToggleRightPanel,
+    TogglePanelControls,
     ToggleInspector,
     Placeholder,
 }
@@ -148,6 +149,12 @@ const VIEW_MENU: &[MenuItemDefinition] = &[
         "Right Panel",
         None,
         MenuAction::ToggleRightPanel,
+    ),
+    MenuItemDefinition::action(
+        "panel-controls",
+        "Panel Controls",
+        None,
+        MenuAction::TogglePanelControls,
     ),
     MenuItemDefinition::disabled("command-palette", "Command Palette"),
 ];

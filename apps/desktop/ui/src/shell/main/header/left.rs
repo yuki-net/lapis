@@ -3,6 +3,67 @@ use crate::components::{header_button, icon_button};
 
 impl Shell {
     pub(super) fn render_header_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_controls = div().flex().items_center().gap(tokens::spacing::XS).when(
+            self.shell.show_panel_controls,
+            |controls| {
+                controls
+                    .child(
+                        panel_toggle_button(
+                            "toggle-left-panel",
+                            controls::PanelPosition::Left,
+                            panel_state(
+                                self.shell
+                                    .layout
+                                    .zone_open(crate::extension_ui::PanelPosition::Left),
+                            ),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_header_panel(
+                                crate::extension_ui::PanelPosition::Left,
+                                window,
+                                cx,
+                            );
+                        })),
+                    )
+                    .child(
+                        panel_toggle_button(
+                            "toggle-bottom-panel",
+                            controls::PanelPosition::Bottom,
+                            panel_state(
+                                self.shell
+                                    .layout
+                                    .zone_open(crate::extension_ui::PanelPosition::Bottom),
+                            ),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_header_panel(
+                                crate::extension_ui::PanelPosition::Bottom,
+                                window,
+                                cx,
+                            );
+                        })),
+                    )
+                    .child(
+                        panel_toggle_button(
+                            "toggle-right-panel",
+                            controls::PanelPosition::Right,
+                            panel_state(
+                                self.shell
+                                    .layout
+                                    .zone_open(crate::extension_ui::PanelPosition::Right),
+                            ),
+                        )
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.toggle_header_panel(
+                                crate::extension_ui::PanelPosition::Right,
+                                window,
+                                cx,
+                            );
+                        })),
+                    )
+            },
+        );
+
         div()
             .flex_shrink_0()
             .flex()
@@ -27,42 +88,7 @@ impl Shell {
                     },
                 )),
             )
-            .child(
-                panel_toggle_button(
-                    "toggle-left-panel",
-                    controls::PanelPosition::Left,
-                    panel_state(self.shell.left_panel.open),
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_header_panel(crate::extension_ui::PanelPosition::Left, cx);
-                })),
-            )
-            .child(
-                panel_toggle_button(
-                    "toggle-bottom-panel",
-                    controls::PanelPosition::Bottom,
-                    if self.shell.bottom_panel.open {
-                        controls::PanelState::Open
-                    } else {
-                        controls::PanelState::Close
-                    },
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_header_panel(crate::extension_ui::PanelPosition::Bottom, cx);
-                    let _ = window;
-                })),
-            )
-            .child(
-                panel_toggle_button(
-                    "toggle-right-panel",
-                    controls::PanelPosition::Right,
-                    panel_state(self.shell.right_panel.open),
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.toggle_header_panel(crate::extension_ui::PanelPosition::Right, cx);
-                    let _ = window;
-                })),
-            )
+            .child(panel_controls)
     }
 }
 

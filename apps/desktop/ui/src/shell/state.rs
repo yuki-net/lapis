@@ -2,13 +2,9 @@ use std::time::{Duration, Instant};
 
 use lapis_desktop_client::DocumentTab;
 
-use crate::{
-    extension_ui::{FeatureRegistry, PanelPosition},
-    features::id,
-    tokens,
-};
+use crate::extension_ui::{FeatureRegistry, PanelPosition};
 
-use super::{panel::PanelHost, tab_state::PanelTab};
+use super::{DockLayout, PanelHost, PanelTab, TabGroupId, ViewInstanceId};
 
 const PANEL_SPAN_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 
@@ -139,19 +135,18 @@ pub(crate) enum ResizeTarget {
 
 #[derive(Clone)]
 pub(crate) struct ShellState {
-    pub focused_panel: PanelPosition,
-    pub main_panel: PanelHost,
-    pub left_panel: PanelHost,
-    pub bottom_panel: PanelHost,
-    pub right_panel: PanelHost,
+    pub focused_group: TabGroupId,
+    pub layout: DockLayout,
     pub bottom_span_left: bool,
     pub bottom_span_right: bool,
     pub bottom_span_left_transition: Option<PanelSpanTransition>,
     pub bottom_span_right_transition: Option<PanelSpanTransition>,
     pub command_palette_open: bool,
-    pub tool_picker: Option<PanelPosition>,
+    pub show_panel_controls: bool,
+    pub tool_picker: Option<TabGroupId>,
     pub tool_picker_anchor: gpui::Point<gpui::Pixels>,
     pub tool_picker_query: String,
+    pub tool_picker_selected: usize,
     pub settings_menu_open: bool,
     pub settings_menu_anchor: gpui::Point<gpui::Pixels>,
     pub header_menu_open: bool,
@@ -167,34 +162,18 @@ pub(crate) struct ShellState {
 impl Default for ShellState {
     fn default() -> Self {
         Self {
-            focused_panel: PanelPosition::Main,
-            main_panel: PanelHost::new(PanelPosition::Main, Vec::new(), true, 0.0),
-            left_panel: PanelHost::new(
-                PanelPosition::Left,
-                vec![PanelTab::tool(id::VIEW_FILES)],
-                true,
-                f32::from(tokens::size::TOOL_ISLAND_WIDTH),
-            ),
-            bottom_panel: PanelHost::new(
-                PanelPosition::Bottom,
-                Vec::new(),
-                false,
-                f32::from(tokens::size::BOTTOM_PANEL_HEIGHT),
-            ),
-            right_panel: PanelHost::new(
-                PanelPosition::Right,
-                Vec::new(),
-                false,
-                f32::from(tokens::size::SIDE_PANEL_WIDTH),
-            ),
+            focused_group: TabGroupId::new(1),
+            layout: DockLayout::default(),
             bottom_span_left: false,
             bottom_span_right: false,
             bottom_span_left_transition: None,
             bottom_span_right_transition: None,
             command_palette_open: false,
+            show_panel_controls: true,
             tool_picker: None,
             tool_picker_anchor: gpui::point(gpui::px(120.0), gpui::px(82.0)),
             tool_picker_query: String::new(),
+            tool_picker_selected: 0,
             settings_menu_open: false,
             settings_menu_anchor: gpui::point(gpui::px(0.0), gpui::px(0.0)),
             header_menu_open: false,
@@ -210,6 +189,30 @@ impl Default for ShellState {
 }
 
 impl ShellState {
+    pub(crate) fn focus_panel(&mut self, position: PanelPosition) {
+        self.focused_group = self.layout.primary_group_id(position).clone();
+    }
+
+    /// 消えた追加先へ操作を適用しない。共有Viewは個体を保って移動する。
+    pub(crate) fn open_group_tab(&mut self, group: &TabGroupId, tab: PanelTab) -> bool {
+        if self.layout.group(group).is_none() {
+            return false;
+        }
+        if let Some(source) = self.layout.group_for_tab(&tab) {
+            if self.layout.move_tab(&source, group, &tab).is_err() {
+                return false;
+            }
+        } else if let Some(target) = self.layout.group_mut(group) {
+            target.activate_without_open(tab);
+        }
+        self.layout
+            .group_mut(group)
+            .unwrap()
+            .set_open_immediate(true);
+        self.focused_group = group.clone();
+        true
+    }
+
     pub(crate) fn bottom_spans_left_layout(&self, now: Instant) -> bool {
         self.bottom_span_left_transition
             .as_ref()
@@ -262,43 +265,48 @@ impl ShellState {
                 .is_some_and(|transition| transition.is_active(now))
     }
     pub fn panel(&self, position: PanelPosition) -> &PanelHost {
-        match position {
-            PanelPosition::Main => &self.main_panel,
-            PanelPosition::Left => &self.left_panel,
-            PanelPosition::Bottom => &self.bottom_panel,
-            PanelPosition::Right => &self.right_panel,
-        }
+        self.layout.panel(position)
     }
 
     pub fn panel_mut(&mut self, position: PanelPosition) -> &mut PanelHost {
-        match position {
-            PanelPosition::Main => &mut self.main_panel,
-            PanelPosition::Left => &mut self.left_panel,
-            PanelPosition::Bottom => &mut self.bottom_panel,
-            PanelPosition::Right => &mut self.right_panel,
-        }
+        self.layout.panel_mut(position)
     }
 
-    pub fn panels(&self) -> [&PanelHost; 4] {
-        [
-            &self.main_panel,
-            &self.left_panel,
-            &self.bottom_panel,
-            &self.right_panel,
-        ]
+    pub fn panels(&self) -> Vec<&PanelHost> {
+        self.layout.panels()
     }
 
-    pub fn panels_mut(&mut self) -> [&mut PanelHost; 4] {
-        [
-            &mut self.main_panel,
-            &mut self.left_panel,
-            &mut self.bottom_panel,
-            &mut self.right_panel,
-        ]
+    pub fn panels_mut(&mut self) -> impl Iterator<Item = &mut PanelHost> {
+        self.layout.panels_mut()
     }
 
     pub fn set_tool_picker_query(&mut self, query: impl Into<String>) {
         self.tool_picker_query = query.into();
+        self.tool_picker_selected = 0;
+    }
+
+    pub(crate) fn next_tool_instance(
+        &mut self,
+        view: &crate::extension_ui::ViewId,
+    ) -> Result<ViewInstanceId, getrandom::Error> {
+        // 復元・移動・非表示の経路に依存せず、Layout全体の個体IDと照合する。
+        loop {
+            // Window・非表示Task・再起動をまたぐため、Layout内の連番に依存しない。
+            let mut bytes = [0u8; 16];
+            getrandom::fill(&mut bytes)?;
+            let token = bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            let instance = ViewInstanceId::new(format!("{}:{token}", view.as_str()));
+            if !self
+                .panels()
+                .iter()
+                .any(|panel| panel.tabs.iter().any(|tab| tab.instance_id() == instance))
+            {
+                return Ok(instance);
+            }
+        }
     }
 
     pub fn synchronize_documents(&mut self, documents: &[DocumentTab]) {
@@ -309,7 +317,7 @@ impl ShellState {
         for panel in self.panels_mut() {
             panel.tabs.retain(|tab| match tab {
                 PanelTab::Document(id) => valid.contains(&id),
-                PanelTab::Tool(_) => true,
+                PanelTab::Tool { .. } => true,
             });
             if let Some(active) = &panel.active
                 && !panel.tabs.contains(active)
@@ -320,7 +328,7 @@ impl ShellState {
         for document in documents {
             let tab = PanelTab::Document(document.id.clone());
             if !self.panels().iter().any(|panel| panel.contains(&tab)) {
-                self.main_panel.tabs.push(tab.clone());
+                self.panel_mut(PanelPosition::Main).tabs.push(tab.clone());
             }
             if document.active {
                 for panel in self.panels_mut() {
@@ -333,47 +341,127 @@ impl ShellState {
     }
 
     pub fn move_tab(&mut self, source: PanelPosition, target: PanelPosition, tab: PanelTab) {
-        if source == target {
-            self.panel_mut(target).activate(tab);
-            return;
-        }
-        self.panel_mut(source).remove(&tab);
-        self.panel_mut(target).activate(tab);
+        let source_id = self.layout.primary_group_id(source).clone();
+        let target_id = self.layout.primary_group_id(target).clone();
+        let _ = self.layout.move_tab(&source_id, &target_id, &tab);
     }
 
     pub fn synchronize_activation(&self, registry: &mut FeatureRegistry) {
-        for panel in self.panels() {
-            registry.set_panel_active_view(
-                panel.position,
-                panel
-                    .open
-                    .then(|| panel.active.as_ref().and_then(PanelTab::view_id).cloned())
-                    .flatten(),
-            );
-        }
+        registry.set_visible_views(
+            self.panels()
+                .into_iter()
+                .filter(|panel| panel.open)
+                .filter_map(|panel| panel.active.as_ref().and_then(PanelTab::view_id).cloned()),
+        );
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::extension_ui::ViewId;
+    use crate::{extension_ui::ViewId, features::id, tokens};
     use std::time::{Duration, Instant};
 
     use super::*;
+
+    #[test]
+    fn picker_adds_to_clicked_group_and_preserves_shared_identity() {
+        let mut shell = ShellState::default();
+        let left = shell.layout.primary_group_id(PanelPosition::Left).clone();
+        let second = shell
+            .layout
+            .split_group(&left, crate::shell::layout::SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        let tab = PanelTab::tool(id::VIEW_FILES);
+        assert!(shell.open_group_tab(&second, tab.clone()));
+        assert!(!shell.layout.group(&left).unwrap().contains(&tab));
+        assert!(shell.layout.group(&second).unwrap().contains(&tab));
+        assert_eq!(shell.focused_group, second);
+        let before = shell.layout.capture_view_state();
+        assert!(!shell.open_group_tab(&TabGroupId::new(999), tab));
+        assert_eq!(shell.layout.capture_view_state(), before);
+        assert!(shell.layout.validate().is_ok());
+    }
 
     #[test]
     fn initializes_four_panels_with_main_visible() {
         let state = ShellState::default();
 
         assert_eq!(state.panels().len(), 4);
-        assert!(state.main_panel.open);
-        assert!(state.left_panel.open);
-        assert!(!state.bottom_panel.open);
-        assert!(!state.right_panel.open);
+        assert!(state.panel(PanelPosition::Main).open);
+        assert!(state.panel(PanelPosition::Left).open);
+        assert!(!state.panel(PanelPosition::Bottom).open);
+        assert!(!state.panel(PanelPosition::Right).open);
         assert_eq!(
-            state.left_panel.active_tool().map(ViewId::as_str),
+            state
+                .panel(PanelPosition::Left)
+                .active_tool()
+                .map(ViewId::as_str),
             Some(id::VIEW_FILES)
         );
+    }
+
+    #[test]
+    fn generated_tool_instances_are_stable_and_distinct() {
+        let mut state = ShellState::default();
+        let view = ViewId::new(id::VIEW_TERMINAL);
+
+        let first = state.next_tool_instance(&view).unwrap();
+        let second = state.next_tool_instance(&view).unwrap();
+
+        assert_ne!(first, second);
+        assert!(first.as_str().starts_with("lapis.view.terminal:"));
+        assert!(second.as_str().starts_with("lapis.view.terminal:"));
+    }
+
+    #[test]
+    fn restored_hidden_instances_do_not_collide_with_new_tabs() {
+        let view = ViewId::new(id::VIEW_TERMINAL);
+        let mut original = ShellState::default();
+        for index in [0, 1, 3] {
+            original
+                .panel_mut(PanelPosition::Bottom)
+                .activate_without_open(PanelTab::tool_instance(
+                    view.clone(),
+                    format!("{}:{index}", view.as_str()),
+                ));
+        }
+        original
+            .panel_mut(PanelPosition::Bottom)
+            .set_open_immediate(false);
+        let saved = original.layout.capture_view_state();
+        let mut restored = ShellState::default();
+        assert!(restored.layout.restore_view_state(&saved, |raw| {
+            let (view, instance) = raw.strip_prefix("tool:")?.split_once(':')?;
+            Some(PanelTab::tool_instance(view, instance))
+        }));
+        for _ in 0..2 {
+            let instance = restored.next_tool_instance(&view).unwrap();
+            assert!(
+                !original
+                    .panels()
+                    .iter()
+                    .any(|panel| panel.tabs.iter().any(|tab| tab.instance_id() == instance))
+            );
+            restored
+                .panel_mut(PanelPosition::Main)
+                .activate_without_open(PanelTab::tool_instance(view.clone(), instance));
+        }
+        assert_eq!(restored.panel(PanelPosition::Bottom).tabs.len(), 3);
+        assert_eq!(restored.panel(PanelPosition::Main).tabs.len(), 2);
+        assert!(restored.layout.validate().is_ok());
+    }
+
+    #[test]
+    fn editing_picker_query_resets_keyboard_selection() {
+        let mut shell = ShellState {
+            tool_picker_selected: 10,
+            ..Default::default()
+        };
+        shell.set_tool_picker_query("terminal");
+        assert_eq!(shell.tool_picker_selected, 0);
+        shell.tool_picker_selected = 4;
+        shell.set_tool_picker_query("termina");
+        assert_eq!(shell.tool_picker_selected, 0);
     }
 
     #[test]
@@ -466,9 +554,9 @@ mod tests {
 
         state.move_tab(PanelPosition::Left, PanelPosition::Main, tab.clone());
 
-        assert!(!state.left_panel.contains(&tab));
-        assert!(state.main_panel.contains(&tab));
-        assert_eq!(state.main_panel.active, Some(tab));
+        assert!(!state.panel(PanelPosition::Left).contains(&tab));
+        assert!(state.panel(PanelPosition::Main).contains(&tab));
+        assert_eq!(state.panel(PanelPosition::Main).active, Some(tab));
     }
 
     #[test]
@@ -478,26 +566,31 @@ mod tests {
 
         state.move_tab(PanelPosition::Left, PanelPosition::Right, tab.clone());
 
-        assert!(!state.left_panel.contains(&tab));
-        assert!(state.right_panel.contains(&tab));
+        assert!(!state.panel(PanelPosition::Left).contains(&tab));
+        assert!(state.panel(PanelPosition::Right).contains(&tab));
     }
 
     #[test]
     fn removing_tabs_keeps_panel_open_and_selects_adjacent_tabs() {
         let mut state = ShellState::default();
-        state.main_panel.activate_tool(ViewId::new(id::VIEW_FILES));
         state
-            .main_panel
+            .panel_mut(PanelPosition::Main)
+            .activate_tool(ViewId::new(id::VIEW_FILES));
+        state
+            .panel_mut(PanelPosition::Main)
             .activate_tool(ViewId::new(id::VIEW_TERMINAL));
         let files = PanelTab::tool(id::VIEW_FILES);
         let terminal = PanelTab::tool(id::VIEW_TERMINAL);
 
-        assert!(state.main_panel.remove(&files));
-        assert_eq!(state.main_panel.active, Some(terminal.clone()));
-        assert!(state.main_panel.remove(&terminal));
-        assert!(state.main_panel.open);
-        assert!(state.main_panel.tabs.is_empty());
-        assert_eq!(state.main_panel.active, None);
+        assert!(state.panel_mut(PanelPosition::Main).remove(&files));
+        assert_eq!(
+            state.panel(PanelPosition::Main).active,
+            Some(terminal.clone())
+        );
+        assert!(state.panel_mut(PanelPosition::Main).remove(&terminal));
+        assert!(state.panel(PanelPosition::Main).open);
+        assert!(state.panel(PanelPosition::Main).tabs.is_empty());
+        assert_eq!(state.panel(PanelPosition::Main).active, None);
     }
 
     #[test]
