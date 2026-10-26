@@ -1039,17 +1039,17 @@ impl DesktopRoot {
         PersistedView {
             document: self.editor.read(cx).view_state(),
             layout,
-            execution: if self.workbench.selected_task() == self.workbench.context_task() {
-                self.tasks.read(cx).selected_execution.clone()
-            } else {
-                // IDEで別Taskを選択しても、作業中Taskの実行参照を上書きしない。
+            execution: execution_for_context(
+                self.task_context.as_ref().map(|(task, _)| task),
+                self.workbench.context_task(),
+                self.tasks.read(cx).selected_execution.clone(),
                 self.conversation
                     .read(cx)
                     .records
                     .iter()
                     .find(|record| Some(&record.id) == self.workbench.context_task())
-                    .and_then(|record| record.selected_execution.clone())
-            },
+                    .and_then(|record| record.selected_execution.clone()),
+            ),
             terminals: self.terminal.read(cx).summaries(),
             terminal_owner: self.terminal.read(cx).persistence_owner(),
             input: self
@@ -1521,5 +1521,97 @@ impl Render for DesktopRoot {
                 }
             }))
             .child(self.shell.clone())
+    }
+}
+
+/// 表示中の選択を保存できるのは、そのViewが保存先Taskを参照している場合だけ。
+fn execution_for_context(
+    view_task: Option<&lapis_editor_core::ConversationId>,
+    context_task: Option<&lapis_editor_core::ConversationId>,
+    view_selection: Option<lapis_editor_core::ExecutionId>,
+    saved_selection: Option<lapis_editor_core::ExecutionId>,
+) -> Option<lapis_editor_core::ExecutionId> {
+    if view_task.is_some() && view_task == context_task {
+        view_selection
+    } else {
+        saved_selection
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lapis_desktop_client::ConversationViewState;
+    use lapis_editor_core::{ConversationId, ExecutionId};
+
+    #[test]
+    fn fixed_assistant_selection_does_not_overwrite_another_tasks_saved_execution() {
+        let a = ConversationId::new("task-a");
+        let b = ConversationId::new("task-b");
+        let execution_a = ExecutionId::new("execution-a");
+        let execution_b = ExecutionId::new("execution-b");
+        let key = ViewInstanceKey::new(
+            crate::shell::PanelTab::tool(id::VIEW_ASSISTANT).stable_view_key(),
+        )
+        .unwrap();
+        let mut state = WorkbenchState::default();
+        let view = ConversationViewState::default();
+        state.apply_task_snapshot(a.clone(), view.clone(), true);
+        state.bind_view(key.clone(), ViewScope::Task(a.clone()));
+        state.select_task(b.clone(), view.clone());
+        state.set_mode(WorkbenchMode::Agent, Some(&a), &view);
+        state.apply_task_snapshot(b.clone(), view.clone(), true);
+        assert_eq!(state.selected_task(), state.context_task());
+        assert_eq!(state.task_reference(&key), Some(&a));
+        for selection in [Some(execution_a.clone()), None] {
+            assert_eq!(
+                execution_for_context(
+                    state.task_reference(&key),
+                    state.context_task(),
+                    selection,
+                    Some(execution_b.clone())
+                ),
+                Some(execution_b.clone())
+            );
+        }
+        // ViewをBへ追従させた場合は、その選択と明示的な選択解除を保存できる。
+        state.bind_view(key.clone(), ViewScope::FollowSelectedTask);
+        assert_eq!(
+            execution_for_context(
+                state.task_reference(&key),
+                state.context_task(),
+                Some(execution_b.clone()),
+                Some(execution_a.clone())
+            ),
+            Some(execution_b.clone())
+        );
+        assert_eq!(
+            execution_for_context(
+                state.task_reference(&key),
+                state.context_task(),
+                None,
+                Some(execution_b.clone())
+            ),
+            None
+        );
+
+        // IDEで選択TaskがBのままでも、固定Viewと作業環境がAならAへ保存する。
+        state.set_mode(WorkbenchMode::Ide, Some(&b), &view);
+        state.apply_task_snapshot(a.clone(), view, true);
+        state.bind_view(key.clone(), ViewScope::Task(a.clone()));
+        assert_ne!(state.selected_task(), state.context_task());
+        assert_eq!(
+            execution_for_context(
+                state.task_reference(&key),
+                state.context_task(),
+                Some(execution_a.clone()),
+                Some(execution_b.clone())
+            ),
+            Some(execution_a)
+        );
+        assert_eq!(
+            execution_for_context(None, state.context_task(), None, Some(execution_b.clone())),
+            Some(execution_b)
+        );
     }
 }
