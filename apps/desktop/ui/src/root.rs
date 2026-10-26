@@ -34,6 +34,24 @@ enum PathRequest {
     Save(std::path::PathBuf, lapis_editor_core::DocumentId),
     CloseSave(std::sync::mpsc::Sender<Result<String, String>>),
 }
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum TaskContextResolution {
+    #[default]
+    Unavailable,
+    Pending,
+    Ready,
+}
+
+impl TaskContextResolution {
+    fn confirmed_task(
+        self,
+        task: Option<&lapis_editor_core::ConversationId>,
+    ) -> Option<&lapis_editor_core::ConversationId> {
+        (self == Self::Ready).then_some(task).flatten()
+    }
+}
+
 type PersistSignature = (
     Vec<(
         lapis_editor_core::DocumentId,
@@ -48,6 +66,7 @@ type PersistSignature = (
         f32,
     )>,
     lapis_desktop_client::ConversationViewState,
+    Option<lapis_editor_core::ExecutionId>,
     Option<lapis_editor_core::ConversationId>,
     Vec<lapis_desktop_client::RestoredTerminal>,
 );
@@ -82,6 +101,8 @@ pub(crate) struct DesktopRoot {
     native_smoke_requested: bool,
     workbench: WorkbenchState,
     task_context_gate: crate::client_adapter::ResponseGate,
+    task_context_resolution: TaskContextResolution,
+    terminal_context_resolved: bool,
     task_context: Option<(
         lapis_editor_core::ConversationId,
         Option<std::path::PathBuf>,
@@ -459,6 +480,8 @@ impl DesktopRoot {
             workbench: WorkbenchState::default(),
             task_context: None,
             task_context_gate: Default::default(),
+            task_context_resolution: Default::default(),
+            terminal_context_resolved: false,
         }
     }
 
@@ -550,38 +573,23 @@ impl DesktopRoot {
             }
             _ => None,
         };
-        let terminal_task = match terminal_scope {
-            Some(ViewScope::Task(task)) => task.clone(),
-            Some(ViewScope::FollowSelectedTask) => selected.clone(),
-            Some(ViewScope::Resource(resource)) => snapshot
-                .conversations
-                .iter()
-                .find(|record| {
-                    record.terminals.iter().any(|terminal| {
-                        terminal
-                            .id
-                            .as_ref()
-                            .is_some_and(|id| id.as_str() == resource)
-                    })
-                })
-                .map(|record| record.id.clone())
-                .unwrap_or_else(|| self.terminal.read(cx).context_task().clone()),
-            _ => self.terminal.read(cx).context_task().clone(),
-        };
-        let terminal_record = snapshot
-            .conversations
-            .iter()
-            .find(|record| record.id == terminal_task);
+        let terminal_record = terminal_context_record(
+            terminal_scope,
+            &selected,
+            self.terminal.read(cx).context_task(),
+            &snapshot.conversations,
+        );
+        self.terminal_context_resolved = terminal_record.is_some();
         self.terminal.update(cx, |terminal, cx| {
             terminal.bind_resource(resource);
-            terminal.set_context(
-                terminal_record.and_then(|record| record.workspace.root.clone()),
-                terminal_task,
-                terminal_record
-                    .map(|record| record.terminals.clone())
-                    .unwrap_or_default(),
-                cx,
-            )
+            if let Some(record) = terminal_record {
+                terminal.set_context(
+                    record.workspace.root.clone(),
+                    record.id.clone(),
+                    record.terminals.clone(),
+                    cx,
+                );
+            }
         });
         self.conversation.update(cx, |conversation, cx| {
             conversation.context = Some(snapshot.conversation.clone());
@@ -653,6 +661,7 @@ impl DesktopRoot {
             return;
         }
         self.task_context = Some(key.clone());
+        self.task_context_resolution = TaskContextResolution::Pending;
         self.task_context_gate.invalidate();
         let token = self.task_context_gate.issue();
         self.tasks.update(cx, |tasks, cx| {
@@ -676,18 +685,27 @@ impl DesktopRoot {
                     return;
                 }
                 match result {
-                    Ok(workspace) => root.tasks.update(cx, |tasks, cx| {
-                        tasks.set_workspace(workspace, cx);
-                        tasks.selected_execution = selected_execution;
-                    }),
+                    Ok(workspace) => {
+                        root.tasks.update(cx, |tasks, cx| {
+                            tasks.set_workspace(workspace, cx);
+                            tasks.selected_execution = selected_execution;
+                        });
+                        root.task_context_resolution = TaskContextResolution::Ready;
+                    }
                     Err(error) => {
+                        root.task_context_resolution = TaskContextResolution::Unavailable;
                         root.set_status(error, cx);
                     }
                 }
+                root.persist_signature = None;
+                root.schedule_persist(cx);
             },
         );
         if let Err(error) = admitted {
+            self.task_context_resolution = TaskContextResolution::Unavailable;
             self.set_status(error, cx);
+            self.persist_signature = None;
+            self.schedule_persist(cx);
         }
     }
 
@@ -1032,6 +1050,30 @@ impl DesktopRoot {
         cx.notify();
     }
 
+    fn execution_for_persistence(&self, cx: &gpui::App) -> Option<lapis_editor_core::ExecutionId> {
+        execution_for_context(
+            self.task_context_resolution
+                .confirmed_task(self.task_context.as_ref().map(|(task, _)| task)),
+            self.workbench.context_task(),
+            self.tasks.read(cx).selected_execution.clone(),
+            self.conversation
+                .read(cx)
+                .records
+                .iter()
+                .find(|record| Some(&record.id) == self.workbench.context_task())
+                .and_then(|record| record.selected_execution.clone()),
+        )
+    }
+
+    fn terminal_owner_for_persistence(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<lapis_editor_core::ConversationId> {
+        self.terminal_context_resolved
+            .then(|| self.terminal.read(cx).persistence_owner())
+            .flatten()
+    }
+
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
     pub(crate) fn persisted_view(&self, cx: &gpui::App) -> PersistedView {
         let mut layout = self.shell.read(cx).view_state();
@@ -1039,19 +1081,9 @@ impl DesktopRoot {
         PersistedView {
             document: self.editor.read(cx).view_state(),
             layout,
-            execution: execution_for_context(
-                self.task_context.as_ref().map(|(task, _)| task),
-                self.workbench.context_task(),
-                self.tasks.read(cx).selected_execution.clone(),
-                self.conversation
-                    .read(cx)
-                    .records
-                    .iter()
-                    .find(|record| Some(&record.id) == self.workbench.context_task())
-                    .and_then(|record| record.selected_execution.clone()),
-            ),
+            execution: self.execution_for_persistence(cx),
             terminals: self.terminal.read(cx).summaries(),
-            terminal_owner: self.terminal.read(cx).persistence_owner(),
+            terminal_owner: self.terminal_owner_for_persistence(cx),
             input: self
                 .editor
                 .read(cx)
@@ -1094,7 +1126,7 @@ impl DesktopRoot {
             })
             .unwrap_or_default();
         let terminal = self.terminal.read(cx);
-        let owner = terminal.persistence_owner();
+        let owner = self.terminal_owner_for_persistence(cx);
         let summaries = if owner.is_some() {
             terminal
                 .summaries()
@@ -1114,6 +1146,7 @@ impl DesktopRoot {
             versions,
             self.editor.read(cx).view_state(),
             layout,
+            self.execution_for_persistence(cx),
             owner,
             summaries,
         );
@@ -1127,6 +1160,7 @@ impl DesktopRoot {
                 if root.group.read(cx).closing
                     || root.group.read(cx).synchronization_required
                     || root.editor.read(cx).has_in_flight()
+                    || root.task_context_resolution == TaskContextResolution::Pending
                 {
                     // 指紋はデバウンス用であり、見送った書き込みは再同期後に再試行できるようにする。
                     // Workspace切替の確認前の表示を、Worker側の新Taskへ保存しない。
@@ -1524,6 +1558,31 @@ impl Render for DesktopRoot {
     }
 }
 
+/// Resourceの所有元が未確定なら、既存コンテキストへフォールバックしない。
+fn terminal_context_record<'a>(
+    scope: Option<&ViewScope>,
+    selected: &lapis_editor_core::ConversationId,
+    current: &lapis_editor_core::ConversationId,
+    records: &'a [lapis_desktop_client::ConversationRecord],
+) -> Option<&'a lapis_desktop_client::ConversationRecord> {
+    if let Some(ViewScope::Resource(resource)) = scope {
+        return records.iter().find(|record| {
+            record.terminals.iter().any(|terminal| {
+                terminal
+                    .id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == resource)
+            })
+        });
+    }
+    let task = match scope {
+        Some(ViewScope::Task(task)) => task,
+        Some(ViewScope::FollowSelectedTask) => selected,
+        _ => current,
+    };
+    records.iter().find(|record| &record.id == task)
+}
+
 /// 表示中の選択を保存できるのは、そのViewが保存先Taskを参照している場合だけ。
 fn execution_for_context(
     view_task: Option<&lapis_editor_core::ConversationId>,
@@ -1543,6 +1602,99 @@ mod tests {
     use super::*;
     use lapis_desktop_client::ConversationViewState;
     use lapis_editor_core::{ConversationId, ExecutionId};
+
+    #[test]
+    fn unresolved_task_context_preserves_execution_until_the_view_is_confirmed() {
+        let task = ConversationId::new("task-b");
+        let saved = ExecutionId::new("saved-selection");
+        let latest = ExecutionId::new("restored-selection");
+        for resolution in [
+            TaskContextResolution::Pending,
+            TaskContextResolution::Unavailable,
+        ] {
+            // 解決待ちのNoneと、解決失敗後のNoneは選択解除として扱わない。
+            assert_eq!(
+                execution_for_context(
+                    resolution.confirmed_task(Some(&task)),
+                    Some(&task),
+                    None,
+                    Some(saved.clone())
+                ),
+                Some(saved.clone())
+            );
+        }
+        let confirmed = TaskContextResolution::Ready.confirmed_task(Some(&task));
+        assert_eq!(
+            execution_for_context(
+                confirmed,
+                Some(&task),
+                Some(latest.clone()),
+                Some(saved.clone())
+            ),
+            Some(latest)
+        );
+        assert_eq!(
+            execution_for_context(confirmed, Some(&task), None, Some(saved)),
+            None
+        );
+    }
+
+    #[test]
+    fn missing_terminal_resource_owner_never_falls_back_to_current_task_record() {
+        use lapis_desktop_client::{ConversationRecord, RestoredTerminal};
+        let a = ConversationId::new("task-a");
+        let b = ConversationId::new("task-b");
+        let record = |task: ConversationId, resource: &str| ConversationRecord {
+            title: task.as_str().into(),
+            id: task,
+            workspace: lapis_desktop_client::WorkspaceSnapshot::default(),
+            view: Default::default(),
+            selected_execution: None,
+            terminals: vec![RestoredTerminal {
+                id: Some(lapis_terminal::TerminalId::new(resource)),
+                cwd: "workspace".into(),
+                status: lapis_terminal::TerminalStatus::Running,
+                columns: 80,
+                rows: 24,
+            }],
+            environment: None,
+            source_role: Default::default(),
+            other_workspace: None,
+            other_terminals: Vec::new(),
+            other_execution: None,
+            parked_sources: Vec::new(),
+        };
+        let mut records = vec![
+            record(a.clone(), "terminal-a"),
+            record(b.clone(), "terminal-b"),
+        ];
+        let fixed = ViewScope::Resource("terminal-a".into());
+        assert_eq!(
+            terminal_context_record(Some(&fixed), &b, &b, &records).map(|record| &record.id),
+            Some(&a)
+        );
+        records[0].terminals.clear();
+        records[0].workspace.root = Some("changed-source".into());
+        assert!(terminal_context_record(Some(&fixed), &b, &a, &records).is_none());
+        assert_eq!(
+            terminal_context_record(Some(&ViewScope::Task(a.clone())), &b, &b, &records)
+                .map(|record| &record.id),
+            Some(&a)
+        );
+        records.remove(0);
+        assert!(terminal_context_record(Some(&fixed), &b, &a, &records).is_none());
+        assert!(
+            terminal_context_record(Some(&ViewScope::Task(a.clone())), &b, &b, &records).is_none()
+        );
+        assert!(
+            terminal_context_record(Some(&ViewScope::SharedWorkbench), &b, &a, &records).is_none()
+        );
+        assert_eq!(
+            terminal_context_record(Some(&ViewScope::FollowSelectedTask), &b, &a, &records)
+                .map(|record| &record.id),
+            Some(&b)
+        );
+    }
 
     #[test]
     fn fixed_assistant_selection_does_not_overwrite_another_tasks_saved_execution() {
