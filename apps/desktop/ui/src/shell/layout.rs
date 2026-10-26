@@ -42,6 +42,58 @@ pub(crate) enum SplitDirection {
     Vertical,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DropZone {
+    Center,
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl DropZone {
+    pub(crate) fn is_split(self) -> bool {
+        !matches!(self, Self::Center)
+    }
+
+    fn direction(self) -> Option<SplitDirection> {
+        match self {
+            Self::Left | Self::Right => Some(SplitDirection::Horizontal),
+            Self::Top | Self::Bottom => Some(SplitDirection::Vertical),
+            Self::Center => None,
+        }
+    }
+
+    fn inserts_before(self) -> bool {
+        matches!(self, Self::Left | Self::Top)
+    }
+
+    /// Uses the outside quarter as a split affordance and the center as a tab
+    /// merge target. This is deliberately independent from GPUI coordinates so
+    /// the same rule can be exercised by unit tests and native drag code.
+    pub(crate) fn from_normalized(x: f32, y: f32) -> Self {
+        let edge = 0.24;
+        if x < edge {
+            Self::Left
+        } else if x > 1.0 - edge {
+            Self::Right
+        } else if y < edge {
+            Self::Top
+        } else if y > 1.0 - edge {
+            Self::Bottom
+        } else {
+            Self::Center
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DropTarget {
+    pub(crate) group: TabGroupId,
+    pub(crate) zone: DropZone,
+    pub(crate) error: Option<LayoutError>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum LayoutNode {
     Tabs(TabGroupId),
@@ -62,6 +114,60 @@ pub(crate) enum LayoutError {
     MainGroupRequired,
     InvalidTree,
     TabNotFound,
+    InsufficientSpace,
+    SideColumnLimitReached,
+    GroupNotEmpty,
+    CannotMerge,
+}
+
+/// GPUIのflex配分とDrop判定が共有する、GAP控除後の割り当て。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SplitAllocation {
+    pub(crate) weights: [f32; 2],
+    pub(crate) gap: f32,
+    direction: SplitDirection,
+}
+
+impl SplitAllocation {
+    pub(crate) fn new(direction: SplitDirection, ratio: f32, visible: [bool; 2]) -> Self {
+        let weights = match visible {
+            [true, true] => [ratio, 1.0 - ratio],
+            [true, false] => [1.0, 0.0],
+            [false, true] => [0.0, 1.0],
+            [false, false] => [0.0, 0.0],
+        };
+        Self {
+            weights,
+            gap: if visible == [true, true] {
+                f32::from(crate::tokens::spacing::GAP)
+            } else {
+                0.0
+            },
+            direction,
+        }
+    }
+
+    pub(crate) fn sizes(self, size: (f32, f32)) -> [(f32, f32); 2] {
+        let (width, height) = (size.0.max(0.0), size.1.max(0.0));
+        self.weights.map(|weight| {
+            if weight == 0.0 {
+                return (0.0, 0.0);
+            }
+            match self.direction {
+                SplitDirection::Horizontal => ((width - self.gap).max(0.0) * weight, height),
+                SplitDirection::Vertical => (width, (height - self.gap).max(0.0) * weight),
+            }
+        })
+    }
+
+    fn can_split(self, size: (f32, f32)) -> bool {
+        size.0.is_finite()
+            && size.1.is_finite()
+            && self.sizes(size).into_iter().all(|(width, height)| {
+                width >= f32::from(crate::tokens::size::PANEL_MIN_WIDTH)
+                    && height >= f32::from(crate::tokens::size::PANEL_MIN_HEIGHT)
+            })
+    }
 }
 
 /// Owns placement and visibility state only. A `PanelHost` may contain a
@@ -147,6 +253,50 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
+    /// 固定配置から初めてSplitする場合も、切替後の木の配分で領域を検証する。
+    pub(crate) fn allocated_group_size(
+        &self,
+        group: &TabGroupId,
+        size: (f32, f32),
+        now: std::time::Instant,
+    ) -> Option<(f32, f32)> {
+        fn visible(layout: &DockLayout, node: &LayoutNode, now: std::time::Instant) -> bool {
+            match node {
+                LayoutNode::Tabs(id) => layout.group(id).is_some_and(|panel| panel.is_visible(now)),
+                LayoutNode::Split { first, second, .. } => {
+                    visible(layout, first, now) || visible(layout, second, now)
+                }
+            }
+        }
+        fn find(
+            layout: &DockLayout,
+            node: &LayoutNode,
+            group: &TabGroupId,
+            size: (f32, f32),
+            now: std::time::Instant,
+        ) -> Option<(f32, f32)> {
+            match node {
+                LayoutNode::Tabs(id) => (id == group).then_some(size),
+                LayoutNode::Split {
+                    direction,
+                    ratio,
+                    first,
+                    second,
+                } => {
+                    let sizes = SplitAllocation::new(
+                        *direction,
+                        *ratio,
+                        [visible(layout, first, now), visible(layout, second, now)],
+                    )
+                    .sizes(size);
+                    find(layout, first, group, sizes[0], now)
+                        .or_else(|| find(layout, second, group, sizes[1], now))
+                }
+            }
+        }
+        find(self, &self.root, group, size, now)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn zone_open(&self, position: PanelPosition) -> bool {
         self.groups
@@ -209,6 +359,14 @@ impl DockLayout {
         }
         group.zone_hidden = false;
         Ok(group.request_open_with_duration(open, duration, now))
+    }
+
+    pub(crate) fn root(&self) -> &LayoutNode {
+        &self.root
+    }
+
+    pub(crate) fn has_variable_splits(&self) -> bool {
+        self.leaf_group_ids().len() > 4
     }
 
     pub(crate) fn group(&self, id: &TabGroupId) -> Option<&PanelHost> {
@@ -278,6 +436,16 @@ impl DockLayout {
         direction: SplitDirection,
         ratio: f32,
     ) -> Result<TabGroupId, LayoutError> {
+        self.split_group_at(group, direction, ratio, false)
+    }
+
+    fn split_group_at(
+        &mut self,
+        group: &TabGroupId,
+        direction: SplitDirection,
+        ratio: f32,
+        inserts_before: bool,
+    ) -> Result<TabGroupId, LayoutError> {
         if !ratio.is_finite() || !(0.1..=0.9).contains(&ratio) {
             return Err(LayoutError::InvalidRatio);
         }
@@ -293,20 +461,145 @@ impl DockLayout {
             new_id.clone(),
             PanelHost::new(source.position, Vec::new(), true, source.size),
         );
+        let first = if inserts_before {
+            LayoutNode::Tabs(new_id.clone())
+        } else {
+            LayoutNode::Tabs(group.clone())
+        };
+        let second = if inserts_before {
+            LayoutNode::Tabs(group.clone())
+        } else {
+            LayoutNode::Tabs(new_id.clone())
+        };
         if !replace_leaf(
             &mut self.root,
             group,
             LayoutNode::Split {
                 direction,
                 ratio,
-                first: Box::new(LayoutNode::Tabs(group.clone())),
-                second: Box::new(LayoutNode::Tabs(new_id.clone())),
+                first: Box::new(first),
+                second: Box::new(second),
             },
         ) {
             self.groups.remove(&new_id);
             return Err(LayoutError::InvalidTree);
         }
-        Ok(new_id)
+        self.normalize().map(|()| new_id)
+    }
+
+    pub(crate) fn drop_tab(
+        &mut self,
+        source: &TabGroupId,
+        target: &TabGroupId,
+        tab: &PanelTab,
+        zone: DropZone,
+        target_size: (f32, f32),
+    ) -> Result<(), LayoutError> {
+        let mut candidate = self.clone();
+        candidate.apply_drop(source, target, tab, zone, target_size)?;
+        candidate.validate()?;
+        // Split生成・ID発行・タブ移動の全てが成功した候補だけを確定する。
+        *self = candidate;
+        Ok(())
+    }
+
+    fn apply_drop(
+        &mut self,
+        source: &TabGroupId,
+        target: &TabGroupId,
+        tab: &PanelTab,
+        zone: DropZone,
+        target_size: (f32, f32),
+    ) -> Result<(), LayoutError> {
+        let Some(target_panel) = self.groups.get(target) else {
+            return Err(LayoutError::GroupNotFound);
+        };
+        let Some(source_panel) = self.groups.get(source) else {
+            return Err(LayoutError::GroupNotFound);
+        };
+        if !source_panel.contains(tab) {
+            return Err(LayoutError::TabNotFound);
+        }
+        if !zone.is_split() {
+            return self.move_tab(source, target, tab);
+        }
+        let direction = zone.direction().expect("split zone has a direction");
+        if !SplitAllocation::new(direction, 0.5, [true, true]).can_split(target_size) {
+            return Err(LayoutError::InsufficientSpace);
+        }
+        if direction == SplitDirection::Horizontal
+            && matches!(
+                target_panel.position,
+                PanelPosition::Left | PanelPosition::Right
+            )
+            && self.zone_columns(&self.root, target_panel.position) >= 2
+        {
+            return Err(LayoutError::SideColumnLimitReached);
+        }
+        let new_group = self.split_group_at(target, direction, 0.5, zone.inserts_before())?;
+        self.move_tab(source, &new_group, tab)
+    }
+
+    fn zone_columns(&self, node: &LayoutNode, position: PanelPosition) -> usize {
+        match node {
+            LayoutNode::Tabs(id) => usize::from(
+                self.groups
+                    .get(id)
+                    .is_some_and(|group| group.position == position),
+            ),
+            LayoutNode::Split {
+                direction,
+                first,
+                second,
+                ..
+            } => {
+                let first = self.zone_columns(first, position);
+                let second = self.zone_columns(second, position);
+                match direction {
+                    SplitDirection::Horizontal => first + second,
+                    SplitDirection::Vertical => first.max(second),
+                }
+            }
+        }
+    }
+
+    /// Collapses an empty leaf with its adjacent target leaf. This is kept as
+    /// an internal layout operation; the UI can expose it later without
+    /// teaching a Panel or Feature how to own the tree.
+    #[allow(dead_code)]
+    pub(crate) fn merge_empty_group(
+        &mut self,
+        source: &TabGroupId,
+        target: &TabGroupId,
+    ) -> Result<(), LayoutError> {
+        if source == target {
+            return Err(LayoutError::CannotMerge);
+        }
+        let Some(source_panel) = self.groups.get(source) else {
+            return Err(LayoutError::GroupNotFound);
+        };
+        if !source_panel.tabs.is_empty() {
+            return Err(LayoutError::GroupNotEmpty);
+        }
+        if !self.groups.contains_key(target) {
+            return Err(LayoutError::GroupNotFound);
+        }
+        if self.primary_groups.values().any(|id| id == source) {
+            return Err(LayoutError::MainGroupRequired);
+        }
+        if !collapse_sibling(&mut self.root, source, target) {
+            return Err(LayoutError::CannotMerge);
+        }
+        self.groups.remove(source);
+        self.normalize()
+    }
+
+    /// Normalizes ratios and re-checks the tree after a structural operation.
+    /// It never removes a TabGroup, including an empty Main group, because an
+    /// empty group is still a valid destination for the shared Tool Picker.
+    pub(crate) fn normalize(&mut self) -> Result<(), LayoutError> {
+        normalize_node(&mut self.root);
+        self.validate()
     }
 
     // 保存値の最大IDや削除済みGroupに依存せず、既存Groupを上書きしない。
@@ -341,6 +634,9 @@ impl DockLayout {
                 .expect("target checked above")
                 .activate_without_open(tab.clone());
             return Ok(());
+        }
+        if !self.group(source).is_some_and(|group| group.contains(tab)) {
+            return Err(LayoutError::TabNotFound);
         }
         let removed = self
             .group_mut(source)
@@ -450,7 +746,11 @@ impl DockLayout {
         let mut primary_groups = BTreeMap::new();
         for id in &leaf_ids {
             let position = groups.get(id).expect("leaf group checked above").position;
-            primary_groups.entry(position).or_insert_with(|| id.clone());
+            if id.0 <= 4 {
+                primary_groups.insert(position, id.clone());
+            } else {
+                primary_groups.entry(position).or_insert_with(|| id.clone());
+            }
         }
         if !state.anchors.is_empty() {
             primary_groups.clear();
@@ -586,6 +886,46 @@ fn replace_leaf(node: &mut LayoutNode, target: &TabGroupId, replacement: LayoutN
                 || replace_leaf(second, target, replacement)
         }
         LayoutNode::Tabs(_) => false,
+    }
+}
+
+#[allow(dead_code)]
+fn collapse_sibling(node: &mut LayoutNode, source: &TabGroupId, target: &TabGroupId) -> bool {
+    match node {
+        LayoutNode::Split { first, second, .. } => {
+            if matches!(first.as_ref(), LayoutNode::Tabs(id) if id == source)
+                && matches!(second.as_ref(), LayoutNode::Tabs(id) if id == target)
+            {
+                *node = LayoutNode::Tabs(target.clone());
+                return true;
+            }
+            if matches!(second.as_ref(), LayoutNode::Tabs(id) if id == source)
+                && matches!(first.as_ref(), LayoutNode::Tabs(id) if id == target)
+            {
+                *node = LayoutNode::Tabs(target.clone());
+                return true;
+            }
+            collapse_sibling(first, source, target) || collapse_sibling(second, source, target)
+        }
+        LayoutNode::Tabs(_) => false,
+    }
+}
+
+fn normalize_node(node: &mut LayoutNode) {
+    if let LayoutNode::Split {
+        ratio,
+        first,
+        second,
+        ..
+    } = node
+    {
+        *ratio = if ratio.is_finite() {
+            ratio.clamp(0.1, 0.9)
+        } else {
+            0.5
+        };
+        normalize_node(first);
+        normalize_node(second);
     }
 }
 
@@ -804,6 +1144,358 @@ mod tests {
         };
         assert!(!layout.restore_view_state(&invalid, |_| None));
         assert_eq!(layout.capture_view_state(), before);
+    }
+
+    #[test]
+    fn split_allocation_accounts_for_direction_ratio_gap_and_visibility() {
+        for direction in [SplitDirection::Horizontal, SplitDirection::Vertical] {
+            for ratio in [0.1, 0.5, 0.9] {
+                for visible in [[true, true], [true, false], [false, true], [false, false]] {
+                    let allocation = SplitAllocation::new(direction, ratio, visible);
+                    let sizes = allocation.sizes((808.0, 608.0));
+                    for (index, shown) in visible.into_iter().enumerate() {
+                        if !shown {
+                            assert_eq!(sizes[index], (0.0, 0.0));
+                        }
+                    }
+                    if visible.contains(&true) {
+                        let extent = match direction {
+                            SplitDirection::Horizontal => sizes[0].0 + sizes[1].0,
+                            SplitDirection::Vertical => sizes[0].1 + sizes[1].1,
+                        };
+                        let available = if direction == SplitDirection::Horizontal {
+                            808.0
+                        } else {
+                            608.0
+                        };
+                        assert!((extent + allocation.gap - available).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn split_drop_checks_both_resulting_regions_at_the_exact_minimum() {
+        for (zone, minimum) in [
+            (DropZone::Left, (408.0, 150.0)),
+            (DropZone::Right, (408.0, 150.0)),
+            (DropZone::Top, (200.0, 308.0)),
+            (DropZone::Bottom, (200.0, 308.0)),
+        ] {
+            for size in [
+                (minimum.0 - 0.01, minimum.1),
+                (minimum.0, minimum.1 - 0.01),
+                minimum,
+            ] {
+                let mut layout = DockLayout::default();
+                let source = layout.primary_group_id(PanelPosition::Left).clone();
+                let target = layout.primary_group_id(PanelPosition::Main).clone();
+                let tab = layout.group(&source).unwrap().tabs[0].clone();
+                let before = layout.capture_view_state();
+                let next_id = layout.next_group_id;
+                let result = layout.drop_tab(&source, &target, &tab, zone, size);
+                if size == minimum {
+                    assert!(result.is_ok());
+                } else {
+                    assert_eq!(result, Err(LayoutError::InsufficientSpace));
+                    assert_eq!(layout.capture_view_state(), before);
+                    assert_eq!(layout.next_group_id, next_id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nested_split_resize_and_hidden_branches_preserve_saved_layout() {
+        fn measure(
+            layout: &DockLayout,
+            size: (f32, f32),
+            now: std::time::Instant,
+        ) -> Vec<(TabGroupId, (f32, f32))> {
+            layout
+                .leaf_group_ids()
+                .into_iter()
+                .map(|id| {
+                    let size = layout.allocated_group_size(&id, size, now).unwrap();
+                    (id, size)
+                })
+                .collect()
+        }
+        let mut layout = DockLayout::default();
+        let main = layout.primary_group_id(PanelPosition::Left).clone();
+        let right = layout
+            .split_group(&main, SplitDirection::Horizontal, 0.3)
+            .unwrap();
+        let bottom = layout
+            .split_group(&right, SplitDirection::Vertical, 0.7)
+            .unwrap();
+        layout
+            .group_mut(&bottom)
+            .unwrap()
+            .activate(PanelTab::tool_instance("terminal", "resize-terminal"));
+        for hidden in [false, true] {
+            layout
+                .group_mut(&right)
+                .unwrap()
+                .set_open_immediate(!hidden);
+            let before = layout.capture_view_state();
+            let now = std::time::Instant::now();
+            let original = measure(&layout, (1600.0, 1000.0), now);
+            for size in [(300.0, 180.0), (4.0, 4.0), (0.0, 0.0)] {
+                for (_, (width, height)) in measure(&layout, size, now) {
+                    assert!(width >= 0.0 && width <= size.0);
+                    assert!(height >= 0.0 && height <= size.1);
+                }
+                assert_eq!(layout.capture_view_state(), before);
+            }
+            assert_eq!(measure(&layout, (1600.0, 1000.0), now), original);
+            assert_eq!(layout.capture_view_state(), before);
+        }
+    }
+
+    #[test]
+    fn drop_zones_split_only_when_the_drop_is_committed() {
+        for zone in [
+            DropZone::Left,
+            DropZone::Right,
+            DropZone::Top,
+            DropZone::Bottom,
+        ] {
+            let mut layout = DockLayout::default();
+            let source = layout.primary_group_id(PanelPosition::Left).clone();
+            let target = layout.primary_group_id(PanelPosition::Main).clone();
+            let tab = PanelTab::tool_instance("terminal", format!("drag-{zone:?}"));
+            layout.group_mut(&source).unwrap().activate(tab.clone());
+            let before = layout.capture_view_state();
+
+            // Computing a preview is pure; the tree is unchanged until drop_tab.
+            let point = match zone {
+                DropZone::Left => (0.02, 0.5),
+                DropZone::Right => (0.98, 0.5),
+                DropZone::Top => (0.5, 0.02),
+                DropZone::Bottom => (0.5, 0.98),
+                DropZone::Center => unreachable!(),
+            };
+            assert_eq!(DropZone::from_normalized(point.0, point.1), zone);
+            assert_eq!(layout.capture_view_state(), before);
+            layout
+                .drop_tab(&source, &target, &tab, zone, (900.0, 600.0))
+                .unwrap();
+
+            assert!(layout.has_variable_splits());
+            assert!(
+                layout
+                    .leaf_group_ids()
+                    .iter()
+                    .any(|id| layout.group(id).is_some_and(|group| group.contains(&tab)))
+            );
+            assert!(layout.validate().is_ok());
+        }
+    }
+
+    #[test]
+    fn center_drop_moves_into_existing_group_without_creating_a_split() {
+        let mut layout = DockLayout::default();
+        let source = layout.primary_group_id(PanelPosition::Left).clone();
+        let target = layout.primary_group_id(PanelPosition::Main).clone();
+        let tab = PanelTab::tool("terminal");
+        layout.group_mut(&source).unwrap().activate(tab.clone());
+        layout
+            .drop_tab(&source, &target, &tab, DropZone::Center, (900.0, 600.0))
+            .unwrap();
+
+        assert!(!layout.has_variable_splits());
+        assert!(!layout.group(&source).unwrap().contains(&tab));
+        assert!(layout.group(&target).unwrap().contains(&tab));
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_drop_keeps_the_previous_layout() {
+        let mut layout = DockLayout::default();
+        let source = layout.primary_group_id(PanelPosition::Left).clone();
+        let target = layout.primary_group_id(PanelPosition::Main).clone();
+        let tab = PanelTab::tool("terminal");
+        layout.group_mut(&source).unwrap().activate(tab.clone());
+        let before = layout.capture_view_state();
+
+        assert_eq!(
+            layout.drop_tab(&source, &target, &tab, DropZone::Right, (240.0, 180.0)),
+            Err(LayoutError::InsufficientSpace)
+        );
+        assert_eq!(layout.capture_view_state(), before);
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn stale_source_drop_never_changes_layout_in_any_zone() {
+        for zone in [
+            DropZone::Center,
+            DropZone::Left,
+            DropZone::Right,
+            DropZone::Top,
+            DropZone::Bottom,
+        ] {
+            for same_group in [false, true] {
+                let mut layout = DockLayout::default();
+                let source = layout.primary_group_id(PanelPosition::Left).clone();
+                let target = if same_group {
+                    source.clone()
+                } else {
+                    layout.primary_group_id(PanelPosition::Main).clone()
+                };
+                let before = layout.capture_view_state();
+                assert_eq!(
+                    layout.drop_tab(
+                        &source,
+                        &target,
+                        &PanelTab::tool("missing"),
+                        zone,
+                        (900.0, 600.0)
+                    ),
+                    Err(LayoutError::TabNotFound)
+                );
+                assert_eq!(layout.capture_view_state(), before);
+                assert_eq!(layout.next_group_id, 5);
+                assert!(layout.validate().is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn nonfinite_drop_bounds_are_rejected_before_splitting() {
+        for size in [(f32::NAN, 600.0), (900.0, f32::INFINITY)] {
+            let mut layout = DockLayout::default();
+            let source = layout.primary_group_id(PanelPosition::Left).clone();
+            let tab = layout.group(&source).unwrap().tabs[0].clone();
+            let before = layout.capture_view_state();
+            assert_eq!(
+                layout.drop_tab(&source, &source, &tab, DropZone::Right, size),
+                Err(LayoutError::InsufficientSpace)
+            );
+            assert_eq!(layout.capture_view_state(), before);
+        }
+    }
+
+    #[test]
+    fn normal_side_split_is_limited_but_the_tree_has_no_fixed_side_capacity() {
+        let mut layout = DockLayout::default();
+        let target = layout.primary_group_id(PanelPosition::Left).clone();
+        let first = PanelTab::tool_instance("terminal", "side-1");
+        let second = PanelTab::tool_instance("terminal", "side-2");
+        layout.group_mut(&target).unwrap().activate(first.clone());
+        layout
+            .drop_tab(&target, &target, &first, DropZone::Right, (900.0, 600.0))
+            .unwrap();
+        let target = layout.primary_group_id(PanelPosition::Left).clone();
+        layout.group_mut(&target).unwrap().activate(second.clone());
+        assert_eq!(
+            layout.drop_tab(&target, &target, &second, DropZone::Right, (900.0, 600.0)),
+            Err(LayoutError::SideColumnLimitReached)
+        );
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn late_drop_validation_rolls_back_tree_id_allocation_and_tab_placement() {
+        let mut layout = DockLayout::default();
+        let source = layout.primary_group_id(PanelPosition::Left).clone();
+        let target = layout.primary_group_id(PanelPosition::Main).clone();
+        let tab = layout.group(&source).unwrap().tabs[0].clone();
+        let right = layout.primary_group_id(PanelPosition::Right).clone();
+        layout.group_mut(&right).unwrap().active = Some(PanelTab::tool("missing"));
+        let before = format!("{layout:?}");
+        assert_eq!(
+            layout.drop_tab(&source, &target, &tab, DropZone::Bottom, (900.0, 600.0)),
+            Err(LayoutError::InvalidTree)
+        );
+        assert_eq!(format!("{layout:?}"), before);
+        layout.group_mut(&right).unwrap().active = None;
+        layout
+            .drop_tab(&source, &target, &tab, DropZone::Bottom, (900.0, 600.0))
+            .unwrap();
+        assert_eq!(
+            layout
+                .placements()
+                .iter()
+                .filter(|(placed, _)| placed == &tab)
+                .count(),
+            1
+        );
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn vertical_side_groups_do_not_consume_horizontal_column_budget() {
+        let mut layout = DockLayout::default();
+        let target = layout.primary_group_id(PanelPosition::Left).clone();
+        let tab = layout.group(&target).unwrap().tabs[0].clone();
+        layout
+            .drop_tab(&target, &target, &tab, DropZone::Bottom, (900.0, 600.0))
+            .unwrap();
+        let source = layout.group_for_tab(&tab).unwrap();
+        layout
+            .drop_tab(&source, &source, &tab, DropZone::Right, (900.0, 600.0))
+            .unwrap();
+        assert_eq!(layout.zone_columns(&layout.root, PanelPosition::Left), 2);
+        assert_eq!(layout.leaf_group_ids().len(), 6);
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn empty_group_can_be_merged_without_removing_the_main_area() {
+        let mut layout = DockLayout::default();
+        let main = layout.primary_group_id(PanelPosition::Main).clone();
+        let created = layout
+            .split_group(&main, SplitDirection::Horizontal, 0.5)
+            .unwrap();
+        layout.merge_empty_group(&created, &main).unwrap();
+
+        assert_eq!(layout.leaf_group_ids().len(), 4);
+        assert!(layout.group(&main).is_some());
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn normalization_clamps_split_ratios_without_dropping_groups() {
+        let mut layout = DockLayout::default();
+        let main = layout.primary_group_id(PanelPosition::Main).clone();
+        layout
+            .split_group(&main, SplitDirection::Vertical, 0.5)
+            .unwrap();
+        if let LayoutNode::Split { ratio, .. } = &mut layout.root {
+            *ratio = f32::NAN;
+        }
+        // Invalid input is normalized to the nearest safe boundary.
+        layout.normalize().unwrap();
+        assert!(layout.validate().is_ok());
+    }
+
+    #[test]
+    fn split_layout_round_trips_with_tab_instances_and_empty_groups() {
+        let mut layout = DockLayout::default();
+        let main = layout.primary_group_id(PanelPosition::Main).clone();
+        let tab = PanelTab::tool_instance("terminal", "terminal-7");
+        layout.group_mut(&main).unwrap().activate(tab.clone());
+        layout
+            .drop_tab(&main, &main, &tab, DropZone::Bottom, (900.0, 600.0))
+            .unwrap();
+        let saved = layout.capture_view_state();
+
+        let mut restored = DockLayout::default();
+        assert!(restored.restore_view_state(&saved, |raw| {
+            let value = raw.strip_prefix("tool:")?;
+            let (view, instance) = value.split_once(':')?;
+            Some(PanelTab::tool_instance(view, instance))
+        }));
+        assert_eq!(restored.capture_view_state(), saved);
+        assert!(
+            restored
+                .leaf_group_ids()
+                .iter()
+                .any(|id| restored.group(id).is_some_and(|group| group.contains(&tab)))
+        );
     }
 
     #[test]

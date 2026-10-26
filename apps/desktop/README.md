@@ -98,8 +98,12 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 - HeaderのPanel開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じ操作APIで復元できる。個別Panelの非表示はタブとHost Resourceを保持する。
 - Headerの左・下・右ボタンはZone全体を開閉し、個別に隠したGroupは再表示しない。Viewメニューには非表示を含む各Groupの開閉を表示し、全列を隠しても個別に復元できる。空のMain Groupも共通TabBarの`+`から追加できる。
 
+## Split とTabドラッグ
+
+- ドラッグ中は配置先の`DropZone`をハイライトするだけで、Drop確定まで`DockLayout`を変更しない。Escape、Focus喪失、不正Drop、Window生成失敗では元のTabとResourceを保持する。
+- 同じWindowGroup内のDocumentは既存のWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は実行資源の契約がないため受理せず、UIだけ成功したように見せない。
+- 左右サイドの通常操作は2列まで、最小領域を満たさないSplitは拒否する。内部のSplit木は可変であり、このUI制限をLayoutモデルへ固定しない。
+
 ## Layout の責務
 
-Shell の表示配置は `DockLayout` が `Split` と `TabGroup` の木として所有する。`PanelPosition` は既存Headerの領域操作へ接続する互換アンカーであり、内部のTabGroup数を制限するものではない。`ViewInstanceId` はViewの種類を表す `ViewId` と別の値で、同じ種類のViewを複数配置できる。
-
-Layoutの変更はタブの表示上の配置だけを変更し、Document・Terminal・AgentなどHost上のResourceを終了・複製しない。`Hide`、`Close View`、`Detach`、`Terminate Resource` は別の操作として扱う。復元では不正なLayoutを拒否し、旧`panels`形式へフォールバックする。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、有効な配置を維持する。
+Shell の表示配置は共通Layout APIが所有し、Panelの配置・Split・TabGroupの表示状態を扱います。詳細な契約は [Desktop の可変 Layout](../../docs/specs/architecture.md#desktop-の-可変-layout) を参照してください。

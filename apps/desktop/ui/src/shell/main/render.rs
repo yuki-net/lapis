@@ -4,6 +4,7 @@ impl Render for Shell {
     /// Builds the window shell and input handlers, clearing panel drop bounds for the new layout pass.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.panel_bounds.borrow_mut().clear();
+        self.group_bounds.borrow_mut().clear();
         div()
             .size_full()
             .relative()
@@ -32,7 +33,19 @@ impl Render for Shell {
             )
             .child(self.tab_drag_events(cx))
             .child(self.render_header(cx))
-            .child(self.render_main(window, cx))
+            .child(self.render_main(window, cx).relative().child({
+                let shell = cx.entity().downgrade();
+                gpui::canvas(
+                    move |bounds, _, cx| {
+                        let _ = shell.update(cx, |shell, _| {
+                            *shell.layout_bounds.borrow_mut() = Some(bounds)
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full()
+            }))
             .child(self.render_footer(cx))
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))

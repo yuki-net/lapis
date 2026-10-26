@@ -1,15 +1,6 @@
 use super::*;
 
 impl Shell {
-    pub(super) fn render_empty_panel(
-        &self,
-        position: PanelPosition,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let group = self.shell.layout.primary_group_id(position).clone();
-        self.render_empty_group(group, cx)
-    }
-
     pub(super) fn render_empty_group(
         &self,
         group: super::super::TabGroupId,

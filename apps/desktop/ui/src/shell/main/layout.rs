@@ -2,11 +2,7 @@ use super::*;
 
 impl Shell {
     /// Renders the animated root panel layout, or a single main panel filling a detached window's body.
-    pub(crate) fn render_main(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    pub(crate) fn render_main(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
         if self.detached {
             return div()
                 .flex()
@@ -25,6 +21,10 @@ impl Shell {
             || self.shell.bottom_span_is_animating(now)
         {
             window.request_animation_frame();
+        }
+
+        if self.shell.layout.has_variable_splits() {
+            return self.render_variable_layout(now, cx);
         }
 
         let gap = f32::from(tokens::spacing::GAP);
@@ -247,6 +247,99 @@ impl Shell {
         }
     }
 
+    fn render_variable_layout(&self, now: std::time::Instant, cx: &mut Context<Self>) -> gpui::Div {
+        self.render_layout_node(self.shell.layout.root(), now, cx)
+            .h_full()
+            .w_full()
+            .flex()
+            .min_h(px(0.0))
+            .min_w(px(0.0))
+            .overflow_hidden()
+    }
+
+    fn render_layout_node(
+        &self,
+        node: &LayoutNode,
+        now: std::time::Instant,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        if !self.layout_node_visible(node, now) {
+            return div().size(px(0.0)).flex_shrink_0();
+        }
+        match node {
+            LayoutNode::Tabs(group) => {
+                let panel = self
+                    .shell
+                    .layout
+                    .group(group)
+                    .expect("layout leaf must have a tab group");
+                self.render_panel_window_for_group(panel, group, cx)
+            }
+            LayoutNode::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                let first_visible = self.layout_node_visible(first, now);
+                let second_visible = self.layout_node_visible(second, now);
+                let allocation = crate::shell::layout::SplitAllocation::new(
+                    *direction,
+                    *ratio,
+                    [first_visible, second_visible],
+                );
+                // basis=0からGAP控除後の空間を配分する。百分率幅とGAPを加算しない。
+                let mut first = self
+                    .render_layout_node(first, now, cx)
+                    .flex_basis(px(0.0))
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .overflow_hidden();
+                first.style().flex_grow = Some(allocation.weights[0]);
+                let mut second = self
+                    .render_layout_node(second, now, cx)
+                    .flex_basis(px(0.0))
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .overflow_hidden();
+                second.style().flex_grow = Some(allocation.weights[1]);
+                let mut split = div()
+                    .flex()
+                    .flex_1()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .overflow_hidden()
+                    .child(first)
+                    // GAP自体も極小WindowではGPUIに縮小させる。
+                    .child(
+                        div()
+                            .flex_basis(px(allocation.gap))
+                            .min_w(px(0.0))
+                            .min_h(px(0.0)),
+                    )
+                    .child(second);
+                split = match direction {
+                    SplitDirection::Horizontal => split.flex_row(),
+                    SplitDirection::Vertical => split.flex_col(),
+                };
+                split
+            }
+        }
+    }
+
+    fn layout_node_visible(&self, node: &LayoutNode, now: std::time::Instant) -> bool {
+        match node {
+            LayoutNode::Tabs(group) => self
+                .shell
+                .layout
+                .group(group)
+                .is_some_and(|panel| panel.is_visible(now)),
+            LayoutNode::Split { first, second, .. } => {
+                self.layout_node_visible(first, now) || self.layout_node_visible(second, now)
+            }
+        }
+    }
+
     fn render_main_flex(&self, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .h_full()
@@ -315,5 +408,129 @@ impl Shell {
                 |stack| stack.child(self.render_resize_handle(ResizeTarget::Bottom, true, cx)),
             )
             .child(bottom)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Empty;
+    impl Render for Empty {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    struct Fixture {
+        shell: gpui::Entity<Shell>,
+        size: (f32, f32),
+    }
+    impl Render for Fixture {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div().w(px(self.size.0)).h(px(self.size.1)).flex().child(
+                self.shell.update(cx, |shell, cx| {
+                    shell.render_variable_layout(std::time::Instant::now(), cx)
+                }),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn gpui_nested_splits_fit_after_resize_without_changing_layout(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
+            shell.update(cx, |shell, _| {
+                let main = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                let extra = shell
+                    .shell
+                    .layout
+                    .split_group(&main, SplitDirection::Horizontal, 0.3)
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .split_group(&extra, SplitDirection::Vertical, 0.65)
+                    .unwrap();
+                let left = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Left)
+                    .clone();
+                shell
+                    .shell
+                    .layout
+                    .split_group(&left, SplitDirection::Vertical, 0.4)
+                    .unwrap();
+            });
+            Fixture {
+                shell,
+                size: (1000.0, 700.0),
+            }
+        });
+        let shell = window
+            .update(cx, |fixture, _, _| fixture.shell.clone())
+            .unwrap();
+        for hidden in [false, true] {
+            shell.update(cx, |shell, _| {
+                let left = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Left)
+                    .clone();
+                shell
+                    .shell
+                    .layout
+                    .group_mut(&left)
+                    .unwrap()
+                    .set_open_immediate(!hidden);
+            });
+            let before = shell.read_with(cx, |shell, _| shell.shell.layout.capture_view_state());
+            let mut original = None;
+            for size in [(1000.0, 700.0), (240.0, 180.0), (4.0, 4.0), (1000.0, 700.0)] {
+                window
+                    .update(cx, |fixture, window, cx| {
+                        fixture.size = size;
+                        fixture
+                            .shell
+                            .update(cx, |shell, _| shell.group_bounds.borrow_mut().clear());
+                        window.refresh();
+                    })
+                    .unwrap();
+                cx.update_window(window.into(), |_, window, cx| {
+                    window.draw(cx).clear();
+                })
+                .unwrap();
+                let bounds = shell.read_with(cx, |shell, _| {
+                    assert_eq!(shell.shell.layout.capture_view_state(), before);
+                    shell.group_bounds.borrow().clone()
+                });
+                assert!(!bounds.is_empty());
+                for bounds in bounds.values() {
+                    assert!(f32::from(bounds.origin.x) >= -0.1);
+                    assert!(f32::from(bounds.origin.y) >= -0.1);
+                    assert!(
+                        f32::from(bounds.origin.x + bounds.size.width) <= size.0 + 0.1,
+                        "{bounds:?} in {size:?}"
+                    );
+                    assert!(
+                        f32::from(bounds.origin.y + bounds.size.height) <= size.1 + 0.1,
+                        "{bounds:?} in {size:?}"
+                    );
+                }
+                if size == (1000.0, 700.0) {
+                    if let Some(original) = &original {
+                        assert_eq!(&bounds, original);
+                    } else {
+                        original = Some(bounds);
+                    }
+                }
+            }
+        }
     }
 }

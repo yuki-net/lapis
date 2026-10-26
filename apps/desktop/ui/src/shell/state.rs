@@ -189,10 +189,6 @@ impl Default for ShellState {
 }
 
 impl ShellState {
-    pub(crate) fn focus_panel(&mut self, position: PanelPosition) {
-        self.focused_group = self.layout.primary_group_id(position).clone();
-    }
-
     /// 消えた追加先へ操作を適用しない。共有Viewは個体を保って移動する。
     pub(crate) fn open_group_tab(&mut self, group: &TabGroupId, tab: PanelTab) -> bool {
         if self.layout.group(group).is_none() {
@@ -340,6 +336,7 @@ impl ShellState {
         }
     }
 
+    #[cfg(test)]
     pub fn move_tab(&mut self, source: PanelPosition, target: PanelPosition, tab: PanelTab) {
         let source_id = self.layout.primary_group_id(source).clone();
         let target_id = self.layout.primary_group_id(target).clone();
