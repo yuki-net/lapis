@@ -1,6 +1,21 @@
 use super::*;
 
 impl Shell {
+    fn move_tab_drag(
+        &mut self,
+        position: Point<Pixels>,
+        screen: Option<crate::window_host::drag::ScreenPoint>,
+        cx: &mut App,
+    ) -> bool {
+        let changed = self.update_drop_target(position);
+        if let (Some(preview), Some(point)) = (self.drag_preview, screen) {
+            let _ = preview.update(cx, |_, window, _| {
+                crate::window_host::drag_preview::position(window, point);
+            });
+        }
+        changed
+    }
+
     pub(super) fn drop_target_size(&self, group: &TabGroupId) -> (f32, f32) {
         let measured = self
             .group_bounds
@@ -72,19 +87,9 @@ impl Shell {
                     if phase != gpui::DispatchPhase::Capture || !cx.has_active_drag() {
                         return;
                     }
-                    let Some(point) =
-                        crate::window_host::drag::screen_position(event.position, window)
-                    else {
-                        return;
-                    };
+                    let point = crate::window_host::drag::screen_position(event.position, window);
                     let _ = moving_shell.update(cx, |shell, cx| {
-                        let target_changed = shell.update_drop_target(event.position);
-                        if let Some(preview) = shell.drag_preview {
-                            let _ = preview.update(cx, |_, window, _| {
-                                crate::window_host::drag_preview::position(window, point);
-                            });
-                        }
-                        if target_changed {
+                        if shell.move_tab_drag(event.position, point, cx) {
                             cx.notify();
                         }
                     });
@@ -218,7 +223,7 @@ mod tests {
                     target.clone(),
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(407.0), px(300.0))),
                 );
-                shell.update_drop_target(point(px(400.0), px(150.0)));
+                assert!(shell.move_tab_drag(point(px(400.0), px(150.0)), None, cx));
                 assert_eq!(
                     shell.drop_target.as_ref().unwrap().error,
                     Some(LayoutError::InsufficientSpace)
@@ -236,6 +241,8 @@ mod tests {
                     target.clone(),
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0))),
                 );
+                assert!(shell.move_tab_drag(point(px(890.0), px(300.0)), None, cx));
+                assert!(shell.drop_target.as_ref().unwrap().error.is_none());
                 *shell.layout_bounds.borrow_mut() = Some(gpui::Bounds::new(
                     point(px(0.0), px(0.0)),
                     gpui::size(px(500.0), px(600.0)),
