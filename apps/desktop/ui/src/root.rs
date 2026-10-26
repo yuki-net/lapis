@@ -354,70 +354,7 @@ impl DesktopRoot {
                 }
             }),
             cx.subscribe(&conversation, |root, _, event, cx| {
-                if root.group.read(cx).members.len() > 1 || root.group.read(cx).closing {
-                    root.set_status(
-                        "別Windowのタブを閉じるか再ドックしてから会話を切り替えてください".into(),
-                        cx,
-                    );
-                    return;
-                }
-                if let ConversationEvent::Switch(id) = event.clone() {
-                    root.dispatch_workbench_command(UiCommand::SelectTask(id), cx);
-                    return;
-                }
-                let event = event.clone();
-                let view = root.persisted_view(cx);
-                root.editor.update(cx, |editor, cx| {
-                    editor.submit(
-                        false,
-                        move |client| {
-                            client.persist_view(view)?;
-                            match event {
-                                ConversationEvent::RegisterProject => {
-                                    if let Some(path) =
-                                        client.editor.file_dialog().choose_workspace_path()
-                                    {
-                                        client
-                                            .conversation
-                                            .register_project(&mut client.editor, path)
-                                            .map_err(|error| error.to_string())?;
-                                    }
-                                    Ok(())
-                                }
-                                ConversationEvent::RegisterSource(project) => {
-                                    if let Some(path) =
-                                        client.editor.file_dialog().choose_workspace_path()
-                                    {
-                                        client
-                                            .conversation
-                                            .register_source(&mut client.editor, &project, path)
-                                            .map_err(|error| error.to_string())?;
-                                    }
-                                    Ok(())
-                                }
-                                ConversationEvent::Create {
-                                    project,
-                                    primary,
-                                    sub,
-                                } => client
-                                    .conversation
-                                    .create_task(&mut client.editor, &project, primary, sub)
-                                    .map(|_| ())
-                                    .map_err(|error| error.to_string()),
-                                ConversationEvent::Source(role) => client
-                                    .conversation
-                                    .switch_source(&mut client.editor, role)
-                                    .map_err(|error| error.to_string()),
-                                ConversationEvent::Switch(id) => client
-                                    .conversation
-                                    .switch(&id, &mut client.editor)
-                                    .map(|_| ())
-                                    .map_err(|error| error.to_string()),
-                            }
-                        },
-                        cx,
-                    )
-                });
+                root.handle_conversation_event(event.clone(), cx);
             }),
             cx.subscribe(&problems, |root, _, event, cx| match event {
                 ProblemsEvent::Status(message) => root.set_status(message.clone(), cx),
@@ -760,6 +697,75 @@ impl DesktopRoot {
         let task = self.workbench.context_task().cloned();
         let view = self.shell.read(cx).view_state();
         self.workbench.prepare_task_switch(task.as_ref(), &view);
+    }
+
+    /// 一覧のTask選択は共通APIへ渡し、作業環境を変える操作だけWindow数で制限する。
+    pub(crate) fn handle_conversation_event(
+        &mut self,
+        event: ConversationEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if let ConversationEvent::Switch(id) = event {
+            self.dispatch_workbench_command(UiCommand::SelectTask(id), cx);
+            return;
+        }
+        if self.group.read(cx).members.len() > 1 || self.group.read(cx).closing {
+            self.set_status(
+                "別Windowのタブを閉じるか再ドックしてから会話を切り替えてください".into(),
+                cx,
+            );
+            return;
+        }
+        let view = self.persisted_view(cx);
+        self.editor.update(cx, |editor, cx| {
+            editor.submit(
+                false,
+                move |client| {
+                    client.persist_view(view)?;
+                    match event {
+                        ConversationEvent::RegisterProject => {
+                            if let Some(path) = client.editor.file_dialog().choose_workspace_path()
+                            {
+                                client
+                                    .conversation
+                                    .register_project(&mut client.editor, path)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            Ok(())
+                        }
+                        ConversationEvent::RegisterSource(project) => {
+                            if let Some(path) = client.editor.file_dialog().choose_workspace_path()
+                            {
+                                client
+                                    .conversation
+                                    .register_source(&mut client.editor, &project, path)
+                                    .map_err(|error| error.to_string())?;
+                            }
+                            Ok(())
+                        }
+                        ConversationEvent::Create {
+                            project,
+                            primary,
+                            sub,
+                        } => client
+                            .conversation
+                            .create_task(&mut client.editor, &project, primary, sub)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string()),
+                        ConversationEvent::Source(role) => client
+                            .conversation
+                            .switch_source(&mut client.editor, role)
+                            .map_err(|error| error.to_string()),
+                        ConversationEvent::Switch(id) => client
+                            .conversation
+                            .switch(&id, &mut client.editor)
+                            .map(|_| ())
+                            .map_err(|error| error.to_string()),
+                    }
+                },
+                cx,
+            )
+        });
     }
 
     /// 左のTask一覧、Command、ショートカットが共有するTask選択APIです。

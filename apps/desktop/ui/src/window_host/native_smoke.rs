@@ -128,6 +128,7 @@ pub(crate) fn run_native_smoke(
             eprintln!("SMOKE drag outside creates native window OK");
         })
         .unwrap();
+        verify_ide_task_list_with_detached_window(&this, handle, cx).await;
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE idle sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
@@ -1154,6 +1155,127 @@ async fn verify_drag_routes(
         })
         .unwrap();
     wait_for(root, cx, Some(2)).await;
+}
+
+async fn verify_ide_task_list_with_detached_window(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    let (a, b, before) = root
+        .update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert_eq!(group.members.len(), 2);
+            let snapshot = group.latest.as_ref().unwrap();
+            let a = snapshot.conversation.clone();
+            let b = snapshot
+                .conversations
+                .iter()
+                .find(|record| record.id != a)
+                .unwrap()
+                .id
+                .clone();
+            let before = group
+                .members
+                .iter()
+                .map(|(id, member)| {
+                    (
+                        *id,
+                        member.shell.read(cx).view_state(),
+                        member.editor.read(cx).document_id(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (a, b, before)
+        })
+        .unwrap();
+    for task in [&b, &a] {
+        root.update(cx, |root, cx| {
+            root.handle_conversation_event(
+                crate::features::conversation::ConversationEvent::Switch(task.clone()),
+                cx,
+            );
+        })
+        .unwrap();
+        wait_for(root, cx, Some(2)).await;
+        root.update(cx, |root, cx| {
+            assert_eq!(
+                root.persisted_view(cx)
+                    .layout
+                    .workbench
+                    .selected_task
+                    .as_ref(),
+                Some(task)
+            );
+            let group = root.group.read(cx);
+            assert_eq!(group.latest.as_ref().unwrap().conversation, a);
+            for (id, layout, document) in &before {
+                assert_eq!(group.members[id].shell.read(cx).view_state(), *layout);
+                assert_eq!(group.members[id].editor.read(cx).document_id(), *document);
+            }
+        })
+        .unwrap();
+    }
+    // 同じ入口でも終了中・再同期中とAgentの作業環境切替は引き続き拒否する。
+    for closing in [true, false] {
+        root.update(cx, |root, cx| {
+            root.group.update(cx, |group, _| {
+                group.closing = closing;
+                group.synchronization_required = !closing;
+            });
+            root.handle_conversation_event(
+                crate::features::conversation::ConversationEvent::Switch(b.clone()),
+                cx,
+            );
+            assert_eq!(
+                root.persisted_view(cx)
+                    .layout
+                    .workbench
+                    .selected_task
+                    .as_ref(),
+                Some(&a)
+            );
+            root.group.update(cx, |group, _| {
+                group.closing = false;
+                group.synchronization_required = false;
+            });
+        })
+        .unwrap();
+    }
+    for mode in [
+        crate::workbench::WorkbenchMode::Agent,
+        crate::workbench::WorkbenchMode::Ide,
+    ] {
+        handle
+            .update(cx, |_, window, cx| {
+                root.update(cx, |root, cx| {
+                    root.command(UiCommand::SetWorkbenchMode(mode), window, cx)
+                })
+                .unwrap();
+            })
+            .unwrap();
+        if mode == crate::workbench::WorkbenchMode::Agent {
+            root.update(cx, |root, cx| {
+                root.handle_conversation_event(
+                    crate::features::conversation::ConversationEvent::Switch(b.clone()),
+                    cx,
+                );
+                assert_eq!(
+                    root.persisted_view(cx)
+                        .layout
+                        .workbench
+                        .selected_task
+                        .as_ref(),
+                    Some(&a)
+                );
+                assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
+            })
+            .unwrap();
+        }
+    }
+    eprintln!(
+        "SMOKE Task list IDE selection preserves both windows; closing, resync and Agent guards remain effective OK"
+    );
 }
 
 async fn verify_workbench_routes(
