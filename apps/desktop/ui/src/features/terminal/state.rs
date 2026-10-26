@@ -154,6 +154,20 @@ impl TerminalFeature {
         (self.requests.pending_actions == 0 && !self.requests.context_unavailable)
             .then(|| self.conversation.clone())
     }
+    pub(crate) fn persistence_owner_for(
+        &self,
+        task: &ConversationId,
+        root: Option<&std::path::Path>,
+    ) -> Option<ConversationId> {
+        self.persistence_owner().filter(|owner| {
+            owner == task
+                && self.root.as_deref() == root
+                && self
+                    .bound_resource
+                    .as_ref()
+                    .is_none_or(|id| self.terminals.iter().any(|terminal| &terminal.id == id))
+        })
+    }
     pub(crate) fn context_task(&self) -> &ConversationId {
         &self.conversation
     }
@@ -593,8 +607,40 @@ mod tests {
                     ));
                 feature.bind_resource(Some(lapis_terminal::TerminalId::new("missing")));
                 assert!(feature.active_id().is_none());
+                assert!(
+                    feature
+                        .persistence_owner_for(
+                            &ConversationId::new("task-a"),
+                            Some(std::path::Path::new("workspace"))
+                        )
+                        .is_none()
+                );
                 feature.bind_resource(Some(lapis_terminal::TerminalId::new("first")));
                 assert_eq!(feature.active_id().unwrap().as_str(), "first");
+                // 作成直後で保存一覧にまだないIDも、実際の接続先が確定していれば保存できる。
+                assert_eq!(
+                    feature.persistence_owner_for(
+                        &ConversationId::new("task-a"),
+                        Some(std::path::Path::new("workspace"))
+                    ),
+                    Some(ConversationId::new("task-a"))
+                );
+                assert!(
+                    feature
+                        .persistence_owner_for(
+                            &ConversationId::new("task-b"),
+                            Some(std::path::Path::new("workspace"))
+                        )
+                        .is_none()
+                );
+                assert!(
+                    feature
+                        .persistence_owner_for(
+                            &ConversationId::new("task-a"),
+                            Some(std::path::Path::new("changed-source"))
+                        )
+                        .is_none()
+                );
                 assert_eq!(
                     feature.persistence_owner(),
                     Some(ConversationId::new("task-a"))

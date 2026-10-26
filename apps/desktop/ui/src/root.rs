@@ -102,7 +102,6 @@ pub(crate) struct DesktopRoot {
     workbench: WorkbenchState,
     task_context_gate: crate::client_adapter::ResponseGate,
     task_context_resolution: TaskContextResolution,
-    terminal_context_resolved: bool,
     task_context: Option<(
         lapis_editor_core::ConversationId,
         Option<std::path::PathBuf>,
@@ -481,7 +480,6 @@ impl DesktopRoot {
             task_context: None,
             task_context_gate: Default::default(),
             task_context_resolution: Default::default(),
-            terminal_context_resolved: false,
         }
     }
 
@@ -573,20 +571,24 @@ impl DesktopRoot {
             }
             _ => None,
         };
-        let terminal_record = terminal_context_record(
+        let terminal_target = terminal_context_target(
             terminal_scope,
             &selected,
             self.terminal.read(cx).context_task(),
             &snapshot.conversations,
         );
-        self.terminal_context_resolved = terminal_record.is_some();
         self.terminal.update(cx, |terminal, cx| {
             terminal.bind_resource(resource);
-            if let Some(record) = terminal_record {
+            if let Some(target) = terminal_target {
                 terminal.set_context(
-                    record.workspace.root.clone(),
-                    record.id.clone(),
-                    record.terminals.clone(),
+                    target
+                        .record
+                        .and_then(|record| record.workspace.root.clone()),
+                    target.task,
+                    target
+                        .record
+                        .map(|record| record.terminals.clone())
+                        .unwrap_or_default(),
                     cx,
                 );
             }
@@ -1069,9 +1071,14 @@ impl DesktopRoot {
         &self,
         cx: &gpui::App,
     ) -> Option<lapis_editor_core::ConversationId> {
-        self.terminal_context_resolved
-            .then(|| self.terminal.read(cx).persistence_owner())
-            .flatten()
+        let terminal = self.terminal.read(cx);
+        let record = self
+            .conversation
+            .read(cx)
+            .records
+            .iter()
+            .find(|record| &record.id == terminal.context_task())?;
+        terminal.persistence_owner_for(&record.id, record.workspace.root.as_deref())
     }
 
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
@@ -1548,29 +1555,46 @@ impl Render for DesktopRoot {
     }
 }
 
+struct TerminalContextTarget<'a> {
+    task: lapis_editor_core::ConversationId,
+    record: Option<&'a lapis_desktop_client::ConversationRecord>,
+}
+
 /// Resourceの所有元が未確定なら、既存コンテキストへフォールバックしない。
-fn terminal_context_record<'a>(
+fn terminal_context_target<'a>(
     scope: Option<&ViewScope>,
     selected: &lapis_editor_core::ConversationId,
     current: &lapis_editor_core::ConversationId,
     records: &'a [lapis_desktop_client::ConversationRecord],
-) -> Option<&'a lapis_desktop_client::ConversationRecord> {
+) -> Option<TerminalContextTarget<'a>> {
     if let Some(ViewScope::Resource(resource)) = scope {
-        return records.iter().find(|record| {
-            record.terminals.iter().any(|terminal| {
-                terminal
-                    .id
-                    .as_ref()
-                    .is_some_and(|id| id.as_str() == resource)
+        return records
+            .iter()
+            .find(|record| {
+                record.terminals.iter().any(|terminal| {
+                    terminal
+                        .id
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == resource)
+                })
             })
-        });
+            .map(|record| TerminalContextTarget {
+                task: record.id.clone(),
+                record: Some(record),
+            });
     }
     let task = match scope {
         Some(ViewScope::Task(task)) => task,
         Some(ViewScope::FollowSelectedTask) => selected,
         _ => current,
     };
-    records.iter().find(|record| &record.id == task)
+    let record = records.iter().find(|record| &record.id == task);
+    // 現在のTaskが一時的に見つからない間は保持する。別Taskへの明示変更は
+    // 表示先を変更して旧Taskへの入力を止め、参照の保存はレコード確定まで待つ。
+    (record.is_some() || task != current).then(|| TerminalContextTarget {
+        task: task.clone(),
+        record,
+    })
 }
 
 /// 表示中の選択を保存できるのは、そのViewが保存先Taskを参照している場合だけ。
@@ -1660,29 +1684,33 @@ mod tests {
         ];
         let fixed = ViewScope::Resource("terminal-a".into());
         assert_eq!(
-            terminal_context_record(Some(&fixed), &b, &b, &records).map(|record| &record.id),
-            Some(&a)
+            terminal_context_target(Some(&fixed), &b, &b, &records).map(|target| target.task),
+            Some(a.clone())
         );
         records[0].terminals.clear();
         records[0].workspace.root = Some("changed-source".into());
-        assert!(terminal_context_record(Some(&fixed), &b, &a, &records).is_none());
+        assert!(terminal_context_target(Some(&fixed), &b, &a, &records).is_none());
         assert_eq!(
-            terminal_context_record(Some(&ViewScope::Task(a.clone())), &b, &b, &records)
-                .map(|record| &record.id),
-            Some(&a)
+            terminal_context_target(Some(&ViewScope::Task(a.clone())), &b, &b, &records)
+                .map(|target| target.task),
+            Some(a.clone())
         );
         records.remove(0);
-        assert!(terminal_context_record(Some(&fixed), &b, &a, &records).is_none());
+        assert!(terminal_context_target(Some(&fixed), &b, &a, &records).is_none());
+        let target =
+            terminal_context_target(Some(&ViewScope::Task(a.clone())), &b, &b, &records).unwrap();
+        assert_eq!(target.task, a);
+        assert!(target.record.is_none());
         assert!(
-            terminal_context_record(Some(&ViewScope::Task(a.clone())), &b, &b, &records).is_none()
+            terminal_context_target(Some(&ViewScope::Task(a.clone())), &b, &a, &records).is_none()
         );
         assert!(
-            terminal_context_record(Some(&ViewScope::SharedWorkbench), &b, &a, &records).is_none()
+            terminal_context_target(Some(&ViewScope::SharedWorkbench), &b, &a, &records).is_none()
         );
         assert_eq!(
-            terminal_context_record(Some(&ViewScope::FollowSelectedTask), &b, &a, &records)
-                .map(|record| &record.id),
-            Some(&b)
+            terminal_context_target(Some(&ViewScope::FollowSelectedTask), &b, &a, &records)
+                .map(|target| target.task),
+            Some(b)
         );
     }
 
