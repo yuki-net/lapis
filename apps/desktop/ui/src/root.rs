@@ -1128,17 +1128,7 @@ impl DesktopRoot {
         let terminal = self.terminal.read(cx);
         let owner = self.terminal_owner_for_persistence(cx);
         let summaries = if owner.is_some() {
-            terminal
-                .summaries()
-                .iter()
-                .map(|terminal| lapis_desktop_client::RestoredTerminal {
-                    id: Some(terminal.id.clone()),
-                    cwd: terminal.cwd.clone(),
-                    status: terminal.status,
-                    columns: terminal.screen.size.columns,
-                    rows: terminal.screen.size.rows,
-                })
-                .collect()
+            terminal.persistence_summaries()
         } else {
             Vec::new()
         };

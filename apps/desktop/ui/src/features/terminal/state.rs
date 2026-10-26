@@ -138,6 +138,18 @@ impl TerminalFeature {
     pub(crate) fn summaries(&self) -> Vec<lapis_terminal::TerminalSnapshot> {
         self.terminals.clone()
     }
+    pub(crate) fn persistence_summaries(&self) -> Vec<RestoredTerminal> {
+        self.terminals
+            .iter()
+            .map(|terminal| RestoredTerminal {
+                id: Some(terminal.id.clone()),
+                cwd: terminal.cwd.clone(),
+                status: terminal.status,
+                columns: terminal.screen.size.columns,
+                rows: terminal.screen.size.rows,
+            })
+            .collect()
+    }
     pub(crate) fn persistence_owner(&self) -> Option<ConversationId> {
         (self.requests.pending_actions == 0 && !self.requests.context_unavailable)
             .then(|| self.conversation.clone())
@@ -511,6 +523,50 @@ impl TerminalFeature {
 
 #[cfg(test)]
 mod tests {
+    #[gpui::test]
+    fn persistence_summary_ignores_output_and_tracks_restore_metadata(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, _| {
+                feature
+                    .terminals
+                    .push(lapis_terminal::TerminalSnapshot::empty(
+                        lapis_terminal::TerminalId::new("terminal-a"),
+                        "workspace".into(),
+                        TerminalStatus::Running,
+                        TerminalSize::new(80, 24),
+                    ));
+                let before = feature.persistence_summaries();
+                feature.terminals[0].revision += 1;
+                feature.terminals[0]
+                    .screen
+                    .scrollback
+                    .extend((0..1024).map(|_| lapis_terminal::TerminalRow::empty(80)));
+                assert_eq!(feature.persistence_summaries(), before);
+                feature.terminals[0].screen =
+                    lapis_terminal::TerminalScreen::empty(TerminalSize::new(120, 40));
+                feature.terminals[0].status = TerminalStatus::Exited;
+                let after = feature.persistence_summaries();
+                assert_eq!(after[0].id, before[0].id);
+                assert_eq!(after[0].cwd, before[0].cwd);
+                assert_eq!(after[0].status, TerminalStatus::Exited);
+                assert_eq!((after[0].columns, after[0].rows), (120, 40));
+                assert_ne!(after, before);
+            });
+        });
+    }
+
     #[gpui::test]
     fn fixed_terminal_never_falls_back_and_pending_context_is_not_persistable(
         cx: &mut gpui::TestAppContext,
