@@ -1,6 +1,45 @@
 use super::*;
 
 impl Shell {
+    fn move_tab_drag(
+        &mut self,
+        position: Point<Pixels>,
+        screen: Option<crate::window_host::drag::ScreenPoint>,
+        cx: &mut App,
+    ) -> bool {
+        let changed = self.update_drop_target(position);
+        if let (Some(preview), Some(point)) = (self.drag_preview, screen) {
+            let _ = preview.update(cx, |_, window, _| {
+                crate::window_host::drag_preview::position(window, point);
+            });
+        }
+        changed
+    }
+
+    pub(super) fn drop_target_size(&self, group: &TabGroupId) -> (f32, f32) {
+        let measured = self
+            .group_bounds
+            .borrow()
+            .get(group)
+            .map(|bounds| (f32::from(bounds.size.width), f32::from(bounds.size.height)))
+            .unwrap_or((0.0, 0.0));
+        if self.shell.layout.has_variable_splits() || self.detached {
+            return measured;
+        }
+        self.layout_bounds
+            .borrow()
+            .and_then(|bounds| {
+                self.shell.layout.allocated_group_size(
+                    group,
+                    (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                    std::time::Instant::now(),
+                )
+            })
+            .map_or(measured, |projected| {
+                (measured.0.min(projected.0), measured.1.min(projected.1))
+            })
+    }
+
     /// Installs capture handlers that release tab drags outside the source window or cancel them on mouse down.
     /// Releases inside the source window are left to panel drop handlers.
     pub(super) fn tab_drag_events(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -48,19 +87,9 @@ impl Shell {
                     if phase != gpui::DispatchPhase::Capture || !cx.has_active_drag() {
                         return;
                     }
-                    let Some(point) =
-                        crate::window_host::drag::screen_position(event.position, window)
-                    else {
-                        return;
-                    };
+                    let point = crate::window_host::drag::screen_position(event.position, window);
                     let _ = moving_shell.update(cx, |shell, cx| {
-                        let target_changed = shell.update_drop_target(event.position);
-                        if let Some(preview) = shell.drag_preview {
-                            let _ = preview.update(cx, |_, window, _| {
-                                crate::window_host::drag_preview::position(window, point);
-                            });
-                        }
-                        if target_changed {
+                        if shell.move_tab_drag(event.position, point, cx) {
                             cx.notify();
                         }
                     });
@@ -106,7 +135,12 @@ impl Shell {
             .borrow()
             .iter()
             .find_map(|(group, bounds)| {
-                if !bounds.contains(&point)
+                if !self
+                    .shell
+                    .layout
+                    .group(group)
+                    .is_some_and(|panel| panel.is_visible(std::time::Instant::now()))
+                    || !bounds.contains(&point)
                     || bounds.size.width <= px(0.0)
                     || bounds.size.height <= px(0.0)
                 {
@@ -122,7 +156,7 @@ impl Shell {
                         group,
                         &drag.tab,
                         zone,
-                        (f32::from(bounds.size.width), f32::from(bounds.size.height)),
+                        self.drop_target_size(group),
                     )
                     .err();
                 Some(DropTarget {
@@ -159,6 +193,84 @@ impl Shell {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn preview_rejects_small_split_and_ignores_hidden_group_bounds(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let document = cx.new(|_| DocumentFixture);
+            let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
+            shell.update(cx, |shell, cx| {
+                shell.group = Some(1.into());
+                let source = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Left)
+                    .clone();
+                let target = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
+                shell.tab_drag.begin(DraggedPanelTab {
+                    group: shell.group,
+                    source_host: shell.host,
+                    source_group: source.clone(),
+                    tab: tab.clone(),
+                });
+                let before = shell.shell.layout.capture_view_state();
+                shell.group_bounds.borrow_mut().insert(
+                    target.clone(),
+                    gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(407.0), px(300.0))),
+                );
+                assert!(shell.move_tab_drag(point(px(400.0), px(150.0)), None, cx));
+                assert_eq!(
+                    shell.drop_target.as_ref().unwrap().error,
+                    Some(LayoutError::InsufficientSpace)
+                );
+                shell.move_panel_tab_to_group(
+                    source.clone(),
+                    target.clone(),
+                    tab.clone(),
+                    DropZone::Right,
+                    cx,
+                );
+                assert_eq!(shell.shell.layout.capture_view_state(), before);
+                // 固定配置では広くても、可変木へ切替後に狭くなる初回Splitを拒否する。
+                shell.group_bounds.borrow_mut().insert(
+                    target.clone(),
+                    gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0))),
+                );
+                assert!(shell.move_tab_drag(point(px(890.0), px(300.0)), None, cx));
+                assert!(shell.drop_target.as_ref().unwrap().error.is_none());
+                *shell.layout_bounds.borrow_mut() = Some(gpui::Bounds::new(
+                    point(px(0.0), px(0.0)),
+                    gpui::size(px(500.0), px(600.0)),
+                ));
+                shell.update_drop_target(point(px(890.0), px(300.0)));
+                assert_eq!(
+                    shell.drop_target.as_ref().unwrap().error,
+                    Some(LayoutError::InsufficientSpace)
+                );
+                shell.move_panel_tab_to_group(source.clone(), target, tab, DropZone::Right, cx);
+                assert_eq!(shell.shell.layout.capture_view_state(), before);
+                shell.group_bounds.borrow_mut().clear();
+                shell
+                    .shell
+                    .layout
+                    .group_mut(&source)
+                    .unwrap()
+                    .set_open_immediate(false);
+                shell.group_bounds.borrow_mut().insert(
+                    source,
+                    gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0))),
+                );
+                shell.update_drop_target(point(px(20.0), px(300.0)));
+                assert!(shell.drop_target.is_none());
+            });
+        });
+    }
+
     struct DocumentFixture;
     impl Render for DocumentFixture {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {

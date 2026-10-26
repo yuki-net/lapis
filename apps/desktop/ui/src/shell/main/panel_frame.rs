@@ -196,22 +196,17 @@ impl Shell {
     }
 
     fn render_drop_overlay(&self, zone: DropZone, error: Option<LayoutError>) -> gpui::Div {
-        let mut overlay = div()
-            .absolute()
-            .m_1()
+        let overlay = div()
+            .size_full()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .overflow_hidden()
             .rounded(tokens::radius::CONTROL)
             .bg(theme::colors().button_background_selected)
             .opacity(0.55)
             .border_1()
             .border_color(theme::colors().button_border_focused);
-        match zone {
-            DropZone::Center => overlay = overlay.inset_0(),
-            DropZone::Left => overlay = overlay.left_0().top_0().bottom_0().w(relative(0.28)),
-            DropZone::Right => overlay = overlay.right_0().top_0().bottom_0().w(relative(0.28)),
-            DropZone::Top => overlay = overlay.top_0().left_0().right_0().h(relative(0.28)),
-            DropZone::Bottom => overlay = overlay.bottom_0().left_0().right_0().h(relative(0.28)),
-        }
-        overlay.when_some(error, |overlay, error| {
+        let overlay = overlay.when_some(error, |overlay, error| {
             overlay
                 .text_color(theme::colors().text_primary)
                 .text_size(tokens::typography::FONT_SM)
@@ -220,6 +215,39 @@ impl Shell {
                     LayoutError::SideColumnLimitReached => "左右の列は通常2列までです",
                     _ => "この位置には配置できません",
                 })
-        })
+        });
+        if zone == DropZone::Center {
+            return div().absolute().inset_0().child(overlay);
+        }
+        let horizontal = matches!(zone, DropZone::Left | DropZone::Right);
+        let allocation = crate::shell::layout::SplitAllocation::new(
+            if horizontal {
+                SplitDirection::Horizontal
+            } else {
+                SplitDirection::Vertical
+            },
+            0.5,
+            [true, true],
+        );
+        let selected = div().flex_1().min_w(px(0.0)).min_h(px(0.0)).child(overlay);
+        let empty = div().flex_1().min_w(px(0.0)).min_h(px(0.0));
+        let (first, second) = if matches!(zone, DropZone::Left | DropZone::Top) {
+            (selected, empty)
+        } else {
+            (empty, selected)
+        };
+        div()
+            .absolute()
+            .inset_0()
+            .flex()
+            .when(!horizontal, |container| container.flex_col())
+            .child(first)
+            .child(
+                div()
+                    .flex_basis(px(allocation.gap))
+                    .min_w(px(0.0))
+                    .min_h(px(0.0)),
+            )
+            .child(second)
     }
 }

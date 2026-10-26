@@ -338,6 +338,172 @@ fn view_scope_from_state(scope: &ViewScopeState) -> ViewScope {
 mod tests {
     use super::*;
 
+    #[test]
+    fn nested_split_layouts_keep_group_and_view_identity_across_tasks_modes_and_restart() {
+        use crate::features::conversation::{apply_view_state, capture_view_state};
+        use crate::{
+            extension_ui::PanelPosition,
+            shell::{PanelTab, ShellState, SplitDirection},
+        };
+        use lapis_desktop_client::DocumentTab;
+
+        fn fixture(name: &str, direction: SplitDirection) -> (ConversationViewState, DocumentTab) {
+            let document = DocumentTab {
+                id: lapis_editor_core::DocumentId::new(name),
+                display_name: name.into(),
+                path: None,
+                dirty: true,
+                external_change: lapis_document::ExternalChange::Unchanged,
+                encoding: Default::default(),
+                active: true,
+            };
+            let mut shell = ShellState::default();
+            let main = shell.layout.primary_group_id(PanelPosition::Main).clone();
+            let terminal = PanelTab::tool(crate::features::id::VIEW_TERMINAL);
+            shell
+                .layout
+                .group_mut(&main)
+                .unwrap()
+                .activate(PanelTab::Document(document.id.clone()));
+            shell
+                .layout
+                .group_mut(&main)
+                .unwrap()
+                .activate(terminal.clone());
+            let extra = shell.layout.split_group(&main, direction, 0.4).unwrap();
+            shell.layout.move_tab(&main, &extra, &terminal).unwrap();
+            shell
+                .layout
+                .split_group(
+                    &extra,
+                    if direction == SplitDirection::Horizontal {
+                        SplitDirection::Vertical
+                    } else {
+                        SplitDirection::Horizontal
+                    },
+                    0.65,
+                )
+                .unwrap();
+            shell
+                .panel_mut(PanelPosition::Left)
+                .set_open_immediate(direction == SplitDirection::Horizontal);
+            (capture_view_state(&shell), document)
+        }
+
+        let a = ConversationId::new("split-a");
+        let b = ConversationId::new("split-b");
+        let (ide, document_a) = fixture("document-a", SplitDirection::Horizontal);
+        let (agent_b, document_b) = fixture("document-b", SplitDirection::Vertical);
+        let mut state = WorkbenchState::default();
+        state.apply_task_snapshot(a.clone(), ide.clone(), true);
+        let terminal = ViewInstanceKey::new(
+            PanelTab::tool(crate::features::id::VIEW_TERMINAL).stable_view_key(),
+        )
+        .unwrap();
+        state.bind_view(terminal.clone(), ViewScope::SharedWorkbench);
+        for selected in [&b, &a, &b] {
+            state.select_task(
+                selected.clone(),
+                if selected == &a {
+                    ide.clone()
+                } else {
+                    agent_b.clone()
+                },
+            );
+            state.prepare_task_switch(Some(&a), &ide);
+            assert!(
+                state
+                    .apply_task_snapshot(a.clone(), ide.clone(), false)
+                    .is_none()
+            );
+            assert_eq!(state.context_task(), Some(&a));
+        }
+        assert_eq!(
+            state.set_mode(WorkbenchMode::Agent, Some(&a), &ide),
+            Some(agent_b.clone())
+        );
+        assert_eq!(
+            state.apply_task_snapshot(b.clone(), agent_b.clone(), true),
+            Some(agent_b.clone())
+        );
+        state.prepare_task_switch(Some(&b), &agent_b);
+        assert_eq!(
+            state.apply_task_snapshot(a.clone(), ide.clone(), true),
+            Some(ide.clone())
+        );
+        let mut saved = ide.clone();
+        state.persisted_view(&mut saved);
+        let decoded: ConversationViewState =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        let mut restored = WorkbenchState::default();
+        assert_eq!(
+            restored
+                .apply_task_snapshot(a.clone(), decoded, true)
+                .unwrap()
+                .layout,
+            ide.layout
+        );
+        assert_eq!(
+            restored.view_scope(&terminal),
+            Some(&ViewScope::SharedWorkbench)
+        );
+
+        let registry = crate::features::bundled_registry();
+        let mut shell = ShellState::default();
+        for (task, expected, document) in [(&b, &agent_b, &document_b), (&a, &ide, &document_a)] {
+            let view = restored
+                .apply_task_snapshot(task.clone(), expected.clone(), true)
+                .unwrap();
+            for _ in 0..2 {
+                apply_view_state(
+                    view.clone(),
+                    &mut shell,
+                    std::slice::from_ref(document),
+                    &registry,
+                );
+                assert_eq!(
+                    shell.layout.capture_view_state(),
+                    *expected.layout.as_ref().unwrap()
+                );
+                let placements = shell.layout.placements();
+                let unique = placements
+                    .iter()
+                    .map(|(tab, _)| tab.instance_id())
+                    .collect::<std::collections::HashSet<_>>();
+                assert_eq!(unique.len(), placements.len());
+                assert_eq!(
+                    placements
+                        .iter()
+                        .filter(|(tab, _)| *tab == PanelTab::Document(document.id.clone()))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    placements
+                        .iter()
+                        .filter(
+                            |(tab, _)| *tab == PanelTab::tool(crate::features::id::VIEW_TERMINAL)
+                        )
+                        .count(),
+                    1
+                );
+                assert_eq!(shell.layout.leaf_group_ids().len(), 6);
+            }
+        }
+        assert_eq!(
+            capture_layout(
+                &restored
+                    .set_mode(WorkbenchMode::Ide, Some(&a), &ide)
+                    .unwrap()
+            ),
+            capture_layout(&ide)
+        );
+        assert_eq!(
+            capture_layout(restored.task_view(&b).unwrap()),
+            capture_layout(&agent_b)
+        );
+    }
+
     fn view(tool: &str) -> ConversationViewState {
         let mut layout = crate::shell::DockLayout::default();
         layout

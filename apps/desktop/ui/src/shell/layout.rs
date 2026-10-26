@@ -120,8 +120,55 @@ pub(crate) enum LayoutError {
     CannotMerge,
 }
 
-const MIN_SPLIT_WIDTH: f32 = 360.0;
-const MIN_SPLIT_HEIGHT: f32 = 240.0;
+/// GPUIのflex配分とDrop判定が共有する、GAP控除後の割り当て。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SplitAllocation {
+    pub(crate) weights: [f32; 2],
+    pub(crate) gap: f32,
+    direction: SplitDirection,
+}
+
+impl SplitAllocation {
+    pub(crate) fn new(direction: SplitDirection, ratio: f32, visible: [bool; 2]) -> Self {
+        let weights = match visible {
+            [true, true] => [ratio, 1.0 - ratio],
+            [true, false] => [1.0, 0.0],
+            [false, true] => [0.0, 1.0],
+            [false, false] => [0.0, 0.0],
+        };
+        Self {
+            weights,
+            gap: if visible == [true, true] {
+                f32::from(crate::tokens::spacing::GAP)
+            } else {
+                0.0
+            },
+            direction,
+        }
+    }
+
+    pub(crate) fn sizes(self, size: (f32, f32)) -> [(f32, f32); 2] {
+        let (width, height) = (size.0.max(0.0), size.1.max(0.0));
+        self.weights.map(|weight| {
+            if weight == 0.0 {
+                return (0.0, 0.0);
+            }
+            match self.direction {
+                SplitDirection::Horizontal => ((width - self.gap).max(0.0) * weight, height),
+                SplitDirection::Vertical => (width, (height - self.gap).max(0.0) * weight),
+            }
+        })
+    }
+
+    fn can_split(self, size: (f32, f32)) -> bool {
+        size.0.is_finite()
+            && size.1.is_finite()
+            && self.sizes(size).into_iter().all(|(width, height)| {
+                width >= f32::from(crate::tokens::size::PANEL_MIN_WIDTH)
+                    && height >= f32::from(crate::tokens::size::PANEL_MIN_HEIGHT)
+            })
+    }
+}
 
 /// Owns placement and visibility state only. A `PanelHost` may contain a
 /// Document or Tool tab, but closing or moving it never touches the Host
@@ -206,6 +253,50 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
+    /// 固定配置から初めてSplitする場合も、切替後の木の配分で領域を検証する。
+    pub(crate) fn allocated_group_size(
+        &self,
+        group: &TabGroupId,
+        size: (f32, f32),
+        now: std::time::Instant,
+    ) -> Option<(f32, f32)> {
+        fn visible(layout: &DockLayout, node: &LayoutNode, now: std::time::Instant) -> bool {
+            match node {
+                LayoutNode::Tabs(id) => layout.group(id).is_some_and(|panel| panel.is_visible(now)),
+                LayoutNode::Split { first, second, .. } => {
+                    visible(layout, first, now) || visible(layout, second, now)
+                }
+            }
+        }
+        fn find(
+            layout: &DockLayout,
+            node: &LayoutNode,
+            group: &TabGroupId,
+            size: (f32, f32),
+            now: std::time::Instant,
+        ) -> Option<(f32, f32)> {
+            match node {
+                LayoutNode::Tabs(id) => (id == group).then_some(size),
+                LayoutNode::Split {
+                    direction,
+                    ratio,
+                    first,
+                    second,
+                } => {
+                    let sizes = SplitAllocation::new(
+                        *direction,
+                        *ratio,
+                        [visible(layout, first, now), visible(layout, second, now)],
+                    )
+                    .sizes(size);
+                    find(layout, first, group, sizes[0], now)
+                        .or_else(|| find(layout, second, group, sizes[1], now))
+                }
+            }
+        }
+        find(self, &self.root, group, size, now)
+    }
+
     #[allow(dead_code)]
     pub(crate) fn zone_open(&self, position: PanelPosition) -> bool {
         self.groups
@@ -432,14 +523,10 @@ impl DockLayout {
         if !zone.is_split() {
             return self.move_tab(source, target, tab);
         }
-        if !target_size.0.is_finite()
-            || !target_size.1.is_finite()
-            || target_size.0 < MIN_SPLIT_WIDTH
-            || target_size.1 < MIN_SPLIT_HEIGHT
-        {
+        let direction = zone.direction().expect("split zone has a direction");
+        if !SplitAllocation::new(direction, 0.5, [true, true]).can_split(target_size) {
             return Err(LayoutError::InsufficientSpace);
         }
-        let direction = zone.direction().expect("split zone has a direction");
         if direction == SplitDirection::Horizontal
             && matches!(
                 target_panel.position,
@@ -1057,6 +1144,114 @@ mod tests {
         };
         assert!(!layout.restore_view_state(&invalid, |_| None));
         assert_eq!(layout.capture_view_state(), before);
+    }
+
+    #[test]
+    fn split_allocation_accounts_for_direction_ratio_gap_and_visibility() {
+        for direction in [SplitDirection::Horizontal, SplitDirection::Vertical] {
+            for ratio in [0.1, 0.5, 0.9] {
+                for visible in [[true, true], [true, false], [false, true], [false, false]] {
+                    let allocation = SplitAllocation::new(direction, ratio, visible);
+                    let sizes = allocation.sizes((808.0, 608.0));
+                    for (index, shown) in visible.into_iter().enumerate() {
+                        if !shown {
+                            assert_eq!(sizes[index], (0.0, 0.0));
+                        }
+                    }
+                    if visible.contains(&true) {
+                        let extent = match direction {
+                            SplitDirection::Horizontal => sizes[0].0 + sizes[1].0,
+                            SplitDirection::Vertical => sizes[0].1 + sizes[1].1,
+                        };
+                        let available = if direction == SplitDirection::Horizontal {
+                            808.0
+                        } else {
+                            608.0
+                        };
+                        assert!((extent + allocation.gap - available).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn split_drop_checks_both_resulting_regions_at_the_exact_minimum() {
+        for (zone, minimum) in [
+            (DropZone::Left, (408.0, 150.0)),
+            (DropZone::Right, (408.0, 150.0)),
+            (DropZone::Top, (200.0, 308.0)),
+            (DropZone::Bottom, (200.0, 308.0)),
+        ] {
+            for size in [
+                (minimum.0 - 0.01, minimum.1),
+                (minimum.0, minimum.1 - 0.01),
+                minimum,
+            ] {
+                let mut layout = DockLayout::default();
+                let source = layout.primary_group_id(PanelPosition::Left).clone();
+                let target = layout.primary_group_id(PanelPosition::Main).clone();
+                let tab = layout.group(&source).unwrap().tabs[0].clone();
+                let before = layout.capture_view_state();
+                let next_id = layout.next_group_id;
+                let result = layout.drop_tab(&source, &target, &tab, zone, size);
+                if size == minimum {
+                    assert!(result.is_ok());
+                } else {
+                    assert_eq!(result, Err(LayoutError::InsufficientSpace));
+                    assert_eq!(layout.capture_view_state(), before);
+                    assert_eq!(layout.next_group_id, next_id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn nested_split_resize_and_hidden_branches_preserve_saved_layout() {
+        fn measure(
+            layout: &DockLayout,
+            size: (f32, f32),
+            now: std::time::Instant,
+        ) -> Vec<(TabGroupId, (f32, f32))> {
+            layout
+                .leaf_group_ids()
+                .into_iter()
+                .map(|id| {
+                    let size = layout.allocated_group_size(&id, size, now).unwrap();
+                    (id, size)
+                })
+                .collect()
+        }
+        let mut layout = DockLayout::default();
+        let main = layout.primary_group_id(PanelPosition::Left).clone();
+        let right = layout
+            .split_group(&main, SplitDirection::Horizontal, 0.3)
+            .unwrap();
+        let bottom = layout
+            .split_group(&right, SplitDirection::Vertical, 0.7)
+            .unwrap();
+        layout
+            .group_mut(&bottom)
+            .unwrap()
+            .activate(PanelTab::tool_instance("terminal", "resize-terminal"));
+        for hidden in [false, true] {
+            layout
+                .group_mut(&right)
+                .unwrap()
+                .set_open_immediate(!hidden);
+            let before = layout.capture_view_state();
+            let now = std::time::Instant::now();
+            let original = measure(&layout, (1600.0, 1000.0), now);
+            for size in [(300.0, 180.0), (4.0, 4.0), (0.0, 0.0)] {
+                for (_, (width, height)) in measure(&layout, size, now) {
+                    assert!(width >= 0.0 && width <= size.0);
+                    assert!(height >= 0.0 && height <= size.1);
+                }
+                assert_eq!(layout.capture_view_state(), before);
+            }
+            assert_eq!(measure(&layout, (1600.0, 1000.0), now), original);
+            assert_eq!(layout.capture_view_state(), before);
+        }
     }
 
     #[test]

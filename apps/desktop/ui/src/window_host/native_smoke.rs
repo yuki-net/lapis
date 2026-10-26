@@ -85,6 +85,7 @@ pub(crate) fn run_native_smoke(
             crate::devtools::native_smoke::run(handle, cx).await;
         }
         verify_workbench_routes(&this, handle, cx).await;
+        verify_split_resize(&this, handle, cx).await;
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
@@ -834,6 +835,81 @@ pub(crate) fn run_native_smoke(
     .detach();
 }
 
+async fn verify_split_resize(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    let (original, document, saved, size) = handle
+        .update(cx, |_, window, cx| {
+            let (shell, document) = root
+                .update(cx, |root, cx| {
+                    (root.shell.clone(), root.editor.read(cx).document_id())
+                })
+                .unwrap();
+            let original = shell.update(cx, |shell, _| {
+                let original = shell.shell.layout.clone();
+                let main = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                let extra = shell
+                    .shell
+                    .layout
+                    .split_group(&main, crate::shell::SplitDirection::Horizontal, 0.4)
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .split_group(&extra, crate::shell::SplitDirection::Vertical, 0.6)
+                    .unwrap();
+                original
+            });
+            let saved = shell.read(cx).shell.layout.capture_view_state();
+            (original, document, saved, window.viewport_size())
+        })
+        .unwrap();
+    for requested in [gpui::size(gpui::px(480.0), gpui::px(320.0)), size] {
+        handle
+            .update(cx, |_, window, _| window.resize(requested))
+            .unwrap();
+        gpui::Timer::after(std::time::Duration::from_millis(150)).await;
+        handle
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+                root.update(cx, |root, cx| {
+                    assert_eq!(root.editor.read(cx).document_id(), document);
+                    let shell = root.shell.read(cx);
+                    assert_eq!(shell.shell.layout.capture_view_state(), saved);
+                    let viewport = window.viewport_size();
+                    for bounds in shell.group_bounds.borrow().values() {
+                        assert!(
+                            bounds.origin.x >= gpui::px(0.0) && bounds.origin.y >= gpui::px(0.0)
+                        );
+                        assert!(
+                            bounds.origin.x + bounds.size.width <= viewport.width + gpui::px(1.0)
+                        );
+                        assert!(
+                            bounds.origin.y + bounds.size.height <= viewport.height + gpui::px(1.0)
+                        );
+                    }
+                })
+                .unwrap();
+            })
+            .unwrap();
+    }
+    root.update(cx, |root, cx| {
+        root.shell.update(cx, |shell, cx| {
+            shell.shell.layout = original;
+            cx.notify();
+        });
+    })
+    .unwrap();
+    eprintln!("SMOKE nested Split resize preserves layout and document OK");
+}
+
 #[cfg(target_os = "windows")]
 async fn simulate_tab_drag(
     root: &WeakEntity<DesktopRoot>,
@@ -1024,6 +1100,7 @@ async fn verify_drag_routes(
             )
         })
         .unwrap();
+    // 新しいNative Windowの生成・初回描画を待つ。
     wait_for(root, cx, Some(3)).await;
     simulate_tab_drag(
         root,
@@ -1084,6 +1161,30 @@ async fn verify_workbench_routes(
     handle: gpui::AnyWindowHandle,
     cx: &mut gpui::AsyncApp,
 ) {
+    let original_layout = root
+        .update(cx, |root, cx| {
+            root.shell.update(cx, |shell, cx| {
+                let original = shell.shell.layout.clone();
+                let main = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                let extra = shell
+                    .shell
+                    .layout
+                    .split_group(&main, crate::shell::SplitDirection::Horizontal, 0.4)
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .split_group(&extra, crate::shell::SplitDirection::Vertical, 0.6)
+                    .unwrap();
+                cx.notify();
+                original
+            })
+        })
+        .unwrap();
     let setup = root
         .update(cx, |root, cx| {
             let view = root.persisted_view(cx);
@@ -1169,14 +1270,30 @@ async fn verify_workbench_routes(
         })
         .unwrap();
     wait_for(root, cx, Some(1)).await;
-    root.update(cx, |root, cx| {
-        assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, b);
-        assert_eq!(
-            root.persisted_view(cx).layout.workbench.mode,
-            lapis_desktop_client::WorkbenchModeState::Agent
-        );
-    })
-    .unwrap();
+    let agent_view = root
+        .update(cx, |root, cx| {
+            assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, b);
+            assert_eq!(
+                root.persisted_view(cx).layout.workbench.mode,
+                lapis_desktop_client::WorkbenchModeState::Agent
+            );
+            root.shell.update(cx, |shell, cx| {
+                let main = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                shell
+                    .shell
+                    .layout
+                    .split_group(&main, crate::shell::SplitDirection::Vertical, 0.55)
+                    .unwrap();
+                cx.notify();
+            });
+            root.schedule_persist(cx);
+            root.shell.read(cx).view_state()
+        })
+        .unwrap();
     for mode in [
         crate::workbench::WorkbenchMode::Ide,
         crate::workbench::WorkbenchMode::Agent,
@@ -1203,6 +1320,8 @@ async fn verify_workbench_routes(
             if mode == crate::workbench::WorkbenchMode::Ide {
                 assert_eq!(root.editor.read(cx).document_id(), before.1);
                 assert_eq!(root.shell.read(cx).view_state(), before.0);
+            } else {
+                assert_eq!(root.shell.read(cx).view_state(), agent_view);
             }
         })
         .unwrap();
@@ -1233,7 +1352,12 @@ async fn verify_workbench_routes(
         assert_eq!(root.persisted_view(cx).layout.workbench.mode, lapis_desktop_client::WorkbenchModeState::Ide);
         assert_eq!(root.editor.read(cx).document_id(), before.1);
         assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
-        eprintln!("SMOKE IDE Task A/B/A keeps documents and workspace; Agent mode restores task context OK");
+        eprintln!("SMOKE IDE Task A/B/A and IDE/Agent round trip preserve nested Splits; Agent restores its own Split layout OK");
+        root.shell.update(cx, |shell, cx| {
+            shell.shell.layout = original_layout;
+            cx.notify();
+        });
+        root.schedule_persist(cx);
     }).unwrap();
 }
 
