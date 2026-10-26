@@ -578,12 +578,7 @@ impl Shell {
         zone: DropZone,
         cx: &mut Context<Self>,
     ) {
-        let target_size = self
-            .group_bounds
-            .borrow()
-            .get(&target)
-            .map(|bounds| (f32::from(bounds.size.width), f32::from(bounds.size.height)))
-            .unwrap_or((0.0, 0.0));
+        let target_size = self.drop_target_size(&target);
         match self
             .shell
             .layout

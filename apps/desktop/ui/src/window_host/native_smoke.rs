@@ -76,6 +76,7 @@ pub(crate) fn run_native_smoke(
         if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
             crate::devtools::native_smoke::run(handle, cx).await;
         }
+        verify_split_resize(&this, handle, cx).await;
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
@@ -829,6 +830,81 @@ pub(crate) fn run_native_smoke(
     .detach();
 }
 
+async fn verify_split_resize(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    let (original, document, saved, size) = handle
+        .update(cx, |_, window, cx| {
+            let (shell, document) = root
+                .update(cx, |root, cx| {
+                    (root.shell.clone(), root.editor.read(cx).document_id())
+                })
+                .unwrap();
+            let original = shell.update(cx, |shell, _| {
+                let original = shell.shell.layout.clone();
+                let main = shell
+                    .shell
+                    .layout
+                    .primary_group_id(PanelPosition::Main)
+                    .clone();
+                let extra = shell
+                    .shell
+                    .layout
+                    .split_group(&main, crate::shell::SplitDirection::Horizontal, 0.4)
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .split_group(&extra, crate::shell::SplitDirection::Vertical, 0.6)
+                    .unwrap();
+                original
+            });
+            let saved = shell.read(cx).shell.layout.capture_view_state();
+            (original, document, saved, window.viewport_size())
+        })
+        .unwrap();
+    for requested in [gpui::size(gpui::px(480.0), gpui::px(320.0)), size] {
+        handle
+            .update(cx, |_, window, _| window.resize(requested))
+            .unwrap();
+        gpui::Timer::after(std::time::Duration::from_millis(150)).await;
+        handle
+            .update(cx, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+                root.update(cx, |root, cx| {
+                    assert_eq!(root.editor.read(cx).document_id(), document);
+                    let shell = root.shell.read(cx);
+                    assert_eq!(shell.shell.layout.capture_view_state(), saved);
+                    let viewport = window.viewport_size();
+                    for bounds in shell.group_bounds.borrow().values() {
+                        assert!(
+                            bounds.origin.x >= gpui::px(0.0) && bounds.origin.y >= gpui::px(0.0)
+                        );
+                        assert!(
+                            bounds.origin.x + bounds.size.width <= viewport.width + gpui::px(1.0)
+                        );
+                        assert!(
+                            bounds.origin.y + bounds.size.height <= viewport.height + gpui::px(1.0)
+                        );
+                    }
+                })
+                .unwrap();
+            })
+            .unwrap();
+    }
+    root.update(cx, |root, cx| {
+        root.shell.update(cx, |shell, cx| {
+            shell.shell.layout = original;
+            cx.notify();
+        });
+    })
+    .unwrap();
+    eprintln!("SMOKE nested Split resize preserves layout and document OK");
+}
+
 #[cfg(target_os = "windows")]
 async fn simulate_tab_drag(
     root: &WeakEntity<DesktopRoot>,
@@ -940,10 +1016,10 @@ fn show_drop_target(
 ) -> drag::ScreenPoint {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
-        Foundation::HWND,
+        Foundation::{HWND, POINT},
         UI::WindowsAndMessaging::{
-            HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetWindowPos,
-            ShowWindow,
+            GetClassNameW, HWND_TOP, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SetWindowPos, ShowWindow, WindowFromPoint,
         },
     };
     handle
@@ -970,9 +1046,18 @@ fn show_drop_target(
             }
             .unwrap();
             let point = drag::screen_position(position, window).unwrap();
+            let hit = unsafe {
+                WindowFromPoint(POINT {
+                    x: point.x,
+                    y: point.y,
+                })
+            };
+            let mut class = [0u16; 256];
+            let length = unsafe { GetClassNameW(hit, &mut class) } as usize;
             assert!(
                 drag::is_source_window(window, point),
-                "Native hit test did not select the fixture window"
+                "Native hit test did not select the fixture window: hit class={}",
+                String::from_utf16_lossy(&class[..length]),
             );
             point
         })
@@ -1010,6 +1095,8 @@ async fn verify_drag_routes(
             )
         })
         .unwrap();
+    // 新しいNative Windowの生成・初回描画を待つ。
+    wait_for(root, cx, Some(3)).await;
     simulate_tab_drag(
         root,
         &first_shell,

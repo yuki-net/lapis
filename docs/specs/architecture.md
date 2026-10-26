@@ -93,6 +93,9 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の分割・ドラッグ
 
+- `SplitAllocation`で方向・比率・可視状態・GAP控除後の領域を共通化する。描画はGPUIのbasis=0とflex配分を使い、可視の両枝の間だけGAPを置く。新規Splitは分割後の両領域がPanel最小幅・高さを満たす場合だけ許可する。Previewと確定は同じDrop APIで検証する。
+- Windowが狭い間は既存Splitを表示領域内へ縮小し、コンテンツをclipする。GAPも領域不足時は縮小できる。Windowサイズだけで木・TabGroup・ViewInstance・比率・表示状態を変更せず、再拡大で元の配置へ戻す。
+
 - タブ移動・Closeで空になったGroupも追加先として保持する。Groupの自動削除で保存済み配置やPickerの起点を失わせない。明示的な統合APIは空の非Anchor Groupだけを隣接Groupへ統合し、Mainと互換Anchorを保護する。
 
 - ドラッグ中は`DropTarget`だけを更新し、`DropZone`のOverlayを表示する。`Split`やタブ移動はDrop確定時にだけ実行し、Escape・Focus喪失・不正Dropでは配置を変更しない。
