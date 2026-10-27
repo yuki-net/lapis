@@ -49,6 +49,28 @@ build/runは同じ `target/` を使い、開発用の設定・会話・復元状
 
 コミット時のhookはRustのfmtとworkspace全体の`cargo check`で、変更関連のテストは手元で実行します。全体の合否は `.github/workflows/ci.yml` のCIで確認します。Rustの検証内容は `scripts/check.py` をCIとローカルで共有し、既存の対象・警告の扱いを維持しています。実画面の確認はCIとは別に行います。
 
+## Hot Reload（Windows 開発用）
+
+WindowsのDebug開発時に、Rust/GPUIのUIコードを変更してもLapisを終了せずに既存Windowへ描画変更を反映できます。Releaseには一切含めません。
+
+| 操作 | コマンド |
+| --- | --- |
+| 通常起動（Hot Reloadなし） | `cargo dev` |
+| Hot Reload起動 | `cargo dev-hot-reload` |
+
+IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` はHot Reload起動です。
+
+Hot Reload起動時は、別途修正版 `dx` CLI でdevserverを起動する必要があります。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
+
+### 概要
+
+- `Shell::render` の1箇所にHot Reload境界を置き、そこから呼び出されるすべてのView / render経路を対象とします。
+- 同一PID・同一Windowで複数回のHot Reloadが可能です。
+- Document / 未保存編集 / Tab / Panel / Task / Terminalの状態は維持されます。
+- devserver切断後は指数バックオフで非同期に再接続を試みます。
+- 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
+- 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
+
 ## Host接続
 
 通常起動は独立したLocal HostへQUICで接続します。「ファイル → Hostに接続…」は招待または保存済みprofileを選び、新しい接続画面を開きます。既存画面の未保存編集は保持します。起動時は `--host <file>`、検証用に状態を分離する場合は `--state-directory <directory>` を使用できます。
