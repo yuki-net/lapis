@@ -78,11 +78,14 @@ impl Shell {
         view: Option<ViewId>,
         cx: &mut Context<Self>,
     ) {
-        self.request_panel_open(position, true, cx);
         if let Some(view) = view {
-            self.shell
-                .panel_mut(position)
-                .activate_tool_without_open(view);
+            let _ = self.shell.layout.move_tab_to_zone(
+                position,
+                PanelTab::tool(view),
+                std::time::Instant::now(),
+            );
+        } else {
+            self.request_panel_open(position, true, cx);
         }
     }
 
@@ -90,28 +93,23 @@ impl Shell {
         if position == PanelPosition::Main {
             return;
         }
-        let open = !self.shell.layout.zone_open(position);
-        let transitions = self.shell.layout.request_zone_open(
-            position,
-            open,
-            crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
-            std::time::Instant::now(),
-        );
-        for (group, generation, duration) in transitions {
-            self.schedule_group_transition(group, generation, duration, cx);
+        if self.shell.layout.zone(position).layout.is_none() {
+            self.shell.tool_picker = Some(PickerTarget::Zone(position));
+            self.shell.set_tool_picker_query(String::new());
+            cx.notify();
+            return;
         }
+        let open = !self.shell.layout.zone_open(position);
+        self.shell.layout.set_zone_open(position, open);
         if !open
             && self
                 .shell
-                .layout
-                .group(&self.shell.focused_group)
+                .focused_group
+                .as_ref()
+                .and_then(|group| self.shell.layout.group(group))
                 .is_some_and(|group| group.position == position)
         {
-            self.shell.focused_group = self
-                .shell
-                .layout
-                .primary_group_id(PanelPosition::Main)
-                .clone();
+            self.shell.focused_group = None;
         }
     }
 
@@ -124,46 +122,12 @@ impl Shell {
             return;
         };
         let open = !panel.requested_open();
-        if let Ok(Some((generation, duration))) = self.shell.layout.request_group_open(
-            &group,
-            open,
-            crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
-            std::time::Instant::now(),
-        ) {
-            self.schedule_group_transition(group.clone(), generation, duration, cx);
-        }
-        if !open && self.shell.focused_group == group {
-            self.shell.focused_group = self
-                .shell
-                .layout
-                .primary_group_id(PanelPosition::Main)
-                .clone();
+        self.shell.layout.set_panel_open(&group, open);
+        if !open && self.shell.focused_group.as_ref() == Some(&group) {
+            self.shell.focused_group = None;
         }
         self.refresh_feature_activation(cx);
         cx.notify();
-    }
-
-    fn schedule_group_transition(
-        &mut self,
-        group: super::super::TabGroupId,
-        generation: u64,
-        duration: Duration,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn(async move |this, cx| {
-            Timer::after(duration).await;
-            let _ = this.update(cx, |shell, cx| {
-                let next = shell.shell.layout.group_mut(&group).and_then(|panel| {
-                    panel.complete_transition(generation, std::time::Instant::now())
-                });
-                if let Some((generation, duration)) = next {
-                    shell.schedule_group_transition(group, generation, duration, cx);
-                }
-                shell.refresh_feature_activation(cx);
-                cx.notify();
-            });
-        })
-        .detach();
     }
 
     pub(crate) fn toggle_header_panel(
@@ -185,10 +149,11 @@ impl Shell {
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
-        self.request_panel_open(position, true, cx);
-        self.shell
-            .panel_mut(position)
-            .activate_tool_without_open(view);
+        let _ = self.shell.layout.move_tab_to_zone(
+            position,
+            PanelTab::tool(view),
+            std::time::Instant::now(),
+        );
         self.refresh_feature_activation(cx);
         cx.notify();
     }
@@ -197,39 +162,20 @@ impl Shell {
         if position == PanelPosition::Main {
             return;
         }
-        self.shell.panel_mut(position).active = None;
         self.request_panel_open(position, false, cx);
         self.refresh_feature_activation(cx);
         cx.notify();
-    }
-
-    pub(crate) fn close_empty_panel(
-        &mut self,
-        position: PanelPosition,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        if position == PanelPosition::Main || !self.shell.panel(position).tabs.is_empty() {
-            return false;
-        }
-        self.close_panel(position, cx);
-        true
     }
 
     pub(crate) fn request_panel_open_with_duration(
         &mut self,
         position: PanelPosition,
         open: bool,
-        duration: Duration,
+        _duration: Duration,
         cx: &mut Context<Self>,
     ) {
-        let transition = self.shell.panel_mut(position).request_open_with_duration(
-            open,
-            duration,
-            std::time::Instant::now(),
-        );
-        if let Some((generation, duration)) = transition {
-            self.schedule_panel_transition(position, generation, duration, cx);
-        }
+        self.shell.layout.set_zone_open(position, open);
+        cx.notify();
     }
 
     fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
@@ -239,39 +185,6 @@ impl Shell {
             crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
             cx,
         );
-    }
-
-    fn schedule_panel_transition(
-        &mut self,
-        position: PanelPosition,
-        generation: u64,
-        duration: Duration,
-        cx: &mut Context<Self>,
-    ) {
-        cx.spawn(async move |this, cx| {
-            Timer::after(duration).await;
-            let _ = this.update(cx, |editor, cx| {
-                editor.complete_panel_transition(position, generation, cx);
-            });
-        })
-        .detach();
-    }
-
-    fn complete_panel_transition(
-        &mut self,
-        position: PanelPosition,
-        generation: u64,
-        cx: &mut Context<Self>,
-    ) {
-        let next = self
-            .shell
-            .panel_mut(position)
-            .complete_transition(generation, std::time::Instant::now());
-        if let Some((next_generation, duration)) = next {
-            self.schedule_panel_transition(position, next_generation, duration, cx);
-        }
-        self.refresh_feature_activation(cx);
-        cx.notify();
     }
 
     pub(crate) fn open_tool_picker(
@@ -284,8 +197,8 @@ impl Shell {
         if self.shell.layout.group(&group).is_none() {
             return;
         }
-        self.shell.focused_group = group.clone();
-        self.shell.tool_picker = Some(group);
+        self.shell.focused_group = Some(group.clone());
+        self.shell.tool_picker = Some(PickerTarget::Panel(group));
         self.shell.tool_picker_anchor = anchor;
         self.shell.set_tool_picker_query(String::new());
         window.focus(&self.focus_handle);
@@ -358,9 +271,8 @@ impl Shell {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        if self.shell.layout.primary_group_id(position) == &group {
-            self.request_panel_open(position, true, cx);
-        }
+        self.shell.layout.set_panel_open(&group, true);
+        self.request_panel_open(position, true, cx);
         self.shell.open_group_tab(&group, tab);
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -368,24 +280,23 @@ impl Shell {
 
     pub(crate) fn close_panel_tab_in_group(
         &mut self,
-        group: TabGroupId,
-        position: PanelPosition,
+        _group: TabGroupId,
+        _position: PanelPosition,
         tab: PanelTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let PanelTab::Document(document_id) = tab else {
             if let Some(group) = self.shell.layout.group_for_tab(&tab) {
-                self.shell.layout.group_mut(&group).unwrap().remove(&tab);
+                self.shell
+                    .layout
+                    .remove_tab(&group, &tab, std::time::Instant::now());
+                self.schedule_empty_close(group, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
             }
-            if self.shell.layout.primary_group_id(position) != &group
-                || !self.close_empty_panel(position, cx)
-            {
-                self.refresh_feature_activation(cx);
-                cx.notify();
-            }
+            self.refresh_feature_activation(cx);
+            cx.notify();
             return;
         };
 
@@ -407,16 +318,15 @@ impl Shell {
 
     pub(crate) fn select_tool_from_picker(
         &mut self,
-        group: super::super::TabGroupId,
+        target: PickerTarget,
         view: ViewId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(target) = self.shell.layout.group(&group) else {
+        let Some(position) = self.picker_position(&target) else {
             self.close_tool_picker(window, cx);
             return;
         };
-        let position = target.position;
         let Some(instance_policy) = self
             .feature_registry
             .tool_contributions(position)
@@ -441,7 +351,18 @@ impl Shell {
         {
             return;
         }
-        if !self.shell.open_group_tab(&group, tab) {
+        let opened = match target {
+            PickerTarget::Panel(group) => self.shell.open_group_tab(&group, tab),
+            PickerTarget::Zone(position) => self
+                .shell
+                .layout
+                .move_tab_to_zone(position, tab, std::time::Instant::now())
+                .map(|id| {
+                    self.shell.focused_group = Some(id);
+                })
+                .is_ok(),
+        };
+        if !opened {
             return;
         }
         self.synchronize_view_instances(cx);
@@ -540,9 +461,9 @@ impl Shell {
 
     fn picker_views(
         &self,
-        group: &super::super::TabGroupId,
+        target: &PickerTarget,
     ) -> Vec<(ViewId, crate::extension_ui::ToolInstancePolicy)> {
-        self.picker_contributions(group)
+        self.picker_contributions(target)
             .into_iter()
             .filter_map(|contribution| {
                 Some((contribution.view.clone()?, contribution.instance_policy))
@@ -552,13 +473,13 @@ impl Shell {
 
     pub(super) fn picker_contributions(
         &self,
-        group: &super::super::TabGroupId,
+        target: &PickerTarget,
     ) -> Vec<&crate::extension_ui::UiContribution> {
-        let Some(target) = self.shell.layout.group(group) else {
+        let Some(position) = self.picker_position(target) else {
             return Vec::new();
         };
         self.feature_registry
-            .tool_contributions(target.position)
+            .tool_contributions(position)
             .into_iter()
             .filter(|contribution| self.tool_matches(contribution))
             .filter(|contribution| {
@@ -570,34 +491,55 @@ impl Shell {
             .collect()
     }
 
+    fn picker_position(&self, target: &PickerTarget) -> Option<PanelPosition> {
+        match target {
+            PickerTarget::Panel(group) => {
+                self.shell.layout.group(group).map(|panel| panel.position)
+            }
+            PickerTarget::Zone(position) => Some(*position),
+        }
+    }
+
+    pub(crate) fn schedule_empty_close(&mut self, group: TabGroupId, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            Timer::after(crate::shell::panel_transition::PANEL_ANIMATION_DURATION).await;
+            let _ = this.update(cx, |shell, cx| {
+                shell.shell.layout.finish_empty_close(&group);
+                shell.refresh_feature_activation(cx);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub(crate) fn move_panel_tab_to_group(
         &mut self,
         source: TabGroupId,
-        target: TabGroupId,
         tab: PanelTab,
-        zone: DropZone,
+        target: PanelDrop,
         cx: &mut Context<Self>,
     ) {
-        let target_size = self.drop_target_size(&target);
+        let size = self.target_zone_size(&target);
         match self
             .shell
             .layout
-            .drop_tab(&source, &target, &tab, zone, target_size)
+            .drop_tab(&source, &tab, &target, size, std::time::Instant::now())
         {
-            Ok(()) => {
-                if let Some(group) = self.shell.layout.group_for_tab(&tab) {
-                    self.shell.focused_group = group;
+            Ok(destination) => {
+                self.shell.focused_group = Some(destination);
+                if self
+                    .shell
+                    .layout
+                    .group(&source)
+                    .is_some_and(|panel| panel.tabs.is_empty())
+                {
+                    self.schedule_empty_close(source, cx);
                 }
                 self.refresh_feature_activation(cx);
                 cx.notify();
             }
-            Err(error) => {
-                self.status = match error {
-                    LayoutError::InsufficientSpace => "分割できる最小領域を確保できません".into(),
-                    LayoutError::SideColumnLimitReached => "サイド領域は通常2列までです".into(),
-                    LayoutError::TabNotFound => "移動元のタブが見つかりません".into(),
-                    _ => "この位置にはタブを配置できません".into(),
-                };
+            Err(()) => {
+                self.status = "この位置にはタブを配置できません".into();
                 cx.notify();
             }
         }
@@ -617,12 +559,12 @@ mod focus_tests {
     #[gpui::test]
     fn committed_drop_focuses_the_group_that_contains_the_tab(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            for zone in [
-                DropZone::Center,
-                DropZone::Left,
-                DropZone::Right,
-                DropZone::Top,
-                DropZone::Bottom,
+            for edge in [
+                None,
+                Some(PanelEdge::Left),
+                Some(PanelEdge::Right),
+                Some(PanelEdge::Top),
+                Some(PanelEdge::Bottom),
             ] {
                 let document = cx.new(|_| DocumentFixture);
                 let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
@@ -630,25 +572,32 @@ mod focus_tests {
                     let source = shell
                         .shell
                         .layout
-                        .primary_group_id(PanelPosition::Left)
-                        .clone();
+                        .first_panel_in_zone(PanelPosition::Left)
+                        .unwrap();
                     let target = shell
                         .shell
                         .layout
-                        .primary_group_id(PanelPosition::Main)
-                        .clone();
+                        .open_tab(PanelPosition::Main, PanelTab::tool("target"))
+                        .unwrap();
                     let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
-                    shell.group_bounds.borrow_mut().insert(
-                        target.clone(),
+                    shell.zone_bounds.borrow_mut().insert(
+                        PanelPosition::Main,
                         gpui::Bounds::new(
                             point(px(0.0), px(0.0)),
                             gpui::size(px(900.0), px(600.0)),
                         ),
                     );
-                    shell.move_panel_tab_to_group(source, target.clone(), tab.clone(), zone, cx);
+                    let drop = edge.map_or_else(
+                        || PanelDrop::Into(target.clone()),
+                        |edge| PanelDrop::Edge {
+                            panel: target.clone(),
+                            edge,
+                        },
+                    );
+                    shell.move_panel_tab_to_group(source, tab.clone(), drop, cx);
                     let actual = shell.shell.layout.group_for_tab(&tab).unwrap();
-                    assert_eq!(shell.shell.focused_group, actual);
-                    if zone != DropZone::Center {
+                    assert_eq!(shell.shell.focused_group, Some(actual.clone()));
+                    if edge.is_some() {
                         assert_ne!(actual, target);
                     }
                     assert_eq!(
@@ -661,7 +610,7 @@ mod focus_tests {
                             .count(),
                         1
                     );
-                    assert!(shell.shell.layout.validate().is_ok());
+                    assert!(shell.shell.layout.valid());
                 });
             }
         });
@@ -687,24 +636,32 @@ mod visibility_tests {
                 let a = shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Left)
-                    .clone();
-                let b = shell
-                    .shell
-                    .layout
-                    .split_group(&a, crate::shell::layout::SplitDirection::Horizontal, 0.5)
+                    .first_panel_in_zone(PanelPosition::Left)
                     .unwrap();
                 let tab = PanelTab::tool_instance("terminal", "visible-terminal");
                 shell
                     .shell
                     .layout
-                    .group_mut(&b)
-                    .unwrap()
-                    .activate(tab.clone());
+                    .open_tab(PanelPosition::Left, tab.clone())
+                    .unwrap();
+                let b = shell
+                    .shell
+                    .layout
+                    .drop_tab(
+                        &a,
+                        &tab,
+                        &PanelDrop::Edge {
+                            panel: a.clone(),
+                            edge: PanelEdge::Right,
+                        },
+                        (600.0, 400.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
                 let placements = shell.shell.layout.placements();
-                shell.shell.focused_group = b.clone();
+                shell.shell.focused_group = Some(b.clone());
                 shell.toggle_group_visibility(b.clone(), cx);
-                assert_ne!(shell.shell.focused_group, b);
+                assert_ne!(shell.shell.focused_group, Some(b.clone()));
                 shell.toggle_panel(PanelPosition::Left, cx);
                 assert!(!shell.shell.layout.zone_open(PanelPosition::Left));
                 shell.toggle_panel(PanelPosition::Left, cx);
@@ -719,7 +676,7 @@ mod visibility_tests {
                 assert!(shell.shell.layout.group(&b).unwrap().requested_open());
                 assert!(!shell.shell.layout.group(&a).unwrap().requested_open());
                 assert_eq!(shell.shell.layout.placements(), placements);
-                assert!(shell.shell.layout.validate().is_ok());
+                assert!(shell.shell.layout.valid());
             });
         });
     }

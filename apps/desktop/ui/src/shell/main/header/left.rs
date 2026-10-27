@@ -17,13 +17,16 @@ impl Shell {
                                     .zone_open(crate::extension_ui::PanelPosition::Left),
                             ),
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_header_panel(
-                                crate::extension_ui::PanelPosition::Left,
-                                window,
-                                cx,
-                            );
-                        })),
+                        .on_click(cx.listener(
+                            |this, event: &ClickEvent, window, cx| {
+                                this.shell.tool_picker_anchor = event.position();
+                                this.toggle_header_panel(
+                                    crate::extension_ui::PanelPosition::Left,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
                     .child(
                         panel_toggle_button(
@@ -35,13 +38,16 @@ impl Shell {
                                     .zone_open(crate::extension_ui::PanelPosition::Bottom),
                             ),
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_header_panel(
-                                crate::extension_ui::PanelPosition::Bottom,
-                                window,
-                                cx,
-                            );
-                        })),
+                        .on_click(cx.listener(
+                            |this, event: &ClickEvent, window, cx| {
+                                this.shell.tool_picker_anchor = event.position();
+                                this.toggle_header_panel(
+                                    crate::extension_ui::PanelPosition::Bottom,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
                     .child(
                         panel_toggle_button(
@@ -53,13 +59,16 @@ impl Shell {
                                     .zone_open(crate::extension_ui::PanelPosition::Right),
                             ),
                         )
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_header_panel(
-                                crate::extension_ui::PanelPosition::Right,
-                                window,
-                                cx,
-                            );
-                        })),
+                        .on_click(cx.listener(
+                            |this, event: &ClickEvent, window, cx| {
+                                this.shell.tool_picker_anchor = event.position();
+                                this.toggle_header_panel(
+                                    crate::extension_ui::PanelPosition::Right,
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
                     )
             },
         );

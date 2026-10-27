@@ -3,7 +3,7 @@ use super::*;
 impl Shell {
     pub(crate) fn render_tool_picker(
         &self,
-        group: super::super::TabGroupId,
+        group: PickerTarget,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let tools = self
