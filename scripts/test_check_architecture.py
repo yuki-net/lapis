@@ -1,9 +1,10 @@
 import copy
 import re
+import tempfile
 from pathlib import Path
 import unittest
 
-from check_architecture import check
+from check_architecture import check, check_desktop_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,6 +15,18 @@ def package(name, path, dependencies=()):
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_desktop_layout_contract_rejects_old_identifiers_and_feature_internals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/features/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('// TabGroupId was removed\nconst TEXT: &str = "DropZone";\n', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text('fn use_old(_: TabGroupId) {}\n', encoding="utf-8")
+            self.assertTrue(any("TabGroupId" in error for error in check_desktop_layout(root)))
+            source.write_text('use crate::shell::panel_layout::PanelLayout;\n', encoding="utf-8")
+            self.assertTrue(any("Feature" in error for error in check_desktop_layout(root)))
+
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
             package("model", "shared/models/example"),

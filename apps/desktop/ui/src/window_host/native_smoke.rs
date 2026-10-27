@@ -76,7 +76,7 @@ pub(crate) fn run_native_smoke(
         if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
             crate::devtools::native_smoke::run(handle, cx).await;
         }
-        verify_split_resize(&this, handle, cx).await;
+        verify_panel_layout_resize(&this, handle, cx).await;
         #[cfg(target_os = "windows")]
         verify_panel_drag_resize(&this, handle, cx).await;
         eprintln!("SMOKE baseline sample begin");
@@ -319,7 +319,7 @@ pub(crate) fn run_native_smoke(
                 root.transfer_tab(
                     child,
                     0,
-                    PanelPosition::Main,
+                    ZonePosition::Main,
                     PanelTab::Document(id.clone()),
                     cx,
                 );
@@ -370,7 +370,7 @@ pub(crate) fn run_native_smoke(
                 cx.notify();
             });
             root.shell.update(cx, |shell, cx| {
-                shell.toggle_panel(PanelPosition::Bottom, cx);
+                shell.toggle_panel(ZonePosition::Bottom, cx);
             });
             root.schedule_persist(cx);
         })
@@ -627,10 +627,10 @@ pub(crate) fn run_native_smoke(
                                         crate::shell::DraggedPanelTab {
                                             group: Some(own_group),
                                             source_host: 0,
-                                            source_group: crate::shell::TabGroupId::new(1),
+                                            source_panel: crate::shell::PanelId::new(1),
                                             tab: PanelTab::Document(id.clone()),
                                         },
-                                        crate::shell::TabGroupId::new(1),
+                                        crate::shell::PanelId::new(1),
                                     ),
                                     window,
                                     cx,
@@ -832,7 +832,7 @@ pub(crate) fn run_native_smoke(
     .detach();
 }
 
-async fn verify_split_resize(
+async fn verify_panel_layout_resize(
     root: &WeakEntity<DesktopRoot>,
     handle: gpui::AnyWindowHandle,
     cx: &mut gpui::AsyncApp,
@@ -846,17 +846,17 @@ async fn verify_split_resize(
                 .unwrap();
             let original = shell.update(cx, |shell, _| {
                 let original = shell.shell.layout.clone();
-                let main = shell
+                let left = shell
                     .shell
                     .layout
-                    .first_panel_in_zone(PanelPosition::Main)
+                    .first_panel_in_zone(ZonePosition::Left)
                     .unwrap();
                 let first = crate::shell::PanelTab::tool(crate::features::id::VIEW_PREVIEW);
                 let second = crate::shell::PanelTab::tool(crate::features::id::VIEW_ASSISTANT);
                 let source = shell
                     .shell
                     .layout
-                    .open_tab(PanelPosition::Main, first.clone())
+                    .open_tab(ZonePosition::Left, first.clone())
                     .unwrap();
                 let extra = shell
                     .shell
@@ -865,7 +865,7 @@ async fn verify_split_resize(
                         &source,
                         &first,
                         &crate::shell::PanelDrop::Edge {
-                            panel: main,
+                            panel: left,
                             edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
@@ -875,7 +875,7 @@ async fn verify_split_resize(
                 let source = shell
                     .shell
                     .layout
-                    .open_tab(PanelPosition::Main, second.clone())
+                    .open_tab(ZonePosition::Left, second.clone())
                     .unwrap();
                 shell
                     .shell
@@ -885,7 +885,7 @@ async fn verify_split_resize(
                         &second,
                         &crate::shell::PanelDrop::Edge {
                             panel: extra,
-                            edge: crate::shell::PanelEdge::Bottom,
+                            edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
                         std::time::Instant::now(),
@@ -911,7 +911,7 @@ async fn verify_split_resize(
                     let shell = root.shell.read(cx);
                     assert_eq!(shell.shell.layout.capture(), saved);
                     let viewport = window.viewport_size();
-                    for bounds in shell.group_bounds.borrow().values() {
+                    for bounds in shell.panel_bounds.borrow().values() {
                         assert!(
                             bounds.origin.x >= gpui::px(0.0) && bounds.origin.y >= gpui::px(0.0)
                         );
@@ -934,7 +934,7 @@ async fn verify_split_resize(
         });
     })
     .unwrap();
-    eprintln!("SMOKE nested Split resize preserves layout and document OK");
+    eprintln!("SMOKE Panel layout resize preserves layout and document OK");
 }
 
 #[cfg(target_os = "windows")]
@@ -958,7 +958,7 @@ async fn simulate_tab_drag(
     let (hwnd, start, mut end) = handle
         .update(cx, |_, window, cx| {
             window.draw(cx).clear();
-            let bounds = shell.read(cx).panel_bounds.borrow()[&PanelPosition::Main];
+            let bounds = shell.read(cx).zone_panel_bounds.borrow()[&ZonePosition::Main];
             if shell.read(cx).detached {
                 assert!(
                     bounds.size.height > window.viewport_size().height - gpui::px(100.),
@@ -1041,14 +1041,27 @@ async fn verify_panel_drag_resize(
     let original = shell
         .read_with(cx, |shell, _| shell.shell.layout.clone())
         .unwrap();
+    shell
+        .update(cx, |shell, cx| {
+            shell
+                .shell
+                .layout
+                .open_tab(
+                    ZonePosition::Left,
+                    PanelTab::tool(crate::features::id::VIEW_PREVIEW),
+                )
+                .unwrap();
+            cx.notify();
+        })
+        .unwrap();
     let _ = show_drop_target(handle, &shell, cx);
     let count = cx.update(|cx| cx.windows().len()).unwrap();
     let (hwnd, start, moved, end) = handle
         .update(cx, |_, window, cx| {
             window.draw(cx).clear();
             let shell = shell.read(cx);
-            let source = shell.panel_bounds.borrow()[&PanelPosition::Left];
-            let target = shell.panel_bounds.borrow()[&PanelPosition::Main];
+            let source = shell.zone_panel_bounds.borrow()[&ZonePosition::Left];
+            let target = shell.zone_panel_bounds.borrow()[&ZonePosition::Left];
             let scale = window.scale_factor();
             let pack = |x: f32, y: f32| {
                 LPARAM(
@@ -1091,27 +1104,27 @@ async fn verify_panel_drag_resize(
             let added = shell
                 .shell
                 .layout
-                .group_for_tab(&files)
+                .panel_for_tab(&files)
                 .expect("moved file tab");
             assert_eq!(
-                shell.shell.layout.group(&added).unwrap().position,
-                PanelPosition::Main
+                shell.shell.layout.panel(&added).unwrap().position,
+                ZonePosition::Left
             );
             let ids = shell
                 .shell
                 .layout
-                .leaf_group_ids()
+                .panel_ids()
                 .into_iter()
                 .filter(|id| {
                     shell
                         .shell
                         .layout
-                        .group(id)
-                        .is_some_and(|panel| panel.position == PanelPosition::Main)
+                        .panel(id)
+                        .is_some_and(|panel| panel.position == ZonePosition::Left)
                 })
                 .collect::<Vec<_>>();
             assert_eq!(ids.len(), 2);
-            let first = shell.group_bounds.borrow()[&ids[0]];
+            let first = shell.panel_bounds.borrow()[&ids[0]];
             let scale = window.scale_factor();
             let x = f32::from(first.origin.x + first.size.width) + 4.0;
             let y = f32::from(first.origin.y + first.size.height / 2.0);
@@ -1175,17 +1188,11 @@ fn show_drop_target(
             window.draw(cx).clear();
             let shell = shell.read(cx);
             let position = shell
-                .panel_bounds
+                .zone_panel_bounds
                 .borrow()
-                .get(&PanelPosition::Main)
+                .get(&ZonePosition::Main)
                 .copied()
-                .or_else(|| {
-                    shell
-                        .zone_bounds
-                        .borrow()
-                        .get(&PanelPosition::Main)
-                        .copied()
-                })
+                .or_else(|| shell.zone_bounds.borrow().get(&ZonePosition::Main).copied())
                 .expect("Main Zone bounds")
                 .center();
             let RawWindowHandle::Win32(raw) =

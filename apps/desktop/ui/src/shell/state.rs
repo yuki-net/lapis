@@ -2,9 +2,9 @@ use std::time::{Duration, Instant};
 
 use lapis_desktop_client::DocumentTab;
 
-use crate::extension_ui::{FeatureRegistry, PanelPosition};
+use crate::extension_ui::{FeatureRegistry, ZonePosition};
 
-use super::{DockLayout, PanelHost, PanelTab, TabGroupId, ViewInstanceId};
+use super::{DockLayout, PanelHost, PanelId, PanelTab, ViewInstanceId};
 
 const PANEL_SPAN_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 
@@ -119,8 +119,8 @@ pub(crate) enum HeaderMenuSection {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PickerTarget {
-    Panel(TabGroupId),
-    Zone(PanelPosition),
+    Panel(PanelId),
+    Zone(ZonePosition),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,18 +141,13 @@ pub(crate) enum ResizeTarget {
 
 #[derive(Clone, Debug)]
 pub(super) struct PanelResize {
-    pub(super) position: PanelPosition,
-    pub(super) path: Vec<usize>,
-    pub(super) boundary: usize,
-    pub(super) next: usize,
-    pub(super) axis: super::panel_layout::Axis,
+    pub(super) boundary: super::dock_geometry::PanelBoundary,
     pub(super) previous: gpui::Point<gpui::Pixels>,
-    pub(super) available: f32,
 }
 
 #[derive(Clone)]
 pub(crate) struct ShellState {
-    pub focused_group: Option<TabGroupId>,
+    pub focused_panel: Option<PanelId>,
     pub layout: DockLayout,
     pub bottom_span_left_transition: Option<PanelSpanTransition>,
     pub bottom_span_right_transition: Option<PanelSpanTransition>,
@@ -178,7 +173,7 @@ pub(crate) struct ShellState {
 impl Default for ShellState {
     fn default() -> Self {
         Self {
-            focused_group: None,
+            focused_panel: None,
             layout: DockLayout::default(),
             bottom_span_left_transition: None,
             bottom_span_right_transition: None,
@@ -205,11 +200,11 @@ impl Default for ShellState {
 
 impl ShellState {
     /// 消えた追加先へ操作を適用しない。共有Viewは個体を保って移動する。
-    pub(crate) fn open_group_tab(&mut self, group: &TabGroupId, tab: PanelTab) -> bool {
-        if self.layout.group(group).is_none() {
+    pub(crate) fn open_panel_tab(&mut self, group: &PanelId, tab: PanelTab) -> bool {
+        if self.layout.panel(group).is_none() {
             return false;
         }
-        if let Some(source) = self.layout.group_for_tab(&tab) {
+        if let Some(source) = self.layout.panel_for_tab(&tab) {
             if self
                 .layout
                 .drop_tab(
@@ -223,11 +218,11 @@ impl ShellState {
             {
                 return false;
             }
-        } else if let Some(target) = self.layout.group_mut(group) {
-            target.activate_without_open(tab);
+        } else if !self.layout.insert_tab_in_panel(group, tab, false) {
+            return false;
         }
         self.layout.set_panel_open(group, true);
-        self.focused_group = Some(group.clone());
+        self.focused_panel = Some(group.clone());
         true
     }
 
@@ -302,10 +297,6 @@ impl ShellState {
         self.layout.panels()
     }
 
-    pub fn panels_mut(&mut self) -> impl Iterator<Item = &mut PanelHost> {
-        self.layout.panels_mut()
-    }
-
     pub fn set_tool_picker_query(&mut self, query: impl Into<String>) {
         self.tool_picker_query = query.into();
         self.tool_picker_selected = 0;
@@ -352,14 +343,10 @@ impl ShellState {
         for document in documents {
             let tab = PanelTab::Document(document.id.clone());
             if !self.panels().iter().any(|panel| panel.contains(&tab)) {
-                let _ = self.layout.open_tab(PanelPosition::Main, tab.clone());
+                let _ = self.layout.open_tab(ZonePosition::Main, tab.clone());
             }
             if document.active {
-                for panel in self.panels_mut() {
-                    if panel.contains(&tab) {
-                        panel.active = Some(tab.clone());
-                    }
-                }
+                self.layout.activate_existing_tab(&tab);
             }
         }
     }
@@ -385,13 +372,13 @@ mod tests {
         let mut shell = ShellState::default();
         let left = shell
             .layout
-            .first_panel_in_zone(PanelPosition::Left)
+            .first_panel_in_zone(ZonePosition::Left)
             .unwrap();
         let tab = PanelTab::tool(id::VIEW_FILES);
         let other = PanelTab::tool("other");
         shell
             .layout
-            .open_tab(PanelPosition::Left, other.clone())
+            .open_tab(ZonePosition::Left, other.clone())
             .unwrap();
         let second = shell
             .layout
@@ -406,25 +393,30 @@ mod tests {
                 Instant::now(),
             )
             .unwrap();
-        assert!(shell.open_group_tab(&second, tab.clone()));
-        assert!(!shell.layout.group(&left).unwrap().contains(&tab));
-        assert!(shell.layout.group(&second).unwrap().contains(&tab));
-        assert_eq!(shell.focused_group, Some(second));
+        assert!(shell.open_panel_tab(&second, tab.clone()));
+        assert!(!shell.layout.panel(&left).unwrap().contains(&tab));
+        assert!(shell.layout.panel(&second).unwrap().contains(&tab));
+        assert_eq!(shell.focused_panel, Some(second));
         let before = shell.layout.capture();
-        assert!(!shell.open_group_tab(&TabGroupId::new(999), tab));
+        assert!(!shell.open_panel_tab(&PanelId::new(999), tab));
         assert_eq!(shell.layout.capture(), before);
         assert!(shell.layout.valid());
     }
 
     #[test]
-    fn initializes_four_zones_without_permanent_empty_panels() {
+    fn initializes_four_zones_with_one_permanent_main_panel() {
         let state = ShellState::default();
         assert_eq!(state.layout.capture().zones.len(), 4);
-        assert!(state.layout.zone_open(PanelPosition::Main));
-        assert!(state.layout.zone_open(PanelPosition::Left));
-        assert!(!state.layout.zone_open(PanelPosition::Bottom));
-        assert!(!state.layout.zone_open(PanelPosition::Right));
-        assert_eq!(state.panels().len(), 1);
+        assert!(state.layout.zone_open(ZonePosition::Main));
+        assert!(state.layout.zone_open(ZonePosition::Left));
+        assert!(!state.layout.zone_open(ZonePosition::Bottom));
+        assert!(!state.layout.zone_open(ZonePosition::Right));
+        assert_eq!(state.panels().len(), 2);
+        let main = state
+            .layout
+            .first_panel_in_zone(ZonePosition::Main)
+            .unwrap();
+        assert!(state.layout.panel(&main).unwrap().tabs.is_empty());
         assert!(
             state
                 .layout
@@ -454,12 +446,12 @@ mod tests {
             original
                 .layout
                 .open_tab(
-                    PanelPosition::Bottom,
+                    ZonePosition::Bottom,
                     PanelTab::tool_instance(view.clone(), format!("{}:{index}", view.as_str())),
                 )
                 .unwrap();
         }
-        original.layout.set_zone_open(PanelPosition::Bottom, false);
+        original.layout.set_zone_open(ZonePosition::Bottom, false);
         let saved = original.layout.capture();
         let mut restored = ShellState {
             layout: DockLayout::restore(&saved, |raw| {
@@ -480,13 +472,13 @@ mod tests {
             restored
                 .layout
                 .open_tab(
-                    PanelPosition::Main,
+                    ZonePosition::Main,
                     PanelTab::tool_instance(view.clone(), instance),
                 )
                 .unwrap();
         }
         assert!(restored.layout.valid());
-        assert!(!restored.layout.zone_open(PanelPosition::Bottom));
+        assert!(!restored.layout.zone_open(ZonePosition::Bottom));
     }
 
     #[test]
@@ -589,11 +581,11 @@ mod tests {
         let source = state.layout.find_tab(&tab).unwrap();
         let target = state
             .layout
-            .move_tab_to_zone(PanelPosition::Main, tab.clone(), Instant::now())
+            .move_tab_to_zone(ZonePosition::Main, tab.clone(), Instant::now())
             .unwrap();
         assert_ne!(source, target);
-        assert_eq!(state.layout.group(&target).unwrap().active, Some(tab));
-        assert!(state.layout.group(&source).unwrap().tabs.is_empty());
+        assert_eq!(state.layout.panel(&target).unwrap().active, Some(tab));
+        assert!(state.layout.panel(&source).unwrap().tabs.is_empty());
     }
 
     #[test]
@@ -603,7 +595,7 @@ mod tests {
         let source = state.layout.find_tab(&tab).unwrap();
         let target = state
             .layout
-            .open_tab(PanelPosition::Right, PanelTab::tool("other"))
+            .open_tab(ZonePosition::Right, PanelTab::tool("other"))
             .unwrap();
         state.layout.set_panel_open(&target, false);
         let before = state.layout.capture();
@@ -630,21 +622,21 @@ mod tests {
         let terminal = PanelTab::tool(id::VIEW_TERMINAL);
         state
             .layout
-            .open_tab(PanelPosition::Left, terminal.clone())
+            .open_tab(ZonePosition::Left, terminal.clone())
             .unwrap();
         assert!(state.layout.remove_tab(&group, &files, Instant::now()));
         assert_eq!(
-            state.layout.group(&group).unwrap().active,
+            state.layout.panel(&group).unwrap().active,
             Some(terminal.clone())
         );
         let now = Instant::now();
         assert!(state.layout.remove_tab(&group, &terminal, now));
-        assert!(state.layout.group(&group).is_some());
+        assert!(state.layout.panel(&group).is_some());
         state
             .layout
             .finish_due_closes(now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION);
-        assert!(state.layout.group(&group).is_none());
-        assert!(!state.layout.zone_open(PanelPosition::Left));
+        assert!(state.layout.panel(&group).is_none());
+        assert!(!state.layout.zone_open(ZonePosition::Left));
     }
 
     #[test]
@@ -655,13 +647,13 @@ mod tests {
         let now = Instant::now();
         assert!(state.layout.remove_tab(&group, &tab, now));
         assert!(!state.layout.finish_due_closes(now));
-        assert!(state.layout.group(&group).is_some());
+        assert!(state.layout.panel(&group).is_some());
         assert!(
             state
                 .layout
                 .finish_due_closes(now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION)
         );
-        assert!(state.layout.group(&group).is_none());
+        assert!(state.layout.panel(&group).is_none());
     }
 
     #[test]
@@ -671,11 +663,11 @@ mod tests {
         let group = state.layout.find_tab(&tab).unwrap();
         let now = Instant::now();
         state.layout.remove_tab(&group, &tab, now);
-        assert!(state.open_group_tab(&group, tab.clone()));
+        assert!(state.open_panel_tab(&group, tab.clone()));
         state
             .layout
             .finish_due_closes(now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION);
-        assert!(state.layout.group(&group).unwrap().contains(&tab));
+        assert!(state.layout.panel(&group).unwrap().contains(&tab));
     }
 
     #[test]
@@ -686,7 +678,7 @@ mod tests {
         state.layout.remove_tab(&group, &tab, Instant::now());
         let saved = state.layout.capture();
         let restored = DockLayout::restore(&saved, |_| None).unwrap();
-        assert!(restored.group(&group).is_none());
+        assert!(restored.panel(&group).is_none());
         assert!(!restored.has_closing_panels());
     }
 }

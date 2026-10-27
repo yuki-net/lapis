@@ -89,7 +89,13 @@ impl Shell {
             }
             id::COMMAND_TOGGLE_PREVIEW => self.toggle_preview(&TogglePreview, window, cx),
             id::COMMAND_TOGGLE_BOTTOM => {
-                self.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
+                self.execute_toggle_zone(ZonePosition::Bottom, window, cx);
+            }
+            id::COMMAND_TOGGLE_LEFT_ZONE => {
+                self.execute_toggle_zone(ZonePosition::Left, window, cx)
+            }
+            id::COMMAND_TOGGLE_RIGHT_ZONE => {
+                self.execute_toggle_zone(ZonePosition::Right, window, cx)
             }
             id::COMMAND_TOGGLE_ASSISTANT => {
                 self.toggle_assistant(&ToggleAssistant, window, cx);

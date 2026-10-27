@@ -31,10 +31,10 @@ impl Shell {
         handle
     }
 
-    pub(super) fn render_panel_window_for_group(
+    pub(super) fn render_panel_window(
         &self,
         panel: &PanelHost,
-        group: &TabGroupId,
+        group: &PanelId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let position = panel.position;
@@ -61,7 +61,7 @@ impl Shell {
                 PanelScrollPolicy::FeatureOwned,
             ),
             None => (
-                self.render_empty_group(group.clone(), cx)
+                self.render_empty_panel(group.clone(), cx)
                     .into_any_element(),
                 PanelScrollPolicy::Panel(ScrollAxis::Both),
             ),
@@ -110,23 +110,28 @@ impl Shell {
             .overflow_hidden()
             .child(
                 crate::components::panel_surface()
-                    .child(
-                        gpui::canvas(
-                            move |bounds, _, cx| {
-                                let _ = shell.update(cx, |shell, _| {
-                                    shell.panel_bounds.borrow_mut().insert(position, bounds);
-                                    shell
-                                        .group_bounds
-                                        .borrow_mut()
-                                        .insert(bounds_group.clone(), bounds);
-                                });
-                            },
-                            |_, _, _, _| {},
+                    .when(cfg!(test), |surface| {
+                        surface.child(
+                            gpui::canvas(
+                                move |bounds, _, cx| {
+                                    let _ = shell.update(cx, |shell, _| {
+                                        shell
+                                            .zone_panel_bounds
+                                            .borrow_mut()
+                                            .insert(position, bounds);
+                                        shell
+                                            .panel_bounds
+                                            .borrow_mut()
+                                            .insert(bounds_group.clone(), bounds);
+                                    });
+                                },
+                                |_, _, _, _| {},
+                            )
+                            .absolute()
+                            .size_full(),
                         )
-                        .absolute()
-                        .size_full(),
-                    )
-                    .child(self.render_tool_panel_header_for_group(panel, &group, cx))
+                    })
+                    .child(self.render_tool_panel_header(panel, &group, cx))
                     .child(body),
             )
             .when_some(preview, |surface, preview| {
@@ -157,10 +162,6 @@ impl Shell {
                 edge: PanelEdge::Top,
                 ..
             } => marker.left_0().right_0().top_0().h(px(4.0)),
-            PanelDrop::Edge {
-                edge: PanelEdge::Bottom,
-                ..
-            } => marker.left_0().right_0().bottom_0().h(px(4.0)),
         }
     }
 }

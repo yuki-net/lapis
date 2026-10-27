@@ -111,7 +111,7 @@ impl Shell {
             .children(children)
             .when(menu == MenuId::View, |surface| {
                 surface.child(separator()).children(
-                    self.group_visibility_entries()
+                    self.panel_visibility_entries()
                         .into_iter()
                         .map(|(group, label, _)| {
                             let id = format!("group-visibility-{}", group.as_str());
@@ -124,7 +124,7 @@ impl Shell {
                             })
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
-                                    this.toggle_group_visibility(group.clone(), cx);
+                                    this.toggle_panel_visibility(group.clone(), cx);
                                     this.close_header_menu(cx);
                                     window.focus(&this.focus_handle);
                                 },

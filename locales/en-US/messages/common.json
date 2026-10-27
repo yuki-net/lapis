@@ -16,6 +16,8 @@
   "command.save-document": "Save",
   "command.toggle-preview": "Markdown Preview",
   "command.toggle-bottom-panel": "Bottom Panel",
+  "command.toggle-left-zone": "Toggle Left Zone",
+  "command.toggle-right-zone": "Toggle Right Zone",
   "command.toggle-assistant": "AI Assistant",
   "command.dev.toggle-inspector": "dev: Toggle Inspector",
   "menu.file": "File",

@@ -73,14 +73,14 @@ impl Shell {
             MenuAction::Copy => self.copy(&Copy, window, cx),
             MenuAction::Paste => self.paste(&Paste, window, cx),
             MenuAction::ToggleLeftPanel => {
-                self.toggle_header_panel(crate::extension_ui::PanelPosition::Left, window, cx)
+                self.execute_command(id::COMMAND_TOGGLE_LEFT_ZONE.into(), window, cx)
             }
             MenuAction::ToggleBottomPanel => {
-                self.toggle_bottom_panel(&ToggleBottomPanel, window, cx)
+                self.execute_command(id::COMMAND_TOGGLE_BOTTOM.into(), window, cx)
             }
             MenuAction::ToggleInspector => self.toggle_inspector_window(window, cx),
             MenuAction::ToggleRightPanel => {
-                self.toggle_header_panel(crate::extension_ui::PanelPosition::Right, window, cx)
+                self.execute_command(id::COMMAND_TOGGLE_RIGHT_ZONE.into(), window, cx)
             }
             MenuAction::TogglePanelControls => self.toggle_panel_controls(cx),
             MenuAction::Placeholder => {}

@@ -1,30 +1,33 @@
 //! Zoneの表示状態とPanelを管理する。
 
 use super::panel_layout::{Axis, PanelLayout};
-use super::{PanelHost, PanelTab, TabGroupId};
-use crate::extension_ui::PanelPosition;
+use super::{PanelHost, PanelId, PanelTab};
+use crate::extension_ui::ZonePosition;
+
+type VisualBoundary = (PanelId, PanelId, Axis, (f32, f32, f32, f32), f32);
 
 /// ZoneはPanelの並びと表示状態を所有する。空Panelの閉鎖中だけ一時的に残す。
 #[derive(Clone, Debug)]
 pub(super) struct Zone {
-    pub(super) position: PanelPosition,
+    pub(super) position: ZonePosition,
     pub(super) layout: Option<PanelLayout>,
-    pub(super) panels: std::collections::BTreeMap<TabGroupId, PanelHost>,
+    pub(super) panels: std::collections::BTreeMap<PanelId, PanelHost>,
     pub(super) open: bool,
-    pub(super) size: f32,
-    closing: std::collections::BTreeMap<TabGroupId, std::time::Instant>,
-    hiding: std::collections::BTreeMap<TabGroupId, std::time::Instant>,
+    pub(super) extent_ratio: f32,
+    closing: std::collections::BTreeMap<PanelId, std::time::Instant>,
+    hiding: std::collections::BTreeMap<PanelId, std::time::Instant>,
     transition: Option<(std::time::Instant, f32, f32)>,
 }
 
 impl Zone {
-    pub(super) fn new(position: PanelPosition, size: f32) -> Self {
+    pub(super) fn new(position: ZonePosition) -> Self {
         Self {
             position,
             layout: None,
             panels: Default::default(),
-            open: position == PanelPosition::Main,
-            size,
+            open: position == ZonePosition::Main,
+            extent_ratio: super::zone_policy::ZonePolicy::for_position(position)
+                .default_extent_ratio(),
             closing: Default::default(),
             hiding: Default::default(),
             transition: None,
@@ -33,9 +36,8 @@ impl Zone {
 
     /// Zoneの表示切替は各Panelの個別表示状態を変更しない。
     pub(super) fn set_open(&mut self, open: bool) {
-        let open = open
-            && (self.position == PanelPosition::Main
-                || self.panels.values().any(|panel| panel.open));
+        let policy = super::zone_policy::ZonePolicy::for_position(self.position);
+        let open = open || !policy.user_closable;
         if self.open != open {
             let now = std::time::Instant::now();
             let from = self.visual_factor(now);
@@ -67,11 +69,24 @@ impl Zone {
             || !self.hiding.is_empty()
     }
 
-    pub(super) fn hiding_since(&self, id: &TabGroupId) -> Option<std::time::Instant> {
+    pub(super) fn hiding_since(&self, id: &PanelId) -> Option<std::time::Instant> {
         self.hiding.get(id).copied()
     }
 
-    pub(super) fn set_panel_open(&mut self, id: &TabGroupId, open: bool) -> bool {
+    pub(super) fn panel_visual_factor(&self, id: &PanelId, now: std::time::Instant) -> f32 {
+        self.closing_since(id)
+            .or_else(|| self.hiding_since(id))
+            .map_or(1.0, |started| {
+                let duration = super::panel_transition::PANEL_ANIMATION_DURATION.as_secs_f32();
+                (1.0 - now.saturating_duration_since(started).as_secs_f32() / duration)
+                    .clamp(0.0, 1.0)
+            })
+    }
+
+    pub(super) fn set_panel_open(&mut self, id: &PanelId, open: bool) -> bool {
+        if !open && super::zone_policy::ZonePolicy::for_position(self.position).keep_empty_panel {
+            return false;
+        }
         let Some(panel) = self.panels.get_mut(id) else {
             return false;
         };
@@ -87,7 +102,7 @@ impl Zone {
         }
         if open {
             self.set_open(true);
-        } else if self.position != PanelPosition::Main
+        } else if self.position != ZonePosition::Main
             && self.panels.values().all(|panel| !panel.open)
         {
             self.set_open(false);
@@ -98,12 +113,31 @@ impl Zone {
     /// 初回のPanelはZoneに作成し、既存Panelの端への追加は同じZone内に限定する。
     pub(super) fn add_panel(
         &mut self,
-        id: TabGroupId,
+        id: PanelId,
         tabs: Vec<PanelTab>,
-        at: Option<(&TabGroupId, Axis, bool)>,
+        at: Option<(&PanelId, Axis, bool)>,
     ) -> bool {
-        if tabs.is_empty() || self.panels.contains_key(&id) {
+        let policy = super::zone_policy::ZonePolicy::for_position(self.position);
+        if (tabs.is_empty() && !policy.keep_empty_panel)
+            || self.panels.contains_key(&id)
+            || policy
+                .max_panels
+                .is_some_and(|max| self.panels.len() >= max)
+        {
             return false;
+        }
+        if let Some((target, axis, before)) = at {
+            if !policy.can_add(self.panels.len()) || policy.growth() != Some((axis, before)) {
+                return false;
+            }
+            let mut ids = Vec::new();
+            if let Some(layout) = &self.layout {
+                layout.panels(&mut ids);
+            }
+            let end = if before { ids.first() } else { ids.last() };
+            if end != Some(target) {
+                return false;
+            }
         }
         match (&mut self.layout, at) {
             (None, None) => self.layout = Some(PanelLayout::Panel(id.clone())),
@@ -121,7 +155,10 @@ impl Zone {
     }
 
     /// 最後のTabの移動後は閉鎖中として保持し、描画側が遷移終了後に除去する。
-    pub(super) fn begin_empty_close(&mut self, id: &TabGroupId, now: std::time::Instant) -> bool {
+    pub(super) fn begin_empty_close(&mut self, id: &PanelId, now: std::time::Instant) -> bool {
+        if super::zone_policy::ZonePolicy::for_position(self.position).keep_empty_panel {
+            return false;
+        }
         if !self
             .panels
             .get(id)
@@ -130,7 +167,7 @@ impl Zone {
             return false;
         }
         self.closing.entry(id.clone()).or_insert(now);
-        if self.position != PanelPosition::Main
+        if self.position != ZonePosition::Main
             && self.panels.iter().all(|(panel_id, panel)| {
                 panel_id == id || !panel.open || self.closing.contains_key(panel_id)
             })
@@ -140,7 +177,7 @@ impl Zone {
         true
     }
 
-    pub(super) fn closing_since(&self, id: &TabGroupId) -> Option<std::time::Instant> {
+    pub(super) fn closing_since(&self, id: &PanelId) -> Option<std::time::Instant> {
         self.closing.get(id).copied()
     }
 
@@ -175,11 +212,11 @@ impl Zone {
         (result > 0.0 && sum.is_finite() && sum > 0.0).then_some(result / sum)
     }
 
-    pub(super) fn cancel_empty_close(&mut self, id: &TabGroupId) {
+    pub(super) fn cancel_empty_close(&mut self, id: &PanelId) {
         self.closing.remove(id);
     }
 
-    pub(super) fn closing_ids(&self) -> Vec<TabGroupId> {
+    pub(super) fn closing_ids(&self) -> Vec<PanelId> {
         self.closing.keys().cloned().collect()
     }
 
@@ -200,9 +237,10 @@ impl Zone {
         &self,
         size: (f32, f32),
         gap: f32,
-    ) -> Option<std::collections::BTreeMap<TabGroupId, (f32, f32)>> {
+    ) -> Option<std::collections::BTreeMap<PanelId, (f32, f32)>> {
         let mut result = std::collections::BTreeMap::new();
-        if !size.0.is_finite() || !size.1.is_finite() || size.0 < 0.0 || size.1 < 0.0 {
+        let minimum = super::zone_policy::PanelConstraints::COMMON.constrained_min_extent;
+        if !size.0.is_finite() || !size.1.is_finite() || size.0 < minimum || size.1 < minimum {
             return None;
         }
         if let Some(layout) = &self.layout {
@@ -220,26 +258,77 @@ impl Zone {
         Some(result)
     }
 
-    pub(super) fn panel_rect(
+    pub(super) fn visual_panel_rect(
         &self,
-        id: &TabGroupId,
+        id: &PanelId,
         size: (f32, f32),
         gap: f32,
     ) -> Option<(f32, f32, f32, f32)> {
-        if !size.0.is_finite() || !size.1.is_finite() || size.0 < 0.0 || size.1 < 0.0 {
-            return None;
-        }
         self.layout
             .as_ref()?
             .panel_rect(id, (0.0, 0.0, size.0, size.1), gap, &|id| {
-                self.open
-                    && !self.closing.contains_key(id)
-                    && self.panels.get(id).is_some_and(|panel| panel.open)
+                self.panels.get(id).is_some_and(|panel| panel.open)
+                    || self.closing.contains_key(id)
+                    || self.hiding.contains_key(id)
             })
     }
 
+    pub(super) fn visual_boundaries(&self, size: (f32, f32), gap: f32) -> Vec<VisualBoundary> {
+        let Some(layout) = &self.layout else {
+            return Vec::new();
+        };
+        let Some((axis, _)) = super::zone_policy::ZonePolicy::for_position(self.position).growth()
+        else {
+            return Vec::new();
+        };
+        if !self.closing.is_empty() || !self.hiding.is_empty() {
+            return Vec::new();
+        }
+        let mut ids = Vec::new();
+        layout.panels(&mut ids);
+        let visible = ids
+            .into_iter()
+            .filter_map(|id| {
+                self.visual_panel_rect(&id, size, gap)
+                    .map(|rect| (id, rect))
+            })
+            .collect::<Vec<_>>();
+        let extent = match axis {
+            Axis::Horizontal => size.0,
+            Axis::Vertical => size.1,
+        };
+        let Some(available) = self.available_for_resize(&[], extent, gap) else {
+            return Vec::new();
+        };
+        visible
+            .windows(2)
+            .map(|pair| {
+                let first = &pair[0];
+                let second = &pair[1];
+                let rect = match axis {
+                    Axis::Horizontal => (
+                        first.1.0 + first.1.2,
+                        0.0,
+                        (second.1.0 - first.1.0 - first.1.2).max(0.0),
+                        size.1,
+                    ),
+                    Axis::Vertical => (
+                        0.0,
+                        first.1.1 + first.1.3,
+                        size.0,
+                        (second.1.1 - first.1.1 - first.1.3).max(0.0),
+                    ),
+                };
+                (first.0.clone(), second.0.clone(), axis, rect, available)
+            })
+            .collect()
+    }
+
     /// 閉鎖中にTabが再追加された場合はそのPanelを保持する。
-    pub(super) fn finish_empty_close(&mut self, id: &TabGroupId) -> bool {
+    pub(super) fn finish_empty_close(&mut self, id: &PanelId) -> bool {
+        if super::zone_policy::ZonePolicy::for_position(self.position).keep_empty_panel {
+            return false;
+        }
         if !self.closing.contains_key(id) {
             return false;
         }
@@ -259,19 +348,33 @@ impl Zone {
         self.closing.remove(id);
         self.hiding.remove(id);
         self.panels.remove(id);
-        if self.panels.values().all(|panel| !panel.open) && self.position != PanelPosition::Main {
+        if self.panels.values().all(|panel| !panel.open) && self.position != ZonePosition::Main {
             self.set_open(false);
         }
         true
     }
 
     pub(super) fn valid(&self) -> bool {
-        if !self.size.is_finite() || self.size < 0.0 {
+        let policy = super::zone_policy::ZonePolicy::for_position(self.position);
+        if !policy.accepts_count(self.panels.len()) || (policy.required && !self.open) {
+            return false;
+        }
+        if !self.extent_ratio.is_finite() || self.extent_ratio <= 0.0 || self.extent_ratio > 1.0 {
             return false;
         }
         let mut ids = Vec::new();
         if let Some(layout) = &self.layout {
             if !layout.valid() {
+                return false;
+            }
+            if let PanelLayout::Arrangement { axis, children, .. } = layout
+                && (policy
+                    .growth()
+                    .is_none_or(|(expected, _)| expected != *axis)
+                    || children
+                        .iter()
+                        .any(|child| !matches!(child, PanelLayout::Panel(_))))
+            {
                 return false;
             }
             layout.panels(&mut ids);
@@ -280,7 +383,14 @@ impl Zone {
             && ids.iter().all(|id| {
                 self.panels.get(id).is_some_and(|panel| {
                     panel.position == self.position
-                        && (!panel.tabs.is_empty() || self.closing.contains_key(id))
+                        && (policy.keep_empty_panel
+                            || !panel.tabs.is_empty()
+                            || self.closing.contains_key(id))
+                        && (!policy.required || panel.open)
+                        && panel
+                            .active
+                            .as_ref()
+                            .is_none_or(|tab| panel.tabs.contains(tab))
                 })
             })
             && self.closing.keys().all(|id| self.panels.contains_key(id))
@@ -296,7 +406,7 @@ impl Zone {
         lapis_desktop_client::ZoneViewState {
             position: super::layout::panel_position_name(stable.position).to_owned(),
             open: stable.open,
-            size: stable.size,
+            extent_ratio: stable.extent_ratio,
             layout: stable.layout.as_ref().map(PanelLayout::capture),
             panels: stable
                 .panels
@@ -325,8 +435,9 @@ impl Zone {
     {
         let position = super::layout::panel_position(&saved.position)?;
         if super::layout::panel_position_name(position) != saved.position
-            || !saved.size.is_finite()
-            || saved.size < 0.0
+            || !saved.extent_ratio.is_finite()
+            || saved.extent_ratio <= 0.0
+            || saved.extent_ratio > 1.0
         {
             return None;
         }
@@ -337,7 +448,7 @@ impl Zone {
         let mut panels = std::collections::BTreeMap::new();
         let mut seen = std::collections::HashSet::new();
         for item in &saved.panels {
-            let id = TabGroupId::parse(&item.id)?;
+            let id = PanelId::parse(&item.id)?;
             let mut tabs = Vec::new();
             for raw in &item.tabs {
                 let Some(tab) = parse_tab(raw) else { continue };
@@ -364,7 +475,7 @@ impl Zone {
             layout,
             panels,
             open: saved.open,
-            size: saved.size,
+            extent_ratio: saved.extent_ratio,
             closing: Default::default(),
             hiding: Default::default(),
             transition: None,
@@ -382,15 +493,15 @@ impl Zone {
         let empty = zone
             .panels
             .iter()
-            .filter(|(_, panel)| panel.tabs.is_empty())
+            .filter(|(_, panel)| {
+                panel.tabs.is_empty()
+                    && !super::zone_policy::ZonePolicy::for_position(position).keep_empty_panel
+            })
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for id in empty {
             zone.begin_empty_close(&id, std::time::Instant::now());
             zone.finish_empty_close(&id);
-        }
-        if zone.position != PanelPosition::Main && zone.panels.values().all(|panel| !panel.open) {
-            zone.open = false;
         }
         zone.valid().then_some(zone)
     }

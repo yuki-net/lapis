@@ -6,10 +6,9 @@ impl Render for Shell {
         self.shell
             .layout
             .finish_due_closes(std::time::Instant::now());
+        self.zone_panel_bounds.borrow_mut().clear();
         self.panel_bounds.borrow_mut().clear();
-        self.group_bounds.borrow_mut().clear();
         self.zone_bounds.borrow_mut().clear();
-        self.arrangement_bounds.borrow_mut().clear();
         div()
             .size_full()
             .relative()
@@ -27,6 +26,8 @@ impl Render for Shell {
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::toggle_preview))
             .on_action(cx.listener(Self::toggle_bottom_panel))
+            .on_action(cx.listener(Self::toggle_left_zone))
+            .on_action(cx.listener(Self::toggle_right_zone))
             .on_action(cx.listener(Self::toggle_assistant))
             .on_key_down(cx.listener(Self::tool_picker_key_down))
             .on_key_down(cx.listener(Self::settings_menu_key_down))
@@ -38,19 +39,7 @@ impl Render for Shell {
             )
             .child(self.tab_drag_events(cx))
             .child(self.render_header(cx))
-            .child(self.render_main(window, cx).relative().child({
-                let shell = cx.entity().downgrade();
-                gpui::canvas(
-                    move |bounds, _, cx| {
-                        let _ = shell.update(cx, |shell, _| {
-                            *shell.layout_bounds.borrow_mut() = Some(bounds)
-                        });
-                    },
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full()
-            }))
+            .child(self.render_main(window, cx))
             .child(self.render_footer(cx))
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))

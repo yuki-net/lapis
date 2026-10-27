@@ -1,5 +1,5 @@
 use crate::{
-    extension_ui::{FeatureRegistry, PanelPosition, ViewId},
+    extension_ui::{FeatureRegistry, ViewId, ZonePosition},
     shell::{DockLayout, PanelTab, ShellState},
 };
 use lapis_desktop_client::{ConversationViewState, DocumentTab};
@@ -23,10 +23,10 @@ pub(crate) fn apply_view_state(
             match &tab {
                 PanelTab::Document(id) => documents.iter().any(|document| &document.id == id),
                 PanelTab::Tool { view, .. } => [
-                    PanelPosition::Main,
-                    PanelPosition::Left,
-                    PanelPosition::Bottom,
-                    PanelPosition::Right,
+                    ZonePosition::Main,
+                    ZonePosition::Left,
+                    ZonePosition::Bottom,
+                    ZonePosition::Right,
                 ]
                 .into_iter()
                 .flat_map(|position| registry.panel_contributions(position))

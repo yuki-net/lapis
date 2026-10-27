@@ -140,6 +140,8 @@ fn default_show_panel_controls() -> bool {
     true
 }
 
+pub const ZONE_LAYOUT_VERSION: u16 = 3;
+
 /// UIフレームワークに依存しないDesktopレイアウトの保存値です。
 /// Viewの配置だけを保存し、Host上のDocumentやTerminalの所有権は保存しません。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,7 +156,7 @@ pub struct ZoneLayoutViewState {
 pub struct ZoneViewState {
     pub position: String,
     pub open: bool,
-    pub size: f32,
+    pub extent_ratio: f32,
     pub layout: Option<PanelLayoutViewState>,
     pub panels: Vec<ZonePanelViewState>,
 }

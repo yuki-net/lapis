@@ -54,12 +54,6 @@ pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
             40,
         ))
         .contributes(UiContribution::command(
-            id::COMMAND_TOGGLE_BOTTOM,
-            "command.toggle-bottom-panel",
-            "bottom-panel",
-            50,
-        ))
-        .contributes(UiContribution::command(
             id::COMMAND_TOGGLE_ASSISTANT,
             "command.toggle-assistant",
             "assistant",

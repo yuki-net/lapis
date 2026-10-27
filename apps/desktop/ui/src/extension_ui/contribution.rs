@@ -4,7 +4,7 @@ use super::{CommandId, IconId, MessageId, ViewId, WorkspaceCapabilityId};
 
 /// ツールを収容するパネルの位置。位置はツールの種類ではなくレイアウト状態です。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PanelPosition {
+pub enum ZonePosition {
     Left,
     Main,
     Bottom,
@@ -75,8 +75,8 @@ pub enum UiSlot {
 pub struct UiContribution {
     pub view: Option<ViewId>,
     pub slot: UiSlot,
-    pub default_panel: Option<PanelPosition>,
-    pub allowed_panels: Vec<PanelPosition>,
+    pub default_zone: Option<ZonePosition>,
+    pub allowed_zones: Vec<ZonePosition>,
     pub category: Option<MessageId>,
     pub title: MessageId,
     pub icon: IconId,
@@ -97,8 +97,8 @@ impl UiContribution {
         Self {
             view: Some(view.into()),
             slot: UiSlot::SettingsPage,
-            default_panel: Some(PanelPosition::Main),
-            allowed_panels: vec![PanelPosition::Main],
+            default_zone: Some(ZonePosition::Main),
+            allowed_zones: vec![ZonePosition::Main],
             category: None,
             title: title.into(),
             icon: icon.into(),
@@ -120,8 +120,8 @@ impl UiContribution {
     ) -> Self {
         Self {
             view: Some(view.into()),
-            default_panel: default_panel_for_slot(slot),
-            allowed_panels: all_panels_for_slot(slot),
+            default_zone: default_zone_for_slot(slot),
+            allowed_zones: all_zones_for_slot(slot),
             slot,
             category: None,
             title: title.into(),
@@ -138,8 +138,8 @@ impl UiContribution {
     /// ツールの既定位置と、利用者が移動可能な位置を明示して登録する。
     pub fn panel_view(
         view: impl Into<ViewId>,
-        default_panel: PanelPosition,
-        allowed_panels: impl IntoIterator<Item = PanelPosition>,
+        default_zone: ZonePosition,
+        allowed_zones: impl IntoIterator<Item = ZonePosition>,
         title: impl Into<MessageId>,
         icon: impl Into<IconId>,
         order: i32,
@@ -147,8 +147,8 @@ impl UiContribution {
         Self {
             view: Some(view.into()),
             slot: UiSlot::ToolDock,
-            default_panel: Some(default_panel),
-            allowed_panels: allowed_panels.into_iter().collect(),
+            default_zone: Some(default_zone),
+            allowed_zones: allowed_zones.into_iter().collect(),
             category: None,
             title: title.into(),
             icon: icon.into(),
@@ -170,8 +170,8 @@ impl UiContribution {
         Self {
             view: None,
             slot: UiSlot::CommandPalette,
-            default_panel: None,
-            allowed_panels: Vec::new(),
+            default_zone: None,
+            allowed_zones: Vec::new(),
             category: None,
             title: title.into(),
             icon: icon.into(),
@@ -225,11 +225,11 @@ impl UiContribution {
     }
 }
 
-const fn default_panel_for_slot(slot: UiSlot) -> Option<PanelPosition> {
+const fn default_zone_for_slot(slot: UiSlot) -> Option<ZonePosition> {
     match slot {
-        UiSlot::ToolDock => Some(PanelPosition::Left),
-        UiSlot::SideDock => Some(PanelPosition::Right),
-        UiSlot::BottomDock => Some(PanelPosition::Bottom),
+        UiSlot::ToolDock => Some(ZonePosition::Left),
+        UiSlot::SideDock => Some(ZonePosition::Right),
+        UiSlot::BottomDock => Some(ZonePosition::Bottom),
         UiSlot::CommandPalette
         | UiSlot::StatusBar
         | UiSlot::EditorDecoration
@@ -237,15 +237,15 @@ const fn default_panel_for_slot(slot: UiSlot) -> Option<PanelPosition> {
     }
 }
 
-fn all_panels_for_slot(slot: UiSlot) -> Vec<PanelPosition> {
+fn all_zones_for_slot(slot: UiSlot) -> Vec<ZonePosition> {
     match slot {
         UiSlot::ToolDock | UiSlot::SideDock | UiSlot::BottomDock => vec![
-            PanelPosition::Main,
-            PanelPosition::Left,
-            PanelPosition::Bottom,
-            PanelPosition::Right,
+            ZonePosition::Main,
+            ZonePosition::Left,
+            ZonePosition::Bottom,
+            ZonePosition::Right,
         ],
-        _ => default_panel_for_slot(slot).into_iter().collect(),
+        _ => default_zone_for_slot(slot).into_iter().collect(),
     }
 }
 
