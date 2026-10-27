@@ -2,10 +2,6 @@ use super::*;
 use crate::shell::panel_layout::{EdgeCandidate, insertion_edges, nearest_edge};
 
 impl Shell {
-    #[cfg(all(target_os = "windows", debug_assertions))]
-    pub(crate) fn smoke_drop_preview(&self) -> String {
-        format!("{:?}", self.drop_target)
-    }
     fn move_tab_drag(
         &mut self,
         position: Point<Pixels>,
