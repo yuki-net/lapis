@@ -95,11 +95,11 @@ impl Shell {
                 std::time::Instant::now(),
             );
         } else {
-            self.request_panel_open(position, true, cx);
+            self.request_zone_open(position, true, cx);
         }
     }
 
-    pub(crate) fn toggle_panel(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_zone(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
         if position == ZonePosition::Main {
             return;
         }
@@ -141,7 +141,7 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_panel(position, cx);
+        self.toggle_zone(position, cx);
         window.focus(&self.focus_handle);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation(cx);
@@ -167,7 +167,7 @@ impl Shell {
         if position == ZonePosition::Main {
             return;
         }
-        self.request_panel_open(position, false, cx);
+        self.request_zone_open(position, false, cx);
         self.refresh_feature_activation(cx);
         cx.notify();
     }
@@ -183,7 +183,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn request_panel_open(&mut self, position: ZonePosition, open: bool, cx: &mut Context<Self>) {
+    fn request_zone_open(&mut self, position: ZonePosition, open: bool, cx: &mut Context<Self>) {
         self.request_panel_open_with_duration(
             position,
             open,
@@ -290,7 +290,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.shell.layout.set_panel_open(&group, true);
-        self.request_panel_open(position, true, cx);
+        self.request_zone_open(position, true, cx);
         self.shell.open_panel_tab(&group, tab);
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -645,6 +645,130 @@ mod visibility_tests {
     }
 
     #[gpui::test]
+    fn empty_side_zones_reopen_by_command_without_opening_picker(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            Shell::new(document.into(), HashMap::new(), cx)
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                for position in [
+                    ZonePosition::Left,
+                    ZonePosition::Right,
+                    ZonePosition::Bottom,
+                ] {
+                    let tab = PanelTab::tool(format!("fixture-{position:?}"));
+                    let id = shell.shell.layout.open_tab(position, tab.clone()).unwrap();
+                    let tabs = shell.shell.layout.panel(&id).unwrap().tabs.clone();
+                    let now = std::time::Instant::now();
+                    for tab in tabs {
+                        assert!(shell.shell.layout.remove_tab(&id, &tab, now));
+                    }
+                    shell.shell.layout.finish_due_closes(
+                        now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
+                    );
+                    assert!(!shell.shell.layout.zone_has_panels(position));
+                    assert!(!shell.shell.layout.zone_open(position));
+                    shell.execute_toggle_zone(position, window, cx);
+                    assert!(shell.shell.layout.zone_open(position));
+                    assert!(shell.shell.tool_picker.is_none());
+                    let first = shell
+                        .shell
+                        .layout
+                        .open_tab(position, PanelTab::tool("one"))
+                        .unwrap();
+                    let edge = match position {
+                        ZonePosition::Left => PanelEdge::Right,
+                        ZonePosition::Right => PanelEdge::Left,
+                        ZonePosition::Bottom => PanelEdge::Top,
+                        ZonePosition::Main => unreachable!(),
+                    };
+                    for count in 1..=3 {
+                        let geometry = crate::shell::dock_geometry::DockGeometry::single_zone(
+                            &shell.shell.layout,
+                            position,
+                            (900.0, 600.0),
+                        );
+                        let growth = shell.shell.layout.growth_panel(position).unwrap();
+                        let rect = geometry.panels[&growth];
+                        let point = match edge {
+                            PanelEdge::Right => {
+                                (rect.x + rect.width - 1.0, rect.y + rect.height / 2.0)
+                            }
+                            PanelEdge::Left => (rect.x + 1.0, rect.y + rect.height / 2.0),
+                            PanelEdge::Top => (rect.x + rect.width / 2.0, rect.y + 1.0),
+                        };
+                        let target = crate::shell::dock_geometry::DockGeometry::drop_target(
+                            &shell.shell.layout,
+                            geometry.panels.iter().map(|(id, rect)| (id.clone(), *rect)),
+                            geometry.zones.iter().map(|(zone, rect)| (*zone, *rect)),
+                            point,
+                        )
+                        .unwrap();
+                        if count == 3 {
+                            assert_eq!(target, PanelDrop::Into(growth));
+                        } else {
+                            assert_eq!(
+                                target,
+                                PanelDrop::Edge {
+                                    panel: growth,
+                                    edge
+                                }
+                            );
+                            let tab = PanelTab::tool(format!("extra-{count}"));
+                            let source =
+                                shell.shell.layout.open_tab(position, tab.clone()).unwrap();
+                            shell
+                                .shell
+                                .layout
+                                .drop_tab(&source, &tab, &target, (900.0, 600.0), now)
+                                .unwrap();
+                        }
+                        assert_eq!(
+                            shell
+                                .shell
+                                .layout
+                                .panel_ids()
+                                .iter()
+                                .filter(
+                                    |id| shell.shell.layout.panel(id).unwrap().position == position
+                                )
+                                .count(),
+                            count + usize::from(count < 3)
+                        );
+                    }
+                    assert!(shell.shell.layout.panel(&first).is_some());
+                    for (tab, id) in shell.shell.layout.placements() {
+                        if shell.shell.layout.panel(&id).unwrap().position == position {
+                            assert!(shell.shell.layout.remove_tab(&id, &tab, now));
+                        }
+                    }
+                    shell.shell.layout.finish_due_closes(
+                        now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
+                    );
+                    assert!(!shell.shell.layout.zone_has_panels(position));
+                    shell.execute_toggle_zone(position, window, cx);
+                    assert!(shell.shell.layout.zone_open(position));
+                    assert!(shell.shell.tool_picker.is_none());
+                    shell.execute_toggle_zone(position, window, cx);
+                }
+                assert!(shell.shell.layout.zone_open(ZonePosition::Main));
+                assert_eq!(
+                    shell
+                        .shell
+                        .layout
+                        .panel_ids()
+                        .iter()
+                        .filter(|id| shell.shell.layout.panel(id).unwrap().position
+                            == ZonePosition::Main)
+                        .count(),
+                    1
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn header_zone_and_view_menu_keep_individual_groups_recoverable(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let document = cx.new(|_| Empty);
@@ -679,9 +803,9 @@ mod visibility_tests {
                 shell.shell.focused_panel = Some(b.clone());
                 shell.toggle_panel_visibility(b.clone(), cx);
                 assert_ne!(shell.shell.focused_panel, Some(b.clone()));
-                shell.toggle_panel(ZonePosition::Left, cx);
+                shell.toggle_zone(ZonePosition::Left, cx);
                 assert!(!shell.shell.layout.zone_open(ZonePosition::Left));
-                shell.toggle_panel(ZonePosition::Left, cx);
+                shell.toggle_zone(ZonePosition::Left, cx);
                 assert!(shell.shell.layout.panel(&a).unwrap().requested_open());
                 assert!(!shell.shell.layout.panel(&b).unwrap().requested_open());
                 shell.toggle_panel_visibility(a.clone(), cx);

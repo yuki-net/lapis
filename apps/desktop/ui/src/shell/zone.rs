@@ -404,7 +404,7 @@ impl Zone {
             stable.finish_empty_close(&id);
         }
         lapis_desktop_client::ZoneViewState {
-            position: super::layout::panel_position_name(stable.position).to_owned(),
+            position: super::layout::zone_position_name(stable.position).to_owned(),
             open: stable.open,
             extent_ratio: stable.extent_ratio,
             layout: stable.layout.as_ref().map(PanelLayout::capture),
@@ -433,8 +433,8 @@ impl Zone {
     where
         F: FnMut(&str) -> Option<PanelTab>,
     {
-        let position = super::layout::panel_position(&saved.position)?;
-        if super::layout::panel_position_name(position) != saved.position
+        let position = super::layout::zone_position(&saved.position)?;
+        if super::layout::zone_position_name(position) != saved.position
             || !saved.extent_ratio.is_finite()
             || saved.extent_ratio <= 0.0
             || saved.extent_ratio > 1.0

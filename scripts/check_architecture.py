@@ -10,6 +10,7 @@ OLD_DESKTOP_LAYOUT = {
     "TabGroup", "TabGroupId", "PanelPosition", "LayoutNode", "SplitDirection",
     "DropZone", "has_variable_splits", "group_for_tab", "leaf_group_ids",
     "focused_group", "source_group", "group_bounds", "open_group_tab",
+    "panel_position", "panel_position_name", "toggle_panel", "request_panel_open",
 }
 
 
@@ -24,13 +25,19 @@ def check_desktop_layout(root=ROOT):
     errors = []
     source = root / "apps/desktop"
     for path in source.rglob("*.rs"):
-        identifiers = set(rust_identifiers(path.read_text(encoding="utf-8")))
+        text = path.read_text(encoding="utf-8")
+        identifiers = set(rust_identifiers(text))
         for name in sorted(identifiers & OLD_DESKTOP_LAYOUT):
             errors.append(f"{path.relative_to(root)}: 旧Desktop Layout識別子 {name}")
         if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
         if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
+        if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()
+                or path.as_posix().endswith("/desktop/client/src/lib.rs")):
+            for name in ("main-panel", "left-panel", "right-panel", "bottom-panel"):
+                if re.search(rf'"{name}"', text):
+                    errors.append(f"{path.relative_to(root)}: 旧Zone保存識別子 {name}")
     shell_mod = source / "ui/src/shell/mod.rs"
     if shell_mod.exists():
         module_text = shell_mod.read_text(encoding="utf-8")
