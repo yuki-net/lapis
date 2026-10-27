@@ -96,13 +96,13 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 - `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。
 - Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
 - HeaderのPanel開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じ操作APIで復元できる。個別Panelの非表示はタブとHost Resourceを保持する。
-- Headerの左・下・右ボタンはZone全体を開閉し、個別に隠したGroupは再表示しない。Viewメニューには非表示を含む各Groupの開閉を表示し、全列を隠しても個別に復元できる。空のMain Groupも共通TabBarの`+`から追加できる。
+- Headerの左・下・右ボタンはZone全体を開閉し、個別に隠したGroupは再表示しない。Viewメニューには非表示を含む各Groupの開閉を表示し、全列を隠しても個別に復元できる。空ZoneへのTool追加は共通Pickerで行い、空Panelを追加先として保持しない。
 
-## Split とTabドラッグ
+## Panel とTabドラッグ
 
-- ドラッグ中は配置先の`DropZone`をハイライトするだけで、Drop確定まで`DockLayout`を変更しない。Escape、Focus喪失、不正Drop、Window生成失敗では元のTabとResourceを保持する。
-- 同じWindowGroup内のDocumentは既存のWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は実行資源の契約がないため受理せず、UIだけ成功したように見せない。
-- 左右サイドの通常操作は2列まで、最小領域を満たさないSplitは拒否する。内部のSplit木は可変であり、このUI制限をLayoutモデルへ固定しない。
+- 通常のPanel面へのDropは既存PanelへTabを移動する。Tab Drag中はPanel自身の端やPanel間境界を追加先として表示し、そこへDropすると同じZoneにPanelを追加する。
+- 境界の通常Dragはサイズ変更。最後のTabが移動したPanelは閉じ、Windowの一時的な縮小だけではPanelやResourceを閉じない。
+- 同じWindowGroup内のDocumentはWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は受理しない。
 
 ## Task とWorkbench Mode
 
@@ -115,4 +115,4 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 
 ## Layout の責務
 
-Shell の表示配置は共通Layout APIが所有し、Panelの配置・Split・TabGroupの表示状態を扱います。詳細な契約は [Desktop の可変 Layout](../../docs/specs/architecture.md#desktop-の-可変-layout) を参照してください。
+Shell の表示配置は共通Layout APIが所有し、Zone・Panel・Tabの配置と表示状態を扱います。詳細な契約は [Desktop の可変 Layout](../../docs/specs/architecture.md#desktop-の-可変-layout) を参照してください。

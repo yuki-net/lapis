@@ -109,6 +109,16 @@ pub(crate) struct DesktopRoot {
 }
 
 impl DesktopRoot {
+    #[cfg(target_os = "windows")]
+    pub(crate) fn smoke_workbench(&self) -> WorkbenchState {
+        self.workbench.clone()
+    }
+
+    #[cfg(target_os = "windows")]
+    pub(crate) fn restore_smoke_workbench(&mut self, workbench: WorkbenchState) {
+        self.workbench = workbench;
+    }
+
     /// Creates a root window's features, shared client worker, and window group.
     /// Installs command, snapshot, persistence, and close subscriptions and focuses the editor.
     pub(crate) fn new(

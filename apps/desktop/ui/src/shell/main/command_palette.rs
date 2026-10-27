@@ -109,7 +109,12 @@ impl Shell {
                 self.emit_view_binding(ViewScope::SharedWorkbench, cx);
             }
             id::COMMAND_BIND_VIEW_TASK => {
-                let Some(panel) = self.shell.layout.group(&self.shell.focused_group) else {
+                let Some(panel) = self
+                    .shell
+                    .focused_group
+                    .as_ref()
+                    .and_then(|id| self.shell.layout.group(id))
+                else {
                     return;
                 };
                 if let Some(tab) = self.shell.visible_active(panel)
@@ -128,7 +133,12 @@ impl Shell {
     }
 
     fn emit_view_binding(&mut self, scope: ViewScope, cx: &mut Context<Self>) {
-        let Some(panel) = self.shell.layout.group(&self.shell.focused_group) else {
+        let Some(panel) = self
+            .shell
+            .focused_group
+            .as_ref()
+            .and_then(|id| self.shell.layout.group(id))
+        else {
             return;
         };
         let Some(view) = panel

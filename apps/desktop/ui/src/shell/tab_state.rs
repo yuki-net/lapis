@@ -3,6 +3,24 @@ use lapis_editor_core::DocumentId;
 
 pub(crate) use crate::extension_ui::ViewInstanceId;
 
+/// Panel内のTabの所属を識別する。ZoneやResourceの識別子とは独立する。
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct TabGroupId(pub(super) u64);
+
+impl TabGroupId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn as_str(&self) -> String {
+        format!("group-{}", self.0)
+    }
+
+    pub(super) fn parse(value: &str) -> Option<Self> {
+        value.strip_prefix("group-")?.parse().ok().map(Self)
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {
     Document(DocumentId),

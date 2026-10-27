@@ -22,7 +22,7 @@ use crate::{
     shell::{
         PanelTab,
         main::{Shell, ShellPresentation},
-        window_group::{GroupLayout, HostId, ROOT_HOST},
+        window_group::{GroupLayout, HostId, ROOT_HOST, TabDestination},
     },
 };
 
@@ -378,9 +378,9 @@ impl DesktopRoot {
                     .layout
                     .tabs
                     .entry(tab)
-                    .or_insert((ROOT_HOST, target_group.clone()));
+                    .or_insert((ROOT_HOST, TabDestination::Panel(target_group.clone())));
                 if *owner == ROOT_HOST {
-                    *position = target_group;
+                    *position = TabDestination::Panel(target_group);
                 }
             }
         });
@@ -460,17 +460,7 @@ impl DesktopRoot {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        let Some(member) = self.group.read(cx).members.get(&target) else {
-            return;
-        };
-        let target_group = member
-            .shell
-            .read(cx)
-            .shell
-            .layout
-            .primary_group_id(panel)
-            .clone();
-        self.transfer_tab_to_group(source, target, target_group, tab, cx);
+        self.transfer_tab_to_destination(source, target, TabDestination::Zone(panel), tab, cx);
     }
 
     fn transfer_tab_to_group(
@@ -481,22 +471,40 @@ impl DesktopRoot {
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
+        self.transfer_tab_to_destination(
+            source,
+            target,
+            TabDestination::Panel(target_group),
+            tab,
+            cx,
+        );
+    }
+
+    fn transfer_tab_to_destination(
+        &mut self,
+        source: HostId,
+        target: HostId,
+        destination: TabDestination,
+        tab: PanelTab,
+        cx: &mut Context<Self>,
+    ) {
         if self.group.read(cx).closing
             || !self.can_move_tab(source, &tab, cx)
             || !self.group.read(cx).members.contains_key(&target)
         {
             return;
         }
-        if self.group.read(cx).members[&target]
-            .shell
-            .read(cx)
-            .shell
-            .layout
-            .group(&target_group)
-            .is_none()
+        if let TabDestination::Panel(target_group) = &destination
+            && self.group.read(cx).members[&target]
+                .shell
+                .read(cx)
+                .shell
+                .layout
+                .group(target_group)
+                .is_none()
         {
             return;
-        };
+        }
         let view = match &tab {
             PanelTab::Document(id) => self
                 .group
@@ -512,9 +520,12 @@ impl DesktopRoot {
             let editor = member.editor.clone();
             editor.update(cx, |editor, _| editor.seed_view(view));
         }
-        let focus_group = target_group.clone();
+        let focus_group = match &destination {
+            TabDestination::Panel(group) => Some(group.clone()),
+            TabDestination::Zone(_) => None,
+        };
         self.group.update(cx, |group, cx| {
-            if group.layout.move_tab(source, target, target_group, &tab) {
+            if group.layout.move_tab_to(source, target, destination, &tab) {
                 group.members[&target].shell.update(cx, |shell, cx| {
                     shell.shell.focused_group = focus_group;
                     cx.notify();
@@ -613,19 +624,42 @@ fn apply_panel_layout(
         let mut changed = false;
         for (tab, target) in placements {
             let source = shell.shell.layout.group_for_tab(&tab);
-            let target = if shell.shell.layout.group(&target).is_some() {
-                target
-            } else {
-                shell
+            if source.as_ref().is_some_and(|source| match &target {
+                TabDestination::Panel(target) => source == target,
+                TabDestination::Zone(position) => shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Main)
-                    .clone()
+                    .group(source)
+                    .is_some_and(|panel| panel.position == *position),
+            }) {
+                continue;
+            }
+            let success = match target {
+                TabDestination::Panel(target) if shell.shell.layout.group(&target).is_some() => {
+                    shell.shell.open_group_tab(&target, tab.clone())
+                }
+                TabDestination::Zone(position) => shell
+                    .shell
+                    .layout
+                    .move_tab_to_zone(position, tab.clone(), std::time::Instant::now())
+                    .is_ok(),
+                TabDestination::Panel(_) => shell
+                    .shell
+                    .layout
+                    .move_tab_to_zone(PanelPosition::Main, tab.clone(), std::time::Instant::now())
+                    .is_ok(),
             };
-            if let Some(source) = source
-                && source != target
-            {
-                changed |= shell.shell.layout.move_tab(&source, &target, &tab).is_ok();
+            if success {
+                if let Some(source) = source
+                    && shell
+                        .shell
+                        .layout
+                        .group(&source)
+                        .is_some_and(|panel| panel.tabs.is_empty())
+                {
+                    shell.schedule_empty_close(source, cx);
+                }
+                changed = true;
             }
         }
         if changed {

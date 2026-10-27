@@ -76,13 +76,11 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の可変 Layout
 
-- `apps/desktop/ui/src/shell/layout.rs` の `DockLayout` が、`Split` と `TabGroup` の木、Groupごとのタブ順・Active・表示状態を所有する。Panelは配置先であり、FeatureやHost Resourceの所有者ではない。
-- `ViewId` はViewの種類、`ViewInstanceId` は開いている個体を表す。タブの非表示・移動・取り外しは、HostのDocument・Terminal・Agentの終了や複製を発生させない。
-- Pickerの追加先・Focus・タブスクロールは`TabGroupId`単位。ZoneはHeader操作と初期配置の情報であり、個々のGroupを代用しない。削除済みGroupへの追加は拒否する。
-- `FeatureRegistry`がViewのFactory・共有Entity・個体別Entityを保持する。`Multiple`はFactory登録時だけ追加可能で、既存のFactory未対応Featureは`Shared`を維持する。個体IDは再起動・別Window・非表示Taskをまたぐ乱数IDを使い、描画処理ではEntityを生成しない。
-- `ConversationViewState.layout` はLayoutの保存値。不正なGroup ID・位置・比率、非有限のサイズ、重複Group/leaf、木とGroupの不一致、Main/Left/Bottom/Rightの互換アンカー欠落は全体を拒否し、旧`panels`形式へフォールバックする。有限のサイズは旧形式と同じ範囲へ補正する。未知のViewや利用できないDocumentは該当タブだけを読み飛ばし、Layoutの復元は継続する。互換アンカーはHeaderの操作先を保証するもので、Group数の上限ではない。
-- Headerの3つの開閉操作は対応Zone全体を対象とし、個別GroupのHideとは分ける。Zoneを閉じる直前に表示していたGroupは`zone_hidden`として保存し、復元時も個別Hideを保つ。全Groupを個別Hideした場合はアンカーまたはGroupの復元操作を入口にする。可変Splitの内部構造へ固定4Panelや左右の列数制限を埋め込まない。制限が必要な場合はUI操作ポリシーで拒否し、Layoutモデル自体を狭めない。
-- `LayoutViewState.anchors`は互換Headerの操作先IDを保存する。未記録の旧形式は既定IDを優先して移行する。復元・変更は同じ不変条件（Anchor参照、Group/個体IDの一意性、Active所属、比率）を検証し、失敗時に現状態を部分適用しない。旧形式へのフォールバックでは以前の可変Groupを残さず、利用可能なDocumentを一度だけ配置する。これはResourceの再生成・終了を意味しない。
+- `DockLayout`はLeft・Main・Right・BottomのZoneとZoneの配置・表示を所有する。各ZoneはPanelの順序、比率、開閉状態を持ち、PanelはTabの順序と選択を持つ。PanelやZoneはDocument・Terminal・Agent等のResourceを所有しない。
+- Zone内の内部配置は`PanelLayout`で表し、初期状態もPanel追加後も同じGPUI Rendererを使う。空ZoneはPanelの代わりに配置先となり、Tool Pickerから初回Panelを作成する。
+- `ViewId`は種類、`ViewInstanceId`は個体を識別する。Layoutの保存値はZone・Panel・Tab参照だけを含む。旧Layout形式は復元せず、Task・未保存Documentなど別の保存値は保持する。
+- 復元時はZone・Panel IDとTab個体の一意性、所属、比率、有限サイズを検証し、不正なLayoutは既定配置へ戻す。利用できないTabは除外する。
+- Zoneの開閉とPanel個別の表示状態は別に保存する。最後のTabが移動したPanelは閉鎖中の状態を経て除去し、表示PanelがなくなったZoneも閉じる。
 
 ## Desktop の共通Tab操作
 
@@ -91,17 +89,12 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
 - HeaderのPanel操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じPanel操作APIを呼び出して復元できる。
 
-## Desktop の分割・ドラッグ
+## Desktop のPanel配置・ドラッグ
 
-- `SplitAllocation`で方向・比率・可視状態・GAP控除後の領域を共通化する。描画はGPUIのbasis=0とflex配分を使い、可視の両枝の間だけGAPを置く。新規Splitは分割後の両領域がPanel最小幅・高さを満たす場合だけ許可する。Previewと確定は同じDrop APIで検証する。
-- Windowが狭い間は既存Splitを表示領域内へ縮小し、コンテンツをclipする。GAPも領域不足時は縮小できる。Windowサイズだけで木・TabGroup・ViewInstance・比率・表示状態を変更せず、再拡大で元の配置へ戻す。
-
-- タブ移動・Closeで空になったGroupも追加先として保持する。Groupの自動削除で保存済み配置やPickerの起点を失わせない。明示的な統合APIは空の非Anchor Groupだけを隣接Groupへ統合し、Mainと互換Anchorを保護する。
-
-- ドラッグ中は`DropTarget`だけを更新し、`DropZone`のOverlayを表示する。`Split`やタブ移動はDrop確定時にだけ実行し、Escape・Focus喪失・不正Dropでは配置を変更しない。
-- 通常の左右サイド領域はUI操作として2列まで、最小領域はLayout APIの不変条件として検査する。ただし`DockLayout`の木自体に固定列数を埋め込まず、将来の広い画面向けポリシー変更を妨げない。
-- 同じWindowGroup内のDocumentは既存のDock/Undock経路へ接続する。別WindowへのTool移動はHost・Featureの寿命契約が検証されるまで受理せず、見た目だけの移動を実装しない。
-- Windowsの`SetCapture`/`ReleaseCapture`、`ClientToScreen`/`ScreenToClient`、DPI変換、`WindowFromPoint`の検証は`window_host`の責務として維持する。描画中に同期I/Oを行わず、Window生成失敗でも元のTabとResourceを保持する。
+- 通常のPanel面へのTab Dropは既存Panelへ移動する。Tab Drag中はPanel端・Panel間境界を追加候補とし、同じZoneにPanelを追加する。左は右端、右は左端、Mainは四辺、Bottomは左右端を使う。
+- 境界候補はポインタからの最短距離で選び、同距離はPanel IDと端の順序で安定させる。Previewと確定は同じ候補状態を検証し、確定後の配分に基づく矩形を表示する。
+- Panel間の通常DragはResize。明示Resizeで閾値まで縮めたPanelだけを閉じる。Windowの縮小・復元・DPI変更・保存復元ではPanelや比率を変更しない。利用領域が不足した場合はGPUIの縮小とclipを使い、新規追加を拒否する。
+- 同じWindowGroupのDocumentはWindowHostのDock/Undockを使用し、ToolのWindow間移動は受理しない。Window生成失敗や不正Dropでは元のTabとResourceを保持する。
 
 ## Desktop の Task / Workbench Mode
 

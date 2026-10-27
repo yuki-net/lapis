@@ -7,7 +7,7 @@ use std::{
 };
 
 use lapis_desktop_client::{
-    ConversationRecord, ConversationRepository, ConversationState, LayoutViewState, Project,
+    ConversationRecord, ConversationRepository, ConversationState, Project, ZoneLayoutViewState,
 };
 use lapis_editor_core::ConversationId;
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
@@ -86,16 +86,43 @@ fn decode_conversations(bytes: &[u8]) -> Result<StoredConversations, serde_json:
             else {
                 continue;
             };
-            if let Some(layout) = view.get("layout")
-                && !layout.is_null()
-                && serde_json::from_value::<LayoutViewState>(layout.clone()).is_err()
+            discard_invalid_layout(view);
+            if let Some(workbench) = view
+                .get_mut("workbench")
+                .and_then(serde_json::Value::as_object_mut)
             {
-                // UI配置の破損でTask・未保存Documentまで復元不能にしない。
-                view.remove("layout");
+                if let Some(layout) = workbench
+                    .get_mut("ide_layout")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    discard_invalid_layout(layout);
+                }
+                if let Some(layouts) = workbench
+                    .get_mut("task_layouts")
+                    .and_then(serde_json::Value::as_object_mut)
+                {
+                    for layout in layouts
+                        .values_mut()
+                        .filter_map(serde_json::Value::as_object_mut)
+                    {
+                        discard_invalid_layout(layout);
+                    }
+                }
             }
         }
     }
     serde_json::from_value(value)
+}
+
+// ????????Task?Document?Workbench?????????
+fn discard_invalid_layout(view: &mut serde_json::Map<String, serde_json::Value>) {
+    if let Some(layout) = view.get("layout")
+        && !layout.is_null()
+        && !serde_json::from_value::<ZoneLayoutViewState>(layout.clone())
+            .is_ok_and(|layout| layout.version == 2)
+    {
+        view.remove("layout");
+    }
 }
 
 impl LocalConversationRepository {
@@ -273,8 +300,7 @@ mod tests {
                 }],
             },
             view: ConversationViewState {
-                active_tool: "search".to_owned(),
-                bottom_panel: Some("terminal".to_owned()),
+                show_panel_controls: false,
                 ..ConversationViewState::default()
             },
             selected_execution: Some(ExecutionId::new("execution-1")),
@@ -301,6 +327,50 @@ mod tests {
 
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(&repository.path).unwrap()).unwrap();
+        let mut legacy = saved.clone();
+        legacy["records"][0]["view"]["layout"] = serde_json::json!({"version":1,"root":{"Tabs":{"group":"group-1"}},"groups":[],"anchors":{}});
+        legacy["records"][0]["view"]["panels"] =
+            serde_json::json!([{"position":"left-panel","tabs":["old"]}]);
+        legacy["records"][0]["view"]["active_tool"] = serde_json::json!("projects");
+        fs::write(&repository.path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        assert_eq!(repository.load().unwrap(), restored);
+        let mut old_workbench = saved.clone();
+        old_workbench["records"][0]["view"]["workbench"]["mode"] = serde_json::json!("agent");
+        old_workbench["records"][0]["view"]["workbench"]["ide_layout"] =
+            serde_json::json!({"layout":{"version":1}, "panels":[], "show_panel_controls":true});
+        old_workbench["records"][0]["view"]["workbench"]["task_layouts"] = serde_json::json!({"task-a":{"layout":{"version":1}, "panels":[], "show_panel_controls":true}});
+        fs::write(
+            &repository.path,
+            serde_json::to_vec(&old_workbench).unwrap(),
+        )
+        .unwrap();
+        let recovered = repository.load().unwrap();
+        assert_eq!(recovered.1[0].workspace, restored.1[0].workspace);
+        assert_eq!(
+            recovered.1[0].view.workbench.mode,
+            lapis_desktop_client::WorkbenchModeState::Agent
+        );
+        assert!(
+            recovered.1[0]
+                .view
+                .workbench
+                .ide_layout
+                .as_ref()
+                .unwrap()
+                .layout
+                .is_none()
+        );
+        assert!(
+            recovered.1[0]
+                .view
+                .workbench
+                .task_layouts
+                .values()
+                .next()
+                .unwrap()
+                .layout
+                .is_none()
+        );
         for invalid in [
             serde_json::json!("invalid"),
             serde_json::json!({}),
@@ -315,10 +385,7 @@ mod tests {
         let layout = serde_json::json!({"version":999,"root":{"Tabs":{"group":"missing"}},"groups":[],"anchors":{}});
         structural["records"][0]["view"]["layout"] = layout.clone();
         fs::write(&repository.path, serde_json::to_vec(&structural).unwrap()).unwrap();
-        assert_eq!(
-            repository.load().unwrap().1[0].view.layout,
-            Some(serde_json::from_value(layout).unwrap())
-        );
+        assert_eq!(repository.load().unwrap(), restored);
     }
 
     #[test]

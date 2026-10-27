@@ -1,68 +1,91 @@
 use super::*;
+use crate::shell::panel_layout::Axis;
+use crate::shell::state::PanelResize;
 
 impl Shell {
+    pub(super) fn start_panel_resize(
+        &mut self,
+        position: PanelPosition,
+        path: Vec<usize>,
+        pair: (usize, usize),
+        axis: Axis,
+        start: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let bounds = self
+            .arrangement_bounds
+            .borrow()
+            .get(&(position, path.clone()))
+            .copied();
+        let Some(bounds) = bounds else {
+            return;
+        };
+        let extent = match axis {
+            Axis::Horizontal => f32::from(bounds.size.width),
+            Axis::Vertical => f32::from(bounds.size.height),
+        };
+        let Some(available) = self.shell.layout.zone(position).available_for_resize(
+            &path,
+            extent,
+            f32::from(tokens::spacing::GAP),
+        ) else {
+            return;
+        };
+        self.shell.panel_resize = Some(PanelResize {
+            position,
+            path,
+            boundary: pair.0,
+            next: pair.1,
+            axis,
+            previous: start,
+            available,
+        });
+        cx.notify();
+    }
+
     pub(super) fn start_resize(
         &mut self,
         target: ResizeTarget,
-        start_pos: Point<Pixels>,
+        start: Point<Pixels>,
         viewport: gpui::Size<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let now = std::time::Instant::now();
-        let can_resize = match target {
-            ResizeTarget::Left => !self.shell.panel(PanelPosition::Left).is_transitioning(),
-            ResizeTarget::Right => !self.shell.panel(PanelPosition::Right).is_transitioning(),
-            ResizeTarget::Bottom => !self.shell.panel(PanelPosition::Bottom).is_transitioning(),
-        };
-        if !can_resize {
-            return;
-        }
-
         let gap = f32::from(tokens::spacing::GAP);
-        let bottom_size = self.shell.panel(PanelPosition::Bottom).effective_size(now);
-        let bottom_visible = self.shell.panel(PanelPosition::Bottom).is_visible(now);
-        let bottom_handle_y = f32::from(viewport.height)
+        let bottom = self.shell.layout.zone(PanelPosition::Bottom);
+        let bottom_y = f32::from(viewport.height)
             - f32::from(tokens::size::STATUS_BAR_HEIGHT)
-            - bottom_size
+            - bottom.size
             - gap * 2.0;
-        let bottom_zone_tolerance = f32::from(tokens::spacing::SM) + gap;
-
-        let resize_mode = match target {
+        let mode = match target {
             ResizeTarget::Left | ResizeTarget::Right
-                if bottom_visible
-                    && f32::from(start_pos.y) >= bottom_handle_y - bottom_zone_tolerance =>
+                if bottom.open && f32::from(start.y) >= bottom_y - gap * 2.0 =>
             {
                 ResizeMode::BottomSpan
             }
             ResizeTarget::Left | ResizeTarget::Right => ResizeMode::PanelWidth,
-            ResizeTarget::Bottom => {
-                let start_x = f32::from(start_pos.x);
-                let left_restore_edge =
-                    gap + self.shell.panel(PanelPosition::Left).effective_size(now) + gap;
-                let right_restore_edge = f32::from(viewport.width)
-                    - gap
-                    - self.shell.panel(PanelPosition::Right).effective_size(now)
-                    - gap;
-
-                if self.shell.bottom_span_left
-                    && self.shell.panel(PanelPosition::Left).is_visible(now)
-                    && start_x <= left_restore_edge
-                {
-                    ResizeMode::RestoreLeft
-                } else if self.shell.bottom_span_right
-                    && self.shell.panel(PanelPosition::Right).is_visible(now)
-                    && start_x >= right_restore_edge
-                {
-                    ResizeMode::RestoreRight
-                } else {
-                    ResizeMode::BottomHeight
-                }
+            ResizeTarget::Bottom
+                if self.shell.layout.bottom_span_left
+                    && self.shell.layout.zone_open(PanelPosition::Left)
+                    && f32::from(start.x)
+                        <= self.shell.layout.zone(PanelPosition::Left).size + gap * 2.0 =>
+            {
+                ResizeMode::RestoreLeft
             }
+            ResizeTarget::Bottom
+                if self.shell.layout.bottom_span_right
+                    && self.shell.layout.zone_open(PanelPosition::Right)
+                    && f32::from(start.x)
+                        >= f32::from(viewport.width)
+                            - self.shell.layout.zone(PanelPosition::Right).size
+                            - gap * 2.0 =>
+            {
+                ResizeMode::RestoreRight
+            }
+            ResizeTarget::Bottom => ResizeMode::BottomHeight,
         };
-
         self.shell.resizing = Some(target);
-        self.shell.resize_start_pos = Some(start_pos);
-        self.shell.resize_mode = Some(resize_mode);
+        self.shell.resize_start_pos = Some(start);
+        self.shell.resize_mode = Some(mode);
         cx.notify();
     }
 
@@ -75,6 +98,26 @@ impl Shell {
         if !event.dragging() {
             return;
         }
+        if let Some(mut resize) = self.shell.panel_resize.take() {
+            let delta = match resize.axis {
+                Axis::Horizontal => f32::from(event.position.x - resize.previous.x),
+                Axis::Vertical => f32::from(event.position.y - resize.previous.y),
+            };
+            let result = self.shell.layout.resize_panel_boundary(
+                resize.position,
+                &resize.path,
+                resize.boundary,
+                resize.next,
+                delta,
+                resize.available,
+            );
+            if result.as_ref().is_ok_and(|closed| closed.is_none()) {
+                resize.previous = event.position;
+                self.shell.panel_resize = Some(resize);
+            }
+            cx.notify();
+            return;
+        }
         let (Some(target), Some(mode), Some(start)) = (
             self.shell.resizing,
             self.shell.resize_mode,
@@ -82,249 +125,77 @@ impl Shell {
         ) else {
             return;
         };
-
-        let viewport = window.viewport_size();
         let gap = f32::from(tokens::spacing::GAP);
-        let min_w = f32::from(tokens::size::PANEL_MIN_WIDTH);
-        let min_h = f32::from(tokens::size::PANEL_MIN_HEIGHT);
-        let shape_threshold = gap * 3.0;
-        let shape_release = gap;
-        let delta_x = f32::from(event.position.x - start.x);
-        let delta_y = f32::from(event.position.y - start.y);
-        let now = std::time::Instant::now();
-
-        match (target, mode) {
-            (ResizeTarget::Left, ResizeMode::BottomSpan) => {
-                if delta_x <= -shape_threshold {
-                    self.set_bottom_span_left(true, now);
-                } else if delta_x >= -shape_release {
-                    self.set_bottom_span_left(false, now);
-                    if delta_x > 0.0 {
-                        self.resize_left_width(
-                            f32::from(event.position.x),
-                            f32::from(viewport.width),
-                            gap,
-                            min_w,
-                            now,
-                            cx,
-                        );
-                    }
+        if mode == ResizeMode::BottomSpan {
+            let delta = f32::from(event.position.x - start.x);
+            let now = std::time::Instant::now();
+            match target {
+                ResizeTarget::Left => self.set_bottom_span_left(delta <= -gap * 3.0, now),
+                ResizeTarget::Right => self.set_bottom_span_right(delta >= gap * 3.0, now),
+                _ => {}
+            }
+            cx.notify();
+            return;
+        }
+        if matches!(mode, ResizeMode::RestoreLeft | ResizeMode::RestoreRight) {
+            let delta = f32::from(event.position.y - start.y);
+            let now = std::time::Instant::now();
+            match mode {
+                ResizeMode::RestoreLeft if delta >= gap * 3.0 => {
+                    self.set_bottom_span_left(false, now)
                 }
-            }
-            (ResizeTarget::Right, ResizeMode::BottomSpan) => {
-                if delta_x >= shape_threshold {
-                    self.set_bottom_span_right(true, now);
-                } else if delta_x <= shape_release {
-                    self.set_bottom_span_right(false, now);
-                    if delta_x < 0.0 {
-                        self.resize_right_width(
-                            f32::from(event.position.x),
-                            f32::from(viewport.width),
-                            gap,
-                            min_w,
-                            now,
-                            cx,
-                        );
-                    }
+                ResizeMode::RestoreRight if delta >= gap * 3.0 => {
+                    self.set_bottom_span_right(false, now)
                 }
+                ResizeMode::RestoreLeft if delta <= gap => self.set_bottom_span_left(true, now),
+                ResizeMode::RestoreRight if delta <= gap => self.set_bottom_span_right(true, now),
+                _ => {}
             }
-            (ResizeTarget::Left, ResizeMode::PanelWidth) => {
-                self.resize_left_width(
-                    f32::from(event.position.x),
-                    f32::from(viewport.width),
-                    gap,
-                    min_w,
-                    now,
-                    cx,
-                );
+            if delta >= 0.0 {
+                cx.notify();
+                return;
             }
-            (ResizeTarget::Right, ResizeMode::PanelWidth) => {
-                self.resize_right_width(
-                    f32::from(event.position.x),
-                    f32::from(viewport.width),
-                    gap,
-                    min_w,
-                    now,
-                    cx,
-                );
-            }
-            (ResizeTarget::Bottom, ResizeMode::BottomHeight) => {
-                self.resize_bottom_height(
-                    f32::from(event.position.y),
-                    f32::from(viewport.height),
-                    gap,
-                    min_h,
-                    cx,
-                );
-            }
-            (ResizeTarget::Bottom, ResizeMode::RestoreLeft) => {
-                if delta_y >= shape_threshold {
-                    self.set_bottom_span_left(false, now);
-                } else if delta_y <= shape_release {
-                    self.set_bottom_span_left(true, now);
-                    if delta_y < 0.0 {
-                        self.resize_bottom_height(
-                            f32::from(event.position.y),
-                            f32::from(viewport.height),
-                            gap,
-                            min_h,
-                            cx,
-                        );
-                    }
-                }
-            }
-            (ResizeTarget::Bottom, ResizeMode::RestoreRight) => {
-                if delta_y >= shape_threshold {
-                    self.set_bottom_span_right(false, now);
-                } else if delta_y <= shape_release {
-                    self.set_bottom_span_right(true, now);
-                    if delta_y < 0.0 {
-                        self.resize_bottom_height(
-                            f32::from(event.position.y),
-                            f32::from(viewport.height),
-                            gap,
-                            min_h,
-                            cx,
-                        );
-                    }
-                }
-            }
-            _ => {}
+        }
+        let viewport = window.viewport_size();
+        let (position, value, maximum) = match target {
+            ResizeTarget::Left => (
+                PanelPosition::Left,
+                f32::from(event.position.x) - gap,
+                f32::from(viewport.width) - gap * 3.0,
+            ),
+            ResizeTarget::Right => (
+                PanelPosition::Right,
+                f32::from(viewport.width - event.position.x) - gap,
+                f32::from(viewport.width) - gap * 3.0,
+            ),
+            ResizeTarget::Bottom => (
+                PanelPosition::Bottom,
+                f32::from(viewport.height - event.position.y)
+                    - f32::from(tokens::size::STATUS_BAR_HEIGHT)
+                    - gap,
+                f32::from(viewport.height) - f32::from(tokens::size::TITLE_BAR_HEIGHT) - gap * 3.0,
+            ),
+        };
+        let shrinking = match target {
+            ResizeTarget::Left => event.position.x < start.x,
+            ResizeTarget::Right => event.position.x > start.x,
+            ResizeTarget::Bottom => event.position.y > start.y,
+        };
+        if value < 16.0 && shrinking {
+            self.shell.layout.set_zone_open(position, false);
+        } else if value >= 16.0 && maximum >= 32.0 {
+            self.shell.layout.zone_mut(position).size = value.clamp(32.0, maximum);
         }
         cx.notify();
     }
 
-    fn resize_left_width(
-        &mut self,
-        mouse_x: f32,
-        viewport_width: f32,
-        gap: f32,
-        min_w: f32,
-        now: std::time::Instant,
-        cx: &mut Context<Self>,
-    ) {
-        let current_raw = mouse_x - gap;
-        if current_raw < min_w * 0.5 {
-            if self.shell.panel(PanelPosition::Left).open {
-                self.request_panel_open_with_duration(
-                    PanelPosition::Left,
-                    false,
-                    crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
-                    cx,
-                );
-                self.refresh_feature_activation(cx);
-            }
-            return;
-        }
-
-        let right_width = if self.shell.panel(PanelPosition::Right).is_visible(now) {
-            self.shell.panel(PanelPosition::Right).effective_size(now) + gap
-        } else {
-            0.0
-        };
-        let max_left = (viewport_width - gap * 3.0 - right_width - min_w).max(min_w);
-        self.shell
-            .panel_mut(PanelPosition::Left)
-            .resize(current_raw.clamp(min_w, max_left));
-        if !self.shell.panel(PanelPosition::Left).open {
-            self.request_panel_open_with_duration(
-                PanelPosition::Left,
-                true,
-                crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
-                cx,
-            );
-            self.refresh_feature_activation(cx);
-        }
-    }
-
-    fn resize_right_width(
-        &mut self,
-        mouse_x: f32,
-        viewport_width: f32,
-        gap: f32,
-        min_w: f32,
-        now: std::time::Instant,
-        cx: &mut Context<Self>,
-    ) {
-        let current_raw = viewport_width - mouse_x - gap;
-        if current_raw < min_w * 0.5 {
-            if self.shell.panel(PanelPosition::Right).open {
-                self.request_panel_open_with_duration(
-                    PanelPosition::Right,
-                    false,
-                    crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
-                    cx,
-                );
-                self.refresh_feature_activation(cx);
-            }
-            return;
-        }
-
-        let left_width = if self.shell.panel(PanelPosition::Left).is_visible(now) {
-            self.shell.panel(PanelPosition::Left).effective_size(now) + gap
-        } else {
-            0.0
-        };
-        let max_right = (viewport_width - gap * 3.0 - left_width - min_w).max(min_w);
-        self.shell
-            .panel_mut(PanelPosition::Right)
-            .resize(current_raw.clamp(min_w, max_right));
-        if !self.shell.panel(PanelPosition::Right).open {
-            self.request_panel_open_with_duration(
-                PanelPosition::Right,
-                true,
-                crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
-                cx,
-            );
-            self.refresh_feature_activation(cx);
-        }
-    }
-
-    fn resize_bottom_height(
-        &mut self,
-        mouse_y: f32,
-        viewport_height: f32,
-        gap: f32,
-        min_h: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let current_raw = viewport_height - mouse_y - gap;
-        if current_raw < min_h * 0.5 {
-            if self.shell.panel(PanelPosition::Bottom).open {
-                self.request_panel_open_with_duration(
-                    PanelPosition::Bottom,
-                    false,
-                    crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
-                    cx,
-                );
-                self.refresh_feature_activation(cx);
-            }
-            return;
-        }
-
-        let header_height = f32::from(tokens::size::TITLE_BAR_HEIGHT) + gap;
-        let max_bottom = (viewport_height - header_height - min_h - gap * 2.0).max(min_h);
-        self.shell
-            .panel_mut(PanelPosition::Bottom)
-            .resize(current_raw.clamp(min_h, max_bottom));
-        if !self.shell.panel(PanelPosition::Bottom).open {
-            self.request_panel_open_with_duration(
-                PanelPosition::Bottom,
-                true,
-                crate::shell::panel_transition::PANEL_SNAP_ANIMATION_DURATION,
-                cx,
-            );
-            self.refresh_feature_activation(cx);
-        }
-    }
-
     fn set_bottom_span_left(&mut self, enabled: bool, now: std::time::Instant) {
-        if self.shell.bottom_span_left == enabled {
+        if self.shell.layout.bottom_span_left == enabled {
             return;
         }
         let from_side = self.shell.left_side_shortening(now);
         let from_bottom = self.shell.bottom_left_extent(now);
-        self.shell.bottom_span_left = enabled;
+        self.shell.layout.bottom_span_left = enabled;
         self.shell.bottom_span_left_transition = Some(PanelSpanTransition::from_visual(
             from_side,
             from_bottom,
@@ -332,14 +203,13 @@ impl Shell {
             now,
         ));
     }
-
     fn set_bottom_span_right(&mut self, enabled: bool, now: std::time::Instant) {
-        if self.shell.bottom_span_right == enabled {
+        if self.shell.layout.bottom_span_right == enabled {
             return;
         }
         let from_side = self.shell.right_side_shortening(now);
         let from_bottom = self.shell.bottom_right_extent(now);
-        self.shell.bottom_span_right = enabled;
+        self.shell.layout.bottom_span_right = enabled;
         self.shell.bottom_span_right_transition = Some(PanelSpanTransition::from_visual(
             from_side,
             from_bottom,
@@ -347,52 +217,11 @@ impl Shell {
             now,
         ));
     }
-
     pub(super) fn stop_resize(&mut self, cx: &mut Context<Self>) {
-        if self.shell.resizing.take().is_some() {
+        if self.shell.resizing.take().is_some() || self.shell.panel_resize.take().is_some() {
             self.shell.resize_start_pos = None;
             self.shell.resize_mode = None;
             cx.notify();
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    struct DocumentFixture;
-    impl Render for DocumentFixture {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-        }
-    }
-
-    #[gpui::test]
-    fn resize_on_large_viewport_and_narrow_right_keeps_restorable_layout(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        cx.update(|cx| {
-            let document = cx.new(|_| DocumentFixture);
-            let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
-            shell.update(cx, |shell, cx| {
-                let now = std::time::Instant::now();
-                shell.resize_left_width(1800.0, 4000.0, 4.0, 200.0, now, cx);
-                shell.resize_right_width(2200.0, 4000.0, 4.0, 200.0, now, cx);
-                shell.resize_bottom_height(200.0, 2000.0, 4.0, 120.0, cx);
-                assert_eq!(shell.shell.panel(PanelPosition::Left).size, 380.0);
-                assert_eq!(shell.shell.panel(PanelPosition::Right).size, 480.0);
-                assert_eq!(shell.shell.panel(PanelPosition::Bottom).size, 360.0);
-                shell.resize_right_width(3766.0, 4000.0, 4.0, 200.0, now, cx);
-                assert_eq!(shell.shell.panel(PanelPosition::Right).size, 260.0);
-                let saved = shell.shell.layout.capture_view_state();
-                let mut restored = crate::shell::DockLayout::default();
-                assert!(restored.restore_view_state(&saved, |raw| {
-                    raw.strip_prefix("tool:")
-                        .and_then(|raw| raw.split_once(':'))
-                        .map(|(view, instance)| PanelTab::tool_instance(view, instance))
-                }));
-                assert_eq!(restored.capture_view_state(), saved);
-            });
-        });
     }
 }

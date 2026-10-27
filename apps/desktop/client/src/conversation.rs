@@ -667,10 +667,7 @@ impl ConversationSession {
                 id: id.clone(),
                 title: format!("Task {}", session.next_id - 1),
                 workspace: editor.snapshot(),
-                view: ConversationViewState {
-                    active_tool: "projects".into(),
-                    ..Default::default()
-                },
+                view: ConversationViewState::default(),
                 selected_execution: None,
                 terminals: Vec::new(),
                 environment: Some(environment),

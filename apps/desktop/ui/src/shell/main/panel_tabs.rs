@@ -28,7 +28,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let position = panel.position;
-        let is_panel_focused = self.shell.focused_group == *group;
+        let is_panel_focused = self.shell.focused_group.as_ref() == Some(group);
         let scroll_state = self.scroll_states.panel_tabs(group);
         let max_offset = scroll_state.handle().max_offset();
         let offset = scroll_state.handle().offset();

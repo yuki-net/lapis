@@ -16,8 +16,8 @@ use crate::{
 use crate::{
     extension_ui::PanelPosition,
     shell::{
-        DraggedPanelTab, DropTarget, DropZone, LayoutError, LayoutNode, PanelHost,
-        PanelSpanTransition, PanelTab, ResizeMode, ResizeTarget, SplitDirection, TabGroupId,
+        DraggedPanelTab, PanelDrop, PanelEdge, PanelHost, PanelSpanTransition, PanelTab,
+        PickerTarget, ResizeMode, ResizeTarget, TabGroupId,
     },
 };
 use gpui::{
@@ -27,6 +27,8 @@ use gpui::{
 };
 use lapis_workspace::FileEntryKind;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
+
+type ArrangementBounds = HashMap<(PanelPosition, Vec<usize>), gpui::Bounds<Pixels>>;
 
 mod actions;
 mod command_palette;
@@ -52,7 +54,9 @@ pub(crate) struct Shell {
     _drag_keys: gpui::Subscription,
     pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
     pub(crate) group_bounds: RefCell<HashMap<TabGroupId, gpui::Bounds<Pixels>>>,
-    drop_target: Option<DropTarget>,
+    drop_target: Option<DropPreview>,
+    pub(crate) zone_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
+    arrangement_bounds: RefCell<ArrangementBounds>,
     layout_bounds: RefCell<Option<gpui::Bounds<Pixels>>>,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
@@ -63,6 +67,14 @@ pub(crate) struct Shell {
     languages: lapis_language::LanguageRegistry,
     scroll_states: ShellScrollStates,
     status: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DropPreview {
+    target: PanelDrop,
+    invalid: bool,
+    zone: PanelPosition,
+    rect: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Default)]
@@ -204,6 +216,8 @@ impl Shell {
             _drag_keys: drag_keys,
             panel_bounds: Default::default(),
             group_bounds: Default::default(),
+            zone_bounds: Default::default(),
+            arrangement_bounds: Default::default(),
             drop_target: None,
             layout_bounds: RefCell::new(None),
             session: ShellPresentation::default(),
@@ -256,19 +270,11 @@ impl Shell {
         }
     }
     pub(crate) fn preview_visible(&self) -> bool {
-        [
-            self.shell.panel(PanelPosition::Left),
-            self.shell.panel(PanelPosition::Main),
-            self.shell.panel(PanelPosition::Bottom),
-            self.shell.panel(PanelPosition::Right),
-        ]
-        .into_iter()
-        .any(|panel| {
-            panel.open
-                && matches!(
-                    panel.active.as_ref(),
-                    Some(PanelTab::Tool { view, .. }) if view.as_str() == id::VIEW_PREVIEW
-                )
+        self.shell.layout.visible_panels().any(|panel| {
+            matches!(
+                panel.active.as_ref(),
+                Some(PanelTab::Tool { view, .. }) if view.as_str() == id::VIEW_PREVIEW
+            )
         })
     }
 
@@ -336,7 +342,13 @@ impl Shell {
             {
                 group
             } else {
-                self.shell.layout.primary_group_id(position).clone()
+                match self.shell.layout.first_panel_in_zone(position) {
+                    Some(group) => group,
+                    None => {
+                        let _ = self.shell.layout.open_tab(position, tab);
+                        continue;
+                    }
+                }
             };
             if let Some(panel) = self.shell.layout.group_mut(&group) {
                 let active = panel.active.clone();

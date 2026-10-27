@@ -297,7 +297,6 @@ impl WorkbenchState {
 fn capture_layout(view: &ConversationViewState) -> WorkbenchLayoutState {
     WorkbenchLayoutState {
         layout: view.layout.clone(),
-        panels: view.panels.clone(),
         show_panel_controls: view.show_panel_controls,
     }
 }
@@ -310,7 +309,6 @@ fn layout_only(mut view: ConversationViewState) -> ConversationViewState {
 fn restore_layout(view: &WorkbenchLayoutState) -> ConversationViewState {
     ConversationViewState {
         layout: view.layout.clone(),
-        panels: view.panels.clone(),
         show_panel_controls: view.show_panel_controls,
         ..Default::default()
     }
@@ -343,11 +341,11 @@ mod tests {
         use crate::features::conversation::{apply_view_state, capture_view_state};
         use crate::{
             extension_ui::PanelPosition,
-            shell::{PanelTab, ShellState, SplitDirection},
+            shell::{PanelDrop, PanelEdge, PanelTab, ShellState},
         };
         use lapis_desktop_client::DocumentTab;
 
-        fn fixture(name: &str, direction: SplitDirection) -> (ConversationViewState, DocumentTab) {
+        fn fixture(name: &str, direction: PanelEdge) -> (ConversationViewState, DocumentTab) {
             let document = DocumentTab {
                 id: lapis_editor_core::DocumentId::new(name),
                 display_name: name.into(),
@@ -358,42 +356,60 @@ mod tests {
                 active: true,
             };
             let mut shell = ShellState::default();
-            let main = shell.layout.primary_group_id(PanelPosition::Main).clone();
+            let main = shell
+                .layout
+                .open_tab(PanelPosition::Main, PanelTab::Document(document.id.clone()))
+                .unwrap();
             let terminal = PanelTab::tool(crate::features::id::VIEW_TERMINAL);
-            shell
+            let source = shell
                 .layout
-                .group_mut(&main)
-                .unwrap()
-                .activate(PanelTab::Document(document.id.clone()));
-            shell
+                .open_tab(PanelPosition::Main, terminal.clone())
+                .unwrap();
+            let extra = shell
                 .layout
-                .group_mut(&main)
-                .unwrap()
-                .activate(terminal.clone());
-            let extra = shell.layout.split_group(&main, direction, 0.4).unwrap();
-            shell.layout.move_tab(&main, &extra, &terminal).unwrap();
-            shell
-                .layout
-                .split_group(
-                    &extra,
-                    if direction == SplitDirection::Horizontal {
-                        SplitDirection::Vertical
-                    } else {
-                        SplitDirection::Horizontal
+                .drop_tab(
+                    &source,
+                    &terminal,
+                    &PanelDrop::Edge {
+                        panel: main,
+                        edge: direction,
                     },
-                    0.65,
+                    (800.0, 600.0),
+                    std::time::Instant::now(),
+                )
+                .unwrap();
+            let preview = PanelTab::tool(crate::features::id::VIEW_PREVIEW);
+            let source = shell
+                .layout
+                .open_tab(PanelPosition::Main, preview.clone())
+                .unwrap();
+            shell
+                .layout
+                .drop_tab(
+                    &source,
+                    &preview,
+                    &PanelDrop::Edge {
+                        panel: extra,
+                        edge: if direction == PanelEdge::Right {
+                            PanelEdge::Bottom
+                        } else {
+                            PanelEdge::Right
+                        },
+                    },
+                    (800.0, 600.0),
+                    std::time::Instant::now(),
                 )
                 .unwrap();
             shell
-                .panel_mut(PanelPosition::Left)
-                .set_open_immediate(direction == SplitDirection::Horizontal);
+                .layout
+                .set_zone_open(PanelPosition::Left, direction == PanelEdge::Right);
             (capture_view_state(&shell), document)
         }
 
         let a = ConversationId::new("split-a");
         let b = ConversationId::new("split-b");
-        let (ide, document_a) = fixture("document-a", SplitDirection::Horizontal);
-        let (agent_b, document_b) = fixture("document-b", SplitDirection::Vertical);
+        let (ide, document_a) = fixture("document-a", PanelEdge::Right);
+        let (agent_b, document_b) = fixture("document-b", PanelEdge::Bottom);
         let mut state = WorkbenchState::default();
         state.apply_task_snapshot(a.clone(), ide.clone(), true);
         let terminal = ViewInstanceKey::new(
@@ -461,10 +477,7 @@ mod tests {
                     std::slice::from_ref(document),
                     &registry,
                 );
-                assert_eq!(
-                    shell.layout.capture_view_state(),
-                    *expected.layout.as_ref().unwrap()
-                );
+                assert_eq!(shell.layout.capture(), *expected.layout.as_ref().unwrap());
                 let placements = shell.layout.placements();
                 let unique = placements
                     .iter()
@@ -487,7 +500,7 @@ mod tests {
                         .count(),
                     1
                 );
-                assert_eq!(shell.layout.leaf_group_ids().len(), 6);
+                assert_eq!(shell.layout.leaf_group_ids().len(), 4);
             }
         }
         assert_eq!(
@@ -507,14 +520,13 @@ mod tests {
     fn view(tool: &str) -> ConversationViewState {
         let mut layout = crate::shell::DockLayout::default();
         layout
-            .panel_mut(crate::extension_ui::PanelPosition::Main)
-            .activate(crate::shell::PanelTab::tool_instance(
-                "fixture",
-                format!("instance-{tool}"),
-            ));
+            .open_tab(
+                crate::extension_ui::PanelPosition::Main,
+                crate::shell::PanelTab::tool_instance("fixture", format!("instance-{tool}")),
+            )
+            .unwrap();
         ConversationViewState {
-            layout: Some(layout.capture_view_state()),
-            active_tool: tool.into(),
+            layout: Some(layout.capture()),
             ..Default::default()
         }
     }
@@ -738,8 +750,9 @@ mod tests {
         let fixed = PanelTab::Document(lapis_editor_core::DocumentId::new("resource-a"));
         for tab in [&owned, &shared, &follow, &fixed] {
             shell
-                .panel_mut(PanelPosition::Main)
-                .activate_without_open(tab.clone());
+                .layout
+                .open_tab(PanelPosition::Main, tab.clone())
+                .unwrap();
         }
         state.bind_view(
             ViewInstanceKey::new(owned.stable_view_key()).unwrap(),
@@ -757,7 +770,7 @@ mod tests {
             ViewInstanceKey::new(fixed.stable_view_key()).unwrap(),
             ViewScope::Resource("resource-a".into()),
         );
-        let before = shell.layout.capture_view_state();
+        let before = shell.layout.capture();
         state.set_mode(WorkbenchMode::Agent, Some(&a), &view("ide"));
         state.apply_task_snapshot(b.clone(), view("b"), true);
         shell.hidden_views = state.hidden_views();
@@ -773,11 +786,11 @@ mod tests {
             state.task_reference(&ViewInstanceKey::new(owned.stable_view_key()).unwrap()),
             Some(&a)
         );
-        assert_eq!(shell.layout.capture_view_state(), before);
+        assert_eq!(shell.layout.capture(), before);
         state.set_mode(WorkbenchMode::Ide, Some(&b), &view("agent-b"));
         shell.hidden_views = state.hidden_views();
         assert!(shell.view_visible(&owned));
-        assert_eq!(shell.layout.capture_view_state(), before);
+        assert_eq!(shell.layout.capture(), before);
     }
 
     #[test]

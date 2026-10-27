@@ -18,21 +18,10 @@ pub enum ToolInstancePolicy {
 }
 
 /// Viewを配置できる範囲を登録する。PanelやWindow側で機能別の例外を作らないための宣言。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewPlacementCapabilities {
-    pub split: bool,
     pub detach: bool,
     pub independent_window: bool,
-}
-
-impl Default for ViewPlacementCapabilities {
-    fn default() -> Self {
-        Self {
-            split: true,
-            detach: false,
-            independent_window: false,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -283,7 +272,6 @@ mod tests {
             Some(MessageId::new("category.runtime"))
         );
         assert_eq!(contribution.instance_policy, ToolInstancePolicy::Multiple);
-        assert!(contribution.placement.split);
         assert!(contribution.placement.detach);
         assert!(contribution.placement.independent_window);
     }

@@ -86,6 +86,8 @@ pub(crate) fn run_native_smoke(
         }
         verify_workbench_routes(&this, handle, cx).await;
         verify_split_resize(&this, handle, cx).await;
+        #[cfg(target_os = "windows")]
+        verify_panel_drag_resize(&this, handle, cx).await;
         eprintln!("SMOKE baseline sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
@@ -853,21 +855,51 @@ async fn verify_split_resize(
                 let main = shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Main)
-                    .clone();
+                    .first_panel_in_zone(PanelPosition::Main)
+                    .unwrap();
+                let first = crate::shell::PanelTab::tool(crate::features::id::VIEW_PREVIEW);
+                let second = crate::shell::PanelTab::tool(crate::features::id::VIEW_ASSISTANT);
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(PanelPosition::Main, first.clone())
+                    .unwrap();
                 let extra = shell
                     .shell
                     .layout
-                    .split_group(&main, crate::shell::SplitDirection::Horizontal, 0.4)
+                    .drop_tab(
+                        &source,
+                        &first,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: main,
+                            edge: crate::shell::PanelEdge::Right,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(PanelPosition::Main, second.clone())
                     .unwrap();
                 shell
                     .shell
                     .layout
-                    .split_group(&extra, crate::shell::SplitDirection::Vertical, 0.6)
+                    .drop_tab(
+                        &source,
+                        &second,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: extra,
+                            edge: crate::shell::PanelEdge::Bottom,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
                     .unwrap();
                 original
             });
-            let saved = shell.read(cx).shell.layout.capture_view_state();
+            let saved = shell.read(cx).shell.layout.capture();
             (original, document, saved, window.viewport_size())
         })
         .unwrap();
@@ -883,7 +915,7 @@ async fn verify_split_resize(
                 root.update(cx, |root, cx| {
                     assert_eq!(root.editor.read(cx).document_id(), document);
                     let shell = root.shell.read(cx);
-                    assert_eq!(shell.shell.layout.capture_view_state(), saved);
+                    assert_eq!(shell.shell.layout.capture(), saved);
                     let viewport = window.viewport_size();
                     for bounds in shell.group_bounds.borrow().values() {
                         assert!(
@@ -1001,6 +1033,128 @@ async fn simulate_tab_drag(
 }
 
 #[cfg(target_os = "windows")]
+async fn verify_panel_drag_resize(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use windows::Win32::{
+        Foundation::{HWND, LPARAM, WPARAM},
+        UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE},
+    };
+    let shell = root.update(cx, |root, _| root.shell.clone()).unwrap();
+    let original = shell
+        .read_with(cx, |shell, _| shell.shell.layout.clone())
+        .unwrap();
+    let _ = show_drop_target(handle, &shell, cx);
+    let count = cx.update(|cx| cx.windows().len()).unwrap();
+    let (hwnd, start, moved, end) = handle
+        .update(cx, |_, window, cx| {
+            window.draw(cx).clear();
+            let shell = shell.read(cx);
+            let source = shell.panel_bounds.borrow()[&PanelPosition::Left];
+            let target = shell.panel_bounds.borrow()[&PanelPosition::Main];
+            let scale = window.scale_factor();
+            let pack = |x: f32, y: f32| {
+                LPARAM(
+                    (((y * scale).round() as i16 as u16 as u32) << 16
+                        | (x * scale).round() as i16 as u16 as u32) as isize,
+                )
+            };
+            let x = f32::from(source.origin.x) + 50.0;
+            let y = f32::from(source.origin.y) + 17.0;
+            let end_x = f32::from(target.origin.x + target.size.width) - 2.0;
+            let end_y = f32::from(target.origin.y + target.size.height / 2.0);
+            let RawWindowHandle::Win32(raw) =
+                HasWindowHandle::window_handle(window).unwrap().as_raw()
+            else {
+                panic!("Windows handle required")
+            };
+            (
+                raw.hwnd.get(),
+                pack(x, y),
+                pack(x + 20.0, y),
+                pack(end_x, end_y),
+            )
+        })
+        .unwrap();
+    let hwnd = HWND(hwnd as *mut _);
+    unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), start) }.unwrap();
+    unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), moved) }.unwrap();
+    wait_for_drag_state(cx, true, count + 1).await;
+    unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), end) }.unwrap();
+    gpui::Timer::after(std::time::Duration::from_millis(80)).await;
+    eprintln!(
+        "SMOKE local preview {}",
+        shell
+            .read_with(cx, |shell, _| shell.smoke_drop_preview())
+            .unwrap()
+    );
+    unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
+    wait_for_drag_state(cx, false, count).await;
+    gpui::Timer::after(std::time::Duration::from_millis(160)).await;
+    let (before, down, shifted) = handle
+        .update(cx, |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+            let shell = shell.read(cx);
+            let files = PanelTab::tool(crate::features::id::VIEW_FILES);
+            let added = shell
+                .shell
+                .layout
+                .group_for_tab(&files)
+                .expect("moved file tab");
+            assert_eq!(
+                shell.shell.layout.group(&added).unwrap().position,
+                PanelPosition::Main
+            );
+            let ids = shell
+                .shell
+                .layout
+                .leaf_group_ids()
+                .into_iter()
+                .filter(|id| {
+                    shell
+                        .shell
+                        .layout
+                        .group(id)
+                        .is_some_and(|panel| panel.position == PanelPosition::Main)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(ids.len(), 2);
+            let first = shell.group_bounds.borrow()[&ids[0]];
+            let scale = window.scale_factor();
+            let x = f32::from(first.origin.x + first.size.width) + 4.0;
+            let y = f32::from(first.origin.y + first.size.height / 2.0);
+            let pack = |x: f32, y: f32| {
+                LPARAM(
+                    (((y * scale).round() as i16 as u16 as u32) << 16
+                        | (x * scale).round() as i16 as u16 as u32) as isize,
+                )
+            };
+            (shell.shell.layout.capture(), pack(x, y), pack(x - 40.0, y))
+        })
+        .unwrap();
+    unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), down) }.unwrap();
+    unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), shifted) }.unwrap();
+    unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), shifted) }.unwrap();
+    gpui::Timer::after(std::time::Duration::from_millis(100)).await;
+    shell
+        .update(cx, |shell, cx| {
+            assert_ne!(
+                shell.shell.layout.capture(),
+                before,
+                "Panel boundary resize must change layout"
+            );
+            shell.shell.layout = original;
+            cx.notify();
+        })
+        .unwrap();
+    eprintln!("SMOKE Panel edge drop and boundary resize OK");
+}
+
+#[cfg(target_os = "windows")]
 async fn wait_for_drag_state(cx: &mut gpui::AsyncApp, dragging: bool, window_count: usize) {
     for _ in 0..125 {
         if cx
@@ -1031,7 +1185,21 @@ fn show_drop_target(
     handle
         .update(cx, |_, window, cx| {
             window.draw(cx).clear();
-            let position = shell.read(cx).panel_bounds.borrow()[&PanelPosition::Main].center();
+            let shell = shell.read(cx);
+            let position = shell
+                .panel_bounds
+                .borrow()
+                .get(&PanelPosition::Main)
+                .copied()
+                .or_else(|| {
+                    shell
+                        .zone_bounds
+                        .borrow()
+                        .get(&PanelPosition::Main)
+                        .copied()
+                })
+                .expect("Main Zone bounds")
+                .center();
             let RawWindowHandle::Win32(raw) =
                 HasWindowHandle::window_handle(window).unwrap().as_raw()
             else {
@@ -1283,28 +1451,60 @@ async fn verify_workbench_routes(
     handle: gpui::AnyWindowHandle,
     cx: &mut gpui::AsyncApp,
 ) {
-    let original_layout = root
+    let (original_layout, original_workbench) = root
         .update(cx, |root, cx| {
-            root.shell.update(cx, |shell, cx| {
+            let original_workbench = root.smoke_workbench();
+            let original_layout = root.shell.update(cx, |shell, cx| {
                 let original = shell.shell.layout.clone();
                 let main = shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Main)
-                    .clone();
+                    .first_panel_in_zone(PanelPosition::Main)
+                    .unwrap();
+                let first = crate::shell::PanelTab::tool(crate::features::id::VIEW_PREVIEW);
+                let second = crate::shell::PanelTab::tool(crate::features::id::VIEW_ASSISTANT);
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(PanelPosition::Main, first.clone())
+                    .unwrap();
                 let extra = shell
                     .shell
                     .layout
-                    .split_group(&main, crate::shell::SplitDirection::Horizontal, 0.4)
+                    .drop_tab(
+                        &source,
+                        &first,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: main,
+                            edge: crate::shell::PanelEdge::Right,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(PanelPosition::Main, second.clone())
                     .unwrap();
                 shell
                     .shell
                     .layout
-                    .split_group(&extra, crate::shell::SplitDirection::Vertical, 0.6)
+                    .drop_tab(
+                        &source,
+                        &second,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: extra,
+                            edge: crate::shell::PanelEdge::Bottom,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
                     .unwrap();
                 cx.notify();
                 original
-            })
+            });
+            (original_layout, original_workbench)
         })
         .unwrap();
     let setup = root
@@ -1403,12 +1603,27 @@ async fn verify_workbench_routes(
                 let main = shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Main)
-                    .clone();
+                    .first_panel_in_zone(PanelPosition::Main)
+                    .unwrap();
+                let preview = crate::shell::PanelTab::tool(crate::features::id::VIEW_PREVIEW);
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(PanelPosition::Main, preview.clone())
+                    .unwrap();
                 shell
                     .shell
                     .layout
-                    .split_group(&main, crate::shell::SplitDirection::Vertical, 0.55)
+                    .drop_tab(
+                        &source,
+                        &preview,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: main,
+                            edge: crate::shell::PanelEdge::Bottom,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
                     .unwrap();
                 cx.notify();
             });
@@ -1475,6 +1690,7 @@ async fn verify_workbench_routes(
         assert_eq!(root.editor.read(cx).document_id(), before.1);
         assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
         eprintln!("SMOKE IDE Task A/B/A and IDE/Agent round trip preserve nested Splits; Agent restores its own Split layout OK");
+        root.restore_smoke_workbench(original_workbench);
         root.shell.update(cx, |shell, cx| {
             shell.shell.layout = original_layout;
             cx.notify();

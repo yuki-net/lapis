@@ -1,15 +1,23 @@
 use std::collections::HashMap;
 
 use super::{PanelTab, TabGroupId};
+use crate::extension_ui::PanelPosition;
 
 pub(crate) type HostId = u64;
 pub(crate) const ROOT_HOST: HostId = 0;
+
+/// まだPanelがないZoneへの配置と、既存Panelへの配置を区別する。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TabDestination {
+    Zone(PanelPosition),
+    Panel(TabGroupId),
+}
 
 /// Window の所属・配置だけを所有する。Feature や実行資源は複製しない。
 pub(crate) struct GroupLayout {
     next_host: HostId,
     pub(crate) windows: HashMap<HostId, Option<HostId>>,
-    pub(crate) tabs: HashMap<PanelTab, (HostId, TabGroupId)>,
+    pub(crate) tabs: HashMap<PanelTab, (HostId, TabDestination)>,
 }
 
 impl GroupLayout {
@@ -37,11 +45,14 @@ impl GroupLayout {
         } else {
             ROOT_HOST
         };
-        self.tabs.entry(tab).or_insert((owner, TabGroupId::new(1)));
+        self.tabs
+            .entry(tab)
+            .or_insert((owner, TabDestination::Zone(PanelPosition::Main)));
     }
 
     /// Updates placement and returns true when the target exists and the source owns the tab.
     /// Invalid targets or ownership mismatches leave the layout unchanged and return false.
+    #[cfg(test)]
     pub(crate) fn move_tab(
         &mut self,
         source: HostId,
@@ -49,12 +60,23 @@ impl GroupLayout {
         group: TabGroupId,
         tab: &PanelTab,
     ) -> bool {
+        self.move_tab_to(source, target, TabDestination::Panel(group), tab)
+    }
+
+    /// 追加先Zoneが空でもPanelの事前生成なしに移動先を確定できる。
+    pub(crate) fn move_tab_to(
+        &mut self,
+        source: HostId,
+        target: HostId,
+        destination: TabDestination,
+        tab: &PanelTab,
+    ) -> bool {
         if !self.windows.contains_key(&target)
             || self.tabs.get(tab).is_none_or(|(owner, _)| *owner != source)
         {
             return false;
         }
-        self.tabs.insert(tab.clone(), (target, group));
+        self.tabs.insert(tab.clone(), (target, destination));
         true
     }
 
@@ -76,9 +98,16 @@ mod tests {
         let tab = PanelTab::tool("future-movable-tool");
         group.register_tab(tab.clone(), child);
         assert_eq!(group.tabs[&tab].0, child);
+        assert_eq!(
+            group.tabs[&tab].1,
+            TabDestination::Zone(PanelPosition::Main)
+        );
         assert!(group.move_tab(child, ROOT_HOST, TabGroupId::new(3), &tab));
         group.register_tab(tab.clone(), child);
-        assert_eq!(group.tabs[&tab], (ROOT_HOST, TabGroupId::new(3)));
+        assert_eq!(
+            group.tabs[&tab],
+            (ROOT_HOST, TabDestination::Panel(TabGroupId::new(3)))
+        );
         group.remove_window(child);
         let late_tab = PanelTab::tool("late-result");
         group.register_tab(late_tab.clone(), child);
@@ -90,7 +119,10 @@ mod tests {
         let mut a = GroupLayout::new();
         let mut b = GroupLayout::new();
         let tab = PanelTab::tool("terminal");
-        a.tabs.insert(tab.clone(), (ROOT_HOST, TabGroupId::new(3)));
+        a.tabs.insert(
+            tab.clone(),
+            (ROOT_HOST, TabDestination::Panel(TabGroupId::new(3))),
+        );
         let child = a.add_window();
         assert!(a.move_tab(ROOT_HOST, child, TabGroupId::new(1), &tab));
         assert!(!b.move_tab(child, ROOT_HOST, TabGroupId::new(1), &tab));
@@ -105,7 +137,10 @@ mod tests {
         let mut group = GroupLayout::new();
         let child = group.add_window();
         let tab = PanelTab::tool("task");
-        group.tabs.insert(tab.clone(), (child, TabGroupId::new(1)));
+        group.tabs.insert(
+            tab.clone(),
+            (child, TabDestination::Panel(TabGroupId::new(1))),
+        );
         group.remove_window(child);
         assert!(!group.tabs.contains_key(&tab));
         assert_eq!(group.windows.len(), 1);
@@ -119,11 +154,48 @@ mod tests {
         let tab = PanelTab::tool("future-resource-view");
         group.register_tab(tab.clone(), ROOT_HOST);
         assert!(group.move_tab(ROOT_HOST, ROOT_HOST, TabGroupId::new(5), &tab));
-        assert_eq!(group.tabs[&tab].1, TabGroupId::new(5));
+        assert_eq!(
+            group.tabs[&tab].1,
+            TabDestination::Panel(TabGroupId::new(5))
+        );
         assert!(group.move_tab(ROOT_HOST, child, TabGroupId::new(6), &tab));
         assert!(group.move_tab(child, ROOT_HOST, TabGroupId::new(5), &tab));
-        assert_eq!(group.tabs[&tab], (ROOT_HOST, TabGroupId::new(5)));
+        assert_eq!(
+            group.tabs[&tab],
+            (ROOT_HOST, TabDestination::Panel(TabGroupId::new(5)))
+        );
         assert!(!group.move_tab(child, ROOT_HOST, TabGroupId::new(7), &tab));
-        assert_eq!(group.tabs[&tab].1, TabGroupId::new(5));
+        assert_eq!(
+            group.tabs[&tab].1,
+            TabDestination::Panel(TabGroupId::new(5))
+        );
+    }
+
+    #[test]
+    fn document_can_target_an_empty_zone_without_a_panel_id() {
+        let mut group = GroupLayout::new();
+        let child = group.add_window();
+        let tab = PanelTab::Document(lapis_editor_core::DocumentId::new("doc"));
+        group.register_tab(tab.clone(), ROOT_HOST);
+        assert!(group.move_tab_to(
+            ROOT_HOST,
+            child,
+            TabDestination::Zone(PanelPosition::Main),
+            &tab
+        ));
+        assert_eq!(
+            group.tabs[&tab],
+            (child, TabDestination::Zone(PanelPosition::Main))
+        );
+        assert!(!group.move_tab_to(
+            ROOT_HOST,
+            child,
+            TabDestination::Zone(PanelPosition::Right),
+            &tab
+        ));
+        assert_eq!(
+            group.tabs[&tab],
+            (child, TabDestination::Zone(PanelPosition::Main))
+        );
     }
 }
