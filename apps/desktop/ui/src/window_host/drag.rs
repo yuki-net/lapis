@@ -81,7 +81,7 @@ impl DesktopRoot {
                                 .borrow()
                                 .iter()
                                 .find(|(_, bounds)| bounds.contains(&position))
-                                .map(|(group, _)| TabDestination::Panel(group.clone()));
+                                .map(|(panel_id, _)| TabDestination::Panel(panel_id.clone()));
                             let destination = panel.or_else(|| {
                                 (!shell.shell.layout.zone_has_panels(ZonePosition::Main)
                                     && shell
