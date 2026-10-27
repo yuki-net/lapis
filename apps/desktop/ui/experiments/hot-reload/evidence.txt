@@ -48,12 +48,14 @@ observed=修正済みCLIでShell背景色を変更するとpatch DLL適用後に
 fault=0xc0000005 at liblapis-patch offset 0x2ff663
 symbol=lapis_desktop_ui::theme::registry::THEMES::constant$0::closure_env$0
 analysis=patched DLLのthread_local! THEMES accessorが元EXEのMSVC TLS領域外アドレスを参照
+note=これは旧実装（個別HotFn per Feature）時点の結果。現在はRoot HotFn化で解消済み
 
-[lapis-after-theme-workaround]
+[lapis-after-root-hotfn]
 result=success
-observed=PID=76704、Window=1を維持。Shell背景色を複数回保存し、各回patch-appliedとrefresh windows=1。終了イベントなし
-workaround=hot-reload DebugだけThemeRegistryをLazyLock<Mutex<_>>へ切り替え、通常Debug/Releaseはthread_local!を維持
+observed=PIDを維持。Shell背景色を複数回保存し、各回patch-appliedとrefresh windows=1。終了イベントなし
+fix=Shell::renderの1箇所にHotFnを置き、ThemeRegistry accessorはpatch DLLに含まれなくなった
 hot_patch_ms=1293-1586
+analysis=Root HotFn化により、ThemeRegistryのthread_local! accessorはEXE側に留まり、patch DLLからTLSアクセサを呼ばなくなった。そのためLazyLock<Mutex<_>>回避は不要
 
 [scope]
 state=同一プロセスと既存Windowの維持を確認。未保存編集・タブ・Panel・フォーカス・Terminalの全項目は今回未確認

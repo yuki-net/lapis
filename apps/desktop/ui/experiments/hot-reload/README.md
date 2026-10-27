@@ -63,6 +63,10 @@ dx serve --platform windows --hot-patch --interactive false --open false --packa
 
 stockのDioxus CLI 0.7.10にはWindows x64スタブのRAX破壊が残っています。上流PR #5967が取り込まれるまでは、このディレクトリの `dioxus-cli-windows-x64.patch` を適用した修正版CLIが必要です。
 
+### TLS問題の解消
+
+旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。`Shell::render` の1箇所にHotFnを置くRoot HotFn化により、ThemeRegistryのaccessorはEXE側に留まり、patch DLLからTLSアクセサを呼ばなくなったため、この問題は解消されました。`LazyLock<Mutex<_>>` の回避は不要になり、`thread_local!` を維持しています。
+
 ```powershell
 git clone --branch v0.7.10 https://github.com/DioxusLabs/dioxus.git target/dioxus-cli-0710
 Copy-Item apps/desktop/ui/experiments/hot-reload/dioxus-cli-windows-x64.patch `

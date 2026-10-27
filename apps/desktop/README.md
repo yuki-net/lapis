@@ -67,9 +67,19 @@ Hot Reload起動時は、別途修正版 `dx` CLI でdevserverを起動する必
 - `Shell::render` の1箇所にHot Reload境界を置き、そこから呼び出されるすべてのView / render経路を対象とします。
 - 同一PID・同一Windowで複数回のHot Reloadが可能です。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態は維持されます。
-- devserver切断後は指数バックオフで非同期に再接続を試みます。
+- devserver切断後は指数バックオフ（2秒 → 最大30秒）で非同期に再接続を試みます。UIスレッドをブロックしません。
 - 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
 - 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
+
+### 再接続
+
+devserverが起動していない状態でHot Reload起動しても、プロセスを終了しません。devserverのWebSocketポート（4243）へのTCP接続で定期的に生存を確認し、devserverが起動したら自動的に接続します。接続中にdevserverが停止しても、再起動後に再接続します。
+
+### 制限
+
+- Windows x64でのみ検証済み。他のプラットフォームでの動作は未確認です。
+- 修正版`dx` CLIが必要です（Dioxus PR #5967がマージされるまで）。
+- ReleaseビルドにはHot Reloadランタイムを含めません。
 
 ## Host接続
 
