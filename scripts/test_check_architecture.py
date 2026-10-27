@@ -27,6 +27,18 @@ class ArchitectureTests(unittest.TestCase):
             source.write_text('use crate::shell::panel_layout::PanelLayout;\n', encoding="utf-8")
             self.assertTrue(any("Feature" in error for error in check_desktop_layout(root)))
 
+    def test_zone_persistence_rejects_legacy_names_and_helpers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/layout.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('fn panel_position() {}\nconst ZONE: &str = "left-panel";', encoding="utf-8")
+            errors = check_desktop_layout(root)
+            self.assertTrue(any("panel_position" in error for error in errors))
+            self.assertTrue(any("left-panel" in error for error in errors))
+            source.write_text('fn zone_position() {}\nconst ZONE: &str = "left";', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
             package("model", "shared/models/example"),

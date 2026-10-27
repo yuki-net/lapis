@@ -24,22 +24,22 @@ pub(crate) fn serialize_tab(tab: &PanelTab) -> String {
     }
 }
 
-pub(crate) fn panel_position(value: &str) -> Option<ZonePosition> {
+pub(crate) fn zone_position(value: &str) -> Option<ZonePosition> {
     match value {
-        "main-panel" => Some(ZonePosition::Main),
-        "left-panel" => Some(ZonePosition::Left),
-        "bottom-panel" => Some(ZonePosition::Bottom),
-        "right-panel" => Some(ZonePosition::Right),
+        "main" => Some(ZonePosition::Main),
+        "left" => Some(ZonePosition::Left),
+        "bottom" => Some(ZonePosition::Bottom),
+        "right" => Some(ZonePosition::Right),
         _ => None,
     }
 }
 
-pub(crate) fn panel_position_name(position: ZonePosition) -> &'static str {
+pub(crate) fn zone_position_name(position: ZonePosition) -> &'static str {
     match position {
-        ZonePosition::Main => "main-panel",
-        ZonePosition::Left => "left-panel",
-        ZonePosition::Bottom => "bottom-panel",
-        ZonePosition::Right => "right-panel",
+        ZonePosition::Main => "main",
+        ZonePosition::Left => "left",
+        ZonePosition::Bottom => "bottom",
+        ZonePosition::Right => "right",
     }
 }
 
@@ -667,6 +667,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn saved_zone_names_are_the_current_zone_contract() {
+        let saved = DockLayout::default().capture();
+        assert_eq!(saved.version, 3);
+        let mut names = saved
+            .zones
+            .iter()
+            .map(|zone| zone.position.as_str())
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, ["bottom", "left", "main", "right"]);
+        let json = serde_json::to_string(&saved).unwrap();
+        let decoded = serde_json::from_str(&json).unwrap();
+        assert!(DockLayout::restore(&decoded, |_| None).is_some());
+        let mut obsolete = saved;
+        obsolete.zones[0].position.push_str("-panel");
+        assert!(DockLayout::restore(&obsolete, |_| None).is_none());
+    }
+
+    #[test]
     fn main_is_permanent_and_never_accepts_another_panel() {
         let mut layout = DockLayout::default();
         let main = layout.first_panel_in_zone(ZonePosition::Main).unwrap();
@@ -1221,7 +1240,7 @@ mod tests {
         let zone = saved
             .zones
             .iter_mut()
-            .find(|zone| zone.position == "left-panel")
+            .find(|zone| zone.position == "left")
             .unwrap();
         zone.panels[0].id = "panel-999".into();
         assert!(
@@ -1245,7 +1264,7 @@ mod tests {
         let right = saved
             .zones
             .iter_mut()
-            .find(|zone| zone.position == "right-panel")
+            .find(|zone| zone.position == "right")
             .unwrap();
         right.panels[0].tabs = vec![raw.clone()];
         right.panels[0].active_tab = Some(raw);

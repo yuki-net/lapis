@@ -411,44 +411,85 @@ mod tests {
     }
 
     #[test]
-    fn panel_limit_removes_add_target_but_keeps_existing_panel_drop() {
-        let mut layout = DockLayout::default();
-        let first = layout.first_panel_in_zone(ZonePosition::Left).unwrap();
-        let first_extra = super::super::PanelTab::tool("first-extra");
-        let second_extra = super::super::PanelTab::tool("second-extra");
-        layout
-            .open_tab(ZonePosition::Left, first_extra.clone())
-            .unwrap();
-        layout
-            .open_tab(ZonePosition::Left, second_extra.clone())
-            .unwrap();
-        let add = |panel| PanelDrop::Edge {
-            panel,
-            edge: PanelEdge::Right,
-        };
-        let now = Instant::now();
-        let second = layout
-            .drop_tab(
-                &first,
-                &first_extra,
-                &add(first.clone()),
-                (900.0, 600.0),
-                now,
-            )
-            .unwrap();
-        let third = layout
-            .drop_tab(&first, &second_extra, &add(second), (900.0, 600.0), now)
-            .unwrap();
-        let before = layout.capture();
-        let geometry = DockGeometry::single_zone(&layout, ZonePosition::Left, (900.0, 600.0));
-        let rect = geometry.panels[&third];
-        let target = DockGeometry::drop_target(
-            &layout,
-            geometry.panels.iter().map(|(id, rect)| (id.clone(), *rect)),
-            geometry.zones.iter().map(|(zone, rect)| (*zone, *rect)),
+    fn all_zones_expose_only_permitted_panel_add_targets() {
+        use super::super::PanelTab;
+        for (position, edge) in [
+            (ZonePosition::Left, PanelEdge::Right),
+            (ZonePosition::Right, PanelEdge::Left),
+            (ZonePosition::Bottom, PanelEdge::Top),
+        ] {
+            let mut layout = DockLayout::default();
+            for (tab, id) in layout.placements() {
+                if layout.panel(&id).unwrap().position == position {
+                    assert!(layout.remove_tab(&id, &tab, Instant::now()));
+                }
+            }
+            layout.finish_due_closes(
+                Instant::now() + super::super::panel_transition::PANEL_ANIMATION_DURATION,
+            );
+            assert!(!layout.zone_has_panels(position));
+            let first = layout.open_tab(position, PanelTab::tool("first")).unwrap();
+            for count in 1..=3 {
+                let geometry = DockGeometry::single_zone(&layout, position, (900.0, 600.0));
+                let growth = layout.growth_panel(position).unwrap();
+                let rect = geometry.panels[&growth];
+                let point = match edge {
+                    PanelEdge::Right => (rect.x + rect.width - 1.0, rect.y + rect.height / 2.0),
+                    PanelEdge::Left => (rect.x + 1.0, rect.y + rect.height / 2.0),
+                    PanelEdge::Top => (rect.x + rect.width / 2.0, rect.y + 1.0),
+                };
+                let target = DockGeometry::drop_target(
+                    &layout,
+                    geometry.panels.iter().map(|(id, rect)| (id.clone(), *rect)),
+                    geometry.zones.iter().map(|(zone, rect)| (*zone, *rect)),
+                    point,
+                );
+                if count == 3 {
+                    assert_eq!(target, Some(PanelDrop::Into(growth)));
+                } else {
+                    assert_eq!(
+                        target,
+                        Some(PanelDrop::Edge {
+                            panel: growth.clone(),
+                            edge
+                        })
+                    );
+                    let tab = PanelTab::tool(format!("extra-{count}"));
+                    let source = layout.open_tab(position, tab.clone()).unwrap();
+                    layout
+                        .drop_tab(
+                            &source,
+                            &tab,
+                            &PanelDrop::Edge {
+                                panel: growth,
+                                edge,
+                            },
+                            (900.0, 600.0),
+                            Instant::now(),
+                        )
+                        .unwrap();
+                }
+            }
+            assert!(layout.panel(&first).is_some());
+        }
+        let layout = DockLayout::default();
+        let main = layout.first_panel_in_zone(ZonePosition::Main).unwrap();
+        let geometry = DockGeometry::single_zone(&layout, ZonePosition::Main, (900.0, 600.0));
+        let rect = geometry.panels[&main];
+        for point in [
+            (rect.x + 1.0, rect.y + rect.height / 2.0),
             (rect.x + rect.width - 1.0, rect.y + rect.height / 2.0),
-        );
-        assert_eq!(target, Some(PanelDrop::Into(third)));
-        assert_eq!(layout.capture(), before);
+            (rect.x + rect.width / 2.0, rect.y + 1.0),
+        ] {
+            assert_eq!(
+                DockGeometry::drop_target(
+                    &layout,
+                    geometry.panels.iter().map(|(id, r)| (id.clone(), *r)),
+                    geometry.zones.iter().map(|(zone, r)| (*zone, *r)),
+                    point
+                ),
+                Some(PanelDrop::Into(main.clone()))
+            );
+        }
     }
 }

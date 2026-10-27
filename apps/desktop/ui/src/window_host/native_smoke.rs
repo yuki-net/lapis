@@ -380,7 +380,7 @@ pub(crate) fn run_native_smoke(
                 cx.notify();
             });
             root.shell.update(cx, |shell, cx| {
-                shell.toggle_panel(ZonePosition::Bottom, cx);
+                shell.toggle_zone(ZonePosition::Bottom, cx);
             });
             root.schedule_persist(cx);
         })
