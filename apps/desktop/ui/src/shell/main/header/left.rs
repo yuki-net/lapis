@@ -9,56 +9,44 @@ impl Shell {
                 controls
                     .child(
                         panel_toggle_button(
-                            "toggle-left-panel",
-                            controls::PanelPosition::Left,
+                            "toggle-left-zone",
+                            controls::ZonePosition::Left,
                             panel_state(
                                 self.shell
                                     .layout
-                                    .zone_open(crate::extension_ui::PanelPosition::Left),
+                                    .zone_open(crate::extension_ui::ZonePosition::Left),
                             ),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_header_panel(
-                                crate::extension_ui::PanelPosition::Left,
-                                window,
-                                cx,
-                            );
+                            this.execute_command(id::COMMAND_TOGGLE_LEFT_ZONE.into(), window, cx);
                         })),
                     )
                     .child(
                         panel_toggle_button(
-                            "toggle-bottom-panel",
-                            controls::PanelPosition::Bottom,
+                            "toggle-bottom-zone",
+                            controls::ZonePosition::Bottom,
                             panel_state(
                                 self.shell
                                     .layout
-                                    .zone_open(crate::extension_ui::PanelPosition::Bottom),
+                                    .zone_open(crate::extension_ui::ZonePosition::Bottom),
                             ),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_header_panel(
-                                crate::extension_ui::PanelPosition::Bottom,
-                                window,
-                                cx,
-                            );
+                            this.execute_command(id::COMMAND_TOGGLE_BOTTOM_ZONE.into(), window, cx);
                         })),
                     )
                     .child(
                         panel_toggle_button(
-                            "toggle-right-panel",
-                            controls::PanelPosition::Right,
+                            "toggle-right-zone",
+                            controls::ZonePosition::Right,
                             panel_state(
                                 self.shell
                                     .layout
-                                    .zone_open(crate::extension_ui::PanelPosition::Right),
+                                    .zone_open(crate::extension_ui::ZonePosition::Right),
                             ),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.toggle_header_panel(
-                                crate::extension_ui::PanelPosition::Right,
-                                window,
-                                cx,
-                            );
+                            this.execute_command(id::COMMAND_TOGGLE_RIGHT_ZONE.into(), window, cx);
                         })),
                     )
             },
@@ -102,7 +90,7 @@ fn panel_state(open: bool) -> controls::PanelState {
 
 fn panel_toggle_button(
     id: &'static str,
-    position: controls::PanelPosition,
+    position: controls::ZonePosition,
     state: controls::PanelState,
 ) -> gpui::Stateful<gpui::Div> {
     header_button(id, controls::PanelToggleIcon::new(position, state))

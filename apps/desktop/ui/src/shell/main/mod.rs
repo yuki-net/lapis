@@ -14,10 +14,10 @@ use crate::{
     theme,
 };
 use crate::{
-    extension_ui::PanelPosition,
+    extension_ui::ZonePosition,
     shell::{
-        DraggedPanelTab, DropTarget, DropZone, LayoutError, LayoutNode, PanelHost,
-        PanelSpanTransition, PanelTab, ResizeMode, ResizeTarget, SplitDirection, TabGroupId,
+        DraggedPanelTab, PanelDrop, PanelEdge, PanelHost, PanelId, PanelSpanTransition, PanelTab,
+        PickerTarget, ResizeMode, ResizeTarget,
     },
 };
 use gpui::{
@@ -50,10 +50,11 @@ pub(crate) struct Shell {
     tab_drag: super::tab_state::TabDragState,
     drag_preview: Option<gpui::AnyWindowHandle>,
     _drag_keys: gpui::Subscription,
-    pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
-    pub(crate) group_bounds: RefCell<HashMap<TabGroupId, gpui::Bounds<Pixels>>>,
-    drop_target: Option<DropTarget>,
-    layout_bounds: RefCell<Option<gpui::Bounds<Pixels>>>,
+    pub(crate) zone_panel_bounds: RefCell<HashMap<ZonePosition, gpui::Bounds<Pixels>>>,
+    pub(crate) panel_bounds: RefCell<HashMap<PanelId, gpui::Bounds<Pixels>>>,
+    drop_target: Option<DropPreview>,
+    pub(crate) zone_bounds: RefCell<HashMap<ZonePosition, gpui::Bounds<Pixels>>>,
+    dock_geometry: RefCell<Option<crate::shell::dock_geometry::DockGeometry>>,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
     focus_handle: FocusHandle,
@@ -63,6 +64,14 @@ pub(crate) struct Shell {
     languages: lapis_language::LanguageRegistry,
     scroll_states: ShellScrollStates,
     status: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct DropPreview {
+    target: PanelDrop,
+    invalid: bool,
+    zone: ZonePosition,
+    rect: Option<(f32, f32, f32, f32)>,
 }
 
 #[derive(Default)]
@@ -109,8 +118,8 @@ impl ShellPresentation {
 
 struct ShellScrollStates {
     panel_contents: RefCell<HashMap<PanelTab, ScrollState>>,
-    panel_empty: RefCell<HashMap<super::TabGroupId, ScrollState>>,
-    panel_tabs: RefCell<HashMap<super::TabGroupId, ScrollState>>,
+    panel_empty: RefCell<HashMap<super::PanelId, ScrollState>>,
+    panel_tabs: RefCell<HashMap<super::PanelId, ScrollState>>,
     tool_picker: ScrollState,
 }
 impl Default for ShellScrollStates {
@@ -131,17 +140,17 @@ impl ShellScrollStates {
             .or_default()
             .clone()
     }
-    fn panel_empty(&self, group: &super::TabGroupId) -> ScrollState {
+    fn panel_empty(&self, panel_id: &super::PanelId) -> ScrollState {
         self.panel_empty
             .borrow_mut()
-            .entry(group.clone())
+            .entry(panel_id.clone())
             .or_default()
             .clone()
     }
-    fn panel_tabs(&self, group: &super::TabGroupId) -> ScrollState {
+    fn panel_tabs(&self, panel_id: &super::PanelId) -> ScrollState {
         self.panel_tabs
             .borrow_mut()
-            .entry(group.clone())
+            .entry(panel_id.clone())
             .or_default()
             .clone()
     }
@@ -149,13 +158,13 @@ impl ShellScrollStates {
 impl gpui::EventEmitter<UiCommand> for Shell {}
 
 #[cfg(all(test, debug_assertions))]
-mod group_scroll_tests {
+mod panel_scroll_tests {
     use super::*;
     #[test]
-    fn tab_groups_have_independent_scroll_state() {
+    fn panels_have_independent_scroll_state() {
         let states = ShellScrollStates::default();
-        let a = super::super::TabGroupId::new(2);
-        let b = super::super::TabGroupId::new(5);
+        let a = super::super::PanelId::new(2);
+        let b = super::super::PanelId::new(5);
         let first = states.panel_tabs(&a);
         let second = states.panel_tabs(&b);
         first.handle().set_offset(point(px(-80.0), px(0.0)));
@@ -202,10 +211,11 @@ impl Shell {
             tab_drag: Default::default(),
             drag_preview: None,
             _drag_keys: drag_keys,
+            zone_panel_bounds: Default::default(),
             panel_bounds: Default::default(),
-            group_bounds: Default::default(),
+            zone_bounds: Default::default(),
             drop_target: None,
-            layout_bounds: RefCell::new(None),
+            dock_geometry: RefCell::new(None),
             session: ShellPresentation::default(),
             document_view,
             focus_handle: cx.focus_handle(),
@@ -256,19 +266,11 @@ impl Shell {
         }
     }
     pub(crate) fn preview_visible(&self) -> bool {
-        [
-            self.shell.panel(PanelPosition::Left),
-            self.shell.panel(PanelPosition::Main),
-            self.shell.panel(PanelPosition::Bottom),
-            self.shell.panel(PanelPosition::Right),
-        ]
-        .into_iter()
-        .any(|panel| {
-            panel.open
-                && matches!(
-                    panel.active.as_ref(),
-                    Some(PanelTab::Tool { view, .. }) if view.as_str() == id::VIEW_PREVIEW
-                )
+        self.shell.layout.visible_panels().any(|panel| {
+            matches!(
+                panel.active.as_ref(),
+                Some(PanelTab::Tool { view, .. }) if view.as_str() == id::VIEW_PREVIEW
+            )
         })
     }
 

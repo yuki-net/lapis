@@ -76,20 +76,30 @@ impl DesktopRoot {
                                 return None;
                             }
                             let shell = member.shell.read(cx);
-                            shell
-                                .group_bounds
+                            let panel = shell
+                                .panel_bounds
                                 .borrow()
                                 .iter()
                                 .find(|(_, bounds)| bounds.contains(&position))
-                                .map(|(group, _)| (*host, group.clone()))
+                                .map(|(panel_id, _)| TabDestination::Panel(panel_id.clone()));
+                            let destination = panel.or_else(|| {
+                                (!shell.shell.layout.zone_has_panels(ZonePosition::Main)
+                                    && shell
+                                        .zone_bounds
+                                        .borrow()
+                                        .get(&ZonePosition::Main)
+                                        .is_some_and(|bounds| bounds.contains(&position)))
+                                .then_some(TabDestination::Zone(ZonePosition::Main))
+                            });
+                            destination.map(|destination| (*host, destination))
                         })
                 });
                 break;
             }
         }
-        if let Some((target, group)) = target {
+        if let Some((target, destination)) = target {
             let handle = self.group.read(cx).members[&target].handle;
-            self.transfer_tab_to_group(host, target, group, drag.tab, cx);
+            self.transfer_tab_to_destination(host, target, destination, drag.tab, cx);
             let editor = self.group.read(cx).members[&target].editor.clone();
             let _ = handle.update(cx, |_, window, cx| {
                 window.activate_window();

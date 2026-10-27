@@ -1,413 +1,220 @@
 use super::*;
+use crate::shell::panel_layout::Axis;
 
 impl Shell {
-    /// Renders the animated root panel layout, or a single main panel filling a detached window's body.
+    /// 全Zoneを同じPanel配置Rendererで描画する。
     pub(crate) fn render_main(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
-        if self.detached {
-            return div()
-                .flex()
-                .flex_col()
-                .flex_1()
-                .min_h(px(0.0))
-                .p(tokens::spacing::GAP)
-                .child(self.render_panel_window(self.shell.panel(PanelPosition::Main), cx));
-        }
         let now = std::time::Instant::now();
-        if self
-            .shell
-            .panels()
-            .into_iter()
-            .any(|panel| panel.is_animating(now))
-            || self.shell.bottom_span_is_animating(now)
-        {
+        if self.shell.layout.has_closing_panels() || self.shell.bottom_span_is_animating(now) {
             window.request_animation_frame();
         }
-
-        if self.shell.layout.has_variable_splits() {
-            return self.render_variable_layout(now, cx);
-        }
-
-        let gap = f32::from(tokens::spacing::GAP);
-        let left_size = self.shell.panel(PanelPosition::Left).effective_size(now);
-        let right_size = self.shell.panel(PanelPosition::Right).effective_size(now);
-        let bottom_size = self.shell.panel(PanelPosition::Bottom).effective_size(now);
-        let body_height = (f32::from(window.viewport_size().height)
-            - f32::from(tokens::size::TITLE_BAR_HEIGHT)
-            - f32::from(tokens::size::STATUS_BAR_HEIGHT)
-            - gap * 2.0)
-            .max(0.0);
-
-        let left_visible = self.shell.panel(PanelPosition::Left).is_visible(now);
-        let right_visible = self.shell.panel(PanelPosition::Right).is_visible(now);
-        let bottom_visible = self.shell.panel(PanelPosition::Bottom).is_visible(now);
-        let span_left = bottom_visible && left_visible && self.shell.bottom_spans_left_layout(now);
-        let span_right =
-            bottom_visible && right_visible && self.shell.bottom_spans_right_layout(now);
-
-        let left_shortening = if bottom_visible && left_visible {
-            self.shell.left_side_shortening(now)
-        } else {
-            0.0
-        };
-        let right_shortening = if bottom_visible && right_visible {
-            self.shell.right_side_shortening(now)
-        } else {
-            0.0
-        };
-        let left_height = (body_height - (bottom_size + gap) * left_shortening).max(0.0);
-        let right_height = (body_height - (bottom_size + gap) * right_shortening).max(0.0);
-        let left_inset = if span_left {
-            (left_size + gap) * (1.0 - self.shell.bottom_left_extent(now))
-        } else {
-            0.0
-        };
-        let right_inset = if span_right {
-            (right_size + gap) * (1.0 - self.shell.bottom_right_extent(now))
-        } else {
-            0.0
-        };
-
-        let root = || {
-            div()
-                .h(px(0.0))
-                .w_full()
-                .min_h(px(0.0))
-                .min_w(px(0.0))
-                .flex_1()
-                .px(tokens::spacing::GAP)
-        };
-
-        match (span_left, span_right) {
-            (true, true) => {
-                let top = div()
-                    .w_full()
-                    .flex()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .min_w(px(0.0))
-                    .child(self.render_panel_window_frame(
-                        self.shell.panel(PanelPosition::Left),
-                        Some(left_size),
-                        cx,
-                    ))
-                    .when(
-                        !self.shell.panel(PanelPosition::Left).is_transitioning(),
-                        |top| top.child(self.render_resize_handle(ResizeTarget::Left, false, cx)),
-                    )
-                    .child(self.render_main_flex(cx))
-                    .when(
-                        !self.shell.panel(PanelPosition::Right).is_transitioning(),
-                        |top| top.child(self.render_resize_handle(ResizeTarget::Right, false, cx)),
-                    )
-                    .child(self.render_panel_window_frame(
-                        self.shell.panel(PanelPosition::Right),
-                        Some(right_size),
-                        cx,
-                    ));
-
-                root().flex().flex_col().child(self.render_bottom_stack(
-                    top,
-                    bottom_size,
-                    left_inset,
-                    right_inset,
-                    cx,
-                ))
-            }
-            (true, false) => {
-                let top = div()
-                    .w_full()
-                    .flex()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .min_w(px(0.0))
-                    .child(self.render_panel_window_frame(
-                        self.shell.panel(PanelPosition::Left),
-                        Some(left_size),
-                        cx,
-                    ))
-                    .when(
-                        !self.shell.panel(PanelPosition::Left).is_transitioning(),
-                        |top| top.child(self.render_resize_handle(ResizeTarget::Left, false, cx)),
-                    )
-                    .child(self.render_main_flex(cx));
-
-                root()
-                    .flex()
-                    .child(self.render_bottom_stack(top, bottom_size, left_inset, 0.0, cx))
-                    .when(right_visible, |body| {
-                        body.when(
-                            !self.shell.panel(PanelPosition::Right).is_transitioning(),
-                            |body| {
-                                body.child(self.render_resize_handle(
-                                    ResizeTarget::Right,
-                                    false,
-                                    cx,
-                                ))
-                            },
-                        )
-                        .child(self.render_side_panel(
-                            self.shell.panel(PanelPosition::Right),
-                            right_size,
-                            right_shortening,
-                            right_height,
-                            cx,
-                        ))
-                    })
-            }
-            (false, true) => {
-                let top = div()
-                    .w_full()
-                    .flex()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .min_w(px(0.0))
-                    .child(self.render_main_flex(cx))
-                    .when(
-                        !self.shell.panel(PanelPosition::Right).is_transitioning(),
-                        |top| top.child(self.render_resize_handle(ResizeTarget::Right, false, cx)),
-                    )
-                    .child(self.render_panel_window_frame(
-                        self.shell.panel(PanelPosition::Right),
-                        Some(right_size),
-                        cx,
-                    ));
-
-                root()
-                    .flex()
-                    .when(left_visible, |body| {
-                        body.child(self.render_side_panel(
-                            self.shell.panel(PanelPosition::Left),
-                            left_size,
-                            left_shortening,
-                            left_height,
-                            cx,
-                        ))
-                        .when(
-                            !self.shell.panel(PanelPosition::Left).is_transitioning(),
-                            |body| {
-                                body.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
-                            },
-                        )
-                    })
-                    .child(self.render_bottom_stack(top, bottom_size, 0.0, right_inset, cx))
-            }
-            (false, false) => {
-                let main = self.render_main_flex(cx);
-                let center = if bottom_visible {
-                    self.render_bottom_stack(main, bottom_size, 0.0, 0.0, cx)
-                } else {
-                    div()
-                        .h_full()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .min_w(px(0.0))
-                        .child(main)
-                };
-
-                root()
-                    .flex()
-                    .when(left_visible, |body| {
-                        body.child(self.render_side_panel(
-                            self.shell.panel(PanelPosition::Left),
-                            left_size,
-                            left_shortening,
-                            left_height,
-                            cx,
-                        ))
-                        .when(
-                            !self.shell.panel(PanelPosition::Left).is_transitioning(),
-                            |body| {
-                                body.child(self.render_resize_handle(ResizeTarget::Left, false, cx))
-                            },
-                        )
-                    })
-                    .child(center)
-                    .when(right_visible, |body| {
-                        body.when(
-                            !self.shell.panel(PanelPosition::Right).is_transitioning(),
-                            |body| {
-                                body.child(self.render_resize_handle(
-                                    ResizeTarget::Right,
-                                    false,
-                                    cx,
-                                ))
-                            },
-                        )
-                        .child(self.render_side_panel(
-                            self.shell.panel(PanelPosition::Right),
-                            right_size,
-                            right_shortening,
-                            right_height,
-                            cx,
-                        ))
-                    })
-            }
-        }
-    }
-
-    fn render_variable_layout(&self, now: std::time::Instant, cx: &mut Context<Self>) -> gpui::Div {
-        self.render_layout_node(self.shell.layout.root(), now, cx)
-            .h_full()
-            .w_full()
-            .flex()
-            .min_h(px(0.0))
+        let viewport = window.viewport_size();
+        let geometry = crate::shell::dock_geometry::DockGeometry::calculate(
+            &self.shell.layout,
+            (f32::from(viewport.width), f32::from(viewport.height)),
+            self.detached,
+            (
+                self.shell.bottom_spans_left_layout(now),
+                self.shell.bottom_spans_right_layout(now),
+            ),
+            now,
+        );
+        let mut frame = div()
+            .relative()
+            .flex_1()
             .min_w(px(0.0))
-            .overflow_hidden()
+            .min_h(px(0.0))
+            .overflow_hidden();
+        for (&position, rect) in &geometry.zones {
+            frame = frame.child(
+                self.render_zone(position, &geometry, now, cx)
+                    .absolute()
+                    .left(px(rect.x - geometry.frame.x))
+                    .top(px(rect.y - geometry.frame.y))
+                    .w(px(rect.width))
+                    .h(px(rect.height)),
+            );
+            self.zone_bounds.borrow_mut().insert(
+                position,
+                gpui::Bounds::new(
+                    point(px(rect.x), px(rect.y)),
+                    gpui::size(px(rect.width), px(rect.height)),
+                ),
+            );
+        }
+        for (id, rect) in &geometry.panels {
+            let bounds = gpui::Bounds::new(
+                point(px(rect.x), px(rect.y)),
+                gpui::size(px(rect.width), px(rect.height)),
+            );
+            self.panel_bounds.borrow_mut().insert(id.clone(), bounds);
+            if let Some(position) = self.shell.layout.zone_for_panel(id) {
+                self.zone_panel_bounds
+                    .borrow_mut()
+                    .entry(position)
+                    .or_insert(bounds);
+            }
+        }
+        let gap = geometry.gap;
+        if let Some(left) = geometry.zones.get(&ZonePosition::Left) {
+            frame = frame.child(
+                self.render_resize_handle(ResizeTarget::Left, false, cx)
+                    .absolute()
+                    .left(px(left.x + left.width))
+                    .top(px(left.y - geometry.frame.y))
+                    .w(px(gap))
+                    .h(px(left.height)),
+            );
+        }
+        if let Some(right) = geometry.zones.get(&ZonePosition::Right) {
+            frame = frame.child(
+                self.render_resize_handle(ResizeTarget::Right, false, cx)
+                    .absolute()
+                    .left(px((right.x - gap).max(0.0)))
+                    .top(px(right.y - geometry.frame.y))
+                    .w(px(gap))
+                    .h(px(right.height)),
+            );
+        }
+        if let Some(bottom) = geometry.zones.get(&ZonePosition::Bottom) {
+            frame = frame.child(
+                self.render_resize_handle(ResizeTarget::Bottom, true, cx)
+                    .absolute()
+                    .left(px(bottom.x))
+                    .top(px((bottom.y - geometry.frame.y - gap).max(0.0)))
+                    .w(px(bottom.width))
+                    .h(px(gap)),
+            );
+        }
+        *self.dock_geometry.borrow_mut() = Some(geometry);
+        frame
     }
 
-    fn render_layout_node(
+    fn render_zone(
         &self,
-        node: &LayoutNode,
+        position: ZonePosition,
+        geometry: &crate::shell::dock_geometry::DockGeometry,
         now: std::time::Instant,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        if !self.layout_node_visible(node, now) {
-            return div().size(px(0.0)).flex_shrink_0();
-        }
-        match node {
-            LayoutNode::Tabs(group) => {
-                let panel = self
-                    .shell
-                    .layout
-                    .group(group)
-                    .expect("layout leaf must have a tab group");
-                self.render_panel_window_for_group(panel, group, cx)
-            }
-            LayoutNode::Split {
-                direction,
-                ratio,
-                first,
-                second,
-            } => {
-                let first_visible = self.layout_node_visible(first, now);
-                let second_visible = self.layout_node_visible(second, now);
-                let allocation = crate::shell::layout::SplitAllocation::new(
-                    *direction,
-                    *ratio,
-                    [first_visible, second_visible],
-                );
-                // basis=0からGAP控除後の空間を配分する。百分率幅とGAPを加算しない。
-                let mut first = self
-                    .render_layout_node(first, now, cx)
-                    .flex_basis(px(0.0))
-                    .min_h(px(0.0))
-                    .min_w(px(0.0))
-                    .overflow_hidden();
-                first.style().flex_grow = Some(allocation.weights[0]);
-                let mut second = self
-                    .render_layout_node(second, now, cx)
-                    .flex_basis(px(0.0))
-                    .min_h(px(0.0))
-                    .min_w(px(0.0))
-                    .overflow_hidden();
-                second.style().flex_grow = Some(allocation.weights[1]);
-                let mut split = div()
-                    .flex()
-                    .flex_1()
-                    .min_h(px(0.0))
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .child(first)
-                    // GAP自体も極小WindowではGPUIに縮小させる。
-                    .child(
-                        div()
-                            .flex_basis(px(allocation.gap))
-                            .min_w(px(0.0))
-                            .min_h(px(0.0)),
-                    )
-                    .child(second);
-                split = match direction {
-                    SplitDirection::Horizontal => split.flex_row(),
-                    SplitDirection::Vertical => split.flex_col(),
-                };
-                split
-            }
-        }
-    }
-
-    fn layout_node_visible(&self, node: &LayoutNode, now: std::time::Instant) -> bool {
-        match node {
-            LayoutNode::Tabs(group) => self
+        let zone = self.shell.layout.zone(position);
+        let zone_rect = geometry.zones[&position];
+        let mut root = div()
+            .relative()
+            .min_w(px(0.0))
+            .min_h(px(0.0))
+            .overflow_hidden();
+        for (id, rect) in &geometry.panels {
+            if let Some(panel) = self
                 .shell
                 .layout
-                .group(group)
-                .is_some_and(|panel| panel.is_visible(now)),
-            LayoutNode::Split { first, second, .. } => {
-                self.layout_node_visible(first, now) || self.layout_node_visible(second, now)
+                .panel(id)
+                .filter(|_| self.shell.layout.zone_for_panel(id) == Some(position))
+            {
+                root = root.child(
+                    self.render_panel_window(position, panel, id, cx)
+                        .absolute()
+                        .left(px(rect.x - zone_rect.x))
+                        .top(px(rect.y - zone_rect.y))
+                        .w(px(rect.width))
+                        .h(px(rect.height))
+                        .opacity(zone.panel_visual_factor(id, now)),
+                );
             }
         }
-    }
-
-    fn render_main_flex(&self, cx: &mut Context<Self>) -> gpui::Div {
-        div()
-            .h_full()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .min_w(tokens::size::PANEL_MIN_WIDTH)
-            .overflow_hidden()
-            .child(self.render_panel_window(self.shell.panel(PanelPosition::Main), cx))
-    }
-
-    fn render_side_panel(
-        &self,
-        panel: &PanelHost,
-        size: f32,
-        shortening: f32,
-        animated_height: f32,
-        cx: &mut Context<Self>,
-    ) -> gpui::Div {
-        let panel = self.render_panel_window_frame(panel, Some(size), cx);
-        if shortening > 0.0 {
-            panel.h(px(animated_height)).flex_shrink_0()
-        } else {
-            panel
+        for boundary in geometry
+            .panel_boundaries
+            .iter()
+            .filter(|boundary| boundary.zone == position)
+        {
+            let rect = boundary.rect;
+            root = root.child(
+                self.render_panel_boundary(boundary.clone(), cx)
+                    .absolute()
+                    .left(px(rect.x - zone_rect.x))
+                    .top(px(rect.y - zone_rect.y))
+                    .w(px(rect.width))
+                    .h(px(rect.height)),
+            );
         }
+        if geometry.panels.keys().all(|id| {
+            self.shell
+                .layout
+                .zone_for_panel(id)
+                .is_none_or(|zone| zone != position)
+        }) {
+            root = root.child(
+                div()
+                    .id(ElementId::Name(format!("empty-zone-{position:?}").into()))
+                    .size_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(theme::colors().background_secondary)
+                    .child(
+                        div()
+                            .id(ElementId::Name(
+                                format!("empty-zone-add-{position:?}").into(),
+                            ))
+                            .px_2()
+                            .py_1()
+                            .child(self.t("panel.open-tool"))
+                            .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                                this.open_empty_zone_picker(position, event.position(), window, cx);
+                            })),
+                    ),
+            );
+        }
+        if let Some(preview) = self
+            .drop_target
+            .as_ref()
+            .filter(|preview| preview.zone == position && preview.rect.is_some())
+        {
+            let (x, y, width, height) = preview.rect.unwrap();
+            root = root.child(
+                div()
+                    .absolute()
+                    .left(px(x))
+                    .top(px(y))
+                    .w(px(width))
+                    .h(px(height))
+                    .bg(theme::colors().button_background_selected)
+                    .opacity(0.55),
+            );
+        } else if self.drop_target.as_ref().is_some_and(
+            |preview| matches!(preview.target, PanelDrop::IntoZone(target) if target == position),
+        ) {
+            root = root.child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(theme::colors().button_background_selected)
+                    .opacity(0.55),
+            );
+        }
+        root
     }
 
-    fn render_bottom_stack(
+    fn render_panel_boundary(
         &self,
-        top: gpui::Div,
-        bottom_size: f32,
-        left_inset: f32,
-        right_inset: f32,
+        boundary: crate::shell::dock_geometry::PanelBoundary,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let bottom = div()
-            .h(px(bottom_size))
-            .w_full()
-            .flex()
-            .flex_shrink_0()
-            .when(left_inset > 0.0, |row| {
-                row.child(div().w(px(left_inset)).h_full().flex_shrink_0())
-            })
-            .child(div().h_full().flex().flex_1().min_w(px(0.0)).child(
-                self.render_panel_window_frame(
-                    self.shell.panel(PanelPosition::Bottom),
-                    Some(bottom_size),
-                    cx,
-                ),
-            ))
-            .when(right_inset > 0.0, |row| {
-                row.child(div().w(px(right_inset)).h_full().flex_shrink_0())
-            });
-
-        div()
-            .h_full()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
+        let axis = boundary.axis;
+        let handle = div()
             .min_w(px(0.0))
-            .child(top)
-            .when(
-                !self.shell.panel(PanelPosition::Bottom).is_transitioning(),
-                |stack| stack.child(self.render_resize_handle(ResizeTarget::Bottom, true, cx)),
-            )
-            .child(bottom)
+            .min_h(px(0.0))
+            .hover(|style| style.bg(theme::colors().button_background_selected))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
+                    this.start_panel_resize(boundary.clone(), event.position, cx);
+                }),
+            );
+        match axis {
+            Axis::Horizontal => handle.cursor(CursorStyle::ResizeLeftRight),
+            Axis::Vertical => handle.cursor(CursorStyle::ResizeUpDown),
+        }
     }
 }
 
@@ -421,51 +228,82 @@ mod tests {
             div()
         }
     }
-
     struct Fixture {
         shell: gpui::Entity<Shell>,
         size: (f32, f32),
     }
     impl Render for Fixture {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            div().w(px(self.size.0)).h(px(self.size.1)).flex().child(
-                self.shell.update(cx, |shell, cx| {
-                    shell.render_variable_layout(std::time::Instant::now(), cx)
-                }),
-            )
+            div()
+                .w(px(self.size.0))
+                .h(px(self.size.1))
+                .flex()
+                .child(self.shell.update(cx, |shell, cx| {
+                    {
+                        let geometry = crate::shell::dock_geometry::DockGeometry::single_zone(
+                            &shell.shell.layout,
+                            ZonePosition::Left,
+                            self.size,
+                        );
+                        shell.render_zone(
+                            ZonePosition::Left,
+                            &geometry,
+                            std::time::Instant::now(),
+                            cx,
+                        )
+                    }
+                    .flex_1()
+                }))
         }
     }
 
     #[gpui::test]
-    fn gpui_nested_splits_fit_after_resize_without_changing_layout(cx: &mut gpui::TestAppContext) {
+    fn gpui_panels_fit_after_window_shrink_and_restore(cx: &mut gpui::TestAppContext) {
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
             let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
             shell.update(cx, |shell, _| {
-                let main = shell
+                let a = PanelTab::tool("a");
+                let b = PanelTab::tool("b");
+                let c = PanelTab::tool("c");
+                let first = shell.shell.layout.open_tab(ZonePosition::Left, a).unwrap();
+                shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Main)
-                    .clone();
-                let extra = shell
-                    .shell
-                    .layout
-                    .split_group(&main, SplitDirection::Horizontal, 0.3)
+                    .open_tab(ZonePosition::Left, b.clone())
                     .unwrap();
                 shell
                     .shell
                     .layout
-                    .split_group(&extra, SplitDirection::Vertical, 0.65)
+                    .open_tab(ZonePosition::Left, c.clone())
                     .unwrap();
-                let left = shell
+                let second = shell
                     .shell
                     .layout
-                    .primary_group_id(PanelPosition::Left)
-                    .clone();
+                    .drop_tab(
+                        &first,
+                        &b,
+                        &PanelDrop::Edge {
+                            panel: first.clone(),
+                            edge: PanelEdge::Right,
+                        },
+                        (1000.0, 700.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
                 shell
                     .shell
                     .layout
-                    .split_group(&left, SplitDirection::Vertical, 0.4)
+                    .drop_tab(
+                        &first,
+                        &c,
+                        &PanelDrop::Edge {
+                            panel: second,
+                            edge: PanelEdge::Right,
+                        },
+                        (1000.0, 700.0),
+                        std::time::Instant::now(),
+                    )
                     .unwrap();
             });
             Fixture {
@@ -476,61 +314,117 @@ mod tests {
         let shell = window
             .update(cx, |fixture, _, _| fixture.shell.clone())
             .unwrap();
-        for hidden in [false, true] {
-            shell.update(cx, |shell, _| {
-                let left = shell
-                    .shell
-                    .layout
-                    .primary_group_id(PanelPosition::Left)
-                    .clone();
-                shell
-                    .shell
-                    .layout
-                    .group_mut(&left)
-                    .unwrap()
-                    .set_open_immediate(!hidden);
-            });
-            let before = shell.read_with(cx, |shell, _| shell.shell.layout.capture_view_state());
-            let mut original = None;
-            for size in [(1000.0, 700.0), (240.0, 180.0), (4.0, 4.0), (1000.0, 700.0)] {
-                window
-                    .update(cx, |fixture, window, cx| {
-                        fixture.size = size;
-                        fixture
-                            .shell
-                            .update(cx, |shell, _| shell.group_bounds.borrow_mut().clear());
-                        window.refresh();
-                    })
-                    .unwrap();
-                cx.update_window(window.into(), |_, window, cx| {
-                    window.draw(cx).clear();
+        let before = shell.read_with(cx, |shell, _| shell.shell.layout.capture());
+        let mut original = None;
+        for size in [(1000.0, 700.0), (240.0, 180.0), (4.0, 4.0), (1000.0, 700.0)] {
+            window
+                .update(cx, |fixture, window, cx| {
+                    fixture.size = size;
+                    fixture
+                        .shell
+                        .update(cx, |shell, _| shell.panel_bounds.borrow_mut().clear());
+                    window.refresh();
                 })
                 .unwrap();
-                let bounds = shell.read_with(cx, |shell, _| {
-                    assert_eq!(shell.shell.layout.capture_view_state(), before);
-                    shell.group_bounds.borrow().clone()
-                });
-                assert!(!bounds.is_empty());
-                for bounds in bounds.values() {
-                    assert!(f32::from(bounds.origin.x) >= -0.1);
-                    assert!(f32::from(bounds.origin.y) >= -0.1);
-                    assert!(
-                        f32::from(bounds.origin.x + bounds.size.width) <= size.0 + 0.1,
-                        "{bounds:?} in {size:?}"
-                    );
-                    assert!(
-                        f32::from(bounds.origin.y + bounds.size.height) <= size.1 + 0.1,
-                        "{bounds:?} in {size:?}"
-                    );
-                }
-                if size == (1000.0, 700.0) {
-                    if let Some(original) = &original {
-                        assert_eq!(&bounds, original);
-                    } else {
-                        original = Some(bounds);
-                    }
+            cx.update_window(window.into(), |_, window, cx| {
+                window.draw(cx).clear();
+            })
+            .unwrap();
+            let bounds = shell.read_with(cx, |shell, _| {
+                assert_eq!(shell.shell.layout.capture(), before);
+                shell.panel_bounds.borrow().clone()
+            });
+            assert_eq!(bounds.len(), 3);
+            if size == (1000.0, 700.0) {
+                assert!(bounds.values().all(|bounds| bounds.size.width > px(32.0) && bounds.size.height > px(32.0)));
+            }
+            for bounds in bounds.values() {
+                assert!(f32::from(bounds.origin.x) >= -0.1 && f32::from(bounds.origin.y) >= -0.1);
+                assert!(
+                    f32::from(bounds.origin.x + bounds.size.width) <= size.0 + 0.1,
+                    "{bounds:?} in {size:?}"
+                );
+                assert!(
+                    f32::from(bounds.origin.y + bounds.size.height) <= size.1 + 0.1,
+                    "{bounds:?} in {size:?}"
+                );
+            }
+            if size == (1000.0, 700.0) {
+                if let Some(original) = &original {
+                    assert_eq!(&bounds, original);
+                } else {
+                    original = Some(bounds);
                 }
             }
         }
+    }
+
+    #[gpui::test]
+    fn preview_rectangle_matches_the_committed_gpui_panel(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
+            shell.update(cx, |shell, _| {
+                shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Left, PanelTab::tool("a"))
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Left, PanelTab::tool("b"))
+                    .unwrap();
+            });
+            Fixture {
+                shell,
+                size: (900.0, 600.0),
+            }
+        });
+        let shell = window
+            .update(cx, |fixture, _, _| fixture.shell.clone())
+            .unwrap();
+        let (target, expected) = shell.update(cx, |shell, _| {
+            let tab = PanelTab::tool("b");
+            let source = shell.shell.layout.find_tab(&tab).unwrap();
+            let drop = PanelDrop::Edge {
+                panel: source.clone(),
+                edge: PanelEdge::Right,
+            };
+            let now = std::time::Instant::now();
+            let (preview, id) = shell
+                .shell
+                .layout
+                .preview_drop(&source, &tab, &drop, (900.0, 600.0), now)
+                .unwrap();
+            let geometry = crate::shell::dock_geometry::DockGeometry::single_zone(
+                &preview,
+                ZonePosition::Left,
+                (900.0, 600.0),
+            );
+            let rect = geometry.panels[&id];
+            let rect = (rect.x, rect.y, rect.width, rect.height);
+            assert_eq!(
+                shell
+                    .shell
+                    .layout
+                    .drop_tab(&source, &tab, &drop, (900.0, 600.0), now),
+                Ok(id.clone())
+            );
+            (id, rect)
+        });
+        window.update(cx, |_, window, _| window.refresh()).unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear();
+        })
+        .unwrap();
+        let actual = shell.read_with(cx, |shell, _| shell.panel_bounds.borrow()[&target]);
+        assert!(
+            (f32::from(actual.origin.x) - expected.0).abs() < 1.0,
+            "actual={actual:?} expected={expected:?}"
+        );
+        assert!((f32::from(actual.origin.y) - expected.1).abs() < 1.0);
+        assert!((f32::from(actual.size.width) - expected.2).abs() < 1.0);
+        assert!((f32::from(actual.size.height) - expected.3).abs() < 1.0);
     }
 }

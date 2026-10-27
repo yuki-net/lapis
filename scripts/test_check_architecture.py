@@ -1,9 +1,10 @@
 import copy
 import re
+import tempfile
 from pathlib import Path
 import unittest
 
-from check_architecture import check
+from check_architecture import check, check_desktop_layout
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,6 +15,43 @@ def package(name, path, dependencies=()):
 
 
 class ArchitectureTests(unittest.TestCase):
+    def test_desktop_layout_contract_rejects_old_identifiers_and_feature_internals(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/features/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('// TabGroupId was removed\nconst TEXT: &str = "DropZone";\n', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text('fn use_old(_: TabGroupId) {}\n', encoding="utf-8")
+            self.assertTrue(any("TabGroupId" in error for error in check_desktop_layout(root)))
+            source.write_text('use crate::shell::panel_layout::PanelLayout;\n', encoding="utf-8")
+            self.assertTrue(any("Feature" in error for error in check_desktop_layout(root)))
+
+    def test_zone_persistence_rejects_legacy_names_and_helpers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/layout.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('fn panel_position() {}\nconst ZONE: &str = "left-panel";', encoding="utf-8")
+            errors = check_desktop_layout(root)
+            self.assertTrue(any("panel_position" in error for error in errors))
+            self.assertTrue(any("left-panel" in error for error in errors))
+            source.write_text('fn zone_position() {}\nconst ZONE: &str = "left";', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+
+    def test_removed_zone_api_names_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            for name in ("open_panel", "close_panel", "request_panel_open_with_duration", "ToggleBottomPanel", "panel_contributions", "set_panel_active_view"):
+                source.write_text(f"fn {name}(zone: ZonePosition) {{}}", encoding="utf-8")
+                self.assertTrue(any(name in error for error in check_desktop_layout(root)))
+            source.write_text("fn close_panel(panel: PanelId) {} fn toggle_panel_visibility() {} fn set_panel_open() {}", encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text("struct PanelHost { position: ZonePosition }", encoding="utf-8")
+            self.assertTrue(any("二重保持" in error for error in check_desktop_layout(root)))
+
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
             package("model", "shared/models/example"),
@@ -127,6 +165,69 @@ class ArchitectureTests(unittest.TestCase):
                     metadata["workspace_members"].append("native")
                     metadata["packages"].append(package("native", path, [dependency]))
                     self.assertIn("Client 固有依存", "\n".join(check(metadata, {})))
+
+    def test_comment_old_zone_api_is_allowed(self):
+        """コメント内の旧Zone API署名はエラーにしない。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('// fn close_panel(zone: ZonePosition) {}\n', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+
+    def test_real_old_zone_api_is_rejected(self):
+        """実コードの旧Zone API署名はエラーにする。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('fn close_panel(zone: ZonePosition) {}', encoding="utf-8")
+            self.assertTrue(any("close_panel" in error for error in check_desktop_layout(root)))
+
+    def test_comment_panelhost_position_is_allowed(self):
+        """コメント内のPanelHost.positionはエラーにしない。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('// struct PanelHost { position: ZonePosition }', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+
+    def test_real_panelhost_position_is_rejected(self):
+        """実コードのPanelHost.positionはエラーにする。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('struct PanelHost { position: ZonePosition }', encoding="utf-8")
+            self.assertTrue(any("二重保持" in error for error in check_desktop_layout(root)))
+
+    def test_comment_old_zone_save_name_is_allowed(self):
+        """コメント内の旧Zone保存名はエラーにしない。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/layout.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('// legacy value: "left-panel"', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+
+    def test_real_old_zone_save_name_is_rejected(self):
+        """実文字列の旧Zone保存名はエラーにする。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/layout.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('const VALUE: &str = "left-panel";', encoding="utf-8")
+            self.assertTrue(any("left-panel" in error for error in check_desktop_layout(root)))
+
+    def test_block_comment_old_zone_api_is_allowed(self):
+        """ブロックコメント内の旧Zone API署名もエラーにしない。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('/* fn close_panel(zone: ZonePosition) {} */', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
 
     def test_desktop_modules_do_not_import_other_features_by_path(self):
         violations = [

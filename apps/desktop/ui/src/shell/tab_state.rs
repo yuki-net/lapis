@@ -3,6 +3,24 @@ use lapis_editor_core::DocumentId;
 
 pub(crate) use crate::extension_ui::ViewInstanceId;
 
+/// Panel内のTabの所属を識別する。ZoneやResourceの識別子とは独立する。
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(crate) struct PanelId(pub(super) u64);
+
+impl PanelId {
+    pub(crate) fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    pub(crate) fn as_str(&self) -> String {
+        format!("panel-{}", self.0)
+    }
+
+    pub(super) fn parse(value: &str) -> Option<Self> {
+        value.strip_prefix("panel-")?.parse().ok().map(Self)
+    }
+}
+
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum PanelTab {
     Document(DocumentId),
@@ -16,7 +34,7 @@ pub(crate) enum PanelTab {
 pub(crate) struct DraggedPanelTab {
     pub group: Option<gpui::EntityId>,
     pub source_host: super::window_group::HostId,
-    pub source_group: super::TabGroupId,
+    pub source_panel: super::PanelId,
     pub tab: PanelTab,
 }
 
@@ -95,7 +113,7 @@ mod tests {
         let drag = DraggedPanelTab {
             group: Some(1.into()),
             source_host: 1,
-            source_group: crate::shell::TabGroupId::new(1),
+            source_panel: crate::shell::PanelId::new(1),
             tab: PanelTab::tool("terminal"),
         };
         assert!(drag.belongs_to(Some(1.into())));
@@ -109,7 +127,7 @@ mod tests {
         let drag = DraggedPanelTab {
             group: Some(1.into()),
             source_host: 0,
-            source_group: crate::shell::TabGroupId::new(1),
+            source_panel: crate::shell::PanelId::new(1),
             tab: PanelTab::tool("terminal"),
         };
         state.begin(drag.clone());

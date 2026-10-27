@@ -1,10 +1,68 @@
 """Cargo metadata に基づく内部依存の検査。"""
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+OLD_DESKTOP_LAYOUT = {
+    "TabGroup", "TabGroupId", "PanelPosition", "LayoutNode", "SplitDirection",
+    "DropZone", "has_variable_splits", "group_for_tab", "leaf_group_ids",
+    "focused_group", "source_group", "group_bounds", "open_group_tab",
+    "panel_position", "panel_position_name", "toggle_panel", "request_panel_open",
+    "ToggleBottomPanel", "toggle_bottom_panel",
+    "select_panel_tab_in_group", "close_panel_tab_in_group", "transfer_tab_to_group",
+}
+
+
+OLD_ZONE_METHODS = {"open_panel", "close_panel", "request_panel_open_with_duration", "panel_contributions", "set_panel_active_view"}
+
+
+def rust_identifiers(text):
+    # 文字列・コメントは履歴用データを含み得るため、コード中の識別子のみ検査する。
+    token = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|r(\#*)"[\s\S]*?"\1|"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*')
+    return [match.group() for match in token.finditer(text)
+            if re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', match.group())]
+
+
+def strip_rust_comments(text):
+    """Rustの行コメントとブロックコメントを空白に置き換えたテキストを返す。文字列リテラルは維持する。"""
+    text = re.sub(r'/\*[\s\S]*?\*/', '', text)
+    text = re.sub(r'//[^\n]*', '', text)
+    return text
+
+
+def check_desktop_layout(root=ROOT):
+    errors = []
+    source = root / "apps/desktop"
+    for path in source.rglob("*.rs"):
+        text = path.read_text(encoding="utf-8")
+        identifiers = set(rust_identifiers(text))
+        for name in sorted(identifiers & OLD_DESKTOP_LAYOUT):
+            errors.append(f"{path.relative_to(root)}: 旧Desktop Layout識別子 {name}")
+        code_text = strip_rust_comments(text)
+        for name in OLD_ZONE_METHODS:
+            if re.search(rf"\bfn\s+{name}\s*\([^)]*\bZonePosition\b", code_text, re.S):
+                errors.append(f"{path.relative_to(root)}: Zone操作の旧Panel名 {name}")
+        if re.search(r"\bstruct\s+PanelHost\s*\{[^}]*\bposition\s*:", code_text, re.S):
+            errors.append(f"{path.relative_to(root)}: PanelHostへのZone所属の二重保持は禁止")
+        if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
+            errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
+        if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
+            errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
+        if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()
+                or path.as_posix().endswith("/desktop/client/src/lib.rs")):
+            for name in ("main-panel", "left-panel", "right-panel", "bottom-panel"):
+                if re.search(rf'"{name}"', code_text):
+                    errors.append(f"{path.relative_to(root)}: 旧Zone保存識別子 {name}")
+    shell_mod = source / "ui/src/shell/mod.rs"
+    if shell_mod.exists():
+        module_text = shell_mod.read_text(encoding="utf-8")
+        for module in ("panel_layout", "zone_policy", "zone"):
+            if re.search(rf'\bpub\s*(?:\([^)]*\))?\s+mod\s+{module}\s*;', module_text):
+                errors.append(f"{shell_mod.relative_to(root)}: {module} の公開は禁止")
+    return errors
 ALLOWED = {
     "models": {"models"},
     "protocol": {"protocol", "models"},
@@ -73,7 +131,7 @@ def main():
         "cargo", "metadata", "--locked", "--no-deps", "--format-version", "1",
     ], cwd=ROOT))
     exceptions = json.loads((ROOT / "scripts/architecture-exceptions.json").read_text(encoding="utf-8"))
-    errors = check(metadata, exceptions)
+    errors = check(metadata, exceptions) + check_desktop_layout()
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

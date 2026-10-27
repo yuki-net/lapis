@@ -3,11 +3,11 @@ use super::*;
 impl Shell {
     pub(crate) fn render_tool_picker(
         &self,
-        group: super::super::TabGroupId,
+        target: PickerTarget,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let tools = self
-            .picker_contributions(&group)
+            .picker_contributions(&target)
             .into_iter()
             .filter_map(|contribution| {
                 Some((
@@ -55,7 +55,7 @@ impl Shell {
             .child(div().h(px(1.0)).my_1().bg(theme::colors().border_default))
             .children(tools.into_iter().enumerate().map(
                 |(index, (view, title, icon, category))| {
-                    let group = group.clone();
+                    let target = target.clone();
                     div()
                         .id(ElementId::Name(
                             format!("tool-picker-{}", view.as_str()).into(),
@@ -72,7 +72,7 @@ impl Shell {
                         })
                         .hover(|style| style.bg(theme::colors().button_background_hover))
                         .on_click(cx.listener(move |this, _, window, cx| {
-                            this.select_tool_from_picker(group.clone(), view.clone(), window, cx);
+                            this.select_tool_from_picker(target.clone(), view.clone(), window, cx);
                         }))
                         .child(Icon::new(IconName::for_tool(&icon)))
                         .when_some(category, |item, category| {

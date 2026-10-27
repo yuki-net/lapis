@@ -35,7 +35,9 @@ pub mod id {
     pub const COMMAND_OPEN_WORKSPACE: &str = "lapis.command.open-workspace";
     pub const COMMAND_SAVE_DOCUMENT: &str = "lapis.command.save-document";
     pub const COMMAND_TOGGLE_PREVIEW: &str = "lapis.command.toggle-preview";
-    pub const COMMAND_TOGGLE_BOTTOM: &str = "lapis.command.toggle-bottom-panel";
+    pub const COMMAND_TOGGLE_BOTTOM_ZONE: &str = "lapis.command.toggle-bottom-zone";
+    pub const COMMAND_TOGGLE_LEFT_ZONE: &str = "lapis.command.toggle-left-zone";
+    pub const COMMAND_TOGGLE_RIGHT_ZONE: &str = "lapis.command.toggle-right-zone";
     pub const COMMAND_TOGGLE_ASSISTANT: &str = "lapis.command.toggle-assistant";
     pub const COMMAND_TOGGLE_PANEL_CONTROLS: &str = "lapis.command.toggle-panel-controls";
     pub const COMMAND_START_CODEX: &str = "lapis.command.start-codex";
@@ -70,6 +72,24 @@ pub fn bundled_registry() -> FeatureRegistry {
                 "command.toggle-panel-controls",
                 "panel",
                 40,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_TOGGLE_BOTTOM_ZONE,
+                "command.toggle-bottom-zone",
+                "bottom-panel",
+                50,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_TOGGLE_LEFT_ZONE,
+                "command.toggle-left-zone",
+                "left-panel",
+                51,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_TOGGLE_RIGHT_ZONE,
+                "command.toggle-right-zone",
+                "right-panel",
+                52,
             )),
         FeatureDescriptor::core(id::FEATURE_COMMAND_SEARCH).contributes(
             crate::extension_ui::UiContribution::view(
@@ -125,7 +145,7 @@ pub fn bundled_registry() -> FeatureRegistry {
 mod tests {
     use super::*;
     use crate::extension_ui::{
-        ActivationEvent, CommandId, PanelPosition, PanelScrollPolicy, ScrollAxis, UiSlot, ViewId,
+        ActivationEvent, CommandId, PanelScrollPolicy, ScrollAxis, UiSlot, ViewId, ZonePosition,
     };
 
     #[test]
@@ -175,13 +195,13 @@ mod tests {
         let registry = bundled_registry();
         let policy = |view_id: &str| {
             [
-                PanelPosition::Main,
-                PanelPosition::Left,
-                PanelPosition::Bottom,
-                PanelPosition::Right,
+                ZonePosition::Main,
+                ZonePosition::Left,
+                ZonePosition::Bottom,
+                ZonePosition::Right,
             ]
             .into_iter()
-            .flat_map(|position| registry.panel_contributions(position))
+            .flat_map(|position| registry.zone_contributions(position))
             .find(|contribution| {
                 contribution
                     .view
@@ -221,7 +241,7 @@ mod tests {
     fn settings_view_is_available_only_in_main_panel() {
         let registry = bundled_registry();
         let contribution = registry
-            .panel_contributions(crate::extension_ui::PanelPosition::Main)
+            .zone_contributions(crate::extension_ui::ZonePosition::Main)
             .into_iter()
             .find(|contribution| {
                 contribution
@@ -232,12 +252,12 @@ mod tests {
             .expect("settings view is registered");
 
         assert_eq!(
-            contribution.allowed_panels,
-            [crate::extension_ui::PanelPosition::Main]
+            contribution.allowed_zones,
+            [crate::extension_ui::ZonePosition::Main]
         );
         assert!(
             registry
-                .panel_contributions(crate::extension_ui::PanelPosition::Left)
+                .zone_contributions(crate::extension_ui::ZonePosition::Left)
                 .into_iter()
                 .all(|candidate| candidate
                     .view

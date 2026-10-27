@@ -5,8 +5,8 @@ use std::rc::Rc;
 use lapis_language::LanguageId;
 
 use super::{
-    ActivationCondition, ActivationEvent, CommandId, FeatureId, PanelPosition, UiContribution,
-    UiSlot, ViewId, WorkspaceCapabilityId,
+    ActivationCondition, ActivationEvent, CommandId, FeatureId, UiContribution, UiSlot, ViewId,
+    WorkspaceCapabilityId, ZonePosition,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -190,7 +190,7 @@ impl FeatureRegistry {
         contributions
     }
 
-    pub fn panel_contributions(&self, position: PanelPosition) -> Vec<&UiContribution> {
+    pub fn zone_contributions(&self, position: ZonePosition) -> Vec<&UiContribution> {
         let workspace_open = self.workspace_open;
         let capabilities = &self.capabilities;
         let mut contributions = self
@@ -199,7 +199,7 @@ impl FeatureRegistry {
             .flat_map(|descriptor| descriptor.contributions.iter())
             .filter(|contribution| {
                 contribution.view.is_some()
-                    && contribution.allowed_panels.contains(&position)
+                    && contribution.allowed_zones.contains(&position)
                     && contribution
                         .visibility
                         .is_visible(workspace_open, capabilities)
@@ -209,8 +209,8 @@ impl FeatureRegistry {
         contributions
     }
 
-    pub fn tool_contributions(&self, position: PanelPosition) -> Vec<&UiContribution> {
-        self.panel_contributions(position)
+    pub fn tool_contributions(&self, position: ZonePosition) -> Vec<&UiContribution> {
+        self.zone_contributions(position)
             .into_iter()
             .filter(|contribution| contribution.slot != UiSlot::SettingsPage)
             .collect()
@@ -228,12 +228,12 @@ impl FeatureRegistry {
         self.recompute();
     }
 
-    pub fn set_panel_active_view(&mut self, panel: PanelPosition, view: Option<ViewId>) {
-        let slot = match panel {
-            PanelPosition::Left => UiSlot::ToolDock,
-            PanelPosition::Main => UiSlot::EditorDecoration,
-            PanelPosition::Bottom => UiSlot::BottomDock,
-            PanelPosition::Right => UiSlot::SideDock,
+    pub fn set_zone_active_view(&mut self, zone: ZonePosition, view: Option<ViewId>) {
+        let slot = match zone {
+            ZonePosition::Left => UiSlot::ToolDock,
+            ZonePosition::Main => UiSlot::EditorDecoration,
+            ZonePosition::Bottom => UiSlot::BottomDock,
+            ZonePosition::Right => UiSlot::SideDock,
         };
         self.set_active_view(slot, view);
     }
@@ -501,11 +501,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(registry.panel_contributions(PanelPosition::Left).is_empty());
+        assert!(registry.zone_contributions(ZonePosition::Left).is_empty());
         registry.activate(ActivationEvent::WorkspaceOpened);
         assert_eq!(
             registry
-                .panel_contributions(PanelPosition::Left)
+                .zone_contributions(ZonePosition::Left)
                 .first()
                 .and_then(|contribution| contribution.view.as_ref()),
             Some(&view)

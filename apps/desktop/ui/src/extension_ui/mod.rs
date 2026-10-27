@@ -5,8 +5,8 @@ mod registry;
 
 pub use activation::{ActivationCondition, ActivationEvent};
 pub use contribution::{
-    PanelPosition, PanelScrollPolicy, ScrollAxis, ToolInstancePolicy, UiContribution, UiSlot,
-    ViewPlacementCapabilities, ViewVisibility,
+    PanelScrollPolicy, ScrollAxis, ToolInstancePolicy, UiContribution, UiSlot,
+    ViewPlacementCapabilities, ViewVisibility, ZonePosition,
 };
 pub use ids::{
     CommandId, FeatureId, IconId, IconThemeId, KeymapId, ThemeId, ViewId, ViewInstanceId,

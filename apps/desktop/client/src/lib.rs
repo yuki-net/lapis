@@ -128,77 +128,57 @@ pub enum DocumentCloseDisposition {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ConversationViewState {
-    /// 可変Split/TabGroupレイアウト。旧保存値では`None`のままです。
+    /// Zone・Panel・Tabの表示配置。TaskやDocumentの所有情報は含まない。
     #[serde(default)]
-    pub layout: Option<LayoutViewState>,
+    pub layout: Option<ZoneLayoutViewState>,
     /// Panel開閉ボタン群の表示設定。非表示でもViewメニューから復元できる。
     #[serde(default = "default_show_panel_controls")]
     pub show_panel_controls: bool,
-    /// 新しいレイアウト形式。位置ごとのタブ・選択状態・サイズを一律で保持する。
-    pub panels: Vec<PanelViewState>,
-    // 旧セッションとの互換読み込み用。次回保存時は panels が正とする。
-    pub active_tool: String,
-    pub side_panel: Option<String>,
-    pub bottom_panel: Option<String>,
-    pub tool_width: f32,
-    pub side_width: f32,
-    pub bottom_height: f32,
 }
 
 fn default_show_panel_controls() -> bool {
     true
 }
 
+pub const ZONE_LAYOUT_VERSION: u16 = 3;
+
 /// UIフレームワークに依存しないDesktopレイアウトの保存値です。
 /// Viewの配置だけを保存し、Host上のDocumentやTerminalの所有権は保存しません。
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LayoutViewState {
-    #[serde(default = "layout_view_state_version")]
+pub struct ZoneLayoutViewState {
     pub version: u16,
-    pub root: LayoutNodeViewState,
-    pub groups: Vec<LayoutGroupViewState>,
-    /// 既存HeaderのZone操作先。Group数の上限ではない。旧形式では空。
-    #[serde(default)]
-    pub anchors: std::collections::BTreeMap<String, String>,
-}
-
-fn layout_view_state_version() -> u16 {
-    1
+    pub zones: Vec<ZoneViewState>,
+    pub bottom_span_left: bool,
+    pub bottom_span_right: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum LayoutNodeViewState {
-    Tabs {
-        group: String,
+pub struct ZoneViewState {
+    pub position: String,
+    pub open: bool,
+    pub extent_ratio: f32,
+    pub layout: Option<PanelLayoutViewState>,
+    pub panels: Vec<ZonePanelViewState>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum PanelLayoutViewState {
+    Panel {
+        id: String,
     },
-    Split {
+    Arrangement {
         direction: String,
-        ratio: f32,
-        first: Box<LayoutNodeViewState>,
-        second: Box<LayoutNodeViewState>,
+        children: Vec<PanelLayoutViewState>,
+        weights: Vec<f32>,
     },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LayoutGroupViewState {
+pub struct ZonePanelViewState {
     pub id: String,
-    pub position: String,
     pub tabs: Vec<String>,
     pub active_tab: Option<String>,
     pub open: bool,
-    /// Zone全体を隠す前に表示されていたGroup。個別Hideとは区別する。
-    #[serde(default)]
-    pub zone_hidden: bool,
-    pub size: f32,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct PanelViewState {
-    pub position: String,
-    pub tabs: Vec<String>,
-    pub active_tab: Option<String>,
-    pub open: bool,
-    pub size: f32,
 }
 
 impl Default for ConversationViewState {
@@ -206,13 +186,6 @@ impl Default for ConversationViewState {
         Self {
             layout: None,
             show_panel_controls: true,
-            panels: Vec::new(),
-            active_tool: "files".to_owned(),
-            side_panel: None,
-            bottom_panel: None,
-            tool_width: 320.0,
-            side_width: 340.0,
-            bottom_height: 220.0,
         }
     }
 }
@@ -2967,7 +2940,7 @@ mod tests {
             .create(
                 &mut editor,
                 ConversationViewState {
-                    active_tool: "search".to_owned(),
+                    show_panel_controls: false,
                     ..ConversationViewState::default()
                 },
             )
@@ -2978,12 +2951,12 @@ mod tests {
             .unwrap();
 
         let first_view = conversations.switch(&first, &mut editor).unwrap();
-        assert_eq!(first_view.active_tool, "files");
+        assert!(first_view.show_panel_controls);
         assert_eq!(editor.tabs().len(), 1);
         assert_eq!(editor.display_name(), "first.md");
 
         let second_view = conversations.switch(&second, &mut editor).unwrap();
-        assert_eq!(second_view.active_tool, "search");
+        assert!(!second_view.show_panel_controls);
         assert_eq!(editor.tabs().len(), 2);
         assert_eq!(editor.display_name(), "second.md");
 
