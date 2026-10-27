@@ -7,6 +7,50 @@ use std::{
     sync::Arc,
 };
 
+/// 現在のbinaryと同じディレクトリから `lapis-host` binaryを解決する。
+fn resolve_host_exe() -> Result<PathBuf, std::io::Error> {
+    let current = std::env::current_exe()?;
+    let mut dir = current
+        .parent()
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "binaryの親ディレクトリが取得できません",
+            )
+        })?
+        .to_path_buf();
+    // cargo test のdeps/ディレクトリから実行される場合、target/debug/ に戻る。
+    if dir.ends_with("deps") {
+        if let Some(parent) = dir.parent() {
+            dir = parent.to_path_buf();
+        }
+    }
+    // Windowsでは.exe、Unixでは拡張子なし
+    #[cfg(windows)]
+    let candidate = dir.join("lapis-host.exe");
+    #[cfg(not(windows))]
+    let candidate = dir.join("lapis-host");
+    if candidate.exists() {
+        return Ok(candidate);
+    }
+    // 拡張子の逆パターンも試す
+    #[cfg(windows)]
+    let fallback = dir.join("lapis-host");
+    #[cfg(not(windows))]
+    let fallback = dir.join("lapis-host.exe");
+    if fallback.exists() {
+        return Ok(fallback);
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        format!(
+            "lapis-host binaryが見つかりません: {} または {}",
+            candidate.display(),
+            fallback.display()
+        ),
+    ))
+}
+
 /// Desktop向けportの変換を共有し、資源の所有者と接続先を分離する。
 #[derive(Clone)]
 pub struct BackendClient {
@@ -64,11 +108,10 @@ impl BackendClient {
             ))),
         }
     }
+    /// 現在のbinaryと同じディレクトリから `lapis-host` を解決し、Local Host を作成する。
     pub fn local_default() -> Result<Self, BackendServiceError> {
-        Ok(Self::local(
-            std::env::current_exe().map_err(|_| BackendServiceError::Unavailable)?,
-            Self::user_directory()?.join("hosts"),
-        ))
+        let host_exe = resolve_host_exe().map_err(|_| BackendServiceError::Unavailable)?;
+        Ok(Self::local(host_exe, Self::user_directory()?.join("hosts")))
     }
     pub fn user_directory() -> Result<PathBuf, BackendServiceError> {
         let base = std::env::var_os("LOCALAPPDATA")

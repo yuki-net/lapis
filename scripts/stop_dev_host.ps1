@@ -1,15 +1,21 @@
 ﻿# Windowsで再ビルド・worktree削除の前に、このworktreeのLocal Hostだけを停止する。
 $ErrorActionPreference = 'Stop'
-$binary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis.exe'))
-$owned = @(Get-CimInstance Win32_Process -Filter "Name = 'lapis.exe'" | Where-Object {
-    $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $binary, [StringComparison]::OrdinalIgnoreCase)
+# lapis-host.exe を対象とする。lapis.exe (Desktop) は対象外。
+$hostBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis-host.exe'))
+$desktopBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis.exe'))
+# このworktreeのlapis-host.exeを実行中のprocessを探す。
+$hosts = @(Get-CimInstance Win32_Process -Filter "Name = 'lapis-host.exe'" | Where-Object {
+    $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $hostBinary, [StringComparison]::OrdinalIgnoreCase)
 })
-$hosts = @($owned | Where-Object { $_.CommandLine -match '\s--managed-host\s' })
-if ($owned.Count -ne $hosts.Count) {
-    throw 'このworktreeの画面または作業プロセスが実行中です。保存して終了してから再実行してください。'
+# Desktopが実行中なら停止しない。
+$desktopRunning = @(Get-CimInstance Win32_Process -Filter "Name = 'lapis.exe'" | Where-Object {
+    $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $desktopBinary, [StringComparison]::OrdinalIgnoreCase)
+})
+if ($desktopRunning.Count -gt 0) {
+    throw 'このworktreeの画面プロセスが実行中です。保存して終了してから再実行してください。'
 }
 if ($hosts.Count -eq 0) { return }
-# 同じexeを通常起動したHostは対象外。開発用保存先の登録と照合する。
+# 開発用保存先の登録と照合する。
 $recordPath = Join-Path $PSScriptRoot '../target/dev-state/hosts/local-v1.host'
 if (-not (Test-Path -LiteralPath $recordPath) -or (Get-Item -LiteralPath $recordPath).Length -gt 131072) {
     throw '開発用Local Hostの記録ファイルが存在しないか、サイズが上限を超えているため停止しません。'
@@ -38,7 +44,7 @@ foreach ($hostProcess in $hosts) {
         $null = $process.Handle
         if ($process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString() -ne $registeredStart -or
             [Math]::Abs(($process.StartTime.ToUniversalTime() - $hostProcess.CreationDate.ToUniversalTime()).TotalMilliseconds) -ge 1 -or
-            -not [string]::Equals($process.Path, $binary, [StringComparison]::OrdinalIgnoreCase)) {
+            -not [string]::Equals($process.Path, $hostBinary, [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Hostのprocess情報が変わりました。再実行してください。'
         }
         $process.Kill()
