@@ -148,8 +148,7 @@ impl Zone {
             }
             _ => return false,
         }
-        self.panels
-            .insert(id, PanelHost::new(self.position, tabs, true));
+        self.panels.insert(id, PanelHost::new(tabs, true));
         self.set_open(true);
         true
     }
@@ -382,10 +381,9 @@ impl Zone {
         ids.len() == self.panels.len()
             && ids.iter().all(|id| {
                 self.panels.get(id).is_some_and(|panel| {
-                    panel.position == self.position
-                        && (policy.keep_empty_panel
-                            || !panel.tabs.is_empty()
-                            || self.closing.contains_key(id))
+                    (policy.keep_empty_panel
+                        || !panel.tabs.is_empty()
+                        || self.closing.contains_key(id))
                         && (!policy.required || panel.open)
                         && panel
                             .active
@@ -463,7 +461,7 @@ impl Zone {
                 .and_then(&mut *parse_tab)
                 .filter(|tab| tabs.contains(tab))
                 .or_else(|| tabs.first().cloned());
-            let mut panel = PanelHost::new(position, tabs, item.open);
+            let mut panel = PanelHost::new(tabs, item.open);
             panel.active = active;
             panel.set_open_immediate(item.open);
             if panels.insert(id, panel).is_some() {

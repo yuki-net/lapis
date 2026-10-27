@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use super::{CommandId, IconId, MessageId, ViewId, WorkspaceCapabilityId};
 
-/// ツールを収容するパネルの位置。位置はツールの種類ではなくレイアウト状態です。
+/// DesktopのZone位置。Viewの種類ではなくレイアウト上の所属です。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ZonePosition {
     Left,

@@ -365,7 +365,7 @@ impl DesktopRoot {
                     || !matches!(tab, PanelTab::Tool { .. })
                     || placements.iter().any(|(present, _)| present == tab)
             });
-            for (tab, target_group) in placements {
+            for (tab, target_panel) in placements {
                 if let PanelTab::Document(id) = &tab
                     && group
                         .latest
@@ -378,9 +378,9 @@ impl DesktopRoot {
                     .layout
                     .tabs
                     .entry(tab)
-                    .or_insert((ROOT_HOST, TabDestination::Panel(target_group.clone())));
+                    .or_insert((ROOT_HOST, TabDestination::Panel(target_panel.clone())));
                 if *owner == ROOT_HOST {
-                    *position = TabDestination::Panel(target_group);
+                    *position = TabDestination::Panel(target_panel);
                 }
             }
         });
@@ -416,9 +416,9 @@ impl DesktopRoot {
             UiCommand::DockTab(tab) => {
                 self.transfer_tab(host, ROOT_HOST, ZonePosition::Main, tab, cx)
             }
-            UiCommand::MoveTab(drag, group) => {
+            UiCommand::MoveTab(drag, panel_id) => {
                 if drag.group == Some(self.group.entity_id()) {
-                    self.transfer_tab_to_group(drag.source_host, host, group, drag.tab, cx);
+                    self.transfer_tab_to_panel(drag.source_host, host, panel_id, drag.tab, cx);
                 }
             }
             UiCommand::CloseWindow => self.close_hosts(host, None, window, cx),
@@ -463,18 +463,18 @@ impl DesktopRoot {
         self.transfer_tab_to_destination(source, target, TabDestination::Zone(panel), tab, cx);
     }
 
-    fn transfer_tab_to_group(
+    fn transfer_tab_to_panel(
         &mut self,
         source: HostId,
         target: HostId,
-        target_group: crate::shell::PanelId,
+        target_panel: crate::shell::PanelId,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
         self.transfer_tab_to_destination(
             source,
             target,
-            TabDestination::Panel(target_group),
+            TabDestination::Panel(target_panel),
             tab,
             cx,
         );
@@ -494,13 +494,13 @@ impl DesktopRoot {
         {
             return;
         }
-        if let TabDestination::Panel(target_group) = &destination
+        if let TabDestination::Panel(target_panel) = &destination
             && self.group.read(cx).members[&target]
                 .shell
                 .read(cx)
                 .shell
                 .layout
-                .panel(target_group)
+                .panel(target_panel)
                 .is_none()
         {
             return;
@@ -520,14 +520,14 @@ impl DesktopRoot {
             let editor = member.editor.clone();
             editor.update(cx, |editor, _| editor.seed_view(view));
         }
-        let focus_group = match &destination {
-            TabDestination::Panel(group) => Some(group.clone()),
+        let focus_panel = match &destination {
+            TabDestination::Panel(panel_id) => Some(panel_id.clone()),
             TabDestination::Zone(_) => None,
         };
         self.group.update(cx, |group, cx| {
             if group.layout.move_tab_to(source, target, destination, &tab) {
                 group.members[&target].shell.update(cx, |shell, cx| {
-                    shell.shell.focused_panel = focus_group;
+                    shell.shell.focused_panel = focus_panel;
                     cx.notify();
                 });
                 let editor = group.members[&target].editor.clone();
@@ -618,7 +618,7 @@ fn apply_panel_layout(
         .tabs
         .iter()
         .filter(|(_, (owner, _))| *owner == host)
-        .map(|(tab, (_, target_group))| (tab.clone(), target_group.clone()))
+        .map(|(tab, (_, target_panel))| (tab.clone(), target_panel.clone()))
         .collect::<Vec<_>>();
     shell.update(cx, |shell, cx| {
         let mut changed = false;
@@ -629,8 +629,8 @@ fn apply_panel_layout(
                 TabDestination::Zone(position) => shell
                     .shell
                     .layout
-                    .panel(source)
-                    .is_some_and(|panel| panel.position == *position),
+                    .zone_for_panel(source)
+                    .is_some_and(|zone| zone == *position),
             }) {
                 continue;
             }

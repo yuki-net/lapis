@@ -8,20 +8,21 @@ impl Shell {
             .panel_ids()
             .into_iter()
             .filter_map(|id| {
-                let group = self.shell.layout.panel(&id)?;
-                let zone = match group.position {
+                let panel = self.shell.layout.panel(&id)?;
+                let position = self.shell.layout.zone_for_panel(&id)?;
+                let zone = match position {
                     ZonePosition::Left => self.t("panel.left"),
                     ZonePosition::Bottom => self.t("panel.bottom"),
                     ZonePosition::Right => self.t("panel.right"),
                     ZonePosition::Main => return None,
                 };
-                let title = group
+                let title = panel
                     .active
                     .as_ref()
-                    .or_else(|| group.tabs.first())
-                    .map(|tab| self.tab_title(group.position, tab))
+                    .or_else(|| panel.tabs.first())
+                    .map(|tab| self.tab_title(position, tab))
                     .unwrap_or_else(|| self.t("panel.empty"));
-                let open = group.requested_open();
+                let open = panel.requested_open();
                 let action = self.t(if open { "panel.hide" } else { "panel.show" });
                 Some((id, format!("{action} {zone} · {title}"), open))
             })
@@ -33,19 +34,19 @@ impl Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_panel(ZonePosition::Right, Some(ViewId::new(id::VIEW_PREVIEW)), cx);
+        self.open_zone(ZonePosition::Right, Some(ViewId::new(id::VIEW_PREVIEW)), cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn toggle_bottom_panel(
+    pub(crate) fn toggle_bottom_zone(
         &mut self,
-        _: &ToggleBottomPanel,
+        _: &ToggleBottomZone,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.execute_command(id::COMMAND_TOGGLE_BOTTOM.into(), window, cx);
+        self.execute_command(id::COMMAND_TOGGLE_BOTTOM_ZONE.into(), window, cx);
     }
 
     pub(crate) fn toggle_left_zone(
@@ -72,7 +73,7 @@ impl Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_panel(
+        self.open_zone(
             ZonePosition::Right,
             Some(ViewId::new(id::VIEW_ASSISTANT)),
             cx,
@@ -82,7 +83,7 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn open_panel(
+    pub(crate) fn open_zone(
         &mut self,
         position: ZonePosition,
         view: Option<ViewId>,
@@ -110,8 +111,8 @@ impl Shell {
                 .shell
                 .focused_panel
                 .as_ref()
-                .and_then(|group| self.shell.layout.panel(group))
-                .is_some_and(|group| group.position == position)
+                .and_then(|panel| self.shell.layout.zone_for_panel(panel))
+                .is_some_and(|zone| zone == position)
         {
             self.shell.focused_panel = None;
         }
@@ -120,15 +121,15 @@ impl Shell {
 
     pub(super) fn toggle_panel_visibility(
         &mut self,
-        group: super::super::PanelId,
+        panel_id: super::super::PanelId,
         cx: &mut Context<Self>,
     ) {
-        let Some(panel) = self.shell.layout.panel(&group) else {
+        let Some(panel) = self.shell.layout.panel(&panel_id) else {
             return;
         };
         let open = !panel.requested_open();
-        self.shell.layout.set_panel_open(&group, open);
-        if !open && self.shell.focused_panel.as_ref() == Some(&group) {
+        self.shell.layout.set_panel_open(&panel_id, open);
+        if !open && self.shell.focused_panel.as_ref() == Some(&panel_id) {
             self.shell.focused_panel = None;
         }
         self.refresh_feature_activation(cx);
@@ -163,7 +164,7 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn close_panel(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
+    pub(crate) fn close_zone(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
         if position == ZonePosition::Main {
             return;
         }
@@ -172,7 +173,7 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn request_panel_open_with_duration(
+    pub(crate) fn request_zone_open_with_duration(
         &mut self,
         position: ZonePosition,
         open: bool,
@@ -184,7 +185,7 @@ impl Shell {
     }
 
     fn request_zone_open(&mut self, position: ZonePosition, open: bool, cx: &mut Context<Self>) {
-        self.request_panel_open_with_duration(
+        self.request_zone_open_with_duration(
             position,
             open,
             crate::shell::panel_transition::PANEL_ANIMATION_DURATION,
@@ -194,16 +195,16 @@ impl Shell {
 
     pub(crate) fn open_tool_picker(
         &mut self,
-        group: super::super::PanelId,
+        panel_id: super::super::PanelId,
         anchor: gpui::Point<gpui::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shell.layout.panel(&group).is_none() {
+        if self.shell.layout.panel(&panel_id).is_none() {
             return;
         }
-        self.shell.focused_panel = Some(group.clone());
-        self.shell.tool_picker = Some(PickerTarget::Panel(group));
+        self.shell.focused_panel = Some(panel_id.clone());
+        self.shell.tool_picker = Some(PickerTarget::Panel(panel_id));
         self.shell.tool_picker_anchor = anchor;
         self.shell.set_tool_picker_query(String::new());
         window.focus(&self.focus_handle);
@@ -261,7 +262,7 @@ impl Shell {
     }
 
     pub(crate) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
-        self.open_panel(ZonePosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)), cx);
+        self.open_zone(ZonePosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)), cx);
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
         self.refresh_feature_activation(cx);
@@ -282,34 +283,34 @@ impl Shell {
         cx.emit(UiCommand::Theme(theme));
         cx.notify();
     }
-    pub(crate) fn select_panel_tab_in_group(
+    pub(crate) fn select_tab_in_panel(
         &mut self,
-        group: PanelId,
+        panel_id: PanelId,
         position: ZonePosition,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
-        self.shell.layout.set_panel_open(&group, true);
+        self.shell.layout.set_panel_open(&panel_id, true);
         self.request_zone_open(position, true, cx);
-        self.shell.open_panel_tab(&group, tab);
+        self.shell.open_panel_tab(&panel_id, tab);
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn close_panel_tab_in_group(
+    pub(crate) fn close_tab_in_panel(
         &mut self,
-        _group: PanelId,
+        _panel: PanelId,
         _position: ZonePosition,
         tab: PanelTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let PanelTab::Document(document_id) = tab else {
-            if let Some(group) = self.shell.layout.panel_for_tab(&tab) {
+            if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.shell
                     .layout
-                    .remove_tab(&group, &tab, std::time::Instant::now());
-                self.schedule_empty_close(group, cx);
+                    .remove_tab(&panel_id, &tab, std::time::Instant::now());
+                self.schedule_empty_close(panel_id, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
             }
@@ -370,7 +371,7 @@ impl Shell {
             return;
         }
         let opened = match target {
-            PickerTarget::Panel(group) => self.shell.open_panel_tab(&group, tab),
+            PickerTarget::Panel(panel_id) => self.shell.open_panel_tab(&panel_id, tab),
             PickerTarget::Zone(position) => self
                 .shell
                 .layout
@@ -414,12 +415,12 @@ impl Shell {
             return;
         }
         if key == "enter" {
-            if let Some(group) = self.shell.tool_picker.clone()
+            if let Some(panel_id) = self.shell.tool_picker.clone()
                 && let Some((view, _)) = self
-                    .picker_views(&group)
+                    .picker_views(&panel_id)
                     .get(self.shell.tool_picker_selected)
             {
-                self.select_tool_from_picker(group, view.clone(), window, cx);
+                self.select_tool_from_picker(panel_id, view.clone(), window, cx);
             }
             return;
         }
@@ -511,18 +512,16 @@ impl Shell {
 
     fn picker_position(&self, target: &PickerTarget) -> Option<ZonePosition> {
         match target {
-            PickerTarget::Panel(group) => {
-                self.shell.layout.panel(group).map(|panel| panel.position)
-            }
+            PickerTarget::Panel(panel_id) => self.shell.layout.zone_for_panel(panel_id),
             PickerTarget::Zone(position) => Some(*position),
         }
     }
 
-    pub(crate) fn schedule_empty_close(&mut self, group: PanelId, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_empty_close(&mut self, panel_id: PanelId, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             Timer::after(crate::shell::panel_transition::PANEL_ANIMATION_DURATION).await;
             let _ = this.update(cx, |shell, cx| {
-                shell.shell.layout.finish_empty_close(&group);
+                shell.shell.layout.finish_empty_close(&panel_id);
                 shell.refresh_feature_activation(cx);
                 cx.notify();
             });
@@ -575,7 +574,7 @@ mod focus_tests {
     }
 
     #[gpui::test]
-    fn committed_drop_focuses_the_group_that_contains_the_tab(cx: &mut gpui::TestAppContext) {
+    fn committed_drop_focuses_the_panel_that_contains_the_tab(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             for (position, edge) in [
                 (ZonePosition::Main, None),
@@ -731,7 +730,7 @@ mod visibility_tests {
                                 .panel_ids()
                                 .iter()
                                 .filter(
-                                    |id| shell.shell.layout.panel(id).unwrap().position == position
+                                    |id| shell.shell.layout.zone_for_panel(id) == Some(position)
                                 )
                                 .count(),
                             count + usize::from(count < 3)
@@ -739,7 +738,7 @@ mod visibility_tests {
                     }
                     assert!(shell.shell.layout.panel(&first).is_some());
                     for (tab, id) in shell.shell.layout.placements() {
-                        if shell.shell.layout.panel(&id).unwrap().position == position {
+                        if shell.shell.layout.zone_for_panel(&id) == Some(position) {
                             assert!(shell.shell.layout.remove_tab(&id, &tab, now));
                         }
                     }
@@ -759,8 +758,9 @@ mod visibility_tests {
                         .layout
                         .panel_ids()
                         .iter()
-                        .filter(|id| shell.shell.layout.panel(id).unwrap().position
-                            == ZonePosition::Main)
+                        .filter(
+                            |id| shell.shell.layout.zone_for_panel(id) == Some(ZonePosition::Main)
+                        )
                         .count(),
                     1
                 );
@@ -769,7 +769,7 @@ mod visibility_tests {
     }
 
     #[gpui::test]
-    fn header_zone_and_view_menu_keep_individual_groups_recoverable(cx: &mut gpui::TestAppContext) {
+    fn header_zone_and_view_menu_keep_individual_panels_recoverable(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             let document = cx.new(|_| Empty);
             let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));

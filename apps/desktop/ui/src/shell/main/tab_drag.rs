@@ -18,10 +18,8 @@ impl Shell {
 
     pub(super) fn target_zone_size(&self, target: &PanelDrop) -> (f32, f32) {
         let position = match target {
-            PanelDrop::Into(id) => self.shell.layout.panel(id).map(|panel| panel.position),
-            PanelDrop::Edge { panel, .. } => {
-                self.shell.layout.panel(panel).map(|panel| panel.position)
-            }
+            PanelDrop::Into(id) => self.shell.layout.zone_for_panel(id),
+            PanelDrop::Edge { panel, .. } => self.shell.layout.zone_for_panel(panel),
             PanelDrop::IntoZone(position) => Some(*position),
         };
         position
@@ -147,8 +145,8 @@ impl Shell {
         let target = target.and_then(|target| {
             let size = self.target_zone_size(&target);
             let zone = match &target {
-                PanelDrop::Into(id) => self.shell.layout.panel(id)?.position,
-                PanelDrop::Edge { panel, .. } => self.shell.layout.panel(panel)?.position,
+                PanelDrop::Into(id) => self.shell.layout.zone_for_panel(id)?,
+                PanelDrop::Edge { panel, .. } => self.shell.layout.zone_for_panel(panel)?,
                 PanelDrop::IntoZone(position) => *position,
             };
             let result = self.shell.layout.preview_drop(

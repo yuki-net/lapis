@@ -35,7 +35,7 @@ pub mod id {
     pub const COMMAND_OPEN_WORKSPACE: &str = "lapis.command.open-workspace";
     pub const COMMAND_SAVE_DOCUMENT: &str = "lapis.command.save-document";
     pub const COMMAND_TOGGLE_PREVIEW: &str = "lapis.command.toggle-preview";
-    pub const COMMAND_TOGGLE_BOTTOM: &str = "lapis.command.toggle-bottom-panel";
+    pub const COMMAND_TOGGLE_BOTTOM_ZONE: &str = "lapis.command.toggle-bottom-zone";
     pub const COMMAND_TOGGLE_LEFT_ZONE: &str = "lapis.command.toggle-left-zone";
     pub const COMMAND_TOGGLE_RIGHT_ZONE: &str = "lapis.command.toggle-right-zone";
     pub const COMMAND_TOGGLE_ASSISTANT: &str = "lapis.command.toggle-assistant";
@@ -102,8 +102,8 @@ pub fn bundled_registry() -> FeatureRegistry {
                 44,
             ))
             .contributes(crate::extension_ui::UiContribution::command(
-                id::COMMAND_TOGGLE_BOTTOM,
-                "command.toggle-bottom-panel",
+                id::COMMAND_TOGGLE_BOTTOM_ZONE,
+                "command.toggle-bottom-zone",
                 "bottom-panel",
                 50,
             ))
@@ -229,7 +229,7 @@ mod tests {
                 ZonePosition::Right,
             ]
             .into_iter()
-            .flat_map(|position| registry.panel_contributions(position))
+            .flat_map(|position| registry.zone_contributions(position))
             .find(|contribution| {
                 contribution
                     .view
@@ -269,7 +269,7 @@ mod tests {
     fn settings_view_is_available_only_in_main_panel() {
         let registry = bundled_registry();
         let contribution = registry
-            .panel_contributions(crate::extension_ui::ZonePosition::Main)
+            .zone_contributions(crate::extension_ui::ZonePosition::Main)
             .into_iter()
             .find(|contribution| {
                 contribution
@@ -285,7 +285,7 @@ mod tests {
         );
         assert!(
             registry
-                .panel_contributions(crate::extension_ui::ZonePosition::Left)
+                .zone_contributions(crate::extension_ui::ZonePosition::Left)
                 .into_iter()
                 .all(|candidate| candidate
                     .view

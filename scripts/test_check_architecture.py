@@ -39,6 +39,19 @@ class ArchitectureTests(unittest.TestCase):
             source.write_text('fn zone_position() {}\nconst ZONE: &str = "left";', encoding="utf-8")
             self.assertEqual(check_desktop_layout(root), [])
 
+    def test_removed_zone_api_names_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "apps/desktop/ui/src/shell/example.rs"
+            source.parent.mkdir(parents=True)
+            for name in ("open_panel", "close_panel", "request_panel_open_with_duration", "ToggleBottomPanel", "panel_contributions", "set_panel_active_view"):
+                source.write_text(f"fn {name}(zone: ZonePosition) {{}}", encoding="utf-8")
+                self.assertTrue(any(name in error for error in check_desktop_layout(root)))
+            source.write_text("fn close_panel(panel: PanelId) {} fn toggle_panel_visibility() {} fn set_panel_open() {}", encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text("struct PanelHost { position: ZonePosition }", encoding="utf-8")
+            self.assertTrue(any("二重保持" in error for error in check_desktop_layout(root)))
+
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
             package("model", "shared/models/example"),

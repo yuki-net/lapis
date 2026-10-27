@@ -59,17 +59,16 @@ impl DockGeometry {
             let Some(panel) = layout.panel(&id) else {
                 continue;
             };
-            if !panel.open
-                || !layout.zone_open(panel.position)
-                || rect.width <= 0.0
-                || rect.height <= 0.0
+            let Some(position) = layout.zone_for_panel(&id) else {
+                continue;
+            };
+            if !panel.open || !layout.zone_open(position) || rect.width <= 0.0 || rect.height <= 0.0
             {
                 continue;
             }
-            if layout.can_add_panel(panel.position)
-                && layout.growth_panel(panel.position).as_ref() == Some(&id)
+            if layout.can_add_panel(position) && layout.growth_panel(position).as_ref() == Some(&id)
             {
-                for &edge in insertion_edges(panel.position) {
+                for &edge in insertion_edges(position) {
                     let (start, end) = match edge {
                         PanelEdge::Left => ((rect.x, rect.y), (rect.x, rect.y + rect.height)),
                         PanelEdge::Right => (
@@ -302,8 +301,8 @@ impl DockGeometry {
             let zone = layout.zone(*position);
             for id in layout.panel_ids().into_iter().filter(|id| {
                 layout
-                    .panel(id)
-                    .is_some_and(|panel| panel.position == *position)
+                    .zone_for_panel(id)
+                    .is_some_and(|zone| zone == *position)
             }) {
                 if let Some((x, y, width, height)) =
                     zone.visual_panel_rect(&id, (rect.width, rect.height), gap)
@@ -420,7 +419,7 @@ mod tests {
         ] {
             let mut layout = DockLayout::default();
             for (tab, id) in layout.placements() {
-                if layout.panel(&id).unwrap().position == position {
+                if layout.zone_for_panel(&id) == Some(position) {
                     assert!(layout.remove_tab(&id, &tab, Instant::now()));
                 }
             }

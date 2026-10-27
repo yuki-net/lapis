@@ -140,17 +140,17 @@ impl ShellScrollStates {
             .or_default()
             .clone()
     }
-    fn panel_empty(&self, group: &super::PanelId) -> ScrollState {
+    fn panel_empty(&self, panel_id: &super::PanelId) -> ScrollState {
         self.panel_empty
             .borrow_mut()
-            .entry(group.clone())
+            .entry(panel_id.clone())
             .or_default()
             .clone()
     }
-    fn panel_tabs(&self, group: &super::PanelId) -> ScrollState {
+    fn panel_tabs(&self, panel_id: &super::PanelId) -> ScrollState {
         self.panel_tabs
             .borrow_mut()
-            .entry(group.clone())
+            .entry(panel_id.clone())
             .or_default()
             .clone()
     }
@@ -158,10 +158,10 @@ impl ShellScrollStates {
 impl gpui::EventEmitter<UiCommand> for Shell {}
 
 #[cfg(all(test, debug_assertions))]
-mod group_scroll_tests {
+mod panel_scroll_tests {
     use super::*;
     #[test]
-    fn tab_groups_have_independent_scroll_state() {
+    fn panels_have_independent_scroll_state() {
         let states = ShellScrollStates::default();
         let a = super::super::PanelId::new(2);
         let b = super::super::PanelId::new(5);
@@ -315,39 +315,33 @@ impl Shell {
             .layout
             .placements()
             .into_iter()
-            .filter_map(|(tab, group)| {
+            .filter_map(|(tab, panel_id)| {
                 if !matches!(tab, PanelTab::Tool { .. }) || !retained.contains(&tab.instance_id()) {
                     return None;
                 }
-                self.shell
-                    .layout
-                    .panel(&group)
-                    .map(|panel| (tab, group.clone(), panel.position, panel.open))
+                let position = self.shell.layout.zone_for_panel(&panel_id)?;
+                let open = self.shell.layout.panel(&panel_id)?.open;
+                Some((tab, panel_id, position, open))
             })
             .collect::<Vec<_>>();
         self.restore_view(view, cx);
-        for (tab, group, position, open) in tabs {
+        for (tab, panel_id, position, open) in tabs {
             if self.shell.layout.panel_for_tab(&tab).is_some() {
                 continue;
             }
-            let group = if self
-                .shell
-                .layout
-                .panel(&group)
-                .is_some_and(|panel| panel.position == position)
-            {
-                group
+            let panel_id = if self.shell.layout.zone_for_panel(&panel_id) == Some(position) {
+                panel_id
             } else {
                 match self.shell.layout.first_panel_in_zone(position) {
-                    Some(group) => group,
+                    Some(panel_id) => panel_id,
                     None => {
                         let _ = self.shell.layout.open_tab(position, tab);
                         continue;
                     }
                 }
             };
-            if self.shell.layout.insert_tab_in_panel(&group, tab, true) && open {
-                self.shell.layout.set_panel_open(&group, true);
+            if self.shell.layout.insert_tab_in_panel(&panel_id, tab, true) && open {
+                self.shell.layout.set_panel_open(&panel_id, true);
             }
         }
         self.refresh_feature_activation(cx);

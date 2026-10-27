@@ -75,8 +75,8 @@ impl Shell {
             MenuAction::ToggleLeftPanel => {
                 self.execute_command(id::COMMAND_TOGGLE_LEFT_ZONE.into(), window, cx)
             }
-            MenuAction::ToggleBottomPanel => {
-                self.execute_command(id::COMMAND_TOGGLE_BOTTOM.into(), window, cx)
+            MenuAction::ToggleBottomZone => {
+                self.execute_command(id::COMMAND_TOGGLE_BOTTOM_ZONE.into(), window, cx)
             }
             MenuAction::ToggleInspector => self.toggle_inspector_window(window, cx),
             MenuAction::ToggleRightPanel => {

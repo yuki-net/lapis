@@ -66,7 +66,7 @@ impl KeymapRegistry {
                 KeyBindingDefinition::new(id::COMMAND_OPEN_WORKSPACE, "ctrl-o", "Ctrl O"),
                 KeyBindingDefinition::new(id::COMMAND_SAVE_DOCUMENT, "ctrl-s", "Ctrl S"),
                 KeyBindingDefinition::new(id::COMMAND_TOGGLE_PREVIEW, "ctrl-alt-p", "Ctrl Alt P"),
-                KeyBindingDefinition::new(id::COMMAND_TOGGLE_BOTTOM, "ctrl-j", "Ctrl J"),
+                KeyBindingDefinition::new(id::COMMAND_TOGGLE_BOTTOM_ZONE, "ctrl-j", "Ctrl J"),
                 KeyBindingDefinition::new(id::COMMAND_TOGGLE_LEFT_ZONE, "ctrl-alt-l", "Ctrl Alt L"),
                 KeyBindingDefinition::new(
                     id::COMMAND_TOGGLE_RIGHT_ZONE,

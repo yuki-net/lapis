@@ -25,7 +25,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::show_commands))
             .on_action(cx.listener(Self::dismiss))
             .on_action(cx.listener(Self::toggle_preview))
-            .on_action(cx.listener(Self::toggle_bottom_panel))
+            .on_action(cx.listener(Self::toggle_bottom_zone))
             .on_action(cx.listener(Self::toggle_left_zone))
             .on_action(cx.listener(Self::toggle_right_zone))
             .on_action(cx.listener(Self::toggle_assistant))
@@ -44,8 +44,8 @@ impl Render for Shell {
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
             })
-            .when_some(self.shell.tool_picker.clone(), |root, group| {
-                root.child(self.render_tool_picker(group, cx))
+            .when_some(self.shell.tool_picker.clone(), |root, target| {
+                root.child(self.render_tool_picker(target, cx))
             })
             .when(self.shell.settings_menu_open, |root| {
                 root.child(self.render_settings_menu(cx))
