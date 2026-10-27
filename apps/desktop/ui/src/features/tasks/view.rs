@@ -8,7 +8,7 @@ use lapis_task::{ExecutionStatus, TaskControl, TaskMode};
 
 impl TasksFeature {
     pub(super) fn render_assistant_content(&self, cx: &mut Context<Self>) -> gpui::Div {
-        let records = &self.records;
+        let records = self.visible_records();
         let mut task_list = div().id("task-list").flex().flex_col().gap_1();
         for (task_index, record) in records.iter().take(12).enumerate() {
             let execution_id = record.execution.id.clone();

@@ -292,6 +292,31 @@ impl ConversationSession {
     pub fn active_id(&self) -> &ConversationId {
         &self.active
     }
+
+    /// Task表示が参照するWorkspaceを解決する。Editorの作業環境は切り替えない。
+    /// Document接続を呼ぶためClient workerから実行する。
+    pub fn task_workspace_id(
+        &self,
+        id: &ConversationId,
+        editor: &EditorSession,
+    ) -> Result<Option<WorkspaceId>, WorkspaceError> {
+        let record = self
+            .records
+            .iter()
+            .find(|record| &record.id == id)
+            .ok_or_else(|| WorkspaceError::new("Taskが見つかりません"))?;
+        record
+            .workspace
+            .root
+            .as_ref()
+            .map(|root| {
+                editor
+                    .document_connection
+                    .workspace(root)
+                    .map_err(|error| WorkspaceError::new(error.to_string()))
+            })
+            .transpose()
+    }
     pub fn active_record(&self) -> Option<&ConversationRecord> {
         self.records.iter().find(|record| record.id == self.active)
     }
@@ -343,6 +368,30 @@ impl ConversationSession {
         selected_execution: Option<ExecutionId>,
         terminals: &[TerminalSnapshot],
     ) -> Result<(), WorkspaceError> {
+        self.capture_with_terminals(editor, view, selected_execution, Some(terminals))
+    }
+
+    /// 未確定のTerminal表示は空の確定状態として保存せず、既存Resource参照を維持します。
+    pub fn capture_with_terminals(
+        &mut self,
+        editor: &mut EditorSession,
+        view: ConversationViewState,
+        selected_execution: Option<ExecutionId>,
+        terminals: Option<&[TerminalSnapshot]>,
+    ) -> Result<(), WorkspaceError> {
+        let owner = self.active.clone();
+        self.capture_bound(editor, view, selected_execution, Some(&owner), terminals)
+    }
+
+    /// 表示中Terminalの参照はEditorのTaskへ移さず、実際の所有Taskに保存します。
+    pub fn capture_bound(
+        &mut self,
+        editor: &mut EditorSession,
+        view: ConversationViewState,
+        selected_execution: Option<ExecutionId>,
+        terminal_owner: Option<&ConversationId>,
+        terminals: Option<&[TerminalSnapshot]>,
+    ) -> Result<(), WorkspaceError> {
         if let Some(record) = self
             .records
             .iter_mut()
@@ -359,6 +408,13 @@ impl ConversationSession {
             record.workspace = workspace;
             record.view = view;
             record.selected_execution = selected_execution;
+        }
+        if let Some(terminals) = terminals
+            && let Some(record) = self
+                .records
+                .iter_mut()
+                .find(|record| Some(&record.id) == terminal_owner)
+        {
             record.terminals = terminals
                 .iter()
                 .map(|terminal| RestoredTerminal {

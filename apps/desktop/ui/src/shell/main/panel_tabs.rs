@@ -64,10 +64,11 @@ impl Shell {
         let mut tab_items: Vec<gpui::AnyElement> = panel
             .tabs
             .iter()
+            .filter(|tab| self.shell.view_visible(tab))
             .enumerate()
             .map(|(index, tab)| {
                 let label = self.tab_title(position, tab);
-                let active = panel.active.as_ref() == Some(tab);
+                let active = self.shell.visible_active(panel) == Some(tab);
                 let file_icon = match tab {
                     PanelTab::Document(document_id) => self
                         .session

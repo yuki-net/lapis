@@ -134,6 +134,7 @@ pub(crate) struct PersistedView {
     pub layout: ConversationViewState,
     pub execution: Option<lapis_editor_core::ExecutionId>,
     pub terminals: Vec<lapis_terminal::TerminalSnapshot>,
+    pub terminal_owner: Option<lapis_editor_core::ConversationId>,
     pub input: Option<String>,
 }
 
@@ -157,12 +158,17 @@ impl DocumentClient {
         if self.editor.workspace_root().is_none() && self.editor.tabs().is_empty() {
             return Ok(());
         }
+        let terminals = view
+            .terminal_owner
+            .is_some()
+            .then_some(view.terminals.as_slice());
         self.conversation
-            .capture(
+            .capture_bound(
                 &mut self.editor,
                 view.layout,
                 view.execution,
-                &view.terminals,
+                view.terminal_owner.as_ref(),
+                terminals,
             )
             .map_err(|error| error.to_string())
     }

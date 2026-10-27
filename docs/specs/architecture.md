@@ -97,6 +97,16 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Panel間の通常DragはResize。明示Resizeで閾値まで縮めたPanelだけを閉じる。Windowの縮小・復元・DPI変更・保存復元ではPanelや比率を変更しない。利用領域が不足した場合は保存比率を維持して縮小し、新規追加を拒否する。
 - 同じWindowGroupのDocumentはWindowHostのDock/Undockを使用し、ToolのWindow間移動は受理しない。Window生成失敗や不正Dropでは元のTabとResourceを保持する。
 
+## Desktop の Task / Workbench Mode
+
+- TaskはProject配下の作業単位であり、Agent Sessionの所有物ではない。Task作成とAgent Session・Terminal開始は別のCommand/APIとし、Agent Sessionが0件でもTaskを成立させる。
+- `WorkbenchMode::Ide`は選択Taskと作業環境のTaskを分離する。Task選択では`ConversationSession::switch`を呼ばず、Editor・Terminal・Git・Panelを維持する。Agent表示が選択Taskへ追従する場合、そのTaskのWorkspace IDをClient worker上で解決し、世代検証後に適用する。Terminal/Gitの対象は選択Taskから推測せず、維持している作業環境のIDを使う。`WorkbenchMode::Agent`ではTaskごとの`ConversationViewState`と作業環境を切り替える。Task切替でHost Resourceを閉じたり複製したりしない。
+- Task選択・Mode変更・View所属変更は共通の`UiCommand`経路で処理する。View所属は表示上のScopeであり、`ViewInstanceId`、Document、Terminal、SessionのResource所有権を変更する契機にはしない。
+- `ConversationViewState.workbench`にはMode・選択Task・View所属と、IDE用Layout・IDEの作業Task・AgentのTask別Layoutを保存する。Layoutの退避値にWorkbench自身を入れ子で複製しない。これらを永続化の変更判定にも含める。初回はIDEでも保存Layoutを復元し、以後のIDEのTask選択では復元しない。Mode切替は現在の表示を対応する保存先へ退避し、作業Taskの切替成功を確認してから確定する。旧保存値はIDE・空のBindingへ移行し、Host Resourceや実行中Sessionを永続化値から再生成しない。
+- Task所属のViewはAgentで別Taskを選択すると非表示にし、IDEでは現在の配置を維持する。共有Toolの配置はTask Layoutの復元時にも個体IDを維持する。Terminalの表示コンテキストはViewのTask/Resource Bindingから解決し、共有Terminalは現在の接続先を維持する。Terminal参照はEditorや選択中Taskへ移さず、実際の接続先Taskへ保存する。再Attach・操作待ち・接続失敗の未確定表示を空のTerminal一覧として保存しない。Resource固定参照は対応済みFeatureと実在するIDに限定し、対象がなければ別Resourceへフォールバックしない。
+- Task一覧は選択中Taskに属するAgent表示だけを描画する。別TaskのSessionを自動起動・自動追加せず、既存のTask / Worktree / Terminal / Agent開始操作を明示的な入口として再利用する。
+- ACPプロトコルやAgent実行エンジンの新規実装は対象外とする。未対応機能を表示だけのButtonで完了扱いにせず、既存能力の範囲を共通RegistryとCommandで表現する。
+
 ## 依存の検査
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。

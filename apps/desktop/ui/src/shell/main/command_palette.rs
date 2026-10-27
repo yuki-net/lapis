@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::workbench::{ViewInstanceKey, ViewScope, WorkbenchMode};
+
 impl Shell {
     pub(crate) fn render_command_palette(
         &self,
@@ -101,6 +103,32 @@ impl Shell {
                 self.toggle_assistant(&ToggleAssistant, window, cx);
             }
             id::COMMAND_TOGGLE_PANEL_CONTROLS => self.toggle_panel_controls(cx),
+            id::COMMAND_WORKBENCH_IDE => {
+                self.shell.command_palette_open = false;
+                cx.emit(UiCommand::SetWorkbenchMode(WorkbenchMode::Ide));
+            }
+            id::COMMAND_WORKBENCH_AGENT => {
+                self.shell.command_palette_open = false;
+                cx.emit(UiCommand::SetWorkbenchMode(WorkbenchMode::Agent));
+            }
+            id::COMMAND_BIND_VIEW_SHARED => {
+                self.emit_view_binding(ViewScope::SharedWorkbench, cx);
+            }
+            id::COMMAND_BIND_VIEW_TASK => {
+                let Some(panel) = self
+                    .shell
+                    .focused_panel
+                    .as_ref()
+                    .and_then(|id| self.shell.layout.panel(id))
+                else {
+                    return;
+                };
+                if let Some(tab) = self.shell.visible_active(panel)
+                    && let Some(view) = ViewInstanceKey::new(tab.stable_view_key())
+                {
+                    cx.emit(UiCommand::BindViewToSelectedTask(view));
+                }
+            }
             #[cfg(debug_assertions)]
             id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector_window(window, cx),
             _ => {
@@ -108,5 +136,27 @@ impl Shell {
                 cx.notify();
             }
         }
+    }
+
+    fn emit_view_binding(&mut self, scope: ViewScope, cx: &mut Context<Self>) {
+        let Some(panel) = self
+            .shell
+            .focused_panel
+            .as_ref()
+            .and_then(|id| self.shell.layout.panel(id))
+        else {
+            return;
+        };
+        let Some(view) = panel
+            .active
+            .as_ref()
+            .and_then(|tab| ViewInstanceKey::new(tab.stable_view_key()))
+        else {
+            self.status = "所属を変更するViewが選択されていません".into();
+            cx.notify();
+            return;
+        };
+        self.shell.command_palette_open = false;
+        cx.emit(UiCommand::SetViewBinding { view, scope });
     }
 }

@@ -148,6 +148,7 @@ pub(super) struct PanelResize {
 #[derive(Clone)]
 pub(crate) struct ShellState {
     pub focused_panel: Option<PanelId>,
+    pub(crate) hidden_views: std::collections::HashSet<ViewInstanceId>,
     pub layout: DockLayout,
     pub bottom_span_left_transition: Option<PanelSpanTransition>,
     pub bottom_span_right_transition: Option<PanelSpanTransition>,
@@ -174,6 +175,7 @@ impl Default for ShellState {
     fn default() -> Self {
         Self {
             focused_panel: None,
+            hidden_views: Default::default(),
             layout: DockLayout::default(),
             bottom_span_left_transition: None,
             bottom_span_right_transition: None,
@@ -199,6 +201,17 @@ impl Default for ShellState {
 }
 
 impl ShellState {
+    pub(crate) fn view_visible(&self, tab: &PanelTab) -> bool {
+        !self.hidden_views.contains(&tab.instance_id())
+    }
+
+    pub(crate) fn visible_active<'a>(&self, panel: &'a PanelHost) -> Option<&'a PanelTab> {
+        panel
+            .active
+            .as_ref()
+            .filter(|tab| self.view_visible(tab))
+            .or_else(|| panel.tabs.iter().find(|tab| self.view_visible(tab)))
+    }
     /// 消えた追加先へ操作を適用しない。共有Viewは個体を保って移動する。
     pub(crate) fn open_panel_tab(&mut self, panel_id: &PanelId, tab: PanelTab) -> bool {
         if self.layout.panel(panel_id).is_none() {
@@ -352,11 +365,11 @@ impl ShellState {
     }
 
     pub fn synchronize_activation(&self, registry: &mut FeatureRegistry) {
-        registry.set_visible_views(
-            self.layout
-                .visible_panels()
-                .filter_map(|panel| panel.active.as_ref().and_then(PanelTab::view_id).cloned()),
-        );
+        registry.set_visible_views(self.layout.visible_panels().filter_map(|panel| {
+            self.visible_active(panel)
+                .and_then(PanelTab::view_id)
+                .cloned()
+        }));
     }
 }
 

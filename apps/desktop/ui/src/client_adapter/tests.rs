@@ -22,6 +22,43 @@ pub(crate) struct State {
     pub fail_persist: bool,
 }
 
+#[test]
+fn terminal_persistence_rejects_other_task_and_pending_context_without_erasing_resources() {
+    use lapis_terminal::{TerminalId, TerminalSize, TerminalSnapshot, TerminalStatus};
+    let fixture = Fixture::default();
+    let mut client = fixture.client();
+    let owner = client.conversation.active_id().clone();
+    let terminal = TerminalSnapshot::empty(
+        TerminalId::new("terminal-a"),
+        PathBuf::from("task-a"),
+        TerminalStatus::Running,
+        TerminalSize::new(80, 24),
+    );
+    let mut view = Fixture::view();
+    view.terminal_owner = Some(owner.clone());
+    view.terminals = vec![terminal.clone()];
+    client.persist_view(view).unwrap();
+    for invalid_owner in [None, Some(ConversationId::new("task-b"))] {
+        let mut view = Fixture::view();
+        view.terminal_owner = invalid_owner;
+        client.persist_view(view).unwrap();
+        let record = client.conversation.active_record().unwrap();
+        assert_eq!(record.terminals.len(), 1);
+        assert_eq!(record.terminals[0].id.as_ref(), Some(&terminal.id));
+    }
+    let mut view = Fixture::view();
+    view.terminal_owner = Some(owner);
+    client.persist_view(view).unwrap();
+    assert!(
+        client
+            .conversation
+            .active_record()
+            .unwrap()
+            .terminals
+            .is_empty()
+    );
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct Fixture(pub Arc<Mutex<State>>);
 impl Fixture {
@@ -60,6 +97,7 @@ impl Fixture {
             layout: Default::default(),
             execution: None,
             terminals: vec![],
+            terminal_owner: None,
             input: None,
         }
     }

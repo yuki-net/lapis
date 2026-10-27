@@ -119,6 +119,7 @@ pub(crate) struct TerminalFeature {
     pub(super) discovered: Vec<lapis_terminal::TerminalSnapshot>,
     pub(super) selected: Option<lapis_terminal::TerminalId>,
     selected_by_context: HashMap<(Option<PathBuf>, ConversationId), lapis_terminal::TerminalId>,
+    bound_resource: Option<lapis_terminal::TerminalId>,
     pub(super) focus: gpui::FocusHandle,
     pub(super) marked: String,
     /// Terminal出力の表示状態。
@@ -137,6 +138,42 @@ impl TerminalFeature {
     pub(crate) fn summaries(&self) -> Vec<lapis_terminal::TerminalSnapshot> {
         self.terminals.clone()
     }
+    pub(crate) fn persistence_summaries(&self) -> Vec<RestoredTerminal> {
+        self.terminals
+            .iter()
+            .map(|terminal| RestoredTerminal {
+                id: Some(terminal.id.clone()),
+                cwd: terminal.cwd.clone(),
+                status: terminal.status,
+                columns: terminal.screen.size.columns,
+                rows: terminal.screen.size.rows,
+            })
+            .collect()
+    }
+    pub(crate) fn persistence_owner(&self) -> Option<ConversationId> {
+        (self.requests.pending_actions == 0 && !self.requests.context_unavailable)
+            .then(|| self.conversation.clone())
+    }
+    pub(crate) fn persistence_owner_for(
+        &self,
+        task: &ConversationId,
+        root: Option<&std::path::Path>,
+    ) -> Option<ConversationId> {
+        self.persistence_owner().filter(|owner| {
+            owner == task
+                && self.root.as_deref() == root
+                && self
+                    .bound_resource
+                    .as_ref()
+                    .is_none_or(|id| self.terminals.iter().any(|terminal| &terminal.id == id))
+        })
+    }
+    pub(crate) fn context_task(&self) -> &ConversationId {
+        &self.conversation
+    }
+    pub(crate) fn bind_resource(&mut self, resource: Option<lapis_terminal::TerminalId>) {
+        self.bound_resource = resource;
+    }
     pub(crate) fn new(
         session: TerminalSession,
         root: Option<PathBuf>,
@@ -151,6 +188,7 @@ impl TerminalFeature {
             discovered: Vec::new(),
             selected: None,
             selected_by_context: HashMap::new(),
+            bound_resource: None,
             focus: cx.focus_handle(),
             marked: String::new(),
             visible_output: None, // None = 未処理
@@ -289,6 +327,13 @@ impl TerminalFeature {
     }
 
     pub(super) fn active_id(&self) -> Option<lapis_terminal::TerminalId> {
+        if let Some(id) = &self.bound_resource {
+            return self
+                .terminals
+                .iter()
+                .find(|terminal| &terminal.id == id)
+                .map(|terminal| terminal.id.clone());
+        }
         self.selected
             .as_ref()
             .filter(|id| self.terminals.iter().any(|terminal| terminal.id == **id))
@@ -492,6 +537,123 @@ impl TerminalFeature {
 
 #[cfg(test)]
 mod tests {
+    #[gpui::test]
+    fn persistence_summary_ignores_output_and_tracks_restore_metadata(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, _| {
+                feature
+                    .terminals
+                    .push(lapis_terminal::TerminalSnapshot::empty(
+                        lapis_terminal::TerminalId::new("terminal-a"),
+                        "workspace".into(),
+                        TerminalStatus::Running,
+                        TerminalSize::new(80, 24),
+                    ));
+                let before = feature.persistence_summaries();
+                feature.terminals[0].revision += 1;
+                feature.terminals[0]
+                    .screen
+                    .scrollback
+                    .extend((0..1024).map(|_| lapis_terminal::TerminalRow::empty(80)));
+                assert_eq!(feature.persistence_summaries(), before);
+                feature.terminals[0].screen =
+                    lapis_terminal::TerminalScreen::empty(TerminalSize::new(120, 40));
+                feature.terminals[0].status = TerminalStatus::Exited;
+                let after = feature.persistence_summaries();
+                assert_eq!(after[0].id, before[0].id);
+                assert_eq!(after[0].cwd, before[0].cwd);
+                assert_eq!(after[0].status, TerminalStatus::Exited);
+                assert_eq!((after[0].columns, after[0].rows), (120, 40));
+                assert_ne!(after, before);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn fixed_terminal_never_falls_back_and_pending_context_is_not_persistable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, _| {
+                feature
+                    .terminals
+                    .push(lapis_terminal::TerminalSnapshot::empty(
+                        lapis_terminal::TerminalId::new("first"),
+                        "workspace".into(),
+                        lapis_terminal::TerminalStatus::Running,
+                        lapis_terminal::TerminalSize::new(80, 24),
+                    ));
+                feature.bind_resource(Some(lapis_terminal::TerminalId::new("missing")));
+                assert!(feature.active_id().is_none());
+                assert!(
+                    feature
+                        .persistence_owner_for(
+                            &ConversationId::new("task-a"),
+                            Some(std::path::Path::new("workspace"))
+                        )
+                        .is_none()
+                );
+                feature.bind_resource(Some(lapis_terminal::TerminalId::new("first")));
+                assert_eq!(feature.active_id().unwrap().as_str(), "first");
+                // 作成直後で保存一覧にまだないIDも、実際の接続先が確定していれば保存できる。
+                assert_eq!(
+                    feature.persistence_owner_for(
+                        &ConversationId::new("task-a"),
+                        Some(std::path::Path::new("workspace"))
+                    ),
+                    Some(ConversationId::new("task-a"))
+                );
+                assert!(
+                    feature
+                        .persistence_owner_for(
+                            &ConversationId::new("task-b"),
+                            Some(std::path::Path::new("workspace"))
+                        )
+                        .is_none()
+                );
+                assert!(
+                    feature
+                        .persistence_owner_for(
+                            &ConversationId::new("task-a"),
+                            Some(std::path::Path::new("changed-source"))
+                        )
+                        .is_none()
+                );
+                assert_eq!(
+                    feature.persistence_owner(),
+                    Some(ConversationId::new("task-a"))
+                );
+                let token = feature.requests.begin_action();
+                assert!(feature.persistence_owner().is_none());
+                feature.requests.finish_action(token);
+                assert!(feature.persistence_owner().is_some());
+                feature.requests.context_unavailable = true;
+                assert!(feature.persistence_owner().is_none());
+            });
+        });
+    }
     use super::*;
     use lapis_terminal::TerminalId;
     use lapis_terminal::{

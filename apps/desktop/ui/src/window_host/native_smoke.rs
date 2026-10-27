@@ -58,6 +58,14 @@ pub(crate) fn run_native_smoke(
 ) {
     let id = root.editor.read(cx).document_id().unwrap();
     let shared_path = root.editor.read(cx).document().path().unwrap().to_owned();
+    let shared_task = root
+        .group
+        .read(cx)
+        .latest
+        .as_ref()
+        .unwrap()
+        .conversation
+        .clone();
     let expected_documents = root
         .group
         .read(cx)
@@ -76,6 +84,7 @@ pub(crate) fn run_native_smoke(
         if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
             crate::devtools::native_smoke::run(handle, cx).await;
         }
+        verify_workbench_routes(&this, handle, cx).await;
         verify_panel_layout_resize(&this, handle, cx).await;
         #[cfg(target_os = "windows")]
         verify_panel_drag_resize(&this, handle, cx).await;
@@ -121,6 +130,7 @@ pub(crate) fn run_native_smoke(
             eprintln!("SMOKE drag outside creates native window OK");
         })
         .unwrap();
+        verify_ide_task_list_with_detached_window(&this, handle, cx).await;
         gpui::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE idle sample begin");
         gpui::Timer::after(std::time::Duration::from_secs(5)).await;
@@ -405,7 +415,7 @@ pub(crate) fn run_native_smoke(
             .clone()
             .expect("persistence must be retried after the synchronization latch is cleared");
         this.update(cx, |root, cx| {
-            let expected = root.shell.read(cx).view_state();
+            let expected = root.persisted_view(cx).layout;
             let active = saved_view
                 .1
                 .iter()
@@ -737,6 +747,7 @@ pub(crate) fn run_native_smoke(
             eprintln!("INSPECTOR_NATIVE_ROOT_CASCADE_PASS");
         }
         let peer_path = shared_path.clone();
+        let peer_task = shared_task.clone();
         peer.update(cx, |other, cx| {
             other.editor.update(cx, |editor, cx| {
                 editor.submit(
@@ -744,10 +755,7 @@ pub(crate) fn run_native_smoke(
                     move |client| {
                         client
                             .conversation
-                            .open_project(
-                                &mut client.editor,
-                                peer_path.parent().unwrap().to_owned(),
-                            )
+                            .switch(&peer_task, &mut client.editor)
                             .map_err(|e| e.to_string())?;
                         client
                             .editor
@@ -783,6 +791,7 @@ pub(crate) fn run_native_smoke(
                                     return None;
                                 }
                                 let path = shared_path.clone();
+                                let task = shared_task.clone();
                                 entity.update(cx, |other, cx| {
                                     other.editor.update(cx, |editor, cx| {
                                         editor.submit(
@@ -790,10 +799,7 @@ pub(crate) fn run_native_smoke(
                                             move |client| {
                                                 client
                                                     .conversation
-                                                    .open_project(
-                                                        &mut client.editor,
-                                                        path.parent().unwrap().to_owned(),
-                                                    )
+                                                    .switch(&task, &mut client.editor)
                                                     .map_err(|e| e.to_string())?;
                                                 client
                                                     .editor
@@ -1318,6 +1324,384 @@ async fn verify_drag_routes(
         })
         .unwrap();
     wait_for(root, cx, Some(2)).await;
+}
+
+async fn verify_ide_task_list_with_detached_window(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    let (a, b, before) = root
+        .update(cx, |root, cx| {
+            let group = root.group.read(cx);
+            assert_eq!(group.members.len(), 2);
+            let snapshot = group.latest.as_ref().unwrap();
+            let a = snapshot.conversation.clone();
+            let b = snapshot
+                .conversations
+                .iter()
+                .find(|record| record.id != a)
+                .unwrap()
+                .id
+                .clone();
+            let before = group
+                .members
+                .iter()
+                .map(|(id, member)| {
+                    (
+                        *id,
+                        member.shell.read(cx).view_state(),
+                        member.editor.read(cx).document_id(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (a, b, before)
+        })
+        .unwrap();
+    for task in [&b, &a] {
+        root.update(cx, |root, cx| {
+            root.handle_conversation_event(
+                crate::features::conversation::ConversationEvent::Switch(task.clone()),
+                cx,
+            );
+        })
+        .unwrap();
+        wait_for(root, cx, Some(2)).await;
+        root.update(cx, |root, cx| {
+            assert_eq!(
+                root.persisted_view(cx)
+                    .layout
+                    .workbench
+                    .selected_task
+                    .as_ref(),
+                Some(task)
+            );
+            let group = root.group.read(cx);
+            assert_eq!(group.latest.as_ref().unwrap().conversation, a);
+            for (id, layout, document) in &before {
+                assert_eq!(group.members[id].shell.read(cx).view_state(), *layout);
+                assert_eq!(group.members[id].editor.read(cx).document_id(), *document);
+            }
+        })
+        .unwrap();
+    }
+    // 同じ入口でも終了中・再同期中とAgentの作業環境切替は引き続き拒否する。
+    for closing in [true, false] {
+        root.update(cx, |root, cx| {
+            root.group.update(cx, |group, _| {
+                group.closing = closing;
+                group.synchronization_required = !closing;
+            });
+            root.handle_conversation_event(
+                crate::features::conversation::ConversationEvent::Switch(b.clone()),
+                cx,
+            );
+            assert_eq!(
+                root.persisted_view(cx)
+                    .layout
+                    .workbench
+                    .selected_task
+                    .as_ref(),
+                Some(&a)
+            );
+            root.group.update(cx, |group, _| {
+                group.closing = false;
+                group.synchronization_required = false;
+            });
+        })
+        .unwrap();
+    }
+    for mode in [
+        crate::workbench::WorkbenchMode::Agent,
+        crate::workbench::WorkbenchMode::Ide,
+    ] {
+        handle
+            .update(cx, |_, window, cx| {
+                root.update(cx, |root, cx| {
+                    root.command(UiCommand::SetWorkbenchMode(mode), window, cx)
+                })
+                .unwrap();
+            })
+            .unwrap();
+        if mode == crate::workbench::WorkbenchMode::Agent {
+            root.update(cx, |root, cx| {
+                root.handle_conversation_event(
+                    crate::features::conversation::ConversationEvent::Switch(b.clone()),
+                    cx,
+                );
+                assert_eq!(
+                    root.persisted_view(cx)
+                        .layout
+                        .workbench
+                        .selected_task
+                        .as_ref(),
+                    Some(&a)
+                );
+                assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
+            })
+            .unwrap();
+        }
+    }
+    eprintln!(
+        "SMOKE Task list IDE selection preserves both windows; closing, resync and Agent guards remain effective OK"
+    );
+}
+
+async fn verify_workbench_routes(
+    root: &WeakEntity<DesktopRoot>,
+    handle: gpui::AnyWindowHandle,
+    cx: &mut gpui::AsyncApp,
+) {
+    let (original_layout, original_workbench) = root
+        .update(cx, |root, cx| {
+            let original_workbench = root.smoke_workbench();
+            let original_layout = root.shell.update(cx, |shell, cx| {
+                let original = shell.shell.layout.clone();
+                let main = shell
+                    .shell
+                    .layout
+                    .first_panel_in_zone(ZonePosition::Left)
+                    .unwrap();
+                let first = crate::shell::PanelTab::tool(crate::features::id::VIEW_PREVIEW);
+                let second = crate::shell::PanelTab::tool(crate::features::id::VIEW_ASSISTANT);
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Left, first.clone())
+                    .unwrap();
+                let extra = shell
+                    .shell
+                    .layout
+                    .drop_tab(
+                        &source,
+                        &first,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: main,
+                            edge: crate::shell::PanelEdge::Right,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Left, second.clone())
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .drop_tab(
+                        &source,
+                        &second,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: extra,
+                            edge: crate::shell::PanelEdge::Right,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                cx.notify();
+                original
+            });
+            (original_layout, original_workbench)
+        })
+        .unwrap();
+    let setup = root
+        .update(cx, |root, cx| {
+            let view = root.persisted_view(cx);
+            root.worker.request(move |client| {
+                client.persist_view(view)?;
+                let a = client.conversation.active_id().clone();
+                let project = client.conversation.projects()[0].id().clone();
+                let path = client.editor.workspace_root().unwrap().to_owned();
+                let b = client
+                    .conversation
+                    .create_task(&mut client.editor, &project, path, None)
+                    .map_err(|error| error.to_string())?;
+                client
+                    .conversation
+                    .switch(&a, &mut client.editor)
+                    .map_err(|error| error.to_string())?;
+                Ok((a, b, client.snapshot()?))
+            })
+        })
+        .unwrap();
+    let (a, b, snapshot) = wait_client(setup).await.unwrap();
+    root.update(cx, |root, cx| {
+        root.group
+            .update(cx, |group, cx| group.publish(snapshot, cx));
+        root.synchronize_group(cx);
+    })
+    .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    let before = root
+        .update(cx, |root, cx| {
+            (
+                root.shell.read(cx).view_state(),
+                root.editor.read(cx).document_id(),
+                root.group
+                    .read(cx)
+                    .latest
+                    .as_ref()
+                    .unwrap()
+                    .workspace
+                    .clone(),
+            )
+        })
+        .unwrap();
+    for selected in [&b, &a, &b] {
+        handle
+            .update(cx, |_, window, cx| {
+                root.update(cx, |root, cx| {
+                    root.command(UiCommand::SelectTask(selected.clone()), window, cx)
+                })
+                .unwrap();
+            })
+            .unwrap();
+        wait_for(root, cx, Some(1)).await;
+        root.update(cx, |root, cx| {
+            assert_eq!(
+                root.persisted_view(cx)
+                    .layout
+                    .workbench
+                    .selected_task
+                    .as_ref(),
+                Some(selected)
+            );
+            assert_eq!(root.shell.read(cx).view_state(), before.0);
+            assert_eq!(root.editor.read(cx).document_id(), before.1);
+            assert_eq!(
+                root.group.read(cx).latest.as_ref().unwrap().workspace,
+                before.2
+            );
+            assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
+        })
+        .unwrap();
+    }
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.command(
+                    UiCommand::SetWorkbenchMode(crate::workbench::WorkbenchMode::Agent),
+                    window,
+                    cx,
+                )
+            })
+            .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    let agent_view = root
+        .update(cx, |root, cx| {
+            assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, b);
+            assert_eq!(
+                root.persisted_view(cx).layout.workbench.mode,
+                lapis_desktop_client::WorkbenchModeState::Agent
+            );
+            root.shell.update(cx, |shell, cx| {
+                let main = shell
+                    .shell
+                    .layout
+                    .first_panel_in_zone(ZonePosition::Left)
+                    .unwrap();
+                let preview = crate::shell::PanelTab::tool(crate::features::id::VIEW_PREVIEW);
+                let source = shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Left, preview.clone())
+                    .unwrap();
+                shell
+                    .shell
+                    .layout
+                    .drop_tab(
+                        &source,
+                        &preview,
+                        &crate::shell::PanelDrop::Edge {
+                            panel: main,
+                            edge: crate::shell::PanelEdge::Right,
+                        },
+                        (800.0, 600.0),
+                        std::time::Instant::now(),
+                    )
+                    .unwrap();
+                cx.notify();
+            });
+            root.schedule_persist(cx);
+            root.shell.read(cx).view_state()
+        })
+        .unwrap();
+    for mode in [
+        crate::workbench::WorkbenchMode::Ide,
+        crate::workbench::WorkbenchMode::Agent,
+    ] {
+        handle
+            .update(cx, |_, window, cx| {
+                root.update(cx, |root, cx| {
+                    root.command(UiCommand::SetWorkbenchMode(mode), window, cx)
+                })
+                .unwrap();
+            })
+            .unwrap();
+        wait_for(root, cx, Some(1)).await;
+        root.update(cx, |root, cx| {
+            let expected = if mode == crate::workbench::WorkbenchMode::Ide {
+                &a
+            } else {
+                &b
+            };
+            assert_eq!(
+                &root.group.read(cx).latest.as_ref().unwrap().conversation,
+                expected
+            );
+            if mode == crate::workbench::WorkbenchMode::Ide {
+                assert_eq!(root.editor.read(cx).document_id(), before.1);
+                assert_eq!(root.shell.read(cx).view_state(), before.0);
+            } else {
+                assert_eq!(root.shell.read(cx).view_state(), agent_view);
+            }
+        })
+        .unwrap();
+    }
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.command(UiCommand::SelectTask(a.clone()), window, cx)
+            })
+            .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.command(
+                    UiCommand::SetWorkbenchMode(crate::workbench::WorkbenchMode::Ide),
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        })
+        .unwrap();
+    wait_for(root, cx, Some(1)).await;
+    root.update(cx, |root, cx| {
+        assert_eq!(
+            root.persisted_view(cx).layout.workbench.mode,
+            lapis_desktop_client::WorkbenchModeState::Ide
+        );
+        assert_eq!(root.editor.read(cx).document_id(), before.1);
+        assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);
+        eprintln!("SMOKE IDE Task A/B/A and IDE/Agent round trip preserve Panel layouts OK");
+        root.restore_smoke_workbench(original_workbench);
+        root.shell.update(cx, |shell, cx| {
+            shell.shell.layout = original_layout;
+            cx.notify();
+        });
+        root.schedule_persist(cx);
+    })
+    .unwrap();
 }
 
 async fn wait_for(root: &WeakEntity<DesktopRoot>, cx: &mut gpui::AsyncApp, windows: Option<usize>) {

@@ -134,10 +134,56 @@ pub struct ConversationViewState {
     /// Panel開閉ボタン群の表示設定。非表示でもViewメニューから復元できる。
     #[serde(default = "default_show_panel_controls")]
     pub show_panel_controls: bool,
+    /// Task???Workbench???????
+    #[serde(default)]
+    pub workbench: WorkbenchViewState,
 }
 
 fn default_show_panel_controls() -> bool {
     true
+}
+
+/// UIの表示ポリシーを保存するための、GPUIに依存しない値です。
+/// Host Resourceの所有権や実行中Sessionは含めません。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkbenchViewState {
+    pub mode: WorkbenchModeState,
+    pub selected_task: Option<ConversationId>,
+    pub bindings: Vec<ViewBindingState>,
+    pub ide_layout: Option<WorkbenchLayoutState>,
+    pub ide_context: Option<ConversationId>,
+    pub task_layouts: std::collections::BTreeMap<ConversationId, WorkbenchLayoutState>,
+}
+
+/// 配置だけを保持し、TaskやResourceのSnapshotを再帰的に複製しない。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkbenchLayoutState {
+    pub layout: Option<ZoneLayoutViewState>,
+    pub show_panel_controls: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkbenchModeState {
+    #[default]
+    Ide,
+    Agent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ViewBindingState {
+    pub view: String,
+    pub scope: ViewScopeState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ViewScopeState {
+    SharedWorkbench,
+    Task(lapis_editor_core::ConversationId),
+    FollowSelectedTask,
+    Resource(String),
 }
 
 pub const ZONE_LAYOUT_VERSION: u16 = 3;
@@ -186,6 +232,7 @@ impl Default for ConversationViewState {
         Self {
             layout: None,
             show_panel_controls: true,
+            workbench: WorkbenchViewState::default(),
         }
     }
 }
@@ -2128,6 +2175,13 @@ mod tests {
     use lapis_workspace::FileEntryKind;
 
     use super::*;
+
+    #[test]
+    fn old_conversation_view_defaults_workbench_state() {
+        let view: ConversationViewState =
+            serde_json::from_str(r#"{"active_tool":"files"}"#).unwrap();
+        assert_eq!(view.workbench, WorkbenchViewState::default());
+    }
 
     #[test]
     fn settings_read_cache_does_not_wait_for_persistence_io() {
