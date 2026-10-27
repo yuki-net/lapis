@@ -34,7 +34,7 @@ impl Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_zone(ZonePosition::Right, Some(ViewId::new(id::VIEW_PREVIEW)), cx);
+        self.open_view_in_zone(ZonePosition::Right, ViewId::new(id::VIEW_PREVIEW), cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -73,31 +73,10 @@ impl Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_zone(
-            ZonePosition::Right,
-            Some(ViewId::new(id::VIEW_ASSISTANT)),
-            cx,
-        );
+        self.open_view_in_zone(ZonePosition::Right, ViewId::new(id::VIEW_ASSISTANT), cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation(cx);
         cx.notify();
-    }
-
-    pub(crate) fn open_zone(
-        &mut self,
-        position: ZonePosition,
-        view: Option<ViewId>,
-        cx: &mut Context<Self>,
-    ) {
-        if let Some(view) = view {
-            let _ = self.shell.layout.move_tab_to_zone(
-                position,
-                PanelTab::tool(view),
-                std::time::Instant::now(),
-            );
-        } else {
-            self.request_zone_open(position, true, cx);
-        }
     }
 
     pub(crate) fn toggle_zone(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
@@ -149,7 +128,7 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn activate_panel_view(
+    pub(crate) fn open_view_in_zone(
         &mut self,
         position: ZonePosition,
         view: ViewId,
@@ -262,7 +241,7 @@ impl Shell {
     }
 
     pub(crate) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
-        self.open_zone(ZonePosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)), cx);
+        self.open_view_in_zone(ZonePosition::Main, ViewId::new(id::VIEW_SETTINGS), cx);
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
         self.refresh_feature_activation(cx);

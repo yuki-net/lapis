@@ -172,12 +172,12 @@ impl DesktopRoot {
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
         shell.update(cx, |shell, cx| {
             shell.set_locale(initial_locale.clone(), cx);
-            shell.activate_panel_view(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
+            shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
-                shell.activate_panel_view(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
+                shell.open_view_in_zone(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
             }
             if initial.show_terminal || initial.show_problems {
-                shell.activate_panel_view(
+                shell.open_view_in_zone(
                     ZonePosition::Bottom,
                     if initial.show_problems {
                         id::VIEW_PROBLEMS
@@ -298,7 +298,7 @@ impl DesktopRoot {
                     root.quick_search
                         .update(cx, |search, cx| search.open_input(request.title(), "", cx));
                     root.shell.update(cx, |shell, cx| {
-                        shell.activate_panel_view(
+                        shell.open_view_in_zone(
                             ZonePosition::Right,
                             id::VIEW_COMMAND_SEARCH.into(),
                             cx,
@@ -323,7 +323,7 @@ impl DesktopRoot {
                     root.search
                         .update(cx, |search, cx| search.start(query.clone(), cx));
                     root.shell.update(cx, |shell, cx| {
-                        shell.activate_panel_view(ZonePosition::Left, id::VIEW_SEARCH.into(), cx)
+                        shell.open_view_in_zone(ZonePosition::Left, id::VIEW_SEARCH.into(), cx)
                     });
                 }
                 EditorEvent::Completion(definition) => {
@@ -775,7 +775,7 @@ impl DesktopRoot {
         self.quick_search
             .update(cx, |search, cx| search.open_path(title, suggested, cx));
         self.shell.update(cx, |shell, cx| {
-            shell.activate_panel_view(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
+            shell.open_view_in_zone(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
         });
         window.focus(&self.quick_search.read(cx).focus_handle());
     }
@@ -920,11 +920,7 @@ impl DesktopRoot {
                 self.quick_search
                     .update(cx, |search, cx| search.open(provider, cx));
                 self.shell.update(cx, |shell, cx| {
-                    shell.activate_panel_view(
-                        ZonePosition::Right,
-                        id::VIEW_COMMAND_SEARCH.into(),
-                        cx,
-                    )
+                    shell.open_view_in_zone(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
                 });
                 window.focus(&self.quick_search.read(cx).focus_handle());
             }
