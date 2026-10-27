@@ -1,8 +1,8 @@
 //! Zone内のPanel順序と比率。ViewやResourceの寿命は扱わない。
 
-use crate::extension_ui::PanelPosition;
+use crate::extension_ui::ZonePosition;
 
-use super::TabGroupId;
+use super::PanelId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Axis {
@@ -12,7 +12,7 @@ pub(super) enum Axis {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum PanelLayout {
-    Panel(TabGroupId),
+    Panel(PanelId),
     Arrangement {
         axis: Axis,
         children: Vec<PanelLayout>,
@@ -26,21 +26,15 @@ pub(crate) enum PanelEdge {
     Left,
     Right,
     Top,
-    Bottom,
 }
 
 /// Tab Drag中だけ利用するPanel自身の端。通常のZone Resizeは変更しない。
-pub(super) fn insertion_edges(position: PanelPosition) -> &'static [PanelEdge] {
-    match position {
-        PanelPosition::Left => &[PanelEdge::Right],
-        PanelPosition::Right => &[PanelEdge::Left],
-        PanelPosition::Main => &[
-            PanelEdge::Left,
-            PanelEdge::Right,
-            PanelEdge::Top,
-            PanelEdge::Bottom,
-        ],
-        PanelPosition::Bottom => &[PanelEdge::Left, PanelEdge::Right],
+pub(super) fn insertion_edges(position: ZonePosition) -> &'static [PanelEdge] {
+    match super::zone_policy::ZonePolicy::for_position(position).growth_edge {
+        Some(PanelEdge::Left) => &[PanelEdge::Left],
+        Some(PanelEdge::Right) => &[PanelEdge::Right],
+        Some(PanelEdge::Top) => &[PanelEdge::Top],
+        None => &[],
     }
 }
 
@@ -90,7 +84,7 @@ pub(super) fn allocate(
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct EdgeCandidate {
-    pub panel: TabGroupId,
+    pub panel: PanelId,
     pub edge: PanelEdge,
     /// 境界線の始点と終点。論理pixel座標。
     pub start: (f32, f32),
@@ -143,7 +137,7 @@ impl PanelLayout {
         Some(node)
     }
 
-    pub(super) fn any_visible(&self, visible: &impl Fn(&TabGroupId) -> bool) -> bool {
+    pub(super) fn any_visible(&self, visible: &impl Fn(&PanelId) -> bool) -> bool {
         match self {
             Self::Panel(id) => visible(id),
             Self::Arrangement { children, .. } => {
@@ -156,8 +150,8 @@ impl PanelLayout {
         &self,
         size: (f32, f32),
         gap: f32,
-        visible: &impl Fn(&TabGroupId) -> bool,
-        result: &mut std::collections::BTreeMap<TabGroupId, (f32, f32)>,
+        visible: &impl Fn(&PanelId) -> bool,
+        result: &mut std::collections::BTreeMap<PanelId, (f32, f32)>,
     ) -> Option<()> {
         match self {
             Self::Panel(id) => {
@@ -193,10 +187,10 @@ impl PanelLayout {
 
     pub(super) fn panel_rect(
         &self,
-        target: &TabGroupId,
+        target: &PanelId,
         rect: (f32, f32, f32, f32),
         gap: f32,
-        visible: &impl Fn(&TabGroupId) -> bool,
+        visible: &impl Fn(&PanelId) -> bool,
     ) -> Option<(f32, f32, f32, f32)> {
         match self {
             Self::Panel(id) => (id == target && visible(id)).then_some(rect),
@@ -267,7 +261,7 @@ impl PanelLayout {
     pub(super) fn restore(saved: &lapis_desktop_client::PanelLayoutViewState) -> Option<Self> {
         match saved {
             lapis_desktop_client::PanelLayoutViewState::Panel { id } => {
-                Some(Self::Panel(TabGroupId::parse(id)?))
+                Some(Self::Panel(PanelId::parse(id)?))
             }
             lapis_desktop_client::PanelLayoutViewState::Arrangement {
                 direction,
@@ -296,7 +290,7 @@ impl PanelLayout {
         available: f32,
         min_size: f32,
         close_threshold: f32,
-    ) -> Result<Option<TabGroupId>, ()> {
+    ) -> Result<Option<PanelId>, ()> {
         if !self.valid()
             || ![delta, available, min_size, close_threshold]
                 .iter()
@@ -350,7 +344,7 @@ impl PanelLayout {
         weights[next] = (combined - first) / available;
         Ok(None)
     }
-    pub(super) fn panels(&self, result: &mut Vec<TabGroupId>) {
+    pub(super) fn panels(&self, result: &mut Vec<PanelId>) {
         match self {
             Self::Panel(id) => result.push(id.clone()),
             Self::Arrangement { children, .. } => {
@@ -364,8 +358,8 @@ impl PanelLayout {
     /// 指定Panelの端へ追加する。同方向の並びは一つの配列で保持する。
     pub(super) fn insert_at_edge(
         &mut self,
-        panel: &TabGroupId,
-        new_panel: TabGroupId,
+        panel: &PanelId,
+        new_panel: PanelId,
         axis: Axis,
         before: bool,
     ) -> bool {
@@ -407,7 +401,7 @@ impl PanelLayout {
     }
 
     /// 空になったPanelを閉じ、残り一つなら内部の配置を畳む。
-    pub(super) fn remove(&mut self, panel: &TabGroupId) -> bool {
+    pub(super) fn remove(&mut self, panel: &PanelId) -> bool {
         let Self::Arrangement {
             children, weights, ..
         } = self
@@ -436,7 +430,7 @@ impl PanelLayout {
     }
 
     pub(super) fn valid(&self) -> bool {
-        fn check(node: &PanelLayout, seen: &mut std::collections::BTreeSet<TabGroupId>) -> bool {
+        fn check(node: &PanelLayout, seen: &mut std::collections::BTreeSet<PanelId>) -> bool {
             match node {
                 PanelLayout::Panel(id) => seen.insert(id.clone()),
                 PanelLayout::Arrangement {
@@ -463,9 +457,9 @@ mod tests {
 
     #[test]
     fn zone_closes_only_empty_panels_after_the_transition() {
-        let mut zone = Zone::new(PanelPosition::Left, 200.0);
-        let a = TabGroupId::new(1);
-        let b = TabGroupId::new(2);
+        let mut zone = Zone::new(ZonePosition::Left);
+        let a = PanelId::new(1);
+        let b = PanelId::new(2);
         let tab_a = PanelTab::tool("a");
         let tab_b = PanelTab::tool("b");
         assert!(zone.add_panel(a.clone(), vec![tab_a.clone()], None));
@@ -484,8 +478,8 @@ mod tests {
 
     #[test]
     fn reopening_during_empty_close_keeps_the_panel() {
-        let mut zone = Zone::new(PanelPosition::Right, 200.0);
-        let id = TabGroupId::new(1);
+        let mut zone = Zone::new(ZonePosition::Right);
+        let id = PanelId::new(1);
         let tab = PanelTab::tool("a");
         assert!(zone.add_panel(id.clone(), vec![tab.clone()], None));
         assert!(zone.panels.get_mut(&id).unwrap().remove(&tab));
@@ -499,14 +493,14 @@ mod tests {
 
     #[test]
     fn zone_open_close_preserves_individual_panel_visibility() {
-        let mut zone = Zone::new(PanelPosition::Right, 200.0);
-        let a = TabGroupId::new(1);
-        let b = TabGroupId::new(2);
+        let mut zone = Zone::new(ZonePosition::Right);
+        let a = PanelId::new(1);
+        let b = PanelId::new(2);
         assert!(zone.add_panel(a.clone(), vec![PanelTab::tool("a")], None));
         assert!(zone.add_panel(
             b.clone(),
             vec![PanelTab::tool("b")],
-            Some((&a, Axis::Horizontal, false))
+            Some((&a, Axis::Horizontal, true))
         ));
         assert!(zone.set_panel_open(&b, false));
         zone.set_open(false);
@@ -523,8 +517,8 @@ mod tests {
 
     #[test]
     fn zone_close_and_reopen_animate_without_discarding_panel_state() {
-        let mut zone = Zone::new(PanelPosition::Left, 200.0);
-        let id = TabGroupId::new(1);
+        let mut zone = Zone::new(ZonePosition::Left);
+        let id = PanelId::new(1);
         assert!(zone.add_panel(id.clone(), vec![PanelTab::tool("a")], None));
         zone.finish_transition_immediately();
         let start = std::time::Instant::now();
@@ -543,9 +537,9 @@ mod tests {
 
     #[test]
     fn zone_round_trip_keeps_panel_identity_and_omits_closing_empty_panel() {
-        let mut zone = Zone::new(PanelPosition::Left, 200.0);
-        let first = TabGroupId::new(1);
-        let second = TabGroupId::new(2);
+        let mut zone = Zone::new(ZonePosition::Left);
+        let first = PanelId::new(1);
+        let second = PanelId::new(2);
         let a = PanelTab::tool("a");
         let b = PanelTab::tool("b");
         assert!(zone.add_panel(first.clone(), vec![a.clone()], None));
@@ -578,58 +572,33 @@ mod tests {
 
     #[test]
     fn edge_insertion_balances_multiple_panels_and_removal_collapses() {
-        let mut layout = PanelLayout::Panel(TabGroupId::new(1));
-        assert!(layout.insert_at_edge(
-            &TabGroupId::new(1),
-            TabGroupId::new(2),
-            Axis::Horizontal,
-            false
-        ));
-        assert!(layout.insert_at_edge(
-            &TabGroupId::new(2),
-            TabGroupId::new(3),
-            Axis::Horizontal,
-            true
-        ));
-        assert!(layout.insert_at_edge(
-            &TabGroupId::new(3),
-            TabGroupId::new(4),
-            Axis::Horizontal,
-            false
-        ));
+        let mut layout = PanelLayout::Panel(PanelId::new(1));
+        assert!(layout.insert_at_edge(&PanelId::new(1), PanelId::new(2), Axis::Horizontal, false));
+        assert!(layout.insert_at_edge(&PanelId::new(2), PanelId::new(3), Axis::Horizontal, true));
+        assert!(layout.insert_at_edge(&PanelId::new(3), PanelId::new(4), Axis::Horizontal, false));
         let mut ids = Vec::new();
         layout.panels(&mut ids);
         assert_eq!(
             ids,
             [1, 3, 4, 2]
                 .into_iter()
-                .map(TabGroupId::new)
+                .map(PanelId::new)
                 .collect::<Vec<_>>()
         );
         assert!(layout.valid());
         for id in [2, 3, 4] {
-            assert!(layout.remove(&TabGroupId::new(id)));
+            assert!(layout.remove(&PanelId::new(id)));
         }
-        assert_eq!(layout, PanelLayout::Panel(TabGroupId::new(1)));
+        assert_eq!(layout, PanelLayout::Panel(PanelId::new(1)));
     }
 
     #[test]
     fn independent_axes_keep_a_valid_arrangement() {
-        let mut layout = PanelLayout::Panel(TabGroupId::new(1));
-        assert!(layout.insert_at_edge(
-            &TabGroupId::new(1),
-            TabGroupId::new(2),
-            Axis::Horizontal,
-            false
-        ));
-        assert!(layout.insert_at_edge(
-            &TabGroupId::new(2),
-            TabGroupId::new(3),
-            Axis::Vertical,
-            true
-        ));
+        let mut layout = PanelLayout::Panel(PanelId::new(1));
+        assert!(layout.insert_at_edge(&PanelId::new(1), PanelId::new(2), Axis::Horizontal, false));
+        assert!(layout.insert_at_edge(&PanelId::new(2), PanelId::new(3), Axis::Vertical, true));
         assert!(layout.valid());
-        assert!(layout.remove(&TabGroupId::new(2)));
+        assert!(layout.remove(&PanelId::new(2)));
         assert!(layout.valid());
     }
 
@@ -637,25 +606,25 @@ mod tests {
     fn nearest_boundary_uses_distance_and_stable_tie_break() {
         let candidates = vec![
             EdgeCandidate {
-                panel: TabGroupId::new(2),
+                panel: PanelId::new(2),
                 edge: PanelEdge::Right,
                 start: (10.0, 0.0),
                 end: (10.0, 100.0),
             },
             EdgeCandidate {
-                panel: TabGroupId::new(1),
-                edge: PanelEdge::Bottom,
+                panel: PanelId::new(1),
+                edge: PanelEdge::Top,
                 start: (0.0, 10.0),
                 end: (100.0, 10.0),
             },
         ];
         assert_eq!(
             nearest_edge(&candidates, (11.0, 30.0), 20.0).unwrap().panel,
-            TabGroupId::new(2)
+            PanelId::new(2)
         );
         assert_eq!(
             nearest_edge(&candidates, (10.0, 10.0), 20.0).unwrap().panel,
-            TabGroupId::new(1)
+            PanelId::new(1)
         );
         assert!(nearest_edge(&candidates, (80.0, 80.0), 20.0).is_none());
         assert!(nearest_edge(&candidates, (f32::NAN, 0.0), 20.0).is_none());
@@ -663,13 +632,10 @@ mod tests {
 
     #[test]
     fn insertion_edges_are_bound_to_the_panel_zone() {
-        assert_eq!(insertion_edges(PanelPosition::Left), &[PanelEdge::Right]);
-        assert_eq!(insertion_edges(PanelPosition::Right), &[PanelEdge::Left]);
-        assert_eq!(insertion_edges(PanelPosition::Main).len(), 4);
-        assert_eq!(
-            insertion_edges(PanelPosition::Bottom),
-            &[PanelEdge::Left, PanelEdge::Right]
-        );
+        assert_eq!(insertion_edges(ZonePosition::Left), &[PanelEdge::Right]);
+        assert_eq!(insertion_edges(ZonePosition::Right), &[PanelEdge::Left]);
+        assert!(insertion_edges(ZonePosition::Main).is_empty());
+        assert_eq!(insertion_edges(ZonePosition::Bottom), &[PanelEdge::Top]);
     }
 
     #[test]
@@ -692,34 +658,29 @@ mod tests {
         let layout = PanelLayout::Arrangement {
             axis: Axis::Horizontal,
             children: vec![
-                PanelLayout::Panel(TabGroupId::new(1)),
-                PanelLayout::Panel(TabGroupId::new(2)),
-                PanelLayout::Panel(TabGroupId::new(3)),
+                PanelLayout::Panel(PanelId::new(1)),
+                PanelLayout::Panel(PanelId::new(2)),
+                PanelLayout::Panel(PanelId::new(3)),
             ],
             weights: vec![0.25, 0.25, 0.5],
         };
-        let visible = |id: &TabGroupId| *id != TabGroupId::new(2);
+        let visible = |id: &PanelId| *id != PanelId::new(2);
         let rect = layout
-            .panel_rect(&TabGroupId::new(3), (0.0, 0.0, 308.0, 200.0), 8.0, &visible)
+            .panel_rect(&PanelId::new(3), (0.0, 0.0, 308.0, 200.0), 8.0, &visible)
             .unwrap();
         assert!((rect.0 - 108.0).abs() < 0.001);
         assert!((rect.2 - 200.0).abs() < 0.001);
         assert!(
             layout
-                .panel_rect(&TabGroupId::new(2), (0.0, 0.0, 308.0, 200.0), 8.0, &visible)
+                .panel_rect(&PanelId::new(2), (0.0, 0.0, 308.0, 200.0), 8.0, &visible)
                 .is_none()
         );
     }
 
     #[test]
     fn close_threshold_is_only_evaluated_for_explicit_resize() {
-        let mut layout = PanelLayout::Panel(TabGroupId::new(1));
-        assert!(layout.insert_at_edge(
-            &TabGroupId::new(1),
-            TabGroupId::new(2),
-            Axis::Horizontal,
-            false
-        ));
+        let mut layout = PanelLayout::Panel(PanelId::new(1));
+        assert!(layout.insert_at_edge(&PanelId::new(1), PanelId::new(2), Axis::Horizontal, false));
         let before = layout.clone();
         assert!(
             layout
@@ -735,12 +696,12 @@ mod tests {
         assert_eq!(layout, before);
         assert_eq!(
             layout.resize_boundary(&[], (0, 1), 1.0, 20.0, 24.0, 12.0),
-            Ok(Some(TabGroupId::new(2)))
+            Ok(Some(PanelId::new(2)))
         );
         assert_eq!(layout, before);
         assert_eq!(
             layout.resize_boundary(&[], (0, 1), -95.0, 200.0, 24.0, 12.0),
-            Ok(Some(TabGroupId::new(1)))
+            Ok(Some(PanelId::new(1)))
         );
         assert_eq!(layout, before);
         assert_eq!(
@@ -755,8 +716,8 @@ mod tests {
         let mut layout = PanelLayout::Arrangement {
             axis: Axis::Horizontal,
             children: vec![
-                PanelLayout::Panel(TabGroupId::new(1)),
-                PanelLayout::Panel(TabGroupId::new(1)),
+                PanelLayout::Panel(PanelId::new(1)),
+                PanelLayout::Panel(PanelId::new(1)),
             ],
             weights: vec![0.5, 0.5],
         };
@@ -770,7 +731,7 @@ mod tests {
             children, weights, ..
         } = &mut layout
         {
-            children[1] = PanelLayout::Panel(TabGroupId::new(2));
+            children[1] = PanelLayout::Panel(PanelId::new(2));
             weights[0] = f32::NAN;
         }
         assert!(!layout.valid());

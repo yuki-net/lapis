@@ -5,14 +5,14 @@ use std::time::Instant;
 
 use super::panel_layout::{Axis, PanelEdge};
 use super::zone::Zone;
-use super::{PanelHost, PanelTab, TabGroupId};
-use crate::extension_ui::PanelPosition;
+use super::{PanelHost, PanelId, PanelTab};
+use crate::extension_ui::ZonePosition;
 
-const POSITIONS: [PanelPosition; 4] = [
-    PanelPosition::Left,
-    PanelPosition::Main,
-    PanelPosition::Right,
-    PanelPosition::Bottom,
+const POSITIONS: [ZonePosition; 4] = [
+    ZonePosition::Left,
+    ZonePosition::Main,
+    ZonePosition::Right,
+    ZonePosition::Bottom,
 ];
 
 pub(crate) fn serialize_tab(tab: &PanelTab) -> String {
@@ -24,28 +24,28 @@ pub(crate) fn serialize_tab(tab: &PanelTab) -> String {
     }
 }
 
-pub(crate) fn panel_position(value: &str) -> Option<PanelPosition> {
+pub(crate) fn panel_position(value: &str) -> Option<ZonePosition> {
     match value {
-        "main-panel" => Some(PanelPosition::Main),
-        "left-panel" => Some(PanelPosition::Left),
-        "bottom-panel" => Some(PanelPosition::Bottom),
-        "right-panel" => Some(PanelPosition::Right),
+        "main-panel" => Some(ZonePosition::Main),
+        "left-panel" => Some(ZonePosition::Left),
+        "bottom-panel" => Some(ZonePosition::Bottom),
+        "right-panel" => Some(ZonePosition::Right),
         _ => None,
     }
 }
 
-pub(crate) fn panel_position_name(position: PanelPosition) -> &'static str {
+pub(crate) fn panel_position_name(position: ZonePosition) -> &'static str {
     match position {
-        PanelPosition::Main => "main-panel",
-        PanelPosition::Left => "left-panel",
-        PanelPosition::Bottom => "bottom-panel",
-        PanelPosition::Right => "right-panel",
+        ZonePosition::Main => "main-panel",
+        ZonePosition::Left => "left-panel",
+        ZonePosition::Bottom => "bottom-panel",
+        ZonePosition::Right => "right-panel",
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct DockLayout {
-    zones: BTreeMap<PanelPosition, Zone>,
+    zones: BTreeMap<ZonePosition, Zone>,
     next_id: u64,
     pub(super) bottom_span_left: bool,
     pub(super) bottom_span_right: bool,
@@ -53,36 +53,35 @@ pub(crate) struct DockLayout {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PanelDrop {
-    Into(TabGroupId),
-    IntoZone(PanelPosition),
-    Edge { panel: TabGroupId, edge: PanelEdge },
+    Into(PanelId),
+    IntoZone(ZonePosition),
+    Edge { panel: PanelId, edge: PanelEdge },
 }
 
 impl Default for DockLayout {
     fn default() -> Self {
         let mut zones = BTreeMap::new();
         for position in POSITIONS {
-            let size = match position {
-                PanelPosition::Left => f32::from(crate::tokens::size::TOOL_ISLAND_WIDTH),
-                PanelPosition::Right => f32::from(crate::tokens::size::SIDE_PANEL_WIDTH),
-                PanelPosition::Bottom => f32::from(crate::tokens::size::BOTTOM_PANEL_HEIGHT),
-                PanelPosition::Main => 0.0,
-            };
-            zones.insert(position, Zone::new(position, size));
+            zones.insert(position, Zone::new(position));
         }
-        let id = TabGroupId::new(1);
-        zones.get_mut(&PanelPosition::Left).unwrap().add_panel(
+        assert!(zones.get_mut(&ZonePosition::Main).unwrap().add_panel(
+            PanelId::new(1),
+            Vec::new(),
+            None
+        ));
+        let id = PanelId::new(2);
+        zones.get_mut(&ZonePosition::Left).unwrap().add_panel(
             id,
             vec![PanelTab::tool(crate::features::id::VIEW_FILES)],
             None,
         );
         zones
-            .get_mut(&PanelPosition::Left)
+            .get_mut(&ZonePosition::Left)
             .unwrap()
             .finish_transition_immediately();
         Self {
             zones,
-            next_id: 2,
+            next_id: 3,
             bottom_span_left: false,
             bottom_span_right: false,
         }
@@ -90,14 +89,51 @@ impl Default for DockLayout {
 }
 
 impl DockLayout {
-    pub(crate) fn set_zone_open(&mut self, position: PanelPosition, open: bool) {
+    pub(crate) fn set_zone_open(&mut self, position: ZonePosition, open: bool) {
         self.zones
             .get_mut(&position)
             .expect("全Zoneを保持する")
             .set_open(open);
     }
 
-    pub(crate) fn set_panel_open(&mut self, id: &TabGroupId, open: bool) -> bool {
+    /// 明示的な境界操作だけがZoneのサイズや開閉状態を変更する。
+    pub(crate) fn resize_zone(
+        &mut self,
+        position: ZonePosition,
+        value: f32,
+        maximum: f32,
+        shrinking: bool,
+    ) -> bool {
+        let policy = super::zone_policy::ZonePolicy::for_position(position);
+        if !policy.user_closable || !value.is_finite() || !maximum.is_finite() {
+            return false;
+        }
+        if value < policy.close_threshold && shrinking {
+            self.set_zone_open(position, false);
+            true
+        } else if value >= policy.close_threshold && maximum >= policy.interactive_min_extent {
+            let other = match position {
+                ZonePosition::Left => self.zone(ZonePosition::Right),
+                ZonePosition::Right => self.zone(ZonePosition::Left),
+                _ => self.zone(ZonePosition::Main),
+            };
+            let limit = if position != ZonePosition::Bottom && other.open {
+                (1.0 - other.extent_ratio).max(0.0)
+            } else {
+                1.0
+            };
+            if limit <= 0.0 {
+                return false;
+            }
+            self.zones.get_mut(&position).unwrap().extent_ratio =
+                (value.clamp(policy.interactive_min_extent, maximum) / maximum).min(limit);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn set_panel_open(&mut self, id: &PanelId, open: bool) -> bool {
         self.position_for(id).is_some_and(|position| {
             self.zones
                 .get_mut(&position)
@@ -106,37 +142,43 @@ impl DockLayout {
         })
     }
 
-    pub(crate) fn first_panel_in_zone(&self, position: PanelPosition) -> Option<TabGroupId> {
+    pub(crate) fn first_panel_in_zone(&self, position: ZonePosition) -> Option<PanelId> {
         let mut ids = Vec::new();
         self.zone(position).layout.as_ref()?.panels(&mut ids);
         ids.into_iter()
             .find(|id| self.panel(id).is_some_and(|panel| panel.open))
     }
 
-    pub(super) fn zone_mut(&mut self, position: PanelPosition) -> &mut Zone {
-        self.zones.get_mut(&position).expect("全Zoneを保持する")
-    }
-    pub(crate) fn zone_open(&self, position: PanelPosition) -> bool {
+    pub(crate) fn zone_open(&self, position: ZonePosition) -> bool {
         self.zone(position).open
     }
 
-    pub(crate) fn zone_has_panels(&self, position: PanelPosition) -> bool {
+    pub(crate) fn zone_has_panels(&self, position: ZonePosition) -> bool {
         !self.zone(position).panels.is_empty()
     }
 
-    pub(crate) fn group(&self, id: &TabGroupId) -> Option<&PanelHost> {
-        self.panel(id)
+    pub(crate) fn can_add_panel(&self, position: ZonePosition) -> bool {
+        super::zone_policy::ZonePolicy::for_position(position)
+            .can_add(self.zone(position).panels.len())
     }
 
-    pub(crate) fn group_mut(&mut self, id: &TabGroupId) -> Option<&mut PanelHost> {
-        self.panel_mut(id)
+    pub(crate) fn growth_panel(&self, position: ZonePosition) -> Option<PanelId> {
+        let policy = super::zone_policy::ZonePolicy::for_position(position);
+        let (_, before) = policy.growth()?;
+        let mut ids = Vec::new();
+        self.zone(position).layout.as_ref()?.panels(&mut ids);
+        if before {
+            ids.first().cloned()
+        } else {
+            ids.last().cloned()
+        }
     }
 
-    pub(crate) fn group_for_tab(&self, tab: &PanelTab) -> Option<TabGroupId> {
+    pub(crate) fn panel_for_tab(&self, tab: &PanelTab) -> Option<PanelId> {
         self.find_tab(tab)
     }
 
-    pub(crate) fn leaf_group_ids(&self) -> Vec<TabGroupId> {
+    pub(crate) fn panel_ids(&self) -> Vec<PanelId> {
         let mut ids = Vec::new();
         for position in POSITIONS {
             if let Some(layout) = &self.zone(position).layout {
@@ -147,7 +189,7 @@ impl DockLayout {
     }
 
     pub(crate) fn panels(&self) -> Vec<&PanelHost> {
-        self.leaf_group_ids()
+        self.panel_ids()
             .iter()
             .filter_map(|id| self.panel(id))
             .collect()
@@ -161,42 +203,68 @@ impl DockLayout {
             .filter(|panel| panel.open)
     }
 
-    pub(crate) fn panels_mut(&mut self) -> impl Iterator<Item = &mut PanelHost> {
-        self.zones
-            .values_mut()
-            .flat_map(|zone| zone.panels.values_mut())
-    }
-
-    pub(crate) fn placements(&self) -> Vec<(PanelTab, TabGroupId)> {
+    pub(crate) fn placements(&self) -> Vec<(PanelTab, PanelId)> {
         self.zones
             .values()
             .flat_map(|zone| zone.panels.iter())
             .flat_map(|(id, panel)| panel.tabs.iter().cloned().map(move |tab| (tab, id.clone())))
             .collect()
     }
-    pub(super) fn zone(&self, position: PanelPosition) -> &Zone {
+    pub(super) fn zone(&self, position: ZonePosition) -> &Zone {
         self.zones.get(&position).expect("全Zoneを保持する")
     }
 
-    pub(crate) fn panel(&self, id: &TabGroupId) -> Option<&PanelHost> {
+    pub(crate) fn panel(&self, id: &PanelId) -> Option<&PanelHost> {
         self.zones.values().find_map(|zone| zone.panels.get(id))
     }
 
-    pub(crate) fn panel_mut(&mut self, id: &TabGroupId) -> Option<&mut PanelHost> {
+    fn panel_mut(&mut self, id: &PanelId) -> Option<&mut PanelHost> {
         self.zones
             .values_mut()
             .find_map(|zone| zone.panels.get_mut(id))
     }
 
-    fn position_for(&self, id: &TabGroupId) -> Option<PanelPosition> {
+    pub(crate) fn insert_tab_in_panel(
+        &mut self,
+        id: &PanelId,
+        tab: PanelTab,
+        keep_active: bool,
+    ) -> bool {
+        if self
+            .placements()
+            .iter()
+            .any(|(existing, _)| existing.instance_id() == tab.instance_id())
+        {
+            return false;
+        }
+        let Some(panel) = self.panel_mut(id) else {
+            return false;
+        };
+        let active = panel.active.clone();
+        panel.activate_without_open(tab);
+        if keep_active && active.is_some() {
+            panel.active = active;
+        }
+        true
+    }
+
+    pub(crate) fn activate_existing_tab(&mut self, tab: &PanelTab) -> bool {
+        let Some(id) = self.panel_for_tab(tab) else {
+            return false;
+        };
+        self.panel_mut(&id).unwrap().active = Some(tab.clone());
+        true
+    }
+
+    fn position_for(&self, id: &PanelId) -> Option<ZonePosition> {
         self.zones
             .iter()
             .find_map(|(position, zone)| zone.panels.contains_key(id).then_some(*position))
     }
 
-    fn allocate_id(&mut self) -> TabGroupId {
+    fn allocate_id(&mut self) -> PanelId {
         loop {
-            let id = TabGroupId::new(self.next_id);
+            let id = PanelId::new(self.next_id);
             self.next_id = self.next_id.wrapping_add(1);
             if self.panel(&id).is_none() {
                 return id;
@@ -207,9 +275,9 @@ impl DockLayout {
     /// 空Zoneへの初回追加はPanelを生成する。空のPanelを追加先として残さない。
     pub(crate) fn open_tab(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         tab: PanelTab,
-    ) -> Result<TabGroupId, ()> {
+    ) -> Result<PanelId, ()> {
         if let Some(id) = self.find_tab(&tab) {
             self.panel_mut(&id).unwrap().activate(tab);
             let position = self.position_for(&id).expect("既存PanelはZoneに所属する");
@@ -246,10 +314,10 @@ impl DockLayout {
 
     pub(crate) fn move_tab_to_zone(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         tab: PanelTab,
         now: Instant,
-    ) -> Result<TabGroupId, ()> {
+    ) -> Result<PanelId, ()> {
         let Some(source) = self.find_tab(&tab) else {
             return self.open_tab(position, tab);
         };
@@ -294,7 +362,7 @@ impl DockLayout {
         Ok(id)
     }
 
-    pub(crate) fn find_tab(&self, tab: &PanelTab) -> Option<TabGroupId> {
+    pub(crate) fn find_tab(&self, tab: &PanelTab) -> Option<PanelId> {
         self.zones
             .values()
             .flat_map(|zone| &zone.panels)
@@ -304,12 +372,12 @@ impl DockLayout {
     /// Previewも確定も同じ候補生成を使用し、Preview時は現在の状態に触れない。
     pub(crate) fn preview_drop(
         &self,
-        source: &TabGroupId,
+        source: &PanelId,
         tab: &PanelTab,
         target: &PanelDrop,
         target_zone_size: (f32, f32),
         now: Instant,
-    ) -> Result<(Self, TabGroupId), ()> {
+    ) -> Result<(Self, PanelId), ()> {
         let mut preview = self.clone();
         let id = preview.drop_tab(source, tab, target, target_zone_size, now)?;
         Ok((preview, id))
@@ -318,15 +386,16 @@ impl DockLayout {
     /// Drop候補は全操作を複製上で検査してから確定する。Resourceは変更しない。
     pub(crate) fn drop_tab(
         &mut self,
-        source: &TabGroupId,
+        source: &PanelId,
         tab: &PanelTab,
         target: &PanelDrop,
         target_zone_size: (f32, f32),
         now: Instant,
-    ) -> Result<TabGroupId, ()> {
+    ) -> Result<PanelId, ()> {
         let mut candidate = self.clone();
         if let PanelDrop::IntoZone(position) = target {
-            if candidate.zone_has_panels(*position)
+            if !candidate.zone_open(*position)
+                || candidate.zone_has_panels(*position)
                 || !candidate
                     .panel(source)
                     .is_some_and(|panel| panel.contains(tab))
@@ -370,14 +439,16 @@ impl DockLayout {
         let destination = match target {
             PanelDrop::Into(id) => id.clone(),
             PanelDrop::Edge { panel, edge } => {
-                if !super::panel_layout::insertion_edges(target_position).contains(edge) {
+                if !candidate.can_add_panel(target_position)
+                    || candidate.growth_panel(target_position).as_ref() != Some(panel)
+                    || !super::panel_layout::insertion_edges(target_position).contains(edge)
+                {
                     return Err(());
                 }
                 let (axis, before) = match edge {
                     PanelEdge::Left => (Axis::Horizontal, true),
                     PanelEdge::Right => (Axis::Horizontal, false),
                     PanelEdge::Top => (Axis::Vertical, true),
-                    PanelEdge::Bottom => (Axis::Vertical, false),
                 };
                 let id = candidate.allocate_id();
                 if !candidate
@@ -416,10 +487,11 @@ impl DockLayout {
                 .zone(target_position)
                 .allocations(target_zone_size, f32::from(crate::tokens::spacing::GAP))
                 .ok_or(())?;
+            let minimum = super::zone_policy::PanelConstraints::COMMON.interactive_min_extent;
             if !sizes.contains_key(&destination)
                 || sizes
                     .values()
-                    .any(|(width, height)| *width < 32.0 || *height < 32.0)
+                    .any(|(width, height)| *width < minimum || *height < minimum)
             {
                 return Err(());
             }
@@ -431,7 +503,7 @@ impl DockLayout {
         Ok(destination)
     }
 
-    pub(crate) fn finish_empty_close(&mut self, id: &TabGroupId) -> bool {
+    pub(crate) fn finish_empty_close(&mut self, id: &PanelId) -> bool {
         self.position_for(id).is_some_and(|position| {
             self.zones
                 .get_mut(&position)
@@ -440,7 +512,7 @@ impl DockLayout {
         })
     }
 
-    pub(crate) fn remove_tab(&mut self, id: &TabGroupId, tab: &PanelTab, now: Instant) -> bool {
+    pub(crate) fn remove_tab(&mut self, id: &PanelId, tab: &PanelTab, now: Instant) -> bool {
         let Some(position) = self.position_for(id) else {
             return false;
         };
@@ -479,24 +551,25 @@ impl DockLayout {
     }
 
     /// ユーザーの境界Dragだけが比率を変え、閾値を越えた側のPanelを閉じる。
-    pub(crate) fn resize_panel_boundary(
+    fn resize_panel_boundary(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         path: &[usize],
         boundary: usize,
         next: usize,
         delta: f32,
         available: f32,
-    ) -> Result<Option<TabGroupId>, ()> {
+    ) -> Result<Option<PanelId>, ()> {
         let mut candidate = self.clone();
         let zone = candidate.zones.get_mut(&position).ok_or(())?;
+        let policy = super::zone_policy::PanelConstraints::COMMON;
         let closing = zone.layout.as_mut().ok_or(())?.resize_boundary(
             path,
             (boundary, next),
             delta,
             available,
-            32.0,
-            16.0,
+            policy.interactive_min_extent,
+            policy.close_threshold,
         )?;
         if let Some(id) = &closing
             && !zone.set_panel_open(id, false)
@@ -510,6 +583,28 @@ impl DockLayout {
         Ok(closing)
     }
 
+    pub(crate) fn resize_between_panels(
+        &mut self,
+        position: ZonePosition,
+        first: &PanelId,
+        second: &PanelId,
+        delta: f32,
+        available: f32,
+    ) -> Result<Option<PanelId>, ()> {
+        let mut ids = Vec::new();
+        self.zone(position)
+            .layout
+            .as_ref()
+            .ok_or(())?
+            .panels(&mut ids);
+        let first_index = ids.iter().position(|id| id == first).ok_or(())?;
+        let second_index = ids.iter().position(|id| id == second).ok_or(())?;
+        if first_index >= second_index {
+            return Err(());
+        }
+        self.resize_panel_boundary(position, &[], first_index, second_index, delta, available)
+    }
+
     pub(crate) fn valid(&self) -> bool {
         let mut ids = HashSet::new();
         let mut instances = HashSet::new();
@@ -519,10 +614,10 @@ impl DockLayout {
                     && zone.valid()
                     && zone.panels.iter().all(|(id, panel)| {
                         ids.insert(id.clone())
-                            && panel
-                                .tabs
-                                .iter()
-                                .all(|tab| instances.insert(tab.instance_id()))
+                            && panel.tabs.iter().all(|tab| {
+                                !tab.instance_id().as_str().is_empty()
+                                    && instances.insert(tab.instance_id())
+                            })
                     })
             })
         }) && self.zones.len() == POSITIONS.len()
@@ -530,7 +625,7 @@ impl DockLayout {
 
     pub(crate) fn capture(&self) -> lapis_desktop_client::ZoneLayoutViewState {
         lapis_desktop_client::ZoneLayoutViewState {
-            version: 2,
+            version: lapis_desktop_client::ZONE_LAYOUT_VERSION,
             bottom_span_left: self.bottom_span_left,
             bottom_span_right: self.bottom_span_right,
             zones: POSITIONS
@@ -547,7 +642,7 @@ impl DockLayout {
     where
         F: FnMut(&str) -> Option<PanelTab>,
     {
-        if saved.version != 2 {
+        if saved.version != lapis_desktop_client::ZONE_LAYOUT_VERSION {
             return None;
         }
         let mut zones = BTreeMap::new();
@@ -572,11 +667,134 @@ mod tests {
     use super::*;
 
     #[test]
+    fn main_is_permanent_and_never_accepts_another_panel() {
+        let mut layout = DockLayout::default();
+        let main = layout.first_panel_in_zone(ZonePosition::Main).unwrap();
+        assert!(layout.panel(&main).unwrap().tabs.is_empty());
+        layout.set_zone_open(ZonePosition::Main, false);
+        assert!(layout.zone_open(ZonePosition::Main));
+        assert!(!layout.set_panel_open(&main, false));
+        let tab = PanelTab::tool("main-document");
+        layout.open_tab(ZonePosition::Main, tab.clone()).unwrap();
+        let before = layout.capture();
+        for edge in [PanelEdge::Left, PanelEdge::Right, PanelEdge::Top] {
+            assert!(
+                layout
+                    .drop_tab(
+                        &main,
+                        &tab,
+                        &PanelDrop::Edge {
+                            panel: main.clone(),
+                            edge
+                        },
+                        (1000.0, 700.0),
+                        Instant::now()
+                    )
+                    .is_err()
+            );
+            assert_eq!(layout.capture(), before);
+        }
+        assert!(layout.remove_tab(&main, &tab, Instant::now()));
+        assert_eq!(layout.first_panel_in_zone(ZonePosition::Main), Some(main));
+        assert!(layout.valid());
+    }
+
+    #[test]
+    fn side_zones_extend_only_from_the_growth_end_up_to_three_panels() {
+        for (position, edge, before) in [
+            (ZonePosition::Left, PanelEdge::Right, false),
+            (ZonePosition::Right, PanelEdge::Left, true),
+            (ZonePosition::Bottom, PanelEdge::Top, true),
+        ] {
+            let mut layout = DockLayout::default();
+            let first = layout.open_tab(position, PanelTab::tool("first")).unwrap();
+            for index in 2..=3 {
+                let tab = PanelTab::tool(format!("item-{index}"));
+                let source = layout.open_tab(position, tab.clone()).unwrap();
+                let target = layout.growth_panel(position).unwrap();
+                let new = layout
+                    .drop_tab(
+                        &source,
+                        &tab,
+                        &PanelDrop::Edge {
+                            panel: target,
+                            edge,
+                        },
+                        (1000.0, 1000.0),
+                        Instant::now(),
+                    )
+                    .unwrap();
+                let mut order = Vec::new();
+                layout
+                    .zone(position)
+                    .layout
+                    .as_ref()
+                    .unwrap()
+                    .panels(&mut order);
+                assert_eq!(
+                    if before { order.first() } else { order.last() },
+                    Some(&new)
+                );
+                assert_eq!(order.len(), index);
+            }
+            assert!(!layout.can_add_panel(position));
+            let tab = PanelTab::tool("fourth");
+            let source = layout.open_tab(position, tab.clone()).unwrap();
+            let target = layout.growth_panel(position).unwrap();
+            let snapshot = layout.capture();
+            assert!(
+                layout
+                    .drop_tab(
+                        &source,
+                        &tab,
+                        &PanelDrop::Edge {
+                            panel: target,
+                            edge
+                        },
+                        (1000.0, 1000.0),
+                        Instant::now()
+                    )
+                    .is_err()
+            );
+            assert_eq!(layout.capture(), snapshot);
+            assert!(
+                layout
+                    .drop_tab(
+                        &source,
+                        &tab,
+                        &PanelDrop::Into(first),
+                        (1000.0, 1000.0),
+                        Instant::now()
+                    )
+                    .is_ok()
+            );
+            assert!(layout.valid());
+        }
+    }
+
+    #[test]
+    fn empty_side_zone_can_reopen_and_remains_open_after_restore() {
+        let mut layout = DockLayout::default();
+        let source = layout.first_panel_in_zone(ZonePosition::Left).unwrap();
+        let tab = PanelTab::tool(crate::features::id::VIEW_FILES);
+        let now = Instant::now();
+        assert!(layout.remove_tab(&source, &tab, now));
+        layout.finish_due_closes(now + super::super::panel_transition::PANEL_ANIMATION_DURATION);
+        assert!(!layout.zone_has_panels(ZonePosition::Left));
+        layout.set_zone_open(ZonePosition::Left, true);
+        assert!(layout.zone_open(ZonePosition::Left));
+        let restored = DockLayout::restore(&layout.capture(), |_| None).unwrap();
+        assert!(restored.zone_open(ZonePosition::Left));
+        assert!(!restored.zone_has_panels(ZonePosition::Left));
+        assert!(restored.valid());
+    }
+
+    #[test]
     fn tab_move_closes_empty_source_without_creating_panel() {
         let mut model = DockLayout::default();
         let main_tab = PanelTab::tool("main");
         let main = model
-            .open_tab(PanelPosition::Main, main_tab.clone())
+            .open_tab(ZonePosition::Main, main_tab.clone())
             .unwrap();
         let left = model
             .find_tab(&PanelTab::tool(crate::features::id::VIEW_FILES))
@@ -603,14 +821,14 @@ mod tests {
                 .sum::<usize>(),
             before
         );
-        assert!(model.finish_empty_close(&main));
+        assert!(!model.finish_empty_close(&main));
         assert_eq!(
             model
                 .zones
                 .values()
                 .map(|zone| zone.panels.len())
                 .sum::<usize>(),
-            before - 1
+            before
         );
         assert_eq!(model.find_tab(&main_tab), Some(left));
         assert!(model.valid());
@@ -619,20 +837,20 @@ mod tests {
     #[test]
     fn panel_edges_add_inside_the_target_zone_and_restore() {
         let mut model = DockLayout::default();
-        for position in POSITIONS {
+        for position in [
+            ZonePosition::Left,
+            ZonePosition::Right,
+            ZonePosition::Bottom,
+        ] {
             let first_tab = PanelTab::tool(format!("first-{position:?}"));
             let moved_tab = PanelTab::tool(format!("second-{position:?}"));
             let first = model.open_tab(position, first_tab).unwrap();
             let source = model.open_tab(position, moved_tab.clone()).unwrap();
             let edge = match position {
-                PanelPosition::Left => PanelEdge::Right,
-                PanelPosition::Right => PanelEdge::Left,
-                _ => PanelEdge::Bottom,
-            };
-            let edge = if position == PanelPosition::Bottom {
-                PanelEdge::Right
-            } else {
-                edge
+                ZonePosition::Left => PanelEdge::Right,
+                ZonePosition::Right => PanelEdge::Left,
+                ZonePosition::Bottom => PanelEdge::Top,
+                ZonePosition::Main => unreachable!(),
             };
             let new_id = model
                 .drop_tab(
@@ -670,7 +888,7 @@ mod tests {
     fn unavailable_space_rejects_panel_creation_without_changes() {
         let mut model = DockLayout::default();
         let tab = PanelTab::tool("extra");
-        let source = model.open_tab(PanelPosition::Main, tab.clone()).unwrap();
+        let source = model.open_tab(ZonePosition::Main, tab.clone()).unwrap();
         let target = model
             .find_tab(&PanelTab::tool(crate::features::id::VIEW_FILES))
             .unwrap();
@@ -697,11 +915,11 @@ mod tests {
     fn hidden_target_is_rejected_without_changing_the_layout() {
         let mut model = DockLayout::default();
         let tab = PanelTab::tool("source");
-        let source = model.open_tab(PanelPosition::Main, tab.clone()).unwrap();
+        let source = model.open_tab(ZonePosition::Main, tab.clone()).unwrap();
         let target = model
             .find_tab(&PanelTab::tool(crate::features::id::VIEW_FILES))
             .unwrap();
-        model.zones.get_mut(&PanelPosition::Left).unwrap().open = false;
+        model.zones.get_mut(&ZonePosition::Left).unwrap().open = false;
         let before = model.capture();
         assert!(
             model
@@ -718,9 +936,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_main_zone_accepts_a_tab_without_a_placeholder_panel() {
+    fn empty_main_panel_accepts_a_tab_and_remains_after_removal() {
         let mut model = DockLayout::default();
-        assert!(!model.zone_has_panels(PanelPosition::Main));
+        let main = model.first_panel_in_zone(ZonePosition::Main).unwrap();
+        assert!(model.panel(&main).unwrap().tabs.is_empty());
         let tab = PanelTab::tool(crate::features::id::VIEW_FILES);
         let source = model.find_tab(&tab).unwrap();
         let now = Instant::now();
@@ -728,16 +947,18 @@ mod tests {
             .drop_tab(
                 &source,
                 &tab,
-                &PanelDrop::IntoZone(PanelPosition::Main),
+                &PanelDrop::Into(main.clone()),
                 (0.0, 0.0),
                 now,
             )
             .unwrap();
         assert_eq!(model.find_tab(&tab), Some(target));
-        assert!(model.zone_has_panels(PanelPosition::Main));
+        assert!(model.zone_has_panels(ZonePosition::Main));
+        assert!(model.remove_tab(&main, &tab, now));
+        assert_eq!(model.first_panel_in_zone(ZonePosition::Main), Some(main));
         model.finish_due_closes(now + super::super::panel_transition::PANEL_ANIMATION_DURATION);
-        assert!(!model.zone_has_panels(PanelPosition::Left));
-        assert!(!model.zone_open(PanelPosition::Left));
+        assert!(!model.zone_has_panels(ZonePosition::Left));
+        assert!(!model.zone_open(ZonePosition::Left));
     }
 
     #[test]
@@ -745,9 +966,9 @@ mod tests {
         let mut model = DockLayout::default();
         let original = PanelTab::tool_instance("one", "shared-instance");
         let duplicate = PanelTab::tool_instance("two", "shared-instance");
-        model.open_tab(PanelPosition::Main, original).unwrap();
+        model.open_tab(ZonePosition::Main, original).unwrap();
         let before = model.capture();
-        assert!(model.open_tab(PanelPosition::Right, duplicate).is_err());
+        assert!(model.open_tab(ZonePosition::Right, duplicate).is_err());
         assert_eq!(model.capture(), before);
     }
 
@@ -755,15 +976,15 @@ mod tests {
     fn opening_an_existing_tab_reopens_its_zone() {
         let mut model = DockLayout::default();
         let tab = PanelTab::tool("saved");
-        let id = model.open_tab(PanelPosition::Right, tab.clone()).unwrap();
+        let id = model.open_tab(ZonePosition::Right, tab.clone()).unwrap();
         model
             .zones
-            .get_mut(&PanelPosition::Right)
+            .get_mut(&ZonePosition::Right)
             .unwrap()
             .set_open(false);
-        assert!(!model.zone(PanelPosition::Right).open);
-        assert_eq!(model.open_tab(PanelPosition::Right, tab), Ok(id));
-        assert!(model.zone(PanelPosition::Right).open);
+        assert!(!model.zone(ZonePosition::Right).open);
+        assert_eq!(model.open_tab(ZonePosition::Right, tab), Ok(id));
+        assert!(model.zone(ZonePosition::Right).open);
     }
 
     #[test]
@@ -771,19 +992,19 @@ mod tests {
         let mut model = DockLayout::default();
         let incoming = PanelTab::tool("incoming");
         let source = model
-            .open_tab(PanelPosition::Main, incoming.clone())
+            .open_tab(ZonePosition::Main, incoming.clone())
             .unwrap();
         let target = model
-            .open_tab(PanelPosition::Right, PanelTab::tool("kept"))
+            .open_tab(ZonePosition::Right, PanelTab::tool("kept"))
             .unwrap();
         assert!(model.set_panel_open(&target, false));
         let actual = model
-            .move_tab_to_zone(PanelPosition::Right, incoming.clone(), Instant::now())
+            .move_tab_to_zone(ZonePosition::Right, incoming.clone(), Instant::now())
             .unwrap();
         assert_eq!(actual, target);
-        assert!(model.zone_open(PanelPosition::Right));
-        assert!(model.group(&target).unwrap().contains(&incoming));
-        assert!(model.group(&source).unwrap().tabs.is_empty());
+        assert!(model.zone_open(ZonePosition::Right));
+        assert!(model.panel(&target).unwrap().contains(&incoming));
+        assert!(model.panel(&source).unwrap().tabs.is_empty());
         assert!(model.valid());
     }
 
@@ -791,7 +1012,7 @@ mod tests {
     fn preview_and_commit_produce_the_same_panel_and_layout() {
         let mut model = DockLayout::default();
         let tab = PanelTab::tool("preview");
-        let source = model.open_tab(PanelPosition::Main, tab.clone()).unwrap();
+        let source = model.open_tab(ZonePosition::Main, tab.clone()).unwrap();
         let panel = model
             .find_tab(&PanelTab::tool(crate::features::id::VIEW_FILES))
             .unwrap();
@@ -822,10 +1043,10 @@ mod tests {
         let first_tab = PanelTab::tool("one");
         let second_tab = PanelTab::tool("two");
         let source = model
-            .open_tab(PanelPosition::Right, first_tab.clone())
+            .open_tab(ZonePosition::Right, first_tab.clone())
             .unwrap();
         model
-            .open_tab(PanelPosition::Right, second_tab.clone())
+            .open_tab(ZonePosition::Right, second_tab.clone())
             .unwrap();
         let second = model
             .drop_tab(
@@ -840,7 +1061,7 @@ mod tests {
             )
             .unwrap();
         model.panel_mut(&second).unwrap().set_open_immediate(false);
-        model.zones.get_mut(&PanelPosition::Right).unwrap().open = false;
+        model.zones.get_mut(&ZonePosition::Right).unwrap().open = false;
         let saved = model.capture();
         let tabs = model
             .zones
@@ -855,7 +1076,7 @@ mod tests {
         })
         .unwrap();
         assert!(restored.bottom_span_left && restored.bottom_span_right);
-        assert!(!restored.zone(PanelPosition::Right).open);
+        assert!(!restored.zone(ZonePosition::Right).open);
         assert!(restored.panel(&source).unwrap().open);
         assert!(!restored.panel(&second).unwrap().open);
         assert_eq!(restored.find_tab(&first_tab), Some(source));
@@ -866,7 +1087,7 @@ mod tests {
     fn explicit_resize_closes_only_the_shrunk_panel_and_retains_tabs() {
         let mut model = DockLayout::default();
         let tab = PanelTab::tool("resize");
-        let source = model.open_tab(PanelPosition::Left, tab.clone()).unwrap();
+        let source = model.open_tab(ZonePosition::Left, tab.clone()).unwrap();
         let new = model
             .drop_tab(
                 &source,
@@ -882,12 +1103,12 @@ mod tests {
         let before = model.capture();
         assert!(
             model
-                .resize_panel_boundary(PanelPosition::Left, &[], 0, 1, 0.0, 0.0)
+                .resize_panel_boundary(ZonePosition::Left, &[], 0, 1, 0.0, 0.0)
                 .is_err()
         );
         assert_eq!(model.capture(), before);
         assert_eq!(
-            model.resize_panel_boundary(PanelPosition::Left, &[], 0, 1, 185.0, 400.0),
+            model.resize_panel_boundary(ZonePosition::Left, &[], 0, 1, 185.0, 400.0),
             Ok(Some(new.clone()))
         );
         assert!(!model.panel(&new).unwrap().open);
@@ -900,17 +1121,18 @@ mod tests {
     fn repeated_boundary_additions_rebalance_and_remain_resizable() {
         let mut model = DockLayout::default();
         let first = model
-            .open_tab(PanelPosition::Main, PanelTab::tool("one"))
+            .open_tab(ZonePosition::Left, PanelTab::tool("one"))
             .unwrap();
-        for index in 2..=4 {
+        for index in 2..=3 {
             let tab = PanelTab::tool(format!("item-{index}"));
-            model.open_tab(PanelPosition::Main, tab.clone()).unwrap();
+            model.open_tab(ZonePosition::Left, tab.clone()).unwrap();
+            let growth = model.growth_panel(ZonePosition::Left).unwrap();
             model
                 .drop_tab(
                     &first,
                     &tab,
                     &PanelDrop::Edge {
-                        panel: first.clone(),
+                        panel: growth,
                         edge: PanelEdge::Right,
                     },
                     (1000.0, 600.0),
@@ -918,7 +1140,7 @@ mod tests {
                 )
                 .unwrap();
             let sizes = model
-                .zone(PanelPosition::Main)
+                .zone(ZonePosition::Left)
                 .allocations((1000.0, 600.0), 8.0)
                 .unwrap();
             assert_eq!(sizes.len(), index);
@@ -928,10 +1150,11 @@ mod tests {
         }
         let before = model.capture();
         assert_eq!(
-            model.resize_panel_boundary(PanelPosition::Main, &[], 0, 1, 20.0, 976.0),
+            model.resize_panel_boundary(ZonePosition::Left, &[], 0, 1, 20.0, 984.0),
             Ok(None)
         );
         assert_ne!(model.capture(), before);
+        assert!(!model.can_add_panel(ZonePosition::Left));
         assert!(model.valid());
     }
 
@@ -944,7 +1167,7 @@ mod tests {
         assert!(
             model
                 .drop_tab(
-                    &TabGroupId::new(999),
+                    &PanelId::new(999),
                     &tab,
                     &PanelDrop::Into(source.clone()),
                     (400.0, 400.0),
@@ -975,7 +1198,7 @@ mod tests {
         let mut saved = model.capture();
         saved.version = 1;
         assert!(DockLayout::restore(&saved, |_| None).is_none());
-        saved.version = 2;
+        saved.version = 3;
         saved.zones.push(saved.zones[0].clone());
         assert!(DockLayout::restore(&saved, |_| None).is_none());
     }
@@ -984,7 +1207,7 @@ mod tests {
     fn restore_rejects_invalid_sizes_and_missing_zones() {
         let model = DockLayout::default();
         let mut saved = model.capture();
-        saved.zones[0].size = f32::NAN;
+        saved.zones[0].extent_ratio = f32::NAN;
         assert!(DockLayout::restore(&saved, |_| None).is_none());
         let mut saved = model.capture();
         saved.zones.pop();
@@ -1000,7 +1223,7 @@ mod tests {
             .iter_mut()
             .find(|zone| zone.position == "left-panel")
             .unwrap();
-        zone.panels[0].id = "group-999".into();
+        zone.panels[0].id = "panel-999".into();
         assert!(
             DockLayout::restore(&saved, |raw| raw
                 .contains(crate::features::id::VIEW_FILES)
@@ -1013,9 +1236,9 @@ mod tests {
     fn restore_rejects_duplicate_tabs_across_zones() {
         let mut model = DockLayout::default();
         let tab = PanelTab::tool("same");
-        model.open_tab(PanelPosition::Main, tab.clone()).unwrap();
+        model.open_tab(ZonePosition::Main, tab.clone()).unwrap();
         model
-            .open_tab(PanelPosition::Right, PanelTab::tool("right"))
+            .open_tab(ZonePosition::Right, PanelTab::tool("right"))
             .unwrap();
         let mut saved = model.capture();
         let raw = super::serialize_tab(&tab);

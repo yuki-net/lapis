@@ -1,17 +1,17 @@
 use super::tab_state::PanelTab;
-use crate::extension_ui::PanelPosition;
+use crate::extension_ui::ZonePosition;
 
 /// PanelはTabの表示と選択だけを所有し、Resourceの寿命を扱わない。
 #[derive(Clone, Debug)]
 pub(crate) struct PanelHost {
-    pub position: PanelPosition,
+    pub position: ZonePosition,
     pub tabs: Vec<PanelTab>,
     pub active: Option<PanelTab>,
     pub open: bool,
 }
 
 impl PanelHost {
-    pub(super) fn new(position: PanelPosition, tabs: Vec<PanelTab>, open: bool) -> Self {
+    pub(super) fn new(position: ZonePosition, tabs: Vec<PanelTab>, open: bool) -> Self {
         let active = tabs.first().cloned();
         Self {
             position,

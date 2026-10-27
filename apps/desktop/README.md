@@ -96,18 +96,18 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 - `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。
 - Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
 - HeaderのPanel開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じ操作APIで復元できる。個別Panelの非表示はタブとHost Resourceを保持する。
-- Headerの左・下・右ボタンはZone全体を開閉し、個別に隠したGroupは再表示しない。Viewメニューには非表示を含む各Groupの開閉を表示し、全列を隠しても個別に復元できる。空ZoneへのTool追加は共通Pickerで行い、空Panelを追加先として保持しない。
+- Headerの左・下・右ボタンはZone全体を開閉し、個別に隠したPanelは再表示しない。Viewメニューには非表示を含む各Panelの開閉を表示し、全列を隠しても個別に復元できる。空Zoneは開閉でき、空Surfaceの共通Pickerから最初のPanelを作成する。
 
 ## Panel とTabドラッグ
 
-- 通常のPanel面へのDropは既存PanelへTabを移動する。Tab Drag中はPanel自身の端やPanel間境界を追加先として表示し、そこへDropすると同じZoneにPanelを追加する。
+- 通常のPanel面へのDropは既存PanelへTabを移動する。Tab Drag中のPanel追加先はZoneの成長方向の末端だけとし、上限到達時には候補を表示しない。
 - 境界の通常Dragはサイズ変更。最後のTabが移動したPanelは閉じ、Windowの一時的な縮小だけではPanelやResourceを閉じない。
 - 同じWindowGroup内のDocumentはWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は受理しない。
 
 ## Task とWorkbench Mode
 
 - TaskはProject配下の作業単位であり、作成しただけではAgent SessionやTerminalを生成しない。Agent Sessionが0件のTaskも有効な選択対象である。
-- `WorkbenchMode::Ide`では選択Taskと作業環境のTaskを分離し、選択だけでは`ConversationSession::switch`を呼ばず、Editor・Terminal・Git・TabGroupを維持する。Agent表示の参照先だけは選択TaskのWorkspace IDをClient workerで解決する。`WorkbenchMode::Agent`ではTaskごとに保存した表示状態と作業環境を切り替え、Terminal・Document・実行中Sessionは再生成しない。Task一覧の「操作対象」は選択TaskではなくEditor・Terminal・Gitが使用中のTaskを示す。
+- `WorkbenchMode::Ide`では選択Taskと作業環境のTaskを分離し、選択だけでは`ConversationSession::switch`を呼ばず、Editor・Terminal・Git・Panelを維持する。Agent表示の参照先だけは選択TaskのWorkspace IDをClient workerで解決する。`WorkbenchMode::Agent`ではTaskごとに保存した表示状態と作業環境を切り替え、Terminal・Document・実行中Sessionは再生成しない。Task一覧の「操作対象」は選択TaskではなくEditor・Terminal・Gitが使用中のTaskを示す。
 - Task選択、Mode変更、View所属変更は、それぞれ`UiCommand::SelectTask`、`UiCommand::SetWorkbenchMode`、`UiCommand::SetViewBinding`を入口とする。左のTask一覧・Command Searchなどの入口が異なっても同じAPIを使う。
 - Viewの所属はShared Workbench、Task、選択Task追従、Resource参照として表示上だけ管理する。所属変更でHost Resourceの所有権を移さず、Task選択で別TaskのTabを無条件に追加しない。
 - Workbench Mode・選択Task・View所属、IDE用Layoutと作業Task、AgentのTask別Layoutは`ConversationViewState.workbench`へ保存する。Layout退避値はWorkbenchを含めず、旧保存値はIDE・空のBindingへ移行する。初回起動では保存Layoutを復元し、その後のIDEのTask選択ではLayoutを置き換えない。Mode切替は旧Modeの表示を退避し、必要な作業Taskの切替成功後に確定する。Terminalの参照は接続先Taskへ保存し、再Attachや操作待ちの未確定表示で既存参照を消さない。Host ResourceやSessionの実体は保存しない。
@@ -115,4 +115,4 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 
 ## Layout の責務
 
-Shell の表示配置は共通Layout APIが所有し、Zone・Panel・Tabの配置と表示状態を扱います。詳細な契約は [Desktop の可変 Layout](../../docs/specs/architecture.md#desktop-の-可変-layout) を参照してください。
+Shell の`DockLayout`はZone・Panel・Tabの配置と表示状態を所有します。`ZonePolicy`がMainの常設Panel、Sideの最大3 Panelと成長方向を定め、`PanelLayout`はZone内部の順序と比率を管理します。`DockGeometry`がWindow・Panelの描画と操作に使う矩形を計算します。Zoneの開閉入口は共通Commandを呼びます。詳細な契約は [Desktop の可変 Layout](../../docs/specs/architecture.md#desktop-の-可変-layout) を参照してください。

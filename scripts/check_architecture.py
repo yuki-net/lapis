@@ -1,10 +1,43 @@
 """Cargo metadata に基づく内部依存の検査。"""
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+OLD_DESKTOP_LAYOUT = {
+    "TabGroup", "TabGroupId", "PanelPosition", "LayoutNode", "SplitDirection",
+    "DropZone", "has_variable_splits", "group_for_tab", "leaf_group_ids",
+    "focused_group", "source_group", "group_bounds", "open_group_tab",
+}
+
+
+def rust_identifiers(text):
+    # 文字列・コメントは履歴用データを含み得るため、コード中の識別子のみ検査する。
+    token = re.compile(r'//[^\n]*|/\*[\s\S]*?\*/|r(\#*)"[\s\S]*?"\1|"(?:\\.|[^"\\])*"|[A-Za-z_][A-Za-z_0-9]*')
+    return [match.group() for match in token.finditer(text)
+            if re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', match.group())]
+
+
+def check_desktop_layout(root=ROOT):
+    errors = []
+    source = root / "apps/desktop"
+    for path in source.rglob("*.rs"):
+        identifiers = set(rust_identifiers(path.read_text(encoding="utf-8")))
+        for name in sorted(identifiers & OLD_DESKTOP_LAYOUT):
+            errors.append(f"{path.relative_to(root)}: 旧Desktop Layout識別子 {name}")
+        if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
+            errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
+        if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
+            errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
+    shell_mod = source / "ui/src/shell/mod.rs"
+    if shell_mod.exists():
+        module_text = shell_mod.read_text(encoding="utf-8")
+        for module in ("panel_layout", "zone_policy", "zone"):
+            if re.search(rf'\bpub\s*(?:\([^)]*\))?\s+mod\s+{module}\s*;', module_text):
+                errors.append(f"{shell_mod.relative_to(root)}: {module} の公開は禁止")
+    return errors
 ALLOWED = {
     "models": {"models"},
     "protocol": {"protocol", "models"},
@@ -73,7 +106,7 @@ def main():
         "cargo", "metadata", "--locked", "--no-deps", "--format-version", "1",
     ], cwd=ROOT))
     exceptions = json.loads((ROOT / "scripts/architecture-exceptions.json").read_text(encoding="utf-8"))
-    errors = check(metadata, exceptions)
+    errors = check(metadata, exceptions) + check_desktop_layout()
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1

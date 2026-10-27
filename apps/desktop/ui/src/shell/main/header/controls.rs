@@ -3,7 +3,7 @@ use std::f32::consts::{FRAC_PI_2, PI};
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(crate) enum PanelPosition {
+pub(crate) enum ZonePosition {
     Left,
     Bottom,
     Right,
@@ -17,12 +17,12 @@ pub(crate) enum PanelState {
 
 /// Reuses the Lucide PanelLeft pair for every dock by rotating the SVG.
 pub(crate) struct PanelToggleIcon {
-    position: PanelPosition,
+    position: ZonePosition,
     state: PanelState,
 }
 
 impl PanelToggleIcon {
-    pub(crate) const fn new(position: PanelPosition, state: PanelState) -> Self {
+    pub(crate) const fn new(position: ZonePosition, state: PanelState) -> Self {
         Self { position, state }
     }
 }
@@ -36,9 +36,9 @@ impl IntoElement for PanelToggleIcon {
             PanelState::Close => crate::components::IconName::PanelLeftDashed,
         };
         let rotation = match self.position {
-            PanelPosition::Left => 0.0,
-            PanelPosition::Bottom => FRAC_PI_2,
-            PanelPosition::Right => PI,
+            ZonePosition::Left => 0.0,
+            ZonePosition::Bottom => FRAC_PI_2,
+            ZonePosition::Right => PI,
         };
 
         div()
@@ -51,12 +51,12 @@ impl IntoElement for PanelToggleIcon {
     }
 }
 
-pub(crate) fn open_panel_icon(position: crate::extension_ui::PanelPosition) -> PanelToggleIcon {
+pub(crate) fn open_panel_icon(position: crate::extension_ui::ZonePosition) -> PanelToggleIcon {
     let position = match position {
-        crate::extension_ui::PanelPosition::Left => PanelPosition::Left,
-        crate::extension_ui::PanelPosition::Bottom => PanelPosition::Bottom,
-        crate::extension_ui::PanelPosition::Right => PanelPosition::Right,
-        crate::extension_ui::PanelPosition::Main => PanelPosition::Left,
+        crate::extension_ui::ZonePosition::Left => ZonePosition::Left,
+        crate::extension_ui::ZonePosition::Bottom => ZonePosition::Bottom,
+        crate::extension_ui::ZonePosition::Right => ZonePosition::Right,
+        crate::extension_ui::ZonePosition::Main => ZonePosition::Left,
     };
     PanelToggleIcon::new(position, PanelState::Open)
 }

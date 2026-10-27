@@ -1,19 +1,19 @@
 use super::*;
-use crate::extension_ui::PanelPosition;
+use crate::extension_ui::ZonePosition;
 
 impl Shell {
-    pub(super) fn group_visibility_entries(&self) -> Vec<(super::super::TabGroupId, String, bool)> {
+    pub(super) fn panel_visibility_entries(&self) -> Vec<(super::super::PanelId, String, bool)> {
         self.shell
             .layout
-            .leaf_group_ids()
+            .panel_ids()
             .into_iter()
             .filter_map(|id| {
-                let group = self.shell.layout.group(&id)?;
+                let group = self.shell.layout.panel(&id)?;
                 let zone = match group.position {
-                    PanelPosition::Left => self.t("panel.left"),
-                    PanelPosition::Bottom => self.t("panel.bottom"),
-                    PanelPosition::Right => self.t("panel.right"),
-                    PanelPosition::Main => return None,
+                    ZonePosition::Left => self.t("panel.left"),
+                    ZonePosition::Bottom => self.t("panel.bottom"),
+                    ZonePosition::Right => self.t("panel.right"),
+                    ZonePosition::Main => return None,
                 };
                 let title = group
                     .active
@@ -33,11 +33,7 @@ impl Shell {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.open_panel(
-            PanelPosition::Right,
-            Some(ViewId::new(id::VIEW_PREVIEW)),
-            cx,
-        );
+        self.open_panel(ZonePosition::Right, Some(ViewId::new(id::VIEW_PREVIEW)), cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -49,11 +45,25 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.toggle_panel(PanelPosition::Bottom, cx);
-        window.focus(&self.focus_handle);
-        self.shell.command_palette_open = false;
-        self.refresh_feature_activation(cx);
-        cx.notify();
+        self.execute_command(id::COMMAND_TOGGLE_BOTTOM.into(), window, cx);
+    }
+
+    pub(crate) fn toggle_left_zone(
+        &mut self,
+        _: &ToggleLeftZone,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command(id::COMMAND_TOGGLE_LEFT_ZONE.into(), window, cx);
+    }
+
+    pub(crate) fn toggle_right_zone(
+        &mut self,
+        _: &ToggleRightZone,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.execute_command(id::COMMAND_TOGGLE_RIGHT_ZONE.into(), window, cx);
     }
 
     pub(crate) fn toggle_assistant(
@@ -63,7 +73,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.open_panel(
-            PanelPosition::Right,
+            ZonePosition::Right,
             Some(ViewId::new(id::VIEW_ASSISTANT)),
             cx,
         );
@@ -74,7 +84,7 @@ impl Shell {
 
     pub(crate) fn open_panel(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         view: Option<ViewId>,
         cx: &mut Context<Self>,
     ) {
@@ -89,14 +99,8 @@ impl Shell {
         }
     }
 
-    pub(crate) fn toggle_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
-        if position == PanelPosition::Main {
-            return;
-        }
-        if self.shell.layout.zone(position).layout.is_none() {
-            self.shell.tool_picker = Some(PickerTarget::Zone(position));
-            self.shell.set_tool_picker_query(String::new());
-            cx.notify();
+    pub(crate) fn toggle_panel(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
+        if position == ZonePosition::Main {
             return;
         }
         let open = !self.shell.layout.zone_open(position);
@@ -104,35 +108,36 @@ impl Shell {
         if !open
             && self
                 .shell
-                .focused_group
+                .focused_panel
                 .as_ref()
-                .and_then(|group| self.shell.layout.group(group))
+                .and_then(|group| self.shell.layout.panel(group))
                 .is_some_and(|group| group.position == position)
         {
-            self.shell.focused_group = None;
+            self.shell.focused_panel = None;
         }
+        cx.notify();
     }
 
-    pub(super) fn toggle_group_visibility(
+    pub(super) fn toggle_panel_visibility(
         &mut self,
-        group: super::super::TabGroupId,
+        group: super::super::PanelId,
         cx: &mut Context<Self>,
     ) {
-        let Some(panel) = self.shell.layout.group(&group) else {
+        let Some(panel) = self.shell.layout.panel(&group) else {
             return;
         };
         let open = !panel.requested_open();
         self.shell.layout.set_panel_open(&group, open);
-        if !open && self.shell.focused_group.as_ref() == Some(&group) {
-            self.shell.focused_group = None;
+        if !open && self.shell.focused_panel.as_ref() == Some(&group) {
+            self.shell.focused_panel = None;
         }
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn toggle_header_panel(
+    pub(super) fn execute_toggle_zone(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -145,7 +150,7 @@ impl Shell {
 
     pub(crate) fn activate_panel_view(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
@@ -158,8 +163,8 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn close_panel(&mut self, position: PanelPosition, cx: &mut Context<Self>) {
-        if position == PanelPosition::Main {
+    pub(crate) fn close_panel(&mut self, position: ZonePosition, cx: &mut Context<Self>) {
+        if position == ZonePosition::Main {
             return;
         }
         self.request_panel_open(position, false, cx);
@@ -169,7 +174,7 @@ impl Shell {
 
     pub(crate) fn request_panel_open_with_duration(
         &mut self,
-        position: PanelPosition,
+        position: ZonePosition,
         open: bool,
         _duration: Duration,
         cx: &mut Context<Self>,
@@ -178,7 +183,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn request_panel_open(&mut self, position: PanelPosition, open: bool, cx: &mut Context<Self>) {
+    fn request_panel_open(&mut self, position: ZonePosition, open: bool, cx: &mut Context<Self>) {
         self.request_panel_open_with_duration(
             position,
             open,
@@ -189,16 +194,33 @@ impl Shell {
 
     pub(crate) fn open_tool_picker(
         &mut self,
-        group: super::super::TabGroupId,
+        group: super::super::PanelId,
         anchor: gpui::Point<gpui::Pixels>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.shell.layout.group(&group).is_none() {
+        if self.shell.layout.panel(&group).is_none() {
             return;
         }
-        self.shell.focused_group = Some(group.clone());
+        self.shell.focused_panel = Some(group.clone());
         self.shell.tool_picker = Some(PickerTarget::Panel(group));
+        self.shell.tool_picker_anchor = anchor;
+        self.shell.set_tool_picker_query(String::new());
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    pub(super) fn open_empty_zone_picker(
+        &mut self,
+        position: ZonePosition,
+        anchor: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.shell.layout.zone_open(position) || self.shell.layout.zone_has_panels(position) {
+            return;
+        }
+        self.shell.tool_picker = Some(PickerTarget::Zone(position));
         self.shell.tool_picker_anchor = anchor;
         self.shell.set_tool_picker_query(String::new());
         window.focus(&self.focus_handle);
@@ -239,11 +261,7 @@ impl Shell {
     }
 
     pub(crate) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
-        self.open_panel(
-            PanelPosition::Main,
-            Some(ViewId::new(id::VIEW_SETTINGS)),
-            cx,
-        );
+        self.open_panel(ZonePosition::Main, Some(ViewId::new(id::VIEW_SETTINGS)), cx);
         self.shell.settings_menu_open = false;
         self.shell.theme_picker_open = false;
         self.refresh_feature_activation(cx);
@@ -266,28 +284,28 @@ impl Shell {
     }
     pub(crate) fn select_panel_tab_in_group(
         &mut self,
-        group: TabGroupId,
-        position: PanelPosition,
+        group: PanelId,
+        position: ZonePosition,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
         self.shell.layout.set_panel_open(&group, true);
         self.request_panel_open(position, true, cx);
-        self.shell.open_group_tab(&group, tab);
+        self.shell.open_panel_tab(&group, tab);
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
     pub(crate) fn close_panel_tab_in_group(
         &mut self,
-        _group: TabGroupId,
-        _position: PanelPosition,
+        _group: PanelId,
+        _position: ZonePosition,
         tab: PanelTab,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let PanelTab::Document(document_id) = tab else {
-            if let Some(group) = self.shell.layout.group_for_tab(&tab) {
+            if let Some(group) = self.shell.layout.panel_for_tab(&tab) {
                 self.shell
                     .layout
                     .remove_tab(&group, &tab, std::time::Instant::now());
@@ -352,13 +370,13 @@ impl Shell {
             return;
         }
         let opened = match target {
-            PickerTarget::Panel(group) => self.shell.open_group_tab(&group, tab),
+            PickerTarget::Panel(group) => self.shell.open_panel_tab(&group, tab),
             PickerTarget::Zone(position) => self
                 .shell
                 .layout
                 .move_tab_to_zone(position, tab, std::time::Instant::now())
                 .map(|id| {
-                    self.shell.focused_group = Some(id);
+                    self.shell.focused_panel = Some(id);
                 })
                 .is_ok(),
         };
@@ -491,16 +509,16 @@ impl Shell {
             .collect()
     }
 
-    fn picker_position(&self, target: &PickerTarget) -> Option<PanelPosition> {
+    fn picker_position(&self, target: &PickerTarget) -> Option<ZonePosition> {
         match target {
             PickerTarget::Panel(group) => {
-                self.shell.layout.group(group).map(|panel| panel.position)
+                self.shell.layout.panel(group).map(|panel| panel.position)
             }
             PickerTarget::Zone(position) => Some(*position),
         }
     }
 
-    pub(crate) fn schedule_empty_close(&mut self, group: TabGroupId, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_empty_close(&mut self, group: PanelId, cx: &mut Context<Self>) {
         cx.spawn(async move |this, cx| {
             Timer::after(crate::shell::panel_transition::PANEL_ANIMATION_DURATION).await;
             let _ = this.update(cx, |shell, cx| {
@@ -512,9 +530,9 @@ impl Shell {
         .detach();
     }
 
-    pub(crate) fn move_panel_tab_to_group(
+    pub(crate) fn drop_panel_tab(
         &mut self,
-        source: TabGroupId,
+        source: PanelId,
         tab: PanelTab,
         target: PanelDrop,
         cx: &mut Context<Self>,
@@ -526,11 +544,11 @@ impl Shell {
             .drop_tab(&source, &tab, &target, size, std::time::Instant::now())
         {
             Ok(destination) => {
-                self.shell.focused_group = Some(destination);
+                self.shell.focused_panel = Some(destination);
                 if self
                     .shell
                     .layout
-                    .group(&source)
+                    .panel(&source)
                     .is_some_and(|panel| panel.tabs.is_empty())
                 {
                     self.schedule_empty_close(source, cx);
@@ -559,12 +577,11 @@ mod focus_tests {
     #[gpui::test]
     fn committed_drop_focuses_the_group_that_contains_the_tab(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            for edge in [
-                None,
-                Some(PanelEdge::Left),
-                Some(PanelEdge::Right),
-                Some(PanelEdge::Top),
-                Some(PanelEdge::Bottom),
+            for (position, edge) in [
+                (ZonePosition::Main, None),
+                (ZonePosition::Left, Some(PanelEdge::Right)),
+                (ZonePosition::Right, Some(PanelEdge::Left)),
+                (ZonePosition::Bottom, Some(PanelEdge::Top)),
             ] {
                 let document = cx.new(|_| DocumentFixture);
                 let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
@@ -572,16 +589,16 @@ mod focus_tests {
                     let source = shell
                         .shell
                         .layout
-                        .first_panel_in_zone(PanelPosition::Left)
+                        .open_tab(ZonePosition::Main, PanelTab::tool("source"))
                         .unwrap();
                     let target = shell
                         .shell
                         .layout
-                        .open_tab(PanelPosition::Main, PanelTab::tool("target"))
+                        .open_tab(position, PanelTab::tool("target"))
                         .unwrap();
-                    let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
+                    let tab = PanelTab::tool("source");
                     shell.zone_bounds.borrow_mut().insert(
-                        PanelPosition::Main,
+                        position,
                         gpui::Bounds::new(
                             point(px(0.0), px(0.0)),
                             gpui::size(px(900.0), px(600.0)),
@@ -594,9 +611,9 @@ mod focus_tests {
                             edge,
                         },
                     );
-                    shell.move_panel_tab_to_group(source, tab.clone(), drop, cx);
-                    let actual = shell.shell.layout.group_for_tab(&tab).unwrap();
-                    assert_eq!(shell.shell.focused_group, Some(actual.clone()));
+                    shell.drop_panel_tab(source, tab.clone(), drop, cx);
+                    let actual = shell.shell.layout.panel_for_tab(&tab).unwrap();
+                    assert_eq!(shell.shell.focused_panel, Some(actual.clone()));
                     if edge.is_some() {
                         assert_ne!(actual, target);
                     }
@@ -636,13 +653,13 @@ mod visibility_tests {
                 let a = shell
                     .shell
                     .layout
-                    .first_panel_in_zone(PanelPosition::Left)
+                    .first_panel_in_zone(ZonePosition::Left)
                     .unwrap();
                 let tab = PanelTab::tool_instance("terminal", "visible-terminal");
                 shell
                     .shell
                     .layout
-                    .open_tab(PanelPosition::Left, tab.clone())
+                    .open_tab(ZonePosition::Left, tab.clone())
                     .unwrap();
                 let b = shell
                     .shell
@@ -659,22 +676,22 @@ mod visibility_tests {
                     )
                     .unwrap();
                 let placements = shell.shell.layout.placements();
-                shell.shell.focused_group = Some(b.clone());
-                shell.toggle_group_visibility(b.clone(), cx);
-                assert_ne!(shell.shell.focused_group, Some(b.clone()));
-                shell.toggle_panel(PanelPosition::Left, cx);
-                assert!(!shell.shell.layout.zone_open(PanelPosition::Left));
-                shell.toggle_panel(PanelPosition::Left, cx);
-                assert!(shell.shell.layout.group(&a).unwrap().requested_open());
-                assert!(!shell.shell.layout.group(&b).unwrap().requested_open());
-                shell.toggle_group_visibility(a.clone(), cx);
-                assert!(!shell.shell.layout.zone_open(PanelPosition::Left));
-                let entries = shell.group_visibility_entries();
+                shell.shell.focused_panel = Some(b.clone());
+                shell.toggle_panel_visibility(b.clone(), cx);
+                assert_ne!(shell.shell.focused_panel, Some(b.clone()));
+                shell.toggle_panel(ZonePosition::Left, cx);
+                assert!(!shell.shell.layout.zone_open(ZonePosition::Left));
+                shell.toggle_panel(ZonePosition::Left, cx);
+                assert!(shell.shell.layout.panel(&a).unwrap().requested_open());
+                assert!(!shell.shell.layout.panel(&b).unwrap().requested_open());
+                shell.toggle_panel_visibility(a.clone(), cx);
+                assert!(!shell.shell.layout.zone_open(ZonePosition::Left));
+                let entries = shell.panel_visibility_entries();
                 assert!(entries.iter().any(|(id, _, open)| id == &a && !open));
                 assert!(entries.iter().any(|(id, _, open)| id == &b && !open));
-                shell.toggle_group_visibility(b.clone(), cx);
-                assert!(shell.shell.layout.group(&b).unwrap().requested_open());
-                assert!(!shell.shell.layout.group(&a).unwrap().requested_open());
+                shell.toggle_panel_visibility(b.clone(), cx);
+                assert!(shell.shell.layout.panel(&b).unwrap().requested_open());
+                assert!(!shell.shell.layout.panel(&a).unwrap().requested_open());
                 assert_eq!(shell.shell.layout.placements(), placements);
                 assert!(shell.shell.layout.valid());
             });

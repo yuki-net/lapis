@@ -21,7 +21,7 @@ pub(crate) enum UiCommand {
     CloseWindow,
     DetachTab(crate::shell::PanelTab),
     DockTab(crate::shell::PanelTab),
-    MoveTab(crate::shell::DraggedPanelTab, crate::shell::TabGroupId),
+    MoveTab(crate::shell::DraggedPanelTab, crate::shell::PanelId),
     ReleaseTab(
         crate::shell::DraggedPanelTab,
         crate::window_host::drag::ScreenPoint,

@@ -91,7 +91,13 @@ impl Shell {
             }
             id::COMMAND_TOGGLE_PREVIEW => self.toggle_preview(&TogglePreview, window, cx),
             id::COMMAND_TOGGLE_BOTTOM => {
-                self.toggle_bottom_panel(&ToggleBottomPanel, window, cx);
+                self.execute_toggle_zone(ZonePosition::Bottom, window, cx);
+            }
+            id::COMMAND_TOGGLE_LEFT_ZONE => {
+                self.execute_toggle_zone(ZonePosition::Left, window, cx)
+            }
+            id::COMMAND_TOGGLE_RIGHT_ZONE => {
+                self.execute_toggle_zone(ZonePosition::Right, window, cx)
             }
             id::COMMAND_TOGGLE_ASSISTANT => {
                 self.toggle_assistant(&ToggleAssistant, window, cx);
@@ -111,9 +117,9 @@ impl Shell {
             id::COMMAND_BIND_VIEW_TASK => {
                 let Some(panel) = self
                     .shell
-                    .focused_group
+                    .focused_panel
                     .as_ref()
-                    .and_then(|id| self.shell.layout.group(id))
+                    .and_then(|id| self.shell.layout.panel(id))
                 else {
                     return;
                 };
@@ -135,9 +141,9 @@ impl Shell {
     fn emit_view_binding(&mut self, scope: ViewScope, cx: &mut Context<Self>) {
         let Some(panel) = self
             .shell
-            .focused_group
+            .focused_panel
             .as_ref()
-            .and_then(|id| self.shell.layout.group(id))
+            .and_then(|id| self.shell.layout.panel(id))
         else {
             return;
         };

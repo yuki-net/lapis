@@ -16,7 +16,7 @@ use lapis_editor_core::DocumentId;
 use crate::{
     client_adapter::ClientSnapshot,
     commands::UiCommand,
-    extension_ui::PanelPosition,
+    extension_ui::ZonePosition,
     features::editor::{Editor, EditorEvent},
     root::DesktopRoot,
     shell::{
@@ -414,7 +414,7 @@ impl DesktopRoot {
             UiCommand::ReleaseTab(drag, point) => self.release_tab(host, drag, point, window, cx),
             UiCommand::DetachTab(tab) => self.detach_tab(host, tab, cx),
             UiCommand::DockTab(tab) => {
-                self.transfer_tab(host, ROOT_HOST, PanelPosition::Main, tab, cx)
+                self.transfer_tab(host, ROOT_HOST, ZonePosition::Main, tab, cx)
             }
             UiCommand::MoveTab(drag, group) => {
                 if drag.group == Some(self.group.entity_id()) {
@@ -456,7 +456,7 @@ impl DesktopRoot {
         &mut self,
         source: HostId,
         target: HostId,
-        panel: PanelPosition,
+        panel: ZonePosition,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
@@ -467,7 +467,7 @@ impl DesktopRoot {
         &mut self,
         source: HostId,
         target: HostId,
-        target_group: crate::shell::TabGroupId,
+        target_group: crate::shell::PanelId,
         tab: PanelTab,
         cx: &mut Context<Self>,
     ) {
@@ -500,7 +500,7 @@ impl DesktopRoot {
                 .read(cx)
                 .shell
                 .layout
-                .group(target_group)
+                .panel(target_group)
                 .is_none()
         {
             return;
@@ -527,7 +527,7 @@ impl DesktopRoot {
         self.group.update(cx, |group, cx| {
             if group.layout.move_tab_to(source, target, destination, &tab) {
                 group.members[&target].shell.update(cx, |shell, cx| {
-                    shell.shell.focused_group = focus_group;
+                    shell.shell.focused_panel = focus_group;
                     cx.notify();
                 });
                 let editor = group.members[&target].editor.clone();
@@ -577,7 +577,7 @@ impl DesktopRoot {
                 if let Some(point) = point {
                     let _ = handle.update(cx, |_, window, _| drag::position_window(window, point));
                 }
-                self.transfer_tab(host, id, PanelPosition::Main, tab, cx);
+                self.transfer_tab(host, id, ZonePosition::Main, tab, cx);
             }
             Err(error) => {
                 self.group
@@ -623,20 +623,20 @@ fn apply_panel_layout(
     shell.update(cx, |shell, cx| {
         let mut changed = false;
         for (tab, target) in placements {
-            let source = shell.shell.layout.group_for_tab(&tab);
+            let source = shell.shell.layout.panel_for_tab(&tab);
             if source.as_ref().is_some_and(|source| match &target {
                 TabDestination::Panel(target) => source == target,
                 TabDestination::Zone(position) => shell
                     .shell
                     .layout
-                    .group(source)
+                    .panel(source)
                     .is_some_and(|panel| panel.position == *position),
             }) {
                 continue;
             }
             let success = match target {
-                TabDestination::Panel(target) if shell.shell.layout.group(&target).is_some() => {
-                    shell.shell.open_group_tab(&target, tab.clone())
+                TabDestination::Panel(target) if shell.shell.layout.panel(&target).is_some() => {
+                    shell.shell.open_panel_tab(&target, tab.clone())
                 }
                 TabDestination::Zone(position) => shell
                     .shell
@@ -646,7 +646,7 @@ fn apply_panel_layout(
                 TabDestination::Panel(_) => shell
                     .shell
                     .layout
-                    .move_tab_to_zone(PanelPosition::Main, tab.clone(), std::time::Instant::now())
+                    .move_tab_to_zone(ZonePosition::Main, tab.clone(), std::time::Instant::now())
                     .is_ok(),
             };
             if success {
@@ -654,7 +654,7 @@ fn apply_panel_layout(
                     && shell
                         .shell
                         .layout
-                        .group(&source)
+                        .panel(&source)
                         .is_some_and(|panel| panel.tabs.is_empty())
                 {
                     shell.schedule_empty_close(source, cx);

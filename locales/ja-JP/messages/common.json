@@ -16,6 +16,8 @@
   "command.save-document": "保存",
   "command.toggle-preview": "Markdown プレビュー",
   "command.toggle-bottom-panel": "下部パネル",
+  "command.toggle-left-zone": "左領域の表示切替",
+  "command.toggle-right-zone": "右領域の表示切替",
   "command.toggle-assistant": "AI アシスタント",
   "command.toggle-panel-controls": "パネル操作ボタン",
   "command.workbench-ide": "IDE Workbench",

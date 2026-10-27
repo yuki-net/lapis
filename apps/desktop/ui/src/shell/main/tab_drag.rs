@@ -1,5 +1,4 @@
 use super::*;
-use crate::shell::panel_layout::{EdgeCandidate, insertion_edges, nearest_edge};
 
 impl Shell {
     fn move_tab_drag(
@@ -19,9 +18,9 @@ impl Shell {
 
     pub(super) fn target_zone_size(&self, target: &PanelDrop) -> (f32, f32) {
         let position = match target {
-            PanelDrop::Into(id) => self.shell.layout.group(id).map(|panel| panel.position),
+            PanelDrop::Into(id) => self.shell.layout.panel(id).map(|panel| panel.position),
             PanelDrop::Edge { panel, .. } => {
-                self.shell.layout.group(panel).map(|panel| panel.position)
+                self.shell.layout.panel(panel).map(|panel| panel.position)
             }
             PanelDrop::IntoZone(position) => Some(*position),
         };
@@ -63,8 +62,8 @@ impl Shell {
                                 && !preview.invalid
                                 && drag.source_host == shell.host
                             {
-                                shell.move_panel_tab_to_group(
-                                    drag.source_group.clone(),
+                                shell.drop_panel_tab(
+                                    drag.source_panel.clone(),
                                     drag.tab.clone(),
                                     preview.target,
                                     cx,
@@ -127,84 +126,54 @@ impl Shell {
         if !drag.belongs_to(self.group) {
             return self.drop_target.take().is_some();
         }
-        let groups = self.group_bounds.borrow();
-        let mut edges = Vec::new();
-        let mut panels = Vec::new();
-        for (id, bounds) in groups.iter() {
-            let Some(panel) = self.shell.layout.group(id) else {
-                continue;
-            };
-            if !panel.open
-                || !self.shell.layout.zone_open(panel.position)
-                || bounds.size.width <= px(0.0)
-                || bounds.size.height <= px(0.0)
-            {
-                continue;
-            }
-            let x = f32::from(bounds.origin.x);
-            let y = f32::from(bounds.origin.y);
-            let w = f32::from(bounds.size.width);
-            let h = f32::from(bounds.size.height);
-            for &edge in insertion_edges(panel.position) {
-                let (start, end) = match edge {
-                    PanelEdge::Left => ((x, y), (x, y + h)),
-                    PanelEdge::Right => ((x + w, y), (x + w, y + h)),
-                    PanelEdge::Top => ((x, y), (x + w, y)),
-                    PanelEdge::Bottom => ((x, y + h), (x + w, y + h)),
-                };
-                edges.push(EdgeCandidate {
-                    panel: id.clone(),
-                    edge,
-                    start,
-                    end,
-                });
-            }
-            if bounds.contains(&point) {
-                panels.push(id.clone());
-            }
-        }
-        panels.sort();
-        let target = nearest_edge(
-            &edges,
+        let panels = self.panel_bounds.borrow();
+        let zones = self.zone_bounds.borrow();
+        let rect = |bounds: &gpui::Bounds<Pixels>| crate::shell::dock_geometry::DockRect {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+        };
+        let target = crate::shell::dock_geometry::DockGeometry::drop_target(
+            &self.shell.layout,
+            panels.iter().map(|(id, bounds)| (id.clone(), rect(bounds))),
+            zones
+                .iter()
+                .map(|(position, bounds)| (*position, rect(bounds))),
             (f32::from(point.x), f32::from(point.y)),
-            f32::from(tokens::spacing::GAP) * 2.5,
-        )
-        .map(|candidate| PanelDrop::Edge {
-            panel: candidate.panel.clone(),
-            edge: candidate.edge,
-        })
-        .or_else(|| panels.into_iter().next().map(PanelDrop::Into))
-        .or_else(|| {
-            (!self.shell.layout.zone_has_panels(PanelPosition::Main)
-                && self
-                    .zone_bounds
-                    .borrow()
-                    .get(&PanelPosition::Main)
-                    .is_some_and(|bounds| bounds.contains(&point)))
-            .then_some(PanelDrop::IntoZone(PanelPosition::Main))
-        });
-        drop(groups);
+        );
+        drop(panels);
+        drop(zones);
         let target = target.and_then(|target| {
             let size = self.target_zone_size(&target);
             let zone = match &target {
-                PanelDrop::Into(id) => self.shell.layout.group(id)?.position,
-                PanelDrop::Edge { panel, .. } => self.shell.layout.group(panel)?.position,
+                PanelDrop::Into(id) => self.shell.layout.panel(id)?.position,
+                PanelDrop::Edge { panel, .. } => self.shell.layout.panel(panel)?.position,
                 PanelDrop::IntoZone(position) => *position,
             };
             let result = self.shell.layout.preview_drop(
-                &drag.source_group,
+                &drag.source_panel,
                 &drag.tab,
                 &target,
                 size,
                 std::time::Instant::now(),
             );
-            let rect =
-                match (&target, &result) {
-                    (PanelDrop::Edge { .. }, Ok((candidate, id))) => candidate
-                        .zone(zone)
-                        .panel_rect(id, size, f32::from(tokens::spacing::GAP)),
-                    _ => None,
-                };
+            let rect = match (&target, &result) {
+                (PanelDrop::Edge { .. }, Ok((candidate, id))) => {
+                    self.dock_geometry.borrow().as_ref().and_then(|geometry| {
+                        let candidate_geometry = geometry.reflow(candidate);
+                        let zone_rect = candidate_geometry.zones.get(&zone)?;
+                        let rect = candidate_geometry.panels.get(id)?;
+                        Some((
+                            rect.x - zone_rect.x,
+                            rect.y - zone_rect.y,
+                            rect.width,
+                            rect.height,
+                        ))
+                    })
+                }
+                _ => None,
+            };
             Some(DropPreview {
                 target,
                 invalid: result.is_err(),
@@ -256,53 +225,53 @@ mod tests {
                 let source = shell
                     .shell
                     .layout
-                    .first_panel_in_zone(PanelPosition::Left)
+                    .first_panel_in_zone(ZonePosition::Left)
                     .unwrap();
                 let target = shell
                     .shell
                     .layout
-                    .open_tab(PanelPosition::Main, PanelTab::tool("target"))
+                    .open_tab(ZonePosition::Right, PanelTab::tool("target"))
                     .unwrap();
-                let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
+                let tab = shell.shell.layout.panel(&source).unwrap().tabs[0].clone();
                 shell.tab_drag.begin(DraggedPanelTab {
                     group: shell.group,
                     source_host: shell.host,
-                    source_group: source.clone(),
+                    source_panel: source.clone(),
                     tab: tab.clone(),
                 });
-                shell.group_bounds.borrow_mut().insert(
+                shell.panel_bounds.borrow_mut().insert(
                     target.clone(),
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(50.0), px(300.0))),
                 );
                 shell.zone_bounds.borrow_mut().insert(
-                    PanelPosition::Main,
+                    ZonePosition::Right,
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(50.0), px(300.0))),
                 );
                 let before = shell.shell.layout.capture();
-                assert!(shell.move_tab_drag(point(px(49.0), px(150.0)), None, cx));
+                assert!(shell.move_tab_drag(point(px(1.0), px(150.0)), None, cx));
                 assert!(shell.drop_target.as_ref().unwrap().invalid);
-                shell.move_panel_tab_to_group(
+                shell.drop_panel_tab(
                     source.clone(),
                     tab.clone(),
                     PanelDrop::Edge {
                         panel: target.clone(),
-                        edge: PanelEdge::Right,
+                        edge: PanelEdge::Left,
                     },
                     cx,
                 );
                 assert_eq!(shell.shell.layout.capture(), before);
-                shell.group_bounds.borrow_mut().insert(
+                shell.panel_bounds.borrow_mut().insert(
                     target.clone(),
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0))),
                 );
                 shell.zone_bounds.borrow_mut().insert(
-                    PanelPosition::Main,
+                    ZonePosition::Right,
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0))),
                 );
-                assert!(shell.move_tab_drag(point(px(890.0), px(300.0)), None, cx));
+                assert!(shell.move_tab_drag(point(px(1.0), px(300.0)), None, cx));
                 assert!(!shell.drop_target.as_ref().unwrap().invalid);
                 shell.shell.layout.set_panel_open(&target, false);
-                shell.update_drop_target(point(px(890.0), px(300.0)));
+                shell.update_drop_target(point(px(1.0), px(300.0)));
                 assert!(shell.drop_target.is_none());
             });
         });
@@ -318,30 +287,30 @@ mod tests {
                 let source = shell
                     .shell
                     .layout
-                    .first_panel_in_zone(PanelPosition::Left)
+                    .first_panel_in_zone(ZonePosition::Left)
                     .unwrap();
                 let target = shell
                     .shell
                     .layout
-                    .open_tab(PanelPosition::Main, PanelTab::tool("target"))
+                    .open_tab(ZonePosition::Main, PanelTab::tool("target"))
                     .unwrap();
-                let tab = shell.shell.layout.group(&source).unwrap().tabs[0].clone();
+                let tab = shell.shell.layout.panel(&source).unwrap().tabs[0].clone();
                 let drag = DraggedPanelTab {
                     group: shell.group,
                     source_host: shell.host,
-                    source_group: source,
+                    source_panel: source,
                     tab,
                 };
                 let bounds =
                     gpui::Bounds::new(point(px(0.0), px(0.0)), gpui::size(px(900.0), px(600.0)));
                 shell
-                    .group_bounds
+                    .panel_bounds
                     .borrow_mut()
                     .insert(target.clone(), bounds);
                 shell
                     .zone_bounds
                     .borrow_mut()
-                    .insert(PanelPosition::Main, bounds);
+                    .insert(ZonePosition::Main, bounds);
                 let before = shell.shell.layout.capture();
                 shell.tab_drag.begin(drag.clone());
                 shell.update_drop_target(point(px(450.0), px(300.0)));

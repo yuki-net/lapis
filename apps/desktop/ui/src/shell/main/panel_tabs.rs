@@ -1,7 +1,7 @@
 use super::*;
 
 impl Shell {
-    pub(super) fn tab_title(&self, position: PanelPosition, tab: &PanelTab) -> String {
+    pub(super) fn tab_title(&self, position: ZonePosition, tab: &PanelTab) -> String {
         match tab {
             PanelTab::Tool { view, .. } => self
                 .feature_registry
@@ -21,14 +21,14 @@ impl Shell {
     }
     /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
     /// Detached windows omit the tool-add button.
-    pub(super) fn render_tool_panel_header_for_group(
+    pub(super) fn render_tool_panel_header(
         &self,
         panel: &PanelHost,
-        group: &TabGroupId,
+        group: &PanelId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let position = panel.position;
-        let is_panel_focused = self.shell.focused_group.as_ref() == Some(group);
+        let is_panel_focused = self.shell.focused_panel.as_ref() == Some(group);
         let scroll_state = self.scroll_states.panel_tabs(group);
         let max_offset = scroll_state.handle().max_offset();
         let offset = scroll_state.handle().offset();
@@ -99,7 +99,7 @@ impl Shell {
                 let drag = DraggedPanelTab {
                     group: self.group,
                     source_host: self.host,
-                    source_group: group.clone(),
+                    source_panel: group.clone(),
                     tab: tab.clone(),
                 };
 

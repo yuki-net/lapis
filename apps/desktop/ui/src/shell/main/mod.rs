@@ -14,10 +14,10 @@ use crate::{
     theme,
 };
 use crate::{
-    extension_ui::PanelPosition,
+    extension_ui::ZonePosition,
     shell::{
-        DraggedPanelTab, PanelDrop, PanelEdge, PanelHost, PanelSpanTransition, PanelTab,
-        PickerTarget, ResizeMode, ResizeTarget, TabGroupId,
+        DraggedPanelTab, PanelDrop, PanelEdge, PanelHost, PanelId, PanelSpanTransition, PanelTab,
+        PickerTarget, ResizeMode, ResizeTarget,
     },
 };
 use gpui::{
@@ -27,8 +27,6 @@ use gpui::{
 };
 use lapis_workspace::FileEntryKind;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
-
-type ArrangementBounds = HashMap<(PanelPosition, Vec<usize>), gpui::Bounds<Pixels>>;
 
 mod actions;
 mod command_palette;
@@ -52,12 +50,11 @@ pub(crate) struct Shell {
     tab_drag: super::tab_state::TabDragState,
     drag_preview: Option<gpui::AnyWindowHandle>,
     _drag_keys: gpui::Subscription,
-    pub(crate) panel_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
-    pub(crate) group_bounds: RefCell<HashMap<TabGroupId, gpui::Bounds<Pixels>>>,
+    pub(crate) zone_panel_bounds: RefCell<HashMap<ZonePosition, gpui::Bounds<Pixels>>>,
+    pub(crate) panel_bounds: RefCell<HashMap<PanelId, gpui::Bounds<Pixels>>>,
     drop_target: Option<DropPreview>,
-    pub(crate) zone_bounds: RefCell<HashMap<PanelPosition, gpui::Bounds<Pixels>>>,
-    arrangement_bounds: RefCell<ArrangementBounds>,
-    layout_bounds: RefCell<Option<gpui::Bounds<Pixels>>>,
+    pub(crate) zone_bounds: RefCell<HashMap<ZonePosition, gpui::Bounds<Pixels>>>,
+    dock_geometry: RefCell<Option<crate::shell::dock_geometry::DockGeometry>>,
     pub(crate) session: ShellPresentation,
     document_view: AnyView,
     focus_handle: FocusHandle,
@@ -73,7 +70,7 @@ pub(crate) struct Shell {
 struct DropPreview {
     target: PanelDrop,
     invalid: bool,
-    zone: PanelPosition,
+    zone: ZonePosition,
     rect: Option<(f32, f32, f32, f32)>,
 }
 
@@ -121,8 +118,8 @@ impl ShellPresentation {
 
 struct ShellScrollStates {
     panel_contents: RefCell<HashMap<PanelTab, ScrollState>>,
-    panel_empty: RefCell<HashMap<super::TabGroupId, ScrollState>>,
-    panel_tabs: RefCell<HashMap<super::TabGroupId, ScrollState>>,
+    panel_empty: RefCell<HashMap<super::PanelId, ScrollState>>,
+    panel_tabs: RefCell<HashMap<super::PanelId, ScrollState>>,
     tool_picker: ScrollState,
 }
 impl Default for ShellScrollStates {
@@ -143,14 +140,14 @@ impl ShellScrollStates {
             .or_default()
             .clone()
     }
-    fn panel_empty(&self, group: &super::TabGroupId) -> ScrollState {
+    fn panel_empty(&self, group: &super::PanelId) -> ScrollState {
         self.panel_empty
             .borrow_mut()
             .entry(group.clone())
             .or_default()
             .clone()
     }
-    fn panel_tabs(&self, group: &super::TabGroupId) -> ScrollState {
+    fn panel_tabs(&self, group: &super::PanelId) -> ScrollState {
         self.panel_tabs
             .borrow_mut()
             .entry(group.clone())
@@ -166,8 +163,8 @@ mod group_scroll_tests {
     #[test]
     fn tab_groups_have_independent_scroll_state() {
         let states = ShellScrollStates::default();
-        let a = super::super::TabGroupId::new(2);
-        let b = super::super::TabGroupId::new(5);
+        let a = super::super::PanelId::new(2);
+        let b = super::super::PanelId::new(5);
         let first = states.panel_tabs(&a);
         let second = states.panel_tabs(&b);
         first.handle().set_offset(point(px(-80.0), px(0.0)));
@@ -214,12 +211,11 @@ impl Shell {
             tab_drag: Default::default(),
             drag_preview: None,
             _drag_keys: drag_keys,
+            zone_panel_bounds: Default::default(),
             panel_bounds: Default::default(),
-            group_bounds: Default::default(),
             zone_bounds: Default::default(),
-            arrangement_bounds: Default::default(),
             drop_target: None,
-            layout_bounds: RefCell::new(None),
+            dock_geometry: RefCell::new(None),
             session: ShellPresentation::default(),
             document_view,
             focus_handle: cx.focus_handle(),
@@ -325,19 +321,19 @@ impl Shell {
                 }
                 self.shell
                     .layout
-                    .group(&group)
+                    .panel(&group)
                     .map(|panel| (tab, group.clone(), panel.position, panel.open))
             })
             .collect::<Vec<_>>();
         self.restore_view(view, cx);
         for (tab, group, position, open) in tabs {
-            if self.shell.layout.group_for_tab(&tab).is_some() {
+            if self.shell.layout.panel_for_tab(&tab).is_some() {
                 continue;
             }
             let group = if self
                 .shell
                 .layout
-                .group(&group)
+                .panel(&group)
                 .is_some_and(|panel| panel.position == position)
             {
                 group
@@ -350,15 +346,8 @@ impl Shell {
                     }
                 }
             };
-            if let Some(panel) = self.shell.layout.group_mut(&group) {
-                let active = panel.active.clone();
-                panel.activate_without_open(tab);
-                if active.is_some() {
-                    panel.active = active;
-                }
-                if open {
-                    panel.set_open_immediate(true);
-                }
+            if self.shell.layout.insert_tab_in_panel(&group, tab, true) && open {
+                self.shell.layout.set_panel_open(&group, true);
             }
         }
         self.refresh_feature_activation(cx);

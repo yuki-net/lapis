@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 /// Task選択が表示Layoutへ与えるポリシーです。Resourceの所有権は変更しません。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum WorkbenchMode {
-    /// Taskを切り替えても、現在のEditor・Terminal・TabGroupを維持します。
+    /// Taskを切り替えても、現在のEditor・Terminal・Panelを維持します。
     #[default]
     Ide,
     /// Taskごとに保存した表示Layoutを復元します。
@@ -337,10 +337,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn nested_split_layouts_keep_group_and_view_identity_across_tasks_modes_and_restart() {
+    fn ordered_panel_layouts_keep_view_identity_across_tasks_modes_and_restart() {
         use crate::features::conversation::{apply_view_state, capture_view_state};
         use crate::{
-            extension_ui::PanelPosition,
+            extension_ui::ZonePosition,
             shell::{PanelDrop, PanelEdge, PanelTab, ShellState},
         };
         use lapis_desktop_client::DocumentTab;
@@ -356,22 +356,34 @@ mod tests {
                 active: true,
             };
             let mut shell = ShellState::default();
-            let main = shell
+            shell
                 .layout
-                .open_tab(PanelPosition::Main, PanelTab::Document(document.id.clone()))
+                .open_tab(ZonePosition::Main, PanelTab::Document(document.id.clone()))
                 .unwrap();
+            let position = if direction == PanelEdge::Right {
+                ZonePosition::Left
+            } else {
+                ZonePosition::Bottom
+            };
+            if position == ZonePosition::Bottom {
+                shell
+                    .layout
+                    .open_tab(
+                        position,
+                        PanelTab::tool(crate::features::id::VIEW_ASSISTANT),
+                    )
+                    .unwrap();
+            }
+            let anchor = shell.layout.first_panel_in_zone(position).unwrap();
             let terminal = PanelTab::tool(crate::features::id::VIEW_TERMINAL);
-            let source = shell
-                .layout
-                .open_tab(PanelPosition::Main, terminal.clone())
-                .unwrap();
+            let source = shell.layout.open_tab(position, terminal.clone()).unwrap();
             let extra = shell
                 .layout
                 .drop_tab(
                     &source,
                     &terminal,
                     &PanelDrop::Edge {
-                        panel: main,
+                        panel: anchor,
                         edge: direction,
                     },
                     (800.0, 600.0),
@@ -379,10 +391,7 @@ mod tests {
                 )
                 .unwrap();
             let preview = PanelTab::tool(crate::features::id::VIEW_PREVIEW);
-            let source = shell
-                .layout
-                .open_tab(PanelPosition::Main, preview.clone())
-                .unwrap();
+            let source = shell.layout.open_tab(position, preview.clone()).unwrap();
             shell
                 .layout
                 .drop_tab(
@@ -390,11 +399,7 @@ mod tests {
                     &preview,
                     &PanelDrop::Edge {
                         panel: extra,
-                        edge: if direction == PanelEdge::Right {
-                            PanelEdge::Bottom
-                        } else {
-                            PanelEdge::Right
-                        },
+                        edge: direction,
                     },
                     (800.0, 600.0),
                     std::time::Instant::now(),
@@ -402,14 +407,14 @@ mod tests {
                 .unwrap();
             shell
                 .layout
-                .set_zone_open(PanelPosition::Left, direction == PanelEdge::Right);
+                .set_zone_open(ZonePosition::Left, direction == PanelEdge::Right);
             (capture_view_state(&shell), document)
         }
 
         let a = ConversationId::new("split-a");
         let b = ConversationId::new("split-b");
         let (ide, document_a) = fixture("document-a", PanelEdge::Right);
-        let (agent_b, document_b) = fixture("document-b", PanelEdge::Bottom);
+        let (agent_b, document_b) = fixture("document-b", PanelEdge::Top);
         let mut state = WorkbenchState::default();
         state.apply_task_snapshot(a.clone(), ide.clone(), true);
         let terminal = ViewInstanceKey::new(
@@ -500,7 +505,10 @@ mod tests {
                         .count(),
                     1
                 );
-                assert_eq!(shell.layout.leaf_group_ids().len(), 4);
+                assert_eq!(
+                    shell.layout.panel_ids().len(),
+                    if task == &a { 4 } else { 5 }
+                );
             }
         }
         assert_eq!(
@@ -521,7 +529,7 @@ mod tests {
         let mut layout = crate::shell::DockLayout::default();
         layout
             .open_tab(
-                crate::extension_ui::PanelPosition::Main,
+                crate::extension_ui::ZonePosition::Main,
                 crate::shell::PanelTab::tool_instance("fixture", format!("instance-{tool}")),
             )
             .unwrap();
@@ -737,7 +745,7 @@ mod tests {
 
     #[test]
     fn task_scope_filters_presentation_while_shared_follow_and_resource_keep_identity() {
-        use crate::extension_ui::PanelPosition;
+        use crate::extension_ui::ZonePosition;
         use crate::shell::{PanelTab, ShellState};
         let a = ConversationId::new("task-a");
         let b = ConversationId::new("task-b");
@@ -751,7 +759,7 @@ mod tests {
         for tab in [&owned, &shared, &follow, &fixed] {
             shell
                 .layout
-                .open_tab(PanelPosition::Main, tab.clone())
+                .open_tab(ZonePosition::Main, tab.clone())
                 .unwrap();
         }
         state.bind_view(

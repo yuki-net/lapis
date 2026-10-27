@@ -119,7 +119,7 @@ fn discard_invalid_layout(view: &mut serde_json::Map<String, serde_json::Value>)
     if let Some(layout) = view.get("layout")
         && !layout.is_null()
         && !serde_json::from_value::<ZoneLayoutViewState>(layout.clone())
-            .is_ok_and(|layout| layout.version == 2)
+            .is_ok_and(|layout| layout.version == lapis_desktop_client::ZONE_LAYOUT_VERSION)
     {
         view.remove("layout");
     }
@@ -324,6 +324,21 @@ mod tests {
             .unwrap();
         let restored = repository.load().unwrap();
         assert_eq!(restored, (Vec::new(), records, Some(active)));
+
+        let mut with_layout = restored.1.clone();
+        with_layout[0].view.layout = Some(lapis_desktop_client::ZoneLayoutViewState {
+            version: lapis_desktop_client::ZONE_LAYOUT_VERSION,
+            zones: Vec::new(),
+            bottom_span_left: false,
+            bottom_span_right: false,
+        });
+        let original = fs::read(&repository.path).unwrap();
+        let mut current: serde_json::Value = serde_json::from_slice(&original).unwrap();
+        current["records"][0]["view"]["layout"] =
+            serde_json::to_value(&with_layout[0].view.layout).unwrap();
+        fs::write(&repository.path, serde_json::to_vec(&current).unwrap()).unwrap();
+        assert_eq!(repository.load().unwrap().1, with_layout);
+        fs::write(&repository.path, original).unwrap();
 
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(&repository.path).unwrap()).unwrap();

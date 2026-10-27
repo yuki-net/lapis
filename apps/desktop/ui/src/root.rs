@@ -2,7 +2,7 @@ use crate::{
     app::{DesktopServices, InitialView},
     client_adapter::{ClientSnapshot, ClientWorker, DocumentClient, EditChain, PersistedView},
     commands::UiCommand,
-    extension_ui::{PanelPosition, ViewId},
+    extension_ui::{ViewId, ZonePosition},
     features::{
         self,
         command_search::{
@@ -174,15 +174,13 @@ impl DesktopRoot {
                                 let _ = sender.send(Err("保存をキャンセルしました".into()));
                             }
                             root.git_input = None;
-                            root.shell.update(cx, |shell, cx| {
-                                shell.close_panel(PanelPosition::Right, cx)
-                            });
+                            root.shell
+                                .update(cx, |shell, cx| shell.close_panel(ZonePosition::Right, cx));
                         }
                         QuickSearchEvent::SubmitPath(path) => {
                             root.submit_path(path, cx);
-                            root.shell.update(cx, |shell, cx| {
-                                shell.close_panel(PanelPosition::Right, cx)
-                            });
+                            root.shell
+                                .update(cx, |shell, cx| shell.close_panel(ZonePosition::Right, cx));
                         }
                         QuickSearchEvent::SubmitText(text) => {
                             if let Some(request) = root.git_input.take() {
@@ -190,9 +188,8 @@ impl DesktopRoot {
                                     git.complete_input(request, text, window, cx)
                                 });
                             }
-                            root.shell.update(cx, |shell, cx| {
-                                shell.close_panel(PanelPosition::Right, cx)
-                            });
+                            root.shell
+                                .update(cx, |shell, cx| shell.close_panel(ZonePosition::Right, cx));
                         }
                     }
                     window.focus(&root.editor.focus_handle(cx));
@@ -214,13 +211,13 @@ impl DesktopRoot {
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
         shell.update(cx, |shell, cx| {
             shell.set_locale(initial_locale.clone(), cx);
-            shell.activate_panel_view(PanelPosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
+            shell.activate_panel_view(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
-                shell.activate_panel_view(PanelPosition::Right, id::VIEW_ASSISTANT.into(), cx);
+                shell.activate_panel_view(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
             }
             if initial.show_terminal || initial.show_problems {
                 shell.activate_panel_view(
-                    PanelPosition::Bottom,
+                    ZonePosition::Bottom,
                     if initial.show_problems {
                         id::VIEW_PROBLEMS
                     } else {
@@ -341,7 +338,7 @@ impl DesktopRoot {
                         .update(cx, |search, cx| search.open_input(request.title(), "", cx));
                     root.shell.update(cx, |shell, cx| {
                         shell.activate_panel_view(
-                            PanelPosition::Right,
+                            ZonePosition::Right,
                             id::VIEW_COMMAND_SEARCH.into(),
                             cx,
                         )
@@ -365,7 +362,7 @@ impl DesktopRoot {
                     root.search
                         .update(cx, |search, cx| search.start(query.clone(), cx));
                     root.shell.update(cx, |shell, cx| {
-                        shell.activate_panel_view(PanelPosition::Left, id::VIEW_SEARCH.into(), cx)
+                        shell.activate_panel_view(ZonePosition::Left, id::VIEW_SEARCH.into(), cx)
                     });
                 }
                 EditorEvent::Completion(definition) => {
@@ -1264,7 +1261,7 @@ impl DesktopRoot {
         self.quick_search
             .update(cx, |search, cx| search.open_path(title, suggested, cx));
         self.shell.update(cx, |shell, cx| {
-            shell.activate_panel_view(PanelPosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
+            shell.activate_panel_view(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
         });
         window.focus(&self.quick_search.read(cx).focus_handle());
     }
@@ -1410,7 +1407,7 @@ impl DesktopRoot {
                     .update(cx, |search, cx| search.open(provider, cx));
                 self.shell.update(cx, |shell, cx| {
                     shell.activate_panel_view(
-                        PanelPosition::Right,
+                        ZonePosition::Right,
                         id::VIEW_COMMAND_SEARCH.into(),
                         cx,
                     )

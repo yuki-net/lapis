@@ -5,40 +5,13 @@ use crate::shell::state::PanelResize;
 impl Shell {
     pub(super) fn start_panel_resize(
         &mut self,
-        position: PanelPosition,
-        path: Vec<usize>,
-        pair: (usize, usize),
-        axis: Axis,
+        boundary: crate::shell::dock_geometry::PanelBoundary,
         start: Point<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let bounds = self
-            .arrangement_bounds
-            .borrow()
-            .get(&(position, path.clone()))
-            .copied();
-        let Some(bounds) = bounds else {
-            return;
-        };
-        let extent = match axis {
-            Axis::Horizontal => f32::from(bounds.size.width),
-            Axis::Vertical => f32::from(bounds.size.height),
-        };
-        let Some(available) = self.shell.layout.zone(position).available_for_resize(
-            &path,
-            extent,
-            f32::from(tokens::spacing::GAP),
-        ) else {
-            return;
-        };
         self.shell.panel_resize = Some(PanelResize {
-            position,
-            path,
-            boundary: pair.0,
-            next: pair.1,
-            axis,
+            boundary,
             previous: start,
-            available,
         });
         cx.notify();
     }
@@ -51,11 +24,20 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let gap = f32::from(tokens::spacing::GAP);
-        let bottom = self.shell.layout.zone(PanelPosition::Bottom);
-        let bottom_y = f32::from(viewport.height)
-            - f32::from(tokens::size::STATUS_BAR_HEIGHT)
-            - bottom.size
-            - gap * 2.0;
+        let bottom = self.shell.layout.zone(ZonePosition::Bottom);
+        let geometry = self.dock_geometry.borrow();
+        let bottom_y = geometry
+            .as_ref()
+            .and_then(|geometry| geometry.zones.get(&ZonePosition::Bottom))
+            .map_or(f32::from(viewport.height), |rect| rect.y);
+        let left_width = geometry
+            .as_ref()
+            .and_then(|geometry| geometry.zones.get(&ZonePosition::Left))
+            .map_or(0.0, |rect| rect.width);
+        let right_width = geometry
+            .as_ref()
+            .and_then(|geometry| geometry.zones.get(&ZonePosition::Right))
+            .map_or(0.0, |rect| rect.width);
         let mode = match target {
             ResizeTarget::Left | ResizeTarget::Right
                 if bottom.open && f32::from(start.y) >= bottom_y - gap * 2.0 =>
@@ -65,19 +47,16 @@ impl Shell {
             ResizeTarget::Left | ResizeTarget::Right => ResizeMode::PanelWidth,
             ResizeTarget::Bottom
                 if self.shell.layout.bottom_span_left
-                    && self.shell.layout.zone_open(PanelPosition::Left)
-                    && f32::from(start.x)
-                        <= self.shell.layout.zone(PanelPosition::Left).size + gap * 2.0 =>
+                    && self.shell.layout.zone_open(ZonePosition::Left)
+                    && f32::from(start.x) <= left_width + gap * 2.0 =>
             {
                 ResizeMode::RestoreLeft
             }
             ResizeTarget::Bottom
                 if self.shell.layout.bottom_span_right
-                    && self.shell.layout.zone_open(PanelPosition::Right)
+                    && self.shell.layout.zone_open(ZonePosition::Right)
                     && f32::from(start.x)
-                        >= f32::from(viewport.width)
-                            - self.shell.layout.zone(PanelPosition::Right).size
-                            - gap * 2.0 =>
+                        >= f32::from(viewport.width) - right_width - gap * 2.0 =>
             {
                 ResizeMode::RestoreRight
             }
@@ -92,24 +71,23 @@ impl Shell {
     pub(super) fn resize_panels(
         &mut self,
         event: &MouseMoveEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !event.dragging() {
             return;
         }
         if let Some(mut resize) = self.shell.panel_resize.take() {
-            let delta = match resize.axis {
+            let delta = match resize.boundary.axis {
                 Axis::Horizontal => f32::from(event.position.x - resize.previous.x),
                 Axis::Vertical => f32::from(event.position.y - resize.previous.y),
             };
-            let result = self.shell.layout.resize_panel_boundary(
-                resize.position,
-                &resize.path,
-                resize.boundary,
-                resize.next,
+            let result = self.shell.layout.resize_between_panels(
+                resize.boundary.zone,
+                &resize.boundary.first,
+                &resize.boundary.second,
                 delta,
-                resize.available,
+                resize.boundary.available,
             );
             if result.as_ref().is_ok_and(|closed| closed.is_none()) {
                 resize.previous = event.position;
@@ -156,36 +134,28 @@ impl Shell {
                 return;
             }
         }
-        let viewport = window.viewport_size();
-        let (position, value, maximum) = match target {
-            ResizeTarget::Left => (
-                PanelPosition::Left,
-                f32::from(event.position.x) - gap,
-                f32::from(viewport.width) - gap * 3.0,
-            ),
-            ResizeTarget::Right => (
-                PanelPosition::Right,
-                f32::from(viewport.width - event.position.x) - gap,
-                f32::from(viewport.width) - gap * 3.0,
-            ),
-            ResizeTarget::Bottom => (
-                PanelPosition::Bottom,
-                f32::from(viewport.height - event.position.y)
-                    - f32::from(tokens::size::STATUS_BAR_HEIGHT)
-                    - gap,
-                f32::from(viewport.height) - f32::from(tokens::size::TITLE_BAR_HEIGHT) - gap * 3.0,
-            ),
+        let position = match target {
+            ResizeTarget::Left => ZonePosition::Left,
+            ResizeTarget::Right => ZonePosition::Right,
+            ResizeTarget::Bottom => ZonePosition::Bottom,
+        };
+        let Some((value, maximum)) = self.dock_geometry.borrow().as_ref().and_then(|geometry| {
+            geometry.zone_resize(
+                position,
+                f32::from(event.position.x),
+                f32::from(event.position.y),
+            )
+        }) else {
+            return;
         };
         let shrinking = match target {
             ResizeTarget::Left => event.position.x < start.x,
             ResizeTarget::Right => event.position.x > start.x,
             ResizeTarget::Bottom => event.position.y > start.y,
         };
-        if value < 16.0 && shrinking {
-            self.shell.layout.set_zone_open(position, false);
-        } else if value >= 16.0 && maximum >= 32.0 {
-            self.shell.layout.zone_mut(position).size = value.clamp(32.0, maximum);
-        }
+        self.shell
+            .layout
+            .resize_zone(position, value, maximum, shrinking);
         cx.notify();
     }
 

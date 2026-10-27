@@ -1,6 +1,6 @@
 use gpui::{
     App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
-    actions, px, size,
+    actions, size,
 };
 use lapis_desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
@@ -44,6 +44,8 @@ actions!(
         Dismiss,
         TogglePreview,
         ToggleBottomPanel,
+        ToggleLeftZone,
+        ToggleRightZone,
         ToggleAssistant,
         Quit,
     ]
@@ -191,7 +193,14 @@ pub(crate) fn open_desktop_window(
 
 /// Returns centered 1440 by 900 logical-pixel bounds with a transparent Lapis title bar.
 pub(crate) fn window_options(cx: &App) -> WindowOptions {
-    let bounds = Bounds::centered(None, size(px(1440.0), px(900.0)), cx);
+    let bounds = Bounds::centered(
+        None,
+        size(
+            crate::tokens::size::DEFAULT_WINDOW_WIDTH,
+            crate::tokens::size::DEFAULT_WINDOW_HEIGHT,
+        ),
+        cx,
+    );
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         titlebar: Some(TitlebarOptions {
@@ -257,6 +266,8 @@ fn bind_keys(cx: &mut App) {
         KeyBinding::new("escape", Dismiss, Some("!Terminal")),
         KeyBinding::new("ctrl-alt-p", TogglePreview, Some("!Terminal")),
         KeyBinding::new("ctrl-j", ToggleBottomPanel, Some("!Terminal")),
+        KeyBinding::new("ctrl-alt-l", ToggleLeftZone, Some("!Terminal")),
+        KeyBinding::new("ctrl-alt-r", ToggleRightZone, Some("!Terminal")),
         KeyBinding::new("ctrl-shift-a", ToggleAssistant, Some("!Terminal")),
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("ctrl-q", Quit, Some("!Terminal")),

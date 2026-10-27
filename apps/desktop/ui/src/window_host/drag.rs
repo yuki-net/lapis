@@ -77,19 +77,19 @@ impl DesktopRoot {
                             }
                             let shell = member.shell.read(cx);
                             let panel = shell
-                                .group_bounds
+                                .panel_bounds
                                 .borrow()
                                 .iter()
                                 .find(|(_, bounds)| bounds.contains(&position))
                                 .map(|(group, _)| TabDestination::Panel(group.clone()));
                             let destination = panel.or_else(|| {
-                                (!shell.shell.layout.zone_has_panels(PanelPosition::Main)
+                                (!shell.shell.layout.zone_has_panels(ZonePosition::Main)
                                     && shell
                                         .zone_bounds
                                         .borrow()
-                                        .get(&PanelPosition::Main)
+                                        .get(&ZonePosition::Main)
                                         .is_some_and(|bounds| bounds.contains(&position)))
-                                .then_some(TabDestination::Zone(PanelPosition::Main))
+                                .then_some(TabDestination::Zone(ZonePosition::Main))
                             });
                             destination.map(|destination| (*host, destination))
                         })
