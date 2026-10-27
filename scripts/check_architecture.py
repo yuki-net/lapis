@@ -26,6 +26,13 @@ def rust_identifiers(text):
             if re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', match.group())]
 
 
+def strip_rust_comments(text):
+    """Rustの行コメントとブロックコメントを空白に置き換えたテキストを返す。文字列リテラルは維持する。"""
+    text = re.sub(r'/\*[\s\S]*?\*/', '', text)
+    text = re.sub(r'//[^\n]*', '', text)
+    return text
+
+
 def check_desktop_layout(root=ROOT):
     errors = []
     source = root / "apps/desktop"
@@ -34,10 +41,11 @@ def check_desktop_layout(root=ROOT):
         identifiers = set(rust_identifiers(text))
         for name in sorted(identifiers & OLD_DESKTOP_LAYOUT):
             errors.append(f"{path.relative_to(root)}: 旧Desktop Layout識別子 {name}")
+        code_text = strip_rust_comments(text)
         for name in OLD_ZONE_METHODS:
-            if re.search(rf"\bfn\s+{name}\s*\([^)]*\bZonePosition\b", text, re.S):
+            if re.search(rf"\bfn\s+{name}\s*\([^)]*\bZonePosition\b", code_text, re.S):
                 errors.append(f"{path.relative_to(root)}: Zone操作の旧Panel名 {name}")
-        if re.search(r"\bstruct\s+PanelHost\s*\{[^}]*\bposition\s*:", text, re.S):
+        if re.search(r"\bstruct\s+PanelHost\s*\{[^}]*\bposition\s*:", code_text, re.S):
             errors.append(f"{path.relative_to(root)}: PanelHostへのZone所属の二重保持は禁止")
         if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
@@ -46,7 +54,7 @@ def check_desktop_layout(root=ROOT):
         if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()
                 or path.as_posix().endswith("/desktop/client/src/lib.rs")):
             for name in ("main-panel", "left-panel", "right-panel", "bottom-panel"):
-                if re.search(rf'"{name}"', text):
+                if re.search(rf'"{name}"', code_text):
                     errors.append(f"{path.relative_to(root)}: 旧Zone保存識別子 {name}")
     shell_mod = source / "ui/src/shell/mod.rs"
     if shell_mod.exists():
