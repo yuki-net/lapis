@@ -1079,12 +1079,6 @@ async fn verify_panel_drag_resize(
     wait_for_drag_state(cx, true, count + 1).await;
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), end) }.unwrap();
     gpui::Timer::after(std::time::Duration::from_millis(80)).await;
-    eprintln!(
-        "SMOKE local preview {}",
-        shell
-            .read_with(cx, |shell, _| shell.smoke_drop_preview())
-            .unwrap()
-    );
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
     wait_for_drag_state(cx, false, count).await;
     gpui::Timer::after(std::time::Duration::from_millis(160)).await;
