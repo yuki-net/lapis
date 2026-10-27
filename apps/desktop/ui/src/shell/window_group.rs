@@ -57,10 +57,10 @@ impl GroupLayout {
         &mut self,
         source: HostId,
         target: HostId,
-        group: PanelId,
+        panel_id: PanelId,
         tab: &PanelTab,
     ) -> bool {
-        self.move_tab_to(source, target, TabDestination::Panel(group), tab)
+        self.move_tab_to(source, target, TabDestination::Panel(panel_id), tab)
     }
 
     /// 追加先Zoneが空でもPanelの事前生成なしに移動先を確定できる。
@@ -144,7 +144,7 @@ mod tests {
     }
 
     #[test]
-    fn two_groups_in_one_zone_keep_distinct_window_placements() {
+    fn two_panels_in_one_zone_keep_distinct_window_placements() {
         let mut group = GroupLayout::new();
         let child = group.add_window();
         let tab = PanelTab::tool("future-resource-view");

@@ -48,10 +48,10 @@ impl Shell {
                 gpui::size(px(rect.width), px(rect.height)),
             );
             self.panel_bounds.borrow_mut().insert(id.clone(), bounds);
-            if let Some(panel) = self.shell.layout.panel(id) {
+            if let Some(position) = self.shell.layout.zone_for_panel(id) {
                 self.zone_panel_bounds
                     .borrow_mut()
-                    .entry(panel.position)
+                    .entry(position)
                     .or_insert(bounds);
             }
         }
@@ -109,10 +109,10 @@ impl Shell {
                 .shell
                 .layout
                 .panel(id)
-                .filter(|panel| panel.position == position)
+                .filter(|_| self.shell.layout.zone_for_panel(id) == Some(position))
             {
                 root = root.child(
-                    self.render_panel_window(panel, id, cx)
+                    self.render_panel_window(position, panel, id, cx)
                         .absolute()
                         .left(px(rect.x - zone_rect.x))
                         .top(px(rect.y - zone_rect.y))
@@ -140,8 +140,8 @@ impl Shell {
         if geometry.panels.keys().all(|id| {
             self.shell
                 .layout
-                .panel(id)
-                .is_none_or(|panel| panel.position != position)
+                .zone_for_panel(id)
+                .is_none_or(|zone| zone != position)
         }) {
             root = root.child(
                 div()

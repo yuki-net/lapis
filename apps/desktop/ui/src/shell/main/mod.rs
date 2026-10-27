@@ -140,17 +140,17 @@ impl ShellScrollStates {
             .or_default()
             .clone()
     }
-    fn panel_empty(&self, group: &super::PanelId) -> ScrollState {
+    fn panel_empty(&self, panel_id: &super::PanelId) -> ScrollState {
         self.panel_empty
             .borrow_mut()
-            .entry(group.clone())
+            .entry(panel_id.clone())
             .or_default()
             .clone()
     }
-    fn panel_tabs(&self, group: &super::PanelId) -> ScrollState {
+    fn panel_tabs(&self, panel_id: &super::PanelId) -> ScrollState {
         self.panel_tabs
             .borrow_mut()
-            .entry(group.clone())
+            .entry(panel_id.clone())
             .or_default()
             .clone()
     }
@@ -158,10 +158,10 @@ impl ShellScrollStates {
 impl gpui::EventEmitter<UiCommand> for Shell {}
 
 #[cfg(all(test, debug_assertions))]
-mod group_scroll_tests {
+mod panel_scroll_tests {
     use super::*;
     #[test]
-    fn tab_groups_have_independent_scroll_state() {
+    fn panels_have_independent_scroll_state() {
         let states = ShellScrollStates::default();
         let a = super::super::PanelId::new(2);
         let b = super::super::PanelId::new(5);

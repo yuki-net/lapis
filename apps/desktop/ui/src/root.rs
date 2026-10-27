@@ -136,12 +136,12 @@ impl DesktopRoot {
                             }
                             root.git_input = None;
                             root.shell
-                                .update(cx, |shell, cx| shell.close_panel(ZonePosition::Right, cx));
+                                .update(cx, |shell, cx| shell.close_zone(ZonePosition::Right, cx));
                         }
                         QuickSearchEvent::SubmitPath(path) => {
                             root.submit_path(path, cx);
                             root.shell
-                                .update(cx, |shell, cx| shell.close_panel(ZonePosition::Right, cx));
+                                .update(cx, |shell, cx| shell.close_zone(ZonePosition::Right, cx));
                         }
                         QuickSearchEvent::SubmitText(text) => {
                             if let Some(request) = root.git_input.take() {
@@ -150,7 +150,7 @@ impl DesktopRoot {
                                 });
                             }
                             root.shell
-                                .update(cx, |shell, cx| shell.close_panel(ZonePosition::Right, cx));
+                                .update(cx, |shell, cx| shell.close_zone(ZonePosition::Right, cx));
                         }
                     }
                     window.focus(&root.editor.focus_handle(cx));

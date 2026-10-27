@@ -113,8 +113,8 @@ impl Shell {
                 surface.child(separator()).children(
                     self.panel_visibility_entries()
                         .into_iter()
-                        .map(|(group, label, _)| {
-                            let id = format!("group-visibility-{}", group.as_str());
+                        .map(|(panel_id, label, _)| {
+                            let id = format!("panel_id-visibility-{}", panel_id.as_str());
                             menu_item(MenuItemSpec {
                                 id: id.into(),
                                 label: label.into(),
@@ -124,7 +124,7 @@ impl Shell {
                             })
                             .on_click(cx.listener(
                                 move |this, _, window, cx| {
-                                    this.toggle_panel_visibility(group.clone(), cx);
+                                    this.toggle_panel_visibility(panel_id.clone(), cx);
                                     this.close_header_menu(cx);
                                     window.focus(&this.focus_handle);
                                 },

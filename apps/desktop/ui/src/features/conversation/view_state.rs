@@ -29,7 +29,7 @@ pub(crate) fn apply_view_state(
                     ZonePosition::Right,
                 ]
                 .into_iter()
-                .flat_map(|position| registry.panel_contributions(position))
+                .flat_map(|position| registry.zone_contributions(position))
                 .any(|contribution| contribution.view.as_ref() == Some(view)),
             }
             .then_some(tab)

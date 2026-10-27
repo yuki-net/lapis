@@ -18,7 +18,7 @@ pub(crate) enum MenuAction {
     Copy,
     Paste,
     ToggleLeftPanel,
-    ToggleBottomPanel,
+    ToggleBottomZone,
     ToggleRightPanel,
     TogglePanelControls,
     ToggleInspector,
@@ -142,7 +142,7 @@ const VIEW_MENU: &[MenuItemDefinition] = &[
         "bottom-panel",
         "Bottom Panel",
         Some("Ctrl+J"),
-        MenuAction::ToggleBottomPanel,
+        MenuAction::ToggleBottomZone,
     ),
     MenuItemDefinition::action(
         "right-panel",

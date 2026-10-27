@@ -3,13 +3,12 @@ use super::*;
 impl Shell {
     pub(super) fn render_empty_panel(
         &self,
-        group: super::super::PanelId,
+        panel_id: super::super::PanelId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let Some(panel) = self.shell.layout.panel(&group) else {
+        let Some(position) = self.shell.layout.zone_for_panel(&panel_id) else {
             return div();
         };
-        let position = panel.position;
         if position == ZonePosition::Main {
             return self.render_main_empty_panel(cx);
         }
@@ -27,7 +26,7 @@ impl Shell {
         .child(
             div()
                 .id(ElementId::Name(
-                    format!("open-tool-{}", group.as_str()).into(),
+                    format!("open-tool-{}", panel_id.as_str()).into(),
                 ))
                 .mt_2()
                 .px_2()
@@ -38,7 +37,7 @@ impl Shell {
                 .text_size(px(11.0))
                 .hover(|style| style.bg(theme::colors().button_background_hover))
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                    this.open_tool_picker(group.clone(), event.position(), window, cx);
+                    this.open_tool_picker(panel_id.clone(), event.position(), window, cx);
                 }))
                 .child(self.t("panel.open-tool")),
         )

@@ -33,18 +33,18 @@ impl Shell {
 
     pub(super) fn render_panel_window(
         &self,
+        position: ZonePosition,
         panel: &PanelHost,
-        group: &PanelId,
+        panel_id: &PanelId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let position = panel.position;
-        let group = group.clone();
+        let panel_id = panel_id.clone();
         let shell = cx.entity().downgrade();
         let (content, scroll_policy) = match panel.active.as_ref() {
             Some(PanelTab::Tool { view, instance }) => {
                 let policy = self
                     .feature_registry
-                    .panel_contributions(position)
+                    .zone_contributions(position)
                     .into_iter()
                     .find(|contribution| contribution.view.as_ref() == Some(view))
                     .map(|contribution| contribution.scroll_policy)
@@ -61,7 +61,7 @@ impl Shell {
                 PanelScrollPolicy::FeatureOwned,
             ),
             None => (
-                self.render_empty_panel(group.clone(), cx)
+                self.render_empty_panel(panel_id.clone(), cx)
                     .into_any_element(),
                 PanelScrollPolicy::Panel(ScrollAxis::Both),
             ),
@@ -70,11 +70,11 @@ impl Shell {
         let body = match scroll_policy {
             PanelScrollPolicy::Panel(axis) => {
                 let state = panel.active.as_ref().map_or_else(
-                    || self.scroll_states.panel_empty(&group),
+                    || self.scroll_states.panel_empty(&panel_id),
                     |tab| self.scroll_states.panel_content(tab),
                 );
                 scroll_viewport(
-                    ElementId::Name(format!("panel-body-scroll-{}", group.as_str()).into()),
+                    ElementId::Name(format!("panel-body-scroll-{}", panel_id.as_str()).into()),
                     axis,
                     &state,
                     content,
@@ -97,12 +97,12 @@ impl Shell {
             .drop_target
             .as_ref()
             .filter(|preview| match &preview.target {
-                PanelDrop::Into(id) => id == &group,
-                PanelDrop::Edge { panel, .. } => panel == &group && preview.invalid,
+                PanelDrop::Into(id) => id == &panel_id,
+                PanelDrop::Edge { panel, .. } => panel == &panel_id && preview.invalid,
                 PanelDrop::IntoZone(_) => false,
             })
             .cloned();
-        let bounds_group = group.clone();
+        let bounds_panel = panel_id.clone();
         div()
             .flex_1()
             .min_h(px(0.0))
@@ -122,7 +122,7 @@ impl Shell {
                                         shell
                                             .panel_bounds
                                             .borrow_mut()
-                                            .insert(bounds_group.clone(), bounds);
+                                            .insert(bounds_panel.clone(), bounds);
                                     });
                                 },
                                 |_, _, _, _| {},
@@ -131,7 +131,7 @@ impl Shell {
                             .size_full(),
                         )
                     })
-                    .child(self.render_tool_panel_header(panel, &group, cx))
+                    .child(self.render_tool_panel_header(position, panel, &panel_id, cx))
                     .child(body),
             )
             .when_some(preview, |surface, preview| {

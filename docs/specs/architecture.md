@@ -76,7 +76,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の可変 Layout
 
-- `DockLayout`はLeft・Main・Right・BottomのZoneとZoneの配置・表示を所有する。各ZoneはPanelの順序、比率、開閉状態を持ち、PanelはTabの順序と選択を持つ。PanelやZoneはDocument・Terminal・Agent等のResourceを所有しない。
+- `DockLayout`はLeft・Main・Right・BottomのZoneとZoneの配置・表示を所有する。各ZoneはPanelの順序、比率、開閉状態を持ち、PanelはTabの順序と選択を持つ。Panelの所属ZoneはZone側で管理し、Panelには重複保持しない。PanelやZoneはDocument・Terminal・Agent等のResourceを所有しない。
 - `ZonePolicy`はZoneの開閉・Panel数・成長方向・サイズ制約を定義する。Mainは常に開き、削除不能な一つのPanelを持つ。Zone内部の順序と比率は`PanelLayout`で表し、初期状態もPanel追加後も同じRendererを使う。空ZoneはTool Pickerから初回Panelを作成する。
 - `DockGeometry`はViewportとLayoutからFrame・Zone・Panel・境界を計算し、描画と操作に使用する。RootとDetachedは同じFrameを使う。Zone操作は共通Commandを経由する。
 - `ViewId`は種類、`ViewInstanceId`は個体を識別する。Layoutの保存値はZone・Panel・Tab参照だけを含む。旧Layout形式は復元せず、Task・未保存Documentなど別の保存値は保持する。
@@ -88,7 +88,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
-- HeaderのPanel操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じPanel操作APIを呼び出して復元できる。
+- HeaderのZone操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じZone Commandを実行できる。
 
 ## Desktop のPanel配置・ドラッグ
 

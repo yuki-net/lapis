@@ -88,7 +88,7 @@ impl Shell {
                 self.save_file(window, cx);
             }
             id::COMMAND_TOGGLE_PREVIEW => self.toggle_preview(&TogglePreview, window, cx),
-            id::COMMAND_TOGGLE_BOTTOM => {
+            id::COMMAND_TOGGLE_BOTTOM_ZONE => {
                 self.execute_toggle_zone(ZonePosition::Bottom, window, cx);
             }
             id::COMMAND_TOGGLE_LEFT_ZONE => {

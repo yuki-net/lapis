@@ -1107,7 +1107,7 @@ async fn verify_panel_drag_resize(
                 .panel_for_tab(&files)
                 .expect("moved file tab");
             assert_eq!(
-                shell.shell.layout.panel(&added).unwrap().position,
+                shell.shell.layout.zone_for_panel(&added).unwrap(),
                 ZonePosition::Left
             );
             let ids = shell
@@ -1119,8 +1119,8 @@ async fn verify_panel_drag_resize(
                     shell
                         .shell
                         .layout
-                        .panel(id)
-                        .is_some_and(|panel| panel.position == ZonePosition::Left)
+                        .zone_for_panel(id)
+                        .is_some_and(|zone| zone == ZonePosition::Left)
                 })
                 .collect::<Vec<_>>();
             assert_eq!(ids.len(), 2);

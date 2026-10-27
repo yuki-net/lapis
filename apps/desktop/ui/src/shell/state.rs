@@ -200,8 +200,8 @@ impl Default for ShellState {
 
 impl ShellState {
     /// 消えた追加先へ操作を適用しない。共有Viewは個体を保って移動する。
-    pub(crate) fn open_panel_tab(&mut self, group: &PanelId, tab: PanelTab) -> bool {
-        if self.layout.panel(group).is_none() {
+    pub(crate) fn open_panel_tab(&mut self, panel_id: &PanelId, tab: PanelTab) -> bool {
+        if self.layout.panel(panel_id).is_none() {
             return false;
         }
         if let Some(source) = self.layout.panel_for_tab(&tab) {
@@ -210,7 +210,7 @@ impl ShellState {
                 .drop_tab(
                     &source,
                     &tab,
-                    &super::PanelDrop::Into(group.clone()),
+                    &super::PanelDrop::Into(panel_id.clone()),
                     (0.0, 0.0),
                     Instant::now(),
                 )
@@ -218,11 +218,11 @@ impl ShellState {
             {
                 return false;
             }
-        } else if !self.layout.insert_tab_in_panel(group, tab, false) {
+        } else if !self.layout.insert_tab_in_panel(panel_id, tab, false) {
             return false;
         }
-        self.layout.set_panel_open(group, true);
-        self.focused_panel = Some(group.clone());
+        self.layout.set_panel_open(panel_id, true);
+        self.focused_panel = Some(panel_id.clone());
         true
     }
 
@@ -337,8 +337,8 @@ impl ShellState {
             .into_iter()
             .filter(|(tab, _)| matches!(tab, PanelTab::Document(id) if !valid.contains(&id)))
             .collect::<Vec<_>>();
-        for (tab, group) in stale {
-            self.layout.remove_tab(&group, &tab, Instant::now());
+        for (tab, panel_id) in stale {
+            self.layout.remove_tab(&panel_id, &tab, Instant::now());
         }
         for document in documents {
             let tab = PanelTab::Document(document.id.clone());
@@ -368,7 +368,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn picker_adds_to_clicked_group_and_preserves_shared_identity() {
+    fn picker_adds_to_clicked_panel_and_preserves_shared_identity() {
         let mut shell = ShellState::default();
         let left = shell
             .layout
@@ -618,24 +618,24 @@ mod tests {
     fn removing_last_tab_closes_panel_after_transition() {
         let mut state = ShellState::default();
         let files = PanelTab::tool(id::VIEW_FILES);
-        let group = state.layout.find_tab(&files).unwrap();
+        let panel_id = state.layout.find_tab(&files).unwrap();
         let terminal = PanelTab::tool(id::VIEW_TERMINAL);
         state
             .layout
             .open_tab(ZonePosition::Left, terminal.clone())
             .unwrap();
-        assert!(state.layout.remove_tab(&group, &files, Instant::now()));
+        assert!(state.layout.remove_tab(&panel_id, &files, Instant::now()));
         assert_eq!(
-            state.layout.panel(&group).unwrap().active,
+            state.layout.panel(&panel_id).unwrap().active,
             Some(terminal.clone())
         );
         let now = Instant::now();
-        assert!(state.layout.remove_tab(&group, &terminal, now));
-        assert!(state.layout.panel(&group).is_some());
+        assert!(state.layout.remove_tab(&panel_id, &terminal, now));
+        assert!(state.layout.panel(&panel_id).is_some());
         state
             .layout
             .finish_due_closes(now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION);
-        assert!(state.layout.panel(&group).is_none());
+        assert!(state.layout.panel(&panel_id).is_none());
         assert!(!state.layout.zone_open(ZonePosition::Left));
     }
 
@@ -643,42 +643,42 @@ mod tests {
     fn closing_panel_remains_until_its_transition_completes() {
         let mut state = ShellState::default();
         let tab = PanelTab::tool(id::VIEW_FILES);
-        let group = state.layout.find_tab(&tab).unwrap();
+        let panel_id = state.layout.find_tab(&tab).unwrap();
         let now = Instant::now();
-        assert!(state.layout.remove_tab(&group, &tab, now));
+        assert!(state.layout.remove_tab(&panel_id, &tab, now));
         assert!(!state.layout.finish_due_closes(now));
-        assert!(state.layout.panel(&group).is_some());
+        assert!(state.layout.panel(&panel_id).is_some());
         assert!(
             state
                 .layout
                 .finish_due_closes(now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION)
         );
-        assert!(state.layout.panel(&group).is_none());
+        assert!(state.layout.panel(&panel_id).is_none());
     }
 
     #[test]
     fn reopening_a_panel_cancels_its_pending_empty_close() {
         let mut state = ShellState::default();
         let tab = PanelTab::tool(id::VIEW_FILES);
-        let group = state.layout.find_tab(&tab).unwrap();
+        let panel_id = state.layout.find_tab(&tab).unwrap();
         let now = Instant::now();
-        state.layout.remove_tab(&group, &tab, now);
-        assert!(state.open_panel_tab(&group, tab.clone()));
+        state.layout.remove_tab(&panel_id, &tab, now);
+        assert!(state.open_panel_tab(&panel_id, tab.clone()));
         state
             .layout
             .finish_due_closes(now + crate::shell::panel_transition::PANEL_ANIMATION_DURATION);
-        assert!(state.layout.panel(&group).unwrap().contains(&tab));
+        assert!(state.layout.panel(&panel_id).unwrap().contains(&tab));
     }
 
     #[test]
     fn restored_layout_excludes_empty_closing_panels() {
         let mut state = ShellState::default();
         let tab = PanelTab::tool(id::VIEW_FILES);
-        let group = state.layout.find_tab(&tab).unwrap();
-        state.layout.remove_tab(&group, &tab, Instant::now());
+        let panel_id = state.layout.find_tab(&tab).unwrap();
+        state.layout.remove_tab(&panel_id, &tab, Instant::now());
         let saved = state.layout.capture();
         let restored = DockLayout::restore(&saved, |_| None).unwrap();
-        assert!(restored.panel(&group).is_none());
+        assert!(restored.panel(&panel_id).is_none());
         assert!(!restored.has_closing_panels());
     }
 }

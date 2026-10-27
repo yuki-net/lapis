@@ -190,7 +190,7 @@ impl FeatureRegistry {
         contributions
     }
 
-    pub fn panel_contributions(&self, position: ZonePosition) -> Vec<&UiContribution> {
+    pub fn zone_contributions(&self, position: ZonePosition) -> Vec<&UiContribution> {
         let workspace_open = self.workspace_open;
         let capabilities = &self.capabilities;
         let mut contributions = self
@@ -210,7 +210,7 @@ impl FeatureRegistry {
     }
 
     pub fn tool_contributions(&self, position: ZonePosition) -> Vec<&UiContribution> {
-        self.panel_contributions(position)
+        self.zone_contributions(position)
             .into_iter()
             .filter(|contribution| contribution.slot != UiSlot::SettingsPage)
             .collect()
@@ -228,8 +228,8 @@ impl FeatureRegistry {
         self.recompute();
     }
 
-    pub fn set_panel_active_view(&mut self, panel: ZonePosition, view: Option<ViewId>) {
-        let slot = match panel {
+    pub fn set_zone_active_view(&mut self, zone: ZonePosition, view: Option<ViewId>) {
+        let slot = match zone {
             ZonePosition::Left => UiSlot::ToolDock,
             ZonePosition::Main => UiSlot::EditorDecoration,
             ZonePosition::Bottom => UiSlot::BottomDock,
@@ -501,11 +501,11 @@ mod tests {
             )
             .unwrap();
 
-        assert!(registry.panel_contributions(ZonePosition::Left).is_empty());
+        assert!(registry.zone_contributions(ZonePosition::Left).is_empty());
         registry.activate(ActivationEvent::WorkspaceOpened);
         assert_eq!(
             registry
-                .panel_contributions(ZonePosition::Left)
+                .zone_contributions(ZonePosition::Left)
                 .first()
                 .and_then(|contribution| contribution.view.as_ref()),
             Some(&view)

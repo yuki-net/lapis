@@ -11,7 +11,12 @@ OLD_DESKTOP_LAYOUT = {
     "DropZone", "has_variable_splits", "group_for_tab", "leaf_group_ids",
     "focused_group", "source_group", "group_bounds", "open_group_tab",
     "panel_position", "panel_position_name", "toggle_panel", "request_panel_open",
+    "ToggleBottomPanel", "toggle_bottom_panel",
+    "select_panel_tab_in_group", "close_panel_tab_in_group", "transfer_tab_to_group",
 }
+
+
+OLD_ZONE_METHODS = {"open_panel", "close_panel", "request_panel_open_with_duration", "panel_contributions", "set_panel_active_view"}
 
 
 def rust_identifiers(text):
@@ -29,6 +34,11 @@ def check_desktop_layout(root=ROOT):
         identifiers = set(rust_identifiers(text))
         for name in sorted(identifiers & OLD_DESKTOP_LAYOUT):
             errors.append(f"{path.relative_to(root)}: 旧Desktop Layout識別子 {name}")
+        for name in OLD_ZONE_METHODS:
+            if re.search(rf"\bfn\s+{name}\s*\([^)]*\bZonePosition\b", text, re.S):
+                errors.append(f"{path.relative_to(root)}: Zone操作の旧Panel名 {name}")
+        if re.search(r"\bstruct\s+PanelHost\s*\{[^}]*\bposition\s*:", text, re.S):
+            errors.append(f"{path.relative_to(root)}: PanelHostへのZone所属の二重保持は禁止")
         if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
         if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:

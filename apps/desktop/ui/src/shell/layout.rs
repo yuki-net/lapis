@@ -134,7 +134,7 @@ impl DockLayout {
     }
 
     pub(crate) fn set_panel_open(&mut self, id: &PanelId, open: bool) -> bool {
-        self.position_for(id).is_some_and(|position| {
+        self.zone_for_panel(id).is_some_and(|position| {
             self.zones
                 .get_mut(&position)
                 .unwrap()
@@ -256,7 +256,7 @@ impl DockLayout {
         true
     }
 
-    fn position_for(&self, id: &PanelId) -> Option<ZonePosition> {
+    pub(crate) fn zone_for_panel(&self, id: &PanelId) -> Option<ZonePosition> {
         self.zones
             .iter()
             .find_map(|(position, zone)| zone.panels.contains_key(id).then_some(*position))
@@ -280,7 +280,7 @@ impl DockLayout {
     ) -> Result<PanelId, ()> {
         if let Some(id) = self.find_tab(&tab) {
             self.panel_mut(&id).unwrap().activate(tab);
-            let position = self.position_for(&id).expect("既存PanelはZoneに所属する");
+            let position = self.zone_for_panel(&id).expect("既存PanelはZoneに所属する");
             let zone = self.zones.get_mut(&position).unwrap();
             zone.cancel_empty_close(&id);
             zone.set_open(true);
@@ -321,7 +321,7 @@ impl DockLayout {
         let Some(source) = self.find_tab(&tab) else {
             return self.open_tab(position, tab);
         };
-        if self.position_for(&source) == Some(position) {
+        if self.zone_for_panel(&source) == Some(position) {
             self.panel_mut(&source).unwrap().activate(tab);
             self.set_panel_open(&source, true);
             return Ok(source);
@@ -338,7 +338,7 @@ impl DockLayout {
             return Ok(result);
         }
         let mut candidate = self.clone();
-        let source_position = candidate.position_for(&source).ok_or(())?;
+        let source_position = candidate.zone_for_panel(&source).ok_or(())?;
         let id = candidate.allocate_id();
         if !candidate.zones.get_mut(&position).unwrap().add_panel(
             id.clone(),
@@ -406,7 +406,7 @@ impl DockLayout {
             *self = candidate;
             return Ok(id);
         }
-        let source_position = candidate.position_for(source).ok_or(())?;
+        let source_position = candidate.zone_for_panel(source).ok_or(())?;
         if !candidate
             .panel(source)
             .is_some_and(|panel| panel.contains(tab))
@@ -418,7 +418,7 @@ impl DockLayout {
             PanelDrop::Edge { panel, .. } => panel,
             PanelDrop::IntoZone(_) => unreachable!(),
         };
-        let target_position = candidate.position_for(target_id).ok_or(())?;
+        let target_position = candidate.zone_for_panel(target_id).ok_or(())?;
         if !candidate.zone(target_position).open
             || !candidate.panel(target_id).is_some_and(|panel| panel.open)
             || candidate
@@ -504,7 +504,7 @@ impl DockLayout {
     }
 
     pub(crate) fn finish_empty_close(&mut self, id: &PanelId) -> bool {
-        self.position_for(id).is_some_and(|position| {
+        self.zone_for_panel(id).is_some_and(|position| {
             self.zones
                 .get_mut(&position)
                 .unwrap()
@@ -513,7 +513,7 @@ impl DockLayout {
     }
 
     pub(crate) fn remove_tab(&mut self, id: &PanelId, tab: &PanelTab, now: Instant) -> bool {
-        let Some(position) = self.position_for(id) else {
+        let Some(position) = self.zone_for_panel(id) else {
             return false;
         };
         if !self.panel_mut(id).is_some_and(|panel| panel.remove(tab)) {
@@ -880,7 +880,7 @@ mod tests {
                     Instant::now(),
                 )
                 .unwrap();
-            assert_eq!(model.position_for(&new_id), Some(position));
+            assert_eq!(model.zone_for_panel(&new_id), Some(position));
             assert!(model.zone(position).panels.len() >= 2);
             assert!(model.valid());
         }

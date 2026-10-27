@@ -15,7 +15,7 @@
   "command.open-workspace": "ワークスペースを開く…",
   "command.save-document": "保存",
   "command.toggle-preview": "Markdown プレビュー",
-  "command.toggle-bottom-panel": "下部パネル",
+  "command.toggle-bottom-zone": "下領域の表示切替",
   "command.toggle-left-zone": "左領域の表示切替",
   "command.toggle-right-zone": "右領域の表示切替",
   "command.toggle-assistant": "AI アシスタント",

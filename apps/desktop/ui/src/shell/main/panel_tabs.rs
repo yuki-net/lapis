@@ -5,7 +5,7 @@ impl Shell {
         match tab {
             PanelTab::Tool { view, .. } => self
                 .feature_registry
-                .panel_contributions(position)
+                .zone_contributions(position)
                 .into_iter()
                 .find(|contribution| contribution.view.as_ref() == Some(view))
                 .map(|contribution| self.locale.resolve(&contribution.title))
@@ -23,13 +23,13 @@ impl Shell {
     /// Detached windows omit the tool-add button.
     pub(super) fn render_tool_panel_header(
         &self,
+        position: ZonePosition,
         panel: &PanelHost,
-        group: &PanelId,
+        panel_id: &PanelId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let position = panel.position;
-        let is_panel_focused = self.shell.focused_panel.as_ref() == Some(group);
-        let scroll_state = self.scroll_states.panel_tabs(group);
+        let is_panel_focused = self.shell.focused_panel.as_ref() == Some(panel_id);
+        let scroll_state = self.scroll_states.panel_tabs(panel_id);
         let max_offset = scroll_state.handle().max_offset();
         let offset = scroll_state.handle().offset();
         let has_overflow = max_offset.width > px(0.0);
@@ -37,10 +37,10 @@ impl Shell {
         let show_left_gradient = has_overflow && -offset.x > px(1.0);
 
         let add_button = |id_suffix: &'static str| {
-            let target = group.clone();
+            let target = panel_id.clone();
             div()
                 .id(ElementId::Name(
-                    format!("open-tool-{}-{id_suffix}", group.as_str()).into(),
+                    format!("open-tool-{}-{id_suffix}", panel_id.as_str()).into(),
                 ))
                 .flex_shrink_0()
                 .size(px(24.0))
@@ -66,7 +66,7 @@ impl Shell {
             .iter()
             .enumerate()
             .map(|(index, tab)| {
-                let label = self.tab_title(panel.position, tab);
+                let label = self.tab_title(position, tab);
                 let active = panel.active.as_ref() == Some(tab);
                 let file_icon = match tab {
                     PanelTab::Document(document_id) => self
@@ -90,15 +90,15 @@ impl Shell {
                 let tab = tab.clone();
                 let close_tab = tab.clone();
                 let detach_tab = tab.clone();
-                let select_group = group.clone();
-                let close_group = group.clone();
+                let select_panel = panel_id.clone();
+                let close_panel_id = panel_id.clone();
                 let movable = matches!(tab, PanelTab::Document(_));
                 let drag_shell = cx.entity().downgrade();
                 let drag_label = label.clone();
                 let drag = DraggedPanelTab {
                     group: self.group,
                     source_host: self.host,
-                    source_panel: group.clone(),
+                    source_panel: panel_id.clone(),
                     tab: tab.clone(),
                 };
 
@@ -124,7 +124,7 @@ impl Shell {
 
                 div()
                     .id(ElementId::Name(
-                        format!("panel-tab-{}-{index}", group.as_str()).into(),
+                        format!("panel-tab-{}-{index}", panel_id.as_str()).into(),
                     ))
                     .h(px(26.0))
                     .px(px(4.0))
@@ -167,15 +167,15 @@ impl Shell {
                         })
                     })
                     .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
-                        PanelTab::Tool { .. } => this.select_panel_tab_in_group(
-                            select_group.clone(),
+                        PanelTab::Tool { .. } => this.select_tab_in_panel(
+                            select_panel.clone(),
                             position,
                             tab.clone(),
                             cx,
                         ),
                         PanelTab::Document(document_id) => {
-                            this.select_panel_tab_in_group(
-                                select_group.clone(),
+                            this.select_tab_in_panel(
+                                select_panel.clone(),
                                 position,
                                 PanelTab::Document(document_id.clone()),
                                 cx,
@@ -192,7 +192,7 @@ impl Shell {
                         element.child(
                             div()
                                 .id(ElementId::Name(
-                                    format!("detach-tab-{}-{index}", group.as_str()).into(),
+                                    format!("detach-tab-{}-{index}", panel_id.as_str()).into(),
                                 ))
                                 .px(px(3.0))
                                 .child(if self.detached { "↩" } else { "↗" })
@@ -213,7 +213,7 @@ impl Shell {
                     .child(
                         div()
                             .id(ElementId::Name(
-                                format!("close-tab-{}-{index}", group.as_str()).into(),
+                                format!("close-tab-{}-{index}", panel_id.as_str()).into(),
                             ))
                             .size(px(11.0))
                             .flex()
@@ -230,8 +230,8 @@ impl Shell {
                             )
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 cx.stop_propagation();
-                                this.close_panel_tab_in_group(
-                                    close_group.clone(),
+                                this.close_tab_in_panel(
+                                    close_panel_id.clone(),
                                     position,
                                     close_tab.clone(),
                                     window,
@@ -257,7 +257,7 @@ impl Shell {
             .items_center()
             .child(
                 scroll_viewport(
-                    ElementId::Name(format!("panel-tabs-{}", group.as_str()).into()),
+                    ElementId::Name(format!("panel-tabs-{}", panel_id.as_str()).into()),
                     ScrollAxis::Horizontal,
                     &scroll_state,
                     div()

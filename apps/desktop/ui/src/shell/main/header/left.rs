@@ -9,7 +9,7 @@ impl Shell {
                 controls
                     .child(
                         panel_toggle_button(
-                            "toggle-left-panel",
+                            "toggle-left-zone",
                             controls::ZonePosition::Left,
                             panel_state(
                                 self.shell
@@ -23,7 +23,7 @@ impl Shell {
                     )
                     .child(
                         panel_toggle_button(
-                            "toggle-bottom-panel",
+                            "toggle-bottom-zone",
                             controls::ZonePosition::Bottom,
                             panel_state(
                                 self.shell
@@ -32,12 +32,12 @@ impl Shell {
                             ),
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
-                            this.execute_command(id::COMMAND_TOGGLE_BOTTOM.into(), window, cx);
+                            this.execute_command(id::COMMAND_TOGGLE_BOTTOM_ZONE.into(), window, cx);
                         })),
                     )
                     .child(
                         panel_toggle_button(
-                            "toggle-right-panel",
+                            "toggle-right-zone",
                             controls::ZonePosition::Right,
                             panel_state(
                                 self.shell
