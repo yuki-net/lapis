@@ -56,24 +56,24 @@ WindowsのDebug開発時に、Rust/GPUIのUIコードを変更してもLapisを�
 | 操作 | コマンド |
 | --- | --- |
 | 通常起動（Hot Reloadなし） | `cargo dev` |
-| Hot Reload起動 | `cargo dev-hot-reload` |
+| Hot Reload起動 | 修正版 `dx serve`（下記参照） |
 
-IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` はHot Reload起動です。
+IDEの `.run/Lapis.run.xml` は通常起動です。`.run/Lapis Hot Reload.run.xml` は現状 `cargo dev-hot-reload` を起動しますが、Dioxusの接続先を設定しないため、単独ではHot Reloadを開始できません。
 
-Hot Reload起動時は、別途修正版 `dx` CLI でdevserverを起動する必要があります。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
+Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
 
 ### 概要
 
 - `Shell::render` の1箇所にHot Reload境界を置き、そこから呼び出されるすべてのView / render経路を対象とします。
 - 同一PID・同一Windowで複数回のHot Reloadが可能です。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態は維持されます。
-- devserver切断後は指数バックオフ（2秒 → 最大30秒）で非同期に再接続を試みます。UIスレッドをブロックしません。
+- devserverへの接続は起動時の1回だけです。自動再接続には対応していません。
 - 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
 - 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
 
-### 再接続
+### 接続
 
-devserverが起動していない状態でHot Reload起動しても、プロセスを終了しません。devserverのWebSocketポート（4243）へのTCP接続で定期的に生存を確認し、devserverが起動したら自動的に接続します。接続中にdevserverが停止しても、再起動後に再接続します。
+接続先はDioxus CLIが設定する環境変数から取得します。初回接続に失敗した場合や接続が切れた場合は、devserverとLapisを手動で再起動してください。自動再接続が必要な場合はDioxus upstreamの改善を含む別課題として扱います。
 
 ### 制限
 

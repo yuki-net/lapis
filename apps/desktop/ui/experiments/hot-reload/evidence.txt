@@ -60,3 +60,5 @@ analysis=Root HotFn化により、ThemeRegistryのthread_local! accessorはEXE�
 [scope]
 state=同一プロセスと既存Windowの維持を確認。未保存編集・タブ・Panel・フォーカス・Terminalの全項目は今回未確認
 unsupported=構造体レイアウト、独自Element、include_str!テーマJSON変更は再起動または別機構
+reconnection=自動再接続は対象外。初回接続失敗または切断後は手動再起動が必要
+single_connection_change=単回接続への変更後のWindows実機検証は未実施

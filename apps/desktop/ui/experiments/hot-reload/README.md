@@ -43,20 +43,19 @@ Shell::render (HotFn境界)
   └── render_footer
 ```
 
-### devserver 再接続
+### devserver 接続
 
-devserver が起動していない場合でもプロセスを終了せず、指数バックオフ（2秒 → 最大30秒）で非同期に再接続を試みます。UIスレッドをブロックしません。
+接続は起動時に一度だけ試みます。接続先はDioxus CLIの環境変数から取得し、UIスレッドをブロックしません。初回接続の失敗や切断後の自動再接続には対応していません。復旧するにはdevserverとLapisを手動で再起動してください。自動再接続はDioxus upstreamの改善を含む別課題です。
 
 ### 起動方法
 
 1. **通常起動**（Hot Reloadなし）: `cargo dev` または `.run/Lapis.run.xml`
-2. **Hot Reload起動**: `cargo dev-hot-reload` または `.run/Lapis Hot Reload.run.xml`
+2. **Hot Reload起動**: 修正版 `dx` CLIから以下のコマンドで起動します。
 
-Hot Reload起動時は、別途修正版 `dx` CLI で devserver を起動する必要があります。
+`dx` がdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。`cargo dev-hot-reload` と `.run/Lapis Hot Reload.run.xml` は接続先を設定しないため、単独ではHot Reloadを開始できません。
 
 ```powershell
-# devserver 起動（別ターミナル）
-dx serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload
+dx serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload --args "--state-directory target/dev-state --workspace ."
 ```
 
 ### Windows x64 patchが必要な理由
@@ -83,7 +82,9 @@ upstream Dioxus が PR #5967 をマージし、修正版CLIが利用可能にな
 `minimal/` はGPUIを使わず、`gpui/` は1 Window・1 Render Entityだけを使います。どちらも Subsecond 0.7.10 と Rust 1.96.0 を使用します。
 
 ```powershell
-cargo run --manifest-path apps/desktop/ui/experiments/hot-reload/minimal/Cargo.toml
+Push-Location apps/desktop/ui/experiments/hot-reload/minimal
+dx serve --platform windows --hot-patch --interactive false --open false --package lapis-subsecond-probe
+Pop-Location
 ```
 
 通常の小さな関数の変更は同じPIDで反映されます。`minimal/src/main.rs` のローカル配列を維持した状態で関数を保存すると、修正前CLIでは `patch-applied` の直後に stack overflow が再現します。
