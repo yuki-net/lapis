@@ -55,7 +55,7 @@ Shell::render (HotFn境界)
 `dx` がdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。`cargo dev-hot-reload` と `.run/Lapis Hot Reload.run.xml` は接続先を設定しないため、単独ではHot Reloadを開始できません。
 
 ```powershell
-.\target\dx-fixed0710\bin\dx.exe serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload --args "--state-directory target/dev-state --workspace ."
+.\target\dx-fixed0710\bin\dx.exe serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload '--args=--state-directory target/dev-state --workspace .'
 ```
 
 ### Windows x64 patchが必要な理由
