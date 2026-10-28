@@ -39,7 +39,7 @@ Desktopを変更・確認する開発者向け。以下は対象のworktreeル�
 | BackendのCIと同じ検証 | `python scripts/check.py backend` |
 | 特定の検証のみ | `python scripts/check.py desktop test` |
 
-IDEの `.run/Lapis.run.xml` も `cargo dev` を使います。Lapis内で作成したworktreeのTerminalからも、そのworktreeルートで同じコマンドを実行できます。単体の回帰テストは通常の `cargo test -p <package> <filter>` で実行します。Mobile / Webの既存コマンドは変更しません。
+初回起動前とHost変更後は `cargo dev-build` でDesktopとHostの両方をビルドしてください。`cargo dev` はDesktopだけをビルドするため、Host binaryを自動更新しません。IDEの `.run/Lapis.run.xml` も `cargo dev` を使います。Lapis内で作成したworktreeのTerminalからも、そのworktreeルートで同じコマンドを実行できます。単体の回帰テストは通常の `cargo test -p <package> <filter>` で実行します。Mobile / Webの既存コマンドは変更しません。
 
 build/runは同じ `target/` を使い、開発用の設定・会話・復元状態・Host接続情報は `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 

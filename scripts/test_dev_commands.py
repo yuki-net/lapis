@@ -54,28 +54,23 @@ class StopDevHostTests(unittest.TestCase):
 param([string]$Target, [string]$Scenario)
 $ErrorActionPreference = 'Stop'
 $global:devTestkilled = 0
-$binary = [IO.Path]::GetFullPath((Join-Path (Split-Path $Target) '../target/debug/lapis.exe'))
+$binary = [IO.Path]::GetFullPath((Join-Path (Split-Path $Target) '../target/debug/lapis-host.exe'))
+$desktop = [IO.Path]::GetFullPath((Join-Path (Split-Path $Target) '../target/debug/lapis.exe'))
+$global:devTestdesktop = @()
 $started = [datetime]'2026-01-01T00:00:00Z'
 $global:devTestitem = [pscustomobject]@{
     ExecutablePath = $binary; ProcessId = 123; CreationDate = $started
-    CommandLine = 'lapis.exe --managed-host "a workspace"'
+    CommandLine = 'lapis-host.exe --managed-host "a workspace"'
 }
 $global:devTestfake = [pscustomobject]@{Handle = 1; StartTime = $started; Path = $binary}
 $global:devTestfake | Add-Member ScriptMethod Kill { $global:devTestkilled++ }
 $global:devTestfake | Add-Member ScriptMethod WaitForExit {}
 $global:devTestfake | Add-Member ScriptMethod Dispose {}
 switch ($Scenario) {
-    'other' { $global:devTestitem.ExecutablePath = 'C:\other-worktree\target\debug\lapis.exe' }
-    'ui' { $global:devTestitem.CommandLine = 'lapis.exe --state-directory target/dev-state' }
-    'mixed' {
-        $global:devTestitem = @(
-            $global:devTestitem
-            [pscustomobject]@{
-                ExecutablePath = $binary; ProcessId = 456; CreationDate = $started
-                CommandLine = 'lapis.exe --state-directory target/dev-state'
-            }
-        )
-    }
+    'other' { $global:devTestitem.ExecutablePath = 'C:\other-worktree\target\debug\lapis-host.exe' }
+    'other_and_host' { $global:devTestitem = @($global:devTestitem, [pscustomobject]@{ExecutablePath = 'C:\other-worktree\target\debug\lapis-host.exe'; ProcessId = 456; CreationDate = $started; CommandLine = 'lapis-host.exe --managed-host other'}) }
+    'ui' { $global:devTestitem = @(); $global:devTestdesktop = @([pscustomobject]@{ExecutablePath = $desktop}) }
+    'mixed' { $global:devTestdesktop = @([pscustomobject]@{ExecutablePath = $desktop}) }
     'reused' { $global:devTestfake.StartTime = $started.AddSeconds(1) }
     'gone' { $global:devTestfake = $null }
 }
@@ -89,7 +84,12 @@ $bytes = [Security.Cryptography.ProtectedData]::Protect(
     [Security.Cryptography.DataProtectionScope]::CurrentUser)
 [IO.File]::WriteAllBytes($recordPath, $bytes)
 if ($Scenario -eq 'missing') { [IO.File]::Delete($recordPath) }
-function Get-CimInstance { param($ClassName, $Filter) return $global:devTestitem }
+function Get-CimInstance {
+    param($ClassName, $Filter)
+    if ($Filter -eq "Name = 'lapis-host.exe'") { return $global:devTestitem }
+    if ($Filter -eq "Name = 'lapis.exe'") { return $global:devTestdesktop }
+    throw "unexpected process filter: $Filter"
+}
 function Get-Process { param($Id, $ErrorAction) return $global:devTestfake }
 $failed = $false
 $message = ''
@@ -100,7 +100,7 @@ if ($Scenario -eq 'missing' -and $message -ne '開発用Local Hostの記録フ�
 if ($Scenario -eq 'foreign' -and $message -ne '開発用Local Hostの記録と実行中のprocessが一致しないため停止しません。') {
     throw 'Mismatched record error is unreadable or incorrect'
 }
-$expected = if ($Scenario -eq 'host') { 1 } else { 0 }
+$expected = if ($Scenario -in @('host', 'other_and_host')) { 1 } else { 0 }
 if ($global:devTestkilled -ne $expected) { throw "unexpected termination: $Scenario" }
 if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing'))) { throw "unexpected result: $Scenario" }
 '''
@@ -110,7 +110,7 @@ if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing'))
             shutil.copyfile(script, fixture_script)
             path = Path(directory) / "host harness.ps1"
             path.write_text(harness, encoding="utf-8-sig")
-            for scenario in ("host", "other", "ui", "mixed", "reused", "gone", "foreign", "missing"):
+            for scenario in ("host", "other", "other_and_host", "ui", "mixed", "reused", "gone", "foreign", "missing"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         ["powershell", "-NoProfile", "-NonInteractive", "-File", str(path), str(fixture_script), scenario],

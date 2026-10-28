@@ -67,8 +67,7 @@ impl Startup {
                 connector_directory,
             }))
         } else {
-            let host_exe = resolve_host_exe()?;
-            let backend = BackendClient::local(host_exe, directory.join("hosts"));
+            let backend = BackendClient::local_in(directory.join("hosts"))?;
             Ok(Some(Self {
                 backend,
                 root: None,
@@ -78,38 +77,6 @@ impl Startup {
         }
     }
 }
-/// Desktopと同じ出力ディレクトリから `lapis-host` binaryを解決する。
-/// Debug/Release/パッケージ環境で自然に動作し、絶対パスやIDE固有パスをハードコードしない。
-fn resolve_host_exe() -> Result<PathBuf, Error> {
-    let desktop_exe = std::env::current_exe()?;
-    let mut desktop_dir = desktop_exe
-        .parent()
-        .ok_or("Desktopの実行ファイルの親ディレクトリが取得できません")?
-        .to_path_buf();
-    // cargo test のdeps/ディレクトリから実行される場合、target/debug/ に戻る。
-    if desktop_dir.ends_with("deps") {
-        if let Some(parent) = desktop_dir.parent() {
-            desktop_dir = parent.to_path_buf();
-        }
-    }
-    // `lapis-host` は `lapis` と同じ出力ディレクトリに配置される。
-    let host_candidate = desktop_dir.join("lapis-host.exe");
-    if host_candidate.exists() {
-        return Ok(host_candidate);
-    }
-    // 拡張子なしでも試す（Unixやsymlink環境）。
-    let host_candidate_no_ext = desktop_dir.join("lapis-host");
-    if host_candidate_no_ext.exists() {
-        return Ok(host_candidate_no_ext);
-    }
-    Err(format!(
-        "lapis-host binaryが見つかりません: {} または {}",
-        host_candidate.display(),
-        host_candidate_no_ext.display()
-    )
-    .into())
-}
-
 fn default_state_directory() -> Result<PathBuf, Error> {
     let preferred = BackendClient::user_directory()?;
     let legacy = std::env::var_os("LOCALAPPDATA")
