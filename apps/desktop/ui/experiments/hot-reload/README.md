@@ -48,12 +48,12 @@ GPUI Entity / AnyView dispatch (HotFn境界)
 ### 起動方法
 
 1. **通常起動**（Hot Reloadなし）: `cargo dev` または `.run/Lapis.run.xml`
-2. **Hot Reload起動**: 修正版 `dx` CLIから以下のコマンドで起動します。
+2. **Hot Reload起動**: `.run/Lapis Hot Reload.run.xml` または以下のコマンドで起動します。
 
-`dx` がdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。IDEの `Lapis Hot Reload` は `target/dx-fixed0710/bin/dx.exe` を起動します。修正版がない場合は以下の手順で準備してください。同一worktreeのRun設定による重複起動は排他ファイルで防ぎます。`cargo dev-hot-reload` 単独では接続先を設定しません。
+IDEとCLIはいずれも `scripts/hot-reload` のlauncherを起動します。launcherは `target/dx-fixed0710/bin/dx.exe` の存在確認と同一worktreeの排他ロック取得後にdxを起動します。dxはdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。修正版がない場合は以下の手順で準備してください。`cargo dev-hot-reload` 単独では接続先を設定しません。
 
 ```powershell
-.\target\dx-fixed0710\bin\dx.exe serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload '--args=--state-directory target/dev-state --workspace .'
+cargo run --manifest-path scripts/hot-reload/Cargo.toml --target-dir target
 ```
 
 ### Windows x64 patchが必要な理由
