@@ -64,7 +64,7 @@ stockのDioxus CLI 0.7.10にはWindows x64スタブのRAX破壊が残ってい�
 
 ### TLS問題の解消
 
-旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。単回接続への変更前の記録では、`Shell::render` の1箇所にHotFnを置くことでクラッシュが解消しました。変更後のWindows実機検証は未実施です。`LazyLock<Mutex<_>>` の回避は削除し、`thread_local!` を維持しています。
+旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。単回接続への変更前の記録では、`Shell::render` の1箇所にHotFnを置くことでクラッシュが解消しました。しかし変更後の実機試験では最初のパッチ後に同じTLS accessorで `0xc0000005` が発生し、`0xc000041d` で終了しました。`LazyLock<Mutex<_>>` の回避は削除済みで、`thread_local!` を維持しています。この再発は未解決です。
 
 ```powershell
 git clone --branch v0.7.10 https://github.com/DioxusLabs/dioxus.git target/dioxus-cli-0710
