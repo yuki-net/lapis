@@ -78,6 +78,7 @@ visible_bound=別試行で保存時刻1793193920386ms、変更後の画面キャ
 
 [common-view-inspector]
 ide_run=RustRoverのRunから修正版dxとLapisが起動。PID=79652で一時変更を保存し、Hot-patching=1994ms、patch-applied、refresh windows=1、変更後Renderのログを確認
+ide_stop=RustRoverのStop後、launcherは終了したがdx PID=69836が残存。ロックはlauncher所有のため強制終了後の重複起動防止は未対応。検証用dxとHostは手動で終了
 observed=PID=40456でInspectorを開きElement treeを確認。Shellの一時変更でHot-patching=2209ms、patch-applied、refresh windows=2、新Renderのログを確認。その後0xc000041dで終了
 files=Inspector OFFのPID=16576でFilesの一時変更はpatch-appliedとrefresh windows=1まで到達。Filesの新Renderログより前に0xc000041dで終了
 launcher=cargo runから修正版dxとLapisが起動。同一worktreeからの2回目の起動はファイルロックで拒否。
