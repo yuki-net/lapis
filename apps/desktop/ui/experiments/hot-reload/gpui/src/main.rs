@@ -1,19 +1,36 @@
 use gpui::{prelude::*, *};
 use std::sync::Arc;
 
-struct Probe;
+struct Probe {
+    typed: Entity<TypedView>,
+    erased: AnyView,
+}
 
-impl Render for Probe {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        subsecond::HotFn::current(Self::render_hot).call((self, window, cx))
+struct TypedView;
+struct ErasedView;
+
+impl Render for TypedView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        eprintln!("typed render pid={}", std::process::id());
+        div().child("typed view")
     }
 }
 
-impl Probe {
-    #[inline(never)]
-    fn render_hot(&mut self, _: &mut Window, _: &mut Context<Self>) -> AnyElement {
+impl Render for ErasedView {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        eprintln!("any view render pid={}", std::process::id());
+        div().child("any view")
+    }
+}
+
+impl Render for Probe {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         eprintln!("render pid={}", std::process::id());
-        div().size_full().bg(rgb(0x4c3810)).into_any_element()
+        div()
+            .size_full()
+            .bg(rgb(0x4c3810))
+            .child(self.typed.clone())
+            .child(self.erased.clone())
     }
 }
 
@@ -40,8 +57,13 @@ fn main() {
         })
         .detach();
         dioxus_devtools::connect_subsecond();
-        cx.open_window(WindowOptions::default(), |_, cx| cx.new(|_| Probe))
-            .unwrap();
+        cx.open_window(WindowOptions::default(), |_, cx| {
+            cx.new(|cx| Probe {
+                typed: cx.new(|_| TypedView),
+                erased: cx.new(|_| ErasedView).into(),
+            })
+        })
+        .unwrap();
         cx.activate(true);
     });
 }

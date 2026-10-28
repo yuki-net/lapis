@@ -58,13 +58,13 @@ WindowsのDebug開発時に、Rust/GPUIのUIコードを変更してもLapisを�
 | 通常起動（Hot Reloadなし） | `cargo dev` |
 | Hot Reload起動 | 修正版 `dx serve`（下記参照） |
 
-IDEの `.run/Lapis.run.xml` は通常起動です。`.run/Lapis Hot Reload.run.xml` は現状 `cargo dev-hot-reload` を起動しますが、Dioxusの接続先を設定しないため、単独ではHot Reloadを開始できません。
+IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` は修正版dx経由のHot Reload起動です。
 
 Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
 
 ### 概要
 
-- `Shell::render` の1箇所にHot Reload境界を置き、そこから呼び出されるすべてのView / render経路を対象とします。
+- GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。probeで両経路を確認し、Lapis本体ではTLS問題が残っています。
 - 単回接続への変更前は、同一PID・同一Windowでの複数回のパッチ適用を記録しています。変更後の試験では最初のパッチ後にThemeRegistryのTLS accessorでアクセス違反が発生し、`0xc000041d` で終了しました。この再発は未解決です。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
 - devserverへの接続は起動時の1回だけです。自動再接続には対応していません。

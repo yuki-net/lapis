@@ -2580,6 +2580,7 @@ dependencies = [
  "smol",
  "stacksafe",
  "strum 0.27.2",
+ "subsecond",
  "taffy",
  "thiserror 2.0.18",
  "usvg",

@@ -44,7 +44,7 @@ impl<V: Render> Element for Entity<V> {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut element = self.update(cx, |view, cx| view.render(window, cx).into_any_element());
+        let mut element = self.update(cx, |view, cx| render_view(view, window, cx));
         let layout_id = window.with_rendered_view(self.entity_id(), |window| {
             element.request_layout(window, cx)
         });
@@ -78,6 +78,24 @@ impl<V: Render> Element for Entity<V> {
     }
 }
 
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+fn render_view<V: Render>(view: &mut V, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    #[inline(never)]
+    fn render_impl<V: Render>(
+        view: &mut V,
+        window: &mut Window,
+        cx: &mut Context<V>,
+    ) -> AnyElement {
+        view.render(window, cx).into_any_element()
+    }
+    subsecond::HotFn::current(render_impl::<V>).call((view, window, cx))
+}
+
+#[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+fn render_view<V: Render>(view: &mut V, window: &mut Window, cx: &mut Context<V>) -> AnyElement {
+    view.render(window, cx).into_any_element()
+}
+
 /// A dynamically-typed handle to a view, which can be downcast to a [Entity] for a specific type.
 #[derive(Clone, Debug)]
 pub struct AnyView {
@@ -97,6 +115,17 @@ impl<V: Render> From<Entity<V>> for AnyView {
 }
 
 impl AnyView {
+    fn render_view(&self, window: &mut Window, cx: &mut App) -> AnyElement {
+        #[cfg(all(feature = "hot-reload", debug_assertions))]
+        {
+            subsecond::HotFn::current(self.render).call((self, window, cx))
+        }
+        #[cfg(not(all(feature = "hot-reload", debug_assertions)))]
+        {
+            (self.render)(self, window, cx)
+        }
+    }
+
     /// Indicate that this view should be cached when using it as an element.
     /// When using this method, the view's previous layout and paint will be recycled from the previous frame if [Context::notify] has not been called since it was rendered.
     /// The one exception is when [Window::refresh] is called, in which case caching is ignored.
@@ -178,7 +207,7 @@ impl Element for AnyView {
                     (layout_id, None)
                 }
                 _ => {
-                    let mut element = (self.render)(self, window, cx);
+                    let mut element = self.render_view(window, cx);
                     let layout_id = element.request_layout(window, cx);
                     (layout_id, Some(element))
                 }
@@ -228,7 +257,7 @@ impl Element for AnyView {
                     let refreshing = mem::replace(&mut window.refreshing, true);
                     let prepaint_start = window.prepaint_index();
                     let (mut element, accessed_entities) = cx.detect_accessed_entities(|cx| {
-                        let mut element = (self.render)(self, window, cx);
+                        let mut element = self.render_view(window, cx);
                         element.layout_as_root(bounds.size.into(), window, cx);
                         element.prepaint_at(bounds.origin, window, cx);
                         element
@@ -357,7 +386,7 @@ impl std::fmt::Debug for AnyWeakView {
 }
 
 mod any_view {
-    use crate::{AnyElement, AnyView, App, IntoElement, Render, Window};
+    use crate::{AnyElement, AnyView, App, Render, Window};
 
     pub(crate) fn render<V: 'static + Render>(
         view: &AnyView,
@@ -365,7 +394,7 @@ mod any_view {
         cx: &mut App,
     ) -> AnyElement {
         let view = view.clone().downcast::<V>().unwrap();
-        view.update(cx, |view, cx| view.render(window, cx).into_any_element())
+        view.update(cx, |view, cx| super::render_view(view, window, cx))
     }
 }
 

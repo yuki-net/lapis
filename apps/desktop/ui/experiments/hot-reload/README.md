@@ -32,15 +32,13 @@ jmp qword ptr [rip+0]
 
 ### ホットパッチ境界
 
-`Shell::render` の1箇所に `HotFn` を置き、そこから呼び出されるすべてのView / render経路を共通のホットリロード対象としています。FeatureやPanelごとに個別の `HotFn` を追加する必要はありません。
+GPUIの共通View dispatchに `HotFn` を置き、型付きEntityとAnyViewの通常描画を対象とします。Featureごとの登録は不要です。probeでは両方のパッチ後の描画を確認しました。独自Elementの各描画段階は対象外です。
+
+この実装はZed / GPUIの設計を参考にしたLapis側の先行実装です。パッチ適用はSubsecondに任せ、通知後の `refresh_windows()` をGPUI foreground executorで実行します。
 
 ```text
-Shell::render (HotFn境界)
-  ├── render_header
-  ├── render_main
-  │     ├── Panel / Zone 内の各View
-  │     └── Feature View (Git, Files, Search, Terminal, Task, Editor...)
-  └── render_footer
+GPUI Entity / AnyView dispatch (HotFn境界)
+  └── 各ViewのRenderとそこから呼ばれるhelper
 ```
 
 ### devserver 接続
@@ -52,7 +50,7 @@ Shell::render (HotFn境界)
 1. **通常起動**（Hot Reloadなし）: `cargo dev` または `.run/Lapis.run.xml`
 2. **Hot Reload起動**: 修正版 `dx` CLIから以下のコマンドで起動します。
 
-`dx` がdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。`cargo dev-hot-reload` と `.run/Lapis Hot Reload.run.xml` は接続先を設定しないため、単独ではHot Reloadを開始できません。
+`dx` がdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。IDEの `Lapis Hot Reload` は `target/dx-fixed0710/bin/dx.exe` を起動します。修正版がない場合は以下の手順で準備してください。同一worktreeのRun設定による重複起動は排他ファイルで防ぎます。`cargo dev-hot-reload` 単独では接続先を設定しません。
 
 ```powershell
 .\target\dx-fixed0710\bin\dx.exe serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload '--args=--state-directory target/dev-state --workspace .'

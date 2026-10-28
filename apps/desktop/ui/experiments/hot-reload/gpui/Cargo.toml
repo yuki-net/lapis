@@ -7,7 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
-gpui = { path = "../../../../../../vendor/gpui" }
+gpui = { path = "../../../../../../vendor/gpui", features = ["hot-reload"] }
 subsecond = "=0.7.10"
 dioxus-devtools = "=0.7.10"
 async-channel = "2"
