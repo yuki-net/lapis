@@ -62,9 +62,11 @@ Shell::render (HotFn境界)
 
 stockのDioxus CLI 0.7.10にはWindows x64スタブのRAX破壊が残っています。上流PR #5967が取り込まれるまでは、このディレクトリの `dioxus-cli-windows-x64.patch` を適用した修正版CLIが必要です。
 
-### TLS問題の解消
+### 既知のTLS制約
 
 旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。単回接続への変更前の記録では、`Shell::render` の1箇所にHotFnを置くことでクラッシュが解消しました。しかし変更後の実機試験では最初のパッチ後に同じTLS accessorで `0xc0000005` が発生し、`0xc000041d` で終了しました。`LazyLock<Mutex<_>>` の回避は削除済みで、`thread_local!` を維持しています。この再発は未解決です。
+
+Syntax Themeの選択値も可変の `thread_local!` に保持されており、同種の問題が起きる可能性があります。ThemeとSyntax Themeのstate ownershipの修正は後続のStacked PRで扱います。独自Elementもさらに後続のPRで扱います。
 
 ```powershell
 git clone --branch v0.7.10 https://github.com/DioxusLabs/dioxus.git target/dioxus-cli-0710
@@ -88,7 +90,7 @@ Push-Location apps/desktop/ui/experiments/hot-reload/minimal
 Pop-Location
 ```
 
-最小再現では通常の小さな関数の変更が同じPIDで反映された記録があります。Lapisの単回接続への変更後のWindows実機検証は未実施です。`minimal/src/main.rs` のローカル配列を維持した状態で関数を保存すると、修正前CLIでは `patch-applied` の直後に stack overflow が再現した記録があります。
+最小再現では通常の小さな関数の変更が同じPIDで反映された記録があります。Lapis本体の単回接続変更後の試験結果は `evidence.txt` の `single_connection_change` と `single_connection_failure` に別途記録しています。`minimal/src/main.rs` のローカル配列を維持した状態で関数を保存すると、修正前CLIでは `patch-applied` の直後に stack overflow が再現した記録があります。
 
 ## 制限
 

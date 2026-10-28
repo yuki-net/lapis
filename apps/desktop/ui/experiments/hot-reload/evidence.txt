@@ -63,3 +63,6 @@ unsupported=構造体レイアウト、独自Element、include_str!テーマJSON
 reconnection=自動再接続は対象外。初回接続失敗または切断後は手動再起動が必要
 single_connection_change=修正版dxで起動しPID=66652、Window=28053820を確認。Shell::render_hotに一時ログを加え、patch-applied、refresh windows=1、新しいログの実行を確認
 single_connection_failure=最初のパッチ後、2回目の一時編集付近で終了コード0xc000041d。イベントログにpatch DLLの0xc0000005、offset=0x37a6d3。PDBではtheme::registry::THEMESのthread_local accessorと判明。画面キャプチャは透明で表示変化を確認できず
+syntax_tls=Syntax Themeの選択値もthread_local!に保持。Hot Patch後の同種障害は未検証
+followup=Theme / Syntax state ownershipは後続Stacked PR、custom Elementはその後のPRで扱う
+timing=dxのHot-patchingログは2114ms、直後にpatch-appliedとrefresh windows=1。saveからvisibleまでの時間と各工程の内訳は未計測
