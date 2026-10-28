@@ -74,6 +74,7 @@ limitation=その後0xc000041dで終了。実画面の変更と状態維持は�
 [common-view-probe]
 observed=修正版dx、PID=53140。別々にtyped EntityとAnyViewのRenderを変更し、それぞれpatch-applied、refresh windows=1、新Renderのログを確認。変更後の2つの文字列を画面で確認
 timing=AnyViewは保存時刻から変更後Renderログまで1980ms、dx Hot-patching=1941ms。表示確認時刻は別途計測していないためsave-to-visibleは未計測
+visible_bound=別試行で保存時刻1793193920386ms、変更後の画面キャプチャ時刻1793193924283ms。save-to-visibleは3897ms以内（キャプチャ時刻による上限）。dx Hot-patching=1271ms、PID=78020を維持
 
 [common-view-inspector]
 observed=PID=40456でInspectorを開きElement treeを確認。Shellの一時変更でHot-patching=2209ms、patch-applied、refresh windows=2、新Renderのログを確認。その後0xc000041dで終了
