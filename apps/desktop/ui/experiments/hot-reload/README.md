@@ -55,7 +55,7 @@ Shell::render (HotFn境界)
 `dx` がdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。`cargo dev-hot-reload` と `.run/Lapis Hot Reload.run.xml` は接続先を設定しないため、単独ではHot Reloadを開始できません。
 
 ```powershell
-dx serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload --args "--state-directory target/dev-state --workspace ."
+.\target\dx-fixed0710\bin\dx.exe serve --platform windows --hot-patch --interactive false --open false --package lapis --features hot-reload --args "--state-directory target/dev-state --workspace ."
 ```
 
 ### Windows x64 patchが必要な理由
@@ -64,13 +64,13 @@ stockのDioxus CLI 0.7.10にはWindows x64スタブのRAX破壊が残ってい�
 
 ### TLS問題の解消
 
-旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。`Shell::render` の1箇所にHotFnを置くRoot HotFn化により、ThemeRegistryのaccessorはEXE側に留まり、patch DLLからTLSアクセサを呼ばなくなったため、この問題は解消されました。`LazyLock<Mutex<_>>` の回避は不要になり、`thread_local!` を維持しています。
+旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。単回接続への変更前の記録では、`Shell::render` の1箇所にHotFnを置くことでクラッシュが解消しました。変更後のWindows実機検証は未実施です。`LazyLock<Mutex<_>>` の回避は削除し、`thread_local!` を維持しています。
 
 ```powershell
 git clone --branch v0.7.10 https://github.com/DioxusLabs/dioxus.git target/dioxus-cli-0710
 Copy-Item apps/desktop/ui/experiments/hot-reload/dioxus-cli-windows-x64.patch `
   target/dioxus-cli-0710/lapis.patch
-git -C target/dioxus-cli-0710 apply lapis.patch
+git -C target/dioxus-cli-0710 apply --ignore-whitespace lapis.patch
 cargo install --path target/dioxus-cli-0710/packages/cli --locked `
   --root target/dx-fixed0710
 ```
@@ -82,12 +82,13 @@ upstream Dioxus が PR #5967 をマージし、修正版CLIが利用可能にな
 `minimal/` はGPUIを使わず、`gpui/` は1 Window・1 Render Entityだけを使います。どちらも Subsecond 0.7.10 と Rust 1.96.0 を使用します。
 
 ```powershell
+$dx = (Resolve-Path target/dx-fixed0710/bin/dx.exe).Path
 Push-Location apps/desktop/ui/experiments/hot-reload/minimal
-dx serve --platform windows --hot-patch --interactive false --open false --package lapis-subsecond-probe
+& $dx serve --platform windows --hot-patch --interactive false --open false --package lapis-subsecond-probe
 Pop-Location
 ```
 
-通常の小さな関数の変更は同じPIDで反映されます。`minimal/src/main.rs` のローカル配列を維持した状態で関数を保存すると、修正前CLIでは `patch-applied` の直後に stack overflow が再現します。
+最小再現では通常の小さな関数の変更が同じPIDで反映された記録があります。Lapisの単回接続への変更後のWindows実機検証は未実施です。`minimal/src/main.rs` のローカル配列を維持した状態で関数を保存すると、修正前CLIでは `patch-applied` の直後に stack overflow が再現した記録があります。
 
 ## 制限
 

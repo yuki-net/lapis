@@ -65,8 +65,8 @@ Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は 
 ### 概要
 
 - `Shell::render` の1箇所にHot Reload境界を置き、そこから呼び出されるすべてのView / render経路を対象とします。
-- 同一PID・同一Windowで複数回のHot Reloadが可能です。
-- Document / 未保存編集 / Tab / Panel / Task / Terminalの状態は維持されます。
+- 単回接続への変更前は、同一PID・同一Windowでの複数回のパッチ適用を記録しています。変更後は未検証です。
+- Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
 - devserverへの接続は起動時の1回だけです。自動再接続には対応していません。
 - 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
 - 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
