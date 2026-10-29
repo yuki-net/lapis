@@ -1,4 +1,4 @@
 [alias]
 # worktreeルートで実行する。製品起動と同じ実装に保存先だけを渡す。
 dev = "run --locked --target-dir target -p lapis --bin lapis -- --state-directory target/dev-state --workspace ."
-dev-build = "build --locked --target-dir target -p lapis --bin lapis"
+dev-build = "build --locked --target-dir target -p lapis -p lapis-host --bins"

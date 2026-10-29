@@ -67,7 +67,7 @@ impl Startup {
                 connector_directory,
             }))
         } else {
-            let backend = BackendClient::local(std::env::current_exe()?, directory.join("hosts"));
+            let backend = BackendClient::local_in(directory.join("hosts"))?;
             Ok(Some(Self {
                 backend,
                 root: None,
