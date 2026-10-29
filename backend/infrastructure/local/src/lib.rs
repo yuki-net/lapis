@@ -2581,13 +2581,16 @@ mod tests {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let (workspace, path) = rust_analyzer_workspace();
+        let backend = LocalLspBackend::default();
+        if let Err(error) = backend.start(workspace.path()) {
+            assert!(error.to_string().contains("rust-analyzer is unavailable"));
+            return;
+        }
         let text = concat!(
             "pub fn lapis_helper() -> u32 { 1 }\n",
             "pub fn caller() -> u32 { lapis_helper() }\n",
             "pub fn completion() { let value = String::new(); value. }\n",
         );
-        let backend = LocalLspBackend::default();
-        backend.start(workspace.path()).unwrap();
         let revision = lapis_document::Revision::default();
         backend.did_open(&path, text, revision).unwrap();
         let _ = backend.diagnostics().unwrap();
