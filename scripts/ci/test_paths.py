@@ -26,6 +26,12 @@ class TestPathRouting(unittest.TestCase):
         for job in format_jobs:
             self.assertRegex(job, r"(?m)^\s+components:\s+[^\n]*\brustfmt\b")
 
+    def test_rust_core_installs_analyzer_for_platform_tests(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        rust_core = workflow.split("\n  rust_core:\n", 1)[1].split("\n  host_windows:\n", 1)[0]
+        self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-analyzer\b")
+        self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-src\b")
+
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
 
