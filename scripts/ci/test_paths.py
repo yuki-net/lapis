@@ -4,6 +4,7 @@ import unittest
 import sys
 import subprocess
 import tempfile
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,6 +17,14 @@ from scripts.ci.paths import changed_paths
 
 class TestPathRouting(unittest.TestCase):
     """path routingロジックのテスト。"""
+
+    def test_format_jobs_install_rustfmt(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        jobs = re.split(r"(?m)^  (?=[a-z_]+:\s*$)", workflow.split("\njobs:\n", 1)[1])
+        format_jobs = [job for job in jobs if re.search(r"scripts/check\.py\s+\w+\s+format", job)]
+        self.assertEqual(len(format_jobs), 3)
+        for job in format_jobs:
+            self.assertRegex(job, r"(?m)^\s+components:\s+[^\n]*\brustfmt\b")
 
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
