@@ -50,7 +50,6 @@ fn main() {
     } else {
         ConnectionGate::connected()
     };
-    let backend_for_shutdown = startup.backend.clone();
     let host = startup.backend;
     let state = Arc::new(LocalWorkspaceStateRepository::new(
         startup.directory.join("session-v1.txt"),
@@ -206,8 +205,6 @@ fn main() {
     )
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
     lapis_desktop_ui::run(session, desktop_services, initial_view);
-    // GPUIのrunが返るとDesktopは終了。開発セッションで起動したLocal Hostを終了させる。
-    backend_for_shutdown.shutdown_dev_children();
 }
 
 fn option_index(arguments: &[std::ffi::OsString], name: &str) -> Option<usize> {

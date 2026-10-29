@@ -1,9 +1,24 @@
 ﻿# Windowsで再ビルド・worktree削除の前に、このworktreeのLocal Hostだけを停止する。
+param([string]$Session)
 $ErrorActionPreference = 'Stop'
 # lapis-host.exe を対象とする。lapis.exe (Desktop) は対象外。
-$hostBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis-host.exe'))
-$desktopBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis.exe'))
-# このworktreeのlapis-host.exeを実行中のprocessを探す。
+if ($Session) {
+    if ($Session -notmatch '^\d+-\d+-\d+$') { throw 'session名が不正です。' }
+    $sessionDirectory = Join-Path $PSScriptRoot "../target/dev-sessions/$Session"
+    foreach ($path in @((Join-Path $PSScriptRoot '../target'), (Join-Path $PSScriptRoot '../target/dev-sessions'), $sessionDirectory, (Join-Path $sessionDirectory 'bin'), (Join-Path $sessionDirectory 'hosts'))) {
+        $item = Get-Item -LiteralPath $path -ErrorAction Stop
+        if (-not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'sessionディレクトリを安全に確認できません。'
+        }
+    }
+    $hostBinary = [IO.Path]::GetFullPath((Join-Path $sessionDirectory 'bin/lapis-host.exe'))
+    $desktopBinary = [IO.Path]::GetFullPath((Join-Path $sessionDirectory 'bin/lapis.exe'))
+    $recordPath = Join-Path $sessionDirectory 'hosts/local-v1.host'
+} else {
+    $hostBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis-host.exe'))
+    $desktopBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis.exe'))
+    $recordPath = Join-Path $PSScriptRoot '../target/dev-state/hosts/local-v1.host'
+}
 $hosts = @(Get-CimInstance Win32_Process -Filter "Name = 'lapis-host.exe'" | Where-Object {
     $_.ExecutablePath -and [string]::Equals($_.ExecutablePath, $hostBinary, [StringComparison]::OrdinalIgnoreCase)
 })
@@ -16,7 +31,6 @@ if ($desktopRunning.Count -gt 0) {
 }
 if ($hosts.Count -eq 0) { return }
 # 開発用保存先の登録と照合する。
-$recordPath = Join-Path $PSScriptRoot '../target/dev-state/hosts/local-v1.host'
 if (-not (Test-Path -LiteralPath $recordPath) -or (Get-Item -LiteralPath $recordPath).Length -gt 131072) {
     throw '開発用Local Hostの記録ファイルが存在しないか、サイズが上限を超えているため停止しません。'
 }

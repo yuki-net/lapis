@@ -56,6 +56,13 @@ $ErrorActionPreference = 'Stop'
 $global:devTestkilled = 0
 $binary = [IO.Path]::GetFullPath((Join-Path (Split-Path $Target) '../target/debug/lapis-host.exe'))
 $desktop = [IO.Path]::GetFullPath((Join-Path (Split-Path $Target) '../target/debug/lapis.exe'))
+$session = '123-456-0'
+if ($Scenario -like 'session*') {
+    $sessionDir = Join-Path (Split-Path $Target) "../target/dev-sessions/$session"
+    New-Item -ItemType Directory -Force -Path (Join-Path $sessionDir 'bin'), (Join-Path $sessionDir 'hosts') | Out-Null
+    $binary = [IO.Path]::GetFullPath((Join-Path $sessionDir 'bin/lapis-host.exe'))
+    $desktop = [IO.Path]::GetFullPath((Join-Path $sessionDir 'bin/lapis.exe'))
+}
 $global:devTestdesktop = @()
 $started = [datetime]'2026-01-01T00:00:00Z'
 $global:devTestitem = [pscustomobject]@{
@@ -70,20 +77,23 @@ switch ($Scenario) {
     'other' { $global:devTestitem.ExecutablePath = 'C:\other-worktree\target\debug\lapis-host.exe' }
     'other_and_host' { $global:devTestitem = @($global:devTestitem, [pscustomobject]@{ExecutablePath = 'C:\other-worktree\target\debug\lapis-host.exe'; ProcessId = 456; CreationDate = $started; CommandLine = 'lapis-host.exe --managed-host other'}) }
     'ui' { $global:devTestitem = @(); $global:devTestdesktop = @([pscustomobject]@{ExecutablePath = $desktop}) }
+    'session_mixed' { $global:devTestdesktop = @([pscustomobject]@{ExecutablePath = $desktop}) }
+    'session_reused' { $global:devTestfake.StartTime = $started.AddSeconds(1) }
     'mixed' { $global:devTestdesktop = @([pscustomobject]@{ExecutablePath = $desktop}) }
     'reused' { $global:devTestfake.StartTime = $started.AddSeconds(1) }
     'gone' { $global:devTestfake = $null }
 }
 $recordPath = Join-Path (Split-Path $Target) '../target/dev-state/hosts/local-v1.host'
+if ($Scenario -like 'session*') { $recordPath = Join-Path $sessionDir 'hosts/local-v1.host' }
 New-Item -ItemType Directory -Force -Path (Split-Path $recordPath) | Out-Null
 Add-Type -AssemblyName System.Security
-$registeredPid = if ($Scenario -eq 'foreign') { 456 } else { 123 }
+$registeredPid = if ($Scenario -in @('foreign', 'session_foreign')) { 456 } else { 123 }
 $record = @{version=1; key='local-v1'; pid=$registeredPid; started_at=$started.ToUniversalTime().ToFileTimeUtc().ToString()} | ConvertTo-Json
 $bytes = [Security.Cryptography.ProtectedData]::Protect(
     [Text.Encoding]::UTF8.GetBytes($record), [Text.Encoding]::UTF8.GetBytes('local-v1'),
     [Security.Cryptography.DataProtectionScope]::CurrentUser)
 [IO.File]::WriteAllBytes($recordPath, $bytes)
-if ($Scenario -eq 'missing') { [IO.File]::Delete($recordPath) }
+if ($Scenario -in @('missing', 'session_missing')) { [IO.File]::Delete($recordPath) }
 function Get-CimInstance {
     param($ClassName, $Filter)
     if ($Filter -eq "Name = 'lapis-host.exe'") { return $global:devTestitem }
@@ -93,16 +103,16 @@ function Get-CimInstance {
 function Get-Process { param($Id, $ErrorAction) return $global:devTestfake }
 $failed = $false
 $message = ''
-try { & $Target } catch { $failed = $true; $message = $_.Exception.Message }
+try { if ($Scenario -like 'session*') { & $Target -Session $session } else { & $Target } } catch { $failed = $true; $message = $_.Exception.Message }
 if ($Scenario -eq 'missing' -and $message -ne '開発用Local Hostの記録ファイルが存在しないか、サイズが上限を超えているため停止しません。') {
     throw 'Missing record error is unreadable or incorrect'
 }
 if ($Scenario -eq 'foreign' -and $message -ne '開発用Local Hostの記録と実行中のprocessが一致しないため停止しません。') {
     throw 'Mismatched record error is unreadable or incorrect'
 }
-$expected = if ($Scenario -in @('host', 'other_and_host')) { 1 } else { 0 }
+$expected = if ($Scenario -in @('host', 'other_and_host', 'session_host')) { 1 } else { 0 }
 if ($global:devTestkilled -ne $expected) { throw "unexpected termination: $Scenario" }
-if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing'))) { throw "unexpected result: $Scenario" }
+if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing', 'session_mixed', 'session_reused', 'session_missing', 'session_foreign'))) { throw "unexpected result: $Scenario" }
 '''
         with tempfile.TemporaryDirectory() as directory:
             fixture_script = Path(directory) / "scripts" / script.name
@@ -110,7 +120,7 @@ if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing'))
             shutil.copyfile(script, fixture_script)
             path = Path(directory) / "host harness.ps1"
             path.write_text(harness, encoding="utf-8-sig")
-            for scenario in ("host", "other", "other_and_host", "ui", "mixed", "reused", "gone", "foreign", "missing"):
+            for scenario in ("host", "other", "other_and_host", "ui", "mixed", "reused", "gone", "foreign", "missing", "session_host", "session_mixed", "session_reused", "session_missing", "session_foreign"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         ["powershell", "-NoProfile", "-NonInteractive", "-File", str(path), str(fixture_script), scenario],

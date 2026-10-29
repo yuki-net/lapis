@@ -77,8 +77,6 @@ pub(crate) struct LocalHosts {
     executable: PathBuf,
     directory: PathBuf,
     configs: Mutex<HashMap<PathBuf, QuicConnectionConfig>>,
-    /// 開発セッションで起動したHostのPID。IDE Stop時に終了させる。
-    dev_children: Mutex<Vec<u32>>,
 }
 impl LocalHosts {
     pub(crate) fn new(executable: PathBuf, directory: PathBuf) -> Self {
@@ -86,34 +84,6 @@ impl LocalHosts {
             executable,
             directory,
             configs: Mutex::new(HashMap::new()),
-            dev_children: Mutex::new(Vec::new()),
-        }
-    }
-    /// このdev sessionで起動したLocal Hostを終了させる。
-    /// 製品動作では呼ばず、IDE Stop時（Desktop終了時）に使用する。
-    pub(crate) fn shutdown_dev_children(&self) {
-        let children = self.dev_children.lock().unwrap();
-        for &pid in &*children {
-            #[cfg(windows)]
-            {
-                use windows_sys::Win32::{
-                    Foundation::CloseHandle,
-                    System::Threading::{OpenProcess, PROCESS_TERMINATE},
-                };
-                let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
-                if !handle.is_null() {
-                    unsafe {
-                        use windows_sys::Win32::System::Threading::TerminateProcess;
-                        let _ = TerminateProcess(handle, 1);
-                        CloseHandle(handle);
-                    }
-                }
-            }
-            #[cfg(unix)]
-            {
-                // UnixではSIGTERMを送る。libcのkillはpid 0以上で安全。
-                let _ = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            }
         }
     }
     pub(crate) fn roots(&self) -> Result<Vec<(PathBuf, WorkspaceId)>, Error> {
@@ -261,9 +231,6 @@ impl LocalHosts {
         };
         let config = register(record.config()?, &root)?;
         configs.insert(root, config.clone());
-        // このdev sessionで起動したHostのPIDを追跡する。
-        // 製品動作ではDesktop終了後もHostは存続するが、開発用Stopで終了させる。
-        self.dev_children.lock().unwrap().push(pid);
         // ChildのDropは終了要求ではない。HostはDesktop終了後も独立して動作する。
         Ok(config)
     }

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # pathパターン → 実行すべきjobのセット
 # 優先度順：狭いパターンを先に定義
 PATH_RULES = [
-    (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", ".run/"], {"repository", "dev_windows"}),
+    (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/", ".run/"], {"repository", "dev_windows"}),
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
     (["apps/desktop/client/", "apps/desktop/persistence/"], {"desktop", "rust_core"}),
