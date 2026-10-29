@@ -32,7 +32,7 @@ def commands(surface, stage):
             cmds.append([sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_dev_commands.py"])
         if surface in ("repository", "backend", "rust_core", "host"):
             cmds.append([sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_*.py"])
-            cmds.append([sys.executable, "scripts/check_architecture.py"])
+        cmds.append([sys.executable, "scripts/check_architecture.py"])
         return cmds if cmds else [[sys.executable, "-c", "pass"]]
     if stage == "format":
         return [["cargo", "fmt", "--all", "--", "--check"]]

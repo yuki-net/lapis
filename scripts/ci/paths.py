@@ -16,6 +16,7 @@ PATH_RULES = [
     (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", ".run/"], {"repository", "dev_windows"}),
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
+    (["apps/desktop/client/", "apps/desktop/persistence/"], {"desktop", "rust_core"}),
     (["apps/desktop/"], {"desktop"}),
     (["vendor/gpui/"], {"desktop"}),
     (["patches/gpui-"], {"desktop"}),
@@ -49,7 +50,7 @@ PATH_RULES = [
     
     # ドキュメント
     (["docs/"], {"repository"}),
-    (["locales/"], {"repository"}),
+    (["locales/"], {"repository", "rust_core", "desktop"}),
 ]
 
 JOB_IDS = {
@@ -64,7 +65,7 @@ def changed_paths(base_ref: str = "origin/develop") -> list[str]:
     """base_refとの差分で変更されたpathのリストを返す。"""
     try:
         output = subprocess.check_output(
-            ["git", "diff", "--name-only", "--relative", base_ref, "HEAD"],
+            ["git", "diff", "--no-renames", "--name-only", "--relative", base_ref, "HEAD"],
             cwd=ROOT,
             text=True,
         )
@@ -84,7 +85,7 @@ def jobs_for_paths(paths: list[str]) -> set[str]:
         matched = False
         for patterns, job_set in PATH_RULES:
             for pattern in patterns:
-                if path.startswith(pattern) or path == pattern:
+                if path == pattern or (pattern.endswith(("/", "-")) and path.startswith(pattern)):
                     jobs.update(job_set)
                     matched = True
                     break

@@ -8,6 +8,10 @@ import check
 
 
 class CheckTests(unittest.TestCase):
+    def test_desktop_architecture_runs_boundary_check(self):
+        commands = check.commands("desktop", "architecture")
+        self.assertTrue(any(command[1:] == ["scripts/check_architecture.py"] for command in commands))
+
     def test_release_build_includes_desktop_and_host(self):
         workflow = (check.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         release_step = workflow.split("- name: Build Release Desktop", 1)[1].split("- name:", 1)[0]

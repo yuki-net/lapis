@@ -18,6 +18,11 @@ from scripts.ci.paths import changed_paths
 class TestPathRouting(unittest.TestCase):
     """path routingロジックのテスト。"""
 
+    def test_client_persistence_and_locales_select_rust_core(self):
+        for path in ("apps/desktop/client/src/lib.rs", "apps/desktop/persistence/src/lib.rs"):
+            self.assertEqual(jobs_for_paths([path]), {"desktop", "rust_core"})
+        self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
+
     def test_format_jobs_install_rustfmt(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         jobs = re.split(r"(?m)^  (?=[a-z_]+:\s*$)", workflow.split("\njobs:\n", 1)[1])
@@ -60,6 +65,7 @@ class TestPathRouting(unittest.TestCase):
         """未知のpathは安全側に倒して全jobを実行する。"""
         jobs = jobs_for_paths(["unknown-file.txt"])
         self.assertEqual(jobs, ALL_JOBS | {"repository"})
+        self.assertEqual(jobs_for_paths(["Cargo.toml.extra"]), ALL_JOBS)
 
     def test_empty_paths_runs_nothing(self):
         self.assertEqual(jobs_for_paths([]), set())
@@ -130,9 +136,13 @@ class TestPathRouting(unittest.TestCase):
             (root / "child.txt").write_text("c")
             git("add", ".")
             git("commit", "-m", "child")
+            child = git("rev-parse", "HEAD")
             with patch("scripts.ci.paths.ROOT", root):
                 self.assertEqual(changed_paths(parent), ["child.txt"])
                 self.assertEqual(set(changed_paths(base)), {"parent.txt", "child.txt"})
+                git("mv", "child.txt", "renamed.txt")
+                git("commit", "-m", "rename")
+                self.assertEqual(set(changed_paths(child)), {"child.txt", "renamed.txt"})
 
 
 if __name__ == "__main__":
