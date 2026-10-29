@@ -1,7 +1,17 @@
 """scripts/ci/paths.py のユニットテスト。"""
 
 import unittest
+import sys
+import subprocess
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from scripts.ci.paths import jobs_for_paths, PATH_RULES, ALL_JOBS
+from scripts.ci.gate import errors
+from scripts.ci.paths import JOB_IDS
+from scripts.ci.paths import changed_paths
 
 
 class TestPathRouting(unittest.TestCase):
@@ -70,6 +80,44 @@ class TestPathRouting(unittest.TestCase):
             for pattern in patterns:
                 self.assertNotIn(pattern, seen, f"重複するpattern: {pattern}")
                 seen.add(pattern)
+
+    def test_windows_dev_commands_are_selected(self):
+        for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", ".run/Lapis.run.xml"):
+            self.assertIn("dev_windows", jobs_for_paths([path]))
+        self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
+
+    def test_gate_checks_mapped_jobs_and_expected_skips(self):
+        for route, path in (("desktop", "apps/desktop/app/src/main.rs"), ("host", "backend/host/src/main.rs")):
+            selected = list(jobs_for_paths([path]))
+            needs = {"path_filter": {"result": "success"}}
+            needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
+            self.assertEqual(errors(selected, needs), [])
+            for result in ("failure", "cancelled", "timed_out", "skipped"):
+                needs[JOB_IDS[route]]["result"] = result
+                self.assertTrue(errors(selected, needs), result)
+            needs[JOB_IDS[route]]["result"] = "success"
+            needs["path_filter"]["result"] = "failure"
+            self.assertTrue(errors(selected, needs))
+
+    def test_diff_uses_given_parent_for_stacked_pr_and_push(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            def git(*args):
+                return subprocess.check_output(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "core.hooksPath=", *args], cwd=root).decode().strip()
+            git("init")
+            (root / "parent.txt").write_text("a")
+            git("add", ".")
+            git("commit", "-m", "base")
+            base = git("rev-parse", "HEAD")
+            (root / "parent.txt").write_text("b")
+            git("commit", "-am", "parent")
+            parent = git("rev-parse", "HEAD")
+            (root / "child.txt").write_text("c")
+            git("add", ".")
+            git("commit", "-m", "child")
+            with patch("scripts.ci.paths.ROOT", root):
+                self.assertEqual(changed_paths(parent), ["child.txt"])
+                self.assertEqual(set(changed_paths(base)), {"parent.txt", "child.txt"})
 
 
 if __name__ == "__main__":

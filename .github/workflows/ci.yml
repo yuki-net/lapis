@@ -34,11 +34,25 @@ jobs:
           python-version: "3.12"
       - name: List jobs
         id: paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
-          jobs=$(python scripts/ci/paths.py list ${{ github.event.pull_request.base.sha || github.event.push.after }})
+          jobs=$(python scripts/ci/paths.py list "${BASE_SHA:-invalid}")
           echo "jobs=$jobs" >> $GITHUB_OUTPUT
     outputs:
       jobs: ${{ steps.paths.outputs.jobs }}
+
+  dev_windows:
+    name: Development commands / Windows
+    runs-on: windows-2022
+    needs: path_filter
+    if: contains(fromJSON(needs.path_filter.outputs.jobs), 'dev_windows')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s scripts -p test_dev_commands.py
 
   repository:
     name: Repository
@@ -283,35 +297,13 @@ jobs:
       - rust_core
       - host_windows
       - desktop_windows
+      - dev_windows
       - mobile
       - web
     steps:
+      - uses: actions/checkout@v4
       - name: Check results
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const needed = ['path_filter', 'repository', 'rust_core', 'host_windows', 'desktop_windows', 'mobile', 'web'];
-            const jobs = ${{ toJson(needs) }};
-            const jobsJson = ${{ toJson(needs) }};
-            const pathJobs = ${{ needs.path_filter.outputs.jobs || '[]' }};
-            let parsedJobs = [];
-            try { parsedJobs = JSON.parse(pathJobs); } catch(e) {}
-            
-            for (const name of needed) {
-              if (name === 'path_filter') continue;
-              // path routingでskipされたjobはsuccess扱い
-              if (!parsedJobs.includes(name)) {
-                console.log(`${name}: skipped by path routing`);
-                continue;
-              }
-              const status = jobs[name]?.result || 'skipped';
-              if (status === 'skipped' || status === 'success') {
-                console.log(`${name}: ${status}`);
-                continue;
-              }
-              if (status === 'cancelled' || status === 'timed_out' || status === 'failure') {
-                core.setFailed(`${name} failed with status: ${status}`);
-                return;
-              }
-            }
-            console.log('CI Gate passed');
+        env:
+          SELECTED_JOBS: ${{ needs.path_filter.outputs.jobs }}
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: python -m scripts.ci.gate

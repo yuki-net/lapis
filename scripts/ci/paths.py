@@ -13,23 +13,25 @@ ROOT = Path(__file__).resolve().parents[2]
 # pathパターン → 実行すべきjobのセット
 # 優先度順：狭いパターンを先に定義
 PATH_RULES = [
+    (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", ".run/"], {"repository", "dev_windows"}),
+    (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
     (["apps/desktop/"], {"desktop"}),
     (["vendor/gpui/"], {"desktop"}),
     (["patches/gpui-"], {"desktop"}),
     
     # Host関連
-    (["backend/host/"], {"host"}),
+    (["backend/host/"], {"host", "desktop"}),
     
     # Backend共通（Host以外）
-    (["backend/runtime/"], {"rust_core"}),
-    (["backend/infrastructure/"], {"rust_core", "host"}),
-    (["backend/transport/"], {"rust_core", "host"}),
-    (["backend/application/"], {"rust_core"}),
+    (["backend/runtime/"], {"rust_core", "host", "desktop"}),
+    (["backend/infrastructure/"], {"rust_core", "host", "desktop"}),
+    (["backend/transport/"], {"rust_core", "host", "desktop"}),
+    (["backend/application/"], {"rust_core", "host", "desktop"}),
     
     # Shared
-    (["shared/models/"], {"rust_core"}),
-    (["shared/protocol/"], {"rust_core"}),
+    (["shared/models/"], {"rust_core", "host", "desktop"}),
+    (["shared/protocol/"], {"rust_core", "host", "desktop"}),
     
     # Mobile
     (["apps/mobile/"], {"mobile"}),
@@ -38,7 +40,6 @@ PATH_RULES = [
     (["apps/web/"], {"web"}),
     
     # CI・scripts
-    ([".github/workflows/"], {"repository"}),
     (["scripts/"], {"repository"}),
     
     # Cargo設定
@@ -51,14 +52,19 @@ PATH_RULES = [
     (["locales/"], {"repository"}),
 ]
 
-ALL_JOBS = {"repository", "rust_core", "host", "desktop", "mobile", "web"}
+JOB_IDS = {
+    "repository": "repository", "rust_core": "rust_core", "host": "host_windows",
+    "desktop": "desktop_windows", "mobile": "mobile", "web": "web",
+    "dev_windows": "dev_windows",
+}
+ALL_JOBS = set(JOB_IDS)
 
 
 def changed_paths(base_ref: str = "origin/develop") -> list[str]:
     """base_refとの差分で変更されたpathのリストを返す。"""
     try:
         output = subprocess.check_output(
-            ["git", "diff", "--name-only", "--relative", f"{base_ref}..."],
+            ["git", "diff", "--name-only", "--relative", base_ref, "HEAD"],
             cwd=ROOT,
             text=True,
         )
@@ -110,12 +116,11 @@ def main() -> int:
         return 1
     
     command = sys.argv[1]
-    base_ref = sys.argv[2] if len(sys.argv) > 2 else "origin/develop"
+    base_ref = (sys.argv[3] if len(sys.argv) > 3 else "origin/develop") if command == "check" else (sys.argv[2] if len(sys.argv) > 2 else "origin/develop")
     
     paths = changed_paths(base_ref)
     if paths is None:
         # baseが見つからない場合は全jobを実行
-        paths = list(ROOT.rglob("*"))  # ダミー：実際にはALL_JOBSを返す
         jobs = ALL_JOBS | {"repository"}
     else:
         jobs = jobs_for_paths(paths)
