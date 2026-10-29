@@ -328,6 +328,75 @@ fn resolved_bindings(registry: &crate::keymap::KeymapRegistry) -> Result<Vec<Key
 mod keymap_tests {
     use super::*;
     use crate::keymap::{KeymapEntry, KeymapOverride, KeymapSettings, Shortcut};
+    use gpui::{Context, FocusHandle, Render, Window, div, prelude::*};
+
+    struct KeyboardTarget {
+        focus: FocusHandle,
+        saves: usize,
+    }
+
+    impl Render for KeyboardTarget {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .key_context("Shell")
+                .track_focus(&self.focus)
+                .on_action(cx.listener(|this, _: &Save, _, _| this.saves += 1))
+        }
+    }
+
+    #[gpui::test]
+    fn rebind_dispatches_both_new_keys_and_stops_old_keys(cx: &mut gpui::TestAppContext) {
+        cx.update(bind_keys);
+        let (target, cx) = cx.add_window_view(|_, cx| KeyboardTarget {
+            focus: cx.focus_handle(),
+            saves: 0,
+        });
+        cx.update(|window, cx| {
+            window.focus(&target.read(cx).focus);
+            window.activate_window();
+        });
+        cx.simulate_keystrokes("ctrl-s");
+        assert_eq!(cx.update(|_, app| target.read(app).saves), 1);
+        cx.update(|_, cx| {
+            apply_keymap_settings(
+                cx,
+                &KeymapSettings {
+                    preset: None,
+                    overrides: vec![KeymapOverride {
+                        command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
+                        entry: KeymapEntry::Bindings(vec![
+                            Shortcut {
+                                keystroke: "ctrl-alt-s".into(),
+                                label: String::new(),
+                            },
+                            Shortcut {
+                                keystroke: "ctrl-alt-d".into(),
+                                label: String::new(),
+                            },
+                        ]),
+                    }],
+                },
+            )
+            .unwrap()
+        });
+        cx.simulate_keystrokes("ctrl-s ctrl-alt-s ctrl-alt-d");
+        assert_eq!(cx.update(|_, app| target.read(app).saves), 3);
+        cx.update(|_, cx| {
+            apply_keymap_settings(
+                cx,
+                &KeymapSettings {
+                    preset: None,
+                    overrides: vec![KeymapOverride {
+                        command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
+                        entry: KeymapEntry::Unbind,
+                    }],
+                },
+            )
+            .unwrap()
+        });
+        cx.simulate_keystrokes("ctrl-alt-s ctrl-alt-d");
+        assert_eq!(cx.update(|_, app| target.read(app).saves), 3);
+    }
 
     #[gpui::test]
     fn multi_binding_preset_and_user_replace_and_unbind(cx: &mut gpui::TestAppContext) {
