@@ -75,7 +75,8 @@ limitation=その後0xc000041dで終了。実画面の変更と状態維持は�
 app_global_probe=PID=19576でApp GlobalをDark / IntelliJに変更し、patch適用後のRenderで同じ値を確認。さらにWhite / Zedへ更新できた。一時probeは削除
 icon_global_probe=PID=29204のGPUI probeで実際のIcon / FileIconをApp Globalから取得した色で描画し、明暗切替で両者の色変化を確認。Inspector有効前後のpatchで変更後Icon RenderOnce実行と画面表示を確認。Lapis本体のInspector UIは未検証
 app_global_lapis=RustRoverのRunからPID=23164で起動。Dark / IntelliJ選択後にShellの一時表示変更を同一PIDで画面確認。White / Zedへ切替後、Settingsの一時表示変更も同一PIDで画面確認。両試行で選択状態を維持しクラッシュなし。
-app_global_inspector=別起動PID=18832でInspector treeを表示し、White / Zedの状態でFilesの一時表示変更を同一PIDで画面確認。Hot-patching=2340ms、patch-applied、refresh windows=2を確認。複数Desktop Windowの同期は実機未確認。
+app_global_inspector=別起動PID=18832でInspector treeを表示し、White / Zedの状態でFilesの一時表示変更を同一PIDで画面確認。Hot-patching=2340ms、patch-applied、refresh windows=2を確認。
+app_global_multiwindow=別起動PID=68896でDesktop Windowを2つ作成。片方のWhiteからDarkへの変更が他方へ反映され、逆方向にSyntaxをIntelliJ、Localeを日本語へ変更した結果が元のWindowへ反映されたことを画面確認。
 observed=修正版dx、PID=53140。別々にtyped EntityとAnyViewのRenderを変更し、それぞれpatch-applied、refresh windows=1、新Renderのログを確認。変更後の2つの文字列を画面で確認
 timing=AnyViewは保存時刻から変更後Renderログまで1980ms、dx Hot-patching=1941ms。表示確認時刻は別途計測していないためsave-to-visibleは未計測
 visible_bound=別試行で保存時刻1793193920386ms、変更後の画面キャプチャ時刻1793193924283ms。save-to-visibleは3897ms以内（キャプチャ時刻による上限）。dx Hot-patching=1271ms、PID=78020を維持
