@@ -13,7 +13,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let build = Command::new(cargo)
         .current_dir(root)
-        .arg("dev-build")
+        .arg("ide-build")
         .status()?;
     if !build.success() {
         return Ok(build.code().unwrap_or(1));
@@ -36,12 +36,18 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             .arg("--certificate")
             .arg(session.join("host.der"))
             .args(&arguments[1..]);
-        eprintln!("??Host session: {}", session.display());
+        eprintln!(
+            "Host session: {}",
+            session.file_name().unwrap().to_string_lossy()
+        );
         host.status()?
     } else {
         let hosts = session.join("hosts");
         fs::create_dir(&hosts)?;
-        eprintln!("??Desktop session: {}", session.display());
+        eprintln!(
+            "Desktop session: {}",
+            session.file_name().unwrap().to_string_lossy()
+        );
         let mut command = Command::new(desktop);
         command
             .current_dir(root)
@@ -82,7 +88,10 @@ fn create_session(parent: &Path) -> io::Result<PathBuf> {
 fn copy_binary(root: &Path, destination: &Path, name: &str) -> io::Result<PathBuf> {
     let filename = format!("{name}{}", env::consts::EXE_SUFFIX);
     let destination = destination.join(&filename);
-    fs::copy(root.join("target/debug").join(filename), &destination)?;
+    fs::copy(
+        root.join("target/dev-build/debug").join(filename),
+        &destination,
+    )?;
     Ok(destination)
 }
 
@@ -132,7 +141,7 @@ mod job {
     pub struct SessionJob(HANDLE);
     impl SessionJob {
         pub fn new() -> io::Result<Self> {
-            // Job?process object????????PID???????????????
+            // Jobはprocess実体を保持するため、PIDの再利用に依存しない。
             let handle = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
             if handle.is_null() {
                 return Err(io::Error::last_os_error());
@@ -168,6 +177,8 @@ mod job {
     }
     impl Drop for SessionJob {
         fn drop(&mut self) {
+            // 通常終了やエラーではHostを維持し、強制停止時はOSがJobを閉じる。
+            let _ = self.set_kill_on_close(false);
             unsafe {
                 CloseHandle(self.0);
             }

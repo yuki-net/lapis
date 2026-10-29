@@ -1,5 +1,5 @@
 ﻿# Windowsで再ビルド・worktree削除の前に、このworktreeのLocal Hostだけを停止する。
-param([string]$Session)
+param([string]$Session, [string]$LocalHostDirectory)
 $ErrorActionPreference = 'Stop'
 # lapis-host.exe を対象とする。lapis.exe (Desktop) は対象外。
 if ($Session) {
@@ -13,8 +13,22 @@ if ($Session) {
     }
     $hostBinary = [IO.Path]::GetFullPath((Join-Path $sessionDirectory 'bin/lapis-host.exe'))
     $desktopBinary = [IO.Path]::GetFullPath((Join-Path $sessionDirectory 'bin/lapis.exe'))
-    $recordPath = Join-Path $sessionDirectory 'hosts/local-v1.host'
+    $recordDirectory = Join-Path $sessionDirectory 'hosts'
+    if ($LocalHostDirectory) {
+        $candidate = if ([IO.Path]::IsPathRooted($LocalHostDirectory)) { $LocalHostDirectory } else { Join-Path (Get-Location).Path $LocalHostDirectory }
+        $recordDirectory = [IO.Path]::GetFullPath($candidate)
+        # 指定先だけでなく親も確認し、junction経由の別場所を拒否する。
+        $directory = Get-Item -LiteralPath $recordDirectory -ErrorAction Stop
+        while ($directory) {
+            if ($directory -isnot [IO.DirectoryInfo] -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw 'Host記録ディレクトリを安全に確認できません。'
+            }
+            $directory = $directory.Parent
+        }
+    }
+    $recordPath = Join-Path $recordDirectory 'local-v1.host'
 } else {
+    if ($LocalHostDirectory) { throw 'LocalHostDirectoryにはSessionの指定が必要です。' }
     $hostBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis-host.exe'))
     $desktopBinary = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../target/debug/lapis.exe'))
     $recordPath = Join-Path $PSScriptRoot '../target/dev-state/hosts/local-v1.host'
@@ -33,6 +47,9 @@ if ($hosts.Count -eq 0) { return }
 # 開発用保存先の登録と照合する。
 if (-not (Test-Path -LiteralPath $recordPath) -or (Get-Item -LiteralPath $recordPath).Length -gt 131072) {
     throw '開発用Local Hostの記録ファイルが存在しないか、サイズが上限を超えているため停止しません。'
+}
+if ((Get-Item -LiteralPath $recordPath).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw 'Host記録ファイルを安全に確認できません。'
 }
 Add-Type -AssemblyName System.Security
 $encrypted = [IO.File]::ReadAllBytes($recordPath)

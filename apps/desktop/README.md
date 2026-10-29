@@ -41,7 +41,7 @@ Desktopを変更・確認する開発者向け。以下は対象のworktreeル�
 
 初回起動前とHost変更後は `cargo dev-build` でDesktopとHostの両方をビルドしてください。`cargo dev` はDesktopだけをビルドするため、Host binaryを自動更新しません。Lapis内で作成したworktreeのTerminalからも、そのworktreeルートで同じコマンドを実行できます。単体の回帰テストは通常の `cargo test -p <package> <filter>` で実行します。Mobile / Webの既存コマンドは変更しません。
 
-WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用できます。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したHostを終了し、既存Hostへの接続や別Runには影響しません。通常のDesktop終了後はHostが残ります。sessionごとのDesktop設定は別々で、次のRunへ自動引き継ぎしません。残ったsessionのLocal Hostは、Desktopを終了後、表示されたsession名を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。Hostを停止するとDocument・Terminalの実行状態は失われます。
+WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用できます。Run用のビルド先は `target/dev-build/` に分け、実行中の通常開発用binaryと競合しないようにします。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したHostを終了し、既存Hostへの接続や別Runには影響しません。通常のDesktop終了後はHostが残ります。sessionごとのDesktop設定は別々で、次のRunへ自動引き継ぎしません。残ったsessionのLocal Hostは、Desktopを終了後、ログの `Desktop session:` に表示された名前を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。`--local-host-directory <directory>` を指定してそのRunがHostを起動した場合は、同じdirectoryを `-Session <session名> -LocalHostDirectory <directory>` に指定します。Hostを停止するとDocument・Terminalの実行状態は失われます。
 
 build/runは同じ `target/` を使い、開発用の設定・会話・復元状態・Host接続情報は `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 

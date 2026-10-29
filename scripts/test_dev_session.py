@@ -15,6 +15,46 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @unittest.skipUnless(sys.platform == "win32", "WindowsのCargo Job Objectを検証")
 class DevSessionProcessTests(unittest.TestCase):
+    def test_startup_failures_report_error_without_killing_launcher(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            launcher = root / "scripts" / "dev-session"
+            launcher.mkdir(parents=True)
+            shutil.copytree(ROOT / "scripts" / "dev-session" / "src", launcher / "src")
+            for name in ("Cargo.toml", "Cargo.lock"):
+                shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
+            (root / ".cargo").mkdir()
+            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+            build_dir = root / "target" / "dev-build" / "debug"
+            build_dir.mkdir(parents=True)
+            source = root / "fixture.rs"
+            source.write_text('fn main() {}', encoding="utf-8")
+            valid = root / "valid.exe"
+            subprocess.run(["rustc", str(source), "-o", str(valid)], check=True, capture_output=True)
+            subprocess.run(["cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"), "--target-dir", str(root / "launcher-target"), "--quiet"], cwd=root, check=True, capture_output=True)
+            executable = root / "launcher-target" / "debug" / "lapis-dev-session.exe"
+            sessions = root / "target" / "dev-sessions"
+            for scenario in ("session", "missing_host", "copy", "spawn"):
+                with self.subTest(scenario=scenario):
+                    shutil.copyfile(valid, build_dir / "lapis.exe")
+                    shutil.copyfile(valid, build_dir / "lapis-host.exe")
+                    if scenario == "session":
+                        sessions.write_text("not a directory")
+                    elif scenario == "missing_host":
+                        (build_dir / "lapis-host.exe").unlink()
+                    elif scenario == "copy":
+                        (build_dir / "lapis-host.exe").unlink()
+                        (build_dir / "lapis-host.exe").mkdir()
+                    elif scenario == "spawn":
+                        (build_dir / "lapis.exe").write_bytes(b"invalid executable")
+                    result = subprocess.run([str(executable)], cwd=root, capture_output=True, timeout=20)
+                    self.assertEqual(result.returncode, 1, result.stderr.decode("utf-8", errors="replace"))
+                    self.assertIn("開発sessionを開始できません", result.stderr.decode("utf-8", errors="replace"))
+                    if scenario == "session":
+                        sessions.unlink()
+                    if scenario == "copy":
+                        (build_dir / "lapis-host.exe").rmdir()
+
     def test_normal_close_and_stop_do_not_cross_session_boundaries(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -24,8 +64,8 @@ class DevSessionProcessTests(unittest.TestCase):
             for filename in ("Cargo.toml", "Cargo.lock"):
                 shutil.copyfile(ROOT / "scripts" / "dev-session" / filename, launcher / filename)
             (root / ".cargo").mkdir()
-            (root / ".cargo" / "config.toml").write_text('[alias]\ndev-build = "version"\n', encoding="utf-8")
-            binary_dir = root / "target" / "debug"
+            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+            binary_dir = root / "target" / "dev-build" / "debug"
             binary_dir.mkdir(parents=True)
             source = root / "fixture.rs"
             source.write_text(r'''
@@ -80,7 +120,7 @@ fn main() {
                 before = set((root / "target" / "dev-sessions").glob("*")) if (root / "target" / "dev-sessions").exists() else set()
                 process = subprocess.Popen(
                     ["cargo", "run", "--locked", "--manifest-path", str(launcher / "Cargo.toml"), "--target-dir", str(root / "launcher-target"), "--quiet"],
-                    cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
                 launchers.append(process)
@@ -178,6 +218,7 @@ fn main() {
                 finally:
                     kernel.CloseHandle(launcher_handle)
                 first.wait(timeout=10)
+                self.assertIn(f"Desktop session: {first_hosts.parent.name}".encode(), first.stderr.read())
                 self.assertEqual(kernel.WaitForSingleObject(first_handle, 10000), 0)
                 self.assertEqual(kernel.WaitForSingleObject(second_handle, 0), 0x102)
                 self.assertIsNone(remote.poll())
@@ -189,6 +230,8 @@ fn main() {
                     if process.poll() is None:
                         process.terminate()
                         process.wait(timeout=10)
+                    if process.stderr is not None:
+                        process.stderr.close()
                 for handle in handles:
                     if kernel.WaitForSingleObject(handle, 0) == 0x102:
                         kernel.TerminateProcess(handle, 1)

@@ -46,7 +46,7 @@ PATH_RULES = [
     # Cargo設定
     (["Cargo.toml"], {"repository", "rust_core", "host", "desktop"}),
     (["Cargo.lock"], {"repository", "rust_core", "host", "desktop"}),
-    ([".cargo/"], {"repository", "rust_core", "host", "desktop"}),
+    ([".cargo/"], {"repository", "rust_core", "host", "desktop", "dev_windows"}),
     
     # ドキュメント
     (["docs/"], {"repository"}),
