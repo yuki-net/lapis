@@ -42,6 +42,7 @@ pub(crate) struct SettingsCoordinator {
     confirmed: GlobalSettings,
     pending: VecDeque<Change>,
     active: bool,
+    quit_when_idle: bool,
     pub(crate) values: GlobalSettings,
     pub(crate) message: String,
 }
@@ -54,6 +55,7 @@ impl SettingsCoordinator {
             confirmed: values.clone(),
             pending: VecDeque::new(),
             active: false,
+            quit_when_idle: false,
             values,
             message: String::new(),
         });
@@ -62,6 +64,20 @@ impl SettingsCoordinator {
 
     pub(crate) fn shared(cx: &App) -> Entity<Self> {
         cx.global::<SettingsGlobal>().0.clone()
+    }
+
+    pub(crate) fn quit_after_pending(&mut self, cx: &mut Context<Self>) {
+        self.quit_when_idle = true;
+        self.finish_quit(cx);
+    }
+
+    fn finish_quit(&mut self, cx: &mut Context<Self>) {
+        if self.quit_when_idle && self.pending.is_empty() {
+            self.quit_when_idle = false;
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        }
     }
 
     pub(crate) fn change(&mut self, change: Change, cx: &mut Context<Self>) {
@@ -127,6 +143,7 @@ impl SettingsCoordinator {
         theme::syntax::set_active(self.values.syntax_theme, cx);
         cx.refresh_windows();
         cx.notify();
+        self.finish_quit(cx);
     }
 }
 
@@ -256,6 +273,29 @@ mod tests {
             "lapis.white"
         );
         cx.update(|cx| assert_eq!(coordinator.read(cx).confirmed.theme, "lapis.white"));
+    }
+
+    #[gpui::test]
+    fn last_window_quit_waits_for_accepted_saves(cx: &mut gpui::TestAppContext) {
+        let repository = Arc::new(Repository::default());
+        let coordinator = setup(cx, repository.clone());
+        cx.update(|cx| {
+            coordinator.update(cx, |state, cx| {
+                state.change(Change::Theme("lapis.white".into()), cx);
+                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
+                state.quit_after_pending(cx);
+                assert!(state.quit_when_idle);
+                assert_eq!(state.pending.len(), 2);
+            })
+        });
+        drain(cx, &coordinator);
+        cx.update(|cx| {
+            let state = coordinator.read(cx);
+            assert!(!state.quit_when_idle);
+            assert_eq!(state.confirmed.theme, "lapis.white");
+            assert_eq!(state.confirmed.syntax_theme, Some(SyntaxTheme::Zed));
+        });
+        assert_eq!(repository.saved.lock().unwrap().len(), 2);
     }
 
     #[gpui::test]

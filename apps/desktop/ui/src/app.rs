@@ -125,7 +125,9 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
             open_desktop_window(session, services, initial_view, cx);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
-                    cx.quit();
+                    let coordinator =
+                        crate::features::settings_coordinator::SettingsCoordinator::shared(cx);
+                    coordinator.update(cx, |coordinator, cx| coordinator.quit_after_pending(cx));
                 }
             })
             .detach();
