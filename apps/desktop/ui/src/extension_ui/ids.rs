@@ -1,6 +1,7 @@
 macro_rules! stable_id {
     ($name:ident) => {
-        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
         pub struct $name(String);
 
         impl $name {

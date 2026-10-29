@@ -51,17 +51,22 @@ fn resolved_bindings(registry: &crate::keymap::KeymapRegistry) -> Result<Vec<Key
     let mut bindings = Vec::new();
     let mut presets = Vec::new();
     let mut overrides = Vec::new();
+    let mut split_defaults = std::collections::HashSet::new();
     macro_rules! command_binding {
         ($primary:expr, $action:expr, $context:expr, $id:expr) => {{
             let id = crate::extension_ui::CommandId::new($id);
-            let default = registry.default_binding(&id);
-            let resolved = registry.binding(&id);
-            let key = if $primary { default.map(|binding| binding.keystroke.as_str()) } else { registry.default_alternative(&id) };
+            let resolved = registry.bindings_for(&id);
             let layer = registry.binding_layer(&id);
+            if !$primary { split_defaults.insert(id.clone()); }
             if layer == 0 {
-                if let Some(key) = key { bindings.push(KeyBinding::new(key, $action, $context)); }
+                let defaults = if $primary {
+                    if split_defaults.contains(&id) { &resolved[..resolved.len().min(1)] } else { resolved }
+                } else {
+                    &resolved[resolved.len().min(1)..]
+                };
+                for binding in defaults { bindings.push(KeyBinding::new(&binding.keystroke, $action, $context)); }
             } else if $primary {
-                if let Some(binding) = resolved {
+                for binding in resolved {
                     if binding.keystroke.trim().is_empty()
                         || binding
                             .keystroke
@@ -278,7 +283,7 @@ fn resolved_bindings(registry: &crate::keymap::KeymapRegistry) -> Result<Vec<Key
         crate::features::id::COMMAND_QUIT
     );
     for &id in EXTRA_COMMANDS {
-        if let Some(binding) = registry.binding(&id.into()) {
+        for binding in registry.bindings_for(&id.into()) {
             if binding.keystroke.trim().is_empty()
                 || binding
                     .keystroke
@@ -322,7 +327,103 @@ fn resolved_bindings(registry: &crate::keymap::KeymapRegistry) -> Result<Vec<Key
 #[cfg(test)]
 mod keymap_tests {
     use super::*;
-    use crate::keymap::{KeymapOverride, KeymapSettings, Shortcut};
+    use crate::keymap::{KeymapEntry, KeymapOverride, KeymapSettings, Shortcut};
+
+    #[gpui::test]
+    fn multi_binding_preset_and_user_replace_and_unbind(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            let shortcut = |key: &str| Shortcut {
+                keystroke: key.into(),
+                label: String::new(),
+            };
+            let key = |s| gpui::Keystroke::parse(s).unwrap();
+            let has = |cx: &App, s| {
+                cx.all_bindings_for_input(&[key(s)])
+                    .iter()
+                    .any(|binding| binding.action().partial_eq(&Save))
+            };
+            bind_keys(cx);
+            assert!(has(cx, "ctrl-s") && has(cx, "cmd-s"));
+            let preset = crate::keymap::KeymapDefinition::new("example.multiple", []).with_entry(
+                crate::features::id::COMMAND_SAVE_DOCUMENT,
+                KeymapEntry::Bindings(vec![shortcut("ctrl-alt-s")]),
+            );
+            crate::keymap::register_preset(cx, preset).unwrap();
+            let mut settings = KeymapSettings {
+                preset: Some("example.multiple".into()),
+                overrides: vec![],
+            };
+            apply_keymap_settings(cx, &settings).unwrap();
+            assert!(has(cx, "ctrl-alt-s"));
+            assert!(!has(cx, "ctrl-s") && !has(cx, "cmd-s"));
+            settings.overrides.push(KeymapOverride {
+                command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
+                entry: KeymapEntry::Bindings(vec![
+                    shortcut("ctrl-shift-s"),
+                    shortcut("cmd-shift-s"),
+                ]),
+            });
+            apply_keymap_settings(cx, &settings).unwrap();
+            assert!(!has(cx, "ctrl-alt-s"));
+            assert!(has(cx, "ctrl-shift-s") && has(cx, "cmd-shift-s"));
+            {
+                let map = cx.key_bindings();
+                let map = map.borrow();
+                for stroke in ["ctrl-shift-s", "cmd-shift-s"] {
+                    let (matches, _) = map.bindings_for_input(
+                        &[key(stroke)],
+                        &[gpui::KeyContext::parse("Shell").unwrap()],
+                    );
+                    assert!(
+                        matches
+                            .iter()
+                            .any(|binding| binding.action().partial_eq(&Save))
+                    );
+                    let (matches, _) = map.bindings_for_input(
+                        &[key(stroke)],
+                        &[gpui::KeyContext::parse("Terminal").unwrap()],
+                    );
+                    assert!(
+                        !matches
+                            .iter()
+                            .any(|binding| binding.action().partial_eq(&Save))
+                    );
+                }
+            }
+            assert_eq!(cx.all_bindings_for_input(&[key("backspace")]).len(), 2);
+            settings.overrides[0].entry = KeymapEntry::Unbind;
+            apply_keymap_settings(cx, &settings).unwrap();
+            for stroke in [
+                "ctrl-s",
+                "cmd-s",
+                "ctrl-alt-s",
+                "ctrl-shift-s",
+                "cmd-shift-s",
+            ] {
+                assert!(!has(cx, stroke));
+            }
+            crate::keymap::unregister_preset(cx, &"example.multiple".into()).unwrap();
+            let preset = crate::keymap::KeymapDefinition::new("example.unbind", []).with_entry(
+                crate::features::id::COMMAND_SAVE_DOCUMENT,
+                KeymapEntry::Unbind,
+            );
+            crate::keymap::register_preset(cx, preset).unwrap();
+            apply_keymap_settings(
+                cx,
+                &KeymapSettings {
+                    preset: Some("example.unbind".into()),
+                    overrides: vec![],
+                },
+            )
+            .unwrap();
+            assert!(!has(cx, "ctrl-s") && !has(cx, "cmd-s"));
+            assert!(
+                crate::keymap::KeymapRegistry::active(cx)
+                    .bindings_for(&crate::features::id::COMMAND_SAVE_DOCUMENT.into())
+                    .is_empty()
+            );
+        });
+    }
 
     #[gpui::test]
     fn rebind_replaces_command_and_preserves_internal_bindings(cx: &mut gpui::TestAppContext) {
@@ -339,10 +440,10 @@ mod keymap_tests {
                     preset: None,
                     overrides: vec![KeymapOverride {
                         command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
-                        binding: Some(Shortcut {
+                        entry: KeymapEntry::Bindings(vec![Shortcut {
                             keystroke: "ctrl-alt-s".into(),
                             label: "Ctrl Alt S".into(),
-                        }),
+                        }]),
                     }],
                 },
             )
@@ -361,7 +462,7 @@ mod keymap_tests {
                     preset: Some("missing.preset".into()),
                     overrides: vec![KeymapOverride {
                         command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
-                        binding: None,
+                        entry: KeymapEntry::Unbind,
                     }],
                 },
             )
@@ -422,10 +523,10 @@ mod keymap_tests {
                     preset: Some("example.preset".into()),
                     overrides: vec![KeymapOverride {
                         command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
-                        binding: Some(Shortcut {
+                        entry: KeymapEntry::Bindings(vec![Shortcut {
                             keystroke: "ctrl-w".into(),
                             label: "Ctrl W".into(),
-                        }),
+                        }]),
                     }],
                 },
             )
@@ -445,10 +546,10 @@ mod keymap_tests {
             preset: None,
             overrides: vec![KeymapOverride {
                 command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
-                binding: Some(Shortcut {
+                entry: KeymapEntry::Bindings(vec![Shortcut {
                     keystroke: "ctrl-n".into(),
                     label: "Ctrl N".into(),
-                }),
+                }]),
             }],
         });
         let keymap = gpui::Keymap::new(resolved_bindings(&registry).unwrap());
@@ -474,10 +575,10 @@ mod keymap_tests {
             preset: None,
             overrides: vec![KeymapOverride {
                 command: crate::features::id::COMMAND_SAVE_DOCUMENT.into(),
-                binding: Some(Shortcut {
+                entry: KeymapEntry::Bindings(vec![Shortcut {
                     keystroke: "ctrl-a".into(),
                     label: "Ctrl A".into(),
-                }),
+                }]),
             }],
         });
         let keymap = gpui::Keymap::new(resolved_bindings(&registry).unwrap());
@@ -489,6 +590,38 @@ mod keymap_tests {
             ],
         );
         assert!(bindings[0].action().partial_eq(&SearchSelectAll));
+    }
+
+    #[test]
+    fn additional_builtin_bindings_are_not_limited_by_adapter_slots() {
+        let mut registry = crate::keymap::KeymapRegistry::bundled();
+        let defaults = registry.definitions.get_mut(&registry.fallback).unwrap();
+        for command in [
+            crate::features::id::COMMAND_SAVE_DOCUMENT,
+            crate::features::id::COMMAND_TOGGLE_PREVIEW,
+        ] {
+            let Some(KeymapEntry::Bindings(bindings)) = defaults.bindings.get_mut(&command.into())
+            else {
+                panic!("missing default")
+            };
+            bindings.push(Shortcut {
+                keystroke: "ctrl-alt-9".into(),
+                label: String::new(),
+            });
+        }
+        let bindings = resolved_bindings(&registry).unwrap();
+        let matching = gpui::Keymap::new(bindings)
+            .all_bindings_for_input(&[gpui::Keystroke::parse("ctrl-alt-9").unwrap()]);
+        assert!(
+            matching
+                .iter()
+                .any(|binding| binding.action().partial_eq(&Save))
+        );
+        assert!(
+            matching
+                .iter()
+                .any(|binding| binding.action().partial_eq(&TogglePreview))
+        );
     }
     #[test]
     fn default_bindings_match_previous_gpui_bindings() {

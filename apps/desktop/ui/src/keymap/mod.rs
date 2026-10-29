@@ -51,10 +51,10 @@ impl KeyBindingDefinition {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct KeymapDefinition {
     pub id: KeymapId,
-    bindings: BTreeMap<CommandId, KeyBindingDefinition>,
+    bindings: BTreeMap<CommandId, KeymapEntry>,
 }
 
 impl KeymapDefinition {
@@ -62,16 +62,31 @@ impl KeymapDefinition {
         id: impl Into<KeymapId>,
         bindings: impl IntoIterator<Item = KeyBindingDefinition>,
     ) -> Self {
-        Self {
+        let mut result = Self {
             id: id.into(),
-            bindings: bindings
-                .into_iter()
-                .map(|binding| (binding.command.clone(), binding))
-                .collect(),
+            bindings: BTreeMap::new(),
+        };
+        for binding in bindings {
+            let entry = result
+                .bindings
+                .entry(binding.command)
+                .or_insert_with(|| KeymapEntry::Bindings(Vec::new()));
+            if let KeymapEntry::Bindings(shortcuts) = entry {
+                shortcuts.push(Shortcut {
+                    keystroke: binding.keystroke,
+                    label: binding.label,
+                });
+            }
         }
+        result
     }
 
-    fn binding(&self, command: &CommandId) -> Option<&KeyBindingDefinition> {
+    pub fn with_entry(mut self, command: impl Into<CommandId>, entry: KeymapEntry) -> Self {
+        self.bindings.insert(command.into(), entry);
+        self
+    }
+
+    fn binding(&self, command: &CommandId) -> Option<&KeymapEntry> {
         self.bindings.get(command)
     }
 }
@@ -81,7 +96,7 @@ pub struct KeymapRegistry {
     fallback: KeymapId,
     active: KeymapId,
     definitions: BTreeMap<KeymapId, KeymapDefinition>,
-    overrides: BTreeMap<CommandId, Option<KeyBindingDefinition>>,
+    overrides: BTreeMap<CommandId, KeymapEntry>,
 }
 
 impl ::gpui::Global for KeymapRegistry {}
@@ -99,11 +114,18 @@ pub struct KeymapSettings {
     pub overrides: Vec<KeymapOverride>,
 }
 
-/// `binding: None` は明示的な解除を表す。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeymapOverride {
     pub command: String,
-    pub binding: Option<Shortcut>,
+    pub entry: KeymapEntry,
+}
+
+/// Entry がない場合は下位層を継承する。
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "bindings", rename_all = "snake_case")]
+pub enum KeymapEntry {
+    Unbind,
+    Bindings(Vec<Shortcut>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,27 +157,12 @@ impl KeymapRegistry {
         }
         cx.global::<Self>()
     }
-    pub(crate) fn default_binding(&self, command: &CommandId) -> Option<&KeyBindingDefinition> {
+    pub(crate) fn default_binding(&self, command: &CommandId) -> Option<&KeymapEntry> {
         self.definitions
             .get(&self.fallback)
             .and_then(|map| map.binding(command))
     }
 
-    /// OS 修飾キーなど、同一 Command に残す既定の別 Binding。
-    pub(crate) fn default_alternative(&self, command: &CommandId) -> Option<&'static str> {
-        match command.as_str() {
-            id::COMMAND_OPEN_DOCUMENT => Some("cmd-o"),
-            id::COMMAND_SAVE_DOCUMENT => Some("cmd-s"),
-            id::COMMAND_NEW_DOCUMENT => Some("cmd-n"),
-            id::COMMAND_UNDO => Some("cmd-z"),
-            id::COMMAND_REDO => Some("cmd-shift-z"),
-            id::COMMAND_FIND => Some("cmd-f"),
-            id::COMMAND_FIND_NEXT => Some("cmd-g"),
-            id::COMMAND_SHOW_COMMANDS => Some("cmd-shift-k"),
-            id::COMMAND_QUIT => Some("cmd-q"),
-            _ => None,
-        }
-    }
     pub fn bundled() -> Self {
         let fallback = KeymapDefinition::new(
             "lapis.default-keymap",
@@ -194,6 +201,15 @@ impl KeymapRegistry {
                     "ctrl-shift-a",
                     "Ctrl Shift A",
                 ),
+                KeyBindingDefinition::new(id::COMMAND_OPEN_DOCUMENT, "cmd-o", "Cmd O"),
+                KeyBindingDefinition::new(id::COMMAND_SAVE_DOCUMENT, "cmd-s", "Cmd S"),
+                KeyBindingDefinition::new(id::COMMAND_NEW_DOCUMENT, "cmd-n", "Cmd N"),
+                KeyBindingDefinition::new(id::COMMAND_UNDO, "cmd-z", "Cmd Z"),
+                KeyBindingDefinition::new(id::COMMAND_REDO, "cmd-shift-z", "Cmd Shift Z"),
+                KeyBindingDefinition::new(id::COMMAND_FIND, "cmd-f", "Cmd F"),
+                KeyBindingDefinition::new(id::COMMAND_FIND_NEXT, "cmd-g", "Cmd G"),
+                KeyBindingDefinition::new(id::COMMAND_SHOW_COMMANDS, "cmd-shift-k", "Cmd Shift K"),
+                KeyBindingDefinition::new(id::COMMAND_QUIT, "cmd-q", "Cmd Q"),
             ],
         );
         let id = fallback.id.clone();
@@ -222,18 +238,29 @@ impl KeymapRegistry {
         true
     }
 
-    pub fn binding(&self, command: &CommandId) -> Option<&KeyBindingDefinition> {
-        if let Some(binding) = self.overrides.get(command) {
-            return binding.as_ref();
-        }
-        self.definitions
-            .get(&self.active)
-            .and_then(|keymap| keymap.binding(command))
+    pub fn bindings_for(&self, command: &CommandId) -> &[Shortcut] {
+        let entry = self
+            .overrides
+            .get(command)
             .or_else(|| {
                 self.definitions
-                    .get(&self.fallback)
-                    .and_then(|keymap| keymap.binding(command))
+                    .get(&self.active)
+                    .and_then(|map| map.binding(command))
             })
+            .or_else(|| self.default_binding(command));
+        match entry {
+            Some(KeymapEntry::Bindings(bindings)) => bindings,
+            _ => &[],
+        }
+    }
+
+    pub fn shortcut_for(&self, command: &CommandId) -> Option<&Shortcut> {
+        if self.default_binding(command).is_none()
+            && !crate::app::EXTRA_COMMANDS.contains(&command.as_str())
+        {
+            return None;
+        }
+        self.bindings_for(command).first()
     }
 
     /// 未登録の Preset は既定に戻し、override は保持する。
@@ -247,13 +274,7 @@ impl KeymapRegistry {
         self.overrides = settings
             .overrides
             .iter()
-            .map(|entry| {
-                let id = CommandId::new(&entry.command);
-                let binding = entry.binding.as_ref().map(|shortcut| {
-                    KeyBindingDefinition::new(id.clone(), &shortcut.keystroke, &shortcut.label)
-                });
-                (id, binding)
-            })
+            .map(|entry| (CommandId::new(&entry.command), entry.entry.clone()))
             .collect();
     }
 
@@ -269,12 +290,7 @@ impl KeymapRegistry {
     }
 
     pub fn shortcut_label(&self, command: &CommandId) -> String {
-        if self.default_binding(command).is_none()
-            && !crate::app::EXTRA_COMMANDS.contains(&command.as_str())
-        {
-            return String::new();
-        }
-        self.binding(command)
+        self.shortcut_for(command)
             .map(|binding| {
                 binding
                     .keystroke
@@ -316,6 +332,70 @@ impl KeymapRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn shortcut(key: &str) -> Shortcut {
+        Shortcut {
+            keystroke: key.into(),
+            label: String::new(),
+        }
+    }
+
+    #[test]
+    fn layers_replace_or_unbind_all_shortcuts_and_serialize() {
+        let save: CommandId = id::COMMAND_SAVE_DOCUMENT.into();
+        let mut registry = KeymapRegistry::bundled();
+        let keys = |registry: &KeymapRegistry| {
+            registry
+                .bindings_for(&save)
+                .iter()
+                .map(|s| s.keystroke.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(keys(&registry), ["ctrl-s", "cmd-s"]);
+        assert_eq!(registry.shortcut_for(&save).unwrap().keystroke, "ctrl-s");
+        let preset = KeymapDefinition::new("extension.preset", [])
+            .with_entry(
+                save.clone(),
+                KeymapEntry::Bindings(vec![shortcut("ctrl-alt-s"), shortcut("cmd-alt-s")]),
+            )
+            .with_entry(id::COMMAND_NEW_DOCUMENT, KeymapEntry::Unbind);
+        let preset: KeymapDefinition =
+            serde_json::from_str(&serde_json::to_string(&preset).unwrap()).unwrap();
+        registry.register(preset).unwrap();
+        let mut settings = KeymapSettings {
+            preset: Some("extension.preset".into()),
+            overrides: vec![],
+        };
+        registry.apply_settings(&settings);
+        assert_eq!(keys(&registry), ["ctrl-alt-s", "cmd-alt-s"]);
+        assert!(
+            registry
+                .bindings_for(&id::COMMAND_NEW_DOCUMENT.into())
+                .is_empty()
+        );
+        assert_eq!(registry.shortcut_label(&save), "Ctrl Alt S");
+        assert_eq!(
+            registry
+                .bindings_for(&id::COMMAND_OPEN_DOCUMENT.into())
+                .len(),
+            2
+        );
+        settings.overrides.push(KeymapOverride {
+            command: save.as_str().into(),
+            entry: KeymapEntry::Bindings(vec![shortcut("ctrl-shift-s"), shortcut("cmd-shift-s")]),
+        });
+        let settings: KeymapSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        registry.apply_settings(&settings);
+        assert_eq!(keys(&registry), ["ctrl-shift-s", "cmd-shift-s"]);
+        assert_eq!(registry.shortcut_label(&save), "Ctrl Shift S");
+        let mut settings = settings;
+        settings.overrides[0].entry = KeymapEntry::Unbind;
+        let settings: KeymapSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        registry.apply_settings(&settings);
+        assert!(keys(&registry).is_empty());
+    }
 
     #[test]
     fn active_keymap_falls_back_per_command() {
@@ -364,14 +444,14 @@ mod tests {
             overrides: vec![
                 KeymapOverride {
                     command: id::COMMAND_SAVE_DOCUMENT.into(),
-                    binding: Some(Shortcut {
+                    entry: KeymapEntry::Bindings(vec![Shortcut {
                         keystroke: "ctrl-w".into(),
                         label: "Ctrl W".into(),
-                    }),
+                    }]),
                 },
                 KeymapOverride {
                     command: id::COMMAND_OPEN_DOCUMENT.into(),
-                    binding: None,
+                    entry: KeymapEntry::Unbind,
                 },
             ],
         };
@@ -408,10 +488,10 @@ mod tests {
             preset: Some("missing".into()),
             overrides: vec![KeymapOverride {
                 command: "extension.missing".into(),
-                binding: Some(Shortcut {
+                entry: KeymapEntry::Bindings(vec![Shortcut {
                     keystroke: "ctrl-k".into(),
                     label: "Ctrl K".into(),
-                }),
+                }]),
             }],
         });
         assert_eq!(registry.shortcut_label(&"extension.missing".into()), "");
@@ -428,10 +508,10 @@ mod tests {
             preset: None,
             overrides: vec![KeymapOverride {
                 command: id::COMMAND_SAVE_DOCUMENT.into(),
-                binding: Some(Shortcut {
+                entry: KeymapEntry::Bindings(vec![Shortcut {
                     keystroke: "ctrl-alt-s".into(),
                     label: "F12".into(),
-                }),
+                }]),
             }],
         });
         assert_eq!(
