@@ -2,10 +2,6 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - develop
-      - "refactor/**"
-      - "feat/**"
   push:
     branches:
       - develop
@@ -22,11 +18,56 @@ env:
   RUST_TOOLCHAIN: 1.96.0
 
 jobs:
-  backend:
-    name: Backend
+  # 変更pathから実行すべきjobを判定
+  path_filter:
+    name: Path Filter
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: List jobs
+        id: paths
+        run: |
+          jobs=$(python scripts/ci/paths.py list ${{ github.event.pull_request.base.sha || github.event.push.after }})
+          echo "jobs=$jobs" >> $GITHUB_OUTPUT
+    outputs:
+      jobs: ${{ steps.paths.outputs.jobs }}
 
+  repository:
+    name: Repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: path_filter
+    if: >-
+      needs.path_filter.outputs.jobs != '[]' &&
+      contains(needs.path_filter.outputs.jobs, 'repository')
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run repository checks
+        run: python scripts/check.py repository architecture
+
+  rust_core:
+    name: Rust Core
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: path_filter
+    if: >-
+      needs.path_filter.outputs.jobs != '[]' &&
+      contains(needs.path_filter.outputs.jobs, 'rust_core')
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -35,7 +76,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt, clippy, rust-analyzer
+          components: clippy
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -46,42 +87,76 @@ jobs:
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
             target/
-          key: backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          key: rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            backend-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+            rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
       - name: Check architecture
-        run: python3 scripts/check.py backend architecture
+        run: python3 scripts/check.py rust_core architecture
 
       - name: Check formatting
-        run: python3 scripts/check.py backend format
+        run: python3 scripts/check.py rust_core format
 
-      - name: Check Backend
-        run: python3 scripts/check.py backend check
+      - name: Test Rust Core
+        run: python3 scripts/check.py rust_core test
 
-      - name: Test Backend
-        run: python3 scripts/check.py backend test
+      - name: Lint Rust Core
+        run: python3 scripts/check.py rust_core lint
 
-      - name: Lint Backend
-        run: python3 scripts/check.py backend lint
+  host_windows:
+    name: Host / Windows
+    runs-on: windows-2022
+    timeout-minutes: 50
+    needs: path_filter
+    if: >-
+      needs.path_filter.outputs.jobs != '[]' &&
+      contains(needs.path_filter.outputs.jobs, 'host')
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - name: Build Backend
-        run: python3 scripts/check.py backend build
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
 
-  desktop:
-    name: Desktop (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - windows-2022
-          # TODO: DesktopのLinuxサポートを保証する段階で有効化する。
-          # - ubuntu-latest
-          # TODO: DesktopのmacOSサポートを保証する段階で有効化する。
-          # - macos-14
-    runs-on: ${{ matrix.os }}
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            host-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Check architecture
+        run: python scripts/check.py host architecture
+
+      - name: Check formatting
+        run: python scripts/check.py host format
+
+      - name: Test Host
+        run: python scripts/check.py host test
+
+      - name: Lint Host
+        run: python scripts/check.py host lint
+
+      - name: Build Host
+        run: python scripts/check.py host build
+
+  desktop_windows:
+    name: Desktop / Windows
+    runs-on: windows-2022
     timeout-minutes: 60
-
+    needs: path_filter
+    if: >-
+      needs.path_filter.outputs.jobs != '[]' &&
+      contains(needs.path_filter.outputs.jobs, 'desktop')
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -105,11 +180,11 @@ jobs:
           restore-keys: |
             desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
-      - name: Test development commands
+      - name: Check architecture
         run: python scripts/check.py desktop architecture
 
-      - name: Check Desktop
-        run: python scripts/check.py desktop check
+      - name: Check formatting
+        run: python scripts/check.py desktop format
 
       - name: Test Desktop
         run: python scripts/check.py desktop test
@@ -138,7 +213,10 @@ jobs:
     name: Mobile
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
+    needs: path_filter
+    if: >-
+      needs.path_filter.outputs.jobs != '[]' &&
+      contains(needs.path_filter.outputs.jobs, 'mobile')
     defaults:
       run:
         working-directory: apps/mobile
@@ -169,6 +247,10 @@ jobs:
     name: Web
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    needs: path_filter
+    if: >-
+      needs.path_filter.outputs.jobs != '[]' &&
+      contains(needs.path_filter.outputs.jobs, 'web')
 
     defaults:
       run:
@@ -190,3 +272,46 @@ jobs:
 
       - name: Build Web
         run: npm run build
+
+  ci_gate:
+    name: CI Gate
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      - path_filter
+      - repository
+      - rust_core
+      - host_windows
+      - desktop_windows
+      - mobile
+      - web
+    steps:
+      - name: Check results
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const needed = ['path_filter', 'repository', 'rust_core', 'host_windows', 'desktop_windows', 'mobile', 'web'];
+            const jobs = ${{ toJson(needs) }};
+            const jobsJson = ${{ toJson(needs) }};
+            const pathJobs = ${{ needs.path_filter.outputs.jobs || '[]' }};
+            let parsedJobs = [];
+            try { parsedJobs = JSON.parse(pathJobs); } catch(e) {}
+            
+            for (const name of needed) {
+              if (name === 'path_filter') continue;
+              // path routingでskipされたjobはsuccess扱い
+              if (!parsedJobs.includes(name)) {
+                console.log(`${name}: skipped by path routing`);
+                continue;
+              }
+              const status = jobs[name]?.result || 'skipped';
+              if (status === 'skipped' || status === 'success') {
+                console.log(`${name}: ${status}`);
+                continue;
+              }
+              if (status === 'cancelled' || status === 'timed_out' || status === 'failure') {
+                core.setFailed(`${name} failed with status: ${status}`);
+                return;
+              }
+            }
+            console.log('CI Gate passed');
