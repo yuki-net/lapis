@@ -138,6 +138,13 @@ impl BackendClient {
     pub fn terminals(&self) -> Arc<dyn lapis_terminal::TerminalBackend> {
         Arc::new(crate::terminal::HostTerminals::new(self.clone()))
     }
+    /// このdev sessionで起動したLocal Hostを終了させる。
+    /// 製品動作では呼ばず、IDE Stop時のみ使用する。
+    pub fn shutdown_dev_children(&self) {
+        if let Source::Local(hosts) = &self.source {
+            hosts.shutdown_dev_children();
+        }
+    }
 
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
         match &self.source {
