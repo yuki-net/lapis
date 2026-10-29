@@ -129,7 +129,7 @@ jobs:
           }
 
       - name: Build Release Desktop
-        run: cargo build -p lapis --release --locked
+        run: cargo build -p lapis -p lapis-host --release --locked
 
       - name: Test Release Inspector boundary
         run: cargo test -p lapis-desktop-ui --release release_build_does_not_register_inspector_command --locked

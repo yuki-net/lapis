@@ -8,6 +8,13 @@ import check
 
 
 class CheckTests(unittest.TestCase):
+    def test_release_build_includes_desktop_and_host(self):
+        workflow = (check.ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        release_step = workflow.split("- name: Build Release Desktop", 1)[1].split("- name:", 1)[0]
+        self.assertIn("-p lapis ", release_step)
+        self.assertIn("-p lapis-host ", release_step)
+        self.assertIn("--release", release_step)
+
     def test_format_runs_for_both_surfaces_and_propagates_failure(self):
         for surface in ("backend", "desktop"):
             with self.subTest(surface=surface):

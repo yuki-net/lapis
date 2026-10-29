@@ -64,7 +64,7 @@ Terminalの「Host Terminals」は既存端末を一覧し、「Attach」で同�
 
 Root ごとに WindowGroup を作り、Detached は元の Client worker と Document を共有する。Shell の共通描画を使い、Focus・Active Tab・scroll は Window ごとに持つ。Tool の実行資源を複製して移動することはない。終了・移動・将来の配置復元の契約は [WindowGroup](../../docs/specs/architecture.md#desktop-の-windowgroup) を参照。
 
-Windows では `cargo build -p lapis` 後に `./scripts/test_window_host.ps1` で隔離した Native Window のスモーク検証を実行できる。Release は `-Binary <release/lapis.exe>` を指定する。テストは一時 Workspace のみを編集し、利用者の設定は使用しない。
+Windows では `cargo build -p lapis -p lapis-host` 後に `./scripts/test_window_host.ps1` で隔離した Native Window のスモーク検証を実行できる。Release は `cargo build -p lapis -p lapis-host --release` で両binaryを生成し、`-Binary <release/lapis.exe>` を指定する。テストは一時 Workspace のみを編集し、利用者の設定は使用しない。
 
 Debugの独立Inspectorは既存のHelpメニュー/コマンドから開く。検査APIとの境界は
 `ui/src/devtools/inspection.rs`、Treeの表示状態とOverlayは同じdevtools内が所有する。
