@@ -1,16 +1,12 @@
 use gpui::{
-    App, AppContext, Application, Bounds, KeyBinding, TitlebarOptions, WindowBounds, WindowOptions,
-    actions, size,
+    App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, actions,
+    size,
 };
 use lapis_desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
 
-use crate::features::command_search::{
-    SearchBackspace, SearchConfirm, SearchDelete, SearchDismiss, SearchEnd, SearchHome, SearchLeft,
-    SearchNext, SearchPrevious, SearchRight, SearchSelectAll,
-};
 use crate::root::DesktopRoot;
 
 actions!(
@@ -50,6 +46,21 @@ actions!(
         Quit,
     ]
 );
+
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = lapis, no_json)]
+pub(crate) struct InvokeCommand(pub String);
+
+pub(crate) const EXTRA_COMMANDS: &[&str] = &[
+    crate::features::id::COMMAND_OPEN_WORKSPACE,
+    crate::features::id::COMMAND_TOGGLE_PANEL_CONTROLS,
+    crate::features::id::COMMAND_WORKBENCH_IDE,
+    crate::features::id::COMMAND_WORKBENCH_AGENT,
+    crate::features::id::COMMAND_BIND_VIEW_SHARED,
+    crate::features::id::COMMAND_BIND_VIEW_TASK,
+    #[cfg(debug_assertions)]
+    crate::features::id::COMMAND_TOGGLE_INSPECTOR,
+];
 
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
@@ -107,7 +118,7 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
-            bind_keys(cx);
+            crate::keymap::gpui::bind_keys(cx);
             #[cfg(debug_assertions)]
             crate::devtools::init(cx);
             open_desktop_window(session, services, initial_view, cx);
@@ -210,66 +221,4 @@ pub(crate) fn window_options(cx: &App) -> WindowOptions {
         }),
         ..Default::default()
     }
-}
-
-fn bind_keys(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("backspace", Backspace, Some("Editor")),
-        KeyBinding::new("delete", Delete, Some("Editor")),
-        KeyBinding::new("left", Left, Some("Editor")),
-        KeyBinding::new("right", Right, Some("Editor")),
-        KeyBinding::new("shift-left", SelectLeft, Some("Editor")),
-        KeyBinding::new("shift-right", SelectRight, Some("Editor")),
-        KeyBinding::new("cmd-a", SelectAll, Some("Editor")),
-        KeyBinding::new("ctrl-a", SelectAll, Some("Editor")),
-        KeyBinding::new("cmd-v", Paste, Some("Editor")),
-        KeyBinding::new("ctrl-v", Paste, Some("Editor")),
-        KeyBinding::new("cmd-c", Copy, Some("Editor")),
-        KeyBinding::new("ctrl-c", Copy, Some("Editor")),
-        KeyBinding::new("cmd-x", Cut, Some("Editor")),
-        KeyBinding::new("ctrl-x", Cut, Some("Editor")),
-        KeyBinding::new("home", Home, Some("Editor")),
-        KeyBinding::new("end", End, Some("Editor")),
-        KeyBinding::new("enter", Enter, Some("Editor")),
-        KeyBinding::new("cmd-o", Open, None),
-        KeyBinding::new("ctrl-o", Open, Some("!Terminal")),
-        KeyBinding::new("cmd-s", Save, None),
-        KeyBinding::new("ctrl-s", Save, Some("!Terminal")),
-        KeyBinding::new("ctrl-shift-s", SaveAs, Some("!Terminal")),
-        KeyBinding::new("cmd-n", New, None),
-        KeyBinding::new("ctrl-n", New, Some("!Terminal")),
-        KeyBinding::new("cmd-z", Undo, Some("Editor")),
-        KeyBinding::new("ctrl-z", Undo, Some("Editor")),
-        KeyBinding::new("cmd-shift-z", Redo, Some("Editor")),
-        KeyBinding::new("ctrl-y", Redo, Some("Editor")),
-        KeyBinding::new("cmd-f", Find, Some("Editor")),
-        KeyBinding::new("ctrl-f", Find, Some("Editor")),
-        KeyBinding::new("ctrl-shift-f", FindWorkspace, Some("!Terminal")),
-        KeyBinding::new("cmd-g", FindNext, Some("Editor")),
-        KeyBinding::new("f3", FindNext, Some("Editor")),
-        KeyBinding::new("ctrl-space", Complete, Some("Editor")),
-        KeyBinding::new("f12", GoToDefinition, Some("Editor")),
-        KeyBinding::new("cmd-shift-k", ShowCommands, None),
-        KeyBinding::new("ctrl-shift-k", ShowCommands, Some("!Terminal")),
-        KeyBinding::new("backspace", SearchBackspace, Some("QuickSearch")),
-        KeyBinding::new("delete", SearchDelete, Some("QuickSearch")),
-        KeyBinding::new("left", SearchLeft, Some("QuickSearch")),
-        KeyBinding::new("right", SearchRight, Some("QuickSearch")),
-        KeyBinding::new("cmd-a", SearchSelectAll, Some("QuickSearch")),
-        KeyBinding::new("ctrl-a", SearchSelectAll, Some("QuickSearch")),
-        KeyBinding::new("home", SearchHome, Some("QuickSearch")),
-        KeyBinding::new("end", SearchEnd, Some("QuickSearch")),
-        KeyBinding::new("up", SearchPrevious, Some("QuickSearch")),
-        KeyBinding::new("down", SearchNext, Some("QuickSearch")),
-        KeyBinding::new("enter", SearchConfirm, Some("QuickSearch")),
-        KeyBinding::new("escape", SearchDismiss, Some("QuickSearch")),
-        KeyBinding::new("escape", Dismiss, Some("!Terminal")),
-        KeyBinding::new("ctrl-alt-p", TogglePreview, Some("!Terminal")),
-        KeyBinding::new("ctrl-j", ToggleBottomZone, Some("!Terminal")),
-        KeyBinding::new("ctrl-alt-l", ToggleLeftZone, Some("!Terminal")),
-        KeyBinding::new("ctrl-alt-r", ToggleRightZone, Some("!Terminal")),
-        KeyBinding::new("ctrl-shift-a", ToggleAssistant, Some("!Terminal")),
-        KeyBinding::new("cmd-q", Quit, None),
-        KeyBinding::new("ctrl-q", Quit, Some("!Terminal")),
-    ]);
 }

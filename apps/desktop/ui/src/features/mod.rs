@@ -33,6 +33,16 @@ pub mod id {
     pub const COMMAND_FIND_WORKSPACE: &str = "lapis.command.find-workspace";
     pub const COMMAND_NEW_DOCUMENT: &str = "lapis.command.new-document";
     pub const COMMAND_OPEN_WORKSPACE: &str = "lapis.command.open-workspace";
+    pub const COMMAND_OPEN_DOCUMENT: &str = "lapis.command.open-document";
+    pub const COMMAND_SAVE_AS: &str = "lapis.command.save-as";
+    pub const COMMAND_UNDO: &str = "lapis.command.undo";
+    pub const COMMAND_REDO: &str = "lapis.command.redo";
+    pub const COMMAND_FIND: &str = "lapis.command.find";
+    pub const COMMAND_FIND_NEXT: &str = "lapis.command.find-next";
+    pub const COMMAND_COMPLETE: &str = "lapis.command.complete";
+    pub const COMMAND_GO_TO_DEFINITION: &str = "lapis.command.go-to-definition";
+    pub const COMMAND_SHOW_COMMANDS: &str = "lapis.command.show-commands";
+    pub const COMMAND_QUIT: &str = "lapis.command.quit";
     pub const COMMAND_SAVE_DOCUMENT: &str = "lapis.command.save-document";
     pub const COMMAND_TOGGLE_PREVIEW: &str = "lapis.command.toggle-preview";
     pub const COMMAND_TOGGLE_BOTTOM_ZONE: &str = "lapis.command.toggle-bottom-zone";

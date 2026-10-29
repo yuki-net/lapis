@@ -13,6 +13,7 @@
   "view.command-search": "Search",
   "command.new-document": "New Document",
   "command.open-workspace": "Open Workspace…",
+  "command.open-document": "Open File…",
   "command.save-document": "Save",
   "command.toggle-preview": "Markdown Preview",
   "command.toggle-bottom-zone": "Toggle Bottom Zone",

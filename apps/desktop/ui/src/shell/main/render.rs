@@ -18,6 +18,9 @@ impl Render for Shell {
             .text_color(theme::colors().text_primary)
             .track_focus(&self.focus_handle(cx))
             .key_context("Shell")
+            .on_action(cx.listener(|this, action: &InvokeCommand, window, cx| {
+                this.execute_command(action.0.clone().into(), window, cx);
+            }))
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))

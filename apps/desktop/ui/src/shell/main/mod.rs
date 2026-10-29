@@ -9,7 +9,6 @@ use crate::{
     },
     extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, ThemeId, UiSlot, ViewId},
     features::{self, id},
-    keymap::KeymapRegistry,
     localization::Localizer,
     theme,
 };
@@ -60,7 +59,6 @@ pub(crate) struct Shell {
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
     locale: Localizer,
-    keymap: KeymapRegistry,
     languages: lapis_language::LanguageRegistry,
     scroll_states: ShellScrollStates,
     status: String,
@@ -221,7 +219,6 @@ impl Shell {
             focus_handle: cx.focus_handle(),
             feature_registry,
             locale: Localizer::bundled(),
-            keymap: KeymapRegistry::bundled(),
             languages: lapis_language::LanguageRegistry::bundled(),
             scroll_states: ShellScrollStates::default(),
             status: String::new(),
@@ -452,16 +449,6 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         cx.emit(UiCommand::QuickSearch);
-    }
-}
-impl Shell {
-    pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(UiCommand::Undo);
-    }
-}
-impl Shell {
-    pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(UiCommand::Redo);
     }
 }
 impl Shell {
