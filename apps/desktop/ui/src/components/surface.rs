@@ -3,8 +3,8 @@ use gpui::{div, prelude::*};
 use crate::{theme, tokens};
 
 /// タブの有無によらない、通常PanelとInspector共通のアイランド。
-pub(crate) fn panel_surface() -> gpui::Div {
-    surface(SurfaceVariant::Panel)
+pub(crate) fn panel_surface(cx: &gpui::App) -> gpui::Div {
+    surface(SurfaceVariant::Panel, cx)
         .relative()
         .size_full()
         .flex()
@@ -33,30 +33,30 @@ pub(crate) enum SurfaceVariant {
     Control,
 }
 
-pub(crate) fn surface(variant: SurfaceVariant) -> gpui::Div {
+pub(crate) fn surface(variant: SurfaceVariant, cx: &gpui::App) -> gpui::Div {
     let mut surface = div().bg(match variant {
-        SurfaceVariant::Menu | SurfaceVariant::Popover => theme::colors().floating_background,
-        SurfaceVariant::Panel => theme::colors().background_secondary,
-        SurfaceVariant::Control => theme::colors().background_primary,
+        SurfaceVariant::Menu | SurfaceVariant::Popover => theme::colors(cx).floating_background,
+        SurfaceVariant::Panel => theme::colors(cx).background_secondary,
+        SurfaceVariant::Control => theme::colors(cx).background_primary,
     });
 
     surface = match variant {
         SurfaceVariant::Menu | SurfaceVariant::Popover => surface
             .rounded(tokens::radius::MENU)
             .border_1()
-            .border_color(theme::colors().floating_border)
+            .border_color(theme::colors(cx).floating_border)
             .shadow_lg(),
         SurfaceVariant::Panel => surface.rounded(tokens::radius::PANEL),
         SurfaceVariant::Control => surface.rounded(tokens::radius::CONTROL),
     };
 
-    surface.text_color(theme::colors().text_primary).when(
+    surface.text_color(theme::colors(cx).text_primary).when(
         matches!(variant, SurfaceVariant::Control),
         |surface| {
             surface.hover(|style| {
                 style
-                    .bg(theme::colors().button_background_hover)
-                    .text_color(theme::colors().text_primary)
+                    .bg(theme::colors(cx).button_background_hover)
+                    .text_color(theme::colors(cx).text_primary)
             })
         },
     )

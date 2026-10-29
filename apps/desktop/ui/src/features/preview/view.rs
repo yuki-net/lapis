@@ -15,7 +15,7 @@ impl PreviewFeature {
     }
 }
 impl Render for PreviewFeature {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
@@ -31,7 +31,7 @@ impl Render for PreviewFeature {
                 div()
                     .min_h(px(22.0))
                     .text_size(px(size))
-                    .text_color(theme::colors().text_primary)
+                    .text_color(theme::colors(cx).text_primary)
                     .child(text.to_owned())
             }))
     }

@@ -150,7 +150,7 @@ impl Shell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(theme::colors().background_secondary)
+                    .bg(theme::colors(cx).background_secondary)
                     .child(
                         div()
                             .id(ElementId::Name(
@@ -178,7 +178,7 @@ impl Shell {
                     .top(px(y))
                     .w(px(width))
                     .h(px(height))
-                    .bg(theme::colors().button_background_selected)
+                    .bg(theme::colors(cx).button_background_selected)
                     .opacity(0.55),
             );
         } else if self.drop_target.as_ref().is_some_and(
@@ -188,7 +188,7 @@ impl Shell {
                 div()
                     .absolute()
                     .inset_0()
-                    .bg(theme::colors().button_background_selected)
+                    .bg(theme::colors(cx).button_background_selected)
                     .opacity(0.55),
             );
         }
@@ -204,7 +204,7 @@ impl Shell {
         let handle = div()
             .min_w(px(0.0))
             .min_h(px(0.0))
-            .hover(|style| style.bg(theme::colors().button_background_selected))
+            .hover(|style| style.bg(theme::colors(cx).button_background_selected))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, _, cx| {
@@ -259,6 +259,9 @@ mod tests {
 
     #[gpui::test]
     fn gpui_panels_fit_after_window_shrink_and_restore(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
             let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));
@@ -361,6 +364,9 @@ mod tests {
 
     #[gpui::test]
     fn preview_rectangle_matches_the_committed_gpui_panel(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
             let shell = cx.new(|cx| Shell::new(document.into(), HashMap::new(), cx));

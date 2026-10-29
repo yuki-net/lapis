@@ -1,7 +1,8 @@
-use gpui::{IntoElement, Pixels, Styled, Svg, svg};
+use gpui::{App, IntoElement, Pixels, RenderOnce, Styled, Window, svg};
 
 use super::{FileIconId, file_catalog};
 
+#[derive(IntoElement)]
 pub(crate) struct FileIcon {
     name: FileIconId,
     size: Option<Pixels>,
@@ -18,13 +19,11 @@ impl FileIcon {
     }
 }
 
-impl IntoElement for FileIcon {
-    type Element = Svg;
-
-    fn into_element(self) -> Self::Element {
+impl RenderOnce for FileIcon {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let mut icon = svg()
             .path(file_catalog::FileIconId::asset(self.name).path)
-            .text_color(crate::theme::colors().text_secondary);
+            .text_color(crate::theme::colors(cx).text_secondary);
 
         if let Some(size) = self.size {
             icon = icon.size(size);

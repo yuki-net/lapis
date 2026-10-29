@@ -480,7 +480,12 @@ impl Shell {
     }
 }
 
-fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful<gpui::Div> {
+fn command_item(
+    index: usize,
+    label: String,
+    shortcut: String,
+    cx: &gpui::App,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(("command-palette-item", index))
         .h(px(31.0))
@@ -489,14 +494,14 @@ fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .text_color(theme::colors().text_primary)
-        .hover(|style| style.bg(theme::colors().button_background_selected))
+        .text_color(theme::colors(cx).text_primary)
+        .hover(|style| style.bg(theme::colors(cx).button_background_selected))
         .child(label)
         .child(div().flex_1())
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(theme::colors().text_tertiary)
+                .text_color(theme::colors(cx).text_tertiary)
                 .child(shortcut),
         )
 }

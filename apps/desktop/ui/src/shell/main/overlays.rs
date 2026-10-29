@@ -5,32 +5,38 @@ impl Shell {
     pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let anchor = self.shell.settings_menu_anchor;
         floating_tree(anchor, point(px(-250.0), px(8.0))).child(
-            floating_panel("settings-menu", SurfaceVariant::Menu)
+            floating_panel("settings-menu", SurfaceVariant::Menu, cx)
                 .w(px(250.0))
                 .p(tokens::spacing::SM)
                 .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                     this.close_settings_menu(cx);
                 }))
                 .child(
-                    menu_item(MenuItemSpec {
-                        id: "settings-menu-settings".into(),
-                        label: "Settings".into(),
-                        shortcut: Some("Ctrl+,".into()),
-                        icon: Some(IconName::Settings),
-                        enabled: true,
-                    })
+                    menu_item(
+                        MenuItemSpec {
+                            id: "settings-menu-settings".into(),
+                            label: "Settings".into(),
+                            shortcut: Some("Ctrl+,".into()),
+                            icon: Some(IconName::Settings),
+                            enabled: true,
+                        },
+                        cx,
+                    )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.open_settings_view(cx);
                     })),
                 )
                 .child(
-                    menu_item(MenuItemSpec {
-                        id: "settings-menu-theme".into(),
-                        label: "Theme".into(),
-                        shortcut: theme::name(&theme::active_id()).map(Into::into),
-                        icon: Some(IconName::SunMoon),
-                        enabled: true,
-                    })
+                    menu_item(
+                        MenuItemSpec {
+                            id: "settings-menu-theme".into(),
+                            label: "Theme".into(),
+                            shortcut: theme::name(&theme::active_id(cx), cx).map(Into::into),
+                            icon: Some(IconName::SunMoon),
+                            enabled: true,
+                        },
+                        cx,
+                    )
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.toggle_theme_preference(cx);
                     })),
@@ -42,7 +48,7 @@ impl Shell {
     }
 
     pub(super) fn render_theme_picker(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let active = theme::active_id();
+        let active = theme::active_id(cx);
         div()
             .id("theme-picker")
             .mt_1()
@@ -51,7 +57,7 @@ impl Shell {
             .flex()
             .flex_col()
             .gap_1()
-            .children(theme::available().into_iter().map(|(theme_id, name)| {
+            .children(theme::available(cx).into_iter().map(|(theme_id, name)| {
                 let selected = active == theme_id;
                 let click_id = theme_id.clone();
                 div()
@@ -64,10 +70,10 @@ impl Shell {
                     .items_center()
                     .gap_2()
                     .text_size(px(12.0))
-                    .text_color(theme::colors().text_primary)
-                    .hover(|style| style.bg(theme::colors().button_background_hover))
+                    .text_color(theme::colors(cx).text_primary)
+                    .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                     .when(selected, |item| {
-                        item.bg(theme::colors().button_background_selected)
+                        item.bg(theme::colors(cx).button_background_selected)
                     })
                     .child(if selected { "✓" } else { "" })
                     .child(name)

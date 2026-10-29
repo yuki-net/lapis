@@ -64,8 +64,8 @@ Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は 
 
 ### 概要
 
-- GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。probeで両経路を確認し、Lapis本体ではTLS問題が残っています。
-- 単回接続への変更前は、同一PID・同一Windowでの複数回のパッチ適用を記録しています。変更後の試験では最初のパッチ後にThemeRegistryのTLS accessorでアクセス違反が発生し、`0xc000041d` で終了しました。この再発は未解決です。
+- GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。
+- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は `ui/experiments/hot-reload/evidence.txt` を参照してください。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
 - devserverへの接続は起動時の1回だけです。自動再接続には対応していません。
 - 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。

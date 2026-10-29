@@ -4,23 +4,29 @@ use serde_json::Value;
 use super::style_view::{detail_row, render_style};
 use crate::theme;
 
-pub(super) fn render_div_inspector(_id: InspectorElementId, state: &DivInspectorState) -> Div {
+pub(super) fn render_div_inspector(
+    _id: InspectorElementId,
+    state: &DivInspectorState,
+    cx: &gpui::App,
+) -> Div {
     div()
         .flex()
         .flex_col()
         .gap_3()
-        .child(section_title("Box Model"))
-        .child(render_box_model(state))
-        .child(section_title("Div Content"))
+        .child(section_title("Box Model", cx))
+        .child(render_box_model(state, cx))
+        .child(section_title("Div Content", cx))
         .child(detail_row(
             "content width",
             pixels(state.content_size.width),
+            cx,
         ))
         .child(detail_row(
             "content height",
             pixels(state.content_size.height),
+            cx,
         ))
-        .child(render_style(&state.base_style))
+        .child(render_style(&state.base_style, cx))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -70,7 +76,7 @@ pub(super) fn extract_edges(value: &Value, field: &str) -> BoxModelEdges {
     }
 }
 
-pub(super) fn render_box_model(state: &DivInspectorState) -> Div {
+pub(super) fn render_box_model(state: &DivInspectorState, cx: &gpui::App) -> Div {
     let style_value = serde_json::to_value(&state.base_style).unwrap_or(Value::Null);
     let margin = extract_edges(&style_value, "margin");
     let border = extract_edges(&style_value, "border_widths");
@@ -83,8 +89,8 @@ pub(super) fn render_box_model(state: &DivInspectorState) -> Div {
         .p_2()
         .rounded(px(6.0))
         .border_1()
-        .border_color(theme::colors().border_default)
-        .bg(theme::colors().background_secondary)
+        .border_color(theme::colors(cx).border_default)
+        .bg(theme::colors(cx).background_secondary)
         .flex()
         .flex_col()
         .items_center()
@@ -226,11 +232,11 @@ fn side_value(value: &str, color: gpui::Rgba) -> Div {
         .child(value.to_owned())
 }
 
-fn section_title(title: &str) -> Div {
+fn section_title(title: &str, cx: &gpui::App) -> Div {
     div()
         .pt_2()
         .pb_1()
-        .text_color(theme::colors().text_accent)
+        .text_color(theme::colors(cx).text_accent)
         .child(title.to_owned())
 }
 

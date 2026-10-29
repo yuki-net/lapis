@@ -107,6 +107,16 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
+            let settings = services.settings.settings();
+            crate::theme::init(
+                &crate::extension_ui::ThemeId::new(settings.theme),
+                settings.syntax_theme,
+                cx,
+            );
+            crate::features::settings_coordinator::SettingsCoordinator::init(
+                services.settings.clone(),
+                cx,
+            );
             #[cfg(all(feature = "hot-reload", debug_assertions))]
             crate::hot_reload::init(cx);
             bind_keys(cx);

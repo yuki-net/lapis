@@ -48,12 +48,12 @@ impl Shell {
                 .flex()
                 .items_center()
                 .justify_center()
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .cursor(CursorStyle::PointingHand)
                 .hover(|style| {
                     style
-                        .bg(theme::colors().button_background_hover)
-                        .text_color(theme::colors().text_primary)
+                        .bg(theme::colors(cx).button_background_hover)
+                        .text_color(theme::colors(cx).text_primary)
                 })
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     this.open_tool_picker(target.clone(), event.position(), window, cx);
@@ -105,21 +105,21 @@ impl Shell {
 
                 let (bg_color, border_color, text_color) = if active && is_panel_focused {
                     (
-                        theme::colors().button_background_focused,
-                        theme::colors().button_border_focused,
-                        theme::colors().text_primary,
+                        theme::colors(cx).button_background_focused,
+                        theme::colors(cx).button_border_focused,
+                        theme::colors(cx).text_primary,
                     )
                 } else if active {
                     (
-                        theme::colors().button_background_selected,
-                        theme::colors().button_border_selected,
-                        theme::colors().text_primary,
+                        theme::colors(cx).button_background_selected,
+                        theme::colors(cx).button_border_selected,
+                        theme::colors(cx).text_primary,
                     )
                 } else {
                     (
-                        theme::colors().button_background,
+                        theme::colors(cx).button_background,
                         gpui::rgba(0x00000000),
-                        theme::colors().text_secondary,
+                        theme::colors(cx).text_secondary,
                     )
                 };
 
@@ -141,8 +141,8 @@ impl Shell {
                     .hover(|style| {
                         if !active {
                             style
-                                .bg(theme::colors().button_background_hover)
-                                .text_color(theme::colors().text_primary)
+                                .bg(theme::colors(cx).button_background_hover)
+                                .text_color(theme::colors(cx).text_primary)
                         } else {
                             style
                         }
@@ -220,9 +220,9 @@ impl Shell {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .text_color(theme::colors().text_secondary)
+                            .text_color(theme::colors(cx).text_secondary)
                             .cursor(CursorStyle::PointingHand)
-                            .hover(|style| style.text_color(theme::colors().text_primary))
+                            .hover(|style| style.text_color(theme::colors(cx).text_primary))
                             .on_mouse_down(
                                 MouseButton::Left,
                                 cx.listener(|_, _, _, cx| {
@@ -266,6 +266,7 @@ impl Shell {
                         .items_center()
                         .gap(tokens::spacing::XS)
                         .children(tab_items),
+                    cx,
                 )
                 .flex_1()
                 .min_w(px(0.0)),
@@ -277,7 +278,7 @@ impl Shell {
                     gpui::linear_gradient(
                         270.0,
                         gpui::linear_color_stop(gpui::rgba(0x00000000), 0.0),
-                        gpui::linear_color_stop(theme::colors().background_secondary, 1.0),
+                        gpui::linear_color_stop(theme::colors(cx).background_secondary, 1.0),
                     ),
                 ));
         }
@@ -293,7 +294,7 @@ impl Shell {
                     .bg(gpui::linear_gradient(
                         90.0,
                         gpui::linear_color_stop(gpui::rgba(0x00000000), 0.0),
-                        gpui::linear_color_stop(theme::colors().background_secondary, 1.0),
+                        gpui::linear_color_stop(theme::colors(cx).background_secondary, 1.0),
                     )),
             );
         }

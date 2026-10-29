@@ -624,6 +624,9 @@ mod visibility_tests {
 
     #[gpui::test]
     fn empty_side_zones_reopen_by_command_without_opening_picker(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
             Shell::new(document.into(), HashMap::new(), cx)

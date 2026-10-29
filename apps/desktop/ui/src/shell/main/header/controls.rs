@@ -16,6 +16,7 @@ pub(crate) enum PanelState {
 }
 
 /// Reuses the Lucide PanelLeft pair for every dock by rotating the SVG.
+#[derive(IntoElement)]
 pub(crate) struct PanelToggleIcon {
     position: ZonePosition,
     state: PanelState,
@@ -27,10 +28,8 @@ impl PanelToggleIcon {
     }
 }
 
-impl IntoElement for PanelToggleIcon {
-    type Element = gpui::Div;
-
-    fn into_element(self) -> Self::Element {
+impl gpui::RenderOnce for PanelToggleIcon {
+    fn render(self, _: &mut Window, cx: &mut gpui::App) -> impl IntoElement {
         let name = match self.state {
             PanelState::Open => crate::components::IconName::PanelLeft,
             PanelState::Close => crate::components::IconName::PanelLeftDashed,
@@ -46,7 +45,7 @@ impl IntoElement for PanelToggleIcon {
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::colors().text_secondary)
+            .text_color(theme::colors(cx).text_secondary)
             .child(crate::components::Icon::new(name).with_rotation(rotation))
     }
 }

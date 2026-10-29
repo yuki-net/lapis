@@ -231,14 +231,14 @@ impl TasksFeature {
 pub(super) fn truncate_chars(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
 }
-pub(super) fn task_status_color(status: ExecutionStatus) -> gpui::Rgba {
+pub(super) fn task_status_color(status: ExecutionStatus, cx: &gpui::App) -> gpui::Rgba {
     match status {
-        ExecutionStatus::Succeeded => theme::colors().positive_text,
-        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::colors().danger_text,
+        ExecutionStatus::Succeeded => theme::colors(cx).positive_text,
+        ExecutionStatus::Failed | ExecutionStatus::Cancelled => theme::colors(cx).danger_text,
         ExecutionStatus::WaitingForInput | ExecutionStatus::WaitingForApproval => {
-            theme::colors().warning_text
+            theme::colors(cx).warning_text
         }
-        _ => theme::colors().info_text,
+        _ => theme::colors(cx).info_text,
     }
 }
 

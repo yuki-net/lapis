@@ -161,7 +161,7 @@ const SECTIONS: &[SectionSpec] = &[
     },
 ];
 
-pub(super) fn render_style(style: &StyleRefinement) -> Div {
+pub(super) fn render_style(style: &StyleRefinement, cx: &gpui::App) -> Div {
     let value = serde_json::to_value(style).unwrap_or(Value::Null);
     let json = serde_json::to_string_pretty(style)
         .unwrap_or_else(|error| format!("StyleRefinementのJSON生成に失敗しました: {error}"));
@@ -173,24 +173,28 @@ pub(super) fn render_style(style: &StyleRefinement) -> Div {
         .children(
             SECTIONS
                 .iter()
-                .map(|section| render_section(section, &value)),
+                .map(|section| render_section(section, &value, cx)),
         )
-        .child(render_json(json))
+        .child(render_json(json, cx))
 }
 
-pub(super) fn detail_row(label: impl Into<String>, value: impl Into<String>) -> Div {
+pub(super) fn detail_row(
+    label: impl Into<String>,
+    value: impl Into<String>,
+    cx: &gpui::App,
+) -> Div {
     div()
         .flex()
         .items_start()
         .gap_3()
         .py_1()
         .border_b_1()
-        .border_color(theme::colors().border_default)
+        .border_color(theme::colors(cx).border_default)
         .child(
             div()
                 .w(px(132.0))
                 .flex_none()
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .child(label.into()),
         )
         .child(
@@ -198,37 +202,37 @@ pub(super) fn detail_row(label: impl Into<String>, value: impl Into<String>) -> 
                 .min_w(px(0.0))
                 .flex_1()
                 .font_family("Cascadia Mono")
-                .text_color(theme::colors().text_primary)
+                .text_color(theme::colors(cx).text_primary)
                 .child(value.into()),
         )
 }
 
-fn render_section(section: &SectionSpec, value: &Value) -> Div {
+fn render_section(section: &SectionSpec, value: &Value, cx: &gpui::App) -> Div {
     div()
         .flex()
         .flex_col()
-        .child(section_title(section.title))
+        .child(section_title(section.title, cx))
         .children(
             section
                 .fields
                 .iter()
-                .map(|field| detail_row(field.label, value_at_path(value, field.path))),
+                .map(|field| detail_row(field.label, value_at_path(value, field.path), cx)),
         )
 }
 
-fn section_title(title: &str) -> Div {
+fn section_title(title: &str, cx: &gpui::App) -> Div {
     div()
         .pt_2()
         .pb_1()
-        .text_color(theme::colors().text_accent)
+        .text_color(theme::colors(cx).text_accent)
         .child(title.to_owned())
 }
 
-fn render_json(json: String) -> Div {
+fn render_json(json: String, cx: &gpui::App) -> Div {
     div()
         .flex()
         .flex_col()
-        .child(section_title("StyleRefinement JSON"))
+        .child(section_title("StyleRefinement JSON", cx))
         .child(
             div()
                 .flex()
@@ -236,9 +240,9 @@ fn render_json(json: String) -> Div {
                 .gap_0p5()
                 .p_2()
                 .rounded_md()
-                .bg(theme::colors().background_primary)
+                .bg(theme::colors(cx).background_primary)
                 .font_family("Cascadia Mono")
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .children(json.lines().map(|line| div().child(line.to_owned()))),
         )
 }

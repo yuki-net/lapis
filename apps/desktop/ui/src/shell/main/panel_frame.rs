@@ -10,7 +10,7 @@ impl Shell {
         let mut handle = div()
             .min_w(px(0.0))
             .min_h(px(0.0))
-            .hover(|style| style.bg(theme::colors().button_background_selected))
+            .hover(|style| style.bg(theme::colors(cx).button_background_selected))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
@@ -79,6 +79,7 @@ impl Shell {
                     axis,
                     &state,
                     content,
+                    cx,
                 )
                 .flex_1()
                 .size_full()
@@ -110,7 +111,7 @@ impl Shell {
             .min_w(px(0.0))
             .overflow_hidden()
             .child(
-                crate::components::panel_surface()
+                crate::components::panel_surface(cx)
                     .when(cfg!(test), |surface| {
                         surface.child(
                             gpui::canvas(
@@ -136,14 +137,14 @@ impl Shell {
                     .child(body),
             )
             .when_some(preview, |surface, preview| {
-                surface.child(self.render_drop_overlay(&preview))
+                surface.child(self.render_drop_overlay(&preview, cx))
             })
     }
 
-    fn render_drop_overlay(&self, preview: &DropPreview) -> gpui::Div {
+    fn render_drop_overlay(&self, preview: &DropPreview, cx: &gpui::App) -> gpui::Div {
         let mut marker = div()
             .absolute()
-            .bg(theme::colors().button_background_selected)
+            .bg(theme::colors(cx).button_background_selected)
             .opacity(0.65);
         if preview.invalid {
             marker = marker.opacity(0.25);

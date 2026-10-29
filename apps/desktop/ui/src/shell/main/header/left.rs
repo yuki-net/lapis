@@ -16,6 +16,7 @@ impl Shell {
                                     .layout
                                     .zone_open(crate::extension_ui::ZonePosition::Left),
                             ),
+                            cx,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.execute_command(id::COMMAND_TOGGLE_LEFT_ZONE.into(), window, cx);
@@ -30,6 +31,7 @@ impl Shell {
                                     .layout
                                     .zone_open(crate::extension_ui::ZonePosition::Bottom),
                             ),
+                            cx,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.execute_command(id::COMMAND_TOGGLE_BOTTOM_ZONE.into(), window, cx);
@@ -44,6 +46,7 @@ impl Shell {
                                     .layout
                                     .zone_open(crate::extension_ui::ZonePosition::Right),
                             ),
+                            cx,
                         )
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.execute_command(id::COMMAND_TOGGLE_RIGHT_ZONE.into(), window, cx);
@@ -64,13 +67,13 @@ impl Shell {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .bg(theme::colors().text_accent)
-                    .text_color(theme::colors().text_primary)
+                    .bg(theme::colors(cx).text_accent)
+                    .text_color(theme::colors(cx).text_primary)
                     .text_size(tokens::typography::FONT_XS)
                     .child("L"),
             )
             .child(
-                icon_button("header-menu", IconName::Menu).on_click(cx.listener(
+                icon_button("header-menu", IconName::Menu, cx).on_click(cx.listener(
                     |this, event: &ClickEvent, _, cx| {
                         this.toggle_header_menu(event.position(), cx);
                     },
@@ -92,7 +95,8 @@ fn panel_toggle_button(
     id: &'static str,
     position: controls::ZonePosition,
     state: controls::PanelState,
+    cx: &gpui::App,
 ) -> gpui::Stateful<gpui::Div> {
-    header_button(id, controls::PanelToggleIcon::new(position, state))
+    header_button(id, controls::PanelToggleIcon::new(position, state), cx)
         .w(tokens::size::HEADER_BUTTON)
 }

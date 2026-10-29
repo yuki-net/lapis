@@ -94,7 +94,7 @@ impl Render for ConversationFeature {
                 .flex_col()
                 .gap_2()
                 .p_2()
-                .child(action_button("Projectを登録…", false).on_click(
+                .child(action_button("Projectを登録…", false, cx).on_click(
                     cx.listener(|_, _, _, cx| cx.emit(ConversationEvent::RegisterProject)),
                 ))
                 .children(self.error.clone())
@@ -104,6 +104,7 @@ impl Render for ConversationFeature {
                         action_button(
                             project.display_name().to_owned(),
                             Some(&id) == self.selected_project.as_ref(),
+                            cx,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.select_project(id.clone());
@@ -113,7 +114,7 @@ impl Render for ConversationFeature {
                 }));
         if let Some(project) = self.selected_project.clone() {
             view = view.child(
-                action_button("既存Repository / フォルダを追加…", false).on_click(cx.listener(
+                action_button("既存Repository / フォルダを追加…", false, cx).on_click(cx.listener(
                     move |_, _, _, cx| cx.emit(ConversationEvent::RegisterSource(project.clone())),
                 )),
             );
@@ -134,7 +135,7 @@ impl Render for ConversationFeature {
                             .flex()
                             .gap_1()
                             .child(
-                                action_button("Primary", self.primary.as_ref() == Some(source))
+                                action_button("Primary", self.primary.as_ref() == Some(source), cx)
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         if this.sub.as_ref() == Some(&primary) {
                                             this.sub = None;
@@ -145,15 +146,21 @@ impl Render for ConversationFeature {
                             )
                             .when(self.primary.as_ref() != Some(source), |view| {
                                 view.child(
-                                    action_button("Sub（任意）", self.sub.as_ref() == Some(source))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                    action_button(
+                                        "Sub（任意）",
+                                        self.sub.as_ref() == Some(source),
+                                        cx,
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
                                             this.sub = if this.sub.as_ref() == Some(&sub) {
                                                 None
                                             } else {
                                                 Some(sub.clone())
                                             };
                                             cx.notify();
-                                        })),
+                                        },
+                                    )),
                                 )
                             }),
                     )
@@ -162,7 +169,7 @@ impl Render for ConversationFeature {
             (self.selected_project.clone(), self.primary.clone())
         {
             let sub = self.sub.clone();
-            view = view.child(action_button("Taskを作成", true).on_click(cx.listener(
+            view = view.child(action_button("Taskを作成", true, cx).on_click(cx.listener(
                 move |_, _, _, cx| {
                     cx.emit(ConversationEvent::Create {
                         project: project.clone(),
@@ -188,9 +195,9 @@ impl Render for ConversationFeature {
                         .id(("project-task", index))
                         .p_2()
                         .bg(if active {
-                            theme::colors().button_background_selected
+                            theme::colors(cx).button_background_selected
                         } else {
-                            theme::colors().background_tertiary
+                            theme::colors(cx).background_tertiary
                         })
                         .child(record.title.clone())
                         .on_click(cx.listener(move |_, _, _, cx| {
@@ -234,6 +241,7 @@ impl Render for ConversationFeature {
                             environment.root(SourceRole::Primary).unwrap().display()
                         ),
                         record.source_role == SourceRole::Primary,
+                        cx,
                     )
                     .on_click(cx.listener(|_, _, _, cx| {
                         cx.emit(ConversationEvent::Source(SourceRole::Primary))
@@ -244,6 +252,7 @@ impl Render for ConversationFeature {
                     action_button(
                         format!("Sub: {}", sub.display()),
                         record.source_role == SourceRole::Sub,
+                        cx,
                     )
                     .on_click(cx.listener(|_, _, _, cx| {
                         cx.emit(ConversationEvent::Source(SourceRole::Sub))

@@ -64,9 +64,9 @@ stockのDioxus CLI 0.7.10にはWindows x64スタブのRAX破壊が残ってい�
 
 ### 既知のTLS制約
 
-旧実装（個別HotFn per Feature）では、patch DLLから `thread_local!` のThemeRegistry accessor を呼び、元EXEに存在しないTLSアドレスを参照して `0xc0000005` クラッシュしていました。単回接続への変更前の記録では、`Shell::render` の1箇所にHotFnを置くことでクラッシュが解消しました。しかし変更後の実機試験では最初のパッチ後に同じTLS accessorで `0xc0000005` が発生し、`0xc000041d` で終了しました。`LazyLock<Mutex<_>>` の回避は削除済みで、`thread_local!` を維持しています。この再発は未解決です。
+旧実装ではHot Patch後、ThemeRegistryの `thread_local!` accessorで `0xc0000005` が発生し、`0xc000041d` で終了しました。ThemeRegistryとSyntax Themeの選択値をGPUI App Globalへ移し、Lapis本体のShell / Settingsで同一PIDのパッチと状態維持を確認しました。実機検証の範囲と未確認項目は `evidence.txt` を参照してください。
 
-Syntax Themeの選択値も可変の `thread_local!` に保持されており、同種の問題が起きる可能性があります。ThemeとSyntax Themeのstate ownershipの修正は後続のStacked PRで扱います。独自Elementもさらに後続のPRで扱います。
+独自ElementのHot Reloadは後続のPRで扱います。
 
 ```powershell
 git clone --branch v0.7.10 https://github.com/DioxusLabs/dioxus.git target/dioxus-cli-0710

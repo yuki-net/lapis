@@ -160,7 +160,7 @@ impl DesktopRoot {
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
-        let settings = cx.new(|_| SettingsFeature::new(services.settings));
+        let settings = cx.new(SettingsFeature::new);
         let root = cx.entity().downgrade();
         let quick_search = cx.new(|cx| {
             QuickSearch::new(cx, move |event, window, cx| {

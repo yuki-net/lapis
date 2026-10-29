@@ -1,6 +1,6 @@
 //! 構文スコープの色だけを解決する。原典・ライセンスはassets/syntax-themes/NOTICE.md。
 use lapis_settings::SyntaxTheme;
-use std::{cell::RefCell, sync::LazyLock};
+use std::sync::LazyLock;
 use syntect::{highlighting::ScopeSelectors, parsing::Scope};
 
 use super::ThemeAppearance;
@@ -115,14 +115,14 @@ static SELECTORS: LazyLock<Vec<ScopeSelectors>> = LazyLock::new(|| {
     .collect()
 });
 
-thread_local! { static SELECTED: RefCell<Option<SyntaxTheme>> = const { RefCell::new(None) }; }
-
-pub(crate) fn set_active(id: Option<SyntaxTheme>) {
-    SELECTED.with(|selected| *selected.borrow_mut() = id);
+pub(crate) fn set_active(id: Option<SyntaxTheme>, cx: &mut gpui::App) {
+    cx.global_mut::<super::registry::ThemeState>().syntax_theme = id;
 }
 
-pub(crate) fn active_family() -> SyntaxTheme {
-    SELECTED.with(|selected| selected.borrow().unwrap_or_default())
+pub(crate) fn active_family(cx: &gpui::App) -> SyntaxTheme {
+    cx.global::<super::registry::ThemeState>()
+        .syntax_theme
+        .unwrap_or_default()
 }
 
 pub(crate) fn resolve(family: Option<SyntaxTheme>, appearance: ThemeAppearance) -> &'static Preset {
@@ -136,8 +136,8 @@ pub(crate) fn resolve(family: Option<SyntaxTheme>, appearance: ThemeAppearance) 
     &PRESETS[pair + usize::from(appearance == ThemeAppearance::Light)]
 }
 
-pub(crate) fn active() -> &'static Preset {
-    resolve(Some(active_family()), super::active_appearance())
+pub(crate) fn active(cx: &gpui::App) -> &'static Preset {
+    resolve(Some(active_family(cx)), super::active_appearance(cx))
 }
 
 impl Preset {
@@ -201,52 +201,61 @@ mod tests {
         );
     }
 
-    #[test]
-    fn explicit_family_follows_ui_without_changing_the_selection_or_ui_colors() {
-        let original = super::super::active_id();
-        for (family, _) in FAMILIES {
-            let previous_ui = super::super::active_id();
-            let previous_background = super::super::colors().background_primary;
-            set_active(Some(family));
-            assert_eq!(super::super::active_id(), previous_ui);
-            assert_eq!(
-                super::super::colors().background_primary,
-                previous_background
-            );
-            for ui in ["lapis.dark", "lapis.white", "lapis.dark"] {
-                assert!(super::super::set_active(&ThemeId::new(ui)));
-                let background = super::super::colors().background_primary;
-                let appearance = super::super::active_appearance();
-                assert_eq!(active_family(), family);
+    #[gpui::test]
+    fn explicit_family_follows_ui_without_changing_the_selection_or_ui_colors(
+        test_cx: &mut gpui::TestAppContext,
+    ) {
+        test_cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            let original = super::super::active_id(cx);
+            for (family, _) in FAMILIES {
+                let previous_ui = super::super::active_id(cx);
+                let previous_background = super::super::colors(cx).background_primary;
+                set_active(Some(family), cx);
+                assert_eq!(super::super::active_id(cx), previous_ui);
                 assert_eq!(
-                    active().foreground(),
-                    resolve(Some(family), appearance).foreground()
+                    super::super::colors(cx).background_primary,
+                    previous_background
                 );
-                assert_eq!(super::super::active_id().as_str(), ui);
-                assert_eq!(super::super::colors().background_primary, background);
+                for ui in ["lapis.dark", "lapis.white", "lapis.dark"] {
+                    assert!(super::super::set_active(&ThemeId::new(ui), cx));
+                    let background = super::super::colors(cx).background_primary;
+                    let appearance = super::super::active_appearance(cx);
+                    assert_eq!(active_family(cx), family);
+                    assert_eq!(
+                        active(cx).foreground(),
+                        resolve(Some(family), appearance).foreground()
+                    );
+                    assert_eq!(super::super::active_id(cx).as_str(), ui);
+                    assert_eq!(super::super::colors(cx).background_primary, background);
+                }
             }
-        }
-        set_active(None);
-        assert!(super::super::set_active(&original));
+            set_active(None, cx);
+            assert!(super::super::set_active(&original, cx));
+        });
     }
 
-    #[test]
-    fn custom_light_theme_uses_light_syntax_palette() {
-        let original = super::super::active_id();
-        let custom_id = ThemeId::new("test.light.syntax");
-        let colors = super::super::colors();
-        super::super::register(
-            super::super::ThemeDefinition::new(custom_id.clone(), colors)
-                .with_appearance(ThemeAppearance::Light),
-        )
-        .unwrap();
-        assert!(super::super::set_active(&custom_id));
-        set_active(Some(SyntaxTheme::Lapis));
-        assert_eq!(
-            active().foreground(),
-            resolve(Some(SyntaxTheme::Lapis), ThemeAppearance::Light).foreground()
-        );
-        set_active(None);
-        assert!(super::super::set_active(&original));
+    #[gpui::test]
+    fn custom_light_theme_uses_light_syntax_palette(test_cx: &mut gpui::TestAppContext) {
+        test_cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            let original = super::super::active_id(cx);
+            let custom_id = ThemeId::new("test.light.syntax");
+            let colors = super::super::colors(cx);
+            super::super::register(
+                super::super::ThemeDefinition::new(custom_id.clone(), colors)
+                    .with_appearance(ThemeAppearance::Light),
+                cx,
+            )
+            .unwrap();
+            assert!(super::super::set_active(&custom_id, cx));
+            set_active(Some(SyntaxTheme::Lapis), cx);
+            assert_eq!(
+                active(cx).foreground(),
+                resolve(Some(SyntaxTheme::Lapis), ThemeAppearance::Light).foreground()
+            );
+            set_active(None, cx);
+            assert!(super::super::set_active(&original, cx));
+        });
     }
 }

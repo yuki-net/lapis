@@ -22,6 +22,7 @@ impl Shell {
             super::header::controls::open_panel_icon(position),
             title,
             self.t("panel.empty-desc"),
+            cx,
         )
         .child(
             div()
@@ -33,9 +34,9 @@ impl Shell {
                 .py_1()
                 .rounded(px(5.0))
                 .border_1()
-                .border_color(theme::colors().border_default)
+                .border_color(theme::colors(cx).border_default)
                 .text_size(px(11.0))
-                .hover(|style| style.bg(theme::colors().button_background_hover))
+                .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                 .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                     this.open_tool_picker(panel_id.clone(), event.position(), window, cx);
                 }))
@@ -46,23 +47,23 @@ impl Shell {
     pub(super) fn render_document_content(
         &self,
         document: &lapis_editor_core::DocumentId,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> gpui::Div {
         if self.session.active_document_id() == Some(document) {
             div().size_full().child(self.document_view.clone())
         } else {
-            panel_empty_state("F", "Document", "Select the document tab to edit")
+            panel_empty_state("F", "Document", "Select the document tab to edit", cx)
         }
     }
     pub(super) fn render_tool_content(
         &self,
         view: &ViewId,
         instance: &crate::extension_ui::ViewInstanceId,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) -> gpui::Div {
         match self.feature_registry.instance_view(instance) {
             Some(view) => div().flex().flex_1().min_h(px(0.0)).child(view.clone()),
-            None => panel_empty_state("?", "Unknown view", view.as_str().to_owned()),
+            None => panel_empty_state("?", "Unknown view", view.as_str().to_owned(), cx),
         }
     }
     /// Renders a no-tabs placeholder for detached windows, or workspace actions and recent roots.
@@ -70,7 +71,7 @@ impl Shell {
         if self.detached {
             return div()
                 .size_full()
-                .child(panel_empty_state("", "Lapis", "タブはありません"));
+                .child(panel_empty_state("", "Lapis", "タブはありません", cx));
         }
         // TODO: Workspaceを開いている状態と、作業中の状態で開始画面を分ける。
         // 現在はどちらも同じWorkspace一覧を表示する。
@@ -107,7 +108,7 @@ impl Shell {
                         .max_w_full()
                         .text_size(px(24.0))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(theme::colors().text_primary)
+                        .text_color(theme::colors(cx).text_primary)
                         .child(self.t("workspace.title")),
                 )
                 .child(
@@ -117,13 +118,13 @@ impl Shell {
                         .flex()
                         .gap_3()
                         .child(
-                            workspace_action("workspace-open", "▱", self.t("workspace.open"))
+                            workspace_action("workspace-open", "▱", self.t("workspace.open"), cx)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.open_project(window, cx);
                                 })),
                         )
                         .child(
-                            workspace_action("workspace-clone", "⑂", self.t("workspace.clone"))
+                            workspace_action("workspace-clone", "⑂", self.t("workspace.clone"), cx)
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.clone_from_git(window, cx);
                                 })),
@@ -151,17 +152,17 @@ impl Shell {
                                     .p_3()
                                     .rounded(px(6.0))
                                     .bg(if selected {
-                                        theme::colors().button_background_selected
+                                        theme::colors(cx).button_background_selected
                                     } else {
-                                        theme::colors().background_tertiary
+                                        theme::colors(cx).background_tertiary
                                     })
                                     .hover(|style| {
-                                        style.bg(theme::colors().button_background_hover)
+                                        style.bg(theme::colors(cx).button_background_hover)
                                     })
                                     .flex()
                                     .flex_col()
                                     .gap_1()
-                                    .text_color(theme::colors().text_primary)
+                                    .text_color(theme::colors(cx).text_primary)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.open_recent_workspace(open_root.clone(), window, cx);
                                     }))
@@ -174,7 +175,7 @@ impl Shell {
                                     .child(
                                         div()
                                             .text_size(px(11.0))
-                                            .text_color(theme::colors().text_secondary)
+                                            .text_color(theme::colors(cx).text_secondary)
                                             .child(root.display().to_string()),
                                     )
                             },
@@ -184,7 +185,7 @@ impl Shell {
                     content.child(
                         div()
                             .text_size(px(12.0))
-                            .text_color(theme::colors().text_secondary)
+                            .text_color(theme::colors(cx).text_secondary)
                             .child(self.t("workspace.no-recent")),
                     )
                 }),
@@ -196,6 +197,7 @@ fn workspace_action(
     id: &'static str,
     icon: &'static str,
     label: String,
+    cx: &gpui::App,
 ) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
@@ -203,16 +205,16 @@ fn workspace_action(
         .h(px(96.0))
         .p_3()
         .rounded(px(6.0))
-        .bg(theme::colors().background_tertiary)
+        .bg(theme::colors(cx).background_tertiary)
         .flex()
         .flex_col()
         .justify_between()
-        .text_color(theme::colors().text_primary)
-        .hover(|style| style.bg(theme::colors().button_background_hover))
+        .text_color(theme::colors(cx).text_primary)
+        .hover(|style| style.bg(theme::colors(cx).button_background_hover))
         .child(
             div()
                 .text_size(px(24.0))
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .child(icon),
         )
         .child(div().text_size(px(14.0)).child(label))

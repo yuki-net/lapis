@@ -9,9 +9,11 @@ pub use registry::{
 };
 
 /// アクティブテーマのカラートークンを取得する。
-pub fn colors() -> ThemeColors {
-    active_colors()
+pub fn colors(cx: &gpui::App) -> ThemeColors {
+    active_colors(cx)
 }
+
+pub(crate) use registry::init;
 
 #[cfg(test)]
 mod tests {
@@ -20,19 +22,27 @@ mod tests {
     use super::*;
     use crate::extension_ui::ThemeId;
 
-    #[test]
-    fn registered_theme_can_be_activated_without_changing_token_callers() {
-        let original_id = active_id();
-        let original_colors = colors();
+    #[gpui::test]
+    fn registered_theme_can_be_activated_without_changing_token_callers(
+        test_cx: &mut gpui::TestAppContext,
+    ) {
+        test_cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            let original_id = active_id(cx);
+            let original_colors = colors(cx);
 
-        let alternate_id = ThemeId::new("test.tokens.alternate");
-        let mut alternate_colors = original_colors.clone();
-        alternate_colors.text_accent = rgb(0x123456);
+            let alternate_id = ThemeId::new("test.tokens.alternate");
+            let mut alternate_colors = original_colors.clone();
+            alternate_colors.text_accent = rgb(0x123456);
 
-        let _ = register(ThemeDefinition::new(alternate_id.clone(), alternate_colors));
-        assert!(set_active(&alternate_id));
-        assert_eq!(colors().text_accent, rgb(0x123456));
-        assert!(set_active(&original_id));
-        assert_eq!(colors().text_accent, original_colors.text_accent);
+            let _ = register(
+                ThemeDefinition::new(alternate_id.clone(), alternate_colors),
+                cx,
+            );
+            assert!(set_active(&alternate_id, cx));
+            assert_eq!(colors(cx).text_accent, rgb(0x123456));
+            assert!(set_active(&original_id, cx));
+            assert_eq!(colors(cx).text_accent, original_colors.text_accent);
+        });
     }
 }
