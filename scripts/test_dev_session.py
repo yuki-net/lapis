@@ -95,6 +95,11 @@ fn main() {
 ''', encoding="utf-8")
             for name in ("lapis.exe", "lapis-host.exe"):
                 subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
+            # 起動待ちの期限には初回buildや依存取得を含めない。
+            subprocess.run(
+                ["cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"), "--target-dir", str(root / "launcher-target"), "--quiet"],
+                cwd=root, check=True, capture_output=True,
+            )
 
             kernel = ctypes.WinDLL("kernel32", use_last_error=True)
             kernel.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
