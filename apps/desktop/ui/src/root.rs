@@ -1180,12 +1180,13 @@ impl DesktopRoot {
                             .apply(client.edit_chain.epoch(), || Ok(()))?;
                         client.persist_view(view)
                     },
-                    |_, result, cx| {
+                    |root, result, cx| {
                         if let Err(error) = result {
+                            let title = root.shell.read(cx).t("notification.error.persistence");
                             crate::notification::publish_error(
                                 cx,
                                 "workspace.persistence_failed",
-                                "表示状態の保存に失敗しました",
+                                &title,
                                 error,
                             );
                         }
@@ -1446,22 +1447,24 @@ impl DesktopRoot {
                 let admitted = self.worker.submit(
                     cx,
                     move |_| factory.open_host(),
-                    |_, result, cx| {
+                    |root, result, cx| {
                         if let Err(error) = result {
+                            let title = root.shell.read(cx).t("notification.error.host-launch");
                             crate::notification::publish_error(
                                 cx,
                                 "host.connection_launcher_failed",
-                                "Host接続画面を開けませんでした",
+                                &title,
                                 error,
                             );
                         }
                     },
                 );
                 if let Err(error) = admitted {
+                    let title = self.shell.read(cx).t("notification.error.host-launch");
                     crate::notification::publish_error(
                         cx,
                         "host.connection_launcher_failed",
-                        "Host接続画面を開けませんでした",
+                        &title,
                         error,
                     );
                 }
@@ -1471,7 +1474,7 @@ impl DesktopRoot {
                 let admitted = self.worker.submit(
                     cx,
                     move |_| Ok(factory.build()),
-                    |_, result, cx| match result {
+                    |root, result, cx| match result {
                         Ok((editor, services)) => crate::app::open_desktop_window(
                             editor,
                             services,
@@ -1481,21 +1484,20 @@ impl DesktopRoot {
                             },
                             cx,
                         ),
-                        Err(error) => crate::notification::publish_error(
-                            cx,
-                            "window.creation_failed",
-                            "Windowの作成に失敗しました",
-                            error,
-                        ),
+                        Err(error) => {
+                            let title = root.shell.read(cx).t("notification.error.window");
+                            crate::notification::publish_error(
+                                cx,
+                                "window.creation_failed",
+                                &title,
+                                error,
+                            );
+                        }
                     },
                 );
                 if let Err(error) = admitted {
-                    crate::notification::publish_error(
-                        cx,
-                        "window.creation_failed",
-                        "Windowの作成に失敗しました",
-                        error,
-                    );
+                    let title = self.shell.read(cx).t("notification.error.window");
+                    crate::notification::publish_error(cx, "window.creation_failed", &title, error);
                 }
             }
             UiCommand::CloseWindow => {

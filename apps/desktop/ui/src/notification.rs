@@ -49,6 +49,17 @@ pub struct Store {
 
 impl gpui::Global for Store {}
 
+impl Severity {
+    pub(crate) fn label(self, locale: &crate::localization::Localizer) -> String {
+        let key = match self {
+            Self::Info => "notification.severity.info",
+            Self::Warning => "notification.severity.warning",
+            Self::Error => "notification.severity.error",
+        };
+        locale.resolve(&lapis_localization::MessageId::new(key))
+    }
+}
+
 impl Store {
     fn publish(&mut self, mut event: Event) -> u64 {
         self.next_id = self
@@ -79,7 +90,9 @@ impl Store {
     pub fn popups_for(&self, window: gpui::WindowId) -> Vec<&Event> {
         self.popups
             .iter()
+            .rev()
             .filter(|(_, target)| *target == window)
+            .take(3)
             .filter_map(|(id, _)| self.events.iter().find(|event| event.id == *id))
             .collect()
     }
@@ -144,6 +157,7 @@ type CommandExecutor = std::rc::Rc<dyn Fn(CommandId, &mut Window, &mut App)>;
 pub(crate) struct Center {
     _subscription: Subscription,
     execute: CommandExecutor,
+    locale: crate::localization::Localizer,
 }
 
 impl Center {
@@ -152,7 +166,17 @@ impl Center {
         Self {
             _subscription: cx.observe_global::<Store>(|_, cx| cx.notify()),
             execute,
+            locale: crate::localization::Localizer::bundled(),
         }
+    }
+
+    pub(crate) fn set_locale(
+        &mut self,
+        locale: &lapis_localization::LocaleId,
+        cx: &mut GpuiContext<Self>,
+    ) {
+        self.locale.set_active(locale);
+        cx.notify();
     }
 }
 
@@ -167,19 +191,24 @@ impl Render for Center {
             .collect::<Vec<_>>();
         let execute = self.execute.clone();
         let empty = events.is_empty();
+        let resolve = |key: &str| {
+            self.locale
+                .resolve(&lapis_localization::MessageId::new(key))
+        };
+        let empty_label = resolve("notification.empty");
+        let unread = resolve("notification.unread");
+        let mark_read = resolve("notification.mark-read");
+        let mark_unread = resolve("notification.mark-unread");
+        let delete = resolve("notification.delete");
         div()
             .flex()
             .flex_col()
             .gap_2()
             .p_2()
-            .when(empty, |view| view.child("通知はありません"))
+            .when(empty, |view| view.child(empty_label))
             .children(events.into_iter().map(|event| {
                 let id = event.id;
-                let seconds = event
-                    .occurred_at
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs();
+                let time = local_time(event.occurred_at);
                 div()
                     .flex()
                     .flex_col()
@@ -188,11 +217,14 @@ impl Render for Center {
                     .border_1()
                     .border_color(crate::theme::colors().border_default)
                     .child(format!(
-                        "{:02}:{:02} UTC · {:?}{}",
-                        (seconds / 3600) % 24,
-                        (seconds / 60) % 60,
-                        event.severity,
-                        if event.read { "" } else { " · 未読" }
+                        "{} · {}{}",
+                        time,
+                        event.severity.label(&self.locale),
+                        if event.read {
+                            String::new()
+                        } else {
+                            format!(" · {unread}")
+                        }
                     ))
                     .child(event.title)
                     .child(event.message)
@@ -219,9 +251,9 @@ impl Render for Center {
                                     .id(("notification-read", id))
                                     .cursor_pointer()
                                     .child(if event.read {
-                                        "未読にする"
+                                        mark_unread.clone()
                                     } else {
-                                        "既読にする"
+                                        mark_read.clone()
                                     })
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.global_mut::<Store>().set_read(id, !event.read);
@@ -231,7 +263,7 @@ impl Render for Center {
                                 div()
                                     .id(("notification-delete", id))
                                     .cursor_pointer()
-                                    .child("削除")
+                                    .child(delete.clone())
                                     .on_click(cx.listener(move |_, _, _, cx| {
                                         cx.global_mut::<Store>().delete(id);
                                     })),
@@ -239,6 +271,11 @@ impl Render for Center {
                     )
             }))
     }
+}
+
+fn local_time(time: SystemTime) -> String {
+    let local: chrono::DateTime<chrono::Local> = time.into();
+    local.format("%H:%M").to_string()
 }
 
 #[cfg(test)]
@@ -300,30 +337,88 @@ mod tests {
             .update(cx, |_, window, _| window.window_handle().window_id())
             .unwrap();
         cx.update(|cx| {
-            publish_error(
-                cx,
-                "host.connection_launcher_failed",
-                "失敗",
-                "接続できません".into(),
-            );
+            for _ in 0..5 {
+                publish_error(
+                    cx,
+                    "host.connection_launcher_failed",
+                    "失敗",
+                    "接続できません".into(),
+                );
+            }
             let store = cx.global::<Store>();
-            assert_eq!(store.events().len(), 1);
-            assert_eq!(store.popups_for(first_id).len(), 1);
+            assert_eq!(store.events().len(), 5);
+            assert_eq!(
+                store
+                    .popups_for(first_id)
+                    .iter()
+                    .map(|event| event.id)
+                    .collect::<Vec<_>>(),
+                [5, 4, 3]
+            );
             assert!(store.popups_for(second_id).is_empty());
         });
         first
             .update(cx, |_, _, cx| {
-                assert_eq!(cx.global::<Store>().events().len(), 1)
+                assert_eq!(cx.global::<Store>().events().len(), 5)
             })
             .unwrap();
         second
             .update(cx, |_, _, cx| {
-                assert_eq!(cx.global::<Store>().events().len(), 1);
-                let id = cx.global::<Store>().events()[0].id;
+                assert_eq!(cx.global::<Store>().events().len(), 5);
+                let id = cx.global::<Store>().events()[4].id;
                 cx.global_mut::<Store>().dismiss_popup(id);
-                assert_eq!(cx.global::<Store>().events().len(), 1);
-                assert!(cx.global::<Store>().popups_for(first_id).is_empty());
+                assert_eq!(cx.global::<Store>().events().len(), 5);
+                assert_eq!(
+                    cx.global::<Store>()
+                        .popups_for(first_id)
+                        .iter()
+                        .map(|event| event.id)
+                        .collect::<Vec<_>>(),
+                    [4, 3, 2]
+                );
             })
             .unwrap();
+    }
+
+    #[test]
+    fn notification_labels_exist_in_both_locales_and_time_is_local() {
+        let mut locale = crate::localization::Localizer::bundled();
+        for locale_id in ["en-US", "ja-JP"] {
+            assert!(locale.set_active(&lapis_localization::LocaleId::new(locale_id)));
+            for key in [
+                "notification.empty",
+                "notification.unread",
+                "notification.mark-read",
+                "notification.mark-unread",
+                "notification.delete",
+                "notification.close",
+                "notification.severity.info",
+                "notification.severity.warning",
+                "notification.severity.error",
+                "notification.error.window",
+                "notification.error.host-launch",
+                "notification.error.persistence",
+            ] {
+                assert_ne!(
+                    locale.resolve(&lapis_localization::MessageId::new(key)),
+                    key
+                );
+            }
+            let empty = locale.resolve(&lapis_localization::MessageId::new("notification.empty"));
+            assert_eq!(
+                empty,
+                if locale_id == "ja-JP" {
+                    "通知はありません"
+                } else {
+                    "No notifications"
+                }
+            );
+        }
+        let now = SystemTime::now();
+        let expected = chrono::DateTime::<chrono::Local>::from(now)
+            .format("%H:%M")
+            .to_string();
+        assert_eq!(local_time(now), expected);
+        assert!(!local_time(now).contains("UTC"));
     }
 }

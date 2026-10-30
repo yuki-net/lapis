@@ -37,6 +37,7 @@ define_icons! {
     Problems => ("icons/problems.svg", include_bytes!("../../../assets/icons/problems.svg")),
     Menu => ("icons/menu.svg", include_bytes!("../../../assets/icons/menu.svg")),
     Search => ("icons/search.svg", include_bytes!("../../../assets/icons/search.svg")),
+    Bell => ("icons/bell.svg", include_bytes!("../../../assets/icons/bell.svg")),
     Close => ("icons/close.svg", include_bytes!("../../../assets/icons/close.svg")),
     Minus => ("icons/minus.svg", include_bytes!("../../../assets/icons/minus.svg")),
     Square => ("icons/square.svg", include_bytes!("../../../assets/icons/square.svg")),

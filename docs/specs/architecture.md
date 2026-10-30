@@ -86,7 +86,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 ## Desktop の共通Tab操作
 
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
-- 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
+- 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
 - HeaderのZone操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じZone Commandを実行できる。

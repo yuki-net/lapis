@@ -65,13 +65,17 @@ impl Render for Shell {
                                 .flex()
                                 .flex_col()
                                 .gap_1()
-                                .child(format!("{:?} · {}", event.severity, event.title))
+                                .child(format!(
+                                    "{} · {}",
+                                    event.severity.label(&self.locale),
+                                    event.title
+                                ))
                                 .child(event.message)
                                 .child(
                                     div()
                                         .id(("notification-popup-dismiss", id))
                                         .cursor_pointer()
-                                        .child("閉じる")
+                                        .child(self.t("notification.close"))
                                         .on_click(cx.listener(move |_, _, _, cx| {
                                             cx.global_mut::<crate::notification::Store>()
                                                 .dismiss_popup(id)

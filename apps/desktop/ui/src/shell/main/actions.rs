@@ -694,6 +694,45 @@ mod visibility_tests {
             .unwrap();
     }
 
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn header_notification_button_opens_and_reuses_tab(cx: &mut gpui::TestAppContext) {
+        let (shell, visual) = cx.add_window_view(|_, cx| {
+            let document = cx.new(|_| Empty);
+            Shell::new(document.into(), HashMap::new(), cx)
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let button = visual.debug_bounds("header-notifications").unwrap();
+        let search = visual.debug_bounds("header-search").unwrap();
+        let footer = visual.debug_bounds("footer").unwrap();
+        assert!(button.origin.x >= search.right());
+        assert!(button.bottom() <= footer.origin.y);
+        for _ in 0..2 {
+            visual.simulate_click(button.center(), gpui::Modifiers::none());
+        }
+        shell.read_with(visual, |shell, _| {
+            let tab = PanelTab::tool(id::VIEW_NOTIFICATIONS);
+            let panel = shell.shell.layout.find_tab(&tab).unwrap();
+            assert_eq!(
+                shell.shell.layout.zone_for_panel(&panel),
+                Some(ZonePosition::Right)
+            );
+            assert_eq!(
+                shell
+                    .shell
+                    .layout
+                    .placements()
+                    .iter()
+                    .filter(|(candidate, _)| candidate == &tab)
+                    .count(),
+                1
+            );
+        });
+    }
+
     #[gpui::test]
     fn empty_side_zones_reopen_by_command_without_opening_picker(cx: &mut gpui::TestAppContext) {
         let window = cx.add_window(|_, cx| {

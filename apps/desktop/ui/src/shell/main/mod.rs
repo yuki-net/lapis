@@ -60,6 +60,7 @@ pub(crate) struct Shell {
     document_view: AnyView,
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
+    notification_center: gpui::Entity<crate::notification::Center>,
     locale: Localizer,
     keymap: KeymapRegistry,
     languages: lapis_language::LanguageRegistry,
@@ -206,7 +207,7 @@ impl Shell {
             let _ = shell.update(cx, |shell, cx| shell.execute_command(command, window, cx));
         });
         let center = cx.new(|cx| crate::notification::Center::new(execute, cx));
-        feature_registry.register_shared_view(id::VIEW_NOTIFICATIONS.into(), center.into());
+        feature_registry.register_shared_view(id::VIEW_NOTIFICATIONS.into(), center.clone().into());
         let notifications = cx.observe_global::<crate::notification::Store>(|_, cx| cx.notify());
         for (view, entity) in views {
             feature_registry.register_shared_view(view, entity);
@@ -229,6 +230,7 @@ impl Shell {
             document_view,
             focus_handle: cx.focus_handle(),
             feature_registry,
+            notification_center: center,
             locale: Localizer::bundled(),
             keymap: KeymapRegistry::bundled(),
             languages: lapis_language::LanguageRegistry::bundled(),
@@ -366,6 +368,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let _ = self.locale.set_active(&locale);
+        self.notification_center
+            .update(cx, |center, cx| center.set_locale(&locale, cx));
         cx.notify();
     }
     pub(crate) fn request_document_close(
