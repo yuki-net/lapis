@@ -47,8 +47,18 @@ class TestPathRouting(unittest.TestCase):
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
 
-    def test_host_path_runs_only_host(self):
+    def test_host_internal_path_runs_only_host(self):
         self.assertEqual(jobs_for_paths(["backend/host/src/main.rs"]), {"host"})
+        self.assertEqual(jobs_for_paths(["backend/host/src/terminal.rs"]), {"host"})
+
+    def test_host_public_boundary_runs_desktop(self):
+        for path in (
+            "backend/host/Cargo.toml",
+            "backend/host/src/lib.rs",
+            "backend/host/src/client.rs",
+            "backend/host/src/profile.rs",
+        ):
+            self.assertEqual(jobs_for_paths([path]), {"host", "desktop"})
 
     def test_protocol_and_transport_keep_cross_surface_ci(self):
         expected = {"rust_core", "host", "desktop"}
