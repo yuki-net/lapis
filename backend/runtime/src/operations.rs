@@ -525,6 +525,7 @@ impl WorkspaceOperations {
             Operation::GitRepositories => {
                 let resolver = crate::WorkspacePathResolver::new(root.to_owned())?;
                 let mut repositories = Vec::new();
+                let mut discovered = HashSet::new();
                 for path in self
                     .git()?
                     .discover_repositories(resolver.root())
@@ -547,6 +548,7 @@ impl WorkspaceOperations {
                     if !path_matches(&directory, &self.require_repository(&directory)?.root) {
                         return Err(BackendStateError::WorkspaceDenied);
                     }
+                    discovered.insert(directory);
                     repositories.push(lapis_git::GitRepositorySnapshot {
                         id: path
                             .as_ref()
@@ -554,6 +556,8 @@ impl WorkspaceOperations {
                         path,
                     });
                 }
+                self.repository_cache
+                    .retain(|path, cache| cache.worktree.is_some() || discovered.contains(path));
                 Ok(Outcome::GitRepositories(repositories))
             }
             Operation::RepositoryGitStatus { repository_id } => {

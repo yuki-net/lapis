@@ -55,6 +55,7 @@ pub struct WorktreeSnapshot {
 pub enum GitUpdate {
     Snapshot(Vec<GitRepositoryStatus>),
     Changed(GitRepositoryStatus),
+    RepositoriesChanged,
 }
 
 pub trait GitSubscription: Send {

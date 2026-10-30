@@ -178,6 +178,9 @@ impl GitFeature {
                                 return false;
                             }
                             if let Some(update) = update {
+                                if matches!(update, lapis_git::GitUpdate::RepositoriesChanged) {
+                                    return git.submit_update(GitOperation::Refresh, cx);
+                                }
                                 return git.submit_update(GitOperation::ApplyUpdate(update), cx);
                             }
                             true

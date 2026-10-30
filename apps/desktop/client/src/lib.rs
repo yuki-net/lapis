@@ -345,6 +345,7 @@ impl GitSession {
         let statuses = match update {
             lapis_git::GitUpdate::Snapshot(statuses) => statuses,
             lapis_git::GitUpdate::Changed(status) => vec![status],
+            lapis_git::GitUpdate::RepositoriesChanged => return false,
         };
         let mut changed = false;
         for item in statuses {

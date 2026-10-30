@@ -119,6 +119,9 @@ impl lapis_git::GitSubscription for HostGitSubscription {
                 lapis_client_api::EventBody::GitStatusChanged { repository, .. } => {
                     return Ok(Some(lapis_git::GitUpdate::Changed(repository)));
                 }
+                lapis_client_api::EventBody::GitRepositoriesChanged { .. } => {
+                    return Ok(Some(lapis_git::GitUpdate::RepositoriesChanged));
+                }
                 lapis_client_api::EventBody::SnapshotRequired { .. } => {
                     return Err(git_error("Git snapshot required"));
                 }

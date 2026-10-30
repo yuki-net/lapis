@@ -628,3 +628,47 @@ fn git_subscription_receives_updates_and_reconnects_to_snapshot() {
                 .any(|file| file.path == "file.txt")
     }));
 }
+
+#[test]
+fn repository_rescan_removes_status_from_reconnect_snapshot() {
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    let repo = root.path().join("frontend");
+    std::fs::create_dir(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    let host = BackendHost::start().unwrap();
+    let workspace = WorkspaceId::new(host.register_workspace(root.path()).unwrap().as_str());
+    let client = host.git();
+    assert_eq!(client.repositories(&workspace).unwrap().len(), 1);
+    let mut events = client.subscribe(&workspace).unwrap();
+    events.recv_timeout(Duration::from_secs(2)).unwrap();
+    client
+        .repository_status(&workspace, "path:frontend")
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if matches!(
+            events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Some(lapis_git::GitUpdate::Changed(_))
+        ) {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    std::fs::rename(repo.join(".git"), root.path().join("removed-git")).unwrap();
+    assert!(client.repositories(&workspace).unwrap().is_empty());
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if matches!(
+            events.recv_timeout(Duration::from_secs(1)).unwrap(),
+            Some(lapis_git::GitUpdate::RepositoriesChanged)
+        ) {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    let mut reconnected = client.subscribe(&workspace).unwrap();
+    assert!(
+        matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(lapis_git::GitUpdate::Snapshot(statuses)) if statuses.is_empty())
+    );
+}

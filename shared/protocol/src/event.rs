@@ -15,6 +15,8 @@ pub enum EventBody {
         workspace_id: WorkspaceId,
         repository: lapis_git::GitRepositoryStatus,
     },
+    #[serde(rename = "git.repositories_changed")]
+    GitRepositoriesChanged { workspace_id: WorkspaceId },
     #[serde(rename = "document.edited")]
     DocumentEdited {
         document_id: DocumentId,

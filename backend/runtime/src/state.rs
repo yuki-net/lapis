@@ -170,6 +170,14 @@ impl BackendState {
             .workspaces
             .get_mut(&workspace_id)
             .ok_or(BackendStateError::WorkspaceNotFound)?;
+        if !repository_id.starts_with("worktree:")
+            && workspace
+                .git_repositories
+                .as_ref()
+                .is_some_and(|known| !known.contains(&repository_id))
+        {
+            return Ok(None);
+        }
         if workspace
             .git_statuses
             .get(&repository_id)
@@ -286,16 +294,40 @@ impl BackendState {
         result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
     ) -> DispatchOutcome {
         let result = result.and_then(|result| {
-            let events = if changed {
-                vec![
+            let mut events = Vec::new();
+            if let lapis_client_api::WorkspaceOperationResult::GitRepositories(repositories) =
+                &result
+            {
+                let workspace = self
+                    .workspaces
+                    .get_mut(&workspace_id)
+                    .ok_or(BackendStateError::WorkspaceNotFound)?;
+                let known: HashSet<String> = repositories
+                    .iter()
+                    .map(|repository| repository.id.clone())
+                    .collect();
+                let list_changed = workspace
+                    .git_repositories
+                    .as_ref()
+                    .is_some_and(|previous| previous != &known);
+                workspace
+                    .git_statuses
+                    .retain(|id, _| id.starts_with("worktree:") || known.contains(id));
+                workspace.git_repositories = Some(known);
+                if list_changed {
+                    events.push(workspace.publish(EventBody::GitRepositoriesChanged {
+                        workspace_id: workspace_id.clone(),
+                    })?);
+                }
+            }
+            if changed {
+                events.push(
                     self.workspaces
                         .get_mut(&workspace_id)
                         .ok_or(BackendStateError::WorkspaceNotFound)?
                         .publish(EventBody::WorkspaceChanged { workspace_id })?,
-                ]
-            } else {
-                Vec::new()
-            };
+                );
+            }
             Ok((ResponseBody::WorkspaceExecute(result), events))
         });
         match result {
@@ -1334,6 +1366,7 @@ struct WorkspaceState {
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
     git_statuses: HashMap<String, lapis_git::GitRepositoryStatus>,
+    git_repositories: Option<HashSet<String>>,
     git_driver_started: bool,
 }
 
@@ -1356,6 +1389,7 @@ impl WorkspaceState {
             ))),
             events: EventJournal::default(),
             git_statuses: HashMap::new(),
+            git_repositories: None,
             git_driver_started: false,
         })
     }
