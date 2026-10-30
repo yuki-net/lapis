@@ -152,6 +152,18 @@ impl Shell {
         cx.notify();
     }
 
+    pub(crate) fn focus_view_in_zone(
+        &mut self,
+        position: ZonePosition,
+        view: ViewId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_view_in_zone(position, view.clone(), cx);
+        self.shell.focused_panel = self.shell.layout.find_tab(&PanelTab::tool(view));
+        window.focus(&self.focus_handle);
+    }
+
     pub(crate) fn request_zone_open_with_duration(
         &mut self,
         position: ZonePosition,
@@ -620,6 +632,66 @@ mod visibility_tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             div()
         }
+    }
+
+    #[gpui::test]
+    fn notification_open_reuses_and_activates_the_right_zone_tab(cx: &mut gpui::TestAppContext) {
+        let window = cx.add_window(|_, cx| {
+            let document = cx.new(|_| Empty);
+            Shell::new(document.into(), HashMap::new(), cx)
+        });
+        window
+            .update(cx, |shell, window, cx| {
+                let tab = PanelTab::tool(id::VIEW_NOTIFICATIONS);
+                assert!(shell.shell.layout.find_tab(&tab).is_none());
+                shell.focus_view_in_zone(
+                    ZonePosition::Right,
+                    id::VIEW_NOTIFICATIONS.into(),
+                    window,
+                    cx,
+                );
+                let panel = shell.shell.layout.find_tab(&tab).unwrap();
+                assert_eq!(
+                    shell.shell.layout.zone_for_panel(&panel),
+                    Some(ZonePosition::Right)
+                );
+                shell
+                    .shell
+                    .layout
+                    .open_tab(ZonePosition::Right, PanelTab::tool("other"))
+                    .unwrap();
+                shell.focus_view_in_zone(
+                    ZonePosition::Right,
+                    id::VIEW_NOTIFICATIONS.into(),
+                    window,
+                    cx,
+                );
+                assert_eq!(shell.shell.focused_panel, Some(panel.clone()));
+                assert_eq!(
+                    shell.shell.layout.panel(&panel).unwrap().active,
+                    Some(tab.clone())
+                );
+                assert_eq!(
+                    shell
+                        .shell
+                        .layout
+                        .placements()
+                        .iter()
+                        .filter(|(candidate, _)| candidate == &tab)
+                        .count(),
+                    1
+                );
+                assert!(
+                    shell
+                        .picker_contributions(&PickerTarget::Zone(ZonePosition::Right))
+                        .iter()
+                        .all(|item| item
+                            .view
+                            .as_ref()
+                            .is_none_or(|view| view.as_str() != id::VIEW_NOTIFICATIONS))
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

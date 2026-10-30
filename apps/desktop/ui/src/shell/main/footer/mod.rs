@@ -3,7 +3,7 @@ use crate::components::{ButtonSize, button};
 
 impl Shell {
     /// フッター（ステータスバー）を描画する。
-    pub(super) fn render_footer(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (line, column) = self.session.cursor;
         let mut path = div()
             .flex()
@@ -27,6 +27,18 @@ impl Shell {
             .items_center()
             .gap(tokens::spacing::XS)
             .text_size(tokens::typography::FONT_SM)
+            .child(
+                button("footer-notifications", "通知", ButtonSize::Xs).on_click(cx.listener(
+                    |this, _, window, cx| {
+                        this.focus_view_in_zone(
+                            ZonePosition::Right,
+                            id::VIEW_NOTIFICATIONS.into(),
+                            window,
+                            cx,
+                        );
+                    },
+                )),
+            )
             .child(self.footer_button("footer-position", format!("{line}:{column}")))
             .child(self.footer_button("footer-line-ending", self.footer_line_ending()))
             .child(self.footer_button("footer-encoding", self.footer_encoding()));

@@ -9,6 +9,7 @@ pub mod extension_ui;
 mod features;
 pub mod keymap;
 pub mod localization;
+pub mod notification;
 mod root;
 mod shell;
 pub mod theme;

@@ -9,6 +9,7 @@
   "view.assistant": "AI Assistant",
   "view.terminal": "Terminal",
   "view.problems": "Problems",
+  "view.notifications": "Notifications",
   "view.output": "Output",
   "view.command-search": "Search",
   "command.new-document": "New Document",

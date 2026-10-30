@@ -188,6 +188,12 @@ pub(crate) fn open_desktop_window(
     });
     if let Err(error) = result {
         eprintln!("Windowを開けませんでした: {error}");
+        crate::notification::publish_error(
+            cx,
+            "window.creation_failed",
+            "Windowの作成に失敗しました",
+            error.to_string(),
+        );
     }
 }
 
