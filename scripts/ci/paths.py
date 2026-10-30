@@ -22,7 +22,7 @@ PATH_RULES = [
     (["patches/gpui-"], {"desktop"}),
     
     # Host関連
-    (["backend/host/"], {"host", "desktop"}),
+    (["backend/host/"], {"host"}),
     
     # Backend共通（Host以外）
     (["backend/runtime/"], {"rust_core", "host", "desktop"}),
