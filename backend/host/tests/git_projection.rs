@@ -267,3 +267,98 @@ fn stage_over_the_wire_changes_only_the_selected_workspace_index() {
         );
     }
 }
+
+#[test]
+fn repository_discovery_projects_workspace_relative_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let first = root.path().join("frontend");
+    let second = root.path().join("backend");
+    std::fs::create_dir(&first).unwrap();
+    std::fs::create_dir(&second).unwrap();
+    git(&first, &["init", "-b", "main"]);
+    git(&second, &["init", "-b", "main"]);
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let wire = host.connect(root.path()).unwrap();
+    let response = wire
+        .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+            workspace_id: workspace.clone(),
+            operation: WorkspaceOperation::GitRepositories,
+        }))
+        .unwrap();
+    let ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitRepositories(repositories)) =
+        response
+    else {
+        panic!("repository list required");
+    };
+    assert_eq!(repositories.len(), 2);
+    assert_ne!(repositories[0].id, repositories[1].id);
+    assert_eq!(
+        repositories
+            .iter()
+            .map(|repo| repo.path.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["backend", "frontend"]
+    );
+    let desktop = host.git();
+    assert_eq!(
+        desktop
+            .repositories(&WorkspaceId::new(workspace.as_str()))
+            .unwrap(),
+        repositories
+    );
+    let serialized = serde_json::to_string(&repositories).unwrap();
+    assert!(!serialized.contains(&root.path().to_string_lossy().replace('\\', "\\\\")));
+}
+
+#[test]
+fn repository_operations_are_scoped_to_the_selected_repository() {
+    let root = tempfile::tempdir().unwrap();
+    for name in ["frontend", "backend"] {
+        let path = root.path().join(name);
+        std::fs::create_dir(&path).unwrap();
+        git(&path, &["init", "-b", "main"]);
+        std::fs::write(path.join("note.txt"), "draft\n").unwrap();
+    }
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let wire = host.connect(root.path()).unwrap();
+    let execute = |operation| {
+        wire.request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+            workspace_id: workspace.clone(),
+            operation,
+        }))
+        .unwrap()
+    };
+    let response = execute(WorkspaceOperation::RepositoryGitAction {
+        repository_id: "path:frontend".into(),
+        request: lapis_git::GitActionRequest {
+            action: lapis_git::GitAction::Stage {
+                path: "note.txt".into(),
+            },
+            expected_head: Some(String::new()),
+        },
+    });
+    assert!(matches!(
+        response,
+        ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitAction(_))
+    ));
+    for (name, staged) in [("frontend", true), ("backend", false)] {
+        let response = execute(WorkspaceOperation::RepositoryGitStatus {
+            repository_id: format!("path:{name}"),
+        });
+        let ResponseBody::WorkspaceExecute(WorkspaceOperationResult::RepositoryGitStatus {
+            status,
+            ..
+        }) = response
+        else {
+            panic!("status required");
+        };
+        assert_eq!(status.files.len(), 1);
+        assert_eq!(status.files[0].staged, staged);
+    }
+    let response = execute(WorkspaceOperation::RepositoryGitStatus {
+        repository_id: "path:../outside".into(),
+    });
+    assert!(matches!(response, ResponseBody::Error(_)));
+}

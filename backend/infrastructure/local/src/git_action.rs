@@ -287,6 +287,7 @@ impl LocalGitBackend {
             ));
         }
         let mutation = request.action.is_mutation();
+        let action = request.action.clone();
         let text = match request.action {
             GitAction::Diff { path, staged } => diff(repository, &path, staged)?,
             GitAction::Stage { path } => git_text(repository, &["add", "--", relative(&path)?])?,
@@ -472,8 +473,55 @@ impl LocalGitBackend {
                 )?
             }
         };
+        let output = limit_git_output(mutation, text)?;
+        let diff = match &action {
+            GitAction::Diff { path, .. } => Some(lapis_git::GitDiffSnapshot {
+                path: path.clone(),
+                additions: output
+                    .lines()
+                    .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
+                    .count(),
+                deletions: output
+                    .lines()
+                    .filter(|line| line.starts_with('-') && !line.starts_with("---"))
+                    .count(),
+                binary: output.contains("GIT binary patch") || output.contains("Binary files"),
+                patch: output.clone(),
+            }),
+            _ => None,
+        };
+        let stashes = if matches!(action, GitAction::Stashes) {
+            output
+                .lines()
+                .map(|line| {
+                    let mut fields = line.splitn(3, ' ');
+                    let index = fields
+                        .next()
+                        .and_then(|v| v.strip_prefix("stash@{"))
+                        .and_then(|v| v.strip_suffix('}'))
+                        .and_then(|v| v.parse().ok());
+                    match (index, fields.next(), fields.next()) {
+                        (Some(index), Some(oid), Some(subject)) if !oid.is_empty() => {
+                            Ok(lapis_git::GitStash {
+                                index,
+                                oid: oid.to_owned(),
+                                subject: subject.to_owned(),
+                            })
+                        }
+                        _ => Err(GitError::new(
+                            GitErrorKind::InvalidOutput,
+                            "Stash一覧の形式が不正です",
+                        )),
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
+        };
         Ok(GitActionResult {
-            output: limit_git_output(mutation, text)?,
+            output,
+            diff,
+            stashes,
         })
     }
 }

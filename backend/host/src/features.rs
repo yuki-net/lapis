@@ -81,6 +81,57 @@ impl HostGit {
     }
 }
 impl GitConnection for HostGit {
+    fn repositories(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Vec<lapis_git::GitRepositorySnapshot>, GitError> {
+        match execute(&self.host, workspace, Operation::GitRepositories).map_err(git_error)? {
+            Outcome::GitRepositories(value) => Ok(value),
+            _ => Err(git_error("Unexpected Git repositories")),
+        }
+    }
+    fn repository_status(
+        &self,
+        workspace: &WorkspaceId,
+        repository_id: &str,
+    ) -> Result<GitSnapshot, GitError> {
+        match execute(
+            &self.host,
+            workspace,
+            Operation::RepositoryGitStatus {
+                repository_id: repository_id.to_owned(),
+            },
+        )
+        .map_err(git_error)?
+        {
+            Outcome::RepositoryGitStatus {
+                repository_id: actual,
+                status,
+            } if actual == repository_id => Ok(status),
+            _ => Err(git_error("Unexpected Git repository status")),
+        }
+    }
+    fn repository_action(
+        &self,
+        workspace: &WorkspaceId,
+        repository_id: &str,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<lapis_git::GitActionResult, GitError> {
+        match execute(
+            &self.host,
+            workspace,
+            Operation::RepositoryGitAction {
+                repository_id: repository_id.to_owned(),
+                request,
+            },
+        )
+        .map_err(git_error)?
+        {
+            Outcome::GitAction(result) => Ok(result),
+            _ => Err(git_error("Unexpected Git repository operation")),
+        }
+    }
+
     fn open_worktree(
         &self,
         workspace: &WorkspaceId,

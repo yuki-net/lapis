@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 
 mod action;
 mod connection;
-pub use action::{ConflictSide, GitAction, GitActionRequest, GitActionResult};
+pub use action::{ConflictSide, GitAction, GitActionRequest, GitActionResult, GitStash};
 pub use connection::{
-    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitSnapshot, WorktreeSnapshot,
+    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitRepositorySnapshot, GitSnapshot,
+    WorktreeSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -68,6 +69,16 @@ pub struct TaskWorktree {
 }
 
 pub trait GitBackend: Send + Sync {
+    fn discover_repositories(
+        &self,
+        _workspace: &std::path::Path,
+    ) -> Result<Vec<PathBuf>, GitError> {
+        Err(GitError::new(
+            GitErrorKind::Io,
+            "repository discovery is unsupported",
+        ))
+    }
+
     fn execute(
         &self,
         _repository: &std::path::Path,

@@ -91,6 +91,71 @@ impl WorkspaceOperations {
         }
         Ok(status)
     }
+    fn repository_directory(
+        &self,
+        root: &Path,
+        id: &str,
+    ) -> Result<std::path::PathBuf, BackendStateError> {
+        let resolver = crate::WorkspacePathResolver::new(root.to_owned())?;
+        let relative = if id == "root" {
+            None
+        } else {
+            Some(
+                WorkspaceRelativePath::parse(
+                    id.strip_prefix("path:")
+                        .ok_or(BackendStateError::WorkspaceDenied)?,
+                )
+                .map_err(|_| BackendStateError::WorkspaceDenied)?,
+            )
+        };
+        resolver
+            .resolve_directory(relative.as_ref())
+            .map_err(Into::into)
+    }
+
+    fn git_action(
+        &self,
+        directory: &Path,
+        request: lapis_git::GitActionRequest,
+    ) -> Result<Outcome, BackendStateError> {
+        self.require_repository(directory)?;
+        if let Some(path) = request.action.path() {
+            let path = WorkspaceRelativePath::parse(path)
+                .map_err(|_| BackendStateError::WorkspaceDenied)?;
+            crate::WorkspacePathResolver::new(directory.to_owned())?.resolve_scoped_path(&path)?;
+        }
+        Ok(Outcome::GitAction(
+            self.git()?.execute(directory, request).map_err(problem)?,
+        ))
+    }
+
+    fn git_snapshot(
+        &self,
+        directory: &Path,
+        worktree: Option<TaskId>,
+    ) -> Result<GitSnapshot, BackendStateError> {
+        let status = self.require_repository(directory)?;
+        let files = status
+            .files
+            .into_iter()
+            .map(|file| {
+                Ok(GitFileSnapshot {
+                    path: relative_path(&file.path)?,
+                    old_path: file.old_path.as_deref().map(relative_path).transpose()?,
+                    kind: file.kind,
+                    staged: file.staged,
+                })
+            })
+            .collect::<Result<Vec<_>, BackendStateError>>()?;
+        Ok(GitSnapshot {
+            workspace_id: self.workspace_id.clone(),
+            worktree_id: worktree,
+            branch: status.branch,
+            head: status.head,
+            files,
+        })
+    }
+
     fn allocate_ids(&self, root: &Path) -> Result<(TaskId, ExecutionId), BackendStateError> {
         let records = self
             .tasks
@@ -222,22 +287,61 @@ impl WorkspaceOperations {
         root: &Path,
     ) -> Result<Outcome, BackendStateError> {
         match operation {
+            Operation::GitRepositories => {
+                let resolver = crate::WorkspacePathResolver::new(root.to_owned())?;
+                let mut repositories = Vec::new();
+                for path in self
+                    .git()?
+                    .discover_repositories(resolver.root())
+                    .map_err(problem)?
+                {
+                    let relative = path
+                        .strip_prefix(resolver.root())
+                        .map_err(|_| BackendStateError::WorkspaceDenied)?;
+                    let path = if relative.as_os_str().is_empty() {
+                        None
+                    } else {
+                        Some(relative_path(relative)?)
+                    };
+                    let checked = path
+                        .as_deref()
+                        .map(WorkspaceRelativePath::parse)
+                        .transpose()
+                        .map_err(|_| BackendStateError::WorkspaceDenied)?;
+                    let directory = resolver.resolve_directory(checked.as_ref())?;
+                    if !path_matches(&directory, &self.require_repository(&directory)?.root) {
+                        return Err(BackendStateError::WorkspaceDenied);
+                    }
+                    repositories.push(lapis_git::GitRepositorySnapshot {
+                        id: path
+                            .as_ref()
+                            .map_or_else(|| "root".to_owned(), |path| format!("path:{path}")),
+                        path,
+                    });
+                }
+                Ok(Outcome::GitRepositories(repositories))
+            }
+            Operation::RepositoryGitStatus { repository_id } => {
+                let directory = self.repository_directory(root, &repository_id)?;
+                Ok(Outcome::RepositoryGitStatus {
+                    repository_id,
+                    status: self.git_snapshot(&directory, None)?,
+                })
+            }
+            Operation::RepositoryGitAction {
+                repository_id,
+                request,
+            } => {
+                let directory = self.repository_directory(root, &repository_id)?;
+                self.git_action(&directory, request)
+            }
             Operation::GitAction { worktree, request } => {
                 let directory = worktree
                     .as_ref()
                     .map(|id| self.worktree(root, id).map(|tree| tree.path))
                     .transpose()?
                     .unwrap_or_else(|| root.to_owned());
-                self.require_repository(&directory)?;
-                if let Some(path) = request.action.path() {
-                    let path = lapis_client_api::WorkspaceRelativePath::parse(path)
-                        .map_err(|_| BackendStateError::WorkspaceDenied)?;
-                    crate::WorkspacePathResolver::new(directory.clone())?
-                        .resolve_scoped_path(&path)?;
-                }
-                Ok(Outcome::GitAction(
-                    self.git()?.execute(&directory, request).map_err(problem)?,
-                ))
+                self.git_action(&directory, request)
             }
             Operation::GitStatus { worktree } => {
                 let directory = worktree
@@ -245,26 +349,7 @@ impl WorkspaceOperations {
                     .map(|id| self.worktree(root, id).map(|tree| tree.path))
                     .transpose()?
                     .unwrap_or_else(|| root.to_owned());
-                let status = self.require_repository(&directory)?;
-                let files = status
-                    .files
-                    .into_iter()
-                    .map(|file| {
-                        Ok(GitFileSnapshot {
-                            path: relative_path(&file.path)?,
-                            old_path: file.old_path.as_deref().map(relative_path).transpose()?,
-                            kind: file.kind,
-                            staged: file.staged,
-                        })
-                    })
-                    .collect::<Result<Vec<_>, BackendStateError>>()?;
-                Ok(Outcome::GitStatus(GitSnapshot {
-                    workspace_id: self.workspace_id.clone(),
-                    worktree_id: worktree,
-                    branch: status.branch,
-                    head: status.head,
-                    files,
-                }))
+                Ok(Outcome::GitStatus(self.git_snapshot(&directory, worktree)?))
             }
             Operation::GitDiff { path, worktree } => {
                 let directory = worktree

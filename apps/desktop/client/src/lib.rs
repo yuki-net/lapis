@@ -397,18 +397,9 @@ impl GitSession {
             self.clear_inspection();
             if matches!(action, lapis_git::GitAction::Stashes) {
                 self.stash_refs = result
-                    .output
-                    .lines()
-                    .filter_map(|line| {
-                        let mut fields = line.split_whitespace();
-                        let index = fields
-                            .next()?
-                            .strip_prefix("stash@{")?
-                            .strip_suffix('}')?
-                            .parse()
-                            .ok()?;
-                        Some((index, fields.next()?.to_owned()))
-                    })
+                    .stashes
+                    .iter()
+                    .map(|stash| (stash.index, stash.oid.clone()))
                     .collect();
             }
             if let lapis_git::GitAction::Diff { path, staged } = action {
@@ -417,21 +408,7 @@ impl GitSession {
                     path: path.clone(),
                     staged,
                 });
-                self.selected_diff = Some(lapis_git::GitDiffSnapshot {
-                    path,
-                    additions: result
-                        .output
-                        .lines()
-                        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
-                        .count(),
-                    deletions: result
-                        .output
-                        .lines()
-                        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
-                        .count(),
-                    patch: result.output.clone(),
-                    binary: result.output.contains("GIT binary patch"),
-                });
+                self.selected_diff = result.diff.clone();
             } else {
                 self.action_output = result.output.clone();
             }

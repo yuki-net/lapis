@@ -83,6 +83,8 @@ impl GitBackend for FakeGit {
     ) -> Result<lapis_git::GitActionResult, GitError> {
         self.calls.lock().unwrap().push(repository.to_owned());
         Ok(lapis_git::GitActionResult {
+            diff: None,
+            stashes: Vec::new(),
             output: "executed".into(),
         })
     }

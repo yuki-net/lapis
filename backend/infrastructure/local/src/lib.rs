@@ -1533,6 +1533,50 @@ impl LocalGitBackend {
 }
 
 impl GitBackend for LocalGitBackend {
+    fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
+        let root = fs::canonicalize(workspace)
+            .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+        let mut candidates = vec![root.clone()];
+        for entry in fs::read_dir(&root)
+            .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?
+        {
+            let entry =
+                entry.map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+            if entry
+                .file_type()
+                .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?
+                .is_dir()
+            {
+                candidates.push(entry.path());
+            }
+        }
+        let mut repositories = Vec::new();
+        for candidate in candidates {
+            match fs::metadata(candidate.join(".git")) {
+                Ok(metadata) if metadata.is_dir() || metadata.is_file() => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(GitError::new(GitErrorKind::Io, error.to_string())),
+            };
+            let actual = match git_text(&candidate, &["rev-parse", "--show-toplevel"]) {
+                Ok(actual) => actual,
+                Err(error) if error.kind() == GitErrorKind::NotRepository => continue,
+                Err(error) => return Err(error),
+            };
+            let actual = fs::canonicalize(actual.trim())
+                .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+            if actual
+                == fs::canonicalize(&candidate)
+                    .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?
+                && actual.starts_with(&root)
+            {
+                repositories.push(actual);
+            }
+        }
+        repositories.sort();
+        repositories.dedup();
+        Ok(repositories)
+    }
     fn execute(
         &self,
         repository: &Path,
@@ -1982,6 +2026,15 @@ impl<T: TaskBackend> TaskBackend for LoopbackBackend<T> {
 }
 
 impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
+    fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
+        if !self.gate.is_connected() {
+            return Err(GitError::new(
+                GitErrorKind::Io,
+                "loopback workspace is disconnected",
+            ));
+        }
+        self.inner.discover_repositories(workspace)
+    }
     fn execute(
         &self,
         repository: &Path,
