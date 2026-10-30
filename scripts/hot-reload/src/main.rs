@@ -42,6 +42,8 @@ fn main() {
             "lapis",
             "--features",
             "hot-reload",
+            "--profile",
+            "hot-reload",
             "--args=--state-directory target/dev-state --workspace .",
         ])
         .status();

@@ -52,6 +52,8 @@ GPUI Entity / AnyView dispatch (HotFn境界)
 
 IDEとCLIはいずれも `scripts/hot-reload` のlauncherを起動します。launcherは `target/dx-fixed0710/bin/dx.exe` の存在確認と同一worktreeの排他ロック取得後にdxを起動します。dxはdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。修正版がない場合は以下の手順で準備してください。`cargo dev-hot-reload` 単独では接続先を設定しません。
 
+launcherは `hot-reload` Cargo profileを使用します。これは `dev` を継承してLTOを無効化し、workspace replayのコンパイル時間を短縮します。通常のDebugとReleaseには適用されず、初回起動時は専用profileのビルドが必要です。
+
 RustRoverのStopでlauncherを強制終了すると、dxが残ってロックだけ解放される場合があります。この場合は残ったdevserverを終了してから再起動してください。強制終了後の重複起動防止は未対応です。
 
 ```powershell

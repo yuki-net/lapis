@@ -22,6 +22,11 @@ license = "MIT"
 [profile.dev]
 opt-level = 1
 
+# Hot Patch の workspace replay では Thin LTO の再実行を避ける。
+[profile.hot-reload]
+inherits = "dev"
+lto = "off"
+
 [workspace.dependencies]
 axum = { version = "0.8", features = ["ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
