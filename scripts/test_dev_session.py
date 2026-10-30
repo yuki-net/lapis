@@ -112,6 +112,27 @@ fn main() {
             kernel.CloseHandle.argtypes = [ctypes.c_void_p]
             handles = []
             launchers = []
+            launcher_handles = {}
+
+            def launcher_handle_for(session):
+                if session in launcher_handles:
+                    return launcher_handles[session]
+                pid = int(session.name.split("-", 1)[0])
+                handle = kernel.OpenProcess(0x00101001, False, pid)
+                self.assertTrue(handle)
+                image = ctypes.create_unicode_buffer(32768)
+                size = ctypes.c_uint32(len(image))
+                if not kernel.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)) or Path(image.value).resolve() != (root / "launcher-target" / "debug" / "lapis-dev-session.exe").resolve():
+                    kernel.CloseHandle(handle)
+                    self.fail("unexpected launcher process identity")
+                launcher_handles[session] = handle
+                return handle
+
+            def stop_launcher(session):
+                handle = launcher_handle_for(session)
+                self.assertTrue(kernel.TerminateProcess(handle, 1))
+                self.assertEqual(kernel.WaitForSingleObject(handle, 10000), 0)
+
             other_binary = root / "other-worktree" / "target" / "debug" / "lapis-host.exe"
             other_binary.parent.mkdir(parents=True)
             shutil.copyfile(binary_dir / "lapis-host.exe", other_binary)
@@ -134,6 +155,7 @@ fn main() {
                     sessions = set((root / "target" / "dev-sessions").glob("*")) - before
                     if len(sessions) == 1:
                         hosts = sessions.pop() / "hosts"
+                        launcher_handle_for(hosts.parent)
                         try:
                             pid = int((hosts / "host.pid").read_text())
                             handle = kernel.OpenProcess(0x00101001, False, pid)
@@ -158,6 +180,7 @@ fn main() {
                 existing_hosts = root / "existing-hosts"
                 existing_hosts.mkdir()
                 (existing_hosts / "existing").touch()
+                before_existing = set((root / "target" / "dev-sessions").glob("*"))
                 existing_client = subprocess.Popen(
                     ["cargo", "run", "--locked", "--manifest-path", str(launcher / "Cargo.toml"), "--target-dir", str(root / "launcher-target"), "--quiet", "--", "--local-host-directory", str(existing_hosts)],
                     cwd=root, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -170,7 +193,9 @@ fn main() {
                         self.fail("existing-host client exited before connecting")
                     time.sleep(0.05)
                 self.assertTrue((existing_hosts / "connected").exists())
-                existing_client.terminate()
+                existing_sessions = set((root / "target" / "dev-sessions").glob("*")) - before_existing
+                self.assertEqual(len(existing_sessions), 1)
+                stop_launcher(existing_sessions.pop())
                 existing_client.wait(timeout=10)
                 self.assertIsNone(remote.poll())
                 before = set((root / "target" / "dev-sessions").glob("*"))
@@ -186,6 +211,7 @@ fn main() {
                     sessions = set((root / "target" / "dev-sessions").glob("*")) - before
                     if len(sessions) == 1:
                         session = sessions.pop()
+                        launcher_handle_for(session)
                         try:
                             pid = int((session / "standalone.pid").read_text())
                             standalone_handle = kernel.OpenProcess(0x00101001, False, pid)
@@ -203,25 +229,16 @@ fn main() {
                         self.fail("standalone host exited")
                     time.sleep(0.05)
                 self.assertTrue(standalone_handle)
-                standalone.terminate()
+                stop_launcher(session)
                 standalone.wait(timeout=10)
                 self.assertEqual(kernel.WaitForSingleObject(standalone_handle, 10000), 0)
                 self.assertIsNone(remote.poll())
+                self.assertEqual(kernel.WaitForSingleObject(first_handle, 0), 0x102)
+                self.assertEqual(kernel.WaitForSingleObject(second_handle, 0), 0x102)
                 self.assertNotEqual(first_hosts, second_hosts)
                 # RustRoverはlauncherへCtrl+Cを送り、Cargoは正常終了し得る。
                 # launcherを直接終了してsession Jobの動作を検証する。
-                launcher_pid = int(first_hosts.parent.name.split("-", 1)[0])
-                launcher_handle = kernel.OpenProcess(0x00101001, False, launcher_pid)
-                self.assertTrue(launcher_handle)
-                try:
-                    image = ctypes.create_unicode_buffer(32768)
-                    size = ctypes.c_uint32(len(image))
-                    self.assertTrue(kernel.QueryFullProcessImageNameW(launcher_handle, 0, image, ctypes.byref(size)))
-                    self.assertEqual(Path(image.value).resolve(), (root / "launcher-target" / "debug" / "lapis-dev-session.exe").resolve())
-                    self.assertTrue(kernel.TerminateProcess(launcher_handle, 1))
-                    self.assertEqual(kernel.WaitForSingleObject(launcher_handle, 10000), 0)
-                finally:
-                    kernel.CloseHandle(launcher_handle)
+                stop_launcher(first_hosts.parent)
                 first.wait(timeout=10)
                 self.assertIn(f"Desktop session: {first_hosts.parent.name}".encode(), first.stderr.read())
                 self.assertEqual(kernel.WaitForSingleObject(first_handle, 10000), 0)
@@ -231,6 +248,27 @@ fn main() {
                 self.assertEqual(second.wait(timeout=10), 0)
                 self.assertEqual(kernel.WaitForSingleObject(second_handle, 0), 0x102)
             finally:
+                # 起動待ちの途中で失敗しても、このfixtureのlauncherだけ回収する。
+                for session in (root / "target" / "dev-sessions").glob("*"):
+                    if session in launcher_handles:
+                        continue
+                    try:
+                        pid = int(session.name.split("-", 1)[0])
+                    except ValueError:
+                        continue
+                    handle = kernel.OpenProcess(0x00101001, False, pid)
+                    if handle:
+                        image = ctypes.create_unicode_buffer(32768)
+                        size = ctypes.c_uint32(len(image))
+                        if kernel.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)) and Path(image.value).resolve() == (root / "launcher-target" / "debug" / "lapis-dev-session.exe").resolve():
+                            launcher_handles[session] = handle
+                        else:
+                            kernel.CloseHandle(handle)
+                for handle in launcher_handles.values():
+                    if kernel.WaitForSingleObject(handle, 0) == 0x102:
+                        kernel.TerminateProcess(handle, 1)
+                        kernel.WaitForSingleObject(handle, 10000)
+                    kernel.CloseHandle(handle)
                 for process in launchers:
                     if process.poll() is None:
                         process.terminate()

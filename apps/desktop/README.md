@@ -43,11 +43,11 @@ Desktopを変更・確認する開発者向け。以下は対象のworktreeル�
 
 WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用できます。Run用のビルド先は `target/dev-build/` に分け、実行中の通常開発用binaryと競合しないようにします。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したHostを終了し、既存Hostへの接続や別Runには影響しません。通常のDesktop終了後はHostが残ります。sessionごとのDesktop設定は別々で、次のRunへ自動引き継ぎしません。残ったsessionのLocal Hostは、Desktopを終了後、ログの `Desktop session:` に表示された名前を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。`--local-host-directory <directory>` を指定してそのRunがHostを起動した場合は、同じdirectoryを `-Session <session名> -LocalHostDirectory <directory>` に指定します。Hostを停止するとDocument・Terminalの実行状態は失われます。
 
-build/runは同じ `target/` を使い、開発用の設定・会話・復元状態・Host接続情報は `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
+`cargo dev` は `target/debug/` のbinaryを使い、開発用の設定・会話・復元状態・Host接続情報を `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 
 生成物と開発用状態はGit管理外の `target/` 内に置くため、worktreeのディレクトリ削除と一緒に消えます。`cargo clean`でも開発用状態ごと削除されるため、残したいファイルは先に保存してください。worktree削除前に起動中のプロセスを終了し、復元用の下書きも必要なら保存します。以前の `target/run/` は自動移動・削除しません。不要なら停止後に削除できます。Cargoのダウンロードキャッシュはユーザー共通で再利用します。
 
-`lapis.exe`（Desktop）と `lapis-host.exe`（Host）は明確に分離されています。Local Workspaceを開くと `lapis-host.exe` がlazy startされ、loopback QUICで接続します。Remote接続のみではLocal Hostは起動しません。Desktopを終了してもLocal Hostは製品仕様どおり存続し、Host上の未保存Document・Terminalは残ります。画面は通常どおり閉じるかIDEで停止します。IDEの強制停止では未保存状態の確定を保証しないため、編集がある場合は先に保存して画面を閉じてください。Windowsで再ビルド・worktree削除がexeの使用中エラーになる場合は、画面と作業プロセスを終了してから `powershell -NoProfile -File scripts/stop_dev_host.ps1` を実行します。この明示操作は該当worktreeのLocal Hostを終了するため、Host上の実行状態は失われますが、他のworktreeのexeは停止しません。
+`lapis.exe`（Desktop）と `lapis-host.exe`（Host）は明確に分離されています。Local Workspaceを開くと `lapis-host.exe` がlazy startされ、loopback QUICで接続します。Remote接続のみではLocal Hostは起動しません。Desktopを終了してもLocal Hostは製品仕様どおり存続し、Host上の未保存Document・Terminalは残ります。IDEの強制停止では未保存状態の確定を保証しないため、編集がある場合は先に保存して画面を閉じてください。Windowsで残ったHostを明示停止する場合は、画面と作業プロセスを終了してから、`cargo dev` のHostには引数なしの `powershell -NoProfile -File scripts/stop_dev_host.ps1`、RustRover RunのHostには上記の `-Session <session名>` 付きコマンドを使います。この操作でHost上の実行状態は失われますが、他のworktreeのexeは停止しません。
 
 コミット時のhookはRustのfmtとworkspace全体の`cargo check`で、変更関連のテストは手元で実行します。全体の合否は `.github/workflows/ci.yml` のCIで確認します。Rustの検証内容は `scripts/check.py` をCIとローカルで共有し、既存の対象・警告の扱いを維持しています。実画面の確認はCIとは別に行います。
 
