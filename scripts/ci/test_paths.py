@@ -30,6 +30,27 @@ class TestPathRouting(unittest.TestCase):
         self.assertNotIn("Build Release Desktop", workflow)
         self.assertNotIn("Test Release Inspector boundary", workflow)
 
+    def test_rust_ci_uses_sccache_without_target_cache(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for job_name, next_job in (
+            ("rust_core", "host_windows"),
+            ("host_windows", "desktop_windows"),
+            ("desktop_windows", "mobile"),
+        ):
+            job = workflow.split(f"\n  {job_name}:\n", 1)[1].split(f"\n  {next_job}:\n", 1)[0]
+            self.assertIn("mozilla-actions/sccache-action@v0.0.11", job)
+            self.assertIn('version: "v0.18.0"', job)
+            self.assertIn('SCCACHE_GHA_ENABLED: "true"', job)
+            self.assertIn("RUSTC_WRAPPER: sccache", job)
+            self.assertIn('CARGO_INCREMENTAL: "0"', job)
+            self.assertIn("name: Show sccache stats", job)
+            self.assertNotIn("target/", job)
+
+    def test_windows_rust_jobs_share_cargo_download_cache(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        expected = "key: cargo-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}"
+        self.assertEqual(workflow.count(expected), 3)
+
     def test_format_jobs_install_rustfmt(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         jobs = re.split(r"(?m)^  (?=[a-z_]+:\s*$)", workflow.split("\njobs:\n", 1)[1])
