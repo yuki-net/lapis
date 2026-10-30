@@ -22,7 +22,9 @@ PATH_RULES = [
     (["patches/gpui-"], {"desktop"}),
     
     # Host関連
-    (["backend/host/"], {"host", "desktop"}),
+    # Desktopが直接利用する公開境界は両surfaceを検証する。
+    (["backend/host/Cargo.toml", "backend/host/src/lib.rs", "backend/host/src/client.rs", "backend/host/src/profile.rs"], {"host", "desktop"}),
+    (["backend/host/"], {"host"}),
     
     # Backend共通（Host以外）
     (["backend/runtime/"], {"rust_core", "host", "desktop"}),
