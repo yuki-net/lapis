@@ -130,7 +130,7 @@ impl Shell {
                 }
             }
             #[cfg(debug_assertions)]
-            id::COMMAND_TOGGLE_INSPECTOR => self.toggle_inspector_window(window, cx),
+            id::COMMAND_TOGGLE_DEVTOOL => self.toggle_devtool_window(window, cx),
             _ => {
                 self.status = format!("Unknown command: {}", command.as_str());
                 cx.notify();

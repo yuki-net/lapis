@@ -98,16 +98,16 @@ mod tests {
     fn command_provider_matches_title_and_stable_id_by_all_terms() {
         let provider = CommandSearchProvider::new(vec![
             item(
-                "lapis.command.dev.toggle-inspector",
-                "dev: Toggle Inspector",
+                "lapis.command.dev.toggle-devtool",
+                "dev: Open Lapis DevTool",
             ),
             item("lapis.command.open-workspace", "Open Workspace…"),
         ]);
 
-        assert_eq!(provider.search("toggle inspector").len(), 1);
+        assert_eq!(provider.search("toggle devtool").len(), 1);
         assert_eq!(
-            provider.search("dev inspector")[0].title,
-            "dev: Toggle Inspector"
+            provider.search("dev devtool")[0].title,
+            "dev: Open Lapis DevTool"
         );
         assert_eq!(
             provider.search("open-workspace")[0].command.as_str(),
