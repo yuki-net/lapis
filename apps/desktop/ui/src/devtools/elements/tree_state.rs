@@ -6,7 +6,7 @@ use std::{
 };
 
 #[derive(Clone)]
-pub(super) struct TreeRow {
+pub(crate) struct TreeRow {
     pub node: InspectorElementNode,
     pub depth: usize,
     pub has_children: bool,
@@ -14,7 +14,7 @@ pub(super) struct TreeRow {
 }
 
 #[derive(Default)]
-pub(super) struct TreeState {
+pub(crate) struct TreeState {
     revision: Option<u64>,
     collapsed: HashSet<InspectorElementId>,
     parents: HashMap<InspectorElementId, Option<InspectorElementId>>,
@@ -27,14 +27,14 @@ pub(super) struct TreeState {
 }
 
 impl TreeState {
-    pub fn toggle(&mut self, id: InspectorElementId) {
+    pub(crate) fn toggle(&mut self, id: InspectorElementId) {
         if !self.collapsed.remove(&id) {
             self.collapsed.insert(id);
         }
         self.dirty = true;
     }
 
-    pub fn rows(
+    pub(crate) fn rows(
         &mut self,
         nodes: &[InspectorElementNode],
         revision: u64,
@@ -114,10 +114,10 @@ impl TreeState {
         self.rows.clone()
     }
 
-    pub fn width_index(&self) -> usize {
+    pub(crate) fn width_index(&self) -> usize {
         self.width_index
     }
-    pub fn take_scroll_target(&mut self) -> Option<usize> {
+    pub(crate) fn take_scroll_target(&mut self) -> Option<usize> {
         self.scroll_target.take()
     }
 }
