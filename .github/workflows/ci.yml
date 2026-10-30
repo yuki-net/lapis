@@ -53,6 +53,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s scripts -p test_dev_commands.py
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --manifest-path scripts/dev-session/Cargo.toml -- --check
+      - run: python -m unittest discover -s scripts -p test_dev_session.py
 
   repository:
     name: Repository
