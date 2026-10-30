@@ -68,7 +68,24 @@ pub struct TaskWorktree {
     pub conflict: Option<String>,
 }
 
+pub trait GitWatch: Send {
+    fn take_changed(&self) -> bool;
+    fn is_healthy(&self) -> bool {
+        true
+    }
+}
+
 pub trait GitBackend: Send + Sync {
+    fn watch_repository(
+        &self,
+        _repository: &std::path::Path,
+    ) -> Result<Box<dyn GitWatch>, GitError> {
+        Err(GitError::new(
+            GitErrorKind::Io,
+            "repository watch is unsupported",
+        ))
+    }
+
     fn discover_repositories(
         &self,
         _workspace: &std::path::Path,

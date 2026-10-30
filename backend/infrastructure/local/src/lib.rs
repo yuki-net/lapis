@@ -41,6 +41,7 @@ use lapis_workspace::{
 };
 use serde::{Deserialize, Serialize};
 mod git_action;
+mod git_watch;
 mod terminal_engine;
 use terminal_engine::{TerminalEngine, normalized_size};
 
@@ -1533,6 +1534,12 @@ impl LocalGitBackend {
 }
 
 impl GitBackend for LocalGitBackend {
+    fn watch_repository(
+        &self,
+        repository: &Path,
+    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+        Ok(Box::new(git_watch::LocalGitWatch::new(repository)?))
+    }
     fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
         let root = fs::canonicalize(workspace)
             .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
@@ -2037,6 +2044,18 @@ impl<T: TaskBackend> TaskBackend for LoopbackBackend<T> {
 }
 
 impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
+    fn watch_repository(
+        &self,
+        repository: &Path,
+    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+        if !self.gate.is_connected() {
+            return Err(GitError::new(
+                GitErrorKind::Io,
+                "loopback workspace is disconnected",
+            ));
+        }
+        self.inner.watch_repository(repository)
+    }
     fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
         if !self.gate.is_connected() {
             return Err(GitError::new(

@@ -258,6 +258,7 @@ mod tests {
             WorkspaceOperationResult::GitStatus(GitSnapshot {
                 workspace_id: CoreWorkspaceId::new("workspace-1"),
                 worktree_id: None,
+                revision: 1,
                 branch: "main".into(),
                 head: "abc".into(),
                 files: vec![GitFileSnapshot {

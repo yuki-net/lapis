@@ -12,11 +12,13 @@ use lapis_task::{
     TaskStart, unix_time_ms,
 };
 use std::{
-    path::Path,
+    collections::HashMap,
+    path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
@@ -25,7 +27,19 @@ pub(crate) struct WorkspaceOperations {
     git: Option<Arc<dyn GitBackend>>,
     tasks: Option<Arc<dyn TaskBackend>>,
     workspace_id: WorkspaceId,
+    repository_cache: HashMap<PathBuf, CachedRepository>,
+    next_git_revision: u64,
 }
+
+struct CachedRepository {
+    watch: Option<Box<dyn lapis_git::GitWatch>>,
+    status: RepositoryStatus,
+    revision: u64,
+    refreshed: Instant,
+}
+
+const REPOSITORY_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
+const REPOSITORY_WATCH_RETRY_INTERVAL: Duration = Duration::from_secs(15);
 impl WorkspaceOperations {
     pub fn new(
         git: Option<Arc<dyn GitBackend>>,
@@ -36,6 +50,8 @@ impl WorkspaceOperations {
             git,
             tasks,
             workspace_id: WorkspaceId::new(workspace_id.as_str()),
+            repository_cache: HashMap::new(),
+            next_git_revision: 1,
         }
     }
 
@@ -91,6 +107,86 @@ impl WorkspaceOperations {
         }
         Ok(status)
     }
+    fn cached_status(
+        &mut self,
+        directory: &Path,
+        force: bool,
+    ) -> Result<(RepositoryStatus, u64), BackendStateError> {
+        if let Some(cache) = self.repository_cache.get_mut(directory) {
+            let watch_failed = cache
+                .watch
+                .as_ref()
+                .is_some_and(|watch| !watch.is_healthy());
+            if watch_failed {
+                cache.watch = None;
+            }
+            let interval = if cache.watch.is_some() {
+                REPOSITORY_RECHECK_INTERVAL
+            } else {
+                REPOSITORY_WATCH_RETRY_INTERVAL
+            };
+            if !force
+                && !watch_failed
+                && !cache
+                    .watch
+                    .as_ref()
+                    .is_some_and(|watch| watch.take_changed())
+                && cache.refreshed.elapsed() < interval
+            {
+                return Ok((cache.status.clone(), cache.revision));
+            }
+        }
+        let watch = if self
+            .repository_cache
+            .get(directory)
+            .is_some_and(|cache| cache.watch.is_some())
+        {
+            None
+        } else {
+            self.git()?.watch_repository(directory).ok()
+        };
+        let status = match self.require_repository(directory) {
+            Ok(status) => status,
+            Err(error) => {
+                self.repository_cache.remove(directory);
+                return Err(error);
+            }
+        };
+        let revision = if let Some(cache) = self
+            .repository_cache
+            .get(directory)
+            .filter(|cache| cache.status == status)
+        {
+            cache.revision
+        } else {
+            let revision = self.next_git_revision;
+            self.next_git_revision = self
+                .next_git_revision
+                .checked_add(1)
+                .ok_or(BackendStateError::CounterOverflow)?;
+            revision
+        };
+        if let Some(cache) = self.repository_cache.get_mut(directory) {
+            cache.status = status.clone();
+            if cache.watch.is_none() {
+                cache.watch = watch;
+            }
+            cache.revision = revision;
+            cache.refreshed = Instant::now();
+        } else {
+            self.repository_cache.insert(
+                directory.to_owned(),
+                CachedRepository {
+                    watch,
+                    status: status.clone(),
+                    revision,
+                    refreshed: Instant::now(),
+                },
+            );
+        }
+        Ok((status, revision))
+    }
+
     fn repository_directory(
         &self,
         root: &Path,
@@ -114,7 +210,7 @@ impl WorkspaceOperations {
     }
 
     fn git_action(
-        &self,
+        &mut self,
         directory: &Path,
         request: lapis_git::GitActionRequest,
     ) -> Result<Outcome, BackendStateError> {
@@ -124,17 +220,20 @@ impl WorkspaceOperations {
                 .map_err(|_| BackendStateError::WorkspaceDenied)?;
             crate::WorkspacePathResolver::new(directory.to_owned())?.resolve_scoped_path(&path)?;
         }
-        Ok(Outcome::GitAction(
-            self.git()?.execute(directory, request).map_err(problem)?,
-        ))
+        let mutation = request.action.is_mutation();
+        let result = self.git()?.execute(directory, request).map_err(problem);
+        if mutation {
+            let _ = self.cached_status(directory, true);
+        }
+        Ok(Outcome::GitAction(result?))
     }
 
     fn git_snapshot(
-        &self,
+        &mut self,
         directory: &Path,
         worktree: Option<TaskId>,
     ) -> Result<GitSnapshot, BackendStateError> {
-        let status = self.require_repository(directory)?;
+        let (status, revision) = self.cached_status(directory, false)?;
         let files = status
             .files
             .into_iter()
@@ -150,6 +249,7 @@ impl WorkspaceOperations {
         Ok(GitSnapshot {
             workspace_id: self.workspace_id.clone(),
             worktree_id: worktree,
+            revision,
             branch: status.branch,
             head: status.head,
             files,

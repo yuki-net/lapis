@@ -20,6 +20,8 @@ pub struct GitFileSnapshot {
 pub struct GitSnapshot {
     pub workspace_id: WorkspaceId,
     pub worktree_id: Option<TaskId>,
+    #[serde(default)]
+    pub revision: u64,
     pub branch: String,
     pub head: String,
     pub files: Vec<GitFileSnapshot>,

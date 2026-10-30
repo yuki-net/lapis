@@ -362,3 +362,121 @@ fn repository_operations_are_scoped_to_the_selected_repository() {
     });
     assert!(matches!(response, ResponseBody::Error(_)));
 }
+
+#[test]
+fn repository_status_cache_observes_external_files_and_git_index() {
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-b", "main"]);
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let workspace = WorkspaceId::new(workspace.as_str());
+    let git_client = host.git();
+    assert!(
+        git_client
+            .repository_status(&workspace, "root")
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    std::fs::write(root.path().join("outside.txt"), "external\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snapshot = git_client.repository_status(&workspace, "root").unwrap();
+        if snapshot
+            .files
+            .iter()
+            .any(|file| file.path == "outside.txt" && !file.staged)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "external file change was not observed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    git(root.path(), &["add", "outside.txt"]);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snapshot = git_client.repository_status(&workspace, "root").unwrap();
+        if snapshot
+            .files
+            .iter()
+            .any(|file| file.path == "outside.txt" && file.staged)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "external index change was not observed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn worktree_cache_observes_git_metadata_outside_workspace() {
+    use std::time::{Duration, Instant};
+    let repository = tempfile::tempdir().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let tree = parent.path().join("tree");
+    git(repository.path(), &["init", "-b", "main"]);
+    git(repository.path(), &["config", "user.name", "Lapis Test"]);
+    git(
+        repository.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    std::fs::write(repository.path().join("file.txt"), "base\n").unwrap();
+    git(repository.path(), &["add", "file.txt"]);
+    git(repository.path(), &["commit", "-m", "initial"]);
+    git(
+        repository.path(),
+        &["worktree", "add", "--detach", tree.to_str().unwrap()],
+    );
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(&tree).unwrap();
+    let workspace = WorkspaceId::new(workspace.as_str());
+    let client = host.git();
+    assert!(
+        client
+            .repository_status(&workspace, "root")
+            .unwrap()
+            .files
+            .is_empty()
+    );
+    std::fs::write(tree.join("file.txt"), "changed\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snapshot = client.repository_status(&workspace, "root").unwrap();
+        if snapshot
+            .files
+            .iter()
+            .any(|file| file.path == "file.txt" && !file.staged)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "external worktree file change was not observed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    git(&tree, &["add", "file.txt"]);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let snapshot = client.repository_status(&workspace, "root").unwrap();
+        if snapshot
+            .files
+            .iter()
+            .any(|file| file.path == "file.txt" && file.staged)
+        {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "external worktree index change was not observed"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
