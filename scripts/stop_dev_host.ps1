@@ -15,7 +15,19 @@ if ($Session) {
     $desktopBinary = [IO.Path]::GetFullPath((Join-Path $sessionDirectory 'bin/lapis.exe'))
     $recordDirectory = Join-Path $sessionDirectory 'hosts'
     if ($LocalHostDirectory) {
-        $candidate = if ([IO.Path]::IsPathRooted($LocalHostDirectory)) { $LocalHostDirectory } else { Join-Path (Split-Path -Parent $PSScriptRoot) $LocalHostDirectory }
+        $worktreeRoot = Split-Path -Parent $PSScriptRoot
+        if ($LocalHostDirectory -match '^[A-Za-z]:(?:[^\\/]|$)') {
+            throw 'ドライブ相対のHost記録ディレクトリは指定できません。'
+        }
+        $candidate = if ($LocalHostDirectory -match '^[\\/](?:[^\\/]|$)') {
+            $driveRoot = [IO.Path]::GetPathRoot($worktreeRoot)
+            $suffix = $LocalHostDirectory.TrimStart([char[]]'\/')
+            if ($suffix) { Join-Path $driveRoot $suffix } else { $driveRoot }
+        } elseif ([IO.Path]::IsPathRooted($LocalHostDirectory)) {
+            $LocalHostDirectory
+        } else {
+            Join-Path $worktreeRoot $LocalHostDirectory
+        }
         $recordDirectory = [IO.Path]::GetFullPath($candidate)
         # 指定先だけでなく親も確認し、junction経由の別場所を拒否する。
         $directory = Get-Item -LiteralPath $recordDirectory -ErrorAction Stop

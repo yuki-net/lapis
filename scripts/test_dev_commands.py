@@ -117,6 +117,14 @@ if ($Scenario -eq 'session_custom_relative') {
     Set-Location -LiteralPath $other
     $custom = 'custom-hosts'
 }
+if ($Scenario -eq 'session_custom_root_relative') {
+    $absolute = [IO.Path]::GetFullPath($custom)
+    $root = [IO.Path]::GetPathRoot($absolute)
+    $otherDrive = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Root -and $_.Root -ne $root -and (Test-Path -LiteralPath $_.Root) } | Select-Object -First 1
+    if ($otherDrive) { Set-Location -LiteralPath $otherDrive.Root }
+    $custom = '\' + $absolute.Substring($root.Length)
+}
+if ($Scenario -eq 'session_custom_drive_relative') { $custom = 'C:custom-hosts' }
 function Get-CimInstance {
     param($ClassName, $Filter)
     if ($Filter -eq "Name = 'lapis-host.exe'") { return $global:devTestitem }
@@ -137,9 +145,9 @@ if ($Scenario -eq 'missing' -and $message -ne '開発用Local Hostの記録フ�
 if ($Scenario -eq 'foreign' -and $message -ne '開発用Local Hostの記録と実行中のprocessが一致しないため停止しません。') {
     throw 'Mismatched record error is unreadable or incorrect'
 }
-$expected = if ($Scenario -in @('host', 'other_and_host', 'session_host', 'session_custom_host', 'session_custom_relative')) { 1 } else { 0 }
+$expected = if ($Scenario -in @('host', 'other_and_host', 'session_host', 'session_custom_host', 'session_custom_relative', 'session_custom_root_relative')) { 1 } else { 0 }
 if ($global:devTestkilled -ne $expected) { throw "unexpected termination: $Scenario $message" }
-if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing', 'session_mixed', 'session_reused', 'session_missing', 'session_foreign', 'session_invalid', 'session_custom_ui', 'session_custom_reused', 'session_custom_foreign', 'session_custom_missing', 'session_custom_junction', 'session_custom_parent_junction'))) { throw "unexpected result: $Scenario $message" }
+if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing', 'session_mixed', 'session_reused', 'session_missing', 'session_foreign', 'session_invalid', 'session_custom_ui', 'session_custom_reused', 'session_custom_foreign', 'session_custom_missing', 'session_custom_junction', 'session_custom_parent_junction', 'session_custom_drive_relative'))) { throw "unexpected result: $Scenario $message" }
 '''
         with tempfile.TemporaryDirectory() as directory:
             fixture_script = Path(directory) / "scripts" / script.name
@@ -147,7 +155,7 @@ if ($failed -ne ($Scenario -in @('ui', 'mixed', 'reused', 'foreign', 'missing', 
             shutil.copyfile(script, fixture_script)
             path = Path(directory) / "host harness.ps1"
             path.write_text(harness, encoding="utf-8-sig")
-            for scenario in ("host", "other", "other_and_host", "ui", "mixed", "reused", "gone", "foreign", "missing", "session_host", "session_mixed", "session_reused", "session_missing", "session_foreign", "session_invalid", "session_custom_host", "session_custom_relative", "session_custom_ui", "session_custom_reused", "session_custom_foreign", "session_custom_missing", "session_custom_other", "session_custom_junction", "session_custom_parent_junction"):
+            for scenario in ("host", "other", "other_and_host", "ui", "mixed", "reused", "gone", "foreign", "missing", "session_host", "session_mixed", "session_reused", "session_missing", "session_foreign", "session_invalid", "session_custom_host", "session_custom_relative", "session_custom_root_relative", "session_custom_drive_relative", "session_custom_ui", "session_custom_reused", "session_custom_foreign", "session_custom_missing", "session_custom_other", "session_custom_junction", "session_custom_parent_junction"):
                 with self.subTest(scenario=scenario):
                     result = subprocess.run(
                         ["powershell", "-NoProfile", "-NonInteractive", "-File", str(path), str(fixture_script), scenario],
