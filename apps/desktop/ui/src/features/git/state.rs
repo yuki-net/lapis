@@ -21,6 +21,7 @@ pub(super) enum GitOperation {
     Action(Option<TaskId>, GitActionRequest),
     Clear,
     CreateWorktree,
+    ApplyUpdate(lapis_git::GitUpdate),
 }
 #[derive(Clone, Copy)]
 pub(crate) enum GitInputKind {
@@ -76,6 +77,8 @@ pub(crate) enum GitEvent {
 }
 pub(crate) struct GitFeature {
     worker: ClientWorker<GitSession>,
+    backend: std::sync::Arc<dyn lapis_git::GitConnection>,
+    subscription_generation: u64,
     workspace: Option<WorkspaceId>,
     gate: ResponseGate,
     pending: usize,
@@ -95,25 +98,12 @@ impl GitFeature {
             });
         }
     }
-    pub(crate) fn new(session: GitSession, cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-                if this
-                    .update(cx, |git, cx| {
-                        if git.pending == 0 {
-                            git.submit(GitOperation::Refresh, cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
+    pub(crate) fn new(session: GitSession, _cx: &mut Context<Self>) -> Self {
+        let backend = session.backend();
         Self {
             worker: ClientWorker::new(session),
+            backend,
+            subscription_generation: 0,
             workspace: None,
             gate: ResponseGate::default(),
             pending: 0,
@@ -129,24 +119,102 @@ impl GitFeature {
             return;
         }
         self.workspace = workspace;
+        self.subscription_generation = self.subscription_generation.wrapping_add(1);
         self.target = None;
         self.gate.invalidate();
         self.snapshot = Snapshot::default();
         self.message.clear();
         self.message_from_refresh = false;
         self.submit(GitOperation::Refresh, cx);
+        if let Some(workspace) = self.workspace.clone() {
+            self.subscribe_updates(workspace, cx);
+        }
         cx.notify();
     }
+    fn subscribe_updates(&mut self, workspace: WorkspaceId, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        let generation = self.subscription_generation;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let backend = backend.clone();
+                let target = workspace.clone();
+                let opened = executor
+                    .spawn(async move { backend.subscribe(&target) })
+                    .await;
+                let mut subscription = match opened {
+                    Ok(subscription) => subscription,
+                    Err(_) => {
+                        if !this
+                            .update(cx, |git, _| {
+                                git.workspace.as_ref() == Some(&workspace)
+                                    && git.subscription_generation == generation
+                            })
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
+                        Timer::after(Duration::from_secs(2)).await;
+                        continue;
+                    }
+                };
+                loop {
+                    let (next_subscription, update) = executor
+                        .spawn(async move {
+                            let update = subscription.recv_timeout(Duration::from_secs(1));
+                            (subscription, update)
+                        })
+                        .await;
+                    subscription = next_subscription;
+                    let update = match update {
+                        Ok(update) => update,
+                        Err(_) => break,
+                    };
+                    let alive = this
+                        .update(cx, |git, cx| {
+                            if git.workspace.as_ref() != Some(&workspace)
+                                || git.subscription_generation != generation
+                            {
+                                return false;
+                            }
+                            if let Some(update) = update {
+                                return git.submit_update(GitOperation::ApplyUpdate(update), cx);
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !alive {
+                        if this
+                            .update(cx, |git, _| {
+                                git.workspace.as_ref() == Some(&workspace)
+                                    && git.subscription_generation == generation
+                            })
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
+                        return;
+                    }
+                }
+                Timer::after(Duration::from_secs(2)).await;
+            }
+        })
+        .detach();
+    }
     pub(super) fn submit(&mut self, operation: GitOperation, cx: &mut Context<Self>) {
+        self.submit_update(operation, cx);
+    }
+
+    fn submit_update(&mut self, operation: GitOperation, cx: &mut Context<Self>) -> bool {
         let Some(workspace) = self.workspace.clone() else {
-            return;
+            return false;
         };
         if let GitOperation::Discard(worktree) = operation {
             cx.emit(GitEvent::DiscardWorktree {
                 workspace,
                 worktree,
             });
-            return;
+            return true;
         }
         let is_refresh = matches!(&operation, GitOperation::Refresh);
         let token = self.gate.issue();
@@ -154,11 +222,17 @@ impl GitFeature {
         let admitted = self.worker.submit(
             cx,
             move |session| {
-                session
-                    .refresh(&workspace)
-                    .map_err(|error| error.to_string())?;
+                if !matches!(&operation, GitOperation::ApplyUpdate(_)) {
+                    session
+                        .refresh(&workspace)
+                        .map_err(|error| error.to_string())?;
+                }
                 let result = match operation {
                     GitOperation::Refresh => Ok(()),
+                    GitOperation::ApplyUpdate(update) => {
+                        session.apply_git_update(update);
+                        Ok(())
+                    }
                     GitOperation::Import(task, path) => session.import_file(&task, &path),
                     GitOperation::Discard(_) => unreachable!("Task状態の所有者で検証する"),
                     GitOperation::Action(worktree, request) => {
@@ -214,7 +288,9 @@ impl GitFeature {
             self.message = error;
             self.message_from_refresh = is_refresh;
             cx.notify();
+            return false;
         }
+        true
     }
 
     pub(crate) fn set_context_label(&mut self, label: String) {

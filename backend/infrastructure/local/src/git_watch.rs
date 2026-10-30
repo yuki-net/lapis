@@ -15,7 +15,10 @@ pub(super) struct LocalGitWatch {
 }
 
 impl LocalGitWatch {
-    pub(super) fn new(repository: &Path) -> Result<Self, GitError> {
+    pub(super) fn new(
+        repository: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Self, GitError> {
         let root = repository
             .canonicalize()
             .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
@@ -31,10 +34,14 @@ impl LocalGitWatch {
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| match event {
                 Ok(event) if !matches!(event.kind, EventKind::Access(_)) => {
-                    changed_event.store(true, Ordering::Release)
+                    changed_event.store(true, Ordering::Release);
+                    notify();
                 }
                 Ok(_) => {}
-                Err(_) => failed_event.store(true, Ordering::Release),
+                Err(_) => {
+                    failed_event.store(true, Ordering::Release);
+                    notify();
+                }
             })
             .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
         watcher

@@ -9,6 +9,12 @@ pub struct GitRepositorySnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitRepositoryStatus {
+    pub repository_id: String,
+    pub status: GitSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitFileSnapshot {
     pub path: String,
     pub old_path: Option<String>,
@@ -45,7 +51,25 @@ pub struct WorktreeSnapshot {
     pub conflict: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitUpdate {
+    Snapshot(Vec<GitRepositoryStatus>),
+    Changed(GitRepositoryStatus),
+}
+
+pub trait GitSubscription: Send {
+    fn recv_timeout(&mut self, timeout: std::time::Duration)
+    -> Result<Option<GitUpdate>, GitError>;
+}
+
 pub trait GitConnection: Send + Sync {
+    fn subscribe(&self, _workspace: &WorkspaceId) -> Result<Box<dyn GitSubscription>, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "Git subscription is unsupported",
+        ))
+    }
+
     fn repositories(
         &self,
         _workspace: &WorkspaceId,

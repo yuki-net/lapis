@@ -9,8 +9,8 @@ mod action;
 mod connection;
 pub use action::{ConflictSide, GitAction, GitActionRequest, GitActionResult, GitStash};
 pub use connection::{
-    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitRepositorySnapshot, GitSnapshot,
-    WorktreeSnapshot,
+    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitRepositorySnapshot, GitRepositoryStatus,
+    GitSnapshot, GitSubscription, GitUpdate, WorktreeSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -79,6 +79,7 @@ pub trait GitBackend: Send + Sync {
     fn watch_repository(
         &self,
         _repository: &std::path::Path,
+        _notify: std::sync::Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Box<dyn GitWatch>, GitError> {
         Err(GitError::new(
             GitErrorKind::Io,

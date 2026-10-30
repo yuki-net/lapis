@@ -253,6 +253,20 @@ pub use conversation::{
 };
 pub use lapis_project::{Project, SourceRole, TaskEnvironment};
 
+fn apply_git_status(
+    current: &mut Option<lapis_git::GitSnapshot>,
+    incoming: lapis_git::GitSnapshot,
+) -> bool {
+    if current
+        .as_ref()
+        .is_some_and(|status| status.revision >= incoming.revision)
+    {
+        return false;
+    }
+    *current = Some(incoming);
+    true
+}
+
 pub struct GitSession {
     backend: Arc<dyn lapis_git::GitConnection>,
     workspace_id: Option<WorkspaceId>,
@@ -325,6 +339,32 @@ impl GitSession {
         self.worktrees = worktrees;
         self.worktree_statuses = worktree_statuses;
         Ok(changed)
+    }
+
+    pub fn apply_git_update(&mut self, update: lapis_git::GitUpdate) -> bool {
+        let statuses = match update {
+            lapis_git::GitUpdate::Snapshot(statuses) => statuses,
+            lapis_git::GitUpdate::Changed(status) => vec![status],
+        };
+        let mut changed = false;
+        for item in statuses {
+            if self.workspace_id.as_ref() != Some(&item.status.workspace_id) {
+                continue;
+            }
+            if item.repository_id == "root" {
+                changed |= apply_git_status(&mut self.status, item.status);
+            } else if let Some(worktree) = item.status.worktree_id.as_ref()
+                && let Some((_, current)) = self
+                    .worktree_statuses
+                    .iter_mut()
+                    .find(|(id, _)| id == worktree)
+                && item.status.revision > current.revision
+            {
+                *current = item.status;
+                changed = true;
+            }
+        }
+        changed
     }
 
     fn workspace(&self) -> Result<&WorkspaceId, GitError> {
@@ -2152,6 +2192,22 @@ mod tests {
     use lapis_workspace::FileEntryKind;
 
     use super::*;
+
+    #[test]
+    fn stale_git_events_do_not_replace_newer_revision() {
+        let snapshot = |revision| lapis_git::GitSnapshot {
+            workspace_id: WorkspaceId::new("workspace"),
+            worktree_id: None,
+            revision,
+            branch: format!("branch-{revision}"),
+            head: String::new(),
+            files: vec![],
+        };
+        let mut current = None;
+        assert!(apply_git_status(&mut current, snapshot(15)));
+        assert!(!apply_git_status(&mut current, snapshot(14)));
+        assert_eq!(current.unwrap().branch, "branch-15");
+    }
 
     #[test]
     fn old_conversation_view_defaults_workbench_state() {

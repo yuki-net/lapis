@@ -480,3 +480,151 @@ fn worktree_cache_observes_git_metadata_outside_workspace() {
         std::thread::sleep(Duration::from_millis(50));
     }
 }
+
+#[test]
+fn external_git_changes_are_pushed_without_status_requests() {
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-b", "main"]);
+    git(root.path(), &["config", "user.name", "Lapis Test"]);
+    git(
+        root.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    std::fs::write(root.path().join("file.txt"), "base\n").unwrap();
+    git(root.path(), &["add", "file.txt"]);
+    git(root.path(), &["commit", "-m", "initial"]);
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let wire = host.connect(root.path()).unwrap();
+    let events = wire.subscribe().unwrap();
+    let response = wire
+        .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
+            workspace_id: workspace.clone(),
+            operation: WorkspaceOperation::RepositoryGitStatus {
+                repository_id: "root".into(),
+            },
+        }))
+        .unwrap();
+    let ResponseBody::WorkspaceExecute(WorkspaceOperationResult::RepositoryGitStatus {
+        status,
+        ..
+    }) = response
+    else {
+        panic!("status required");
+    };
+    let revision = status.revision;
+    std::fs::write(root.path().join("file.txt"), "external\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("Git event missing");
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body
+            && repository.status.revision > revision
+            && repository
+                .status
+                .files
+                .iter()
+                .any(|file| file.path == "file.txt" && !file.staged)
+        {
+            break;
+        }
+    }
+    git(root.path(), &["add", "file.txt"]);
+    loop {
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("stage event missing");
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body
+            && repository
+                .status
+                .files
+                .iter()
+                .any(|file| file.path == "file.txt" && file.staged)
+        {
+            break;
+        }
+    }
+    git(root.path(), &["commit", "-m", "external"]);
+    git(root.path(), &["switch", "-c", "topic"]);
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("branch event missing");
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body
+            && repository.status.branch == "topic"
+            && repository.status.head != status.head
+        {
+            break;
+        }
+    }
+    let reconnect = host.connect(root.path()).unwrap();
+    let response = reconnect
+        .request(RequestBody::SnapshotResync(
+            lapis_client_api::SnapshotRequest {
+                workspace_id: workspace,
+                reason: lapis_client_api::SnapshotReason::Reconnect,
+            },
+        ))
+        .unwrap();
+    let ResponseBody::SnapshotResync(response) = response else {
+        panic!("snapshot required")
+    };
+    assert!(
+        response
+            .snapshot
+            .git_repositories
+            .iter()
+            .any(|item| item.repository_id == "root" && item.status.branch == "topic")
+    );
+}
+
+#[test]
+fn git_subscription_receives_updates_and_reconnects_to_snapshot() {
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-b", "main"]);
+    let host = BackendHost::start().unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let workspace = WorkspaceId::new(workspace.as_str());
+    let client = host.git();
+    let mut events = client.subscribe(&workspace).unwrap();
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(2)).unwrap(),
+        Some(lapis_git::GitUpdate::Snapshot(_))
+    ));
+    client.repository_status(&workspace, "root").unwrap();
+    std::fs::write(root.path().join("file.txt"), "changed\n").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if let Some(lapis_git::GitUpdate::Changed(status)) = events
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .unwrap()
+            && status
+                .status
+                .files
+                .iter()
+                .any(|file| file.path == "file.txt")
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    drop(events);
+    let mut reconnected = client.subscribe(&workspace).unwrap();
+    let Some(lapis_git::GitUpdate::Snapshot(snapshot)) =
+        reconnected.recv_timeout(Duration::from_secs(2)).unwrap()
+    else {
+        panic!("Git snapshot required")
+    };
+    assert!(snapshot.iter().any(|entry| {
+        entry.repository_id == "root"
+            && entry
+                .status
+                .files
+                .iter()
+                .any(|file| file.path == "file.txt")
+    }));
+}

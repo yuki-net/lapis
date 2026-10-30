@@ -3535,6 +3535,7 @@ dependencies = [
  "lapis-client-api",
  "lapis-document",
  "lapis-editor-core",
+ "lapis-git",
  "lapis-task",
  "quinn",
  "rcgen",

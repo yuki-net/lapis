@@ -1537,8 +1537,9 @@ impl GitBackend for LocalGitBackend {
     fn watch_repository(
         &self,
         repository: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
-        Ok(Box::new(git_watch::LocalGitWatch::new(repository)?))
+        Ok(Box::new(git_watch::LocalGitWatch::new(repository, notify)?))
     }
     fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
         let root = fs::canonicalize(workspace)
@@ -2047,6 +2048,7 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
     fn watch_repository(
         &self,
         repository: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
     ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
         if !self.gate.is_connected() {
             return Err(GitError::new(
@@ -2054,7 +2056,7 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
                 "loopback workspace is disconnected",
             ));
         }
-        self.inner.watch_repository(repository)
+        self.inner.watch_repository(repository, notify)
     }
     fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
         if !self.gate.is_connected() {

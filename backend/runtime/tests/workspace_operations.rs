@@ -68,6 +68,7 @@ impl TaskBackend for FakeTasks {
 struct FakeGit {
     trees: Mutex<Vec<TaskWorktree>>,
     watch: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+    notifications: Mutex<std::collections::HashMap<PathBuf, Arc<dyn Fn() + Send + Sync>>>,
     calls: Mutex<Vec<PathBuf>>,
     status_root: Mutex<Option<PathBuf>>,
     fail_discovery: Mutex<bool>,
@@ -83,7 +84,15 @@ impl lapis_git::GitWatch for FakeGitWatch {
     }
 }
 impl GitBackend for FakeGit {
-    fn watch_repository(&self, _: &Path) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+    fn watch_repository(
+        &self,
+        path: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+        self.notifications
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), notify);
         self.watch
             .lock()
             .unwrap()
@@ -1091,4 +1100,99 @@ fn git_status_without_watcher_uses_bounded_fallback_cache() {
         ));
     }
     assert_eq!(fixture.git.calls.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn git_events_debounce_and_refresh_only_the_changed_repository() {
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    };
+    let fixture = Fixture::new();
+    let dirty = Arc::new(AtomicBool::new(false));
+    *fixture.git.watch.lock().unwrap() = Some(dirty.clone());
+    for name in ["frontend", "backend"] {
+        std::fs::create_dir(fixture.root.path().join(name)).unwrap();
+    }
+    let client = fixture.client("git-events", "first");
+    let events = client.subscribe().unwrap();
+    for name in ["frontend", "backend"] {
+        assert!(matches!(
+            outcome(execute(
+                &client,
+                Operation::RepositoryGitStatus {
+                    repository_id: format!("path:{name}")
+                }
+            )),
+            Outcome::RepositoryGitStatus { .. }
+        ));
+    }
+    let mut initialized = std::collections::HashSet::new();
+    while initialized.len() < 2 {
+        let event = events.recv_timeout(Duration::from_secs(3)).unwrap();
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body {
+            initialized.insert(repository.repository_id);
+        }
+    }
+    fixture.git.calls.lock().unwrap().clear();
+    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+        path: PathBuf::from("changed"),
+        old_path: None,
+        kind: lapis_git::ChangeKind::Modified,
+        staged: false,
+    }];
+    dirty.store(true, Ordering::Release);
+    let frontend = fixture.root.path().join("frontend").canonicalize().unwrap();
+    let callback = fixture
+        .git
+        .notifications
+        .lock()
+        .unwrap()
+        .get(&frontend)
+        .unwrap()
+        .clone();
+    for _ in 0..100 {
+        callback();
+    }
+    let event = events.recv_timeout(Duration::from_secs(3)).unwrap();
+    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body else {
+        panic!("Git event required");
+    };
+    assert_eq!(repository.repository_id, "path:frontend");
+    assert_eq!(repository.status.files[0].path, "changed");
+    let calls = fixture.git.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0], frontend);
+}
+
+#[test]
+fn git_watch_unavailable_refreshes_in_host_fallback() {
+    use std::time::Duration;
+    let fixture = Fixture::new();
+    let client = fixture.client("git-fallback", "first");
+    let events = client.subscribe().unwrap();
+    assert!(matches!(
+        outcome(execute(&client, Operation::GitStatus { worktree: None })),
+        Outcome::GitStatus(_)
+    ));
+    let initial = events.recv_timeout(Duration::from_secs(3)).unwrap();
+    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = initial.body else {
+        panic!("initial Git event required")
+    };
+    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+        path: PathBuf::from("later"),
+        old_path: None,
+        kind: lapis_git::ChangeKind::Modified,
+        staged: false,
+    }];
+    let changed = events.recv_timeout(Duration::from_secs(18)).unwrap();
+    let lapis_client_api::EventBody::GitStatusChanged {
+        repository: updated,
+        ..
+    } = changed.body
+    else {
+        panic!("fallback Git event required")
+    };
+    assert!(updated.status.revision > repository.status.revision);
+    assert_eq!(updated.status.files[0].path, "later");
 }

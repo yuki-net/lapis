@@ -141,6 +141,55 @@ impl PreparedWorkspaceOperation {
 }
 
 impl BackendState {
+    pub(crate) fn start_git_updates(
+        &mut self,
+        publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync>,
+    ) {
+        for (id, workspace) in &mut self.workspaces {
+            if workspace.git_driver_started {
+                continue;
+            }
+            workspace.git_driver_started = true;
+            let id = id.clone();
+            let publish = publish.clone();
+            crate::operations::WorkspaceOperations::start_git_updates(
+                &workspace.operations,
+                workspace.resolver.root().to_owned(),
+                Arc::new(move |repository, status| publish(id.clone(), repository, status)),
+            );
+        }
+    }
+
+    pub(crate) fn publish_git_status(
+        &mut self,
+        workspace_id: WorkspaceId,
+        repository_id: String,
+        status: lapis_git::GitSnapshot,
+    ) -> Result<Option<PublishedEvent>, BackendStateError> {
+        let workspace = self
+            .workspaces
+            .get_mut(&workspace_id)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        if workspace
+            .git_statuses
+            .get(&repository_id)
+            .is_some_and(|current| current.status.revision >= status.revision)
+        {
+            return Ok(None);
+        }
+        let repository = lapis_git::GitRepositoryStatus {
+            repository_id: repository_id.clone(),
+            status,
+        };
+        workspace
+            .git_statuses
+            .insert(repository_id, repository.clone());
+        Ok(Some(workspace.publish(EventBody::GitStatusChanged {
+            workspace_id,
+            repository,
+        })?))
+    }
+
     pub(crate) fn reserve_worktree_removal(
         &mut self,
         root: PathBuf,
@@ -1187,6 +1236,7 @@ impl BackendState {
                     workspace: workspace.summary.clone(),
                     documents,
                     terminals,
+                    git_repositories: workspace.git_statuses.values().cloned().collect(),
                 },
             }),
             Vec::new(),
@@ -1283,6 +1333,8 @@ struct WorkspaceState {
     terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
+    git_statuses: HashMap<String, lapis_git::GitRepositoryStatus>,
+    git_driver_started: bool,
 }
 
 impl WorkspaceState {
@@ -1303,6 +1355,8 @@ impl WorkspaceState {
                 &registration.workspace_id,
             ))),
             events: EventJournal::default(),
+            git_statuses: HashMap::new(),
+            git_driver_started: false,
         })
     }
 

@@ -12,11 +12,12 @@ use lapis_task::{
     TaskStart, unix_time_ms,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
+        mpsc,
     },
     time::{Duration, Instant},
 };
@@ -29,6 +30,7 @@ pub(crate) struct WorkspaceOperations {
     workspace_id: WorkspaceId,
     repository_cache: HashMap<PathBuf, CachedRepository>,
     next_git_revision: u64,
+    notifier: Option<Arc<dyn Fn(PathBuf) + Send + Sync>>,
 }
 
 struct CachedRepository {
@@ -36,6 +38,7 @@ struct CachedRepository {
     status: RepositoryStatus,
     revision: u64,
     refreshed: Instant,
+    worktree: Option<TaskId>,
 }
 
 const REPOSITORY_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
@@ -52,7 +55,105 @@ impl WorkspaceOperations {
             workspace_id: WorkspaceId::new(workspace_id.as_str()),
             repository_cache: HashMap::new(),
             next_git_revision: 1,
+            notifier: None,
         }
+    }
+
+    pub(crate) fn start_git_updates(
+        operations: &Arc<Mutex<Self>>,
+        root: PathBuf,
+        publish: Arc<dyn Fn(String, GitSnapshot) + Send + Sync>,
+    ) {
+        let pending = Arc::new(Mutex::new(HashSet::<PathBuf>::new()));
+        let (wake, receiver) = mpsc::sync_channel::<()>(1);
+        let pending_callback = pending.clone();
+        if let Ok(mut state) = operations.lock() {
+            state.notifier = Some(Arc::new(move |path| {
+                if let Ok(mut paths) = pending_callback.lock() {
+                    paths.insert(path);
+                }
+                let _ = wake.try_send(());
+            }));
+        }
+        let weak = Arc::downgrade(operations);
+        std::thread::spawn(move || {
+            loop {
+                match receiver.recv_timeout(REPOSITORY_WATCH_RETRY_INTERVAL) {
+                    Ok(()) => {
+                        let deadline = Instant::now() + Duration::from_secs(1);
+                        while Instant::now() < deadline
+                            && receiver.recv_timeout(Duration::from_millis(150)).is_ok()
+                        {
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let Some(operations) = weak.upgrade() else {
+                            break;
+                        };
+                        let Ok(state) = operations.lock() else { break };
+                        if let Ok(mut paths) = pending.lock() {
+                            paths.extend(
+                                state
+                                    .repository_cache
+                                    .iter()
+                                    .filter(|(_, cache)| {
+                                        cache.watch.as_ref().is_none_or(|watch| !watch.is_healthy())
+                                            && cache.refreshed.elapsed()
+                                                >= REPOSITORY_WATCH_RETRY_INTERVAL
+                                    })
+                                    .map(|(path, _)| path.clone()),
+                            );
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+                let paths = match pending.lock() {
+                    Ok(mut paths) => std::mem::take(&mut *paths),
+                    Err(_) => break,
+                };
+                for path in paths {
+                    let Some(operations) = weak.upgrade() else {
+                        return;
+                    };
+                    let result = operations
+                        .lock()
+                        .ok()
+                        .and_then(|mut state| state.refresh_git_event(&root, &path).ok());
+                    if let Some((id, snapshot)) = result {
+                        publish(id, snapshot);
+                    }
+                }
+            }
+        });
+    }
+
+    fn refresh_git_event(
+        &mut self,
+        root: &Path,
+        directory: &Path,
+    ) -> Result<(String, GitSnapshot), BackendStateError> {
+        let cache = self
+            .repository_cache
+            .get(directory)
+            .ok_or(BackendStateError::WorkspaceDenied)?;
+        let worktree = cache.worktree.clone();
+        if let Some(watch) = &cache.watch {
+            watch.take_changed();
+        }
+        let id = if let Some(worktree) = &worktree {
+            format!("worktree:{}", worktree.as_str())
+        } else {
+            let relative = directory
+                .strip_prefix(root)
+                .map_err(|_| BackendStateError::WorkspaceDenied)?;
+            if relative.as_os_str().is_empty() {
+                "root".to_owned()
+            } else {
+                format!("path:{}", relative_path(relative)?)
+            }
+        };
+        let (status, revision) = self.cached_status(directory, true)?;
+        Ok((id, self.project_git_status(status, revision, worktree)?))
     }
 
     fn git(&self) -> Result<&dyn GitBackend, BackendStateError> {
@@ -143,12 +244,26 @@ impl WorkspaceOperations {
         {
             None
         } else {
-            self.git()?.watch_repository(directory).ok()
+            let notify = self.notifier.clone();
+            let path = directory.to_owned();
+            self.git()?
+                .watch_repository(
+                    directory,
+                    Arc::new(move || {
+                        if let Some(notify) = &notify {
+                            notify(path.clone());
+                        }
+                    }),
+                )
+                .ok()
         };
         let status = match self.require_repository(directory) {
             Ok(status) => status,
             Err(error) => {
-                self.repository_cache.remove(directory);
+                if let Some(cache) = self.repository_cache.get_mut(directory) {
+                    cache.watch = None;
+                    cache.refreshed = Instant::now();
+                }
                 return Err(error);
             }
         };
@@ -181,6 +296,7 @@ impl WorkspaceOperations {
                     status: status.clone(),
                     revision,
                     refreshed: Instant::now(),
+                    worktree: None,
                 },
             );
         }
@@ -224,6 +340,9 @@ impl WorkspaceOperations {
         let result = self.git()?.execute(directory, request).map_err(problem);
         if mutation {
             let _ = self.cached_status(directory, true);
+            if let Some(notify) = &self.notifier {
+                notify(directory.to_owned());
+            }
         }
         Ok(Outcome::GitAction(result?))
     }
@@ -233,7 +352,23 @@ impl WorkspaceOperations {
         directory: &Path,
         worktree: Option<TaskId>,
     ) -> Result<GitSnapshot, BackendStateError> {
+        let initial = !self.repository_cache.contains_key(directory);
         let (status, revision) = self.cached_status(directory, false)?;
+        if let Some(cache) = self.repository_cache.get_mut(directory) {
+            cache.worktree = worktree.clone();
+        }
+        if initial && let Some(notify) = &self.notifier {
+            notify(directory.to_owned());
+        }
+        self.project_git_status(status, revision, worktree)
+    }
+
+    fn project_git_status(
+        &self,
+        status: RepositoryStatus,
+        revision: u64,
+        worktree: Option<TaskId>,
+    ) -> Result<GitSnapshot, BackendStateError> {
         let files = status
             .files
             .into_iter()

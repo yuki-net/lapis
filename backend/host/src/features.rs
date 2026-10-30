@@ -80,7 +80,84 @@ impl HostGit {
         }
     }
 }
+struct HostGitSubscription {
+    _client: Client,
+    receiver: lapis_backend_state::BackendEventReceiver,
+    watermark: u64,
+    initial: Option<Vec<lapis_git::GitRepositoryStatus>>,
+}
+
+impl lapis_git::GitSubscription for HostGitSubscription {
+    fn recv_timeout(
+        &mut self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<lapis_git::GitUpdate>, GitError> {
+        if let Some(initial) = self.initial.take() {
+            return Ok(Some(lapis_git::GitUpdate::Snapshot(initial)));
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let event = match self
+                .receiver
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(event) => event,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Ok(None),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(git_error("Git subscription disconnected"));
+                }
+            };
+            let sequence = event.event_sequence.value();
+            if sequence <= self.watermark {
+                continue;
+            }
+            if sequence != self.watermark.saturating_add(1) {
+                return Err(git_error("Git event gap"));
+            }
+            self.watermark = sequence;
+            match event.body {
+                lapis_client_api::EventBody::GitStatusChanged { repository, .. } => {
+                    return Ok(Some(lapis_git::GitUpdate::Changed(repository)));
+                }
+                lapis_client_api::EventBody::SnapshotRequired { .. } => {
+                    return Err(git_error("Git snapshot required"));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 impl GitConnection for HostGit {
+    fn subscribe(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Box<dyn lapis_git::GitSubscription>, GitError> {
+        let id = lapis_client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
+        let client = self
+            .host
+            .host
+            .connect_workspace(id.clone())
+            .map_err(git_error)?;
+        let receiver = client.subscribe().map_err(git_error)?;
+        let response = client
+            .request(RequestBody::SnapshotResync(
+                lapis_client_api::SnapshotRequest {
+                    workspace_id: id,
+                    reason: lapis_client_api::SnapshotReason::Reconnect,
+                },
+            ))
+            .map_err(git_error)?;
+        let ResponseBody::SnapshotResync(response) = response else {
+            return Err(git_error("Git snapshot unavailable"));
+        };
+        Ok(Box::new(HostGitSubscription {
+            _client: client,
+            receiver,
+            watermark: response.snapshot.event_watermark.value(),
+            initial: Some(response.snapshot.git_repositories),
+        }))
+    }
     fn repositories(
         &self,
         workspace: &WorkspaceId,
