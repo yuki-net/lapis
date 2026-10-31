@@ -108,7 +108,7 @@ impl Render for ChangesFeature {
             .gap_2()
             .p_2()
             .child(
-                action_button("Rescan", false).on_click(cx.listener(|this, _, _, cx| {
+                action_button("Rescan", false, cx).on_click(cx.listener(|this, _, _, cx| {
                     this.git.update(cx, |git, cx| {
                         git.submit(GitOperation::RescanRepositories, cx)
                     });
@@ -118,13 +118,13 @@ impl Render for ChangesFeature {
                 div()
                     .flex()
                     .gap_1()
-                    .child(action_button("Tree", self.tree).on_click(cx.listener(
+                    .child(action_button("Tree", self.tree, cx).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.tree = true;
                             cx.notify();
                         },
                     )))
-                    .child(action_button("List", !self.tree).on_click(cx.listener(
+                    .child(action_button("List", !self.tree, cx).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.tree = false;
                             cx.notify();
@@ -136,7 +136,7 @@ impl Render for ChangesFeature {
             content = content.child(
                 div()
                     .text_size(px(11.))
-                    .text_color(theme::colors().text_secondary)
+                    .text_color(theme::colors(cx).text_secondary)
                     .child(format!("Git状態の更新に失敗しました: {error}")),
             );
         }
@@ -145,6 +145,7 @@ impl Render for ChangesFeature {
                 "⑂",
                 "Repository",
                 "Open or rescan a project",
+                cx,
             ));
         }
         for (index, (repository, status)) in repositories.into_iter().enumerate() {
@@ -178,6 +179,7 @@ impl Render for ChangesFeature {
                                     status.files.len()
                                 ),
                                 false,
+                                cx,
                             )
                             .on_click(cx.listener(
                                 move |this, _, _, cx| {
@@ -188,14 +190,14 @@ impl Render for ChangesFeature {
                                 },
                             )),
                         )
-                        .child(action_button("Commit...", false).on_click(cx.listener(
+                        .child(action_button("Commit...", false, cx).on_click(cx.listener(
                             move |this, _, _, cx| {
                                 this.git.update(cx, |git, cx| {
                                     git.prompt_repository_commit(commit_id.clone(), false, cx)
                                 });
                             },
                         )))
-                        .child(action_button("Amend...", false).on_click(cx.listener(
+                        .child(action_button("Amend...", false, cx).on_click(cx.listener(
                             move |this, _, _, cx| {
                                 this.git.update(cx, |git, cx| {
                                     git.prompt_repository_commit(amend_id.clone(), true, cx)
@@ -207,7 +209,7 @@ impl Render for ChangesFeature {
                 group = group.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(theme::colors().text_secondary)
+                        .text_color(theme::colors(cx).text_secondary)
                         .child(format!("Status stale: {error}")),
                 );
             }
@@ -238,7 +240,7 @@ impl Render for ChangesFeature {
                             .child(
                                 div()
                                     .text_size(px(11.))
-                                    .text_color(change_color(file.kind))
+                                    .text_color(change_color(file.kind, cx))
                                     .child(format!(
                                         "{} {} {}",
                                         if file.kind == lapis_git::ChangeKind::Conflicted {
@@ -256,7 +258,7 @@ impl Render for ChangesFeature {
                                         }
                                     )),
                             )
-                            .child(action_button("Diff", false).on_click(cx.listener(
+                            .child(action_button("Diff", false, cx).on_click(cx.listener(
                                 move |this, _, window, cx| {
                                     this.git.update(cx, |git, cx| {
                                         git.execute_repository_action(
@@ -272,7 +274,7 @@ impl Render for ChangesFeature {
                                 },
                             )))
                             .child(
-                                action_button(if staged { "Unstage" } else { "Stage" }, false)
+                                action_button(if staged { "Unstage" } else { "Stage" }, false, cx)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         let action = if staged {
                                             GitAction::Unstage {
@@ -319,7 +321,7 @@ impl Render for ChangesFeature {
                     .child(
                         div()
                             .text_size(px(11.))
-                            .text_color(theme::colors().text_secondary)
+                            .text_color(theme::colors(cx).text_secondary)
                             .child(error),
                     ),
             );
@@ -335,8 +337,8 @@ impl Render for ChangesFeature {
                 let restore_id = repository_id.clone();
                 let restore_path = selection.path.clone();
                 let restore_patch = diff.patch.clone();
-                content = content.child(action_button("Restore...", false).on_click(cx.listener(
-                    move |this, _, window, cx| {
+                content = content.child(action_button("Restore...", false, cx).on_click(
+                    cx.listener(move |this, _, window, cx| {
                         this.git.update(cx, |git, cx| {
                             git.execute_repository_action(
                                 restore_id.clone(),
@@ -348,14 +350,14 @@ impl Render for ChangesFeature {
                                 cx,
                             )
                         });
-                    },
-                )));
+                    }),
+                ));
             }
             content = content.children(diff.patch.lines().map(|line| {
                 div()
                     .font_family("Cascadia Mono")
                     .text_size(px(11.))
-                    .text_color(theme::colors().text_secondary)
+                    .text_color(theme::colors(cx).text_secondary)
                     .child(line.to_owned())
             }));
         }

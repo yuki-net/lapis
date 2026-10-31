@@ -93,5 +93,6 @@
   "settings.syntax-theme-follows-ui": "明暗はアプリのテーマに自動で追従します。",
   "settings.language": "言語 / Language",
   "settings.workspace-info": "ワークスペース情報とバージョン",
-  "settings.no-workspace": "ワークスペースが開かれていません"
+  "settings.no-workspace": "ワークスペースが開かれていません",
+  "command.open-document": "ファイルを開く…"
 }

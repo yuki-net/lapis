@@ -57,18 +57,24 @@ impl Shell {
     ) {
         self.close_header_menu(cx);
         match action {
-            MenuAction::NewFile => self.new_document(&New, window, cx),
+            MenuAction::NewFile => {
+                self.execute_command(id::COMMAND_NEW_DOCUMENT.into(), window, cx)
+            }
             MenuAction::NewFolder => self.create_new_folder(window, cx),
             MenuAction::NewWindow => self.open_new_window(cx),
             MenuAction::ConnectHost => cx.emit(UiCommand::ConnectHost),
-            MenuAction::OpenProject => self.open_project(window, cx),
-            MenuAction::OpenFile => self.open_file(window, cx),
-            MenuAction::Save => cx.emit(UiCommand::Save),
-            MenuAction::SaveAs => cx.emit(UiCommand::SaveAs),
+            MenuAction::OpenProject => {
+                self.execute_command(id::COMMAND_OPEN_WORKSPACE.into(), window, cx)
+            }
+            MenuAction::OpenFile => {
+                self.execute_command(id::COMMAND_OPEN_DOCUMENT.into(), window, cx)
+            }
+            MenuAction::Save => self.execute_command(id::COMMAND_SAVE_DOCUMENT.into(), window, cx),
+            MenuAction::SaveAs => self.execute_command(id::COMMAND_SAVE_AS.into(), window, cx),
             MenuAction::CloseProject => self.close_project(window, cx),
             MenuAction::CloseWindow => cx.emit(UiCommand::CloseWindow),
-            MenuAction::Undo => self.undo(&Undo, window, cx),
-            MenuAction::Redo => self.redo(&Redo, window, cx),
+            MenuAction::Undo => self.execute_command(id::COMMAND_UNDO.into(), window, cx),
+            MenuAction::Redo => self.execute_command(id::COMMAND_REDO.into(), window, cx),
             MenuAction::Cut => self.cut(&Cut, window, cx),
             MenuAction::Copy => self.copy(&Copy, window, cx),
             MenuAction::Paste => self.paste(&Paste, window, cx),
@@ -82,7 +88,9 @@ impl Shell {
             MenuAction::ToggleRightPanel => {
                 self.execute_command(id::COMMAND_TOGGLE_RIGHT_ZONE.into(), window, cx)
             }
-            MenuAction::TogglePanelControls => self.toggle_panel_controls(cx),
+            MenuAction::TogglePanelControls => {
+                self.execute_command(id::COMMAND_TOGGLE_PANEL_CONTROLS.into(), window, cx)
+            }
             MenuAction::Placeholder => {}
         }
     }

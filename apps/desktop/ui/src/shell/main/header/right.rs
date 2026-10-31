@@ -17,7 +17,7 @@ impl Shell {
                     ),
             )
             .child(
-                icon_button("open-notifications", IconName::Bell)
+                icon_button("open-notifications", IconName::Bell, cx)
                     .debug_selector(|| "header-notifications".into())
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.focus_view_in_zone(

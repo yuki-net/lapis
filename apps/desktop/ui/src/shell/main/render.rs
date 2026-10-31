@@ -24,6 +24,9 @@ impl Shell {
             .text_color(theme::colors(cx).text_primary)
             .track_focus(&self.focus_handle(cx))
             .key_context("Shell")
+            .on_action(cx.listener(|this, action: &InvokeCommand, window, cx| {
+                this.execute_command(action.0.clone().into(), window, cx);
+            }))
             .on_action(cx.listener(Self::open))
             .on_action(cx.listener(Self::save))
             .on_action(cx.listener(Self::save_as))
@@ -65,6 +68,7 @@ impl Shell {
                                 crate::components::floating_panel(
                                     ("notification-popup", id),
                                     SurfaceVariant::Popover,
+                                    cx,
                                 )
                                 .w(px(320.0))
                                 .p_3()

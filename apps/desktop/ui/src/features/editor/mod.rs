@@ -36,6 +36,12 @@ pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
             10,
         ))
         .contributes(UiContribution::command(
+            id::COMMAND_OPEN_DOCUMENT,
+            "command.open-document",
+            "folder-open",
+            19,
+        ))
+        .contributes(UiContribution::command(
             id::COMMAND_OPEN_WORKSPACE,
             "command.open-workspace",
             "folder-open",

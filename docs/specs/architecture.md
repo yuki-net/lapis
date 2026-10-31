@@ -109,6 +109,12 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Task一覧は選択中Taskに属するAgent表示だけを描画する。別TaskのSessionを自動起動・自動追加せず、既存のTask / Worktree / Terminal / Agent開始操作を明示的な入口として再利用する。
 - ACPプロトコルやAgent実行エンジンの新規実装は対象外とする。未対応機能を表示だけのButtonで完了扱いにせず、既存能力の範囲を共通RegistryとCommandで表現する。
 
+## Desktop の Command / Keymap
+
+- 名前付き操作は Command ID で識別し、画面操作と GPUI Action から既存処理へ接続する。Editor の文字入力と Quick Search の内部操作は別の入力 Binding とする。
+- Keymap は Desktop が所有し、Command ごとの Binding 一覧を既定値、選択 Preset、User Override の順に解決する。各層の未指定は継承、明示解除は空、指定された一覧は下位層の全 Binding を置換する。先頭を表示用とする。未登録 Preset は既定値へ戻す。Preset と解決結果を User Settings へコピーしない。
+- GPUI の Binding は解決結果の adapter であり、設定変更時は内部入力を含めて再登録する。他の登録元による変更を検知した場合は全消去せず再適用を拒否する。Host へ Keymap を同期しない。
+
 ## 依存の検査
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。

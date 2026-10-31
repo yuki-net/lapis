@@ -12,6 +12,12 @@ Rust/GPUIによるDesktop Clientの実装領域です。現在のファイル配
 
 必要な境界は状態の所有者やライフサイクルで判断し、行数のためだけのEntity・ファイル分割をしません。
 
+## Command と Keymap
+
+Command ID は操作を識別し、Keymap は Desktop 上のキーから既存の GPUI Action への割り当てを解決する。Editor と Quick Search の内部入力は Command と分ける。各 Command の複数 Binding を既定値、選択 Preset、User Override の順に解決する。Preset と Override は未指定なら継承し、明示解除または Binding 一覧の置換もできる。先頭の Binding を表示用とする。実行時の再適用は内部入力も含めて再登録し、他の登録元による GPUI Binding の変更を検知した場合は再適用を拒否する。
+
+Preset 登録と portable な設定値は Desktop UI が持ち、Host に Keymap を送らない。設定の保存先への接続、外部 Extension のロード、Keymap の設定 UI は未実装。
+
 UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱いは [AGENTS.md](../../AGENTS.md) を参照してください。
 
 ## ディレクトリの責務

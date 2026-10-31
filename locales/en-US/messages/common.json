@@ -93,5 +93,6 @@
   "settings.syntax-theme-follows-ui": "Light and dark colors follow the app theme automatically.",
   "settings.language": "Language / 言語",
   "settings.workspace-info": "Workspace & Version",
-  "settings.no-workspace": "No workspace open"
+  "settings.no-workspace": "No workspace open",
+  "command.open-document": "Open File…"
 }

@@ -17,7 +17,7 @@ impl Shell {
                 Some((
                     index,
                     self.locale.resolve(&contribution.title),
-                    self.keymap.shortcut_label(&command),
+                    crate::keymap::KeymapRegistry::active(cx).shortcut_label(&command),
                     command,
                 ))
             })
@@ -82,6 +82,17 @@ impl Shell {
     ) {
         match command.as_str() {
             id::COMMAND_NEW_DOCUMENT => self.new_document(&New, window, cx),
+            id::COMMAND_OPEN_DOCUMENT => self.open_file(window, cx),
+            id::COMMAND_SAVE_AS => cx.emit(UiCommand::SaveAs),
+            id::COMMAND_UNDO => cx.emit(UiCommand::Undo),
+            id::COMMAND_REDO => cx.emit(UiCommand::Redo),
+            id::COMMAND_FIND => cx.emit(UiCommand::Find),
+            id::COMMAND_FIND_NEXT => cx.emit(UiCommand::FindNext),
+            id::COMMAND_FIND_WORKSPACE => cx.emit(UiCommand::FindWorkspace),
+            id::COMMAND_COMPLETE => cx.emit(UiCommand::Complete),
+            id::COMMAND_GO_TO_DEFINITION => cx.emit(UiCommand::GoToDefinition),
+            id::COMMAND_SHOW_COMMANDS => cx.emit(UiCommand::QuickSearch),
+            id::COMMAND_QUIT => cx.emit(UiCommand::Quit),
             id::COMMAND_OPEN_WORKSPACE => {
                 self.shell.command_palette_open = false;
                 self.open_project(window, cx);

@@ -667,7 +667,17 @@ impl Element for SearchTextElement {
 
 impl Render for QuickSearch {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rows = self.matches.iter().cloned().enumerate().collect::<Vec<_>>();
+        let keymap = crate::keymap::KeymapRegistry::active(cx);
+        let rows = self
+            .matches
+            .iter()
+            .cloned()
+            .map(|mut item| {
+                item.shortcut = keymap.shortcut_label(&item.command);
+                item
+            })
+            .enumerate()
+            .collect::<Vec<_>>();
         div()
             .size_full()
             .min_h(px(0.0))

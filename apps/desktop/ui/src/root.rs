@@ -1409,7 +1409,7 @@ impl DesktopRoot {
                 let provider = CommandSearchProvider::from_registry(
                     &features::bundled_registry(),
                     &crate::localization::Localizer::bundled(),
-                    &crate::keymap::KeymapRegistry::bundled(),
+                    crate::keymap::KeymapRegistry::active(cx),
                 );
                 self.quick_search
                     .update(cx, |search, cx| search.open(provider, cx));
@@ -1433,6 +1433,22 @@ impl DesktopRoot {
             UiCommand::Redo => self
                 .editor
                 .update(cx, |editor, cx| editor.redo(&crate::app::Redo, window, cx)),
+            UiCommand::Find => self
+                .editor
+                .update(cx, |editor, cx| editor.find(&crate::app::Find, window, cx)),
+            UiCommand::FindNext => self.editor.update(cx, |editor, cx| {
+                editor.find_next(&crate::app::FindNext, window, cx)
+            }),
+            UiCommand::FindWorkspace => self.editor.update(cx, |editor, cx| {
+                editor.find_workspace(&crate::app::FindWorkspace, window, cx)
+            }),
+            UiCommand::Complete => self.editor.update(cx, |editor, cx| {
+                editor.complete(&crate::app::Complete, window, cx)
+            }),
+            UiCommand::GoToDefinition => self.editor.update(cx, |editor, cx| {
+                editor.go_to_definition(&crate::app::GoToDefinition, window, cx)
+            }),
+            UiCommand::Quit => self.close_application(window, cx),
             UiCommand::Copy => self
                 .editor
                 .update(cx, |editor, cx| editor.copy(&crate::app::Copy, window, cx)),
