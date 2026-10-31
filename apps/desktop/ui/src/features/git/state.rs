@@ -255,6 +255,8 @@ mod event_order_tests {
 pub(super) struct Snapshot {
     pub status: Option<GitSnapshot>,
     pub repositories: Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)>,
+    pub repository_errors: Vec<(lapis_git::GitRepositorySnapshot, String)>,
+    pub last_refresh_error: Option<String>,
     pub worktree_statuses: Vec<(TaskId, GitSnapshot)>,
     pub selected_diff: Option<GitDiffSnapshot>,
     pub inspection: Option<lapis_desktop_client::GitDiffSelection>,
@@ -529,23 +531,8 @@ impl GitFeature {
                     GitOperation::RefreshRepositories => session.rescan_repositories(),
                     GitOperation::RefreshWorktrees => session.refresh_worktrees(),
                     GitOperation::ApplyUpdate(update) => {
-                        let is_snapshot = matches!(&update, lapis_git::GitUpdate::Snapshot(_));
-                        let rescanned = if is_snapshot {
-                            session
-                                .rescan_repositories()
-                                .map_err(|error| error.to_string())
-                        } else {
-                            Ok(())
-                        };
-                        let refreshed = if is_snapshot && session.status().is_some() {
-                            session
-                                .refresh_worktrees()
-                                .map_err(|error| error.to_string())
-                        } else {
-                            Ok(())
-                        };
-                        session.apply_git_update(update);
-                        rescanned.and(refreshed)
+                        session.reconcile_git_update(update);
+                        Ok(())
                     }
                     GitOperation::Import(task, path) => session.import_file(&task, &path),
                     GitOperation::Discard(_) => unreachable!("Task状態の所有者で検証する"),
@@ -566,6 +553,12 @@ impl GitFeature {
                 Ok(Snapshot {
                     status: session.status().cloned(),
                     repositories: session.repository_statuses().to_vec(),
+                    repository_errors: session
+                        .repository_errors()
+                        .iter()
+                        .map(|(repository, error)| (repository.clone(), error.to_string()))
+                        .collect(),
+                    last_refresh_error: session.last_refresh_error().map(ToString::to_string),
                     worktree_statuses: session.worktree_statuses().to_vec(),
                     selected_diff: session.selected_diff().cloned(),
                     inspection: session.inspection().cloned(),
@@ -669,6 +662,8 @@ impl GitFeature {
                                 };
                             git.snapshot = snapshot;
                         }
+                        git.snapshot.repository_errors = snapshot.repository_errors;
+                        git.snapshot.last_refresh_error = snapshot.last_refresh_error;
                         if git.target.as_ref().is_some_and(|target| {
                             !git.snapshot
                                 .worktree_statuses
