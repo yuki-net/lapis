@@ -8,5 +8,5 @@ pub(crate) fn separator(cx: &gpui::App) -> gpui::Div {
         .w_full()
         .flex_shrink_0()
         .my(tokens::spacing::XS)
-        .bg(theme::colors(cx).border_default)
+        .bg(theme::colors(cx).floating_border)
 }

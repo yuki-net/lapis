@@ -133,7 +133,12 @@ impl DockGeometry {
         } else {
             0.0
         };
-        let header = f32::from(crate::tokens::size::TITLE_BAR_HEIGHT).min(height);
+        // ボタンはタイトルバーの中央。ボタン下のPopup間隔とアイランド上端を揃える。
+        let header = ((f32::from(crate::tokens::size::TITLE_BAR_HEIGHT)
+            + f32::from(crate::tokens::size::HEADER_BUTTON))
+            / 2.0
+            + f32::from(crate::tokens::spacing::XS))
+        .min(height);
         let footer =
             f32::from(crate::tokens::size::STATUS_BAR_HEIGHT).min((height - header).max(0.0));
         let frame = DockRect {

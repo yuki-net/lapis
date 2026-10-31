@@ -1,80 +1,75 @@
 use super::*;
-use crate::components::{MenuItemSpec, menu_item, menu_surface};
+use crate::components::{Menu, MenuEntry, MenuItemSpec};
 
 impl Shell {
-    pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        menu_surface("settings-menu", cx)
-            .debug_selector(|| "settings-menu-panel".into())
-            .w(px(250.0))
-            .p(tokens::spacing::SM)
-            .child(
-                menu_item(
-                    MenuItemSpec {
-                        id: "settings-menu-settings".into(),
-                        label: "Settings".into(),
-                        shortcut: Some("Ctrl+,".into()),
-                        icon: Some(IconName::Settings),
-                        enabled: true,
-                    },
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.open_settings_view(cx);
-                })),
-            )
-            .child(
-                menu_item(
-                    MenuItemSpec {
-                        id: "settings-menu-theme".into(),
-                        label: "Theme".into(),
-                        shortcut: theme::name(&theme::active_id(cx), cx).map(Into::into),
-                        icon: Some(IconName::SunMoon),
-                        enabled: true,
-                    },
-                    cx,
-                )
-                .on_click(cx.listener(|this, _, _, cx| {
-                    this.toggle_theme_preference(cx);
-                })),
-            )
-            .when(self.shell.theme_picker_open, |menu| {
-                menu.child(self.render_theme_picker(cx))
-            })
-    }
-
-    pub(super) fn render_theme_picker(&self, cx: &mut Context<Self>) -> gpui::Stateful<gpui::Div> {
-        let active = theme::active_id(cx);
-        div()
-            .id("theme-picker")
-            .mt_1()
-            .mb_1()
-            .pl_2()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .children(theme::available(cx).into_iter().map(|(theme_id, name)| {
-                let selected = active == theme_id;
-                let click_id = theme_id.clone();
-                div()
-                    .id(gpui::SharedString::from(theme_id.as_str().to_owned()))
-                    .h(px(30.0))
-                    .w_full()
-                    .px_2()
-                    .rounded(px(5.0))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(px(12.0))
-                    .text_color(theme::colors(cx).text_primary)
-                    .hover(|style| style.bg(theme::colors(cx).button_background_hover))
-                    .when(selected, |item| {
-                        item.bg(theme::colors(cx).button_background_selected)
-                    })
-                    .child(if selected { "✓" } else { "" })
-                    .child(name)
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.select_theme(click_id.clone(), cx);
+    pub(crate) fn render_settings_menu(&self, cx: &mut Context<Self>) -> Menu {
+        let specs = [
+            MenuItemSpec {
+                id: "settings-menu-settings".into(),
+                label: "Settings".into(),
+                shortcut: Some("Ctrl+,".into()),
+                icon: Some(IconName::Settings),
+                enabled: true,
+                selected: false,
+                submenu: false,
+                separator_before: false,
+            },
+            MenuItemSpec {
+                id: "settings-menu-theme".into(),
+                label: "Theme".into(),
+                shortcut: theme::name(&theme::active_id(cx), cx).map(Into::into),
+                icon: Some(IconName::SunMoon),
+                enabled: true,
+                selected: false,
+                submenu: false,
+                separator_before: false,
+            },
+        ];
+        let mut entries = specs
+            .into_iter()
+            .map(|spec| {
+                let settings = spec.id.as_ref() == "settings-menu-settings";
+                MenuEntry::new(spec, cx, |row| {
+                    row.on_click(cx.listener(move |this, _, _, cx| {
+                        if settings {
+                            this.open_settings_view(cx);
+                        } else {
+                            this.toggle_theme_preference(cx);
+                        }
                     }))
-            }))
+                    .into_any_element()
+                })
+            })
+            .collect::<Vec<_>>();
+        if self.shell.theme_picker_open {
+            let active = theme::active_id(cx);
+            entries.extend(theme::available(cx).into_iter().enumerate().map(
+                |(index, (theme_id, name))| {
+                    let selected = active == theme_id;
+                    MenuEntry::new(
+                        MenuItemSpec {
+                            id: theme_id.as_str().to_owned().into(),
+                            label: name.into(),
+                            shortcut: None,
+                            icon: None,
+                            enabled: true,
+                            selected,
+                            submenu: false,
+                            separator_before: index == 0,
+                        },
+                        cx,
+                        |row| {
+                            row.on_click(cx.listener(move |this, _, _, cx| {
+                                this.select_theme(theme_id.clone(), cx)
+                            }))
+                            .into_any_element()
+                        },
+                    )
+                },
+            ));
+        }
+        Menu::new("settings-menu", entries)
+            .debug_selector("settings-menu-panel")
+            .padding(tokens::spacing::SM)
     }
 }

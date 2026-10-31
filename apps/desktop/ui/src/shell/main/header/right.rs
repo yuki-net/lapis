@@ -14,7 +14,7 @@ impl Shell {
                     window.focus(&this.focus_handle);
                     this.toggle_settings_menu(cx);
                 })),
-            PopupPlacement::BelowEnd,
+            PopupPlacement::BelowStart,
             scope,
         )
         .on_dismiss(cx.listener(|this, _: &(), window, cx| {

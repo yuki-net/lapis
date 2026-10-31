@@ -37,6 +37,7 @@ impl PopupScope {
 #[derive(Clone, Copy)]
 pub(crate) enum PopupPlacement {
     BelowStart,
+    #[allow(dead_code)] // 呼び出し側で右端揃えを選べる配置として保持する。
     BelowEnd,
     Right,
 }
@@ -102,12 +103,14 @@ impl RenderOnce for Popup {
                     }
                 });
             let (slot, offset) = match self.placement {
-                PopupPlacement::BelowStart => {
-                    (div().absolute().left_0().top_full(), point(px(0.), px(4.)))
-                }
-                PopupPlacement::BelowEnd => {
-                    (div().absolute().right_0().top_full(), point(px(0.), px(4.)))
-                }
+                PopupPlacement::BelowStart => (
+                    div().absolute().left_0().top_full(),
+                    point(px(0.), crate::tokens::spacing::XS),
+                ),
+                PopupPlacement::BelowEnd => (
+                    div().absolute().right_0().top_full(),
+                    point(px(0.), crate::tokens::spacing::XS),
+                ),
                 PopupPlacement::Right => {
                     (div().absolute().left_full().top_0(), point(px(4.), px(-4.)))
                 }

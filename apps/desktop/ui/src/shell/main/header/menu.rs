@@ -1,7 +1,5 @@
 use crate::{
-    components::{
-        MenuItemSpec, Popup, PopupPlacement, PopupScope, menu_item, menu_surface, separator,
-    },
+    components::{Menu, MenuEntry, MenuItemSpec, Popup, PopupPlacement, PopupScope},
     shell::HeaderMenuSection as MenuId,
 };
 use gpui::ElementId;
@@ -15,65 +13,61 @@ impl Shell {
         scope: &PopupScope,
         max_height: Pixels,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> Menu {
         let active = self.shell.header_menu_section;
-        menu_surface("header-menu-column", cx)
-            .debug_selector(|| "header-menu-panel".into())
-            .w(px(168.0))
-            .p(tokens::spacing::XS)
-            .children(ROOT_MENUS.iter().map(|(menu, label)| {
-                let row = self.render_header_menu_root(*menu, label, active == Some(*menu), cx);
-                Popup::new(row, PopupPlacement::Right, scope.clone())
-                    .when(active == Some(*menu), |popup| {
-                        popup.content(self.render_header_submenu(*menu, max_height, cx))
-                    })
-            }))
+        let entries = ROOT_MENUS
+            .iter()
+            .map(|(menu, label)| {
+                let menu = *menu;
+                let submenu = (active == Some(menu))
+                    .then(|| self.render_header_submenu(menu, max_height, cx));
+                MenuEntry::new(
+                    self.header_menu_root_spec(menu, label, active == Some(menu)),
+                    cx,
+                    |row| {
+                        let row =
+                            row.debug_selector(move || format!("header-menu-root-{label}"))
+                                .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+                                    if *hovered {
+                                        this.select_header_menu(menu, cx);
+                                    }
+                                }))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.select_header_menu(menu, cx)
+                                }));
+                        Popup::new(row, PopupPlacement::Right, scope.clone())
+                            .when_some(submenu, |popup, submenu| popup.content(submenu))
+                            .into_any_element()
+                    },
+                )
+            })
+            .collect();
+        Menu::new("header-menu-column", entries).debug_selector("header-menu-panel")
     }
 
-    fn render_header_menu_root(
+    fn header_menu_root_spec(
         &self,
         menu: MenuId,
         label: &'static str,
-        active: bool,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        let localized_label = match menu {
-            MenuId::File => self.t("menu.file"),
-            MenuId::Edit => self.t("menu.edit"),
-            MenuId::View => self.t("menu.view"),
-            MenuId::Window => self.t("menu.window"),
-            MenuId::Help => self.t("menu.help"),
+        selected: bool,
+    ) -> MenuItemSpec {
+        let (key, icon) = match menu {
+            MenuId::File => ("menu.file", IconName::Files),
+            MenuId::Edit => ("menu.edit", IconName::Pencil),
+            MenuId::View => ("menu.view", IconName::PanelLeft),
+            MenuId::Window => ("menu.window", IconName::Square),
+            MenuId::Help => ("menu.help", IconName::HelpCircle),
         };
-        let icon = match menu {
-            MenuId::File => IconName::Files,
-            MenuId::Edit => IconName::Pencil,
-            MenuId::View => IconName::PanelLeft,
-            MenuId::Window => IconName::Square,
-            MenuId::Help => IconName::HelpCircle,
-        };
-        menu_item(
-            MenuItemSpec {
-                id: format!("header-menu-root-{label}").into(),
-                label: localized_label.into(),
-                shortcut: None,
-                icon: Some(icon),
-                enabled: true,
-            },
-            cx,
-        )
-        .debug_selector(move || format!("header-menu-root-{label}").into())
-        .when(active, |item| {
-            item.bg(theme::colors(cx).button_background_selected)
-        })
-        .child(Icon::new(IconName::ChevronRight).size(px(14.)))
-        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-            if *hovered {
-                this.select_header_menu(menu, cx);
-            }
-        }))
-        .on_click(cx.listener(move |this, _, _, cx| {
-            this.select_header_menu(menu, cx);
-        }))
+        MenuItemSpec {
+            id: format!("header-menu-root-{label}").into(),
+            label: self.t(key).into(),
+            shortcut: None,
+            icon: Some(icon),
+            enabled: true,
+            selected,
+            submenu: true,
+            separator_before: false,
+        }
     }
 
     fn render_header_submenu(
@@ -81,7 +75,7 @@ impl Shell {
         menu: MenuId,
         max_height: Pixels,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> Menu {
         let menu_prefix = match menu {
             MenuId::File => "menu.file",
             MenuId::Edit => "menu.edit",
@@ -89,63 +83,51 @@ impl Shell {
             MenuId::Window => "menu.window",
             MenuId::Help => "menu.help",
         };
-        let children = items(menu)
+        let mut entries = items(menu)
             .iter()
-            .flat_map(|item| {
-                let separator = item
-                    .separator_before
-                    .then(|| separator(cx).into_any_element());
-                separator.into_iter().chain(std::iter::once(
-                    self.render_header_item(menu_prefix, item, cx)
-                        .into_any_element(),
-                ))
-            })
+            .map(|item| self.header_item_entry(menu_prefix, item, cx))
             .collect::<Vec<_>>();
-
-        menu_surface(
-            ElementId::Name(format!("header-submenu-{menu:?}").into()),
-            cx,
-        )
-        .debug_selector(move || format!("header-submenu-{menu:?}").into())
-        .w(px(272.0))
-        .max_h(max_height)
-        .overflow_y_scroll()
-        .p(tokens::spacing::XS)
-        .children(children)
-        .when(menu == MenuId::View, |surface| {
-            surface
-                .child(separator(cx))
-                .children(self.panel_visibility_entries().into_iter().map(
-                    |(panel_id, label, _)| {
-                        let id = format!("panel_id-visibility-{}", panel_id.as_str());
-                        menu_item(
-                            MenuItemSpec {
-                                id: id.into(),
-                                label: label.into(),
-                                shortcut: None,
-                                icon: None,
-                                enabled: true,
-                            },
-                            cx,
-                        )
-                        .on_click(cx.listener(
-                            move |this, _, window, cx| {
+        if menu == MenuId::View {
+            entries.extend(self.panel_visibility_entries().into_iter().enumerate().map(
+                |(index, (panel_id, label, _))| {
+                    MenuEntry::new(
+                        MenuItemSpec {
+                            id: format!("panel_id-visibility-{}", panel_id.as_str()).into(),
+                            label: label.into(),
+                            shortcut: None,
+                            icon: None,
+                            enabled: true,
+                            selected: false,
+                            submenu: false,
+                            separator_before: index == 0,
+                        },
+                        cx,
+                        |row| {
+                            row.on_click(cx.listener(move |this, _, window, cx| {
                                 this.toggle_panel_visibility(panel_id.clone(), cx);
                                 this.close_header_menu(cx);
                                 window.focus(&this.focus_handle);
-                            },
-                        ))
-                    },
-                ))
-        })
+                            }))
+                            .into_any_element()
+                        },
+                    )
+                },
+            ));
+        }
+        Menu::new(
+            ElementId::Name(format!("header-submenu-{menu:?}").into()),
+            entries,
+        )
+        .debug_selector(format!("header-submenu-{menu:?}"))
+        .max_height(max_height)
     }
 
-    fn render_header_item(
+    fn header_item_entry(
         &self,
         menu_prefix: &'static str,
         item: &'static MenuItemDefinition,
         cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
+    ) -> MenuEntry {
         let action = item.action;
         let id = item.id;
         let enabled = item.enabled;
@@ -156,24 +138,30 @@ impl Shell {
         } else {
             resolved
         };
-        menu_item(
+        MenuEntry::new(
             MenuItemSpec {
                 id: format!("header-menu-item-{id}").into(),
                 label: label.into(),
                 shortcut: item.shortcut.map(Into::into),
                 icon: item.icon,
                 enabled,
+                selected: false,
+                submenu: false,
+                separator_before: item.separator_before,
             },
             cx,
+            |row| {
+                row.debug_selector(move || format!("header-menu-item-{id}"))
+                    .when(enabled, |row| {
+                        row.on_click(cx.listener(move |this, _, window, cx| {
+                            if let Some(action) = action {
+                                this.execute_header_menu_action(action, window, cx);
+                            }
+                        }))
+                    })
+                    .into_any_element()
+            },
         )
-        .debug_selector(move || format!("header-menu-item-{id}").into())
-        .when(enabled, |row| {
-            row.on_click(cx.listener(move |this, _, window, cx| {
-                if let Some(action) = action {
-                    this.execute_header_menu_action(action, window, cx);
-                }
-            }))
-        })
     }
 }
 
@@ -287,8 +275,18 @@ mod tests {
         visual.simulate_click(trigger.center(), Modifiers::none());
         draw(visual);
         let menu = visual.debug_bounds("settings-menu-panel").unwrap();
-        assert_eq!(menu.right(), trigger.right());
-        assert_eq!(menu.top(), trigger.bottom() + px(4.));
+        let viewport = visual.update(|window, _| window.viewport_size());
+        // ボタン左端を起点とし、右にはみ出す分だけWindow端の内側へ寄せる。
+        assert_eq!(
+            menu.left(),
+            trigger
+                .left()
+                .min(viewport.width - menu.size.width - px(8.))
+        );
+        assert!(menu.right() <= viewport.width - px(8.));
+        assert!(menu.left() >= px(8.));
+        assert_eq!(menu.top(), trigger.bottom() + tokens::spacing::XS);
+        assert_eq!(visual.debug_bounds("dock-frame").unwrap().top(), menu.top());
         visual.simulate_click(trigger.center(), Modifiers::none());
         shell.read_with(visual, |shell, _| assert!(!shell.shell.settings_menu_open));
         visual.simulate_click(trigger.center(), Modifiers::none());
