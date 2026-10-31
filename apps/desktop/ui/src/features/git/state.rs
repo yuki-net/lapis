@@ -5,6 +5,22 @@ use lapis_editor_core::{TaskId, WorkspaceId};
 use lapis_git::{GitAction, GitActionRequest, GitDiffSnapshot, GitSnapshot};
 use std::time::Duration;
 
+fn merge_repository_statuses(
+    mut base: Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)>,
+    updates: impl IntoIterator<Item = (lapis_git::GitRepositorySnapshot, GitSnapshot)>,
+) -> Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)> {
+    for (repository, incoming) in updates {
+        if let Some((_, current)) = base
+            .iter_mut()
+            .find(|(existing, _)| existing.id == repository.id)
+            && incoming.revision > current.revision
+        {
+            *current = incoming;
+        }
+    }
+    base
+}
+
 #[cfg(test)]
 mod event_order_tests {
     use super::*;
@@ -17,6 +33,22 @@ mod event_order_tests {
         trees: Mutex<Vec<lapis_git::WorktreeSnapshot>>,
     }
     impl lapis_git::GitConnection for Backend {
+        fn repositories(
+            &self,
+            _: &WorkspaceId,
+        ) -> Result<Vec<lapis_git::GitRepositorySnapshot>, lapis_git::GitError> {
+            Ok(vec![lapis_git::GitRepositorySnapshot {
+                id: "root".into(),
+                path: None,
+            }])
+        }
+        fn repository_status(
+            &self,
+            workspace: &WorkspaceId,
+            _: &str,
+        ) -> Result<GitSnapshot, lapis_git::GitError> {
+            self.status(workspace, None)
+        }
         fn status(
             &self,
             workspace: &WorkspaceId,
@@ -79,6 +111,45 @@ mod event_order_tests {
         ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
             unreachable!()
         }
+    }
+
+    #[test]
+    fn repository_merge_preserves_membership_and_newest_revision() {
+        let workspace = WorkspaceId::new("workspace");
+        let repository = |id: &str| lapis_git::GitRepositorySnapshot {
+            id: id.into(),
+            path: Some(id.into()),
+        };
+        let status = |revision: u64| GitSnapshot {
+            workspace_id: workspace.clone(),
+            worktree_id: None,
+            revision,
+            branch: "main".into(),
+            head: revision.to_string(),
+            files: vec![],
+        };
+
+        let merged = merge_repository_statuses(
+            vec![(repository("frontend"), status(2))],
+            vec![
+                (repository("frontend"), status(3)),
+                (repository("backend"), status(9)),
+            ],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.id, "frontend");
+        assert_eq!(merged[0].1.revision, 3);
+
+        let authoritative_snapshot = merge_repository_statuses(
+            vec![
+                (repository("frontend"), status(2)),
+                (repository("backend"), status(1)),
+            ],
+            vec![(repository("frontend"), status(4))],
+        );
+        assert_eq!(authoritative_snapshot.len(), 2);
+        assert_eq!(authoritative_snapshot[0].1.revision, 4);
+        assert_eq!(authoritative_snapshot[1].1.revision, 1);
     }
 
     #[gpui::test]
@@ -183,6 +254,9 @@ mod event_order_tests {
 #[derive(Default)]
 pub(super) struct Snapshot {
     pub status: Option<GitSnapshot>,
+    pub repositories: Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)>,
+    pub repository_errors: Vec<(lapis_git::GitRepositorySnapshot, String)>,
+    pub last_refresh_error: Option<String>,
     pub worktree_statuses: Vec<(TaskId, GitSnapshot)>,
     pub selected_diff: Option<GitDiffSnapshot>,
     pub inspection: Option<lapis_desktop_client::GitDiffSelection>,
@@ -194,6 +268,8 @@ pub(super) enum GitOperation {
     Import(TaskId, String),
     Discard(TaskId),
     Action(Option<TaskId>, GitActionRequest),
+    RepositoryAction(String, GitActionRequest),
+    RescanRepositories,
     Clear,
     CreateWorktree,
     ApplyUpdate(lapis_git::GitUpdate),
@@ -203,6 +279,7 @@ pub(super) enum GitOperation {
 #[derive(Clone, Copy)]
 pub(crate) enum GitInputKind {
     Commit,
+    Amend,
     CreateBranch,
     SwitchBranch,
     DeleteBranch,
@@ -216,6 +293,7 @@ impl GitInputKind {
     pub fn title(self) -> &'static str {
         match self {
             Self::Commit => "Commit message",
+            Self::Amend => "Amend message",
             Self::CreateBranch => "作成するBranch名",
             Self::SwitchBranch => "切り替えるBranch名",
             Self::DeleteBranch => "削除するBranch名",
@@ -232,6 +310,7 @@ pub(crate) struct GitInputRequest {
     kind: GitInputKind,
     workspace: WorkspaceId,
     worktree: Option<TaskId>,
+    repository_id: Option<String>,
     head: String,
     stash_refs: Vec<(u32, String)>,
 }
@@ -257,6 +336,7 @@ pub(crate) struct GitFeature {
     backend: std::sync::Arc<dyn lapis_git::GitConnection>,
     subscription_generation: u64,
     worktree_refresh_generation: u64,
+    repository_refresh_generation: u64,
     workspace: Option<WorkspaceId>,
     gate: ResponseGate,
     pending: usize,
@@ -283,6 +363,7 @@ impl GitFeature {
             backend,
             subscription_generation: 0,
             worktree_refresh_generation: 0,
+            repository_refresh_generation: 0,
             workspace: None,
             gate: ResponseGate::default(),
             pending: 0,
@@ -408,6 +489,12 @@ impl GitFeature {
             GitOperation::RefreshWorktrees
                 | GitOperation::ApplyUpdate(lapis_git::GitUpdate::Snapshot(_))
         );
+        let is_repository_refresh = matches!(
+            &operation,
+            GitOperation::RefreshRepositories
+                | GitOperation::RescanRepositories
+                | GitOperation::ApplyUpdate(lapis_git::GitUpdate::Snapshot(_))
+        );
         let is_event = matches!(
             &operation,
             GitOperation::ApplyUpdate(_)
@@ -420,13 +507,20 @@ impl GitFeature {
             self.worktree_refresh_generation = self.worktree_refresh_generation.wrapping_add(1);
         }
         let worktree_generation = self.worktree_refresh_generation;
+        if is_repository_refresh {
+            self.repository_refresh_generation = self.repository_refresh_generation.wrapping_add(1);
+        }
+        let repository_generation = self.repository_refresh_generation;
         self.pending += 1;
         let admitted = self.worker.submit(
             cx,
             move |session| {
                 if !matches!(
                     &operation,
-                    GitOperation::ApplyUpdate(_) | GitOperation::RefreshWorktrees
+                    GitOperation::ApplyUpdate(_)
+                        | GitOperation::RefreshWorktrees
+                        | GitOperation::RefreshRepositories
+                        | GitOperation::RescanRepositories
                 ) {
                     session
                         .refresh(&workspace)
@@ -434,15 +528,10 @@ impl GitFeature {
                 }
                 let result = match operation {
                     GitOperation::Refresh => Ok(()),
-                    GitOperation::RefreshRepositories => Ok(()),
+                    GitOperation::RefreshRepositories => session.rescan_repositories(),
                     GitOperation::RefreshWorktrees => session.refresh_worktrees(),
                     GitOperation::ApplyUpdate(update) => {
-                        if matches!(update, lapis_git::GitUpdate::Snapshot(_)) {
-                            session
-                                .refresh_worktrees()
-                                .map_err(|error| error.to_string())?;
-                        }
-                        session.apply_git_update(update);
+                        session.reconcile_git_update(update);
                         Ok(())
                     }
                     GitOperation::Import(task, path) => session.import_file(&task, &path),
@@ -450,6 +539,10 @@ impl GitFeature {
                     GitOperation::Action(worktree, request) => {
                         session.execute_action(worktree.as_ref(), request)
                     }
+                    GitOperation::RepositoryAction(repository_id, request) => {
+                        session.execute_repository_action(&repository_id, request)
+                    }
+                    GitOperation::RescanRepositories => session.rescan_repositories(),
                     GitOperation::Clear => {
                         session.clear_inspection();
                         Ok(())
@@ -459,6 +552,13 @@ impl GitFeature {
                 result.map_err(|error| error.to_string())?;
                 Ok(Snapshot {
                     status: session.status().cloned(),
+                    repositories: session.repository_statuses().to_vec(),
+                    repository_errors: session
+                        .repository_errors()
+                        .iter()
+                        .map(|(repository, error)| (repository.clone(), error.to_string()))
+                        .collect(),
+                    last_refresh_error: session.last_refresh_error().map(ToString::to_string),
                     worktree_statuses: session.worktree_statuses().to_vec(),
                     selected_diff: session.selected_diff().cloned(),
                     inspection: session.inspection().cloned(),
@@ -475,7 +575,22 @@ impl GitFeature {
                 }
                 match result {
                     Ok(mut snapshot) => {
+                        let repository_errors = std::mem::take(&mut snapshot.repository_errors);
+                        let last_refresh_error = snapshot.last_refresh_error.take();
                         if is_event {
+                            if is_repository_refresh
+                                && git.repository_refresh_generation == repository_generation
+                            {
+                                git.snapshot.repositories = merge_repository_statuses(
+                                    snapshot.repositories,
+                                    git.snapshot.repositories.clone(),
+                                );
+                            } else {
+                                git.snapshot.repositories = merge_repository_statuses(
+                                    git.snapshot.repositories.clone(),
+                                    snapshot.repositories,
+                                );
+                            }
                             if snapshot.status.as_ref().is_some_and(|incoming| {
                                 git.snapshot
                                     .status
@@ -535,8 +650,22 @@ impl GitFeature {
                                     }
                                 }
                             }
+                            snapshot.repositories =
+                                if git.repository_refresh_generation != repository_generation {
+                                    merge_repository_statuses(
+                                        git.snapshot.repositories.clone(),
+                                        snapshot.repositories,
+                                    )
+                                } else {
+                                    merge_repository_statuses(
+                                        snapshot.repositories,
+                                        git.snapshot.repositories.clone(),
+                                    )
+                                };
                             git.snapshot = snapshot;
                         }
+                        git.snapshot.repository_errors = repository_errors;
+                        git.snapshot.last_refresh_error = last_refresh_error;
                         if git.target.as_ref().is_some_and(|target| {
                             !git.snapshot
                                 .worktree_statuses
@@ -596,6 +725,7 @@ impl GitFeature {
                 kind,
                 workspace: workspace.clone(),
                 worktree: self.target.clone(),
+                repository_id: None,
                 head: status.head.clone(),
                 stash_refs: self.snapshot.stash_refs.clone(),
             }));
@@ -608,9 +738,14 @@ impl GitFeature {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let current_head = if let Some(id) = &request.repository_id {
+            self.repository_status(id).map(|status| &status.head)
+        } else {
+            self.selected_status().map(|status| &status.head)
+        };
         if self.workspace.as_ref() != Some(&request.workspace)
-            || self.target != request.worktree
-            || self.selected_status().map(|status| &status.head) != Some(&request.head)
+            || (request.repository_id.is_none() && self.target != request.worktree)
+            || current_head != Some(&request.head)
         {
             self.message = "操作対象が変わりました。Git操作を選び直してください".into();
             cx.notify();
@@ -631,6 +766,9 @@ impl GitFeature {
         };
         let action = match request.kind {
             GitInputKind::Commit => Ok(GitAction::Commit {
+                message: text.clone(),
+            }),
+            GitInputKind::Amend => Ok(GitAction::Amend {
                 message: text.clone(),
             }),
             GitInputKind::CreateBranch => Ok(GitAction::CreateBranch { name: text.clone() }),
@@ -658,13 +796,105 @@ impl GitFeature {
             }),
         };
         match action {
-            Ok(action) => self.execute_action(action, window, cx),
+            Ok(action) => {
+                if let Some(repository_id) = request.repository_id {
+                    self.execute_repository_action(repository_id, action, window, cx);
+                } else {
+                    self.execute_action(action, window, cx);
+                }
+            }
             Err(error) => {
                 self.message = error.into();
                 cx.notify();
             }
         }
     }
+    pub(super) fn repository_status(&self, id: &str) -> Option<&GitSnapshot> {
+        self.snapshot
+            .repositories
+            .iter()
+            .find(|(repository, _)| repository.id == id)
+            .map(|(_, status)| status)
+    }
+    pub(super) fn prompt_repository_commit(
+        &mut self,
+        repository_id: String,
+        amend: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let (Some(workspace), Some(status)) =
+            (&self.workspace, self.repository_status(&repository_id))
+        {
+            cx.emit(GitEvent::Input(GitInputRequest {
+                kind: if amend {
+                    GitInputKind::Amend
+                } else {
+                    GitInputKind::Commit
+                },
+                workspace: workspace.clone(),
+                worktree: None,
+                repository_id: Some(repository_id),
+                head: status.head.clone(),
+                stash_refs: Vec::new(),
+            }));
+        }
+    }
+    pub(super) fn execute_repository_action(
+        &mut self,
+        repository_id: String,
+        action: GitAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(workspace), Some(status)) = (
+            self.workspace.clone(),
+            self.repository_status(&repository_id),
+        ) else {
+            return;
+        };
+        let head = status.head.clone();
+        let request = GitActionRequest {
+            expected_head: action.is_mutation().then_some(head.clone()),
+            action: action.clone(),
+        };
+        if !action.needs_confirmation() {
+            self.submit(GitOperation::RepositoryAction(repository_id, request), cx);
+            return;
+        }
+        let operation = match &action {
+            GitAction::Restore { path, .. } => format!("Restore {path}"),
+            GitAction::Amend { .. } => "Amend".to_owned(),
+            _ => format!("{:?}", action),
+        };
+        let detail = format!("Repository: {}\n{}", repository_id, operation);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "Git operation?",
+            Some(&detail),
+            &[PromptButton::new("Run"), PromptButton::cancel("Cancel")],
+            cx,
+        );
+        cx.spawn(async move |this, cx| {
+            if answer.await != Ok(0) {
+                return;
+            }
+            let _ = this.update(cx, |feature, cx| {
+                if feature.workspace.as_ref() == Some(&workspace)
+                    && feature
+                        .repository_status(&repository_id)
+                        .map(|status| &status.head)
+                        == Some(&head)
+                {
+                    feature.submit(GitOperation::RepositoryAction(repository_id, request), cx);
+                } else {
+                    feature.message = "Repository changed; choose the operation again".into();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     pub(super) fn execute_action(
         &mut self,
         action: GitAction,

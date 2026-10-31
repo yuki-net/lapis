@@ -701,3 +701,74 @@ fn discovery_is_shallow_and_finds_worktree_git_files() {
     }
     assert!(!found.contains(&deep.canonicalize().unwrap()));
 }
+
+#[test]
+fn restore_rejects_stale_diff_and_amend_preserves_the_staged_content() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "base\n");
+    commit(&backend, root, "initial");
+    save(root, "first draft\n");
+    let patch = act(
+        &backend,
+        root,
+        GitAction::Diff {
+            path: "note.txt".into(),
+            staged: false,
+        },
+    );
+    save(root, "newer draft\n");
+    let request = GitActionRequest {
+        action: GitAction::Restore {
+            path: "note.txt".into(),
+            expected_patch: patch,
+        },
+        expected_head: Some(backend.status(root).unwrap().head),
+    };
+    assert!(backend.execute(root, request).is_err());
+    assert_eq!(
+        std::fs::read_to_string(root.join("note.txt")).unwrap(),
+        "newer draft\n"
+    );
+    let patch = act(
+        &backend,
+        root,
+        GitAction::Diff {
+            path: "note.txt".into(),
+            staged: false,
+        },
+    );
+    act(
+        &backend,
+        root,
+        GitAction::Restore {
+            path: "note.txt".into(),
+            expected_patch: patch,
+        },
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("note.txt")).unwrap(),
+        "base\n"
+    );
+    save(root, "amended\n");
+    act(
+        &backend,
+        root,
+        GitAction::Stage {
+            path: "note.txt".into(),
+        },
+    );
+    act(
+        &backend,
+        root,
+        GitAction::Amend {
+            message: "amended message".into(),
+        },
+    );
+    assert_eq!(
+        git(root, &["log", "-1", "--format=%s"]).trim(),
+        "amended message"
+    );
+    assert_eq!(git(root, &["show", "HEAD:note.txt"]), "amended\n");
+    assert_eq!(git(root, &["rev-list", "--count", "HEAD"]).trim(), "1");
+}
