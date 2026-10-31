@@ -38,12 +38,19 @@ impl RemoteRequestHandler for BackendRemoteHandler {
         let request_id = request.request_id.clone();
         let session = BackendSession::new(grant.session_id().clone(), grant.workspace_id().clone());
         let opens_workspace = matches!(&request.body, RequestBody::WorkspaceConnect(_));
+        let can_read_git = grant.capabilities().contains(
+            &lapis_client_api::CapabilityId::try_new("workspace.git.read")
+                .expect("valid capability"),
+        );
         let pending_subscriptions = self.pending_subscriptions.clone();
         Box::pin(async move {
             let receiver = opens_workspace.then(|| {
                 let (sender, receiver) = tokio::sync::mpsc::channel(REMOTE_EVENT_QUEUE_CAPACITY);
                 (
-                    Arc::new(TokioEventSink { sender }) as Arc<dyn BackendEventSink>,
+                    Arc::new(TokioEventSink {
+                        sender,
+                        can_read_git,
+                    }) as Arc<dyn BackendEventSink>,
                     receiver,
                 )
             });
@@ -54,7 +61,12 @@ impl RemoteRequestHandler for BackendRemoteHandler {
             })
             .await;
             match dispatched {
-                Ok(Ok(response)) => {
+                Ok(Ok(mut response)) => {
+                    if !can_read_git
+                        && let ResponseBody::SnapshotResync(snapshot) = &mut response.body
+                    {
+                        snapshot.snapshot.git_repositories.clear();
+                    }
                     if matches!(&response.body, ResponseBody::WorkspaceConnect(_))
                         && let Some((_, receiver)) = receiver
                     {
@@ -96,10 +108,20 @@ impl RemoteRequestHandler for BackendRemoteHandler {
 
 struct TokioEventSink {
     sender: tokio::sync::mpsc::Sender<EventEnvelope>,
+    can_read_git: bool,
 }
 
 impl BackendEventSink for TokioEventSink {
-    fn try_send(&self, event: EventEnvelope) -> bool {
+    fn try_send(&self, mut event: EventEnvelope) -> bool {
+        if !self.can_read_git
+            && let lapis_client_api::EventBody::GitStatusChanged { workspace_id, .. }
+            | lapis_client_api::EventBody::GitRepositoriesChanged { workspace_id }
+            | lapis_client_api::EventBody::GitWorktreesChanged { workspace_id } = &event.body
+        {
+            event.body = lapis_client_api::EventBody::WorkspaceChanged {
+                workspace_id: workspace_id.clone(),
+            };
+        }
         self.sender.try_send(event).is_ok()
     }
 }
@@ -503,6 +525,39 @@ mod tests {
         assert_eq!(tasks.load().unwrap().len(), 2);
         assert_eq!(tasks.controls.lock().unwrap().len(), 1);
         handler.disconnect(&grant);
+    }
+
+    #[test]
+    fn git_events_are_redacted_without_git_read_capability() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let sink = TokioEventSink {
+            sender,
+            can_read_git: false,
+        };
+        let workspace_id = WorkspaceId::try_new("workspace").unwrap();
+        let event = EventEnvelope {
+            event_sequence: lapis_client_api::EventSequence::new(7),
+            body: EventBody::GitStatusChanged {
+                workspace_id: workspace_id.clone(),
+                repository: lapis_git::GitRepositoryStatus {
+                    repository_id: "path:private".into(),
+                    status: lapis_git::GitSnapshot {
+                        workspace_id: lapis_editor_core::WorkspaceId::new("workspace"),
+                        worktree_id: None,
+                        revision: 1,
+                        branch: "secret".into(),
+                        head: String::new(),
+                        files: vec![],
+                    },
+                },
+            },
+        };
+        assert!(sink.try_send(event));
+        let received = receiver.try_recv().unwrap();
+        assert_eq!(received.event_sequence.value(), 7);
+        assert!(
+            matches!(received.body, EventBody::WorkspaceChanged { workspace_id: id } if id == workspace_id)
+        );
     }
 
     fn request(number: u64, body: RequestBody) -> RequestEnvelope {

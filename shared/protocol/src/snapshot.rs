@@ -18,6 +18,8 @@ pub struct WorkspaceSnapshot {
     pub workspace: WorkspaceSummary,
     pub documents: Vec<DocumentSnapshot>,
     pub terminals: Vec<TerminalSnapshot>,
+    #[serde(default)]
+    pub git_repositories: Vec<lapis_git::GitRepositoryStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,6 +47,7 @@ mod tests {
             },
             documents: Vec::new(),
             terminals: Vec::new(),
+            git_repositories: Vec::new(),
         };
 
         let restored =

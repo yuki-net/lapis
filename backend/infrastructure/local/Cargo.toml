@@ -6,6 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+notify = "8.2.0"
 wezterm-term.workspace = true
 wezterm-surface.workspace = true
 lapis-backend-state = { path = "../../runtime" }

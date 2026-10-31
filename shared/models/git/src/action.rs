@@ -114,4 +114,15 @@ pub struct GitActionRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitActionResult {
     pub output: String,
+    #[serde(default)]
+    pub diff: Option<crate::GitDiffSnapshot>,
+    #[serde(default)]
+    pub stashes: Vec<GitStash>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitStash {
+    pub index: u32,
+    pub oid: String,
+    pub subject: String,
 }

@@ -3,6 +3,18 @@ use lapis_editor_core::{TaskId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitRepositorySnapshot {
+    pub id: String,
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitRepositoryStatus {
+    pub repository_id: String,
+    pub status: GitSnapshot,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitFileSnapshot {
     pub path: String,
     pub old_path: Option<String>,
@@ -14,6 +26,8 @@ pub struct GitFileSnapshot {
 pub struct GitSnapshot {
     pub workspace_id: WorkspaceId,
     pub worktree_id: Option<TaskId>,
+    #[serde(default)]
+    pub revision: u64,
     pub branch: String,
     pub head: String,
     pub files: Vec<GitFileSnapshot>,
@@ -37,7 +51,58 @@ pub struct WorktreeSnapshot {
     pub conflict: Option<String>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitUpdate {
+    Snapshot(Vec<GitRepositoryStatus>),
+    Changed(GitRepositoryStatus),
+    RepositoriesChanged,
+    WorktreesChanged,
+}
+
+pub trait GitSubscription: Send {
+    fn recv_timeout(&mut self, timeout: std::time::Duration)
+    -> Result<Option<GitUpdate>, GitError>;
+}
+
 pub trait GitConnection: Send + Sync {
+    fn subscribe(&self, _workspace: &WorkspaceId) -> Result<Box<dyn GitSubscription>, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "Git subscription is unsupported",
+        ))
+    }
+
+    fn repositories(
+        &self,
+        _workspace: &WorkspaceId,
+    ) -> Result<Vec<GitRepositorySnapshot>, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "repository discovery is unsupported",
+        ))
+    }
+    fn repository_status(
+        &self,
+        _workspace: &WorkspaceId,
+        _repository_id: &str,
+    ) -> Result<GitSnapshot, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "repository status is unsupported",
+        ))
+    }
+    fn repository_action(
+        &self,
+        _workspace: &WorkspaceId,
+        _repository_id: &str,
+        _request: crate::GitActionRequest,
+    ) -> Result<crate::GitActionResult, GitError> {
+        Err(GitError::new(
+            crate::GitErrorKind::Io,
+            "repository operation is unsupported",
+        ))
+    }
+
     /// 検証済みWorktreeを開き、Clientで使うroot（Remoteでは仮想path）を返す。
     fn open_worktree(
         &self,

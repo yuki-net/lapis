@@ -5,6 +5,181 @@ use lapis_editor_core::{TaskId, WorkspaceId};
 use lapis_git::{GitAction, GitActionRequest, GitDiffSnapshot, GitSnapshot};
 use std::time::Duration;
 
+#[cfg(test)]
+mod event_order_tests {
+    use super::*;
+    use gpui::AppContext;
+    use std::sync::{Arc, Mutex, mpsc};
+
+    struct Backend {
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        trees: Mutex<Vec<lapis_git::WorktreeSnapshot>>,
+    }
+    impl lapis_git::GitConnection for Backend {
+        fn status(
+            &self,
+            workspace: &WorkspaceId,
+            worktree: Option<&TaskId>,
+        ) -> Result<GitSnapshot, lapis_git::GitError> {
+            Ok(GitSnapshot {
+                workspace_id: workspace.clone(),
+                worktree_id: worktree.cloned(),
+                revision: 1,
+                branch: "main".into(),
+                head: "abc".into(),
+                files: vec![],
+            })
+        }
+        fn worktrees(
+            &self,
+            _: &WorkspaceId,
+        ) -> Result<Vec<lapis_git::WorktreeSnapshot>, lapis_git::GitError> {
+            Ok(self.trees.lock().unwrap().clone())
+        }
+        fn execute(
+            &self,
+            _: &WorkspaceId,
+            _: Option<&TaskId>,
+            _: GitActionRequest,
+        ) -> Result<lapis_git::GitActionResult, lapis_git::GitError> {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            Err(lapis_git::GitError::new(
+                lapis_git::GitErrorKind::Io,
+                "mutation failed",
+            ))
+        }
+        fn diff(
+            &self,
+            _: &WorkspaceId,
+            _: Option<&TaskId>,
+            _: &str,
+        ) -> Result<GitDiffSnapshot, lapis_git::GitError> {
+            unreachable!()
+        }
+        fn create_worktree(
+            &self,
+            _: &WorkspaceId,
+        ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+            unreachable!()
+        }
+        fn import_file(
+            &self,
+            _: &WorkspaceId,
+            _: &TaskId,
+            _: &str,
+        ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+            unreachable!()
+        }
+        fn discard_worktree(
+            &self,
+            _: &WorkspaceId,
+            _: &TaskId,
+        ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+            unreachable!()
+        }
+    }
+
+    #[gpui::test]
+    fn status_event_does_not_hide_mutation_failure(cx: &mut gpui::TestAppContext) {
+        let (entered, wait) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        let backend = Arc::new(Backend {
+            entered,
+            release: Mutex::new(resume),
+            trees: Mutex::new(Vec::new()),
+        });
+        let workspace = WorkspaceId::new("workspace");
+        let mut session = GitSession::new(backend);
+        session.refresh(&workspace).unwrap();
+        let feature = cx.update(|cx| cx.new(|cx| GitFeature::new(session, cx)));
+        feature.update(cx, |git, cx| {
+            git.workspace = Some(workspace.clone());
+            git.submit(
+                GitOperation::Action(
+                    None,
+                    GitActionRequest {
+                        action: GitAction::Stage {
+                            path: "file".into(),
+                        },
+                        expected_head: None,
+                    },
+                ),
+                cx,
+            );
+        });
+        wait.recv_timeout(Duration::from_secs(3)).unwrap();
+        feature.update(cx, |git, cx| {
+            git.submit(
+                GitOperation::ApplyUpdate(lapis_git::GitUpdate::Changed(
+                    lapis_git::GitRepositoryStatus {
+                        repository_id: "root".into(),
+                        status: GitSnapshot {
+                            workspace_id: workspace.clone(),
+                            worktree_id: None,
+                            revision: 2,
+                            branch: "main".into(),
+                            head: "abc".into(),
+                            files: vec![],
+                        },
+                    },
+                )),
+                cx,
+            );
+        });
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.executor().advance_clock(Duration::from_millis(20));
+            cx.run_until_parked();
+            if cx.update(|cx| feature.read(cx).pending == 0) {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        cx.update(|cx| {
+            assert!(feature.read(cx).message.contains("mutation failed"));
+            assert_eq!(
+                feature.read(cx).snapshot.status.as_ref().unwrap().revision,
+                2
+            );
+        });
+    }
+
+    #[test]
+    fn worktree_refresh_reconciles_new_and_removed_instances() {
+        let (entered, _) = mpsc::channel();
+        let (_, resume) = mpsc::channel();
+        let backend = Arc::new(Backend {
+            entered,
+            release: Mutex::new(resume),
+            trees: Mutex::new(Vec::new()),
+        });
+        let workspace = WorkspaceId::new("workspace");
+        let id = TaskId::new("worktree");
+        let mut session = GitSession::new(backend.clone());
+        session.refresh(&workspace).unwrap();
+        backend
+            .trees
+            .lock()
+            .unwrap()
+            .push(lapis_git::WorktreeSnapshot {
+                workspace_id: workspace,
+                worktree_id: id.clone(),
+                base_commit: "abc".into(),
+                state: lapis_git::WorktreeState::Active,
+                conflict: None,
+            });
+        session.refresh_worktrees().unwrap();
+        assert_eq!(session.worktree_statuses()[0].0, id);
+        backend.trees.lock().unwrap().clear();
+        session.refresh_worktrees().unwrap();
+        assert!(session.worktree_statuses().is_empty());
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Snapshot {
     pub status: Option<GitSnapshot>,
@@ -21,6 +196,9 @@ pub(super) enum GitOperation {
     Action(Option<TaskId>, GitActionRequest),
     Clear,
     CreateWorktree,
+    ApplyUpdate(lapis_git::GitUpdate),
+    RefreshWorktrees,
+    RefreshRepositories,
 }
 #[derive(Clone, Copy)]
 pub(crate) enum GitInputKind {
@@ -76,6 +254,9 @@ pub(crate) enum GitEvent {
 }
 pub(crate) struct GitFeature {
     worker: ClientWorker<GitSession>,
+    backend: std::sync::Arc<dyn lapis_git::GitConnection>,
+    subscription_generation: u64,
+    worktree_refresh_generation: u64,
     workspace: Option<WorkspaceId>,
     gate: ResponseGate,
     pending: usize,
@@ -95,25 +276,13 @@ impl GitFeature {
             });
         }
     }
-    pub(crate) fn new(session: GitSession, cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_secs(1)).await;
-                if this
-                    .update(cx, |git, cx| {
-                        if git.pending == 0 {
-                            git.submit(GitOperation::Refresh, cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
+    pub(crate) fn new(session: GitSession, _cx: &mut Context<Self>) -> Self {
+        let backend = session.backend();
         Self {
             worker: ClientWorker::new(session),
+            backend,
+            subscription_generation: 0,
+            worktree_refresh_generation: 0,
             workspace: None,
             gate: ResponseGate::default(),
             pending: 0,
@@ -129,36 +298,153 @@ impl GitFeature {
             return;
         }
         self.workspace = workspace;
+        self.subscription_generation = self.subscription_generation.wrapping_add(1);
         self.target = None;
         self.gate.invalidate();
         self.snapshot = Snapshot::default();
         self.message.clear();
         self.message_from_refresh = false;
         self.submit(GitOperation::Refresh, cx);
+        if let Some(workspace) = self.workspace.clone() {
+            self.subscribe_updates(workspace, cx);
+        }
         cx.notify();
     }
+    fn subscribe_updates(&mut self, workspace: WorkspaceId, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        let generation = self.subscription_generation;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let backend = backend.clone();
+                let target = workspace.clone();
+                let opened = executor
+                    .spawn(async move { backend.subscribe(&target) })
+                    .await;
+                let mut subscription = match opened {
+                    Ok(subscription) => subscription,
+                    Err(_) => {
+                        if !this
+                            .update(cx, |git, _| {
+                                git.workspace.as_ref() == Some(&workspace)
+                                    && git.subscription_generation == generation
+                            })
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
+                        Timer::after(Duration::from_secs(2)).await;
+                        continue;
+                    }
+                };
+                loop {
+                    let (next_subscription, update) = executor
+                        .spawn(async move {
+                            let update = subscription.recv_timeout(Duration::from_secs(1));
+                            (subscription, update)
+                        })
+                        .await;
+                    subscription = next_subscription;
+                    let update = match update {
+                        Ok(update) => update,
+                        Err(_) => break,
+                    };
+                    let alive = this
+                        .update(cx, |git, cx| {
+                            if git.workspace.as_ref() != Some(&workspace)
+                                || git.subscription_generation != generation
+                            {
+                                return false;
+                            }
+                            if let Some(update) = update {
+                                if matches!(update, lapis_git::GitUpdate::RepositoriesChanged) {
+                                    return git
+                                        .submit_update(GitOperation::RefreshRepositories, cx);
+                                }
+                                if matches!(update, lapis_git::GitUpdate::WorktreesChanged) {
+                                    return git.submit_update(GitOperation::RefreshWorktrees, cx);
+                                }
+                                return git.submit_update(GitOperation::ApplyUpdate(update), cx);
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !alive {
+                        if this
+                            .update(cx, |git, _| {
+                                git.workspace.as_ref() == Some(&workspace)
+                                    && git.subscription_generation == generation
+                            })
+                            .unwrap_or(false)
+                        {
+                            break;
+                        }
+                        return;
+                    }
+                }
+                Timer::after(Duration::from_secs(2)).await;
+            }
+        })
+        .detach();
+    }
     pub(super) fn submit(&mut self, operation: GitOperation, cx: &mut Context<Self>) {
+        self.submit_update(operation, cx);
+    }
+
+    fn submit_update(&mut self, operation: GitOperation, cx: &mut Context<Self>) -> bool {
         let Some(workspace) = self.workspace.clone() else {
-            return;
+            return false;
         };
         if let GitOperation::Discard(worktree) = operation {
             cx.emit(GitEvent::DiscardWorktree {
                 workspace,
                 worktree,
             });
-            return;
+            return true;
         }
         let is_refresh = matches!(&operation, GitOperation::Refresh);
-        let token = self.gate.issue();
+        let is_worktree_refresh = matches!(
+            &operation,
+            GitOperation::RefreshWorktrees
+                | GitOperation::ApplyUpdate(lapis_git::GitUpdate::Snapshot(_))
+        );
+        let is_event = matches!(
+            &operation,
+            GitOperation::ApplyUpdate(_)
+                | GitOperation::RefreshWorktrees
+                | GitOperation::RefreshRepositories
+        );
+        let token = (!is_event).then(|| self.gate.issue());
+        let generation = self.subscription_generation;
+        if is_worktree_refresh {
+            self.worktree_refresh_generation = self.worktree_refresh_generation.wrapping_add(1);
+        }
+        let worktree_generation = self.worktree_refresh_generation;
         self.pending += 1;
         let admitted = self.worker.submit(
             cx,
             move |session| {
-                session
-                    .refresh(&workspace)
-                    .map_err(|error| error.to_string())?;
+                if !matches!(
+                    &operation,
+                    GitOperation::ApplyUpdate(_) | GitOperation::RefreshWorktrees
+                ) {
+                    session
+                        .refresh(&workspace)
+                        .map_err(|error| error.to_string())?;
+                }
                 let result = match operation {
                     GitOperation::Refresh => Ok(()),
+                    GitOperation::RefreshRepositories => Ok(()),
+                    GitOperation::RefreshWorktrees => session.refresh_worktrees(),
+                    GitOperation::ApplyUpdate(update) => {
+                        if matches!(update, lapis_git::GitUpdate::Snapshot(_)) {
+                            session
+                                .refresh_worktrees()
+                                .map_err(|error| error.to_string())?;
+                        }
+                        session.apply_git_update(update);
+                        Ok(())
+                    }
                     GitOperation::Import(task, path) => session.import_file(&task, &path),
                     GitOperation::Discard(_) => unreachable!("Task状態の所有者で検証する"),
                     GitOperation::Action(worktree, request) => {
@@ -182,12 +468,75 @@ impl GitFeature {
             },
             move |git, result, cx| {
                 git.pending = git.pending.saturating_sub(1);
-                if !git.gate.accept(token) {
+                if git.subscription_generation != generation
+                    || token.is_some_and(|token| !git.gate.accept(token))
+                {
                     return;
                 }
                 match result {
-                    Ok(snapshot) => {
-                        git.snapshot = snapshot;
+                    Ok(mut snapshot) => {
+                        if is_event {
+                            if snapshot.status.as_ref().is_some_and(|incoming| {
+                                git.snapshot
+                                    .status
+                                    .as_ref()
+                                    .is_none_or(|current| incoming.revision > current.revision)
+                            }) {
+                                git.snapshot.status = snapshot.status;
+                            }
+                            if is_worktree_refresh
+                                && git.worktree_refresh_generation == worktree_generation
+                            {
+                                let mut incoming = snapshot.worktree_statuses;
+                                for (id, status) in &mut incoming {
+                                    if let Some((_, current)) = git
+                                        .snapshot
+                                        .worktree_statuses
+                                        .iter()
+                                        .find(|(existing, _)| existing == id)
+                                        && current.revision > status.revision
+                                    {
+                                        *status = current.clone();
+                                    }
+                                }
+                                git.snapshot.worktree_statuses = incoming;
+                            } else {
+                                for (id, incoming) in snapshot.worktree_statuses {
+                                    if let Some((_, current)) = git
+                                        .snapshot
+                                        .worktree_statuses
+                                        .iter_mut()
+                                        .find(|(existing, _)| *existing == id)
+                                        && incoming.revision > current.revision
+                                    {
+                                        *current = incoming;
+                                    }
+                                }
+                            }
+                        } else {
+                            if let (Some(current), Some(incoming)) =
+                                (&git.snapshot.status, &snapshot.status)
+                                && incoming.revision < current.revision
+                            {
+                                snapshot.status = Some(current.clone());
+                            }
+                            if git.worktree_refresh_generation != worktree_generation {
+                                snapshot.worktree_statuses = git.snapshot.worktree_statuses.clone();
+                            } else {
+                                for (id, incoming) in &mut snapshot.worktree_statuses {
+                                    if let Some((_, current)) = git
+                                        .snapshot
+                                        .worktree_statuses
+                                        .iter()
+                                        .find(|(existing, _)| existing == id)
+                                        && current.revision > incoming.revision
+                                    {
+                                        *incoming = current.clone();
+                                    }
+                                }
+                            }
+                            git.snapshot = snapshot;
+                        }
                         if git.target.as_ref().is_some_and(|target| {
                             !git.snapshot
                                 .worktree_statuses
@@ -196,14 +545,16 @@ impl GitFeature {
                         }) {
                             git.target = None;
                         }
-                        if !is_refresh || git.message_from_refresh {
+                        if !is_event && (!is_refresh || git.message_from_refresh) {
                             git.message.clear();
                             git.message_from_refresh = false;
                         }
                     }
                     Err(error) => {
-                        git.message = error;
-                        git.message_from_refresh = is_refresh;
+                        if !is_event {
+                            git.message = error;
+                            git.message_from_refresh = is_refresh;
+                        }
                     }
                 }
                 cx.notify();
@@ -211,10 +562,14 @@ impl GitFeature {
         );
         if let Err(error) = admitted {
             self.pending = self.pending.saturating_sub(1);
-            self.message = error;
-            self.message_from_refresh = is_refresh;
+            if !is_event {
+                self.message = error;
+                self.message_from_refresh = is_refresh;
+            }
             cx.notify();
+            return false;
         }
+        true
     }
 
     pub(crate) fn set_context_label(&mut self, label: String) {

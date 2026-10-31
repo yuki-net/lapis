@@ -249,6 +249,30 @@ fn individual_hunks_stage_unstage_and_reject_changed_diffs() {
 }
 
 #[test]
+fn text_diff_containing_binary_files_words_is_not_marked_binary() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "base\n");
+    commit(&backend, root, "base");
+    save(root, "Binary files are still text\n");
+    let result = backend
+        .execute(
+            root,
+            GitActionRequest {
+                action: GitAction::Diff {
+                    path: "note.txt".into(),
+                    staged: false,
+                },
+                expected_head: None,
+            },
+        )
+        .unwrap();
+    let diff = result.diff.expect("structured diff");
+    assert!(!diff.binary);
+    assert!(diff.patch.contains("+Binary files are still text"));
+}
+
+#[test]
 fn branch_stash_and_merge_conflicts_can_be_resolved_explicitly() {
     let (directory, backend) = setup();
     let root = directory.path();
@@ -602,4 +626,78 @@ fn fetch_pull_and_push_use_the_selected_repository_and_configured_remote() {
         std::fs::read_to_string(root.join("note.txt")).unwrap(),
         "local change\n"
     );
+}
+
+#[test]
+fn action_results_include_structured_diff_and_stash() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "before\n");
+    commit(&backend, root, "initial");
+    save(root, "after\n");
+    let result = backend
+        .execute(
+            root,
+            GitActionRequest {
+                action: GitAction::Diff {
+                    path: "note.txt".into(),
+                    staged: false,
+                },
+                expected_head: None,
+            },
+        )
+        .unwrap();
+    let diff = result.diff.unwrap();
+    assert_eq!((diff.additions, diff.deletions, diff.binary), (1, 1, false));
+    act(
+        &backend,
+        root,
+        GitAction::StashPush {
+            message: "draft with spaces".into(),
+        },
+    );
+    let result = backend
+        .execute(
+            root,
+            GitActionRequest {
+                action: GitAction::Stashes,
+                expected_head: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(result.stashes.len(), 1);
+    assert_eq!(result.stashes[0].index, 0);
+    assert_eq!(
+        result.stashes[0].oid,
+        git(root, &["rev-parse", "stash@{0}"]).trim()
+    );
+    assert!(result.stashes[0].subject.contains("draft with spaces"));
+}
+
+#[test]
+fn discovery_is_shallow_and_finds_worktree_git_files() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "initial\n");
+    commit(&backend, root, "initial");
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    git(&nested, &["init", "-b", "main"]);
+    let ignored = root.join("container");
+    std::fs::create_dir(&ignored).unwrap();
+    let deep = ignored.join("deep");
+    std::fs::create_dir(&deep).unwrap();
+    git(&deep, &["init", "-b", "main"]);
+    let tree = root.join("linked");
+    git(
+        root,
+        &["worktree", "add", "--detach", tree.to_str().unwrap()],
+    );
+    assert!(tree.join(".git").is_file());
+    let found = backend.discover_repositories(root).unwrap();
+    assert_eq!(found.len(), 3);
+    for expected in [root.to_path_buf(), nested, tree] {
+        assert!(found.contains(&expected.canonicalize().unwrap()));
+    }
+    assert!(!found.contains(&deep.canonicalize().unwrap()));
 }

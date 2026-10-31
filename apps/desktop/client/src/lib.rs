@@ -253,6 +253,20 @@ pub use conversation::{
 };
 pub use lapis_project::{Project, SourceRole, TaskEnvironment};
 
+fn apply_git_status(
+    current: &mut Option<lapis_git::GitSnapshot>,
+    incoming: lapis_git::GitSnapshot,
+) -> bool {
+    if current
+        .as_ref()
+        .is_some_and(|status| status.revision >= incoming.revision)
+    {
+        return false;
+    }
+    *current = Some(incoming);
+    true
+}
+
 pub struct GitSession {
     backend: Arc<dyn lapis_git::GitConnection>,
     workspace_id: Option<WorkspaceId>,
@@ -300,6 +314,29 @@ impl GitSession {
         &self.worktree_statuses
     }
 
+    pub fn refresh_worktrees(&mut self) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        let worktrees = self.backend.worktrees(&workspace)?;
+        let mut statuses = Vec::new();
+        for tree in worktrees
+            .iter()
+            .filter(|tree| tree.state != lapis_git::WorktreeState::Discarded)
+        {
+            if let Some((_, status)) = self
+                .worktree_statuses
+                .iter()
+                .find(|(id, _)| id == &tree.worktree_id)
+            {
+                statuses.push((tree.worktree_id.clone(), status.clone()));
+            } else if let Ok(status) = self.backend.status(&workspace, Some(&tree.worktree_id)) {
+                statuses.push((tree.worktree_id.clone(), status));
+            }
+        }
+        self.worktrees = worktrees;
+        self.worktree_statuses = statuses;
+        Ok(())
+    }
+
     pub fn refresh(&mut self, workspace: &WorkspaceId) -> Result<bool, GitError> {
         let status = self.backend.status(workspace, None)?;
         let worktrees = self.backend.worktrees(workspace)?;
@@ -325,6 +362,34 @@ impl GitSession {
         self.worktrees = worktrees;
         self.worktree_statuses = worktree_statuses;
         Ok(changed)
+    }
+
+    pub fn apply_git_update(&mut self, update: lapis_git::GitUpdate) -> bool {
+        let statuses = match update {
+            lapis_git::GitUpdate::Snapshot(statuses) => statuses,
+            lapis_git::GitUpdate::Changed(status) => vec![status],
+            lapis_git::GitUpdate::RepositoriesChanged => return false,
+            lapis_git::GitUpdate::WorktreesChanged => return false,
+        };
+        let mut changed = false;
+        for item in statuses {
+            if self.workspace_id.as_ref() != Some(&item.status.workspace_id) {
+                continue;
+            }
+            if item.repository_id == "root" {
+                changed |= apply_git_status(&mut self.status, item.status);
+            } else if let Some(worktree) = item.status.worktree_id.as_ref()
+                && let Some((_, current)) = self
+                    .worktree_statuses
+                    .iter_mut()
+                    .find(|(id, _)| id == worktree)
+                && item.status.revision > current.revision
+            {
+                *current = item.status;
+                changed = true;
+            }
+        }
+        changed
     }
 
     fn workspace(&self) -> Result<&WorkspaceId, GitError> {
@@ -397,18 +462,9 @@ impl GitSession {
             self.clear_inspection();
             if matches!(action, lapis_git::GitAction::Stashes) {
                 self.stash_refs = result
-                    .output
-                    .lines()
-                    .filter_map(|line| {
-                        let mut fields = line.split_whitespace();
-                        let index = fields
-                            .next()?
-                            .strip_prefix("stash@{")?
-                            .strip_suffix('}')?
-                            .parse()
-                            .ok()?;
-                        Some((index, fields.next()?.to_owned()))
-                    })
+                    .stashes
+                    .iter()
+                    .map(|stash| (stash.index, stash.oid.clone()))
                     .collect();
             }
             if let lapis_git::GitAction::Diff { path, staged } = action {
@@ -417,21 +473,7 @@ impl GitSession {
                     path: path.clone(),
                     staged,
                 });
-                self.selected_diff = Some(lapis_git::GitDiffSnapshot {
-                    path,
-                    additions: result
-                        .output
-                        .lines()
-                        .filter(|line| line.starts_with('+') && !line.starts_with("+++"))
-                        .count(),
-                    deletions: result
-                        .output
-                        .lines()
-                        .filter(|line| line.starts_with('-') && !line.starts_with("---"))
-                        .count(),
-                    patch: result.output.clone(),
-                    binary: result.output.contains("GIT binary patch"),
-                });
+                self.selected_diff = result.diff.clone();
             } else {
                 self.action_output = result.output.clone();
             }
@@ -2175,6 +2217,22 @@ mod tests {
     use lapis_workspace::FileEntryKind;
 
     use super::*;
+
+    #[test]
+    fn stale_git_events_do_not_replace_newer_revision() {
+        let snapshot = |revision| lapis_git::GitSnapshot {
+            workspace_id: WorkspaceId::new("workspace"),
+            worktree_id: None,
+            revision,
+            branch: format!("branch-{revision}"),
+            head: String::new(),
+            files: vec![],
+        };
+        let mut current = None;
+        assert!(apply_git_status(&mut current, snapshot(15)));
+        assert!(!apply_git_status(&mut current, snapshot(14)));
+        assert_eq!(current.unwrap().branch, "branch-15");
+    }
 
     #[test]
     fn old_conversation_view_defaults_workbench_state() {
