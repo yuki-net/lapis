@@ -465,16 +465,6 @@ impl Shell {
     }
 }
 impl Shell {
-    pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(UiCommand::Undo);
-    }
-}
-impl Shell {
-    pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
-        cx.emit(UiCommand::Redo);
-    }
-}
-impl Shell {
     pub(crate) fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(UiCommand::Cut);
     }
