@@ -50,6 +50,7 @@ pub struct Store {
 impl gpui::Global for Store {}
 
 const MAX_ACTIONS: usize = 2;
+const MAX_HISTORY: usize = 200;
 
 impl Severity {
     pub(crate) fn label(self, locale: &crate::localization::Localizer) -> String {
@@ -72,6 +73,10 @@ impl Store {
         event.id = self.next_id;
         event.read = false;
         self.events.push(event);
+        if self.events.len() > MAX_HISTORY {
+            let removed = self.events.remove(0).id;
+            self.dismiss_popup(removed);
+        }
         self.next_id
     }
 
@@ -310,6 +315,33 @@ mod tests {
         assert!(store.events()[0].read);
         store.delete(ids[0]);
         assert_eq!(store.events().len(), 4);
+    }
+
+    #[test]
+    fn publish_keeps_only_the_latest_history_entries() {
+        let mut store = Store::default();
+        let event = Event {
+            id: 0,
+            kind: "agent.task_completed".into(),
+            severity: Severity::Info,
+            title: "完了".into(),
+            message: "処理が完了しました".into(),
+            context: Context::default(),
+            actions: Vec::new(),
+            occurred_at: SystemTime::now(),
+            read: false,
+        };
+
+        for _ in 0..=MAX_HISTORY {
+            store.publish(event.clone());
+        }
+
+        assert_eq!(store.events().len(), MAX_HISTORY);
+        assert_eq!(store.events().first().map(|event| event.id), Some(2));
+        assert_eq!(
+            store.events().last().map(|event| event.id),
+            Some((MAX_HISTORY + 1) as u64)
+        );
     }
 
     #[test]
