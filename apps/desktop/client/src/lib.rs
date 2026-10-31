@@ -273,6 +273,8 @@ pub struct GitSession {
     status: Option<lapis_git::GitSnapshot>,
     repositories: Vec<lapis_git::GitRepositorySnapshot>,
     repository_statuses: Vec<(lapis_git::GitRepositorySnapshot, lapis_git::GitSnapshot)>,
+    repository_errors: Vec<(lapis_git::GitRepositorySnapshot, GitError)>,
+    last_refresh_error: Option<GitError>,
     worktrees: Vec<lapis_git::WorktreeSnapshot>,
     worktree_statuses: Vec<(TaskId, lapis_git::GitSnapshot)>,
     worktree_refreshed: Option<std::time::Instant>,
@@ -298,6 +300,8 @@ impl GitSession {
             status: None,
             repositories: Vec::new(),
             repository_statuses: Vec::new(),
+            repository_errors: Vec::new(),
+            last_refresh_error: None,
             worktrees: Vec::new(),
             worktree_statuses: Vec::new(),
             worktree_refreshed: None,
@@ -315,6 +319,14 @@ impl GitSession {
         &self,
     ) -> &[(lapis_git::GitRepositorySnapshot, lapis_git::GitSnapshot)] {
         &self.repository_statuses
+    }
+    pub fn repository_errors(
+        &self,
+    ) -> &[(lapis_git::GitRepositorySnapshot, GitError)] {
+        &self.repository_errors
+    }
+    pub fn last_refresh_error(&self) -> Option<&GitError> {
+        self.last_refresh_error.as_ref()
     }
     pub fn rescan_repositories(&mut self) -> Result<(), GitError> {
         let workspace = self.workspace()?.clone();
@@ -362,14 +374,24 @@ impl GitSession {
         } else {
             self.repositories.clone()
         };
-        let repository_statuses = repositories
-            .iter()
-            .map(|repository| {
-                self.backend
-                    .repository_status(workspace, &repository.id)
-                    .map(|status| (repository.clone(), status))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut repository_statuses = Vec::with_capacity(repositories.len());
+        let mut repository_errors = Vec::new();
+        for repository in &repositories {
+            match self.backend.repository_status(workspace, &repository.id) {
+                Ok(status) => repository_statuses.push((repository.clone(), status)),
+                Err(error) => {
+                    if !workspace_changed
+                        && let Some((_, previous)) = self
+                            .repository_statuses
+                            .iter()
+                            .find(|(current, _)| current.id == repository.id)
+                    {
+                        repository_statuses.push((repository.clone(), previous.clone()));
+                    }
+                    repository_errors.push((repository.clone(), error));
+                }
+            }
+        }
         let status = repository_statuses
             .iter()
             .find(|(repository, _)| repository.id == "root")
@@ -400,6 +422,7 @@ impl GitSession {
         let changed = workspace_changed
             || self.status != status
             || self.repository_statuses != repository_statuses
+            || self.repository_errors != repository_errors
             || self.worktrees != worktrees
             || self.worktree_statuses != worktree_statuses;
         if workspace_changed {
@@ -415,6 +438,8 @@ impl GitSession {
         self.status = status;
         self.repositories = repositories;
         self.repository_statuses = repository_statuses;
+        self.repository_errors = repository_errors;
+        self.last_refresh_error = None;
         self.worktrees = worktrees;
         self.worktree_statuses = worktree_statuses;
         Ok(changed)
@@ -441,6 +466,8 @@ impl GitSession {
                 *current = item.status.clone();
                 changed = true;
             }
+            self.repository_errors
+                .retain(|(repository, _)| repository.id != item.repository_id);
             if item.repository_id == "root" {
                 changed |= apply_git_status(&mut self.status, item.status);
             } else if let Some(worktree) = item.status.worktree_id.as_ref()
@@ -552,7 +579,7 @@ impl GitSession {
         }
         let refreshed = self.refresh(&workspace);
         result?;
-        refreshed?;
+        self.last_refresh_error = refreshed.err();
         Ok(())
     }
 
