@@ -644,6 +644,7 @@ impl WorkspaceOperations {
             Operation::DiscardWorktree { worktree_id } => {
                 let tree = self.worktree(root, &worktree_id)?;
                 let discarded = self.git()?.discard_worktree(&tree).map_err(problem)?;
+                self.repository_cache.remove(&tree.path);
                 Ok(Outcome::Worktree(self.tree_snapshot(discarded, root)?))
             }
             Operation::Tasks => Ok(Outcome::Tasks(self.records(root)?)),

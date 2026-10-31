@@ -672,3 +672,72 @@ fn repository_rescan_removes_status_from_reconnect_snapshot() {
         matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(lapis_git::GitUpdate::Snapshot(statuses)) if statuses.is_empty())
     );
 }
+
+#[test]
+fn worktree_events_and_reconnect_snapshot_follow_creation_and_removal() {
+    use std::time::{Duration, Instant};
+    let root = tempfile::tempdir().unwrap();
+    git(root.path(), &["init", "-b", "main"]);
+    git(root.path(), &["config", "user.name", "Lapis Test"]);
+    git(
+        root.path(),
+        &["config", "user.email", "test@example.invalid"],
+    );
+    std::fs::write(root.path().join("file"), "initial").unwrap();
+    git(root.path(), &["add", "file"]);
+    git(root.path(), &["commit", "-m", "initial"]);
+    let host = BackendHost::start().unwrap();
+    let workspace = WorkspaceId::new(host.register_workspace(root.path()).unwrap().as_str());
+    let client_a = host.git();
+    let client_b = host.git();
+    let mut events = client_b.subscribe(&workspace).unwrap();
+    events.recv_timeout(Duration::from_secs(2)).unwrap();
+    let tree = client_a.create_worktree(&workspace).unwrap();
+    let wait_for_change = |events: &mut Box<dyn lapis_git::GitSubscription>| {
+        let deadline = Instant::now() + Duration::from_secs(8);
+        loop {
+            if matches!(
+                events.recv_timeout(Duration::from_secs(1)).unwrap(),
+                Some(lapis_git::GitUpdate::WorktreesChanged)
+            ) {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+        }
+    };
+    wait_for_change(&mut events);
+    assert!(
+        client_b
+            .worktrees(&workspace)
+            .unwrap()
+            .iter()
+            .any(|item| item.worktree_id == tree.worktree_id)
+    );
+    client_b
+        .status(&workspace, Some(&tree.worktree_id))
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(8);
+    loop {
+        if matches!(events.recv_timeout(Duration::from_secs(1)).unwrap(), Some(lapis_git::GitUpdate::Changed(item)) if item.status.worktree_id == Some(tree.worktree_id.clone()))
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    client_a
+        .discard_worktree(&workspace, &tree.worktree_id)
+        .unwrap();
+    wait_for_change(&mut events);
+    assert!(
+        client_b
+            .worktrees(&workspace)
+            .unwrap()
+            .iter()
+            .all(|item| item.worktree_id != tree.worktree_id
+                || item.state == lapis_git::WorktreeState::Discarded)
+    );
+    let mut reconnected = client_b.subscribe(&workspace).unwrap();
+    assert!(
+        matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(lapis_git::GitUpdate::Snapshot(statuses)) if statuses.iter().all(|item| item.status.worktree_id != Some(tree.worktree_id.clone())))
+    );
+}

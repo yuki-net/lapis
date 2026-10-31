@@ -115,7 +115,8 @@ impl BackendEventSink for TokioEventSink {
     fn try_send(&self, mut event: EventEnvelope) -> bool {
         if !self.can_read_git
             && let lapis_client_api::EventBody::GitStatusChanged { workspace_id, .. }
-            | lapis_client_api::EventBody::GitRepositoriesChanged { workspace_id } = &event.body
+            | lapis_client_api::EventBody::GitRepositoriesChanged { workspace_id }
+            | lapis_client_api::EventBody::GitWorktreesChanged { workspace_id } = &event.body
         {
             event.body = lapis_client_api::EventBody::WorkspaceChanged {
                 workspace_id: workspace_id.clone(),

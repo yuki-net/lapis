@@ -56,6 +56,7 @@ pub enum GitUpdate {
     Snapshot(Vec<GitRepositoryStatus>),
     Changed(GitRepositoryStatus),
     RepositoriesChanged,
+    WorktreesChanged,
 }
 
 pub trait GitSubscription: Send {

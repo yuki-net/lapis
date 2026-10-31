@@ -140,6 +140,11 @@ impl BackendService {
         request: lapis_client_api::WorkspaceOperationRequest,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
         let changed = request.operation.is_mutation();
+        let worktrees_changed = matches!(
+            request.operation,
+            lapis_client_api::WorkspaceOperation::CreateWorktree
+                | lapis_client_api::WorkspaceOperation::DiscardWorktree { .. }
+        ) || matches!(&request.operation, lapis_client_api::WorkspaceOperation::StartTask { input } if input.isolated);
         let workspace_id = session.workspace_id.clone();
         let removing = match &request.operation {
             lapis_client_api::WorkspaceOperation::DiscardWorktree { worktree_id } => {
@@ -191,6 +196,7 @@ impl BackendService {
             .send(Command::CompleteWorkspaceOperation {
                 workspace_id,
                 changed,
+                worktrees_changed,
                 request_id,
                 result,
                 reserved,
@@ -304,6 +310,7 @@ enum Command {
     CompleteWorkspaceOperation {
         workspace_id: WorkspaceId,
         changed: bool,
+        worktrees_changed: bool,
         request_id: lapis_client_api::RequestId,
         result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
         reserved: Option<std::path::PathBuf>,
@@ -395,6 +402,7 @@ fn run_worker(
             Ok(Command::CompleteWorkspaceOperation {
                 workspace_id,
                 changed,
+                worktrees_changed,
                 request_id,
                 result,
                 reserved,
@@ -407,8 +415,13 @@ fn run_worker(
                 if let Some(root) = reserved {
                     state.release_worktree_removal(&root);
                 }
-                let outcome =
-                    state.complete_workspace_operation(workspace_id, changed, request_id, result);
+                let outcome = state.complete_workspace_operation(
+                    workspace_id,
+                    changed,
+                    worktrees_changed,
+                    request_id,
+                    result,
+                );
                 let _ = respond.send(outcome.response);
                 publish_events(&mut subscribers, outcome.events);
             }

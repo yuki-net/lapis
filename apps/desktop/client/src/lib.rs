@@ -314,6 +314,29 @@ impl GitSession {
         &self.worktree_statuses
     }
 
+    pub fn refresh_worktrees(&mut self) -> Result<(), GitError> {
+        let workspace = self.workspace()?.clone();
+        let worktrees = self.backend.worktrees(&workspace)?;
+        let mut statuses = Vec::new();
+        for tree in worktrees
+            .iter()
+            .filter(|tree| tree.state != lapis_git::WorktreeState::Discarded)
+        {
+            if let Some((_, status)) = self
+                .worktree_statuses
+                .iter()
+                .find(|(id, _)| id == &tree.worktree_id)
+            {
+                statuses.push((tree.worktree_id.clone(), status.clone()));
+            } else if let Ok(status) = self.backend.status(&workspace, Some(&tree.worktree_id)) {
+                statuses.push((tree.worktree_id.clone(), status));
+            }
+        }
+        self.worktrees = worktrees;
+        self.worktree_statuses = statuses;
+        Ok(())
+    }
+
     pub fn refresh(&mut self, workspace: &WorkspaceId) -> Result<bool, GitError> {
         let status = self.backend.status(workspace, None)?;
         let worktrees = self.backend.worktrees(workspace)?;
@@ -346,6 +369,7 @@ impl GitSession {
             lapis_git::GitUpdate::Snapshot(statuses) => statuses,
             lapis_git::GitUpdate::Changed(status) => vec![status],
             lapis_git::GitUpdate::RepositoriesChanged => return false,
+            lapis_git::GitUpdate::WorktreesChanged => return false,
         };
         let mut changed = false;
         for item in statuses {

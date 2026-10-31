@@ -170,6 +170,9 @@ impl BackendState {
             .workspaces
             .get_mut(&workspace_id)
             .ok_or(BackendStateError::WorkspaceNotFound)?;
+        if workspace.removed_worktrees.contains(&repository_id) {
+            return Ok(None);
+        }
         if !repository_id.starts_with("worktree:")
             && workspace
                 .git_repositories
@@ -290,11 +293,30 @@ impl BackendState {
         &mut self,
         workspace_id: WorkspaceId,
         changed: bool,
+        worktrees_changed: bool,
         request_id: lapis_client_api::RequestId,
         result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
     ) -> DispatchOutcome {
         let result = result.and_then(|result| {
             let mut events = Vec::new();
+            if worktrees_changed {
+                let workspace = self
+                    .workspaces
+                    .get_mut(&workspace_id)
+                    .ok_or(BackendStateError::WorkspaceNotFound)?;
+                if let lapis_client_api::WorkspaceOperationResult::Worktree(tree) = &result {
+                    let id = format!("worktree:{}", tree.worktree_id.as_str());
+                    if tree.state == lapis_git::WorktreeState::Discarded {
+                        workspace.git_statuses.remove(&id);
+                        workspace.removed_worktrees.insert(id);
+                    } else {
+                        workspace.removed_worktrees.remove(&id);
+                    }
+                }
+                events.push(workspace.publish(EventBody::GitWorktreesChanged {
+                    workspace_id: workspace_id.clone(),
+                })?);
+            }
             if let lapis_client_api::WorkspaceOperationResult::GitRepositories(repositories) =
                 &result
             {
@@ -1366,6 +1388,7 @@ struct WorkspaceState {
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
     git_statuses: HashMap<String, lapis_git::GitRepositoryStatus>,
+    removed_worktrees: HashSet<String>,
     git_repositories: Option<HashSet<String>>,
     git_driver_started: bool,
 }
@@ -1389,6 +1412,7 @@ impl WorkspaceState {
             ))),
             events: EventJournal::default(),
             git_statuses: HashMap::new(),
+            removed_worktrees: HashSet::new(),
             git_repositories: None,
             git_driver_started: false,
         })
