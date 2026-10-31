@@ -2268,7 +2268,8 @@ mod tests {
         let command = git_command(Path::new("."), &["status"]);
         let removed = command
             .get_envs()
-            .filter_map(|(key, value)| value.is_none().then(|| key.to_string_lossy().into_owned()))
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
             .collect::<std::collections::HashSet<_>>();
         for name in [
             "GIT_DIR",
