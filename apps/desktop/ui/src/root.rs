@@ -1182,7 +1182,13 @@ impl DesktopRoot {
                     },
                     |root, result, cx| {
                         if let Err(error) = result {
-                            root.set_status(error, cx);
+                            let title = root.shell.read(cx).t("notification.error.persistence");
+                            crate::notification::publish_error(
+                                cx,
+                                "workspace.persistence_failed",
+                                &title,
+                                error,
+                            );
                         }
                     },
                 );
@@ -1443,12 +1449,24 @@ impl DesktopRoot {
                     move |_| factory.open_host(),
                     |root, result, cx| {
                         if let Err(error) = result {
-                            root.set_status(error, cx);
+                            let title = root.shell.read(cx).t("notification.error.host-launch");
+                            crate::notification::publish_error(
+                                cx,
+                                "host.connection_launcher_failed",
+                                &title,
+                                error,
+                            );
                         }
                     },
                 );
                 if let Err(error) = admitted {
-                    self.set_status(error, cx);
+                    let title = self.shell.read(cx).t("notification.error.host-launch");
+                    crate::notification::publish_error(
+                        cx,
+                        "host.connection_launcher_failed",
+                        &title,
+                        error,
+                    );
                 }
             }
             UiCommand::NewWindow => {
@@ -1466,11 +1484,20 @@ impl DesktopRoot {
                             },
                             cx,
                         ),
-                        Err(error) => root.set_status(error, cx),
+                        Err(error) => {
+                            let title = root.shell.read(cx).t("notification.error.window");
+                            crate::notification::publish_error(
+                                cx,
+                                "window.creation_failed",
+                                &title,
+                                error,
+                            );
+                        }
                     },
                 );
                 if let Err(error) = admitted {
-                    self.set_status(error, cx);
+                    let title = self.shell.read(cx).t("notification.error.window");
+                    crate::notification::publish_error(cx, "window.creation_failed", &title, error);
                 }
             }
             UiCommand::CloseWindow => {

@@ -41,6 +41,49 @@ impl Render for Shell {
             .child(self.render_header(cx))
             .child(self.render_main(window, cx))
             .child(self.render_footer(cx))
+            .child(
+                div()
+                    .absolute()
+                    .right(px(16.0))
+                    .bottom(px(32.0))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(
+                        cx.global::<crate::notification::Store>()
+                            .popups_for(window.window_handle().window_id())
+                            .into_iter()
+                            .cloned()
+                            .map(|event| {
+                                let id = event.id;
+                                crate::components::floating_panel(
+                                    ("notification-popup", id),
+                                    SurfaceVariant::Popover,
+                                )
+                                .w(px(320.0))
+                                .p_3()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(format!(
+                                    "{} · {}",
+                                    event.severity.label(&self.locale),
+                                    event.title
+                                ))
+                                .child(event.message)
+                                .child(
+                                    div()
+                                        .id(("notification-popup-dismiss", id))
+                                        .cursor_pointer()
+                                        .child(self.t("notification.close"))
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            cx.global_mut::<crate::notification::Store>()
+                                                .dismiss_popup(id)
+                                        })),
+                                )
+                            }),
+                    ),
+            )
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
             })

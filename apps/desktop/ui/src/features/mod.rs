@@ -60,12 +60,24 @@ pub mod id {
     pub const VIEW_OUTPUT: &str = "lapis.view.output";
     pub const VIEW_COMMAND_SEARCH: &str = "lapis.view.command-search";
     pub const VIEW_SETTINGS: &str = "lapis.view.settings";
+    pub const VIEW_NOTIFICATIONS: &str = "lapis.view.notifications";
 }
 
 pub fn bundled_registry() -> FeatureRegistry {
     let mut registry = FeatureRegistry::default();
     let descriptors = vec![
         FeatureDescriptor::core(id::FEATURE_SHELL)
+            .contributes(
+                crate::extension_ui::UiContribution::panel_view(
+                    id::VIEW_NOTIFICATIONS,
+                    crate::extension_ui::ZonePosition::Right,
+                    [crate::extension_ui::ZonePosition::Right],
+                    "view.notifications",
+                    "problems",
+                    0,
+                )
+                .hidden_in_picker(),
+            )
             .contributes(crate::extension_ui::UiContribution::settings_view(
                 id::VIEW_SETTINGS,
                 "view.settings",
