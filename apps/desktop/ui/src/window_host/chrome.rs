@@ -22,6 +22,7 @@ impl WindowControlIconName {
 /// ネイティブのウィンドウ操作ボタン用 Lucide アイコン。
 ///
 /// 色は共通の `Icon` コンポーネントが有効テーマから解決する。
+#[derive(IntoElement)]
 pub(crate) struct WindowControlIcon {
     name: WindowControlIconName,
 }
@@ -32,16 +33,14 @@ impl WindowControlIcon {
     }
 }
 
-impl IntoElement for WindowControlIcon {
-    type Element = gpui::Div;
-
-    fn into_element(self) -> Self::Element {
+impl gpui::RenderOnce for WindowControlIcon {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         div()
             .size_4()
             .flex()
             .items_center()
             .justify_center()
-            .text_color(theme::colors().text_secondary)
+            .text_color(theme::colors(cx).text_secondary)
             .child(crate::components::Icon::new(self.name.icon_name()))
     }
 }
@@ -49,6 +48,7 @@ impl IntoElement for WindowControlIcon {
 pub(crate) fn title_bar(
     content: impl IntoElement,
     close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &gpui::App,
 ) -> Div {
     let region = div()
         .h(tokens::size::TITLE_BAR_HEIGHT)
@@ -56,13 +56,13 @@ pub(crate) fn title_bar(
         .flex_shrink_0()
         .flex()
         .items_center()
-        .bg(theme::colors().background_primary)
+        .bg(theme::colors(cx).background_primary)
         .when(cfg!(target_os = "macos"), |el| {
             el.child(div().w(px(80.)).flex_shrink_0())
         })
         .child(content)
         .when(!cfg!(target_os = "macos"), |el| {
-            el.child(window_controls(close))
+            el.child(window_controls(close, cx))
         });
     #[cfg(target_os = "windows")]
     let region = region.window_control_area(WindowControlArea::Drag);
@@ -73,7 +73,10 @@ pub(crate) fn title_bar(
     region
 }
 
-fn window_controls(close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Div {
+fn window_controls(
+    close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    cx: &gpui::App,
+) -> Div {
     div()
         .h_full()
         .w(tokens::size::WINDOW_CONTROL_WIDTH * 3.)
@@ -86,6 +89,7 @@ fn window_controls(close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)
                 WindowControlIconName::Minimize,
                 WindowControlArea::Min,
                 false,
+                cx,
             )
             .on_click(|_, window, _| window.minimize_window()),
         )
@@ -95,6 +99,7 @@ fn window_controls(close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)
                 WindowControlIconName::Maximize,
                 WindowControlArea::Max,
                 false,
+                cx,
             )
             .on_click(|_, window, _| window.zoom_window()),
         )
@@ -104,6 +109,7 @@ fn window_controls(close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static)
                 WindowControlIconName::Close,
                 WindowControlArea::Close,
                 true,
+                cx,
             )
             .on_click(close),
         )
@@ -114,6 +120,7 @@ fn window_control_button(
     icon: WindowControlIconName,
     area: WindowControlArea,
     close: bool,
+    cx: &gpui::App,
 ) -> gpui::Stateful<Div> {
     div()
         .id(id)
@@ -125,18 +132,18 @@ fn window_control_button(
         .justify_center()
         .occlude()
         .window_control_area(area)
-        .text_color(theme::colors().text_secondary)
+        .text_color(theme::colors(cx).text_secondary)
         .hover(move |style| {
             if close {
                 style
-                    .bg(theme::colors().danger_background)
-                    .text_color(theme::colors().text_primary)
+                    .bg(theme::colors(cx).danger_background)
+                    .text_color(theme::colors(cx).text_primary)
             } else {
                 style
-                    .bg(theme::colors().button_background_hover)
-                    .text_color(theme::colors().text_primary)
+                    .bg(theme::colors(cx).button_background_hover)
+                    .text_color(theme::colors(cx).text_primary)
             }
         })
-        .active(|style| style.bg(theme::colors().button_background_selected))
+        .active(|style| style.bg(theme::colors(cx).button_background_selected))
         .child(WindowControlIcon::new(icon))
 }

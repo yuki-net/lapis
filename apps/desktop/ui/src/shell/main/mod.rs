@@ -49,6 +49,7 @@ pub(crate) struct Shell {
     tab_drag: super::tab_state::TabDragState,
     drag_preview: Option<gpui::AnyWindowHandle>,
     _drag_keys: gpui::Subscription,
+    _notifications: gpui::Subscription,
     pub(crate) zone_panel_bounds: RefCell<HashMap<ZonePosition, gpui::Bounds<Pixels>>>,
     pub(crate) panel_bounds: RefCell<HashMap<PanelId, gpui::Bounds<Pixels>>>,
     drop_target: Option<DropPreview>,
@@ -58,6 +59,7 @@ pub(crate) struct Shell {
     document_view: AnyView,
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
+    notification_center: gpui::Entity<crate::notification::Center>,
     locale: Localizer,
     languages: lapis_language::LanguageRegistry,
     scroll_states: ShellScrollStates,
@@ -198,6 +200,13 @@ impl Shell {
             }
         });
         let mut feature_registry = features::bundled_registry();
+        let shell = cx.entity().downgrade();
+        let execute = std::rc::Rc::new(move |command, window: &mut Window, cx: &mut App| {
+            let _ = shell.update(cx, |shell, cx| shell.execute_command(command, window, cx));
+        });
+        let center = cx.new(|cx| crate::notification::Center::new(execute, cx));
+        feature_registry.register_shared_view(id::VIEW_NOTIFICATIONS.into(), center.clone().into());
+        let notifications = cx.observe_global::<crate::notification::Store>(|_, cx| cx.notify());
         for (view, entity) in views {
             feature_registry.register_shared_view(view, entity);
         }
@@ -209,6 +218,7 @@ impl Shell {
             tab_drag: Default::default(),
             drag_preview: None,
             _drag_keys: drag_keys,
+            _notifications: notifications,
             zone_panel_bounds: Default::default(),
             panel_bounds: Default::default(),
             zone_bounds: Default::default(),
@@ -218,6 +228,7 @@ impl Shell {
             document_view,
             focus_handle: cx.focus_handle(),
             feature_registry,
+            notification_center: center,
             locale: Localizer::bundled(),
             languages: lapis_language::LanguageRegistry::bundled(),
             scroll_states: ShellScrollStates::default(),
@@ -354,6 +365,8 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         let _ = self.locale.set_active(&locale);
+        self.notification_center
+            .update(cx, |center, cx| center.set_locale(&locale, cx));
         cx.notify();
     }
     pub(crate) fn request_document_close(
@@ -452,6 +465,16 @@ impl Shell {
     }
 }
 impl Shell {
+    pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(UiCommand::Undo);
+    }
+}
+impl Shell {
+    pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        cx.emit(UiCommand::Redo);
+    }
+}
+impl Shell {
     pub(crate) fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
         cx.emit(UiCommand::Cut);
     }
@@ -467,7 +490,12 @@ impl Shell {
     }
 }
 
-fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful<gpui::Div> {
+fn command_item(
+    index: usize,
+    label: String,
+    shortcut: String,
+    cx: &gpui::App,
+) -> gpui::Stateful<gpui::Div> {
     div()
         .id(("command-palette-item", index))
         .h(px(31.0))
@@ -476,14 +504,14 @@ fn command_item(index: usize, label: String, shortcut: String) -> gpui::Stateful
         .flex()
         .items_center()
         .text_size(px(12.0))
-        .text_color(theme::colors().text_primary)
-        .hover(|style| style.bg(theme::colors().button_background_selected))
+        .text_color(theme::colors(cx).text_primary)
+        .hover(|style| style.bg(theme::colors(cx).button_background_selected))
         .child(label)
         .child(div().flex_1())
         .child(
             div()
                 .text_size(px(10.0))
-                .text_color(theme::colors().text_tertiary)
+                .text_color(theme::colors(cx).text_tertiary)
                 .child(shortcut),
         )
 }

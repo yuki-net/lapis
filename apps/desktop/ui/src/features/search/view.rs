@@ -15,6 +15,7 @@ impl Render for SearchFeature {
                 "⌕",
                 "Search",
                 "選択範囲またはクリップボードを Ctrl+Shift+F で検索",
+                cx,
             ));
         }
         for (index, hit) in self.hits.iter().take(500).enumerate() {
@@ -24,7 +25,7 @@ impl Render for SearchFeature {
                     .id(("search-hit", index))
                     .p_2()
                     .rounded(px(5.0))
-                    .hover(|style| style.bg(theme::colors().button_background_hover))
+                    .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                     .on_click(cx.listener(move |_, _, _, cx| {
                         if let Some(path) = &path {
                             cx.emit(UiCommand::OpenPath(path.clone()));

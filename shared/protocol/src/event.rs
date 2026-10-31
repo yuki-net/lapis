@@ -10,6 +10,15 @@ use crate::{
 pub enum EventBody {
     #[serde(rename = "workspace.changed")]
     WorkspaceChanged { workspace_id: WorkspaceId },
+    #[serde(rename = "git.status_changed")]
+    GitStatusChanged {
+        workspace_id: WorkspaceId,
+        repository: lapis_git::GitRepositoryStatus,
+    },
+    #[serde(rename = "git.repositories_changed")]
+    GitRepositoriesChanged { workspace_id: WorkspaceId },
+    #[serde(rename = "git.worktrees_changed")]
+    GitWorktreesChanged { workspace_id: WorkspaceId },
     #[serde(rename = "document.edited")]
     DocumentEdited {
         document_id: DocumentId,

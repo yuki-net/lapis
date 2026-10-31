@@ -118,13 +118,27 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
+            let settings = services.settings.settings();
+            crate::theme::init(
+                &crate::extension_ui::ThemeId::new(settings.theme),
+                settings.syntax_theme,
+                cx,
+            );
+            crate::features::settings_coordinator::SettingsCoordinator::init(
+                services.settings.clone(),
+                cx,
+            );
+            #[cfg(all(feature = "hot-reload", debug_assertions))]
+            crate::hot_reload::init(cx);
             crate::keymap::gpui::bind_keys(cx);
             #[cfg(debug_assertions)]
             crate::devtools::init(cx);
             open_desktop_window(session, services, initial_view, cx);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
-                    cx.quit();
+                    let coordinator =
+                        crate::features::settings_coordinator::SettingsCoordinator::shared(cx);
+                    coordinator.update(cx, |coordinator, cx| coordinator.quit_after_pending(cx));
                 }
             })
             .detach();
@@ -194,11 +208,18 @@ pub(crate) fn open_desktop_window(
     initial: InitialView,
     cx: &mut App,
 ) {
+    let locale_id = services.settings.settings().locale.clone();
     let result = cx.open_window(window_options(cx), move |window, cx| {
         cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx))
     });
     if let Err(error) = result {
         eprintln!("Windowを開けませんでした: {error}");
+        let mut locale = crate::localization::Localizer::bundled();
+        locale.set_active(&locale_id);
+        let title = locale.resolve(&lapis_localization::MessageId::new(
+            "notification.error.window",
+        ));
+        crate::notification::publish_error(cx, "window.creation_failed", &title, error.to_string());
     }
 }
 

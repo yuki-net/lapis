@@ -35,6 +35,7 @@ repository = "https://github.com/zed-industries/zed"
 resolver = "2"
 
 [features]
+hot-reload = ["dep:subsecond"]
 default = [
     "font-kit",
     "wayland",
@@ -230,6 +231,10 @@ path = "tests/action_macros.rs"
 
 [dependencies.anyhow]
 version = "1.0.86"
+
+[dependencies.subsecond]
+version = "=0.7.10"
+optional = true
 
 [dependencies.async-task]
 version = "4.7"

@@ -16,6 +16,7 @@ pub(crate) fn floating_tree(anchor: Point<Pixels>, offset: Point<Pixels>) -> Anc
 pub(crate) fn floating_panel(
     id: impl Into<ElementId>,
     variant: SurfaceVariant,
+    cx: &gpui::App,
 ) -> Stateful<gpui::Div> {
-    surface(variant).id(id).occlude()
+    surface(variant, cx).id(id).occlude()
 }

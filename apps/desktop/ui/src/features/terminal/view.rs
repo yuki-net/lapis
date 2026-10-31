@@ -121,53 +121,55 @@ impl Render for TerminalFeature {
                     .flex_wrap()
                     .gap_1()
                     .child(
-                        action_button("80×24", false)
+                        action_button("80×24", false, cx)
                             .on_click(cx.listener(|this, _, _, cx| this.resize(80, 24, cx))),
                     )
                     .child(
-                        action_button("120×30", false)
+                        action_button("120×30", false, cx)
                             .on_click(cx.listener(|this, _, _, cx| this.resize(120, 30, cx))),
                     )
-                    .child(action_button("Terminate", false).on_click(
+                    .child(action_button("Terminate", false, cx).on_click(
                         cx.listener(|this, _, window, cx| this.confirm_terminate(window, cx)),
                     ))
-                    .child(action_button("Shell", true).on_click(cx.listener(
+                    .child(action_button("Shell", true, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.start(cx);
                             window.focus(&this.focus);
                         },
                     )))
-                    .child(action_button("PowerShell", false).on_click(cx.listener(
+                    .child(action_button("PowerShell", false, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.start_shell(TerminalShell::PowerShell, cx);
                             window.focus(&this.focus);
                         },
                     )))
-                    .child(action_button("cmd", false).on_click(cx.listener(
+                    .child(action_button("cmd", false, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.start_shell(TerminalShell::Cmd, cx);
                             window.focus(&this.focus);
                         },
                     )))
                     .child(
-                        action_button("Host Terminals", false)
+                        action_button("Host Terminals", false, cx)
                             .on_click(cx.listener(|this, _, _, cx| this.discover(cx))),
                     )
-                    .child(action_button("Paste", false).on_click(cx.listener(
+                    .child(action_button("Paste", false, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.send_clipboard(cx);
                             window.focus(&this.focus);
                         },
                     )))
-                    .child(action_button("Copy screen", false).on_click(cx.listener(
-                        |this, _, _, cx| {
-                            if let Some(screen) = this.active_screen() {
-                                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
-                                    screen.plain_text(),
-                                ));
-                            }
-                        },
-                    ))),
+                    .child(
+                        action_button("Copy screen", false, cx).on_click(cx.listener(
+                            |this, _, _, cx| {
+                                if let Some(screen) = this.active_screen() {
+                                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                        screen.plain_text(),
+                                    ));
+                                }
+                            },
+                        )),
+                    ),
             )
             .child(
                 div()
@@ -176,7 +178,7 @@ impl Render for TerminalFeature {
                     .gap_1()
                     .children(tabs.into_iter().enumerate().map(|(index, (id, status))| {
                         let selected = active.as_ref() == Some(&id);
-                        action_button(format!("{} - {status:?}", index + 1), selected).on_click(
+                        action_button(format!("{} - {status:?}", index + 1), selected, cx).on_click(
                             cx.listener(move |this, _, window, cx| {
                                 this.selected = Some(id.clone());
                                 window.focus(&this.focus);
@@ -187,7 +189,7 @@ impl Render for TerminalFeature {
             )
             .children(discovered.into_iter().map(|terminal| {
                 let label = format!("Attach: {} - {:?}", terminal.id.as_str(), terminal.status);
-                action_button(label, false).on_click(cx.listener(move |this, _, window, cx| {
+                action_button(label, false, cx).on_click(cx.listener(move |this, _, window, cx| {
                     this.attach(terminal.id.clone(), cx);
                     window.focus(&this.focus);
                 }))
@@ -205,7 +207,7 @@ impl Render for TerminalFeature {
                         .font_family("Cascadia Mono")
                         .text_size(px(13.0))
                         .line_height(px(16.0))
-                        .text_color(theme::colors().text_primary)
+                        .text_color(theme::colors(cx).text_primary)
                         .on_mouse_down(
                             gpui::MouseButton::Left,
                             cx.listener(|this, _, window, _| window.focus(&this.focus)),
@@ -215,7 +217,7 @@ impl Render for TerminalFeature {
                             el.child(div().h(top_spacer_height))
                         })
                         // visible rowsのみ描画
-                        .children(rows.into_iter().map(render_row))
+                        .children(rows.into_iter().map(|row| render_row(row, cx)))
                         // bottom spacer: 見えていない下部行の高さを確保
                         .when(bottom_spacer_height > px(0.0), |el| {
                             el.child(div().h(bottom_spacer_height))
@@ -254,6 +256,7 @@ impl Render for TerminalFeature {
                             .left_0()
                             .size_full(),
                         ),
+                    cx,
                 )
                 .flex_1(),
             )
@@ -317,16 +320,16 @@ fn visible_row_range(
     first..last
 }
 
-fn render_row(row: TerminalRow) -> impl IntoElement {
+fn render_row(row: TerminalRow, cx: &gpui::App) -> impl IntoElement {
     div()
         .flex()
         .h(px(16.0))
-        .children(row.cells.into_iter().map(render_cell))
+        .children(row.cells.into_iter().map(|cell| render_cell(cell, cx)))
 }
 
-fn render_cell(cell: TerminalCell) -> impl IntoElement {
-    let default_foreground = theme::colors().text_primary;
-    let default_background = theme::colors().background_primary;
+fn render_cell(cell: TerminalCell, cx: &gpui::App) -> impl IntoElement {
+    let default_foreground = theme::colors(cx).text_primary;
+    let default_background = theme::colors(cx).background_primary;
     let mut foreground = color(cell.foreground, default_foreground);
     let mut background = color(cell.background, default_background);
     if cell.inverse {

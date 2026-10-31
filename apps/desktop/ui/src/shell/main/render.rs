@@ -3,6 +3,12 @@ use super::*;
 impl Render for Shell {
     /// Builds the window shell and input handlers, clearing panel drop bounds for the new layout pass.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_content(window, cx)
+    }
+}
+
+impl Shell {
+    fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.shell
             .layout
             .finish_due_closes(std::time::Instant::now());
@@ -14,8 +20,8 @@ impl Render for Shell {
             .relative()
             .flex()
             .flex_col()
-            .bg(theme::colors().background_primary)
-            .text_color(theme::colors().text_primary)
+            .bg(theme::colors(cx).background_primary)
+            .text_color(theme::colors(cx).text_primary)
             .track_focus(&self.focus_handle(cx))
             .key_context("Shell")
             .on_action(cx.listener(|this, action: &InvokeCommand, window, cx| {
@@ -44,6 +50,49 @@ impl Render for Shell {
             .child(self.render_header(cx))
             .child(self.render_main(window, cx))
             .child(self.render_footer(cx))
+            .child(
+                div()
+                    .absolute()
+                    .right(px(16.0))
+                    .bottom(px(32.0))
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .children(
+                        cx.global::<crate::notification::Store>()
+                            .popups_for(window.window_handle().window_id())
+                            .into_iter()
+                            .cloned()
+                            .map(|event| {
+                                let id = event.id;
+                                crate::components::floating_panel(
+                                    ("notification-popup", id),
+                                    SurfaceVariant::Popover,
+                                )
+                                .w(px(320.0))
+                                .p_3()
+                                .flex()
+                                .flex_col()
+                                .gap_1()
+                                .child(format!(
+                                    "{} · {}",
+                                    event.severity.label(&self.locale),
+                                    event.title
+                                ))
+                                .child(event.message)
+                                .child(
+                                    div()
+                                        .id(("notification-popup-dismiss", id))
+                                        .cursor_pointer()
+                                        .child(self.t("notification.close"))
+                                        .on_click(cx.listener(move |_, _, _, cx| {
+                                            cx.global_mut::<crate::notification::Store>()
+                                                .dismiss_popup(id)
+                                        })),
+                                )
+                            }),
+                    ),
+            )
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
             })

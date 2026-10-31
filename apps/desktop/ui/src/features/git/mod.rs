@@ -3,18 +3,23 @@ use crate::{
     features::id,
 };
 
+mod changes;
 mod state;
 mod view;
 
 use crate::theme;
 use lapis_git::ChangeKind;
 
+pub(crate) use changes::ChangesFeature;
 pub(crate) use state::{GitEvent, GitFeature, GitInputRequest};
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(
         id::FEATURE_GIT,
-        [ActivationCondition::OnView(ViewId::new(id::VIEW_GIT))],
+        [
+            ActivationCondition::OnView(ViewId::new(id::VIEW_GIT)),
+            ActivationCondition::OnView(ViewId::new(id::VIEW_CHANGES)),
+        ],
     )
     .contributes(UiContribution::view(
         id::VIEW_GIT,
@@ -22,6 +27,13 @@ pub(super) fn descriptor() -> FeatureDescriptor {
         "view.git",
         "git",
         30,
+    ))
+    .contributes(UiContribution::view(
+        id::VIEW_CHANGES,
+        UiSlot::ToolDock,
+        "view.changes",
+        "git",
+        29,
     ))
     .requires("workspace.git")
 }
@@ -37,11 +49,11 @@ fn change_label(kind: ChangeKind) -> &'static str {
     }
 }
 
-fn change_color(kind: ChangeKind) -> gpui::Rgba {
+fn change_color(kind: ChangeKind, cx: &gpui::App) -> gpui::Rgba {
     match kind {
-        ChangeKind::Added => theme::colors().positive_text,
-        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors().danger_text,
-        ChangeKind::Modified | ChangeKind::Renamed => theme::colors().warning_text,
-        ChangeKind::Untracked => theme::colors().text_secondary,
+        ChangeKind::Added => theme::colors(cx).positive_text,
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors(cx).danger_text,
+        ChangeKind::Modified | ChangeKind::Renamed => theme::colors(cx).warning_text,
+        ChangeKind::Untracked => theme::colors(cx).text_secondary,
     }
 }

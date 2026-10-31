@@ -15,8 +15,8 @@ use gpui::{App, DivInspectorState, Window};
 pub(crate) fn init(cx: &mut App) {
     inspector_controller::init(cx);
     cx.set_inspector_renderer(Box::new(inspector_window::render_inspector));
-    cx.register_inspector_element(|id, state: &DivInspectorState, _window, _cx| {
-        div_inspector::render_div_inspector(id, state)
+    cx.register_inspector_element(|id, state: &DivInspectorState, _window, cx| {
+        div_inspector::render_div_inspector(id, state, cx)
     });
 }
 

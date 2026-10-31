@@ -553,7 +553,7 @@ impl Element for SearchTextElement {
             input.query.clone().into()
         };
         let color = if input.query.is_empty() {
-            theme::colors().text_tertiary.into()
+            theme::colors(cx).text_tertiary.into()
         } else {
             style.color
         };
@@ -607,7 +607,7 @@ impl Element for SearchTextElement {
                         bounds.bottom(),
                     ),
                 ),
-                theme::colors().editor_search_match,
+                theme::colors(cx).editor_search_match,
             )
         });
         let cursor = input.selected_range.is_empty().then(|| {
@@ -619,7 +619,7 @@ impl Element for SearchTextElement {
                     ),
                     size(px(1.0), bounds.size.height),
                 ),
-                theme::colors().text_primary,
+                theme::colors(cx).text_primary,
             )
         });
         SearchTextPrepaint {
@@ -707,16 +707,20 @@ impl Render for QuickSearch {
                     .px_2()
                     .rounded(px(6.0))
                     .border_1()
-                    .border_color(theme::colors().border_default)
-                    .bg(theme::colors().background_tertiary)
+                    .border_color(theme::colors(cx).border_default)
+                    .bg(theme::colors(cx).background_tertiary)
                     .flex()
                     .items_center()
                     .gap_2()
                     .cursor(CursorStyle::IBeam)
                     .text_size(px(13.0))
-                    .text_color(theme::colors().text_primary)
+                    .text_color(theme::colors(cx).text_primary)
                     .on_mouse_down(MouseButton::Left, cx.listener(Self::mouse_down))
-                    .child(div().text_color(theme::colors().text_secondary).child("S"))
+                    .child(
+                        div()
+                            .text_color(theme::colors(cx).text_secondary)
+                            .child("S"),
+                    )
                     .child(
                         div()
                             .min_w(px(0.0))
@@ -729,7 +733,7 @@ impl Render for QuickSearch {
                     .px_2()
                     .pb_1()
                     .text_size(px(10.0))
-                    .text_color(theme::colors().text_tertiary)
+                    .text_color(theme::colors(cx).text_tertiary)
                     .child(if self.path_title.is_some() {
                         "Workspaceからの相対path · Enterで確定 · Escで戻る".to_owned()
                     } else {
@@ -752,7 +756,7 @@ impl Render for QuickSearch {
                                 div()
                                     .p_3()
                                     .text_size(px(12.0))
-                                    .text_color(theme::colors().text_tertiary)
+                                    .text_color(theme::colors(cx).text_tertiary)
                                     .child("No matching commands"),
                             )
                         })
@@ -764,11 +768,11 @@ impl Render for QuickSearch {
                                 .py_2()
                                 .rounded(px(6.0))
                                 .bg(if index == self.selected_index {
-                                    theme::colors().button_background_selected
+                                    theme::colors(cx).button_background_selected
                                 } else {
-                                    theme::colors().background_secondary
+                                    theme::colors(cx).background_secondary
                                 })
-                                .hover(|style| style.bg(theme::colors().button_background_hover))
+                                .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                                 .cursor_pointer()
                                 .flex()
                                 .items_center()
@@ -786,13 +790,13 @@ impl Render for QuickSearch {
                                         .child(
                                             div()
                                                 .text_size(px(12.0))
-                                                .text_color(theme::colors().text_primary)
+                                                .text_color(theme::colors(cx).text_primary)
                                                 .child(item.title),
                                         )
                                         .child(
                                             div()
                                                 .text_size(px(9.0))
-                                                .text_color(theme::colors().text_tertiary)
+                                                .text_color(theme::colors(cx).text_tertiary)
                                                 .child(command_label),
                                         ),
                                 )
@@ -800,11 +804,12 @@ impl Render for QuickSearch {
                                     row.child(
                                         div()
                                             .text_size(px(10.0))
-                                            .text_color(theme::colors().text_secondary)
+                                            .text_color(theme::colors(cx).text_secondary)
                                             .child(item.shortcut),
                                     )
                                 })
                         })),
+                    cx,
                 )
                 .h(px(0.0))
                 .min_h(px(0.0))

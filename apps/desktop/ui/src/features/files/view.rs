@@ -20,10 +20,10 @@ impl FilesFeature {
                     .rounded(tokens::radius::CONTROL)
                     .flex()
                     .items_center()
-                    .bg(theme::colors().button_background_selected)
+                    .bg(theme::colors(cx).button_background_selected)
                     .text_size(tokens::typography::FONT_SM)
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_color(theme::colors().text_primary)
+                    .text_color(theme::colors(cx).text_primary)
                     .child(workspace_name),
             );
 
@@ -54,7 +54,7 @@ impl FilesFeature {
             let file_path = path.clone();
 
             let row_bg = if is_selected_file {
-                theme::colors().button_background_selected
+                theme::colors(cx).button_background_selected
             } else {
                 gpui::rgba(0x00000000)
             };
@@ -70,10 +70,10 @@ impl FilesFeature {
                 .items_center()
                 .gap(tokens::spacing::XS)
                 .text_size(tokens::typography::FONT_SM)
-                .text_color(theme::colors().text_primary)
+                .text_color(theme::colors(cx).text_primary)
                 .hover(|style| {
                     if !is_selected_file {
-                        style.bg(theme::colors().button_background_hover)
+                        style.bg(theme::colors(cx).button_background_hover)
                     } else {
                         style
                     }
@@ -82,7 +82,7 @@ impl FilesFeature {
                     div()
                         .w(px(14.0))
                         .flex_shrink_0()
-                        .text_color(theme::colors().text_secondary)
+                        .text_color(theme::colors(cx).text_secondary)
                         .child(if is_file || !has_children {
                             ""
                         } else if is_expanded {

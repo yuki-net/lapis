@@ -25,15 +25,15 @@ impl Shell {
 
         let picker_content = div()
             .p(tokens::spacing::SM)
-            .text_color(theme::colors().text_primary)
+            .text_color(theme::colors(cx).text_primary)
             .child(
                 div()
                     .px(tokens::spacing::XS)
                     .py(px(2.0))
                     .rounded(px(5.0))
                     .border_1()
-                    .border_color(theme::colors().button_border_focused)
-                    .bg(theme::colors().background_tertiary)
+                    .border_color(theme::colors(cx).button_border_focused)
+                    .bg(theme::colors(cx).background_tertiary)
                     .flex()
                     .items_center()
                     .gap(tokens::spacing::XS)
@@ -43,16 +43,16 @@ impl Shell {
                     .child(div().text_size(tokens::typography::FONT_SM).child(
                         if self.shell.tool_picker_query.is_empty() {
                             div()
-                                .text_color(theme::colors().text_secondary)
+                                .text_color(theme::colors(cx).text_secondary)
                                 .child("Search tools...")
                         } else {
                             div()
-                                .text_color(theme::colors().text_primary)
+                                .text_color(theme::colors(cx).text_primary)
                                 .child(format!("{}|", self.shell.tool_picker_query))
                         },
                     )),
             )
-            .child(div().h(px(1.0)).my_1().bg(theme::colors().border_default))
+            .child(div().h(px(1.0)).my_1().bg(theme::colors(cx).border_default))
             .children(tools.into_iter().enumerate().map(
                 |(index, (view, title, icon, category))| {
                     let target = target.clone();
@@ -68,9 +68,9 @@ impl Shell {
                         .items_center()
                         .gap(tokens::spacing::XS)
                         .when(index == selected, |item| {
-                            item.bg(theme::colors().button_background_selected)
+                            item.bg(theme::colors(cx).button_background_selected)
                         })
-                        .hover(|style| style.bg(theme::colors().button_background_hover))
+                        .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.select_tool_from_picker(target.clone(), view.clone(), window, cx);
                         }))
@@ -79,7 +79,7 @@ impl Shell {
                             item.child(
                                 div()
                                     .text_size(tokens::typography::FONT_XS)
-                                    .text_color(theme::colors().text_tertiary)
+                                    .text_color(theme::colors(cx).text_tertiary)
                                     .child(format!("{category} · ")),
                             )
                         })
@@ -95,6 +95,7 @@ impl Shell {
             crate::components::floating_panel(
                 "tool-picker",
                 crate::components::SurfaceVariant::Popover,
+                cx,
             )
             .w(px(250.0))
             .max_h(px(520.0))
@@ -107,6 +108,7 @@ impl Shell {
                     ScrollAxis::Vertical,
                     &self.scroll_states.tool_picker,
                     picker_content,
+                    cx,
                 )
                 .max_h(px(520.0)),
             ),

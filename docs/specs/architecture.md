@@ -25,6 +25,7 @@
 
 - Host が登録した Workspace ごとに Runtime が Document の内容・revision・undo/redo、Terminal の出力・状態、Git/Task の操作範囲を所有する。Client の Document は表示 cache であり、編集は revision を指定して正本へ送る。
 - 埋め込み接続と Remote は同じ request/response/event と Runtime を使う。Transport は認可と配送を担い、別の正規状態を作らない。
+- Git Repository の status・revision・監視はHost Runtimeが所有する。Git操作と外部変更を同じ更新経路へ集約し、変更を既存のWorkspace eventとsnapshotでClientへ配信する。監視に失敗した場合はHost側で低頻度に再確認し、監視を再試行する。
 - Git/Task の外部 I/O は正規状態 worker の外で実行する。Runtime 内で接続・Workspace を検証し、Workspace ごとの実行資源を直列化したうえで、結果とイベントを worker に戻す。他 Workspace の操作や Document・Terminal の更新を Git の完了待ちにしない。
 - Git/Worktree/Task の公開操作は Workspace・Worktree・Execution の ID を指定する。実行ディレクトリ、内部 TaskRecord、OS の絶対パスを wire に公開せず、実行 ID と初期状態は Runtime が生成する。
 - Document の close や接続切断は attachment の解除であり、未保存内容・履歴・Terminal・Agent の終了ではない。実行終了には明示的な終了操作が必要。
@@ -86,6 +87,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 ## Desktop の共通Tab操作
 
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
+- 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - Popupはクリック元の座標をアンカーにし、共通Popup基盤でWindow端補正、外側クリック、Escape、キーボード選択、Focus復帰を扱う。固定画面座標やFeature固有の補正値を使わない。
 - HeaderのZone操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じZone Commandを実行できる。

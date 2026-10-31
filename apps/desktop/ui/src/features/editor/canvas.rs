@@ -65,7 +65,7 @@ impl Element for EditorElement {
     ) -> Self::PrepaintState {
         let editor = self.editor.read(cx);
         let text_style = window.text_style();
-        let syntax_theme = theme::syntax::active();
+        let syntax_theme = theme::syntax::active(cx);
         let mut lines = Vec::new();
         let mut selection = Vec::new();
         let mut search_highlights = Vec::new();
@@ -93,8 +93,8 @@ impl Element for EditorElement {
             .map(|position| position.line as usize)
             .unwrap_or(0)
             .min(line_count.saturating_sub(1));
-        let selection_color = theme::colors().editor_selection;
-        let search_match_color = theme::colors().editor_search_match;
+        let selection_color = theme::colors(cx).editor_selection;
+        let search_match_color = theme::colors(cx).editor_search_match;
 
         for line_index in first_line..last_line {
             let raw = editor.session.line(line_index).unwrap_or_default();
@@ -179,7 +179,7 @@ impl Element for EditorElement {
                         point(layout.origin.x + cursor_x, layout.origin.y),
                         size(px(2.0), line_height),
                     ),
-                    theme::colors().editor_caret,
+                    theme::colors(cx).editor_caret,
                 )
             });
         EditorPrepaint {

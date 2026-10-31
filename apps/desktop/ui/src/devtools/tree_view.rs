@@ -20,7 +20,7 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
         div()
             .p_3()
             .text_size(px(11.))
-            .text_color(theme::colors().text_secondary)
+            .text_color(theme::colors(cx).text_secondary)
             .child("対象ウィンドウを描画するとツリーが表示されます")
             .into_any_element()
     } else {
@@ -56,17 +56,17 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                 .child(
                     div()
                         .text_size(px(10.0))
-                        .text_color(theme::colors().text_secondary)
+                        .text_color(theme::colors(cx).text_secondary)
                         .child(format!("{node_count} nodes · rev {revision}")),
                 ),
         )
         .child(
-            scroll_surface(ScrollAxis::Both, &scroll_state, tree_content)
+            scroll_surface(ScrollAxis::Both, &scroll_state, tree_content, cx)
                 .min_h(px(0.0))
                 .flex_1(),
         )
 }
-pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
+pub(super) fn render_active_summary(inspector: &Inspector, cx: &gpui::App) -> Option<Div> {
     let active = inspector.active_element_id()?;
     let node = inspector
         .element_tree()
@@ -80,22 +80,28 @@ pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
             .flex()
             .flex_col()
             .gap_1()
-            .child(section_title("Element"))
-            .child(detail_row("type", short_type_name(node.element_type)))
+            .child(section_title("Element", cx))
+            .child(detail_row("type", short_type_name(node.element_type), cx))
             .child(detail_row(
                 "GlobalElementId",
                 node.id.path.global_id.to_string(),
+                cx,
             ))
-            .child(detail_row("instance ID", node.id.instance_id.to_string()))
+            .child(detail_row(
+                "instance ID",
+                node.id.instance_id.to_string(),
+                cx,
+            ))
             .child(detail_row(
                 "生成元",
                 format!("{}:{}:{}", source.file(), source.line(), source.column()),
+                cx,
             ))
-            .child(section_title("Bounds"))
-            .child(detail_row("x", pixels(bounds.origin.x)))
-            .child(detail_row("y", pixels(bounds.origin.y)))
-            .child(detail_row("width", pixels(bounds.size.width)))
-            .child(detail_row("height", pixels(bounds.size.height))),
+            .child(section_title("Bounds", cx))
+            .child(detail_row("x", pixels(bounds.origin.x), cx))
+            .child(detail_row("y", pixels(bounds.origin.y), cx))
+            .child(detail_row("width", pixels(bounds.size.width), cx))
+            .child(detail_row("height", pixels(bounds.size.height), cx)),
     )
 }
 
@@ -123,15 +129,15 @@ fn render_tree_row(
         .pr_2()
         .cursor_pointer()
         .when(selected, |element| {
-            element.bg(theme::colors().button_background_selected)
+            element.bg(theme::colors(cx).button_background_selected)
         })
-        .hover(|style| style.bg(theme::colors().button_background_hover))
+        .hover(|style| style.bg(theme::colors(cx).button_background_hover))
         .child(
             div()
                 .id(("inspector-tree-toggle", index))
                 .w(px(14.0))
                 .flex_none()
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .child(if row.has_children {
                     if collapsed { "▸" } else { "▾" }
                 } else {
@@ -154,9 +160,9 @@ fn render_tree_row(
                 .flex_none()
                 .text_size(px(11.0))
                 .text_color(if selected {
-                    theme::colors().text_primary
+                    theme::colors(cx).text_primary
                 } else {
-                    theme::colors().text_accent
+                    theme::colors(cx).text_accent
                 })
                 .child(short_type_name(row.node.element_type)),
         )
@@ -165,7 +171,7 @@ fn render_tree_row(
                 div()
                     .min_w(px(0.0))
                     .text_size(px(9.0))
-                    .text_color(theme::colors().text_secondary)
+                    .text_color(theme::colors(cx).text_secondary)
                     .child(format!("#{global_id}")),
             )
         })
@@ -210,11 +216,11 @@ fn short_type_name(element_type: &'static str) -> String {
         .to_owned()
 }
 
-fn section_title(title: &str) -> Div {
+fn section_title(title: &str, cx: &gpui::App) -> Div {
     div()
         .pt_2()
         .pb_1()
-        .text_color(theme::colors().text_accent)
+        .text_color(theme::colors(cx).text_accent)
         .child(title.to_owned())
 }
 

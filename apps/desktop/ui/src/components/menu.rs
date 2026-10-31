@@ -13,11 +13,11 @@ pub(crate) struct MenuItemSpec {
 }
 
 /// Shared outer surface for header menus, settings menus, and future context menus.
-pub(crate) fn menu_surface(id: impl Into<ElementId>) -> Stateful<gpui::Div> {
-    floating_panel(id, SurfaceVariant::Menu)
+pub(crate) fn menu_surface(id: impl Into<ElementId>, cx: &gpui::App) -> Stateful<gpui::Div> {
+    floating_panel(id, SurfaceVariant::Menu, cx)
 }
 
-pub(crate) fn menu_item(spec: MenuItemSpec) -> Stateful<gpui::Div> {
+pub(crate) fn menu_item(spec: MenuItemSpec, cx: &gpui::App) -> Stateful<gpui::Div> {
     let id = spec.id.clone();
     let enabled = spec.enabled;
     div()
@@ -31,12 +31,12 @@ pub(crate) fn menu_item(spec: MenuItemSpec) -> Stateful<gpui::Div> {
         .gap(tokens::spacing::SM)
         .text_size(tokens::typography::FONT_SM)
         .text_color(if enabled {
-            theme::colors().text_primary
+            theme::colors(cx).text_primary
         } else {
-            theme::colors().text_tertiary
+            theme::colors(cx).text_tertiary
         })
         .when(enabled, |item| {
-            item.hover(|style| style.bg(theme::colors().button_background_hover))
+            item.hover(|style| style.bg(theme::colors(cx).button_background_hover))
         })
         .when_some(spec.icon, |item, icon| item.child(Icon::new(icon)))
         .child(spec.label)
@@ -44,7 +44,7 @@ pub(crate) fn menu_item(spec: MenuItemSpec) -> Stateful<gpui::Div> {
         .when_some(spec.shortcut, |item, shortcut| {
             item.child(
                 div()
-                    .text_color(theme::colors().text_secondary)
+                    .text_color(theme::colors(cx).text_secondary)
                     .child(shortcut),
             )
         })

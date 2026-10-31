@@ -6,6 +6,7 @@ pub(crate) fn panel_empty_state(
     icon: impl Into<SharedString>,
     message: impl Into<SharedString>,
     detail: impl Into<SharedString>,
+    cx: &gpui::App,
 ) -> gpui::Div {
     let icon = icon.into();
     let message = message.into();
@@ -22,19 +23,19 @@ pub(crate) fn panel_empty_state(
         .child(
             div()
                 .text_size(tokens::typography::FONT_XL)
-                .text_color(theme::colors().text_tertiary)
+                .text_color(theme::colors(cx).text_tertiary)
                 .child(icon),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .child(message),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().text_tertiary)
+                .text_color(theme::colors(cx).text_tertiary)
                 .child(detail),
         )
 }
@@ -43,6 +44,7 @@ pub(crate) fn panel_empty_state_element(
     icon: impl IntoElement,
     message: impl Into<SharedString>,
     detail: impl Into<SharedString>,
+    cx: &gpui::App,
 ) -> gpui::Div {
     let message = message.into();
     let detail = detail.into();
@@ -59,13 +61,13 @@ pub(crate) fn panel_empty_state_element(
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .child(message),
         )
         .child(
             div()
                 .text_size(tokens::typography::FONT_XS)
-                .text_color(theme::colors().text_tertiary)
+                .text_color(theme::colors(cx).text_tertiary)
                 .child(detail),
         )
 }
