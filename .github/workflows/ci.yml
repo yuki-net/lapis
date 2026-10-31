@@ -85,10 +85,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 40
     needs: path_filter
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      CARGO_INCREMENTAL: "0"
     if: >-
       needs.path_filter.outputs.jobs != '[]' &&
       contains(needs.path_filter.outputs.jobs, 'rust_core')
@@ -102,12 +98,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy, rust-analyzer, rust-src
 
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: "v0.18.0"
-
-      - name: Cache Cargo downloads
+      - name: Cache Cargo artifacts
         uses: actions/cache@v4
         with:
           path: |
@@ -115,9 +106,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+            target/
+          key: rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+            rust-core-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
       - name: Check architecture
         run: python3 scripts/check.py rust_core architecture
@@ -131,10 +123,6 @@ jobs:
       - name: Lint Rust Core
         run: python3 scripts/check.py rust_core lint
 
-      - name: Show sccache stats
-        if: always()
-        run: sccache --show-stats
-
   host_windows:
     name: Host / Windows
     runs-on: windows-2022
@@ -142,6 +130,7 @@ jobs:
     needs: path_filter
     env:
       SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_GHA_VERSION: "lapis-host-only-v1"
       RUSTC_WRAPPER: sccache
       CARGO_INCREMENTAL: "0"
     if: >-
@@ -198,10 +187,6 @@ jobs:
     runs-on: windows-2022
     timeout-minutes: 60
     needs: path_filter
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: sccache
-      CARGO_INCREMENTAL: "0"
     if: >-
       needs.path_filter.outputs.jobs != '[]' &&
       contains(needs.path_filter.outputs.jobs, 'desktop')
@@ -215,12 +200,7 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
 
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-        with:
-          version: "v0.18.0"
-
-      - name: Cache Cargo downloads
+      - name: Cache Cargo artifacts
         uses: actions/cache@v4
         with:
           path: |
@@ -228,9 +208,10 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ~/.cargo/git/checkouts/
-          key: cargo-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+            target/
+          key: desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            cargo-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+            desktop-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
 
       - name: Check architecture
         run: python scripts/check.py desktop architecture
@@ -254,10 +235,6 @@ jobs:
             git apply --unidiff-zero --ignore-space-change --check --reverse --directory=vendor/gpui "patches/gpui-0.2.2-$patch.patch"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-
-      - name: Show sccache stats
-        if: always()
-        run: sccache --show-stats
 
   mobile:
     name: Mobile / Android
