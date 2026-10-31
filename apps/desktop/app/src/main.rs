@@ -14,45 +14,13 @@ use lapis_persistence::{
     LocalConversationRepository, LocalGlobalSettingsRepository, LocalWorkspaceStateRepository,
 };
 use lapis_platform::{
-    ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend, run_task_worker,
+    ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend,
 };
 
-/// Dispatches worker and task smoke modes, or starts the desktop with command-line options.
+/// Starts the Desktop Client. Host関連のモード (--managed-host / --task-worker) は
+/// `lapis-host.exe` が担当するため、このbinaryでは処理しない。
 fn main() {
     let arguments = std::env::args_os().collect::<Vec<_>>();
-    if arguments
-        .get(1)
-        .is_some_and(|value| value == "--managed-host")
-    {
-        let result = arguments
-            .get(2)
-            .ok_or("Workspaceがありません")
-            .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })
-            .and_then(|root| {
-                let directory = arguments.get(3).ok_or("Hostの状態フォルダがありません")?;
-                lapis_host::run_managed_host(
-                    std::path::Path::new(root),
-                    std::path::Path::new(directory),
-                )
-            });
-        if result.is_err() {
-            std::process::exit(1);
-        }
-        return;
-    }
-    if arguments.get(1).map(std::ffi::OsString::as_os_str)
-        == Some(std::ffi::OsStr::new("--task-worker"))
-    {
-        let Some(spec_path) = arguments.get(2) else {
-            eprintln!("Task worker spec がありません");
-            std::process::exit(2);
-        };
-        if let Err(error) = run_task_worker(std::path::Path::new(&spec_path)) {
-            eprintln!("Task worker failed: {error}");
-            std::process::exit(1);
-        }
-        return;
-    }
     if arguments.get(1).map(std::ffi::OsString::as_os_str)
         == Some(std::ffi::OsStr::new("--task-smoke"))
     {
