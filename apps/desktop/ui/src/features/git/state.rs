@@ -5,6 +5,22 @@ use lapis_editor_core::{TaskId, WorkspaceId};
 use lapis_git::{GitAction, GitActionRequest, GitDiffSnapshot, GitSnapshot};
 use std::time::Duration;
 
+fn merge_repository_statuses(
+    mut base: Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)>,
+    updates: impl IntoIterator<Item = (lapis_git::GitRepositorySnapshot, GitSnapshot)>,
+) -> Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)> {
+    for (repository, incoming) in updates {
+        if let Some((_, current)) = base
+            .iter_mut()
+            .find(|(existing, _)| existing.id == repository.id)
+            && incoming.revision > current.revision
+        {
+            *current = incoming;
+        }
+    }
+    base
+}
+
 #[cfg(test)]
 mod event_order_tests {
     use super::*;
@@ -95,6 +111,45 @@ mod event_order_tests {
         ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
             unreachable!()
         }
+    }
+
+    #[test]
+    fn repository_merge_preserves_membership_and_newest_revision() {
+        let workspace = WorkspaceId::new("workspace");
+        let repository = |id: &str| lapis_git::GitRepositorySnapshot {
+            id: id.into(),
+            path: Some(id.into()),
+        };
+        let status = |revision: u64| GitSnapshot {
+            workspace_id: workspace.clone(),
+            worktree_id: None,
+            revision,
+            branch: "main".into(),
+            head: revision.to_string(),
+            files: vec![],
+        };
+
+        let merged = merge_repository_statuses(
+            vec![(repository("frontend"), status(2))],
+            vec![
+                (repository("frontend"), status(3)),
+                (repository("backend"), status(9)),
+            ],
+        );
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].0.id, "frontend");
+        assert_eq!(merged[0].1.revision, 3);
+
+        let authoritative_snapshot = merge_repository_statuses(
+            vec![
+                (repository("frontend"), status(2)),
+                (repository("backend"), status(1)),
+            ],
+            vec![(repository("frontend"), status(4))],
+        );
+        assert_eq!(authoritative_snapshot.len(), 2);
+        assert_eq!(authoritative_snapshot[0].1.revision, 4);
+        assert_eq!(authoritative_snapshot[1].1.revision, 1);
     }
 
     #[gpui::test]
@@ -474,18 +529,23 @@ impl GitFeature {
                     GitOperation::RefreshRepositories => session.rescan_repositories(),
                     GitOperation::RefreshWorktrees => session.refresh_worktrees(),
                     GitOperation::ApplyUpdate(update) => {
-                        if matches!(update, lapis_git::GitUpdate::Snapshot(_)) {
+                        let is_snapshot = matches!(&update, lapis_git::GitUpdate::Snapshot(_));
+                        let rescanned = if is_snapshot {
                             session
                                 .rescan_repositories()
-                                .map_err(|error| error.to_string())?;
-                            if session.status().is_some() {
-                                session
-                                    .refresh_worktrees()
-                                    .map_err(|error| error.to_string())?;
-                            }
-                        }
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Ok(())
+                        };
+                        let refreshed = if is_snapshot && session.status().is_some() {
+                            session
+                                .refresh_worktrees()
+                                .map_err(|error| error.to_string())
+                        } else {
+                            Ok(())
+                        };
                         session.apply_git_update(update);
-                        Ok(())
+                        rescanned.and(refreshed)
                     }
                     GitOperation::Import(task, path) => session.import_file(&task, &path),
                     GitOperation::Discard(_) => unreachable!("Task状態の所有者で検証する"),
@@ -526,30 +586,15 @@ impl GitFeature {
                             if is_repository_refresh
                                 && git.repository_refresh_generation == repository_generation
                             {
-                                for (repository, incoming) in &mut snapshot.repositories {
-                                    if let Some((_, current)) = git
-                                        .snapshot
-                                        .repositories
-                                        .iter()
-                                        .find(|(existing, _)| existing.id == repository.id)
-                                        && current.revision > incoming.revision
-                                    {
-                                        *incoming = current.clone();
-                                    }
-                                }
-                                git.snapshot.repositories = snapshot.repositories.clone();
+                                git.snapshot.repositories = merge_repository_statuses(
+                                    snapshot.repositories,
+                                    git.snapshot.repositories.clone(),
+                                );
                             } else {
-                                for (repository, incoming) in snapshot.repositories {
-                                    if let Some((_, current)) = git
-                                        .snapshot
-                                        .repositories
-                                        .iter_mut()
-                                        .find(|(existing, _)| existing.id == repository.id)
-                                        && incoming.revision > current.revision
-                                    {
-                                        *current = incoming;
-                                    }
-                                }
+                                git.snapshot.repositories = merge_repository_statuses(
+                                    git.snapshot.repositories.clone(),
+                                    snapshot.repositories,
+                                );
                             }
                             if snapshot.status.as_ref().is_some_and(|incoming| {
                                 git.snapshot
@@ -610,20 +655,18 @@ impl GitFeature {
                                     }
                                 }
                             }
-                            if git.repository_refresh_generation != repository_generation {
-                                snapshot.repositories = git.snapshot.repositories.clone();
-                            }
-                            for (repository, incoming) in &mut snapshot.repositories {
-                                if let Some((_, current)) = git
-                                    .snapshot
-                                    .repositories
-                                    .iter()
-                                    .find(|(existing, _)| existing.id == repository.id)
-                                    && current.revision > incoming.revision
-                                {
-                                    *incoming = current.clone();
-                                }
-                            }
+                            snapshot.repositories =
+                                if git.repository_refresh_generation != repository_generation {
+                                    merge_repository_statuses(
+                                        git.snapshot.repositories.clone(),
+                                        snapshot.repositories,
+                                    )
+                                } else {
+                                    merge_repository_statuses(
+                                        snapshot.repositories,
+                                        git.snapshot.repositories.clone(),
+                                    )
+                                };
                             git.snapshot = snapshot;
                         }
                         if git.target.as_ref().is_some_and(|target| {
