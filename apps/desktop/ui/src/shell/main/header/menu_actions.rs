@@ -4,13 +4,8 @@ use super::menu_definition::MenuAction;
 use crate::shell::HeaderMenuSection as MenuId;
 
 impl Shell {
-    pub(super) fn toggle_header_menu(
-        &mut self,
-        position: gpui::Point<gpui::Pixels>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn toggle_header_menu(&mut self, cx: &mut Context<Self>) {
         self.shell.header_menu_open = !self.shell.header_menu_open;
-        self.shell.header_menu_anchor = position;
         self.shell.header_menu_section = None;
         if self.shell.header_menu_open {
             self.shell.command_palette_open = false;

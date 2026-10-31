@@ -1,5 +1,7 @@
 use crate::{
-    components::{MenuItemSpec, floating_tree, menu_item, menu_surface, separator},
+    components::{
+        MenuItemSpec, Popup, PopupPlacement, PopupScope, menu_item, menu_surface, separator,
+    },
     shell::HeaderMenuSection as MenuId,
 };
 use gpui::ElementId;
@@ -8,31 +10,24 @@ use super::*;
 use menu_definition::{MenuItemDefinition, ROOT_MENUS, items};
 
 impl Shell {
-    pub(crate) fn render_header_menu(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn render_header_menu(
+        &self,
+        scope: &PopupScope,
+        max_height: Pixels,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let active = self.shell.header_menu_section;
-        floating_tree(self.shell.header_menu_anchor, point(px(-8.0), px(8.0))).child(
-            div()
-                .id("header-menu-surface")
-                .relative()
-                .occlude()
-                .w(px(440.0))
-                .h(px(164.0))
-                .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                    this.close_header_menu(cx);
-                }))
-                .child(
-                    menu_surface("header-menu-column", cx)
-                        .w(px(190.0))
-                        .h(px(164.0))
-                        .p(tokens::spacing::XS)
-                        .children(ROOT_MENUS.iter().map(|(menu, label)| {
-                            self.render_header_menu_root(*menu, label, active == Some(*menu), cx)
-                        })),
-                )
-                .when_some(active, |surface, menu| {
-                    surface.child(self.render_header_submenu(menu, cx))
-                }),
-        )
+        menu_surface("header-menu-column", cx)
+            .debug_selector(|| "header-menu-panel".into())
+            .w(px(168.0))
+            .p(tokens::spacing::XS)
+            .children(ROOT_MENUS.iter().map(|(menu, label)| {
+                let row = self.render_header_menu_root(*menu, label, active == Some(*menu), cx);
+                Popup::new(row, PopupPlacement::Right, scope.clone())
+                    .when(active == Some(*menu), |popup| {
+                        popup.content(self.render_header_submenu(*menu, max_height, cx))
+                    })
+            }))
     }
 
     fn render_header_menu_root(
@@ -49,39 +44,42 @@ impl Shell {
             MenuId::Window => self.t("menu.window"),
             MenuId::Help => self.t("menu.help"),
         };
-        div()
-            .id(ElementId::Name(format!("header-menu-root-{label}").into()))
-            .h(px(30.0))
-            .w_full()
-            .px_2()
-            .rounded(px(4.0))
-            .flex()
-            .items_center()
-            .justify_between()
-            .text_size(px(13.0))
-            .when(active, |item| {
-                item.bg(theme::colors(cx).button_background_selected)
-            })
-            .hover(|style| style.bg(theme::colors(cx).button_background_selected))
-            .child(localized_label)
-            .child(
-                div()
-                    .text_color(theme::colors(cx).text_secondary)
-                    .child("›"),
-            )
-            .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
-                if *hovered {
-                    this.select_header_menu(menu, cx);
-                }
-            }))
-            .on_click(cx.listener(move |this, _, _, cx| {
+        let icon = match menu {
+            MenuId::File => IconName::Files,
+            MenuId::Edit => IconName::Pencil,
+            MenuId::View => IconName::PanelLeft,
+            MenuId::Window => IconName::Square,
+            MenuId::Help => IconName::HelpCircle,
+        };
+        menu_item(
+            MenuItemSpec {
+                id: format!("header-menu-root-{label}").into(),
+                label: localized_label.into(),
+                shortcut: None,
+                icon: Some(icon),
+                enabled: true,
+            },
+            cx,
+        )
+        .debug_selector(move || format!("header-menu-root-{label}").into())
+        .when(active, |item| {
+            item.bg(theme::colors(cx).button_background_selected)
+        })
+        .child(Icon::new(IconName::ChevronRight).size(px(14.)))
+        .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
+            if *hovered {
                 this.select_header_menu(menu, cx);
-            }))
+            }
+        }))
+        .on_click(cx.listener(move |this, _, _, cx| {
+            this.select_header_menu(menu, cx);
+        }))
     }
 
     fn render_header_submenu(
         &self,
         menu: MenuId,
+        max_height: Pixels,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let menu_prefix = match menu {
@@ -108,11 +106,9 @@ impl Shell {
             ElementId::Name(format!("header-submenu-{menu:?}").into()),
             cx,
         )
-        .absolute()
-        .left(px(184.0))
-        .top(px(0.0))
-        .w(px(250.0))
-        .max_h(px(360.0))
+        .debug_selector(move || format!("header-submenu-{menu:?}").into())
+        .w(px(272.0))
+        .max_h(max_height)
         .overflow_y_scroll()
         .p(tokens::spacing::XS)
         .children(children)
@@ -165,11 +161,12 @@ impl Shell {
                 id: format!("header-menu-item-{id}").into(),
                 label: label.into(),
                 shortcut: item.shortcut.map(Into::into),
-                icon: None,
+                icon: item.icon,
                 enabled,
             },
             cx,
         )
+        .debug_selector(move || format!("header-menu-item-{id}").into())
         .when(enabled, |row| {
             row.on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(action) = action {
@@ -177,5 +174,147 @@ impl Shell {
                 }
             }))
         })
+    }
+}
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::*;
+    use gpui::{AppContext, Modifiers, TestAppContext, VisualTestContext};
+
+    struct Empty;
+    impl Render for Empty {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            div()
+        }
+    }
+
+    fn setup(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, &mut VisualTestContext) {
+        cx.add_window_view(|_, cx| {
+            theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            let document = cx.new(|_| Empty);
+            Shell::new(document.into(), HashMap::new(), cx)
+        })
+    }
+
+    fn draw(cx: &mut VisualTestContext) {
+        cx.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+    }
+
+    #[gpui::test]
+    fn header_popup_is_button_anchored_and_same_trigger_toggles_closed(cx: &mut TestAppContext) {
+        let (shell, visual) = setup(cx);
+        draw(visual);
+        let trigger = visual.debug_bounds("header-menu-trigger").unwrap();
+        for click in [
+            trigger.origin + point(px(3.), px(3.)),
+            trigger.bottom_right() - point(px(3.), px(3.)),
+        ] {
+            visual.simulate_click(click, Modifiers::none());
+            draw(visual);
+            let menu = visual.debug_bounds("header-menu-panel").unwrap();
+            assert_eq!(menu.left(), trigger.left());
+            assert_eq!(menu.top(), trigger.bottom() + px(4.));
+            visual.simulate_click(click, Modifiers::none());
+            shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
+            draw(visual);
+            // debug_boundsは過去のselectorを保持するため、閉じた後の操作で状態を確認する。
+            visual.simulate_click(point(px(600.), px(500.)), Modifiers::none());
+            shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
+        }
+    }
+
+    #[gpui::test]
+    fn submenu_follows_its_row_and_blank_space_outside_the_cascade_dismisses(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, visual) = setup(cx);
+        draw(visual);
+        let trigger = visual.debug_bounds("header-menu-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let row = visual.debug_bounds("header-menu-root-Window").unwrap();
+        visual.simulate_mouse_move(row.center(), None, Modifiers::none());
+        draw(visual);
+        let submenu = visual.debug_bounds("header-submenu-Window").unwrap();
+        assert_eq!(submenu.top(), row.top() - px(4.));
+        assert_eq!(submenu.left(), row.right() + px(4.));
+        let outside = point(submenu.center().x, row.top() - px(16.));
+        visual.simulate_click(outside, Modifiers::none());
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
+    }
+
+    #[gpui::test]
+    fn submenu_click_reaches_the_action_and_file_menu_is_not_truncated(cx: &mut TestAppContext) {
+        let (shell, visual) = setup(cx);
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = calls.clone();
+        let _subscription = visual.update(|_, cx| {
+            cx.subscribe(&shell, move |_, event, _| {
+                if matches!(event, UiCommand::CloseWindow) {
+                    observed.set(observed.get() + 1);
+                }
+            })
+        });
+        draw(visual);
+        let trigger = visual.debug_bounds("header-menu-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let row = visual.debug_bounds("header-menu-root-File").unwrap();
+        visual.simulate_mouse_move(row.center(), None, Modifiers::none());
+        draw(visual);
+        let submenu = visual.debug_bounds("header-submenu-File").unwrap();
+        let close = visual
+            .debug_bounds("header-menu-item-close-window")
+            .unwrap();
+        assert!(close.bottom() <= submenu.bottom());
+        let save_as = visual.debug_bounds("header-menu-item-save-as").unwrap();
+        let new_file = visual.debug_bounds("header-menu-item-new-file").unwrap();
+        assert!(new_file.top() > save_as.bottom());
+        visual.simulate_click(close.center(), Modifiers::none());
+        assert_eq!(calls.get(), 1);
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
+    }
+
+    #[gpui::test]
+    fn settings_uses_the_same_trigger_and_outside_dismissal(cx: &mut TestAppContext) {
+        let (shell, visual) = setup(cx);
+        draw(visual);
+        let trigger = visual.debug_bounds("settings-menu-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let menu = visual.debug_bounds("settings-menu-panel").unwrap();
+        assert_eq!(menu.right(), trigger.right());
+        assert_eq!(menu.top(), trigger.bottom() + px(4.));
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.settings_menu_open));
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        visual.simulate_click(point(px(600.), px(500.)), Modifiers::none());
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.settings_menu_open));
+    }
+
+    #[gpui::test]
+    fn escape_dismisses_and_switching_triggers_closes_the_other_popup(cx: &mut TestAppContext) {
+        let (shell, visual) = setup(cx);
+        draw(visual);
+        let menu = visual.debug_bounds("header-menu-trigger").unwrap();
+        let settings = visual.debug_bounds("settings-menu-trigger").unwrap();
+        visual.simulate_click(menu.center(), Modifiers::none());
+        visual.simulate_click(settings.center(), Modifiers::none());
+        shell.read_with(visual, |shell, _| {
+            assert!(!shell.shell.header_menu_open);
+            assert!(shell.shell.settings_menu_open);
+        });
+        visual.simulate_click(menu.center(), Modifiers::none());
+        shell.read_with(visual, |shell, _| {
+            assert!(shell.shell.header_menu_open);
+            assert!(!shell.shell.settings_menu_open);
+        });
+        visual.simulate_keystrokes("escape");
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
     }
 }

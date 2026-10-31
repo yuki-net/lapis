@@ -11,16 +11,20 @@ use super::*;
 impl Shell {
     /// Composes the persistent application header, separating app content (left/center/right)
     /// from OS window controls (minimize/maximize/close).
-    pub(super) fn render_header(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_header(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         crate::window_host::chrome::title_bar(
-            self.render_app_header(cx),
+            self.render_app_header(window, cx),
             cx.listener(|_, _, _, cx| cx.emit(UiCommand::CloseWindow)),
             cx,
         )
     }
 
     /// Renders the application header sections, or only the workspace title in detached windows.
-    fn render_app_header(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn render_app_header(&self, window: &Window, cx: &mut Context<Self>) -> gpui::Div {
         div()
             .flex_1()
             .h_full()
@@ -34,7 +38,7 @@ impl Shell {
             })
             .when(!self.detached, |header| {
                 header
-                    .child(self.render_header_left(cx))
+                    .child(self.render_header_left(window, cx))
                     .child(self.render_header_center(cx))
                     .child(self.render_header_right(cx))
             })

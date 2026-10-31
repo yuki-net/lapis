@@ -219,14 +219,11 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn toggle_settings_menu(
-        &mut self,
-        position: gpui::Point<gpui::Pixels>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn toggle_settings_menu(&mut self, cx: &mut Context<Self>) {
         self.shell.settings_menu_open = !self.shell.settings_menu_open;
-        self.shell.settings_menu_anchor = position;
         self.shell.tool_picker = None;
+        self.shell.header_menu_open = false;
+        self.shell.header_menu_section = None;
         if !self.shell.settings_menu_open {
             self.shell.theme_picker_open = false;
         }

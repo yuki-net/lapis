@@ -1,3 +1,4 @@
+use crate::components::IconName;
 use crate::shell::HeaderMenuSection as MenuId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +34,7 @@ pub(crate) struct MenuItemDefinition {
     pub(crate) action: Option<MenuAction>,
     pub(crate) enabled: bool,
     pub(crate) separator_before: bool,
+    pub(crate) icon: Option<IconName>,
 }
 
 impl MenuItemDefinition {
@@ -49,6 +51,26 @@ impl MenuItemDefinition {
             action: Some(action),
             enabled: !matches!(action, MenuAction::Placeholder),
             separator_before: false,
+            icon: match action {
+                MenuAction::NewFile => Some(IconName::FilePlus),
+                MenuAction::NewFolder => Some(IconName::FolderPlus),
+                MenuAction::NewWindow => Some(IconName::Square),
+                MenuAction::ConnectHost => Some(IconName::Plug),
+                MenuAction::OpenProject | MenuAction::OpenFile => Some(IconName::Files),
+                MenuAction::Save | MenuAction::SaveAs => Some(IconName::Save),
+                MenuAction::CloseProject | MenuAction::CloseWindow => Some(IconName::Close),
+                MenuAction::Undo => Some(IconName::Undo),
+                MenuAction::Redo => Some(IconName::Redo),
+                MenuAction::Cut => Some(IconName::Cut),
+                MenuAction::Copy => Some(IconName::Copy),
+                MenuAction::Paste => Some(IconName::Paste),
+                MenuAction::ToggleLeftPanel
+                | MenuAction::ToggleBottomZone
+                | MenuAction::ToggleRightPanel
+                | MenuAction::TogglePanelControls => Some(IconName::PanelLeft),
+                MenuAction::ToggleInspector => Some(IconName::Search),
+                MenuAction::Placeholder => None,
+            },
         }
     }
 
@@ -60,6 +82,7 @@ impl MenuItemDefinition {
             action: Some(MenuAction::Placeholder),
             enabled: false,
             separator_before: false,
+            icon: None,
         }
     }
 
@@ -85,13 +108,13 @@ const FILE_MENU: &[MenuItemDefinition] = &[
         Some("Ctrl+Shift+S"),
         MenuAction::SaveAs,
     ),
-    MenuItemDefinition::action("connect-host", "Hostに接続…", None, MenuAction::ConnectHost),
     MenuItemDefinition::action(
         "new-file",
         "New File...",
         Some("Ctrl+N"),
         MenuAction::NewFile,
-    ),
+    )
+    .with_separator_before(),
     MenuItemDefinition::action("new-folder", "New Folder...", None, MenuAction::NewFolder),
     MenuItemDefinition::action(
         "new-window",
@@ -108,6 +131,8 @@ const FILE_MENU: &[MenuItemDefinition] = &[
     .with_separator_before(),
     MenuItemDefinition::action("open-file", "Open...", None, MenuAction::OpenFile),
     MenuItemDefinition::disabled("open-recent", "Open Recent"),
+    MenuItemDefinition::action("connect-host", "Hostに接続…", None, MenuAction::ConnectHost)
+        .with_separator_before(),
     MenuItemDefinition::action(
         "close-project",
         "Close Project",
@@ -126,7 +151,8 @@ const FILE_MENU: &[MenuItemDefinition] = &[
 const EDIT_MENU: &[MenuItemDefinition] = &[
     MenuItemDefinition::action("undo", "Undo", Some("Ctrl+Z"), MenuAction::Undo),
     MenuItemDefinition::action("redo", "Redo", Some("Ctrl+Y"), MenuAction::Redo),
-    MenuItemDefinition::action("cut", "Cut", Some("Ctrl+X"), MenuAction::Cut),
+    MenuItemDefinition::action("cut", "Cut", Some("Ctrl+X"), MenuAction::Cut)
+        .with_separator_before(),
     MenuItemDefinition::action("copy", "Copy", Some("Ctrl+C"), MenuAction::Copy),
     MenuItemDefinition::action("paste", "Paste", Some("Ctrl+V"), MenuAction::Paste),
 ];
@@ -156,7 +182,7 @@ const VIEW_MENU: &[MenuItemDefinition] = &[
         None,
         MenuAction::TogglePanelControls,
     ),
-    MenuItemDefinition::disabled("command-palette", "Command Palette"),
+    MenuItemDefinition::disabled("command-palette", "Command Palette").with_separator_before(),
 ];
 
 const WINDOW_MENU: &[MenuItemDefinition] = &[
@@ -172,7 +198,7 @@ const WINDOW_MENU: &[MenuItemDefinition] = &[
         Some("Ctrl+Shift+F4"),
         MenuAction::CloseWindow,
     ),
-    MenuItemDefinition::disabled("switch-window", "Switch Window"),
+    MenuItemDefinition::disabled("switch-window", "Switch Window").with_separator_before(),
 ];
 
 const HELP_MENU: &[MenuItemDefinition] = &[
@@ -182,7 +208,8 @@ const HELP_MENU: &[MenuItemDefinition] = &[
         Some("F12"),
         MenuAction::ToggleInspector,
     ),
-    MenuItemDefinition::disabled("keyboard-shortcuts", "Keyboard Shortcuts"),
+    MenuItemDefinition::disabled("keyboard-shortcuts", "Keyboard Shortcuts")
+        .with_separator_before(),
     MenuItemDefinition::disabled("documentation", "Documentation"),
     MenuItemDefinition::disabled("about", "About Lapis"),
 ];

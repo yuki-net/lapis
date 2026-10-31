@@ -46,6 +46,18 @@ define_icons! {
     PanelLeftDashed => ("icons/panel-left-dashed.svg", include_bytes!("../../../assets/icons/panel-left-dashed.svg")),
     Settings => ("icons/settings.svg", include_bytes!("../../../assets/icons/settings.svg")),
     SunMoon => ("icons/sun-moon.svg", include_bytes!("../../../assets/icons/sun-moon.svg")),
+    ChevronRight => ("icons/chevron-right.svg", include_bytes!("../../../assets/icons/chevron-right.svg")),
+    Pencil => ("icons/pencil.svg", include_bytes!("../../../assets/icons/pencil.svg")),
+    HelpCircle => ("icons/help-circle.svg", include_bytes!("../../../assets/icons/help-circle.svg")),
+    Save => ("icons/save.svg", include_bytes!("../../../assets/icons/save.svg")),
+    FilePlus => ("icons/file-plus.svg", include_bytes!("../../../assets/icons/file-plus.svg")),
+    FolderPlus => ("icons/folder-plus.svg", include_bytes!("../../../assets/icons/folder-plus.svg")),
+    Undo => ("icons/undo.svg", include_bytes!("../../../assets/icons/undo.svg")),
+    Redo => ("icons/redo.svg", include_bytes!("../../../assets/icons/redo.svg")),
+    Copy => ("icons/copy.svg", include_bytes!("../../../assets/icons/copy.svg")),
+    Cut => ("icons/cut.svg", include_bytes!("../../../assets/icons/cut.svg")),
+    Paste => ("icons/paste.svg", include_bytes!("../../../assets/icons/paste.svg")),
+    Plug => ("icons/plug.svg", include_bytes!("../../../assets/icons/plug.svg")),
 }
 
 impl IconName {
