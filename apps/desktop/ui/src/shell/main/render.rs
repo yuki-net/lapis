@@ -68,6 +68,7 @@ impl Shell {
                                 crate::components::floating_panel(
                                     ("notification-popup", id),
                                     SurfaceVariant::Popover,
+                                    cx,
                                 )
                                 .w(px(320.0))
                                 .p_3()

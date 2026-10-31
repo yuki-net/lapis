@@ -235,7 +235,7 @@ impl Render for Center {
                     .gap_1()
                     .p_2()
                     .border_1()
-                    .border_color(crate::theme::colors().border_default)
+                    .border_color(crate::theme::colors(cx).border_default)
                     .child(format!(
                         "{} · {}{}",
                         time,
