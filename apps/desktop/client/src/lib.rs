@@ -455,17 +455,32 @@ impl GitSession {
             if self.workspace_id.as_ref() != Some(&item.status.workspace_id) {
                 continue;
             }
+            let mut repository_applied = false;
             if let Some((_, current)) = self
                 .repository_statuses
                 .iter_mut()
                 .find(|(repository, _)| repository.id == item.repository_id)
-                && item.status.revision > current.revision
             {
-                *current = item.status.clone();
+                if item.status.revision > current.revision {
+                    *current = item.status.clone();
+                    repository_applied = true;
+                    changed = true;
+                }
+            } else if let Some(repository) = self
+                .repositories
+                .iter()
+                .find(|repository| repository.id == item.repository_id)
+                .cloned()
+            {
+                self.repository_statuses
+                    .push((repository, item.status.clone()));
+                repository_applied = true;
                 changed = true;
             }
-            self.repository_errors
-                .retain(|(repository, _)| repository.id != item.repository_id);
+            if repository_applied {
+                self.repository_errors
+                    .retain(|(repository, _)| repository.id != item.repository_id);
+            }
             if item.repository_id == "root" {
                 changed |= apply_git_status(&mut self.status, item.status);
             } else if let Some(worktree) = item.status.worktree_id.as_ref()
