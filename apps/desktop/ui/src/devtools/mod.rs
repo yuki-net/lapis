@@ -3,6 +3,8 @@ mod elements;
 mod inspector_controller;
 mod inspector_window;
 pub(crate) mod native_smoke;
+pub(crate) mod network;
+pub(crate) mod performance;
 #[cfg(test)]
 mod tests;
 mod tool;
@@ -12,6 +14,10 @@ use gpui::{App, DivInspectorState, Window};
 pub(crate) fn init(cx: &mut App) {
     // 診断ログ store を初期化
     console::init(cx);
+    // Network 診断ログ store を初期化
+    network::init(cx);
+    // Performance 診断ログ store を初期化
+    performance::init(cx);
     // Inspector Controller を初期化
     inspector_controller::init(cx);
     cx.set_inspector_renderer(Box::new(inspector_window::render_inspector));
