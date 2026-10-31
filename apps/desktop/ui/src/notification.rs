@@ -35,9 +35,21 @@ pub struct Event {
     pub title: String,
     pub message: String,
     pub context: Context,
-    pub actions: Vec<Action>,
+    actions: Vec<Action>,
     pub occurred_at: SystemTime,
     pub read: bool,
+}
+
+impl Event {
+    pub const MAX_ACTIONS: usize = 2;
+
+    pub fn actions(&self) -> &[Action] {
+        &self.actions
+    }
+
+    pub fn set_actions(&mut self, actions: impl IntoIterator<Item = Action>) {
+        self.actions = actions.into_iter().take(Self::MAX_ACTIONS).collect();
+    }
 }
 
 #[derive(Default)]
@@ -293,6 +305,26 @@ fn local_time(time: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_actions_are_limited_to_two() {
+        let mut event = Event {
+            id: 0,
+            kind: "agent.input_required".into(),
+            severity: Severity::Info,
+            title: "Input required".into(),
+            message: "Choose an action".into(),
+            context: Context::default(),
+            actions: vec![],
+            occurred_at: SystemTime::now(),
+            read: false,
+        };
+        event.set_actions((0..3).map(|index| Action {
+            label: format!("Action {index}"),
+            command: CommandId::new(format!("notification.action.{index}")),
+        }));
+        assert_eq!(event.actions().len(), Event::MAX_ACTIONS);
+    }
 
     #[test]
     fn repeated_events_have_distinct_ids_and_can_be_read_and_deleted() {
