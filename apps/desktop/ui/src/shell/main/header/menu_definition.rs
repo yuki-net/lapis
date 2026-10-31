@@ -177,8 +177,8 @@ const WINDOW_MENU: &[MenuItemDefinition] = &[
 
 const HELP_MENU: &[MenuItemDefinition] = &[
     MenuItemDefinition::action(
-        "toggle-inspector",
-        "Toggle Inspector",
+        "toggle-devtool",
+        "Open Lapis DevTool",
         Some("F12"),
         MenuAction::ToggleInspector,
     ),
@@ -256,6 +256,15 @@ mod tests {
             WINDOW_MENU
                 .iter()
                 .any(|item| item.id == "switch-window" && !item.enabled)
+        );
+    }
+
+    #[test]
+    fn help_menu_contains_devtool() {
+        assert!(
+            HELP_MENU
+                .iter()
+                .any(|item| item.id == "toggle-devtool" && item.enabled)
         );
     }
 }

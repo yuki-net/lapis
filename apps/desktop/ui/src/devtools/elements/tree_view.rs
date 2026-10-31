@@ -5,10 +5,11 @@ use crate::{
     theme,
 };
 
+use super::super::inspector_controller::InspectorController;
+use super::style_view::detail_row;
 use super::tree_state::TreeRow;
-use super::{inspector_controller::InspectorController, style_view::detail_row};
 
-pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Inspector>) -> Div {
+pub(crate) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Inspector>) -> Div {
     let entity = cx.entity_id();
     let rows = InspectorController::tree_rows(inspector, entity, cx);
     let node_count = inspector.element_tree().len();
@@ -66,7 +67,7 @@ pub(super) fn render_tree(inspector: &mut Inspector, cx: &mut gpui::Context<Insp
                 .flex_1(),
         )
 }
-pub(super) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
+pub(crate) fn render_active_summary(inspector: &Inspector) -> Option<Div> {
     let active = inspector.active_element_id()?;
     let node = inspector
         .element_tree()

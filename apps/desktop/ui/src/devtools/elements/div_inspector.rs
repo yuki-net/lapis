@@ -4,7 +4,7 @@ use serde_json::Value;
 use super::style_view::{detail_row, render_style};
 use crate::theme;
 
-pub(super) fn render_div_inspector(_id: InspectorElementId, state: &DivInspectorState) -> Div {
+pub(crate) fn render_div_inspector(_id: InspectorElementId, state: &DivInspectorState) -> Div {
     div()
         .flex()
         .flex_col()

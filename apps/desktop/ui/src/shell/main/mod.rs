@@ -391,10 +391,10 @@ impl Shell {
     pub(crate) fn open_new_window(&mut self, cx: &mut Context<Self>) {
         cx.emit(UiCommand::NewWindow);
     }
-    pub(crate) fn toggle_inspector_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_devtool_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(debug_assertions)]
         {
-            let _ = crate::devtools::toggle_inspector(window, cx);
+            let _ = crate::devtools::toggle_devtool(window, cx);
         }
         let _ = (window, cx);
     }

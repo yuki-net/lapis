@@ -47,7 +47,7 @@ pub mod id {
     pub const COMMAND_START_CODEX: &str = "lapis.command.start-codex";
     pub const COMMAND_START_TERMINAL: &str = "lapis.command.start-terminal";
     #[cfg(debug_assertions)]
-    pub const COMMAND_TOGGLE_INSPECTOR: &str = "lapis.command.dev.toggle-inspector";
+    pub const COMMAND_TOGGLE_DEVTOOL: &str = "lapis.command.dev.toggle-devtool";
 
     pub const VIEW_FILES: &str = "lapis.view.files";
     pub const VIEW_SEARCH: &str = "lapis.view.search";
@@ -162,12 +162,12 @@ pub fn bundled_registry() -> FeatureRegistry {
             FeatureDescriptor::bundled(
                 id::FEATURE_DEVTOOLS,
                 [crate::extension_ui::ActivationCondition::OnCommand(
-                    id::COMMAND_TOGGLE_INSPECTOR.into(),
+                    id::COMMAND_TOGGLE_DEVTOOL.into(),
                 )],
             )
             .contributes(crate::extension_ui::UiContribution::command(
-                id::COMMAND_TOGGLE_INSPECTOR,
-                "command.dev.toggle-inspector",
+                id::COMMAND_TOGGLE_DEVTOOL,
+                "command.dev.toggle-devtool",
                 "search",
                 900,
             )),
@@ -343,7 +343,7 @@ mod tests {
                 .any(|contribution| contribution
                     .command
                     .as_ref()
-                    .is_some_and(|command| { command.as_str() == id::COMMAND_TOGGLE_INSPECTOR }))
+                    .is_some_and(|command| { command.as_str() == id::COMMAND_TOGGLE_DEVTOOL }))
         );
     }
 

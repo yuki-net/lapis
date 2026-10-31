@@ -1,4 +1,6 @@
-use super::{inspection::Inspection, inspector_controller::InspectorController};
+use super::{
+    elements::inspection::Inspection, inspector_controller::InspectorController, tool::DevToolTab,
+};
 use gpui::{
     Context, DivInspectorState, Entity, Inspector, IntoElement, Modifiers, Pixels, Render,
     ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, Window,
@@ -620,7 +622,8 @@ fn inspector_islands_keep_toolbar_inside_details(cx: &mut TestAppContext) {
                     .unwrap_or_else(|| panic!("missing {id}"))
                     .bounds
             };
-            let title = bounds("inspector-title");
+            let _title = bounds("inspector-title");
+            let tab_bar = bounds("devtool-tab-bar");
             let tree = bounds("inspector-tree-island");
             let details = bounds("inspector-details-island");
             let header = bounds("inspector-details-header");
@@ -628,7 +631,8 @@ fn inspector_islands_keep_toolbar_inside_details(cx: &mut TestAppContext) {
             assert!(details.contains(&header.bottom_right()));
             let gap = crate::tokens::spacing::GAP;
             assert_eq!(tree.origin.x, gap);
-            assert_eq!(tree.origin.y, title.bottom() + gap);
+            // Tree is below the tab bar, not directly below the title
+            assert!(tree.origin.y >= tab_bar.bottom());
             assert_eq!(details.origin.x, tree.right() + gap);
             assert_eq!(tree.origin.y, details.origin.y);
             assert_eq!(tree.bottom(), details.bottom());
@@ -640,7 +644,7 @@ fn inspector_islands_keep_toolbar_inside_details(cx: &mut TestAppContext) {
                     header.contains(&button.bottom_right()),
                     "{id}: {button:?} outside {header:?}"
                 );
-                assert!(button.origin.y > title.bottom());
+                assert!(button.origin.y > tab_bar.bottom());
             }
             let pick = bounds("inspector-pick").center();
             Inspection::disable(window);
@@ -822,4 +826,115 @@ fn disabled_inspector_does_not_collect_element_sources(cx: &mut TestAppContext) 
     calls.set(0);
     draw(cx);
     assert_eq!(calls.get(), 0);
+}
+
+// DevTool tab tests
+
+#[gpui::test]
+fn devtool_initial_tab_is_elements(cx: &mut TestAppContext) {
+    let target = setup(cx);
+    target
+        .update(cx, |_, window, cx| {
+            InspectorController::toggle(window, cx).unwrap()
+        })
+        .unwrap();
+    let inspector = inspector(target, cx);
+    let active = cx.read(|cx| InspectorController::active_tab(inspector.entity_id(), cx));
+    assert_eq!(active, DevToolTab::Elements);
+}
+
+#[gpui::test]
+fn devtool_tab_switch_preserves_elements_state(cx: &mut TestAppContext) {
+    let target = setup(cx);
+    target
+        .update(cx, |_, window, cx| {
+            InspectorController::toggle(window, cx).unwrap()
+        })
+        .unwrap();
+    draw(target, cx);
+    let inspector = inspector(target, cx);
+    // Select an element
+    let element_id = inspector.read_with(cx, |inspector, _| inspector.element_tree()[0].id.clone());
+    cx.update(|cx| {
+        InspectorController::select_element(element_id.clone(), inspector.entity_id(), cx);
+    });
+    draw(target, cx);
+    // Switch to Console tab
+    cx.update(|cx| {
+        InspectorController::set_active_tab(DevToolTab::Console, inspector.entity_id(), cx);
+    });
+    let active = cx.read(|cx| InspectorController::active_tab(inspector.entity_id(), cx));
+    assert_eq!(active, DevToolTab::Console);
+    // Switch back to Elements
+    cx.update(|cx| {
+        InspectorController::set_active_tab(DevToolTab::Elements, inspector.entity_id(), cx);
+    });
+    draw(target, cx);
+    // Element selection should be preserved
+    inspector.read_with(cx, |inspector, _| {
+        assert_eq!(inspector.active_element_id(), Some(&element_id));
+    });
+}
+
+#[gpui::test]
+fn devtool_keeps_target_sessions_independent_across_tabs(cx: &mut TestAppContext) {
+    let first = setup(cx);
+    let second = cx.add_window(|_, _| Target {
+        width: px(300.),
+        child: true,
+    });
+    let a_viewer = first
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    let b_viewer = second
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    assert_ne!(a_viewer.window_id(), b_viewer.window_id());
+    draw(first, cx);
+    draw(second, cx);
+    let a = inspector(first, cx);
+    let b = inspector(second, cx);
+    // Switch A to Console
+    cx.update(|cx| {
+        InspectorController::set_active_tab(DevToolTab::Console, a.entity_id(), cx);
+    });
+    // B should still be on Elements
+    assert_eq!(
+        cx.read(|cx| InspectorController::active_tab(b.entity_id(), cx)),
+        DevToolTab::Elements
+    );
+    // Select element in B
+    let id = b.read_with(cx, |inspector, _| inspector.element_tree()[0].id.clone());
+    cx.update(|cx| {
+        InspectorController::select_element(id.clone(), b.entity_id(), cx);
+    });
+    draw(second, cx);
+    // A should have no selection
+    a.read_with(cx, |inspector, _| {
+        assert!(inspector.active_element_id().is_none());
+    });
+    // B should have selection
+    b.read_with(cx, |inspector, _| {
+        assert_eq!(inspector.active_element_id(), Some(&id));
+    });
+}
+
+#[gpui::test]
+fn devtool_open_same_target_reuses_window(cx: &mut TestAppContext) {
+    let target = setup(cx);
+    let viewer1 = target
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    let viewer2 = target
+        .update(cx, |_, window, cx| {
+            InspectorController::open(window, cx).unwrap()
+        })
+        .unwrap();
+    assert_eq!(viewer1.window_id(), viewer2.window_id());
 }
