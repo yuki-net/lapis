@@ -313,6 +313,21 @@ impl LocalGitBackend {
                 args.extend(paths);
                 git_text(repository, &args)?
             }
+            GitAction::Restore {
+                path,
+                expected_patch,
+            } => {
+                if expected_patch.is_empty()
+                    || expected_patch.len() > 1024 * 1024
+                    || diff(repository, &path, false)? != expected_patch
+                {
+                    return Err(invalid("Diff changed; refresh before restore"));
+                }
+                git_text(
+                    repository,
+                    &["restore", "--worktree", "--", relative(&path)?],
+                )?
+            }
             GitAction::StageHunk {
                 path,
                 staged,
@@ -331,15 +346,17 @@ impl LocalGitBackend {
                 apply_patch(repository, selected_hunk(&current, hunk)?, staged)?;
                 String::new()
             }
-            GitAction::Commit { message } => {
+            GitAction::Commit { message } | GitAction::Amend { message } => {
                 if message.trim().is_empty() || message.len() > 64 * 1024 || message.contains('\0')
                 {
                     return Err(invalid("Commit messageを入力してください"));
                 }
-                git_text(
-                    repository,
-                    &["-c", "core.editor=true", "commit", "-m", &message],
-                )?
+                let mut args = vec!["-c", "core.editor=true", "commit"];
+                if matches!(action, GitAction::Amend { .. }) {
+                    args.push("--amend");
+                }
+                args.extend(["-m", &message]);
+                git_text(repository, &args)?
             }
             GitAction::History => {
                 if status.head.is_empty() {

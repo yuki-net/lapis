@@ -3,18 +3,23 @@ use crate::{
     features::id,
 };
 
+mod changes;
 mod state;
 mod view;
 
 use crate::theme;
 use lapis_git::ChangeKind;
 
+pub(crate) use changes::ChangesFeature;
 pub(crate) use state::{GitEvent, GitFeature, GitInputRequest};
 
 pub(super) fn descriptor() -> FeatureDescriptor {
     FeatureDescriptor::bundled(
         id::FEATURE_GIT,
-        [ActivationCondition::OnView(ViewId::new(id::VIEW_GIT))],
+        [
+            ActivationCondition::OnView(ViewId::new(id::VIEW_GIT)),
+            ActivationCondition::OnView(ViewId::new(id::VIEW_CHANGES)),
+        ],
     )
     .contributes(UiContribution::view(
         id::VIEW_GIT,
@@ -22,6 +27,13 @@ pub(super) fn descriptor() -> FeatureDescriptor {
         "view.git",
         "git",
         30,
+    ))
+    .contributes(UiContribution::view(
+        id::VIEW_CHANGES,
+        UiSlot::ToolDock,
+        "view.changes",
+        "git",
+        29,
     ))
     .requires("workspace.git")
 }
