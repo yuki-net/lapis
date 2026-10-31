@@ -5,6 +5,7 @@ mod inspector_window;
 pub(crate) mod native_smoke;
 pub(crate) mod network;
 pub(crate) mod performance;
+pub(crate) mod state;
 #[cfg(test)]
 mod tests;
 mod tool;
@@ -18,6 +19,8 @@ pub(crate) fn init(cx: &mut App) {
     network::init(cx);
     // Performance 診断ログ store を初期化
     performance::init(cx);
+    // State 診断 store を初期化
+    state::init(cx);
     // Inspector Controller を初期化
     inspector_controller::init(cx);
     cx.set_inspector_renderer(Box::new(inspector_window::render_inspector));
