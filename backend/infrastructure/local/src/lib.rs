@@ -41,6 +41,7 @@ use lapis_workspace::{
 };
 use serde::{Deserialize, Serialize};
 mod git_action;
+mod git_watch;
 mod terminal_engine;
 use terminal_engine::{TerminalEngine, normalized_size};
 
@@ -1533,6 +1534,57 @@ impl LocalGitBackend {
 }
 
 impl GitBackend for LocalGitBackend {
+    fn watch_repository(
+        &self,
+        repository: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+        Ok(Box::new(git_watch::LocalGitWatch::new(repository, notify)?))
+    }
+    fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
+        let root = fs::canonicalize(workspace)
+            .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+        let mut candidates = vec![root.clone()];
+        for entry in fs::read_dir(&root)
+            .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?
+        {
+            let entry =
+                entry.map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+            if entry
+                .file_type()
+                .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?
+                .is_dir()
+            {
+                candidates.push(entry.path());
+            }
+        }
+        let mut repositories = Vec::new();
+        for candidate in candidates {
+            match fs::metadata(candidate.join(".git")) {
+                Ok(metadata) if metadata.is_dir() || metadata.is_file() => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(GitError::new(GitErrorKind::Io, error.to_string())),
+            };
+            let actual = match git_text(&candidate, &["rev-parse", "--show-toplevel"]) {
+                Ok(actual) => actual,
+                Err(error) if error.kind() == GitErrorKind::NotRepository => continue,
+                Err(error) => return Err(error),
+            };
+            let actual = fs::canonicalize(actual.trim())
+                .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+            if actual
+                == fs::canonicalize(&candidate)
+                    .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?
+                && actual.starts_with(&root)
+            {
+                repositories.push(actual);
+            }
+        }
+        repositories.sort();
+        repositories.dedup();
+        Ok(repositories)
+    }
     fn execute(
         &self,
         repository: &Path,
@@ -1890,22 +1942,33 @@ fn git_bytes(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, GitError>
     git_bytes_allow_exit_code(repository, arguments, 0)
 }
 
+fn git_command(repository: &Path, arguments: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "credential.interactive=never", "--literal-pathspecs"])
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_PREFIX")
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
 fn git_bytes_allow_exit_code(
     repository: &Path,
     arguments: &[&str],
     allowed_failure_code: i32,
 ) -> Result<Vec<u8>, GitError> {
-    let output = git_action::git_output(
-        Command::new("git")
-            .args(["-c", "credential.interactive=never", "--literal-pathspecs"])
-            .arg("-C")
-            .arg(repository)
-            .args(arguments)
-            .stdin(Stdio::null())
-            .env("GIT_OPTIONAL_LOCKS", "0"),
-        Duration::from_secs(120),
-    )
-    .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+    let mut command = git_command(repository, arguments);
+    let output = git_action::git_output(&mut command, Duration::from_secs(120))
+        .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
     if output.status.success() || output.status.code() == Some(allowed_failure_code) {
         Ok(output.stdout)
     } else {
@@ -1982,6 +2045,28 @@ impl<T: TaskBackend> TaskBackend for LoopbackBackend<T> {
 }
 
 impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
+    fn watch_repository(
+        &self,
+        repository: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+        if !self.gate.is_connected() {
+            return Err(GitError::new(
+                GitErrorKind::Io,
+                "loopback workspace is disconnected",
+            ));
+        }
+        self.inner.watch_repository(repository, notify)
+    }
+    fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
+        if !self.gate.is_connected() {
+            return Err(GitError::new(
+                GitErrorKind::Io,
+                "loopback workspace is disconnected",
+            ));
+        }
+        self.inner.discover_repositories(workspace)
+    }
     fn execute(
         &self,
         repository: &Path,
@@ -2197,6 +2282,27 @@ mod tests {
         let path = workspace.path().join("src/lib.rs");
         fs::write(&path, "").unwrap();
         (workspace, path)
+    }
+
+    #[test]
+    fn git_command_clears_repository_location_environment() {
+        let command = git_command(Path::new("."), &["status"]);
+        let removed = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect::<std::collections::HashSet<_>>();
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PREFIX",
+        ] {
+            assert!(removed.contains(name), "{name} must be removed");
+        }
     }
 
     #[test]

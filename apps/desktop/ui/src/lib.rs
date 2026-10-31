@@ -11,6 +11,7 @@ mod features;
 mod hot_reload;
 pub mod keymap;
 pub mod localization;
+pub mod notification;
 mod root;
 mod shell;
 pub mod theme;

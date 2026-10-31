@@ -10,6 +10,7 @@ hot-reload = ["dep:async-channel", "dep:dioxus-devtools", "dep:subsecond", "gpui
 
 [dependencies]
 gpui.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 getrandom.workspace = true
 serde.workspace = true
 lapis-desktop-client = { path = "../client" }
