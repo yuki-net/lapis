@@ -1959,11 +1959,8 @@ fn git_bytes_allow_exit_code(
     allowed_failure_code: i32,
 ) -> Result<Vec<u8>, GitError> {
     let mut command = git_command(repository, arguments);
-    let output = git_action::git_output(
-        &mut command,
-        Duration::from_secs(120),
-    )
-    .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
+    let output = git_action::git_output(&mut command, Duration::from_secs(120))
+        .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
     if output.status.success() || output.status.code() == Some(allowed_failure_code) {
         Ok(output.stdout)
     } else {
