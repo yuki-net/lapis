@@ -78,6 +78,8 @@ impl Render for ChangesFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let git = self.git.read(cx);
         let repositories = git.snapshot.repositories.clone();
+        let repository_errors = git.snapshot.repository_errors.clone();
+        let last_refresh_error = git.snapshot.last_refresh_error.clone();
         let message = git.message.clone();
         let diff = git.snapshot.selected_diff.clone();
         let selection = git.snapshot.inspection.clone();
@@ -130,7 +132,15 @@ impl Render for ChangesFeature {
                     ))),
             )
             .child(message);
-        if repositories.is_empty() {
+        if let Some(error) = last_refresh_error {
+            content = content.child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme::colors().text_secondary)
+                    .child(format!("Git状態の更新に失敗しました: {error}")),
+            );
+        }
+        if repositories.is_empty() && repository_errors.is_empty() {
             content = content.child(panel_empty_state(
                 "⑂",
                 "Repository",
@@ -144,6 +154,10 @@ impl Render for ChangesFeature {
             let toggle_id = id.clone();
             let commit_id = id.clone();
             let amend_id = id.clone();
+            let repository_error = repository_errors
+                .iter()
+                .find(|(failed, _)| failed.id == id)
+                .map(|(_, error)| error.clone());
             let mut group = div()
                 .id(("changes-repository", index))
                 .flex()
@@ -189,6 +203,14 @@ impl Render for ChangesFeature {
                             },
                         ))),
                 );
+            if let Some(error) = repository_error {
+                group = group.child(
+                    div()
+                        .text_size(px(11.))
+                        .text_color(theme::colors().text_secondary)
+                        .child(format!("Status stale: {error}")),
+                );
+            }
             if !collapsed {
                 for (file_index, row) in file_rows(status.files, self.tree).into_iter().enumerate()
                 {
@@ -275,6 +297,32 @@ impl Render for ChangesFeature {
                 }
             }
             content = content.child(group);
+        }
+        for (index, (repository, error)) in repository_errors
+            .into_iter()
+            .filter(|(failed, _)| {
+                !git.snapshot
+                    .repositories
+                    .iter()
+                    .any(|(repository, _)| repository.id == failed.id)
+            })
+            .enumerate()
+        {
+            let label = repository.path.unwrap_or_else(|| ".".into());
+            content = content.child(
+                div()
+                    .id(("changes-repository-error", index))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(format!("{label} · Status unavailable"))
+                    .child(
+                        div()
+                            .text_size(px(11.))
+                            .text_color(theme::colors().text_secondary)
+                            .child(error),
+                    ),
+            );
         }
         if let (Some(diff), Some(selection)) = (diff, selection)
             && let Some(repository_id) = selection.repository_id
