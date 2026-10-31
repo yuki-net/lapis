@@ -140,3 +140,44 @@ fn git_session_keeps_other_repositories_fresh_when_one_status_fails() {
         3
     );
 }
+
+
+#[test]
+fn git_status_event_recovers_repository_that_initially_failed() {
+    let fixture = Arc::new(GitFixture::default());
+    *fixture.failing_repository.lock().unwrap() = Some("path:backend".into());
+    let mut session = GitSession::new(fixture.clone());
+    let workspace = WorkspaceId::new("project");
+
+    session.refresh(&workspace).unwrap();
+    assert!(
+        session
+            .repository_statuses()
+            .iter()
+            .all(|(repository, _)| repository.id != "path:backend")
+    );
+    assert_eq!(session.repository_errors().len(), 1);
+
+    let recovered = lapis_git::GitSnapshot {
+        workspace_id: workspace,
+        worktree_id: None,
+        revision: 2,
+        branch: "main".into(),
+        head: "recovered".into(),
+        files: vec![],
+    };
+    assert!(session.apply_git_update(lapis_git::GitUpdate::Changed(
+        lapis_git::GitRepositoryStatus {
+            repository_id: "path:backend".into(),
+            status: recovered,
+        },
+    )));
+
+    let backend = session
+        .repository_statuses()
+        .iter()
+        .find(|(repository, _)| repository.id == "path:backend")
+        .expect("recovered repository");
+    assert_eq!(backend.1.revision, 2);
+    assert!(session.repository_errors().is_empty());
+}
