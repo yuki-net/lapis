@@ -7,6 +7,8 @@ use crate::{
     theme, tokens,
 };
 
+use super::console::store::store;
+use super::console::view::ConsoleView;
 use super::elements::tree_view::{render_active_summary, render_tree};
 use super::inspector_controller::InspectorController;
 use super::tool::DevToolTab;
@@ -66,6 +68,7 @@ pub(super) fn render_inspector(
     // タブコンテンツ
     let tab_content = match active_tab {
         DevToolTab::Elements => render_elements_tab(inspector, window, cx, &content_scroll),
+        DevToolTab::Console => render_console_tab(inspector, window, cx),
         _ => render_placeholder_tab(active_tab),
     };
 
@@ -166,6 +169,151 @@ fn render_elements_tab(
                     .min_h(px(0.))
                     .flex_1(),
                 ),
+        )
+}
+
+fn render_console_tab(
+    _inspector: &mut Inspector,
+    _window: &mut Window,
+    cx: &mut Context<Inspector>,
+) -> Div {
+    let _ = cx.new(ConsoleView::new);
+    // ConsoleView は Entity として保持され、render_inspector の再描画時に更新される
+    let entries = store(cx).entries();
+    div()
+        .size_full()
+        .min_h(px(0.))
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .id("console-filter-bar")
+                .flex()
+                .items_center()
+                .px(tokens::spacing::SM)
+                .py(px(4.))
+                .gap(px(4.))
+                .bg(theme::colors().background_secondary)
+                .border_b_1()
+                .border_color(theme::colors().border_default)
+                .child(
+                    div()
+                        .px(tokens::spacing::SM)
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .bg(theme::colors().button_background_hover)
+                        .text_size(px(11.))
+                        .child("Source: All"),
+                )
+                .child(
+                    div()
+                        .px(tokens::spacing::SM)
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .bg(theme::colors().button_background_hover)
+                        .text_size(px(11.))
+                        .child("Level: All"),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .px(tokens::spacing::SM)
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .bg(theme::colors().button_background_hover)
+                        .text_size(px(11.))
+                        .child("Filter..."),
+                )
+                .child(
+                    header_button("console-clear", "Clear")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            store(cx).clear();
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            scroll_viewport(
+                "console-scroll",
+                ScrollAxis::Both,
+                &ScrollState::default(),
+                div()
+                    .id("console-entry-list")
+                    .min_h(px(0.))
+                    .flex_1()
+                    .children(entries.iter().enumerate().map(|(i, entry)| {
+                        let level_color = match entry.level {
+                            super::console::entry::DiagnosticLevel::Error => {
+                                theme::colors().text_dangerous
+                            }
+                            super::console::entry::DiagnosticLevel::Warn => {
+                                theme::colors().text_warning
+                            }
+                            super::console::entry::DiagnosticLevel::Info => {
+                                theme::colors().text_primary
+                            }
+                            super::console::entry::DiagnosticLevel::Debug => {
+                                theme::colors().text_secondary
+                            }
+                            super::console::entry::DiagnosticLevel::Trace => {
+                                theme::colors().text_secondary
+                            }
+                        };
+                        let timestamp = entry
+                            .occurred_at
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| {
+                                let secs = d.as_secs() % 86400;
+                                let h = secs / 3600;
+                                let m = (secs % 3600) / 60;
+                                let s = secs % 60;
+                                format!("{:02}:{:02}:{:02}", h, m, s)
+                            })
+                            .unwrap_or_else(|_| "00:00:00".to_string());
+                        div()
+                            .id(("console-entry", i))
+                            .flex()
+                            .items_baseline()
+                            .px(tokens::spacing::SM)
+                            .py(px(2.))
+                            .gap(px(6.))
+                            .text_size(px(12.))
+                            .font_family("Cascadia Mono")
+                            .child(div().text_color(level_color).child(timestamp))
+                            .child(
+                                div()
+                                    .text_color(level_color)
+                                    .w(px(45.))
+                                    .child(entry.level.title()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::colors().text_secondary)
+                                    .w(px(60.))
+                                    .child(entry.source.title()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::colors().text_secondary)
+                                    .w(px(120.))
+                                    .truncate()
+                                    .child(entry.target.clone()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .child(entry.message.clone()),
+                            )
+                    })),
+            )
+            .min_h(px(0.))
+            .min_w(px(0.))
+            .flex_1(),
         )
 }
 

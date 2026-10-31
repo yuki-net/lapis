@@ -104,6 +104,11 @@ pub struct InitialView {
 
 /// Runs the desktop event loop with an initial root window and quits after the last window closes.
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
+    // 診断ログの tracing subscriber を初期化（Debug/Release 共通）
+    #[cfg(debug_assertions)]
+    let _diagnostic_store = crate::devtools::console::init_subscriber();
+    let _ = _diagnostic_store;
+
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
@@ -188,7 +193,7 @@ pub(crate) fn open_desktop_window(
         cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx))
     });
     if let Err(error) = result {
-        eprintln!("Windowを開けませんでした: {error}");
+        tracing::error!(target: "lapis::app", "Windowを開けませんでした: {error}");
         let mut locale = crate::localization::Localizer::bundled();
         locale.set_active(&locale_id);
         let title = locale.resolve(&lapis_localization::MessageId::new(
