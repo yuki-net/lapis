@@ -70,6 +70,8 @@ IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` �
 
 Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
 
+launcherはWindows x64用のHostを毎回ビルドし、`--local-host-executable` でDesktopへ渡します。dxのapp出力先にHostをコピーする必要はありません。通常起動では引き続きDesktopと同じ出力先のHostを使用します。
+
 ### 概要
 
 - GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。

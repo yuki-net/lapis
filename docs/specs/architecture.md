@@ -23,6 +23,7 @@
 
 ## Runtime と接続の契約
 
+- Local Host実行ファイルの選択はDesktopのComposition Rootが行う。既定はDesktopと同じ出力先とし、`--local-host-executable` の明示指定はLocal接続へ注入する。開発launcherがビルドを準備し、UIやBackendに開発ツールの出力先探索を持ち込まない。
 - Host が登録した Workspace ごとに Runtime が Document の内容・revision・undo/redo、Terminal の出力・状態、Git/Task の操作範囲を所有する。Client の Document は表示 cache であり、編集は revision を指定して正本へ送る。
 - 埋め込み接続と Remote は同じ request/response/event と Runtime を使う。Transport は認可と配送を担い、別の正規状態を作らない。
 - Git Repository の status・revision・監視はHost Runtimeが所有する。Git操作と外部変更を同じ更新経路へ集約し、変更を既存のWorkspace eventとsnapshotでClientへ配信する。監視に失敗した場合はHost側で低頻度に再確認し、監視を再試行する。

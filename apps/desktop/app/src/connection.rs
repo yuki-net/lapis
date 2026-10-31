@@ -68,7 +68,10 @@ impl Startup {
             }))
         } else {
             let hosts_directory = local_hosts_directory(arguments, &directory)?;
-            let backend = BackendClient::local_in(hosts_directory)?;
+            let backend = match local_host_executable(arguments)? {
+                Some(executable) => BackendClient::local(executable, hosts_directory),
+                None => BackendClient::local_in(hosts_directory)?,
+            };
             Ok(Some(Self {
                 backend,
                 root: None,
@@ -77,6 +80,23 @@ impl Startup {
             }))
         }
     }
+}
+
+fn local_host_executable(arguments: &[OsString]) -> Result<Option<PathBuf>, Error> {
+    let Some(path) = option(arguments, "--local-host-executable")? else {
+        return Ok(None);
+    };
+    let path = Path::new(path);
+    let executable = path.canonicalize().map_err(|error| {
+        format!(
+            "Local Host 実行ファイルを解決できません ({}): {error}",
+            path.display()
+        )
+    })?;
+    if !executable.is_file() {
+        return Err(format!("Local Host 実行ファイルではありません: {}", path.display()).into());
+    }
+    Ok(Some(executable))
 }
 
 fn local_hosts_directory(arguments: &[OsString], directory: &Path) -> Result<PathBuf, Error> {
@@ -148,6 +168,56 @@ fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsStri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relative_local_host_is_resolved_from_the_launch_directory() {
+        let cwd = std::env::current_dir().unwrap();
+        let temp = tempfile::tempdir_in(&cwd).unwrap();
+        let host = temp.path().join("host.exe");
+        std::fs::write(&host, "fixture").unwrap();
+        let args = [
+            OsString::from("lapis"),
+            OsString::from("--local-host-executable"),
+            host.strip_prefix(&cwd).unwrap().as_os_str().to_owned(),
+        ];
+        assert_eq!(
+            local_host_executable(&args).unwrap(),
+            Some(host.canonicalize().unwrap())
+        );
+    }
+
+    #[test]
+    fn explicit_local_host_is_resolved_without_sibling_binary_or_cwd_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        let host = temp.path().join("Host with spaces.exe");
+        std::fs::write(&host, "fixture").unwrap();
+        let args = [
+            OsString::from("lapis"),
+            OsString::from("--local-host-executable"),
+            host.into_os_string(),
+        ];
+        assert_eq!(
+            local_host_executable(&args).unwrap(),
+            Some(
+                temp.path()
+                    .join("Host with spaces.exe")
+                    .canonicalize()
+                    .unwrap()
+            )
+        );
+        assert!(local_host_executable(&["lapis".into()]).unwrap().is_none());
+        assert!(local_host_executable(&args[..2]).is_err());
+        std::fs::remove_file(&args[2]).unwrap();
+        assert!(
+            local_host_executable(&args)
+                .unwrap_err()
+                .to_string()
+                .contains("Local Host")
+        );
+        std::fs::create_dir(&args[2]).unwrap();
+        assert!(local_host_executable(&args).is_err());
+    }
+
     #[test]
     fn local_host_directory_can_be_separated_from_desktop_state() {
         let temp = tempfile::tempdir().unwrap();

@@ -50,7 +50,9 @@ GPUI Entity / AnyView dispatch (HotFn境界)
 1. **通常起動**（Hot Reloadなし）: `cargo dev` または `.run/Lapis.run.xml`
 2. **Hot Reload起動**: `.run/Lapis Hot Reload.run.xml` または以下のコマンドで起動します。
 
-IDEとCLIはいずれも `scripts/hot-reload` のlauncherを起動します。launcherは `target/dx-fixed0710/bin/dx.exe` の存在確認と同一worktreeの排他ロック取得後にdxを起動します。dxはdevserverとアプリを起動し、接続先の環境変数をアプリへ渡します。修正版がない場合は以下の手順で準備してください。`cargo dev-hot-reload` 単独では接続先を設定しません。
+IDEとCLIはいずれも `scripts/hot-reload` のlauncherを起動します。launcherは修正版 `target/dx-fixed0710/bin/dx.exe` の存在確認と同一worktreeの排他ロック取得後、Windows x64向けにHostをビルドしてからdxを起動します。Hostのビルドに失敗した場合はdxを起動しません。修正版dxがない場合は以下の手順で準備してください。`cargo dev-hot-reload` 単独では接続先を設定しません。
+
+Hostは `target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe` に置き、Desktopの `--local-host-executable` に渡します。dxは起動時にapp出力先を削除するため、そこへHostを手動コピーする必要はありません。パスはworktreeルートからの相対指定なので、空白を含むworktreeでもdxの引数分割に影響されません。dxはdevserverとDesktopを起動し、接続先の環境変数をDesktopへ渡します。Hostは通常どおりWorkspaceを開くときに起動し、Desktop終了後も存続します。Hostのソース変更を反映するには、利用中の作業を終了してHostとlauncherを再起動してください。
 
 launcherは `hot-reload` Cargo profileを使用します。これは `dev` を継承してLTOを無効化し、workspace replayのコンパイル時間を短縮します。通常のDebugとReleaseには適用されず、初回起動時は専用profileのビルドが必要です。
 
