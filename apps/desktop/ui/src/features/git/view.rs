@@ -242,7 +242,8 @@ impl Render for GitFeature {
                 "DIFF · {} · +{} -{}",
                 diff.path, diff.additions, diff.deletions
             ));
-            let target_matches = selection.worktree == self.target;
+            let target_matches =
+                selection.repository_id.is_none() && selection.worktree == self.target;
             let patch = std::sync::Arc::new(diff.patch.clone());
             for (index, _) in diff
                 .patch

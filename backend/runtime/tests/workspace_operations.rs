@@ -67,6 +67,9 @@ impl TaskBackend for FakeTasks {
 #[derive(Default)]
 struct FakeGit {
     trees: Mutex<Vec<TaskWorktree>>,
+    watch: Mutex<Option<Arc<std::sync::atomic::AtomicBool>>>,
+    watch_drops: Arc<std::sync::atomic::AtomicUsize>,
+    notifications: Mutex<std::collections::HashMap<PathBuf, Arc<dyn Fn() + Send + Sync>>>,
     calls: Mutex<Vec<PathBuf>>,
     status_root: Mutex<Option<PathBuf>>,
     fail_discovery: Mutex<bool>,
@@ -75,7 +78,40 @@ struct FakeGit {
     blocked_status: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     blocked_discard: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
+struct FakeGitWatch(
+    Arc<std::sync::atomic::AtomicBool>,
+    Arc<std::sync::atomic::AtomicUsize>,
+);
+impl Drop for FakeGitWatch {
+    fn drop(&mut self) {
+        self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+impl lapis_git::GitWatch for FakeGitWatch {
+    fn take_changed(&self) -> bool {
+        self.0.swap(false, std::sync::atomic::Ordering::AcqRel)
+    }
+}
 impl GitBackend for FakeGit {
+    fn watch_repository(
+        &self,
+        path: &Path,
+        notify: Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+        self.notifications
+            .lock()
+            .unwrap()
+            .insert(path.to_owned(), notify);
+        self.watch
+            .lock()
+            .unwrap()
+            .clone()
+            .map(|watch| {
+                Box::new(FakeGitWatch(watch, self.watch_drops.clone()))
+                    as Box<dyn lapis_git::GitWatch>
+            })
+            .ok_or_else(|| GitError::new(lapis_git::GitErrorKind::Io, "watch unavailable"))
+    }
     fn execute(
         &self,
         repository: &Path,
@@ -83,6 +119,8 @@ impl GitBackend for FakeGit {
     ) -> Result<lapis_git::GitActionResult, GitError> {
         self.calls.lock().unwrap().push(repository.to_owned());
         Ok(lapis_git::GitActionResult {
+            diff: None,
+            stashes: Vec::new(),
             output: "executed".into(),
         })
     }
@@ -162,7 +200,18 @@ impl GitBackend for FakeGit {
             release.recv().unwrap();
         }
         self.calls.lock().unwrap().push(tree.path.clone());
-        Ok(tree.clone())
+        let mut discarded = tree.clone();
+        discarded.state = WorktreeState::Discarded;
+        if let Some(stored) = self
+            .trees
+            .lock()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item.task_id == tree.task_id)
+        {
+            *stored = discarded.clone();
+        }
+        Ok(discarded)
     }
 }
 
@@ -1007,4 +1056,255 @@ fn operation_errors_are_distinguishable_without_exposing_native_details() {
             .unwrap()
             .contains(&fixture.root.path().to_string_lossy().to_string())
     );
+}
+
+#[test]
+fn git_status_cache_refreshes_on_watch_changes_and_operations() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
+    let fixture = Fixture::new();
+    let dirty = Arc::new(AtomicBool::new(false));
+    *fixture.git.watch.lock().unwrap() = Some(dirty.clone());
+    let client = fixture.client("cache-client", "first");
+    let events = client.subscribe().unwrap();
+    let status = || outcome(execute(&client, Operation::GitStatus { worktree: None }));
+    let Outcome::GitStatus(initial) = status() else {
+        panic!("status required")
+    };
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(3)).unwrap().body,
+        lapis_client_api::EventBody::GitStatusChanged { .. }
+    ));
+    fixture.git.calls.lock().unwrap().clear();
+    let Outcome::GitStatus(cached) = status() else {
+        panic!("status required")
+    };
+    assert_eq!(initial.revision, cached.revision);
+    assert_eq!(fixture.git.calls.lock().unwrap().len(), 0);
+    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+        path: PathBuf::from("draft.txt"),
+        old_path: None,
+        kind: lapis_git::ChangeKind::Modified,
+        staged: false,
+    }];
+    dirty.store(true, Ordering::Release);
+    fixture
+        .git
+        .notifications
+        .lock()
+        .unwrap()
+        .get(&fixture.root.path().canonicalize().unwrap())
+        .unwrap()();
+    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } =
+        events.recv_timeout(Duration::from_secs(3)).unwrap().body
+    else {
+        panic!("status event required")
+    };
+    let updated = repository.status;
+    assert_eq!(updated.files[0].path, "draft.txt");
+    assert!(updated.revision > initial.revision);
+    assert_eq!(fixture.git.calls.lock().unwrap().len(), 1);
+    fixture.git.calls.lock().unwrap().clear();
+    fixture.git.status_files.lock().unwrap()[0].staged = true;
+    let request = lapis_git::GitActionRequest {
+        action: lapis_git::GitAction::Stage {
+            path: "draft.txt".into(),
+        },
+        expected_head: Some("abc".into()),
+    };
+    assert!(matches!(
+        outcome(execute(
+            &client,
+            Operation::GitAction {
+                worktree: None,
+                request
+            }
+        )),
+        Outcome::GitAction(_)
+    ));
+    loop {
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } =
+            events.recv_timeout(Duration::from_secs(3)).unwrap().body
+            && repository.status.files[0].staged
+        {
+            break;
+        }
+    }
+    let calls_after_operation = fixture.git.calls.lock().unwrap().len();
+    assert_eq!(calls_after_operation, 4);
+    assert!(matches!(status(), Outcome::GitStatus(_)));
+    assert_eq!(
+        fixture.git.calls.lock().unwrap().len(),
+        calls_after_operation
+    );
+}
+
+#[test]
+fn git_status_without_watcher_uses_bounded_fallback_cache() {
+    let fixture = Fixture::new();
+    let client = fixture.client("fallback-cache", "first");
+    let events = client.subscribe().unwrap();
+    assert!(matches!(
+        outcome(execute(&client, Operation::GitStatus { worktree: None })),
+        Outcome::GitStatus(_)
+    ));
+    assert!(matches!(
+        events
+            .recv_timeout(std::time::Duration::from_secs(3))
+            .unwrap()
+            .body,
+        lapis_client_api::EventBody::GitStatusChanged { .. }
+    ));
+    fixture.git.calls.lock().unwrap().clear();
+    for _ in 0..2 {
+        assert!(matches!(
+            outcome(execute(&client, Operation::GitStatus { worktree: None })),
+            Outcome::GitStatus(_)
+        ));
+    }
+    assert_eq!(fixture.git.calls.lock().unwrap().len(), 0);
+}
+
+#[test]
+fn discarded_worktree_releases_watcher_and_is_not_rechecked() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::{Duration, Instant};
+    let fixture = Fixture::new();
+    *fixture.git.watch.lock().unwrap() = Some(Arc::new(AtomicBool::new(false)));
+    let client = fixture.client("worktree-cleanup", "first");
+    let events = client.subscribe().unwrap();
+    let Outcome::Worktree(tree) = outcome(execute(&client, Operation::CreateWorktree)) else {
+        panic!("worktree required")
+    };
+    let path = fixture.git.trees.lock().unwrap()[0].path.clone();
+    assert!(matches!(
+        outcome(execute(
+            &client,
+            Operation::GitStatus {
+                worktree: Some(tree.worktree_id.clone())
+            }
+        )),
+        Outcome::GitStatus(_)
+    ));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } =
+            events.recv_timeout(Duration::from_secs(1)).unwrap().body
+            && repository.status.worktree_id == Some(tree.worktree_id.clone())
+        {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    assert!(matches!(
+        outcome(execute(
+            &client,
+            Operation::DiscardWorktree {
+                worktree_id: tree.worktree_id
+            }
+        )),
+        Outcome::Worktree(_)
+    ));
+    assert_eq!(fixture.git.watch_drops.load(Ordering::SeqCst), 1);
+    fixture.git.calls.lock().unwrap().clear();
+    let deadline = Instant::now() + Duration::from_secs(17);
+    while Instant::now() < deadline {
+        let _ = events.recv_timeout(deadline.saturating_duration_since(Instant::now()));
+    }
+    assert!(!fixture.git.calls.lock().unwrap().contains(&path));
+}
+
+#[test]
+fn git_events_debounce_and_refresh_only_the_changed_repository() {
+    use std::{
+        sync::atomic::{AtomicBool, Ordering},
+        time::Duration,
+    };
+    let fixture = Fixture::new();
+    let dirty = Arc::new(AtomicBool::new(false));
+    *fixture.git.watch.lock().unwrap() = Some(dirty.clone());
+    for name in ["frontend", "backend"] {
+        std::fs::create_dir(fixture.root.path().join(name)).unwrap();
+    }
+    let client = fixture.client("git-events", "first");
+    let events = client.subscribe().unwrap();
+    for name in ["frontend", "backend"] {
+        assert!(matches!(
+            outcome(execute(
+                &client,
+                Operation::RepositoryGitStatus {
+                    repository_id: format!("path:{name}")
+                }
+            )),
+            Outcome::RepositoryGitStatus { .. }
+        ));
+    }
+    let mut initialized = std::collections::HashSet::new();
+    while initialized.len() < 2 {
+        let event = events.recv_timeout(Duration::from_secs(3)).unwrap();
+        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body {
+            initialized.insert(repository.repository_id);
+        }
+    }
+    fixture.git.calls.lock().unwrap().clear();
+    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+        path: PathBuf::from("changed"),
+        old_path: None,
+        kind: lapis_git::ChangeKind::Modified,
+        staged: false,
+    }];
+    dirty.store(true, Ordering::Release);
+    let frontend = fixture.root.path().join("frontend").canonicalize().unwrap();
+    let callback = fixture
+        .git
+        .notifications
+        .lock()
+        .unwrap()
+        .get(&frontend)
+        .unwrap()
+        .clone();
+    for _ in 0..100 {
+        callback();
+    }
+    let event = events.recv_timeout(Duration::from_secs(3)).unwrap();
+    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body else {
+        panic!("Git event required");
+    };
+    assert_eq!(repository.repository_id, "path:frontend");
+    assert_eq!(repository.status.files[0].path, "changed");
+    let calls = fixture.git.calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0], frontend);
+}
+
+#[test]
+fn git_watch_unavailable_refreshes_in_host_fallback() {
+    use std::time::Duration;
+    let fixture = Fixture::new();
+    let client = fixture.client("git-fallback", "first");
+    let events = client.subscribe().unwrap();
+    assert!(matches!(
+        outcome(execute(&client, Operation::GitStatus { worktree: None })),
+        Outcome::GitStatus(_)
+    ));
+    let initial = events.recv_timeout(Duration::from_secs(3)).unwrap();
+    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = initial.body else {
+        panic!("initial Git event required")
+    };
+    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+        path: PathBuf::from("later"),
+        old_path: None,
+        kind: lapis_git::ChangeKind::Modified,
+        staged: false,
+    }];
+    let changed = events.recv_timeout(Duration::from_secs(18)).unwrap();
+    let lapis_client_api::EventBody::GitStatusChanged {
+        repository: updated,
+        ..
+    } = changed.body
+    else {
+        panic!("fallback Git event required")
+    };
+    assert!(updated.status.revision > repository.status.revision);
+    assert_eq!(updated.status.files[0].path, "later");
 }

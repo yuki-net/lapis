@@ -36,6 +36,7 @@ impl Shell {
             .child(self.footer_button("footer-encoding", self.footer_encoding(), cx));
 
         div()
+            .debug_selector(|| "footer".into())
             .h(tokens::size::STATUS_BAR_HEIGHT)
             .w_full()
             .flex_shrink_0()

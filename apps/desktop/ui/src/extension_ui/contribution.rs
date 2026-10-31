@@ -73,6 +73,7 @@ pub enum UiSlot {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiContribution {
+    pub show_in_picker: bool,
     pub view: Option<ViewId>,
     pub slot: UiSlot,
     pub default_zone: Option<ZonePosition>,
@@ -95,6 +96,7 @@ impl UiContribution {
         icon: impl Into<IconId>,
     ) -> Self {
         Self {
+            show_in_picker: true,
             view: Some(view.into()),
             slot: UiSlot::SettingsPage,
             default_zone: Some(ZonePosition::Main),
@@ -119,6 +121,7 @@ impl UiContribution {
         order: i32,
     ) -> Self {
         Self {
+            show_in_picker: true,
             view: Some(view.into()),
             default_zone: default_zone_for_slot(slot),
             allowed_zones: all_zones_for_slot(slot),
@@ -145,6 +148,7 @@ impl UiContribution {
         order: i32,
     ) -> Self {
         Self {
+            show_in_picker: true,
             view: Some(view.into()),
             slot: UiSlot::ToolDock,
             default_zone: Some(default_zone),
@@ -168,6 +172,7 @@ impl UiContribution {
         order: i32,
     ) -> Self {
         Self {
+            show_in_picker: true,
             view: None,
             slot: UiSlot::CommandPalette,
             default_zone: None,
@@ -186,6 +191,11 @@ impl UiContribution {
 
     pub fn category(mut self, category: impl Into<MessageId>) -> Self {
         self.category = Some(category.into());
+        self
+    }
+
+    pub fn hidden_in_picker(mut self) -> Self {
+        self.show_in_picker = false;
         self
     }
 

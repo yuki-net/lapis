@@ -18,6 +18,14 @@ pub struct WorkspaceOperationRequest {
     deny_unknown_fields
 )]
 pub enum WorkspaceOperation {
+    GitRepositories,
+    RepositoryGitStatus {
+        repository_id: String,
+    },
+    RepositoryGitAction {
+        repository_id: String,
+        request: lapis_git::GitActionRequest,
+    },
     GitAction {
         worktree: Option<TaskId>,
         request: lapis_git::GitActionRequest,
@@ -51,7 +59,7 @@ impl WorkspaceOperation {
     pub const fn is_mutation(&self) -> bool {
         matches!(
             self,
-            Self::GitAction { request, .. } if request.action.is_mutation()
+            Self::GitAction { request, .. } | Self::RepositoryGitAction { request, .. } if request.action.is_mutation()
         ) || matches!(
             self,
             Self::CreateWorktree
@@ -63,14 +71,18 @@ impl WorkspaceOperation {
     }
     pub const fn required_capability(&self) -> &'static str {
         match self {
-            Self::GitAction { request, .. } => {
+            Self::GitAction { request, .. } | Self::RepositoryGitAction { request, .. } => {
                 if request.action.is_mutation() {
                     "workspace.git.write"
                 } else {
                     "workspace.git.read"
                 }
             }
-            Self::GitStatus { .. } | Self::GitDiff { .. } | Self::Worktrees => "workspace.git.read",
+            Self::GitRepositories
+            | Self::RepositoryGitStatus { .. }
+            | Self::GitStatus { .. }
+            | Self::GitDiff { .. }
+            | Self::Worktrees => "workspace.git.read",
             Self::CreateWorktree | Self::ImportFile { .. } | Self::DiscardWorktree { .. } => {
                 "workspace.git.write"
             }
@@ -90,6 +102,11 @@ impl WorkspaceOperation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum WorkspaceOperationResult {
+    GitRepositories(Vec<lapis_git::GitRepositorySnapshot>),
+    RepositoryGitStatus {
+        repository_id: String,
+        status: GitSnapshot,
+    },
     GitAction(lapis_git::GitActionResult),
     GitStatus(GitSnapshot),
     GitDiff(GitDiffSnapshot),
@@ -174,6 +191,17 @@ mod tests {
     fn every_operation_round_trips_through_the_common_request_envelope() {
         let path = WorkspaceRelativePath::parse("note.txt").unwrap();
         let mut cases = vec![
+            WorkspaceOperation::GitRepositories,
+            WorkspaceOperation::RepositoryGitStatus {
+                repository_id: "path:frontend".into(),
+            },
+            WorkspaceOperation::RepositoryGitAction {
+                repository_id: "path:frontend".into(),
+                request: lapis_git::GitActionRequest {
+                    action: lapis_git::GitAction::History,
+                    expected_head: None,
+                },
+            },
             WorkspaceOperation::GitStatus { worktree: None },
             WorkspaceOperation::GitStatus {
                 worktree: Some(TaskId::new("task-1")),
@@ -230,6 +258,7 @@ mod tests {
             WorkspaceOperationResult::GitStatus(GitSnapshot {
                 workspace_id: CoreWorkspaceId::new("workspace-1"),
                 worktree_id: None,
+                revision: 1,
                 branch: "main".into(),
                 head: "abc".into(),
                 files: vec![GitFileSnapshot {

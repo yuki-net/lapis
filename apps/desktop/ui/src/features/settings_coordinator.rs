@@ -43,6 +43,7 @@ pub(crate) struct SettingsCoordinator {
     pending: VecDeque<Change>,
     active: bool,
     quit_when_idle: bool,
+    shutting_down: bool,
     pub(crate) values: GlobalSettings,
     pub(crate) message: String,
 }
@@ -50,14 +51,19 @@ pub(crate) struct SettingsCoordinator {
 impl SettingsCoordinator {
     pub(crate) fn init(session: SettingsSession, cx: &mut App) {
         let values = session.settings();
-        let entity = cx.new(|_| Self {
-            worker: ClientWorker::new(session),
-            confirmed: values.clone(),
-            pending: VecDeque::new(),
-            active: false,
-            quit_when_idle: false,
-            values,
-            message: String::new(),
+        let entity = cx.new(|cx: &mut Context<Self>| {
+            cx.on_app_quit(|this, _| this.wait_for_shutdown_saves())
+                .detach();
+            Self {
+                worker: ClientWorker::new(session),
+                confirmed: values.clone(),
+                pending: VecDeque::new(),
+                active: false,
+                quit_when_idle: false,
+                shutting_down: false,
+                values,
+                message: String::new(),
+            }
         });
         cx.set_global(SettingsGlobal(entity));
     }
@@ -71,6 +77,47 @@ impl SettingsCoordinator {
         self.finish_quit(cx);
     }
 
+    fn wait_for_shutdown_saves(&mut self) -> impl std::future::Future<Output = ()> + use<> {
+        let pending = !self.shutting_down && !self.pending.is_empty();
+        self.shutting_down = true;
+        self.quit_when_idle = false;
+        // 先頭は既にworkerへ渡されている。残りはforeground taskを介さず引き継ぐ。
+        let remaining: Vec<_> = self
+            .pending
+            .iter()
+            .skip(usize::from(self.active))
+            .cloned()
+            .collect();
+        let worker = self.worker.clone();
+        let receiver = pending.then(|| {
+            worker.request(move |session| {
+                let mut failure = None;
+                for change in remaining {
+                    if let Err(error) = change.save(session) {
+                        failure = Some(error.to_string());
+                    }
+                }
+                failure.map_or(Ok(()), Err)
+            })
+        });
+        async move {
+            let _worker = worker;
+            let Some(receiver) = receiver else { return };
+            loop {
+                match receiver.try_recv() {
+                    Ok(Ok(())) | Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+                    Ok(Err(error)) => {
+                        eprintln!("終了時の設定保存に失敗しました: {error}");
+                        break;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        gpui::Timer::after(std::time::Duration::from_millis(5)).await;
+                    }
+                }
+            }
+        }
+    }
+
     fn finish_quit(&mut self, cx: &mut Context<Self>) {
         if self.quit_when_idle && self.pending.is_empty() {
             self.quit_when_idle = false;
@@ -81,6 +128,9 @@ impl SettingsCoordinator {
     }
 
     pub(crate) fn change(&mut self, change: Change, cx: &mut Context<Self>) {
+        if self.shutting_down {
+            return;
+        }
         if self.pending.len() >= CAPACITY {
             self.message = "設定の処理待ちが上限に達しました".into();
             cx.notify();
@@ -115,7 +165,9 @@ impl SettingsCoordinator {
                     Err(error) => this.message = error,
                 }
                 this.active = false;
-                this.start_next(cx);
+                if !this.shutting_down {
+                    this.start_next(cx);
+                }
                 this.publish(cx);
             },
         );
@@ -296,6 +348,74 @@ mod tests {
             assert_eq!(state.confirmed.syntax_theme, Some(SyntaxTheme::Zed));
         });
         assert_eq!(repository.saved.lock().unwrap().len(), 2);
+    }
+
+    #[gpui::test]
+    fn application_quit_waits_for_in_flight_and_queued_saves(cx: &mut gpui::TestAppContext) {
+        use std::future::Future;
+        use std::sync::mpsc;
+        use std::task::{Context as TaskContext, Poll, Waker};
+
+        struct GatedRepository {
+            saved: Mutex<Vec<GlobalSettings>>,
+            started: mpsc::Sender<()>,
+            release: Mutex<mpsc::Receiver<()>>,
+        }
+        impl GlobalSettingsRepository for GatedRepository {
+            fn load(&self) -> Result<GlobalSettings, SettingsError> {
+                Ok(GlobalSettings::default())
+            }
+            fn save(&self, value: &GlobalSettings) -> Result<(), SettingsError> {
+                if self.saved.lock().unwrap().is_empty() {
+                    self.started.send(()).unwrap();
+                    self.release.lock().unwrap().recv().unwrap();
+                }
+                self.saved.lock().unwrap().push(value.clone());
+                Ok(())
+            }
+        }
+
+        let (started, started_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let repository = Arc::new(GatedRepository {
+            saved: Mutex::new(Vec::new()),
+            started,
+            release: Mutex::new(release_rx),
+        });
+        let coordinator = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            SettingsCoordinator::init(SettingsSession::load(repository.clone()).unwrap(), cx);
+            SettingsCoordinator::shared(cx)
+        });
+        let mut shutdown = Box::pin(cx.update(|cx| {
+            coordinator.update(cx, |state, cx| {
+                state.change(Change::Theme("lapis.white".into()), cx);
+                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
+                state.wait_for_shutdown_saves()
+            })
+        }));
+        started_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let mut task_cx = TaskContext::from_waker(Waker::noop());
+        assert!(matches!(
+            shutdown.as_mut().poll(&mut task_cx),
+            Poll::Pending
+        ));
+        assert!(repository.saved.lock().unwrap().is_empty());
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            cx.executor().advance_clock(Duration::from_millis(10));
+            cx.run_until_parked();
+            if shutdown.as_mut().poll(&mut task_cx).is_ready() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "shutdown did not wait for saves");
+            std::thread::yield_now();
+        }
+        let saved = repository.saved.lock().unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved.last().unwrap().theme, "lapis.white");
+        assert_eq!(saved.last().unwrap().syntax_theme, Some(SyntaxTheme::Zed));
     }
 
     #[gpui::test]
