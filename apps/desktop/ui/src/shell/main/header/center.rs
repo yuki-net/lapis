@@ -15,15 +15,19 @@ impl Shell {
             .child(
                 crate::components::header_button(
                     "header-workspace",
-                    self.session.workspace_name().to_owned(),
+                    self.session
+                        .root
+                        .as_deref()
+                        .and_then(|root| root.file_name())
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| self.session.workspace_name().to_owned()),
                     cx,
                 )
                 .on_click(cx.listener(|_, _, _, cx| cx.notify())),
             )
-            .child(div().text_color(theme::colors(cx).text_tertiary).child("›"))
-            .child(
-                crate::components::header_button("header-branch", "make-develop", cx)
-                    .on_click(cx.listener(|_, _, _, cx| cx.notify())),
-            )
+            .child(Icon::new(IconName::ChevronRight).size(px(12.)))
+            .when_some(self.branch_picker.clone(), |header, picker| {
+                header.child(picker)
+            })
     }
 }

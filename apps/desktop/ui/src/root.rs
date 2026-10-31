@@ -211,7 +211,9 @@ impl DesktopRoot {
             (id::VIEW_COMMAND_SEARCH.into(), quick_search.clone().into()),
         ]);
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
+        let branch_picker = cx.new(|cx| features::git::BranchPicker::new(git.clone(), window, cx));
         shell.update(cx, |shell, cx| {
+            shell.branch_picker = Some(branch_picker);
             shell.set_locale(initial_locale.clone(), cx);
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {

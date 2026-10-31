@@ -47,6 +47,7 @@ define_icons! {
     Settings => ("icons/settings.svg", include_bytes!("../../../assets/icons/settings.svg")),
     SunMoon => ("icons/sun-moon.svg", include_bytes!("../../../assets/icons/sun-moon.svg")),
     ChevronRight => ("icons/chevron-right.svg", include_bytes!("../../../assets/icons/chevron-right.svg")),
+    ChevronDown => ("icons/chevron-down.svg", include_bytes!("../../../assets/icons/chevron-down.svg")),
     Pencil => ("icons/pencil.svg", include_bytes!("../../../assets/icons/pencil.svg")),
     HelpCircle => ("icons/help-circle.svg", include_bytes!("../../../assets/icons/help-circle.svg")),
     Save => ("icons/save.svg", include_bytes!("../../../assets/icons/save.svg")),

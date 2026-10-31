@@ -5,6 +5,7 @@ mod icon_button;
 mod menu;
 mod popup;
 mod scroll;
+mod search_input;
 mod separator;
 mod surface;
 
@@ -18,5 +19,6 @@ pub(crate) use popup::{Popup, PopupPlacement, PopupScope};
 #[cfg(debug_assertions)]
 pub(crate) use scroll::scroll_surface;
 pub(crate) use scroll::{ScrollState, scroll_viewport};
+pub(crate) use search_input::{SearchInput, SearchInputEvent};
 pub(crate) use separator::separator;
 pub(crate) use surface::{SurfaceVariant, panel_header, panel_surface, surface};

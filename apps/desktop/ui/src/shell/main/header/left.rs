@@ -21,10 +21,10 @@ impl Shell {
             PopupPlacement::BelowStart,
             scope.clone(),
         )
-        .on_dismiss(cx.listener(|this, _: &(), window, cx| {
+        .on_dismiss(std::rc::Rc::new(cx.listener(|this, _: &(), window, cx| {
             this.close_header_menu(cx);
             window.focus(&this.focus_handle);
-        }))
+        })))
         .when(self.shell.header_menu_open, |popup| {
             popup.content(self.render_header_menu(
                 &scope,

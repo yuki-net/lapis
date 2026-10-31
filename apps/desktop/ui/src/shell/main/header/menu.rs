@@ -65,6 +65,7 @@ impl Shell {
             icon: Some(icon),
             enabled: true,
             selected,
+            indent: 0,
             submenu: true,
             separator_before: false,
         }
@@ -98,6 +99,7 @@ impl Shell {
                             icon: None,
                             enabled: true,
                             selected: false,
+                            indent: 0,
                             submenu: false,
                             separator_before: index == 0,
                         },
@@ -146,6 +148,7 @@ impl Shell {
                 icon: item.icon,
                 enabled,
                 selected: false,
+                indent: 0,
                 submenu: false,
                 separator_before: item.separator_before,
             },

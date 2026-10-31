@@ -3,6 +3,8 @@ use crate::{
     features::id,
 };
 
+mod branch_panel;
+mod branch_picker;
 mod changes;
 mod state;
 mod view;
@@ -10,6 +12,7 @@ mod view;
 use crate::theme;
 use lapis_git::ChangeKind;
 
+pub(crate) use branch_picker::BranchPicker;
 pub(crate) use changes::ChangesFeature;
 pub(crate) use state::{GitEvent, GitFeature, GitInputRequest};
 
@@ -34,6 +37,13 @@ pub(super) fn descriptor() -> FeatureDescriptor {
         "view.changes",
         "git",
         29,
+    ))
+    .contributes(UiContribution::view(
+        id::VIEW_BRANCHES,
+        UiSlot::ToolDock,
+        "view.branches",
+        "git",
+        28,
     ))
     .requires("workspace.git")
 }

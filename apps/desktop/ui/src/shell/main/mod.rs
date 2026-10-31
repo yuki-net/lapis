@@ -42,6 +42,7 @@ mod tab_drag;
 mod tool_picker;
 
 pub(crate) struct Shell {
+    pub(crate) branch_picker: Option<gpui::Entity<crate::features::git::BranchPicker>>,
     pub(crate) shell: ShellState,
     pub(crate) host: super::window_group::HostId,
     pub(crate) group: Option<gpui::EntityId>,
@@ -212,6 +213,7 @@ impl Shell {
         }
         Self {
             shell: ShellState::default(),
+            branch_picker: None,
             host: 0,
             group: None,
             detached: false,

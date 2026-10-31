@@ -347,6 +347,69 @@ pub(crate) struct GitFeature {
     pub(super) context_label: String,
 }
 impl gpui::EventEmitter<GitEvent> for GitFeature {}
+
+impl GitFeature {
+    pub(super) fn header_context(&self) -> Option<(WorkspaceId, String, String)> {
+        let status = self.repository_status("root")?;
+        Some((
+            self.workspace.clone()?,
+            status.head.clone(),
+            status.branch.clone(),
+        ))
+    }
+
+    pub(super) fn load_header_branches(
+        &mut self,
+        cx: &mut Context<Self>,
+        complete: impl FnOnce(Result<String, String>, &mut gpui::App) + 'static,
+    ) -> Result<(), String> {
+        let context = self
+            .header_context()
+            .ok_or("現在のフォルダにGit Repositoryがありません")?;
+        let workspace = context.0.clone();
+        self.worker.submit(
+            cx,
+            move |session| {
+                session
+                    .backend()
+                    .repository_action(
+                        &workspace,
+                        "root",
+                        GitActionRequest {
+                            action: GitAction::Branches,
+                            expected_head: None,
+                        },
+                    )
+                    .map(|result| result.output)
+                    .map_err(|error| error.to_string())
+            },
+            move |git, result, cx| {
+                if git.header_context().as_ref() != Some(&context) {
+                    complete(
+                        Err("作業環境が変わりました。ブランチ一覧を開き直してください".into()),
+                        cx,
+                    );
+                } else {
+                    complete(result, cx);
+                }
+            },
+        )
+    }
+
+    pub(super) fn header_create_branch(&mut self, cx: &mut Context<Self>) {
+        if let Some((workspace, head, _)) = self.header_context() {
+            cx.emit(GitEvent::Input(GitInputRequest {
+                kind: GitInputKind::CreateBranch,
+                workspace,
+                worktree: None,
+                repository_id: Some("root".into()),
+                head,
+                stash_refs: Vec::new(),
+            }));
+        }
+    }
+}
+
 impl GitFeature {
     pub(super) fn open_task_worktree(&self, worktree: Option<TaskId>, cx: &mut Context<Self>) {
         if let Some(workspace) = self.workspace.clone() {

@@ -19,6 +19,7 @@ pub(crate) struct MenuItemSpec {
     pub(crate) icon: Option<IconName>,
     pub(crate) enabled: bool,
     pub(crate) selected: bool,
+    pub(crate) indent: usize,
     pub(crate) submenu: bool,
     pub(crate) separator_before: bool,
 }
@@ -51,6 +52,8 @@ pub(crate) struct Menu {
     padding: Pixels,
     max_height: Option<Pixels>,
     debug_selector: String,
+    min_width: Pixels,
+    header: Option<AnyElement>,
 }
 
 impl Menu {
@@ -61,11 +64,23 @@ impl Menu {
             padding: tokens::spacing::XS,
             max_height: None,
             debug_selector: String::new(),
+            min_width: px(0.),
+            header: None,
         }
     }
 
     pub(crate) fn padding(mut self, padding: Pixels) -> Self {
         self.padding = padding;
+        self
+    }
+
+    pub(crate) fn min_width(mut self, width: Pixels) -> Self {
+        self.min_width = width;
+        self
+    }
+
+    pub(crate) fn header(mut self, header: impl IntoElement) -> Self {
+        self.header = Some(header.into_any_element());
         self
     }
 
@@ -96,6 +111,7 @@ fn row_width(spec: &MenuItemSpec, measure: impl Fn(&SharedString) -> Pixels) -> 
         + tokens::spacing::SM
         + measure(&spec.label)
         + trailing
+        + px(spec.indent as f32 * 12.)
 }
 
 impl RenderOnce for Menu {
@@ -114,6 +130,7 @@ impl RenderOnce for Menu {
             .fold(px(0.), Pixels::max);
         let width = (content_width + self.padding * 2. + px(2.))
             .ceil()
+            .max(self.min_width)
             .min((window.viewport_size().width - tokens::spacing::SM * 2.).max(px(0.)));
         floating_panel(self.id, SurfaceVariant::Menu, cx)
             .debug_selector(move || self.debug_selector)
@@ -121,6 +138,7 @@ impl RenderOnce for Menu {
             .flex_col()
             .w(width)
             .p(self.padding)
+            .when_some(self.header, |menu, header| menu.child(header))
             .when_some(self.max_height, |menu, height| {
                 menu.max_h(height).overflow_y_scroll()
             })
@@ -146,6 +164,7 @@ fn menu_item(spec: MenuItemSpec, cx: &gpui::App) -> Stateful<gpui::Div> {
         .flex_shrink_0()
         .w_full()
         .px(tokens::spacing::SM)
+        .pl(tokens::spacing::SM + px(spec.indent as f32 * 12.))
         .rounded(tokens::radius::MENU_ITEM)
         .border_1()
         .border_color(if selected {
@@ -224,6 +243,7 @@ mod tests {
                     icon: None,
                     enabled: true,
                     selected: false,
+                    indent: 0,
                     submenu: false,
                     separator_before: false,
                 },
@@ -234,6 +254,7 @@ mod tests {
                     icon: None,
                     enabled: true,
                     selected: false,
+                    indent: 0,
                     submenu: self.submenu,
                     separator_before: true,
                 },
@@ -273,6 +294,7 @@ mod tests {
                     icon: None,
                     enabled: true,
                     selected: true,
+                    indent: 0,
                     submenu: false,
                     separator_before: false,
                 };
