@@ -485,7 +485,9 @@ impl LocalGitBackend {
                     .lines()
                     .filter(|line| line.starts_with('-') && !line.starts_with("---"))
                     .count(),
-                binary: output.contains("GIT binary patch") || output.contains("Binary files"),
+                binary: output
+                    .lines()
+                    .any(|line| line == "GIT binary patch" || line.starts_with("Binary files ")),
                 patch: output.clone(),
             }),
             _ => None,
