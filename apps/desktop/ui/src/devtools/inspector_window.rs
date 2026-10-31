@@ -71,7 +71,7 @@ pub(super) fn render_inspector(
         DevToolTab::Console => render_console_tab(inspector, window, cx),
         DevToolTab::Network => render_network_tab(cx),
         DevToolTab::Performance => render_performance_tab(cx),
-        DevToolTab::State => render_placeholder_tab(active_tab),
+        DevToolTab::State => render_state_tab(inspector, window, cx),
     };
 
     div()
@@ -560,32 +560,281 @@ fn render_performance_tab(cx: &mut Context<Inspector>) -> Div {
         )
 }
 
-fn render_placeholder_tab(tab: DevToolTab) -> Div {
+fn render_state_tab(
+    _inspector: &mut gpui::Inspector,
+    _window: &mut Window,
+    cx: &mut Context<gpui::Inspector>,
+) -> Div {
+    let store = super::state::store::store(cx);
+    let snapshot = store.current();
+    let is_watch = store.is_watch_enabled();
+    let watch_history = store.watch_history();
+
+    // ツリーノード一覧
+    let tree_nodes: Vec<_> = snapshot
+        .as_ref()
+        .map(|snap| {
+            snap.nodes
+                .iter()
+                .enumerate()
+                .map(|(i, node)| render_state_tree_node(node, i, 0, cx))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Watch 履歴エントリ
+    let watch_entries: Vec<_> = watch_history
+        .iter()
+        .rev()
+        .take(50)
+        .enumerate()
+        .map(|(i, event)| {
+            let elapsed = event.occurred_at.elapsed().unwrap_or_default();
+            let time_str = format!(
+                "{:02}:{:02}.{:03}",
+                elapsed.as_secs() % 3600 % 60,
+                elapsed.as_secs() % 60,
+                elapsed.subsec_millis()
+            );
+            let path = event.path.clone();
+            let new_value = event.new_value.clone();
+            div()
+                .id(("watch-event", i))
+                .flex()
+                .items_baseline()
+                .gap(px(4.))
+                .text_size(px(11.))
+                .font_family("Cascadia Mono")
+                .child(
+                    div()
+                        .text_color(theme::colors().text_secondary)
+                        .child(time_str),
+                )
+                .child(div().text_color(theme::colors().text_primary).child(path))
+                .child(div().text_color(theme::colors().text_secondary).child("→"))
+                .child(
+                    div()
+                        .text_color(theme::colors().text_primary)
+                        .child(new_value),
+                )
+        })
+        .collect();
+
+    // 更新時刻
+    let updated_str = if snapshot.is_some() {
+        let now = std::time::SystemTime::now();
+        let elapsed = now
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        format!(
+            "Updated: {:02}:{:02}.{:03}",
+            (elapsed.as_secs() / 3600) % 24,
+            (elapsed.as_secs() / 60) % 60,
+            elapsed.subsec_millis()
+        )
+    } else {
+        "No snapshot".to_string()
+    };
+
+    let entity_id = cx.entity_id();
+
     div()
         .size_full()
+        .min_h(px(0.))
+        .min_w(px(0.))
         .flex()
         .flex_col()
+        // ヘッダー
+        .child(
+            div()
+                .id("state-header")
+                .flex()
+                .items_center()
+                .px(tokens::spacing::SM)
+                .py(px(4.))
+                .gap(px(4.))
+                .bg(theme::colors().background_secondary)
+                .border_b_1()
+                .border_color(theme::colors().border_default)
+                .child(
+                    header_button("state-snapshot", "Snapshot")
+                        .cursor_pointer()
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            let target = InspectorController::target(entity_id, cx);
+                            if let Some(target) = target {
+                                let _ = target.update(cx, |_, window, cx| {
+                                    let snap = super::state::snapshot::capture_state(window, cx);
+                                    super::state::store::store(cx).set_snapshot(snap);
+                                });
+                            }
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    header_button(
+                        "state-watch",
+                        if is_watch { "Watch: On" } else { "Watch: Off" },
+                    )
+                    .cursor_pointer()
+                    .when(is_watch, |el| el.text_color(theme::colors().text_dangerous))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        super::state::store::store(cx)
+                            .set_watch_enabled(!super::state::store::store(cx).is_watch_enabled());
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    header_button("state-clear", "Clear")
+                        .cursor_pointer()
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            super::state::store::store(cx).clear();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .ml_auto()
+                        .text_size(px(11.))
+                        .text_color(theme::colors().text_secondary)
+                        .child(updated_str),
+                ),
+        )
+        // 2ペイン: ツリー | 詳細
+        .child(
+            div()
+                .id("state-content")
+                .flex_1()
+                .min_h(px(0.))
+                .min_w(px(0.))
+                .flex()
+                // 左: ツリー
+                .child(
+                    div()
+                        .id("state-tree")
+                        .w(px(280.))
+                        .min_w(px(200.))
+                        .flex()
+                        .flex_col()
+                        .border_r_1()
+                        .border_color(theme::colors().border_default)
+                        .child(scroll_viewport(
+                            "state-tree-scroll",
+                            ScrollAxis::Both,
+                            &ScrollState::default(),
+                            div()
+                                .id("state-tree-list")
+                                .min_h(px(0.))
+                                .flex_1()
+                                .px(tokens::spacing::SM)
+                                .py(px(4.))
+                                .gap(px(1.))
+                                .children(tree_nodes)
+                                .when(snapshot.is_none(), |el| {
+                                    el.child(
+                                        div()
+                                            .py_4()
+                                            .text_size(px(12.))
+                                            .text_color(theme::colors().text_secondary)
+                                            .child("Snapshot をクリックして状態を取得"),
+                                    )
+                                }),
+                        )),
+                )
+                // 右: 詳細 / Watch 履歴
+                .child(
+                    div()
+                        .id("state-details")
+                        .flex_1()
+                        .min_w(px(0.))
+                        .min_h(px(0.))
+                        .flex()
+                        .flex_col()
+                        .when(!watch_entries.is_empty(), |el| {
+                            el.child(
+                                div()
+                                    .id("state-watch-history")
+                                    .max_h(px(200.))
+                                    .border_b_1()
+                                    .border_color(theme::colors().border_default)
+                                    .flex()
+                                    .flex_col()
+                                    .child(
+                                        div()
+                                            .px(tokens::spacing::SM)
+                                            .py(px(2.))
+                                            .text_size(px(11.))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(theme::colors().text_secondary)
+                                            .child("Watch History"),
+                                    )
+                                    .child(scroll_viewport(
+                                        "state-watch-scroll",
+                                        ScrollAxis::Vertical,
+                                        &ScrollState::default(),
+                                        div()
+                                            .id("state-watch-list")
+                                            .min_h(px(0.))
+                                            .flex_1()
+                                            .px(tokens::spacing::SM)
+                                            .py(px(2.))
+                                            .gap(px(1.))
+                                            .children(watch_entries),
+                                    )),
+                            )
+                        })
+                        .child(
+                            div()
+                                .id("state-details-content")
+                                .flex_1()
+                                .min_h(px(0.))
+                                .min_w(px(0.))
+                                .px(tokens::spacing::SM)
+                                .py(px(4.))
+                                .text_size(px(12.))
+                                .text_color(theme::colors().text_secondary)
+                                .child("ノードを選択して詳細を表示"),
+                        ),
+                ),
+        )
+}
+
+fn render_state_tree_node(
+    node: &super::state::snapshot::StateNode,
+    _index: usize,
+    depth: usize,
+    _cx: &mut Context<gpui::Inspector>,
+) -> Div {
+    let has_children = !node.children.is_empty();
+    let indent = depth * 16;
+    let name = node.name.clone();
+
+    div()
+        .flex()
         .items_center()
-        .justify_center()
-        .gap_4()
-        .p_8()
+        .gap(px(2.))
+        .py(px(1.))
+        .px(px(2.))
+        .pl(px(indent as f32))
+        .rounded(px(3.))
+        .cursor_pointer()
+        .text_size(px(12.))
+        .font_family("Cascadia Mono")
         .child(
             div()
-                .text_size(px(18.))
-                .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_color(theme::colors().text_primary)
-                .child(tab.title()),
+                .w(px(14.))
+                .h(px(14.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(has_children, |el| el.child("▸")),
         )
         .child(
             div()
-                .text_size(px(13.))
-                .text_color(theme::colors().text_secondary)
-                .child("この診断Toolは後続実装"),
-        )
-        .child(
-            div()
-                .text_size(px(11.))
-                .text_color(theme::colors().text_secondary)
-                .child("この機能は今後のPRで追加されます"),
+                .flex_1()
+                .min_w(px(0.))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child(name),
         )
 }
