@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// 開発中のpre-release protocol。Client/Host間の互換性方針と混在バージョンの検証が
 /// 互換性を壊すwire変更ごとにminorを進め、1.0への移行条件は別途判断する。
-pub const CURRENT_PROTOCOL: ProtocolVersion = ProtocolVersion::new(0, 3);
+pub const CURRENT_PROTOCOL: ProtocolVersion = ProtocolVersion::new(0, 4);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ProtocolVersion {
