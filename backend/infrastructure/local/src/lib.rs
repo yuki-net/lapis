@@ -1934,19 +1934,33 @@ fn git_bytes(repository: &Path, arguments: &[&str]) -> Result<Vec<u8>, GitError>
     git_bytes_allow_exit_code(repository, arguments, 0)
 }
 
+fn git_command(repository: &Path, arguments: &[&str]) -> Command {
+    let mut command = Command::new("git");
+    command
+        .args(["-c", "credential.interactive=never", "--literal-pathspecs"])
+        .arg("-C")
+        .arg(repository)
+        .args(arguments)
+        .stdin(Stdio::null())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_COMMON_DIR")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_OBJECT_DIRECTORY")
+        .env_remove("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+        .env_remove("GIT_PREFIX")
+        .env("GIT_OPTIONAL_LOCKS", "0");
+    command
+}
+
 fn git_bytes_allow_exit_code(
     repository: &Path,
     arguments: &[&str],
     allowed_failure_code: i32,
 ) -> Result<Vec<u8>, GitError> {
+    let mut command = git_command(repository, arguments);
     let output = git_action::git_output(
-        Command::new("git")
-            .args(["-c", "credential.interactive=never", "--literal-pathspecs"])
-            .arg("-C")
-            .arg(repository)
-            .args(arguments)
-            .stdin(Stdio::null())
-            .env("GIT_OPTIONAL_LOCKS", "0"),
+        &mut command,
         Duration::from_secs(120),
     )
     .map_err(|error| GitError::new(GitErrorKind::Io, error.to_string()))?;
@@ -2250,6 +2264,26 @@ mod tests {
         let path = workspace.path().join("src/lib.rs");
         fs::write(&path, "").unwrap();
         (workspace, path)
+    }
+
+    #[test]
+    fn git_command_clears_repository_location_environment() {
+        let command = git_command(Path::new("."), &["status"]);
+        let removed = command
+            .get_envs()
+            .filter_map(|(key, value)| value.is_none().then(|| key.to_string_lossy().into_owned()))
+            .collect::<std::collections::HashSet<_>>();
+        for name in [
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+            "GIT_COMMON_DIR",
+            "GIT_INDEX_FILE",
+            "GIT_OBJECT_DIRECTORY",
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            "GIT_PREFIX",
+        ] {
+            assert!(removed.contains(name), "{name} must be removed");
+        }
     }
 
     #[test]
