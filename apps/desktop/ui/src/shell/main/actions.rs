@@ -636,6 +636,9 @@ mod visibility_tests {
 
     #[gpui::test]
     fn notification_open_reuses_and_activates_the_right_zone_tab(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
             Shell::new(document.into(), HashMap::new(), cx)
@@ -697,6 +700,9 @@ mod visibility_tests {
     #[cfg(debug_assertions)]
     #[gpui::test]
     fn header_notification_button_opens_and_reuses_tab(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
         let (shell, visual) = cx.add_window_view(|_, cx| {
             let document = cx.new(|_| Empty);
             Shell::new(document.into(), HashMap::new(), cx)
