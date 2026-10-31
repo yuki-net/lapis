@@ -23,6 +23,8 @@ lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 serde_json.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }

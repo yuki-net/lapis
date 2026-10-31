@@ -23,7 +23,7 @@ impl ThemeRegistry {
             match ThemeDefinition::from_json(source) {
                 Ok(definition) => {
                     if definitions.contains_key(&definition.id) {
-                        eprintln!("Duplicate bundled theme id");
+                        tracing::warn!(target: "lapis::theme", "Duplicate bundled theme id");
                         continue;
                     }
                     if fallback.is_none() {
@@ -31,7 +31,9 @@ impl ThemeRegistry {
                     }
                     definitions.insert(definition.id.clone(), definition);
                 }
-                Err(error) => eprintln!("Bundled theme ignored: {error}"),
+                Err(error) => {
+                    tracing::warn!(target: "lapis::theme", "Bundled theme ignored: {error}")
+                }
             }
         }
         let fallback = fallback.expect("at least one bundled theme must be valid");

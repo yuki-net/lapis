@@ -44,3 +44,5 @@ wezterm-term = { git = "https://github.com/wezterm/wezterm", rev = "e2a98e1b8af1
 wezterm-surface = { git = "https://github.com/wezterm/wezterm", rev = "e2a98e1b8af156988ad0ac778658ac27b60a55fb" }
 rcgen = "0.14"
 zeroize = "1.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

@@ -447,7 +447,7 @@ impl DesktopRoot {
                     match receiver.try_recv() {
                         Ok(result) => {
                             if let Err(error) = result {
-                                eprintln!("終了時の保存に失敗しました: {error}");
+                                tracing::error!(target: "lapis::root", "終了時の保存に失敗しました: {error}");
                             }
                             break;
                         }
