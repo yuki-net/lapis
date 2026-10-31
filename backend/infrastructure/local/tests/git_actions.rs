@@ -249,6 +249,30 @@ fn individual_hunks_stage_unstage_and_reject_changed_diffs() {
 }
 
 #[test]
+fn text_diff_containing_binary_files_words_is_not_marked_binary() {
+    let (directory, backend) = setup();
+    let root = directory.path();
+    save(root, "base\n");
+    commit(&backend, root, "base");
+    save(root, "Binary files are still text\n");
+    let result = backend
+        .execute(
+            root,
+            GitActionRequest {
+                action: GitAction::Diff {
+                    path: "note.txt".into(),
+                    staged: false,
+                },
+                expected_head: None,
+            },
+        )
+        .unwrap();
+    let diff = result.diff.expect("structured diff");
+    assert!(!diff.binary);
+    assert!(diff.patch.contains("+Binary files are still text"));
+}
+
+#[test]
 fn branch_stash_and_merge_conflicts_can_be_resolved_explicitly() {
     let (directory, backend) = setup();
     let root = directory.path();
