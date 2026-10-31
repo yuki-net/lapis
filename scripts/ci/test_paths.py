@@ -124,7 +124,7 @@ class TestPathRouting(unittest.TestCase):
                 seen.add(pattern)
 
     def test_windows_dev_commands_are_selected(self):
-        for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/src/main.rs", ".run/Lapis.run.xml", ".cargo/config.toml"):
+        for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/src/main.rs", "scripts/hot-reload/src/main.rs", "scripts/test_hot_reload.py", ".run/Lapis.run.xml", ".cargo/config.toml"):
             self.assertIn("dev_windows", jobs_for_paths([path]))
         self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
 

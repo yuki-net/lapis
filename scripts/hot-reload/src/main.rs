@@ -27,12 +27,45 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // dx は Desktop だけをビルドし、起動時に app 出力先を削除する。
+    // Host は Cargo の安定した出力先に用意し、Composition Root へ明示する。
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let build = std::process::Command::new(cargo)
+        .current_dir(root)
+        .args([
+            "build",
+            "--locked",
+            "--target-dir",
+            "target",
+            "--target",
+            "x86_64-pc-windows-msvc",
+            "--profile",
+            "hot-reload",
+            "--package",
+            "lapis-host",
+            "--bin",
+            "lapis-host",
+        ])
+        .status();
+    match build {
+        Ok(status) if status.success() => {}
+        Ok(status) => {
+            eprintln!("Local Host のビルドに失敗したため、Hot Reload を開始しません。");
+            std::process::exit(status.code().unwrap_or(1));
+        }
+        Err(error) => {
+            eprintln!("Local Host のビルドを開始できません: {error}");
+            std::process::exit(1);
+        }
+    }
     let status = std::process::Command::new(dx)
         .current_dir(root)
         .args([
             "serve",
             "--platform",
             "windows",
+            "--target",
+            "x86_64-pc-windows-msvc",
             "--hot-patch",
             "--interactive",
             "false",
@@ -44,7 +77,7 @@ fn main() {
             "hot-reload",
             "--profile",
             "hot-reload",
-            "--args=--state-directory target/dev-state --workspace .",
+            "--args=--state-directory target/dev-state --workspace . --local-host-executable target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe",
         ])
         .status();
     match status {

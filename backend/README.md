@@ -33,6 +33,6 @@ Host側の秘密鍵とcredentialはメモリ内に保持するため、Host再�
 
 Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立processで起動し、loopback QUICで接続します。同じユーザーのstate directoryで一つのHostを共有し、複数のフォルダを登録できます。所有者credentialは匿名pipeで渡し、DPAPIで保護した `hosts/local-v1.host` に保存します。Local所有者の鍵はHostの寿命に紐付き、Remoteの招待には配布しません。通信失敗だけで既存Hostを終了・置換しません。Desktopを閉じてもHostのDocument・Terminalは残ります。Host自体の終了後は実行状態を復元しません。
 
-`lapis.exe`（Desktop Client）と `lapis-host.exe`（Host）は明確に分離されたbinaryです。Desktopは自身をHostとして起動せず、同じ出力ディレクトリから `lapis-host.exe` を解決して起動します。
+`lapis.exe`（Desktop Client）と `lapis-host.exe`（Host）は明確に分離されたbinaryです。Desktopは自身をHostとして起動せず、既定では同じ出力ディレクトリから `lapis-host.exe` を解決して起動します。`--local-host-executable <path>` を指定した場合はDesktopのComposition Rootがそのファイルを解決してLocal接続へ注入します。Hot Reload launcherはこの指定でdxの一時出力先とHostを分離します。
 
 実通信と別processの回帰検証は `cargo test -p lapis-host --test quic --test standalone --test managed_client` で実行します。Unixの開発・CI環境ではDPAPIの代わりにdirectory 0700・file 0600を使用します。
