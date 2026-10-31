@@ -575,6 +575,8 @@ impl GitFeature {
                 }
                 match result {
                     Ok(mut snapshot) => {
+                        let repository_errors = std::mem::take(&mut snapshot.repository_errors);
+                        let last_refresh_error = snapshot.last_refresh_error.take();
                         if is_event {
                             if is_repository_refresh
                                 && git.repository_refresh_generation == repository_generation
@@ -662,8 +664,8 @@ impl GitFeature {
                                 };
                             git.snapshot = snapshot;
                         }
-                        git.snapshot.repository_errors = snapshot.repository_errors;
-                        git.snapshot.last_refresh_error = snapshot.last_refresh_error;
+                        git.snapshot.repository_errors = repository_errors;
+                        git.snapshot.last_refresh_error = last_refresh_error;
                         if git.target.as_ref().is_some_and(|target| {
                             !git.snapshot
                                 .worktree_statuses
