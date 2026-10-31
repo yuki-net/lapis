@@ -320,9 +320,7 @@ impl GitSession {
     ) -> &[(lapis_git::GitRepositorySnapshot, lapis_git::GitSnapshot)] {
         &self.repository_statuses
     }
-    pub fn repository_errors(
-        &self,
-    ) -> &[(lapis_git::GitRepositorySnapshot, GitError)] {
+    pub fn repository_errors(&self) -> &[(lapis_git::GitRepositorySnapshot, GitError)] {
         &self.repository_errors
     }
     pub fn last_refresh_error(&self) -> Option<&GitError> {
