@@ -3,12 +3,19 @@ struct GitFixture {
     discoveries: Mutex<usize>,
     actions: Mutex<Vec<String>>,
     failing_repository: Mutex<Option<String>>,
+    fail_discovery: Mutex<bool>,
     revisions: Mutex<std::collections::HashMap<String, u64>>,
 }
 
 impl lapis_git::GitConnection for GitFixture {
     fn repositories(&self, _: &WorkspaceId) -> Result<Vec<lapis_git::GitRepositorySnapshot>, GitError> {
         *self.discoveries.lock().unwrap() += 1;
+        if *self.fail_discovery.lock().unwrap() {
+            return Err(GitError::new(
+                lapis_git::GitErrorKind::Io,
+                "repository discovery failed",
+            ));
+        }
         Ok(["frontend", "backend"].into_iter().map(|name| lapis_git::GitRepositorySnapshot { id: format!("path:{name}"), path: Some(name.into()) }).collect())
     }
     fn repository_status(&self, workspace: &WorkspaceId, id: &str) -> Result<lapis_git::GitSnapshot, GitError> {
@@ -180,4 +187,39 @@ fn git_status_event_recovers_repository_that_initially_failed() {
         .expect("recovered repository");
     assert_eq!(backend.1.revision, 2);
     assert!(session.repository_errors().is_empty());
+}
+
+
+#[test]
+fn git_snapshot_update_is_applied_even_when_repository_reconciliation_fails() {
+    let fixture = Arc::new(GitFixture::default());
+    let mut session = GitSession::new(fixture.clone());
+    let workspace = WorkspaceId::new("project");
+    session.refresh(&workspace).unwrap();
+
+    *fixture.fail_discovery.lock().unwrap() = true;
+    let mut status = session
+        .repository_statuses()
+        .iter()
+        .find(|(repository, _)| repository.id == "path:frontend")
+        .unwrap()
+        .1
+        .clone();
+    status.revision = 7;
+    status.branch = "event-branch".into();
+
+    assert!(session.reconcile_git_update(lapis_git::GitUpdate::Snapshot(vec![
+        lapis_git::GitRepositoryStatus {
+            repository_id: "path:frontend".into(),
+            status,
+        },
+    ])));
+    let frontend = session
+        .repository_statuses()
+        .iter()
+        .find(|(repository, _)| repository.id == "path:frontend")
+        .unwrap();
+    assert_eq!(frontend.1.revision, 7);
+    assert_eq!(frontend.1.branch, "event-branch");
+    assert!(session.last_refresh_error().is_some());
 }
