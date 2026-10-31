@@ -3,6 +3,12 @@ use super::*;
 impl Render for Shell {
     /// Builds the window shell and input handlers, clearing panel drop bounds for the new layout pass.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.render_content(window, cx)
+    }
+}
+
+impl Shell {
+    fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.shell
             .layout
             .finish_due_closes(std::time::Instant::now());
@@ -14,8 +20,8 @@ impl Render for Shell {
             .relative()
             .flex()
             .flex_col()
-            .bg(theme::colors().background_primary)
-            .text_color(theme::colors().text_primary)
+            .bg(theme::colors(cx).background_primary)
+            .text_color(theme::colors(cx).text_primary)
             .track_focus(&self.focus_handle(cx))
             .key_context("Shell")
             .on_action(cx.listener(Self::open))

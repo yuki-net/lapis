@@ -3,3 +3,5 @@
 dev = "run --locked --target-dir target -p lapis --bin lapis -- --state-directory target/dev-state --workspace ."
 dev-build = "build --locked --target-dir target -p lapis -p lapis-host --bins"
 ide-build = "build --locked --target-dir target/dev-build -p lapis -p lapis-host --bins"
+# Hot Reload 付き開発起動。Windows x64 で Subsecond devserver を使用する。
+dev-hot-reload = "run --locked --target-dir target -p lapis --bin lapis --features hot-reload -- --state-directory target/dev-state --workspace ."

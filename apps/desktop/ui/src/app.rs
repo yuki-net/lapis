@@ -107,13 +107,27 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
     Application::new()
         .with_assets(crate::components::IconAssets)
         .run(move |cx: &mut App| {
+            let settings = services.settings.settings();
+            crate::theme::init(
+                &crate::extension_ui::ThemeId::new(settings.theme),
+                settings.syntax_theme,
+                cx,
+            );
+            crate::features::settings_coordinator::SettingsCoordinator::init(
+                services.settings.clone(),
+                cx,
+            );
+            #[cfg(all(feature = "hot-reload", debug_assertions))]
+            crate::hot_reload::init(cx);
             bind_keys(cx);
             #[cfg(debug_assertions)]
             crate::devtools::init(cx);
             open_desktop_window(session, services, initial_view, cx);
             cx.on_window_closed(|cx| {
                 if cx.windows().is_empty() {
-                    cx.quit();
+                    let coordinator =
+                        crate::features::settings_coordinator::SettingsCoordinator::shared(cx);
+                    coordinator.update(cx, |coordinator, cx| coordinator.quit_after_pending(cx));
                 }
             })
             .detach();

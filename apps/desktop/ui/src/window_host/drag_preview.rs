@@ -13,7 +13,7 @@ impl DragPreview {
 }
 
 impl Render for DragPreview {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.visible {
             return div().size(px(0.0));
         }
@@ -24,10 +24,10 @@ impl Render for DragPreview {
             .items_center()
             .px(crate::tokens::spacing::XS)
             .rounded(crate::tokens::radius::CONTROL)
-            .bg(crate::theme::colors().button_background_focused)
+            .bg(crate::theme::colors(cx).button_background_focused)
             .border_1()
-            .border_color(crate::theme::colors().button_border_focused)
-            .text_color(crate::theme::colors().text_primary)
+            .border_color(crate::theme::colors(cx).button_border_focused)
+            .text_color(crate::theme::colors(cx).text_primary)
             .text_size(crate::tokens::typography::FONT_XS)
             .truncate()
             .child(self.label.clone())

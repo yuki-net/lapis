@@ -21,11 +21,11 @@ impl TasksFeature {
                     .p_2()
                     .rounded(px(6.0))
                     .bg(if selected {
-                        theme::colors().button_background_selected
+                        theme::colors(cx).button_background_selected
                     } else {
-                        theme::colors().background_tertiary
+                        theme::colors(cx).background_tertiary
                     })
-                    .hover(|style| style.bg(theme::colors().button_background_hover))
+                    .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                     .flex()
                     .flex_col()
                     .gap_1()
@@ -35,13 +35,13 @@ impl TasksFeature {
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(theme::colors().text_primary)
+                            .text_color(theme::colors(cx).text_primary)
                             .child(truncate_chars(&record.task.title, 42)),
                     )
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(task_status_color(status))
+                            .text_color(task_status_color(status, cx))
                             .child(format!(
                                 "{} · {} · {}",
                                 status.label(),
@@ -57,6 +57,7 @@ impl TasksFeature {
             ScrollAxis::Vertical,
             &self.scroll_states.task_list,
             task_list,
+            cx,
         )
         .max_h(px(170.0));
 
@@ -71,25 +72,25 @@ impl TasksFeature {
             let mut actions = div().flex().items_center().gap_1();
             if status == ExecutionStatus::WaitingForApproval {
                 actions = actions
-                    .child(
-                        action_button("承認", true).on_click(cx.listener(|this, _, _, cx| {
+                    .child(action_button("承認", true, cx).on_click(cx.listener(
+                        |this, _, _, cx| {
                             this.control_selected_task(TaskControl::Approve, cx);
-                        })),
-                    )
-                    .child(
-                        action_button("拒否", false).on_click(cx.listener(|this, _, _, cx| {
+                        },
+                    )))
+                    .child(action_button("拒否", false, cx).on_click(cx.listener(
+                        |this, _, _, cx| {
                             this.control_selected_task(TaskControl::Decline, cx);
-                        })),
-                    );
+                        },
+                    )));
             }
             if status == ExecutionStatus::WaitingForInput {
                 actions = actions.child(
-                    action_button("Clipboard で回答", true)
+                    action_button("Clipboard で回答", true, cx)
                         .on_click(cx.listener(|this, _, _, cx| this.reply_to_selected_task(cx))),
                 );
             }
             if !status.is_terminal() {
-                actions = actions.child(action_button("取消", false).on_click(cx.listener(
+                actions = actions.child(action_button("取消", false, cx).on_click(cx.listener(
                     |this, _, _, cx| {
                         this.control_selected_task(TaskControl::Cancel, cx);
                     },
@@ -113,9 +114,9 @@ impl TasksFeature {
                     div()
                         .p_2()
                         .rounded(px(5.0))
-                        .bg(theme::colors().background_tertiary)
+                        .bg(theme::colors(cx).background_tertiary)
                         .text_size(px(10.0))
-                        .text_color(theme::colors().text_secondary)
+                        .text_color(theme::colors(cx).text_secondary)
                         .child(text),
                 );
             }
@@ -127,7 +128,7 @@ impl TasksFeature {
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(task_status_color(status))
+                                .text_color(task_status_color(status, cx))
                                 .child(status.label()),
                         )
                         .child(div().flex_1())
@@ -139,6 +140,7 @@ impl TasksFeature {
                         ScrollAxis::Vertical,
                         &self.scroll_states.task_events,
                         events,
+                        cx,
                     )
                     .flex_1()
                     .min_h(px(0.0)),
@@ -148,6 +150,7 @@ impl TasksFeature {
                 "✦",
                 "Task はまだありません",
                 "選択範囲またはクリップボードを指示として開始できます",
+                cx,
             ));
         }
 
@@ -165,25 +168,25 @@ impl TasksFeature {
                     .child(
                         div()
                             .text_size(px(10.0))
-                            .text_color(theme::colors().text_tertiary)
+                            .text_color(theme::colors(cx).text_tertiary)
                             .child("CODEX TASKS"),
                     )
                     .child(div().flex_1())
-                    .child(action_button("＋ Default", true).on_click(cx.listener(
+                    .child(action_button("＋ Default", true, cx).on_click(cx.listener(
                         |this, _, _, cx| {
                             this.start_codex_task(TaskMode::Default, false, cx);
                         },
                     )))
-                    .child(
-                        action_button("Plan", false).on_click(cx.listener(|this, _, _, cx| {
+                    .child(action_button("Plan", false, cx).on_click(cx.listener(
+                        |this, _, _, cx| {
                             this.start_codex_task(TaskMode::Plan, false, cx);
-                        })),
-                    )
-                    .child(
-                        action_button("WT", false).on_click(cx.listener(|this, _, _, cx| {
+                        },
+                    )))
+                    .child(action_button("WT", false, cx).on_click(cx.listener(
+                        |this, _, _, cx| {
                             this.start_codex_task(TaskMode::Default, true, cx);
-                        })),
-                    ),
+                        },
+                    ))),
             )
             .child(task_list)
             .child(detail)
@@ -195,11 +198,11 @@ impl Render for TasksFeature {
             .size_full()
             .flex()
             .flex_col()
-            .child(
-                action_button("Start Codex", true).on_click(cx.listener(|this, _, _, cx| {
+            .child(action_button("Start Codex", true, cx).on_click(cx.listener(
+                |this, _, _, cx| {
                     this.start_codex_task(TaskMode::Default, false, cx);
-                })),
-            )
+                },
+            )))
             .child(self.message.clone())
             .child(self.render_assistant_content(cx))
     }

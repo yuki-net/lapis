@@ -168,6 +168,7 @@ pub(crate) fn scroll_viewport(
     axis: ScrollAxis,
     state: &ScrollState,
     content: impl IntoElement,
+    cx: &gpui::App,
 ) -> gpui::Div {
     let id = id.into();
     let handle = state.handle();
@@ -191,7 +192,7 @@ pub(crate) fn scroll_viewport(
         ScrollAxis::Both => viewport.overflow_scroll(),
     };
 
-    scroll_surface(axis, state, viewport)
+    scroll_surface(axis, state, viewport, cx)
 }
 
 /// 独自のスクロール要素（uniform_list等）にも既存のスクロールバーを重ねる。
@@ -199,6 +200,7 @@ pub(crate) fn scroll_surface(
     axis: ScrollAxis,
     state: &ScrollState,
     viewport: impl IntoElement,
+    cx: &gpui::App,
 ) -> gpui::Div {
     div()
         .relative()
@@ -211,15 +213,19 @@ pub(crate) fn scroll_surface(
         .child(viewport)
         .when(
             matches!(axis, ScrollAxis::Vertical | ScrollAxis::Both),
-            |root| root.child(scrollbar_track(state.clone(), ScrollAxis::Vertical)),
+            |root| root.child(scrollbar_track(state.clone(), ScrollAxis::Vertical, cx)),
         )
         .when(
             matches!(axis, ScrollAxis::Horizontal | ScrollAxis::Both),
-            |root| root.child(scrollbar_track(state.clone(), ScrollAxis::Horizontal)),
+            |root| root.child(scrollbar_track(state.clone(), ScrollAxis::Horizontal, cx)),
         )
 }
 
-fn scrollbar_track(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui::Div> {
+fn scrollbar_track(
+    state: ScrollState,
+    axis: ScrollAxis,
+    cx: &gpui::App,
+) -> gpui::Stateful<gpui::Div> {
     let handle = state.handle();
     let max_offset = handle.max_offset();
 
@@ -238,7 +244,7 @@ fn scrollbar_track(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui:
         })
         .absolute()
         .opacity(if visible { 1.0 } else { 0.0 })
-        .bg(theme::colors().border_default)
+        .bg(theme::colors(cx).border_default)
         .rounded(tokens::radius::FULL)
         .cursor(CursorStyle::Arrow)
         .occlude()
@@ -285,10 +291,14 @@ fn scrollbar_track(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui:
         ScrollAxis::Both => return track,
     };
 
-    track.child(scrollbar_thumb(state, axis))
+    track.child(scrollbar_thumb(state, axis, cx))
 }
 
-fn scrollbar_thumb(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui::Div> {
+fn scrollbar_thumb(
+    state: ScrollState,
+    axis: ScrollAxis,
+    cx: &gpui::App,
+) -> gpui::Stateful<gpui::Div> {
     let handle = state.handle();
     let bounds = handle.bounds();
     let viewport = bounds.size;
@@ -312,7 +322,7 @@ fn scrollbar_thumb(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui:
             ScrollAxis::Both => "invalid-scrollbar-thumb",
         })
         .absolute()
-        .bg(theme::colors().text_tertiary)
+        .bg(theme::colors(cx).text_tertiary)
         .rounded(tokens::radius::FULL)
         .cursor(CursorStyle::Arrow)
         .occlude()
@@ -326,7 +336,7 @@ fn scrollbar_thumb(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui:
                     style
                         .right_0()
                         .w(tokens::size::SCROLLBAR)
-                        .bg(theme::colors().text_secondary)
+                        .bg(theme::colors(cx).text_secondary)
                 })
         })
         .when(axis == ScrollAxis::Horizontal, |thumb| {
@@ -339,7 +349,7 @@ fn scrollbar_thumb(state: ScrollState, axis: ScrollAxis) -> gpui::Stateful<gpui:
                     style
                         .bottom_0()
                         .h(tokens::size::SCROLLBAR)
-                        .bg(theme::colors().text_secondary)
+                        .bg(theme::colors(cx).text_secondary)
                 })
         })
         .child(

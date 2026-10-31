@@ -782,7 +782,7 @@ impl Render for Editor {
                         .gap_1()
                         .child(self.status.clone())
                         .child(
-                            crate::components::action_button("Copy draft", false).on_click(
+                            crate::components::action_button("Copy draft", false, cx).on_click(
                                 cx.listener(|this, _, _, cx| {
                                     cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                         this.session.content_for_save(),
@@ -791,7 +791,7 @@ impl Render for Editor {
                             ),
                         )
                         .child(
-                            crate::components::action_button("Recover as new document", true)
+                            crate::components::action_button("Recover as new document", true, cx)
                                 .on_click(cx.listener(|this, _, _, cx| this.recover_draft(cx))),
                         ),
                 )
@@ -824,6 +824,7 @@ impl Render for Editor {
                     ScrollAxis::Both,
                     &self.editor_scroll,
                     content,
+                    cx,
                 )
                 .size_full(),
             )

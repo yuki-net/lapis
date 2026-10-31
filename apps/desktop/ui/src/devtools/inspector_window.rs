@@ -25,17 +25,17 @@ pub(super) fn render_inspector(
                 .child("Element details"),
         )
         .child(
-            header_button("inspector-refresh", "Refresh")
+            header_button("inspector-refresh", "Refresh", cx)
                 .cursor_pointer()
                 .on_click(cx.listener(|_, _, _, cx| {
                     InspectorController::defer(cx, InspectorController::refresh_target);
                 })),
         )
         .child(
-            header_button("inspector-pick", "Pick element")
+            header_button("inspector-pick", "Pick element", cx)
                 .cursor_pointer()
                 .when(inspector.is_picking(), |button| {
-                    button.bg(theme::colors().button_background_selected)
+                    button.bg(theme::colors(cx).button_background_selected)
                 })
                 .on_click(cx.listener(|inspector, _, window, cx| {
                     inspector.start_picking();
@@ -48,8 +48,8 @@ pub(super) fn render_inspector(
         .size_full()
         .flex()
         .flex_col()
-        .bg(theme::colors().background_primary)
-        .text_color(theme::colors().text_primary)
+        .bg(theme::colors(cx).background_primary)
+        .text_color(theme::colors(cx).text_primary)
         .child(crate::window_host::chrome::title_bar(
             div()
                 .id("inspector-title")
@@ -60,6 +60,7 @@ pub(super) fn render_inspector(
                 .px_3()
                 .child("Lapis Inspector"),
             |_, window, _| window.remove_window(),
+            cx,
         ))
         .child(
             div()
@@ -69,14 +70,14 @@ pub(super) fn render_inspector(
                 .p(tokens::spacing::GAP)
                 .gap(tokens::spacing::GAP)
                 .child(
-                    panel_surface()
+                    panel_surface(cx)
                         .id("inspector-tree-island")
                         .w(tokens::size::SIDE_PANEL_WIDTH)
                         .flex_none()
                         .child(render_tree(inspector, cx)),
                 )
                 .child(
-                    panel_surface()
+                    panel_surface(cx)
                         .id("inspector-details-island")
                         .flex_1()
                         .child(details_header)
@@ -88,10 +89,11 @@ pub(super) fn render_inspector(
                                 div()
                                     .p_3()
                                     .when_some(
-                                        render_active_summary(inspector),
+                                        render_active_summary(inspector, cx),
                                         |element, summary| element.child(summary),
                                     )
                                     .children(inspector.render_inspector_states(window, cx)),
+                                cx,
                             )
                             .min_w(px(0.))
                             .min_h(px(0.))

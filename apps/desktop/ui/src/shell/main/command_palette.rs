@@ -26,6 +26,7 @@ impl Shell {
         crate::components::floating_panel(
             "command-palette",
             crate::components::SurfaceVariant::Popover,
+            cx,
         )
         .absolute()
         .top(px(49.0))
@@ -44,9 +45,9 @@ impl Shell {
                 .flex()
                 .items_center()
                 .gap_2()
-                .bg(theme::colors().background_secondary)
+                .bg(theme::colors(cx).background_secondary)
                 .text_size(px(12.0))
-                .text_color(theme::colors().text_secondary)
+                .text_color(theme::colors(cx).text_secondary)
                 .child(crate::components::Icon::new(
                     crate::components::IconName::Search,
                 ))
@@ -56,7 +57,7 @@ impl Shell {
             commands
                 .into_iter()
                 .map(|(index, label, shortcut, command)| {
-                    command_item(index, label, shortcut).on_click(cx.listener(
+                    command_item(index, label, shortcut, cx).on_click(cx.listener(
                         move |this, _, window, cx| {
                             this.execute_command(command.clone(), window, cx);
                         },
@@ -68,7 +69,7 @@ impl Shell {
                 .pt_1()
                 .px_2()
                 .text_size(px(10.0))
-                .text_color(theme::colors().text_tertiary)
+                .text_color(theme::colors(cx).text_tertiary)
                 .child("Esc で閉じる"),
         )
     }

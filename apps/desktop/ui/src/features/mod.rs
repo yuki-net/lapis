@@ -9,6 +9,7 @@ pub(crate) mod preview;
 pub(crate) mod problems;
 pub(crate) mod search;
 pub(crate) mod settings;
+pub(crate) mod settings_coordinator;
 pub(crate) mod tasks;
 pub(crate) mod terminal;
 

@@ -1,0 +1,89 @@
+[environment]
+os=Windows 11 Pro 10.0.26200
+rustc=1.96.0 (ac68faa20 2026-05-25)
+subsecond=0.7.10
+dioxus_cli=0.7.10
+target=x86_64-pc-windows-msvc
+
+[minimal-no-large-frame]
+result=success
+observed=同一PIDのまま数値変更を複数回反映
+
+[minimal-large-frame-before-cli-fix]
+change=16 KiBのローカル配列をホット関数へ追加
+observed=patch-applied後にthread main has overflowed its stack
+exit_code=0xc00000fd
+generated_stub=48 B8 <address> FF E0 (mov rax, address; jmp rax)
+generated_function=mov eax, 4030h; call __chkstk; sub rsp, rax
+
+[gpui-probe]
+result=success
+window_count=1
+observed=背景色変更後もPID=66368、Window handle=18883208を維持し、描画ログを継続
+scope=1 Window、1 Render Entity、明示的refresh_windows
+
+[causal-chain]
+1=大きなスタックフレームがRAXへサイズを設定
+2=__chkstkへのWindowsスタブがRAXをアドレスへ上書き
+3=__chkstk復帰後のsub rsp, raxが不正値を使用
+4=stack overflow (0xc00000fd)
+
+[upstream-fix]
+pr=https://github.com/DioxusLabs/dioxus/pull/5967
+fix=Windows x64 stubをjmp [rip+0]へ変更し、RAXを保存
+status=検証時点で未マージ。修正済みCLIでLapis本体の最終追試が必要
+
+[minimal-large-frame-after-cli-fix]
+result=success
+observed=同一PIDのまま数値変更を継続反映し、stack overflowなし
+cli_fix=PR #5967相当のjmp [rip+0]スタブ
+
+[gpui-probe-after-cli-fix]
+result=success
+observed=同一PID・Windowを維持し、patch-applied後にrefresh windows=1。背景色変更後も描画継続
+
+[lapis-before-theme-workaround]
+result=failure
+observed=修正済みCLIでShell背景色を変更するとpatch DLL適用後に0xc000041d
+fault=0xc0000005 at liblapis-patch offset 0x2ff663
+symbol=lapis_desktop_ui::theme::registry::THEMES::constant$0::closure_env$0
+analysis=patched DLLのthread_local! THEMES accessorが元EXEのMSVC TLS領域外アドレスを参照
+note=これは旧実装（個別HotFn per Feature）時点の結果。後の単回接続試験ではTLSクラッシュが再発
+
+[lapis-after-root-hotfn]
+result=success
+observed=PIDを維持。Shell背景色を複数回保存し、各回patch-appliedとrefresh windows=1。終了イベントなし
+fix=Shell::renderの1箇所にHotFnを置き、ThemeRegistry accessorはpatch DLLに含まれなくなった
+hot_patch_ms=1293-1586
+analysis=この試験ではTLSクラッシュが発生しなかったが、後の試験で再発したため恒久的な解消とは判断できない
+
+[scope]
+state=同一プロセスと既存Windowの維持を確認。未保存編集・タブ・Panel・フォーカス・Terminalの全項目は今回未確認
+unsupported=構造体レイアウト、独自Element、include_str!テーマJSON変更は再起動または別機構
+reconnection=自動再接続は対象外。初回接続失敗または切断後は手動再起動が必要
+single_connection_change=修正版dxで起動しPID=66652、Window=28053820を確認。Shell::render_hotに一時ログを加え、patch-applied、refresh windows=1、新しいログの実行を確認
+single_connection_failure=最初のパッチ後、2回目の一時編集付近で終了コード0xc000041d。イベントログにpatch DLLの0xc0000005、offset=0x37a6d3。PDBではtheme::registry::THEMESのthread_local accessorと判明。画面キャプチャは透明で表示変化を確認できず
+syntax_tls=Syntax Themeの選択値もthread_local!に保持。Hot Patch後の同種障害は未検証
+followup=Theme / Syntax state ownershipは後続Stacked PR、custom Elementはその後のPRで扱う
+timing=dxのHot-patchingログは2114ms、直後にpatch-appliedとrefresh windows=1。saveからvisibleまでの時間と各工程の内訳は未計測
+
+[common-view-dispatch-wip]
+observed=修正版dxでPID=64392を起動。Shell::renderに一時ログを追加し、Hot-patching=2559ms、patch-applied、refresh windows=1、変更後ログの実行を確認
+limitation=その後0xc000041dで終了。実画面の変更と状態維持は未検証
+
+[common-view-probe]
+app_global_probe=PID=19576でApp GlobalをDark / IntelliJに変更し、patch適用後のRenderで同じ値を確認。さらにWhite / Zedへ更新できた。一時probeは削除
+icon_global_probe=PID=29204のGPUI probeで実際のIcon / FileIconをApp Globalから取得した色で描画し、明暗切替で両者の色変化を確認。Inspector有効前後のpatchで変更後Icon RenderOnce実行と画面表示を確認。Lapis本体のInspector UIは未検証
+app_global_lapis=RustRoverのRunからPID=23164で起動。Dark / IntelliJ選択後にShellの一時表示変更を同一PIDで画面確認。White / Zedへ切替後、Settingsの一時表示変更も同一PIDで画面確認。両試行で選択状態を維持しクラッシュなし。
+app_global_inspector=別起動PID=18832でInspector treeを表示し、White / Zedの状態でFilesの一時表示変更を同一PIDで画面確認。Hot-patching=2340ms、patch-applied、refresh windows=2を確認。
+app_global_multiwindow=別起動PID=68896でDesktop Windowを2つ作成。片方のWhiteからDarkへの変更が他方へ反映され、逆方向にSyntaxをIntelliJ、Localeを日本語へ変更した結果が元のWindowへ反映されたことを画面確認。
+observed=修正版dx、PID=53140。別々にtyped EntityとAnyViewのRenderを変更し、それぞれpatch-applied、refresh windows=1、新Renderのログを確認。変更後の2つの文字列を画面で確認
+timing=AnyViewは保存時刻から変更後Renderログまで1980ms、dx Hot-patching=1941ms。表示確認時刻は別途計測していないためsave-to-visibleは未計測
+visible_bound=別試行で保存時刻1793193920386ms、変更後の画面キャプチャ時刻1793193924283ms。save-to-visibleは3897ms以内（キャプチャ時刻による上限）。dx Hot-patching=1271ms、PID=78020を維持
+
+[common-view-inspector]
+ide_run=RustRoverのRunから修正版dxとLapisが起動。PID=79652で一時変更を保存し、Hot-patching=1994ms、patch-applied、refresh windows=1、変更後Renderのログを確認
+ide_stop=RustRoverのStop後、launcherは終了したがdx PID=69836が残存。ロックはlauncher所有のため強制終了後の重複起動防止は未対応。検証用dxとHostは手動で終了
+observed=PID=40456でInspectorを開きElement treeを確認。Shellの一時変更でHot-patching=2209ms、patch-applied、refresh windows=2、新Renderのログを確認。その後0xc000041dで終了
+files=Inspector OFFのPID=16576でFilesの一時変更はpatch-appliedとrefresh windows=1まで到達。Filesの新Renderログより前に0xc000041dで終了
+launcher=cargo runから修正版dxとLapisが起動。同一worktreeからの2回目の起動はファイルロックで拒否。

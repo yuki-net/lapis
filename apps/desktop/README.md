@@ -51,6 +51,38 @@ WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用
 
 コミット時のhookはRustのfmtとworkspace全体の`cargo check`で、変更関連のテストは手元で実行します。全体の合否は `.github/workflows/ci.yml` のCIで確認します。Rustの検証内容は `scripts/check.py` をCIとローカルで共有し、既存の対象・警告の扱いを維持しています。実画面の確認はCIとは別に行います。
 
+## Hot Reload（Windows 開発用）
+
+WindowsのDebug開発時に、Rust/GPUIのUIコードを変更してもLapisを終了せずに既存Windowへ描画変更を反映できます。Releaseには一切含めません。
+
+| 操作 | コマンド |
+| --- | --- |
+| 通常起動（Hot Reloadなし） | `cargo dev` |
+| Hot Reload起動 | 修正版 `dx serve`（下記参照） |
+
+IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` は修正版dx経由のHot Reload起動です。
+
+Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
+
+### 概要
+
+- GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。
+- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は `ui/experiments/hot-reload/evidence.txt` を参照してください。
+- Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
+- devserverへの接続は起動時の1回だけです。自動再接続には対応していません。
+- 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
+- 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
+
+### 接続
+
+接続先はDioxus CLIが設定する環境変数から取得します。初回接続に失敗した場合や接続が切れた場合は、devserverとLapisを手動で再起動してください。自動再接続が必要な場合はDioxus upstreamの改善を含む別課題として扱います。
+
+### 制限
+
+- Windows x64でのみ検証済み。他のプラットフォームでの動作は未確認です。
+- 修正版`dx` CLIが必要です（Dioxus PR #5967がマージされるまで）。
+- ReleaseビルドにはHot Reloadランタイムを含めません。
+
 ## Host接続
 
 通常起動は独立したLocal HostへQUICで接続します。「ファイル → Hostに接続…」は招待または保存済みprofileを選び、新しい接続画面を開きます。既存画面の未保存編集は保持します。起動時は `--host <file>`、検証用に状態を分離する場合は `--state-directory <directory>` を使用できます。
@@ -66,7 +98,7 @@ Terminalの「Host Terminals」は既存端末を一覧し、「Attach」で同�
 
 Root ごとに WindowGroup を作り、Detached は元の Client worker と Document を共有する。Shell の共通描画を使い、Focus・Active Tab・scroll は Window ごとに持つ。Tool の実行資源を複製して移動することはない。終了・移動・将来の配置復元の契約は [WindowGroup](../../docs/specs/architecture.md#desktop-の-windowgroup) を参照。
 
-Windows では `cargo build -p lapis -p lapis-host` 後に `./scripts/test_window_host.ps1` で隔離した Native Window のスモーク検証を実行できる。Release は `cargo build -p lapis -p lapis-host --release` で両binaryを生成し、`-Binary <release/lapis.exe>` を指定する。テストは一時 Workspace のみを編集し、利用者の設定は使用しない。
+Windows では `cargo build -p lapis` 後に `./scripts/test_window_host.ps1` で隔離した Native Window のスモーク検証を実行できる。Release は `-Binary <release/lapis.exe>` を指定する。テストは一時 Workspace のみを編集し、利用者の設定は使用しない。
 
 Debugの独立Inspectorは既存のHelpメニュー/コマンドから開く。検査APIとの境界は
 `ui/src/devtools/inspection.rs`、Treeの表示状態とOverlayは同じdevtools内が所有する。

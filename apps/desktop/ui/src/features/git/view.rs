@@ -8,7 +8,7 @@ use gpui::{Context, Render, Window, div, prelude::*, px};
 use lapis_git::{ChangeKind, ConflictSide, GitAction};
 
 impl Render for GitFeature {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let mut content = div()
             .id("git-content")
             .flex()
@@ -29,7 +29,7 @@ impl Render for GitFeature {
                     ]
                     .into_iter()
                     .map(|(label, action)| {
-                        action_button(label, false).on_click(cx.listener(
+                        action_button(label, false, cx).on_click(cx.listener(
                             move |this, _, window, cx| {
                                 this.execute_action(action.clone(), window, cx)
                             },
@@ -52,21 +52,21 @@ impl Render for GitFeature {
                     ]
                     .into_iter()
                     .map(|(label, kind)| {
-                        action_button(label, false).on_click(
+                        action_button(label, false, cx).on_click(
                             cx.listener(move |this, _, _, cx| this.prompt_input(kind, cx)),
                         )
                     }),
                 ),
             )
             .child(
-                action_button("登録環境", self.target.is_none())
+                action_button("登録環境", self.target.is_none(), cx)
                     .on_click(cx.listener(|this, _, _, cx| this.select_target(None, cx))),
             )
-            .child(action_button("Worktree作成", false).on_click(
+            .child(action_button("Worktree作成", false, cx).on_click(
                 cx.listener(|this, _, _, cx| this.submit(GitOperation::CreateWorktree, cx)),
             ))
             .child(
-                action_button("Taskを登録環境へ戻す", false)
+                action_button("Taskを登録環境へ戻す", false, cx)
                     .on_click(cx.listener(|this, _, _, cx| this.open_task_worktree(None, cx))),
             );
         for (index, (id, status)) in self.snapshot.worktree_statuses.iter().enumerate() {
@@ -83,24 +83,29 @@ impl Render for GitFeature {
                         action_button(
                             format!("Worktree {} · {}", id.as_str(), status.branch),
                             self.target.as_ref() == Some(id),
+                            cx,
                         )
                         .on_click(cx.listener(move |this, _, _, cx| {
                             this.select_target(Some(select.clone()), cx)
                         })),
                     )
-                    .child(action_button("このTaskで作業", false).on_click(cx.listener(
-                        move |this, _, _, cx| this.open_task_worktree(Some(open.clone()), cx),
-                    )))
-                    .child(action_button("Worktree削除…", false).on_click(cx.listener(
-                        move |this, _, window, cx| {
-                            this.confirm_operation(
-                                GitOperation::Discard(remove.clone()),
-                                format!("Worktree {}を削除", remove.as_str()),
-                                window,
-                                cx,
-                            );
-                        },
-                    ))),
+                    .child(
+                        action_button("このTaskで作業", false, cx).on_click(cx.listener(
+                            move |this, _, _, cx| this.open_task_worktree(Some(open.clone()), cx),
+                        )),
+                    )
+                    .child(
+                        action_button("Worktree削除…", false, cx).on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.confirm_operation(
+                                    GitOperation::Discard(remove.clone()),
+                                    format!("Worktree {}を削除", remove.as_str()),
+                                    window,
+                                    cx,
+                                );
+                            },
+                        )),
+                    ),
             );
         }
         if let Some(status) = self.selected_status() {
@@ -122,11 +127,11 @@ impl Render for GitFeature {
                     .gap_1()
                     .p_2()
                     .border_1()
-                    .border_color(theme::colors().border_default)
+                    .border_color(theme::colors(cx).border_default)
                     .child(
                         div()
                             .text_size(px(11.0))
-                            .text_color(change_color(file.kind))
+                            .text_color(change_color(file.kind, cx))
                             .child(format!(
                                 "{} · {} · {}",
                                 if staged { "INDEX" } else { "WORKING" },
@@ -139,7 +144,7 @@ impl Render for GitFeature {
                             .flex()
                             .flex_wrap()
                             .gap_1()
-                            .child(action_button("Diff", false).on_click(cx.listener(
+                            .child(action_button("Diff", false, cx).on_click(cx.listener(
                                 move |this, _, window, cx| {
                                     this.execute_action(
                                         GitAction::Diff {
@@ -152,7 +157,7 @@ impl Render for GitFeature {
                                 },
                             )))
                             .child(
-                                action_button(if staged { "Unstage" } else { "Stage" }, true)
+                                action_button(if staged { "Unstage" } else { "Stage" }, true, cx)
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.execute_action(
                                             if staged {
@@ -173,51 +178,52 @@ impl Render for GitFeature {
                 if file.kind == ChangeKind::Conflicted {
                     let ours = file.path.clone();
                     let theirs = ours.clone();
-                    row = row.child(
-                        div()
-                            .flex()
-                            .gap_1()
-                            .child(action_button("Oursを採用…", false).on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.execute_action(
-                                        GitAction::Resolve {
-                                            path: ours.clone(),
-                                            side: ConflictSide::Ours,
-                                        },
-                                        window,
-                                        cx,
-                                    )
-                                },
-                            )))
-                            .child(action_button("Theirsを採用…", false).on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.execute_action(
-                                        GitAction::Resolve {
-                                            path: theirs.clone(),
-                                            side: ConflictSide::Theirs,
-                                        },
-                                        window,
-                                        cx,
-                                    )
-                                },
-                            )))
-                            .child("Editorで修正して保存した後、Stage → Commitでも解消できます。"),
-                    );
+                    row =
+                        row.child(
+                            div()
+                                .flex()
+                                .gap_1()
+                                .child(action_button("Oursを採用…", false, cx).on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.execute_action(
+                                            GitAction::Resolve {
+                                                path: ours.clone(),
+                                                side: ConflictSide::Ours,
+                                            },
+                                            window,
+                                            cx,
+                                        )
+                                    }),
+                                ))
+                                .child(action_button("Theirsを採用…", false, cx).on_click(
+                                    cx.listener(move |this, _, window, cx| {
+                                        this.execute_action(
+                                            GitAction::Resolve {
+                                                path: theirs.clone(),
+                                                side: ConflictSide::Theirs,
+                                            },
+                                            window,
+                                            cx,
+                                        )
+                                    }),
+                                ))
+                                .child(
+                                    "Editorで修正して保存した後、Stage → Commitでも解消できます。",
+                                ),
+                        );
                 }
                 if let Some(worktree) = worktree {
                     let path = file.path.clone();
-                    row = row.child(
-                        action_button("登録環境へ取込…", false).on_click(cx.listener(
-                            move |this, _, window, cx| {
-                                this.confirm_operation(
-                                    GitOperation::Import(worktree.clone(), path.clone()),
-                                    format!("Worktree {} の {} を取込", worktree.as_str(), path),
-                                    window,
-                                    cx,
-                                );
-                            },
-                        )),
-                    );
+                    row = row.child(action_button("登録環境へ取込…", false, cx).on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.confirm_operation(
+                                GitOperation::Import(worktree.clone(), path.clone()),
+                                format!("Worktree {} の {} を取込", worktree.as_str(), path),
+                                window,
+                                cx,
+                            );
+                        }),
+                    ));
                 }
                 content = content.child(row);
             }
@@ -226,6 +232,7 @@ impl Render for GitFeature {
                 "⑂",
                 "Git repositoryを確認中です",
                 "Project / Taskの操作対象を選択してください",
+                cx,
             ));
         }
         if let (Some(diff), Some(selection)) =
@@ -255,6 +262,7 @@ impl Render for GitFeature {
                                 if selection.staged { "Unstage" } else { "Stage" }
                             ),
                             false,
+                            cx,
                         )
                         .on_click(cx.listener(
                             move |this, _, window, cx| {
@@ -278,11 +286,11 @@ impl Render for GitFeature {
                     .font_family("Cascadia Mono")
                     .text_size(px(11.0))
                     .text_color(if line.starts_with('+') {
-                        theme::colors().positive_text
+                        theme::colors(cx).positive_text
                     } else if line.starts_with('-') {
-                        theme::colors().danger_text
+                        theme::colors(cx).danger_text
                     } else {
-                        theme::colors().text_secondary
+                        theme::colors(cx).text_secondary
                     })
                     .child(line.to_owned())
             }));

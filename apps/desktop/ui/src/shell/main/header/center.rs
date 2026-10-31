@@ -16,12 +16,13 @@ impl Shell {
                 crate::components::header_button(
                     "header-workspace",
                     self.session.workspace_name().to_owned(),
+                    cx,
                 )
                 .on_click(cx.listener(|_, _, _, cx| cx.notify())),
             )
-            .child(div().text_color(theme::colors().text_tertiary).child("›"))
+            .child(div().text_color(theme::colors(cx).text_tertiary).child("›"))
             .child(
-                crate::components::header_button("header-branch", "make-develop")
+                crate::components::header_button("header-branch", "make-develop", cx)
                     .on_click(cx.listener(|_, _, _, cx| cx.notify())),
             )
     }

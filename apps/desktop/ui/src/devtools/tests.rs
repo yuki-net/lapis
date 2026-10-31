@@ -32,6 +32,7 @@ impl Render for Target {
 }
 
 fn setup(cx: &mut TestAppContext) -> WindowHandle<Target> {
+    cx.update(|cx| crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx));
     cx.update(super::init);
     cx.add_window(|_, _| Target {
         width: px(200.),
@@ -671,6 +672,7 @@ impl Render for LargeTarget {
 
 #[gpui::test]
 fn large_tree_renders_only_viewport_rows_and_reveals_selection(cx: &mut TestAppContext) {
+    cx.update(|cx| crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx));
     cx.update(super::init);
     let target = cx.add_window(|_, _| LargeTarget);
     let viewer = cx

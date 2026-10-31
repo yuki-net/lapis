@@ -21,7 +21,7 @@ impl Shell {
                     this.close_header_menu(cx);
                 }))
                 .child(
-                    menu_surface("header-menu-column")
+                    menu_surface("header-menu-column", cx)
                         .w(px(190.0))
                         .h(px(164.0))
                         .p(tokens::spacing::XS)
@@ -60,11 +60,15 @@ impl Shell {
             .justify_between()
             .text_size(px(13.0))
             .when(active, |item| {
-                item.bg(theme::colors().button_background_selected)
+                item.bg(theme::colors(cx).button_background_selected)
             })
-            .hover(|style| style.bg(theme::colors().button_background_selected))
+            .hover(|style| style.bg(theme::colors(cx).button_background_selected))
             .child(localized_label)
-            .child(div().text_color(theme::colors().text_secondary).child("›"))
+            .child(
+                div()
+                    .text_color(theme::colors(cx).text_secondary)
+                    .child("›"),
+            )
             .on_hover(cx.listener(move |this, hovered: &bool, _, cx| {
                 if *hovered {
                     this.select_header_menu(menu, cx);
@@ -92,7 +96,7 @@ impl Shell {
             .flat_map(|item| {
                 let separator = item
                     .separator_before
-                    .then(|| separator().into_any_element());
+                    .then(|| separator(cx).into_any_element());
                 separator.into_iter().chain(std::iter::once(
                     self.render_header_item(menu_prefix, item, cx)
                         .into_any_element(),
@@ -100,38 +104,44 @@ impl Shell {
             })
             .collect::<Vec<_>>();
 
-        menu_surface(ElementId::Name(format!("header-submenu-{menu:?}").into()))
-            .absolute()
-            .left(px(184.0))
-            .top(px(0.0))
-            .w(px(250.0))
-            .max_h(px(360.0))
-            .overflow_y_scroll()
-            .p(tokens::spacing::XS)
-            .children(children)
-            .when(menu == MenuId::View, |surface| {
-                surface.child(separator()).children(
-                    self.panel_visibility_entries()
-                        .into_iter()
-                        .map(|(panel_id, label, _)| {
-                            let id = format!("panel_id-visibility-{}", panel_id.as_str());
-                            menu_item(MenuItemSpec {
+        menu_surface(
+            ElementId::Name(format!("header-submenu-{menu:?}").into()),
+            cx,
+        )
+        .absolute()
+        .left(px(184.0))
+        .top(px(0.0))
+        .w(px(250.0))
+        .max_h(px(360.0))
+        .overflow_y_scroll()
+        .p(tokens::spacing::XS)
+        .children(children)
+        .when(menu == MenuId::View, |surface| {
+            surface
+                .child(separator(cx))
+                .children(self.panel_visibility_entries().into_iter().map(
+                    |(panel_id, label, _)| {
+                        let id = format!("panel_id-visibility-{}", panel_id.as_str());
+                        menu_item(
+                            MenuItemSpec {
                                 id: id.into(),
                                 label: label.into(),
                                 shortcut: None,
                                 icon: None,
                                 enabled: true,
-                            })
-                            .on_click(cx.listener(
-                                move |this, _, window, cx| {
-                                    this.toggle_panel_visibility(panel_id.clone(), cx);
-                                    this.close_header_menu(cx);
-                                    window.focus(&this.focus_handle);
-                                },
-                            ))
-                        }),
-                )
-            })
+                            },
+                            cx,
+                        )
+                        .on_click(cx.listener(
+                            move |this, _, window, cx| {
+                                this.toggle_panel_visibility(panel_id.clone(), cx);
+                                this.close_header_menu(cx);
+                                window.focus(&this.focus_handle);
+                            },
+                        ))
+                    },
+                ))
+        })
     }
 
     fn render_header_item(
@@ -150,13 +160,16 @@ impl Shell {
         } else {
             resolved
         };
-        menu_item(MenuItemSpec {
-            id: format!("header-menu-item-{id}").into(),
-            label: label.into(),
-            shortcut: item.shortcut.map(Into::into),
-            icon: None,
-            enabled,
-        })
+        menu_item(
+            MenuItemSpec {
+                id: format!("header-menu-item-{id}").into(),
+                label: label.into(),
+                shortcut: item.shortcut.map(Into::into),
+                icon: None,
+                enabled,
+            },
+            cx,
+        )
         .when(enabled, |row| {
             row.on_click(cx.listener(move |this, _, window, cx| {
                 if let Some(action) = action {

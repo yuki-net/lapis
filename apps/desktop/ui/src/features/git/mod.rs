@@ -49,11 +49,11 @@ fn change_label(kind: ChangeKind) -> &'static str {
     }
 }
 
-fn change_color(kind: ChangeKind) -> gpui::Rgba {
+fn change_color(kind: ChangeKind, cx: &gpui::App) -> gpui::Rgba {
     match kind {
-        ChangeKind::Added => theme::colors().positive_text,
-        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors().danger_text,
-        ChangeKind::Modified | ChangeKind::Renamed => theme::colors().warning_text,
-        ChangeKind::Untracked => theme::colors().text_secondary,
+        ChangeKind::Added => theme::colors(cx).positive_text,
+        ChangeKind::Deleted | ChangeKind::Conflicted => theme::colors(cx).danger_text,
+        ChangeKind::Modified | ChangeKind::Renamed => theme::colors(cx).warning_text,
+        ChangeKind::Untracked => theme::colors(cx).text_secondary,
     }
 }

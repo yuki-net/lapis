@@ -3,7 +3,7 @@ use crate::components::{ButtonSize, button};
 
 impl Shell {
     /// フッター（ステータスバー）を描画する。
-    pub(super) fn render_footer(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let (line, column) = self.session.cursor;
         let mut path = div()
             .flex()
@@ -13,10 +13,14 @@ impl Shell {
             .overflow_hidden();
         for (index, part) in self.footer_path_parts().iter().enumerate() {
             if index > 0 {
-                path = path.child(div().text_color(theme::colors().text_secondary).child("/"));
+                path = path.child(
+                    div()
+                        .text_color(theme::colors(cx).text_secondary)
+                        .child("/"),
+                );
             }
             path = path.child(
-                button(("footer-path", index), part.clone(), ButtonSize::Xs)
+                button(("footer-path", index), part.clone(), ButtonSize::Xs, cx)
                     .text_size(tokens::typography::FONT_SM),
             );
         }
@@ -27,9 +31,9 @@ impl Shell {
             .items_center()
             .gap(tokens::spacing::XS)
             .text_size(tokens::typography::FONT_SM)
-            .child(self.footer_button("footer-position", format!("{line}:{column}")))
-            .child(self.footer_button("footer-line-ending", self.footer_line_ending()))
-            .child(self.footer_button("footer-encoding", self.footer_encoding()));
+            .child(self.footer_button("footer-position", format!("{line}:{column}"), cx))
+            .child(self.footer_button("footer-line-ending", self.footer_line_ending(), cx))
+            .child(self.footer_button("footer-encoding", self.footer_encoding(), cx));
 
         div()
             .debug_selector(|| "footer".into())
@@ -43,7 +47,7 @@ impl Shell {
             .child(path)
             .child(
                 div()
-                    .text_color(theme::colors().text_secondary)
+                    .text_color(theme::colors(cx).text_secondary)
                     .child(self.status.clone()),
             )
             .child(right)
@@ -76,8 +80,9 @@ impl Shell {
         &self,
         id: &'static str,
         label: impl Into<SharedString>,
+        cx: &gpui::App,
     ) -> gpui::Stateful<gpui::Div> {
-        button(id, label.into(), ButtonSize::Xs).text_size(tokens::typography::FONT_SM)
+        button(id, label.into(), ButtonSize::Xs, cx).text_size(tokens::typography::FONT_SM)
     }
 
     fn footer_line_ending(&self) -> &'static str {

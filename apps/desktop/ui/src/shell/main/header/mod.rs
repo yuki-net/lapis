@@ -15,6 +15,7 @@ impl Shell {
         crate::window_host::chrome::title_bar(
             self.render_app_header(cx),
             cx.listener(|_, _, _, cx| cx.emit(UiCommand::CloseWindow)),
+            cx,
         )
     }
 

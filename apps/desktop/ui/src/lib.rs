@@ -7,6 +7,8 @@ mod components;
 mod devtools;
 pub mod extension_ui;
 mod features;
+#[cfg(all(feature = "hot-reload", debug_assertions))]
+mod hot_reload;
 pub mod keymap;
 pub mod localization;
 pub mod notification;
