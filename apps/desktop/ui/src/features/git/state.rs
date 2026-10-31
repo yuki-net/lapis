@@ -256,6 +256,7 @@ pub(crate) struct GitFeature {
     worker: ClientWorker<GitSession>,
     backend: std::sync::Arc<dyn lapis_git::GitConnection>,
     subscription_generation: u64,
+    worktree_refresh_generation: u64,
     workspace: Option<WorkspaceId>,
     gate: ResponseGate,
     pending: usize,
@@ -281,6 +282,7 @@ impl GitFeature {
             worker: ClientWorker::new(session),
             backend,
             subscription_generation: 0,
+            worktree_refresh_generation: 0,
             workspace: None,
             gate: ResponseGate::default(),
             pending: 0,
@@ -414,6 +416,10 @@ impl GitFeature {
         );
         let token = (!is_event).then(|| self.gate.issue());
         let generation = self.subscription_generation;
+        if is_worktree_refresh {
+            self.worktree_refresh_generation = self.worktree_refresh_generation.wrapping_add(1);
+        }
+        let worktree_generation = self.worktree_refresh_generation;
         self.pending += 1;
         let admitted = self.worker.submit(
             cx,
@@ -468,7 +474,7 @@ impl GitFeature {
                     return;
                 }
                 match result {
-                    Ok(snapshot) => {
+                    Ok(mut snapshot) => {
                         if is_event {
                             if snapshot.status.as_ref().is_some_and(|incoming| {
                                 git.snapshot
@@ -478,8 +484,22 @@ impl GitFeature {
                             }) {
                                 git.snapshot.status = snapshot.status;
                             }
-                            if is_worktree_refresh {
-                                git.snapshot.worktree_statuses = snapshot.worktree_statuses;
+                            if is_worktree_refresh
+                                && git.worktree_refresh_generation == worktree_generation
+                            {
+                                let mut incoming = snapshot.worktree_statuses;
+                                for (id, status) in &mut incoming {
+                                    if let Some((_, current)) = git
+                                        .snapshot
+                                        .worktree_statuses
+                                        .iter()
+                                        .find(|(existing, _)| existing == id)
+                                        && current.revision > status.revision
+                                    {
+                                        *status = current.clone();
+                                    }
+                                }
+                                git.snapshot.worktree_statuses = incoming;
                             } else {
                                 for (id, incoming) in snapshot.worktree_statuses {
                                     if let Some((_, current)) = git
@@ -494,6 +514,27 @@ impl GitFeature {
                                 }
                             }
                         } else {
+                            if let (Some(current), Some(incoming)) =
+                                (&git.snapshot.status, &snapshot.status)
+                                && incoming.revision < current.revision
+                            {
+                                snapshot.status = Some(current.clone());
+                            }
+                            if git.worktree_refresh_generation != worktree_generation {
+                                snapshot.worktree_statuses = git.snapshot.worktree_statuses.clone();
+                            } else {
+                                for (id, incoming) in &mut snapshot.worktree_statuses {
+                                    if let Some((_, current)) = git
+                                        .snapshot
+                                        .worktree_statuses
+                                        .iter()
+                                        .find(|(existing, _)| existing == id)
+                                        && current.revision > incoming.revision
+                                    {
+                                        *incoming = current.clone();
+                                    }
+                                }
+                            }
                             git.snapshot = snapshot;
                         }
                         if git.target.as_ref().is_some_and(|target| {
