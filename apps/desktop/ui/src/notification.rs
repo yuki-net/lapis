@@ -231,20 +231,24 @@ impl Render for Center {
                     ))
                     .child(event.title)
                     .child(event.message)
-                    .children(event.actions.into_iter().enumerate().map(
-                        |(index, action)| {
-                            let execute = execute.clone();
-                            div()
-                                .id(gpui::SharedString::from(format!(
-                                    "notification-action-{id}-{index}"
-                                )))
-                                .cursor_pointer()
-                                .child(action.label)
-                                .on_click(move |_, window, cx| {
-                                    execute(action.command.clone(), window, cx)
-                                })
-                        },
-                    ))
+                    .children(
+                        event
+                            .actions
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, action)| {
+                                let execute = execute.clone();
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "notification-action-{id}-{index}"
+                                    )))
+                                    .cursor_pointer()
+                                    .child(action.label)
+                                    .on_click(move |_, window, cx| {
+                                        execute(action.command.clone(), window, cx)
+                                    })
+                            }),
+                    )
                     .child(
                         div()
                             .flex()
