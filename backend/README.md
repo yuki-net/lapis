@@ -31,6 +31,8 @@ Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の�
 
 Host側の秘密鍵とcredentialはメモリ内に保持するため、Host再起動後は新しい公開証明書とペアリングが必要です。Remote credentialの期限は1日です。Desktopは「ファイル → Hostに接続…」または `cargo run -p lapis -- --host <招待.jsonまたは保存済みprofile.host>` で接続します。取り込んだ証明書とcredentialはWindowsのユーザー単位DPAPIで保護して保存し、以後はprofileから接続します。認証・証明書の不一致時に自動で信頼し直しません。
 
-Desktopの通常起動は同じ実行ファイルの `--managed-host` modeを独立processで起動し、loopback QUICで接続します。同じユーザーのstate directoryで一つのHostを共有し、複数のフォルダを登録できます。所有者credentialは匿名pipeで渡し、DPAPIで保護した `hosts/local-v1.host` に保存します。Local所有者の鍵はHostの寿命に紐付き、Remoteの招待には配布しません。通信失敗だけで既存Hostを終了・置換しません。Desktopを閉じてもHostのDocument・Terminalは残ります。Host自体の終了後は実行状態を復元しません。
+Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立processで起動し、loopback QUICで接続します。同じユーザーのstate directoryで一つのHostを共有し、複数のフォルダを登録できます。所有者credentialは匿名pipeで渡し、DPAPIで保護した `hosts/local-v1.host` に保存します。Local所有者の鍵はHostの寿命に紐付き、Remoteの招待には配布しません。通信失敗だけで既存Hostを終了・置換しません。Desktopを閉じてもHostのDocument・Terminalは残ります。Host自体の終了後は実行状態を復元しません。
+
+`lapis.exe`（Desktop Client）と `lapis-host.exe`（Host）は明確に分離されたbinaryです。Desktopは自身をHostとして起動せず、同じ出力ディレクトリから `lapis-host.exe` を解決して起動します。
 
 実通信と別processの回帰検証は `cargo test -p lapis-host --test quic --test standalone --test managed_client` で実行します。Unixの開発・CI環境ではDPAPIの代わりにdirectory 0700・file 0600を使用します。

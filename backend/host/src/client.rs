@@ -7,6 +7,19 @@ use std::{
     sync::Arc,
 };
 
+/// cargo testの実行ファイルも含め、同じ出力ディレクトリのHostを指定する。
+fn host_executable(current: &Path) -> std::io::Result<PathBuf> {
+    let mut dir = current
+        .parent()
+        .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))?;
+    if dir.ends_with("deps")
+        && let Some(parent) = dir.parent()
+    {
+        dir = parent;
+    }
+    Ok(dir.join(format!("lapis-host{}", std::env::consts::EXE_SUFFIX)))
+}
+
 /// Desktop向けportの変換を共有し、資源の所有者と接続先を分離する。
 #[derive(Clone)]
 pub struct BackendClient {
@@ -64,11 +77,14 @@ impl BackendClient {
             ))),
         }
     }
+    /// 現在のbinaryと同じディレクトリから `lapis-host` を解決し、Local Host を作成する。
     pub fn local_default() -> Result<Self, BackendServiceError> {
-        Ok(Self::local(
-            std::env::current_exe().map_err(|_| BackendServiceError::Unavailable)?,
-            Self::user_directory()?.join("hosts"),
-        ))
+        Self::local_in(Self::user_directory()?.join("hosts"))
+    }
+    pub fn local_in(directory: PathBuf) -> Result<Self, BackendServiceError> {
+        let current = std::env::current_exe().map_err(|_| BackendServiceError::Unavailable)?;
+        let host_exe = host_executable(&current).map_err(|_| BackendServiceError::Unavailable)?;
+        Ok(Self::local(host_exe, directory))
     }
     pub fn user_directory() -> Result<PathBuf, BackendServiceError> {
         let base = std::env::var_os("LOCALAPPDATA")
@@ -329,6 +345,26 @@ impl BackendClient {
                 }
             }
             Source::Quic { .. } => Err(BackendServiceError::Unavailable),
+        }
+    }
+}
+
+#[cfg(test)]
+mod executable_tests {
+    use super::*;
+    #[test]
+    fn host_is_resolved_from_debug_release_and_test_directories() {
+        for profile in ["debug", "release"] {
+            let output = PathBuf::from("target").join(profile);
+            let expected = output.join(format!("lapis-host{}", std::env::consts::EXE_SUFFIX));
+            assert_eq!(
+                host_executable(&output.join("lapis.exe")).unwrap(),
+                expected
+            );
+            assert_eq!(
+                host_executable(&output.join("deps").join("lapis-test.exe")).unwrap(),
+                expected
+            );
         }
     }
 }
