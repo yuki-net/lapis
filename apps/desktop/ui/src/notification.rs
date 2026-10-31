@@ -49,6 +49,8 @@ pub struct Store {
 
 impl gpui::Global for Store {}
 
+const MAX_ACTIONS: usize = 2;
+
 impl Severity {
     pub(crate) fn label(self, locale: &crate::localization::Localizer) -> String {
         let key = match self {
@@ -62,6 +64,7 @@ impl Severity {
 
 impl Store {
     fn publish(&mut self, mut event: Event) -> u64 {
+        event.actions.truncate(MAX_ACTIONS);
         self.next_id = self
             .next_id
             .checked_add(1)
@@ -228,7 +231,7 @@ impl Render for Center {
                     ))
                     .child(event.title)
                     .child(event.message)
-                    .children(event.actions.into_iter().take(2).enumerate().map(
+                    .children(event.actions.into_iter().enumerate().map(
                         |(index, action)| {
                             let execute = execute.clone();
                             div()
@@ -303,6 +306,39 @@ mod tests {
         assert!(store.events()[0].read);
         store.delete(ids[0]);
         assert_eq!(store.events().len(), 4);
+    }
+
+    #[test]
+    fn publish_limits_actions_to_two() {
+        let mut store = Store::default();
+        let event = Event {
+            id: 0,
+            kind: "agent.input_required".into(),
+            severity: Severity::Info,
+            title: "入力待ち".into(),
+            message: "確認が必要です".into(),
+            context: Context::default(),
+            actions: (0..3)
+                .map(|index| Action {
+                    label: format!("action-{index}"),
+                    command: CommandId::new(format!("command-{index}")),
+                })
+                .collect(),
+            occurred_at: SystemTime::now(),
+            read: false,
+        };
+
+        let id = store.publish(event);
+        let stored = store.events().iter().find(|event| event.id == id).unwrap();
+        assert_eq!(stored.actions.len(), MAX_ACTIONS);
+        assert_eq!(
+            stored
+                .actions
+                .iter()
+                .map(|action| action.command.as_str())
+                .collect::<Vec<_>>(),
+            ["command-0", "command-1"]
+        );
     }
 
     #[test]
