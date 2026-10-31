@@ -221,5 +221,8 @@ fn git_snapshot_update_is_applied_even_when_repository_reconciliation_fails() {
         .unwrap();
     assert_eq!(frontend.1.revision, 7);
     assert_eq!(frontend.1.branch, "event-branch");
-    assert!(session.last_refresh_error().is_some());
+    assert_eq!(
+        session.last_refresh_error().unwrap().to_string(),
+        "repository discovery failed"
+    );
 }
