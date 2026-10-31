@@ -443,6 +443,27 @@ impl GitSession {
         Ok(changed)
     }
 
+    pub fn reconcile_git_update(&mut self, update: lapis_git::GitUpdate) -> bool {
+        let is_snapshot = matches!(&update, lapis_git::GitUpdate::Snapshot(_));
+        let mut reconciliation_error = None;
+        if is_snapshot {
+            if let Err(error) = self.rescan_repositories() {
+                reconciliation_error = Some(error);
+            }
+            if self.status().is_some()
+                && let Err(error) = self.refresh_worktrees()
+                && reconciliation_error.is_none()
+            {
+                reconciliation_error = Some(error);
+            }
+        }
+        let changed = self.apply_git_update(update);
+        if is_snapshot {
+            self.last_refresh_error = reconciliation_error;
+        }
+        changed
+    }
+
     pub fn apply_git_update(&mut self, update: lapis_git::GitUpdate) -> bool {
         let statuses = match update {
             lapis_git::GitUpdate::Snapshot(statuses) => statuses,
