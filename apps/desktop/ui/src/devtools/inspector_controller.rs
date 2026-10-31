@@ -238,7 +238,7 @@ impl InspectorController {
         }
     }
 
-    fn target(entity: EntityId, cx: &App) -> Option<AnyWindowHandle> {
+    pub(super) fn target(entity: EntityId, cx: &App) -> Option<AnyWindowHandle> {
         cx.global::<Self>()
             .session(entity)
             .map(|session| session.target)
