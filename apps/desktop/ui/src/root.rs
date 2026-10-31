@@ -11,7 +11,7 @@ use crate::{
         conversation::{ConversationEvent, ConversationFeature},
         editor::{Editor, EditorEvent},
         files::FilesFeature,
-        git::{GitEvent, GitFeature, GitInputRequest},
+        git::{ChangesFeature, GitEvent, GitFeature, GitInputRequest},
         id,
         preview::PreviewFeature,
         problems::{ProblemsEvent, ProblemsFeature},
@@ -153,6 +153,7 @@ impl DesktopRoot {
         let editor = cx.new(|cx| Editor::new(worker.clone(), cx));
         let files = cx.new(|_| FilesFeature::new());
         let git = cx.new(|cx| GitFeature::new(services.git, cx));
+        let changes = cx.new(|cx| ChangesFeature::new(git.clone(), cx));
         let tasks = cx.new(|cx| TasksFeature::new(services.task, cx));
         let terminal = cx
             .new(|cx| TerminalFeature::new(services.terminal, terminal_root, conversation_id, cx));
@@ -199,6 +200,7 @@ impl DesktopRoot {
         let views = HashMap::<ViewId, AnyView>::from([
             (id::VIEW_FILES.into(), files.clone().into()),
             (id::VIEW_GIT.into(), git.clone().into()),
+            (id::VIEW_CHANGES.into(), changes.into()),
             (id::VIEW_ASSISTANT.into(), tasks.clone().into()),
             (id::VIEW_TERMINAL.into(), terminal.clone().into()),
             (id::VIEW_PROBLEMS.into(), problems.clone().into()),
@@ -1182,7 +1184,13 @@ impl DesktopRoot {
                     },
                     |root, result, cx| {
                         if let Err(error) = result {
-                            root.set_status(error, cx);
+                            let title = root.shell.read(cx).t("notification.error.persistence");
+                            crate::notification::publish_error(
+                                cx,
+                                "workspace.persistence_failed",
+                                &title,
+                                error,
+                            );
                         }
                     },
                 );
@@ -1443,12 +1451,24 @@ impl DesktopRoot {
                     move |_| factory.open_host(),
                     |root, result, cx| {
                         if let Err(error) = result {
-                            root.set_status(error, cx);
+                            let title = root.shell.read(cx).t("notification.error.host-launch");
+                            crate::notification::publish_error(
+                                cx,
+                                "host.connection_launcher_failed",
+                                &title,
+                                error,
+                            );
                         }
                     },
                 );
                 if let Err(error) = admitted {
-                    self.set_status(error, cx);
+                    let title = self.shell.read(cx).t("notification.error.host-launch");
+                    crate::notification::publish_error(
+                        cx,
+                        "host.connection_launcher_failed",
+                        &title,
+                        error,
+                    );
                 }
             }
             UiCommand::NewWindow => {
@@ -1466,11 +1486,20 @@ impl DesktopRoot {
                             },
                             cx,
                         ),
-                        Err(error) => root.set_status(error, cx),
+                        Err(error) => {
+                            let title = root.shell.read(cx).t("notification.error.window");
+                            crate::notification::publish_error(
+                                cx,
+                                "window.creation_failed",
+                                &title,
+                                error,
+                            );
+                        }
                     },
                 );
                 if let Err(error) = admitted {
-                    self.set_status(error, cx);
+                    let title = self.shell.read(cx).t("notification.error.window");
+                    crate::notification::publish_error(cx, "window.creation_failed", &title, error);
                 }
             }
             UiCommand::CloseWindow => {

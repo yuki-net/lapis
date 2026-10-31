@@ -212,7 +212,9 @@ impl FeatureRegistry {
     pub fn tool_contributions(&self, position: ZonePosition) -> Vec<&UiContribution> {
         self.zone_contributions(position)
             .into_iter()
-            .filter(|contribution| contribution.slot != UiSlot::SettingsPage)
+            .filter(|contribution| {
+                contribution.slot != UiSlot::SettingsPage && contribution.show_in_picker
+            })
             .collect()
     }
 
@@ -307,6 +309,21 @@ impl FeatureRegistry {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hidden_contributions_remain_available_for_layout() {
+        use super::*;
+        let mut registry = FeatureRegistry::default();
+        registry
+            .register(
+                FeatureDescriptor::core("core.test").contributes(
+                    UiContribution::view("view.hidden", UiSlot::SideDock, "title", "icon", 0)
+                        .hidden_in_picker(),
+                ),
+            )
+            .unwrap();
+        assert_eq!(registry.zone_contributions(ZonePosition::Right).len(), 1);
+        assert!(registry.tool_contributions(ZonePosition::Right).is_empty());
+    }
     use super::*;
     use crate::extension_ui::{IconId, MessageId};
 

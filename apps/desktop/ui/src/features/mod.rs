@@ -52,6 +52,7 @@ pub mod id {
     pub const VIEW_FILES: &str = "lapis.view.files";
     pub const VIEW_SEARCH: &str = "lapis.view.search";
     pub const VIEW_GIT: &str = "lapis.view.git";
+    pub const VIEW_CHANGES: &str = "lapis.view.changes";
     pub const VIEW_PROJECT_TASKS: &str = "lapis.view.project-tasks";
     pub const VIEW_PREVIEW: &str = "lapis.view.preview";
     pub const VIEW_ASSISTANT: &str = "lapis.view.assistant";
@@ -60,12 +61,24 @@ pub mod id {
     pub const VIEW_OUTPUT: &str = "lapis.view.output";
     pub const VIEW_COMMAND_SEARCH: &str = "lapis.view.command-search";
     pub const VIEW_SETTINGS: &str = "lapis.view.settings";
+    pub const VIEW_NOTIFICATIONS: &str = "lapis.view.notifications";
 }
 
 pub fn bundled_registry() -> FeatureRegistry {
     let mut registry = FeatureRegistry::default();
     let descriptors = vec![
         FeatureDescriptor::core(id::FEATURE_SHELL)
+            .contributes(
+                crate::extension_ui::UiContribution::panel_view(
+                    id::VIEW_NOTIFICATIONS,
+                    crate::extension_ui::ZonePosition::Right,
+                    [crate::extension_ui::ZonePosition::Right],
+                    "view.notifications",
+                    "problems",
+                    0,
+                )
+                .hidden_in_picker(),
+            )
             .contributes(crate::extension_ui::UiContribution::settings_view(
                 id::VIEW_SETTINGS,
                 "view.settings",
@@ -191,6 +204,10 @@ mod tests {
         assert!(registry.state(id::FEATURE_GIT).running);
         registry.set_active_view(UiSlot::ToolDock, Some(ViewId::new(id::VIEW_FILES)));
         assert!(!registry.state(id::FEATURE_GIT).running);
+        registry.set_active_view(UiSlot::ToolDock, Some(ViewId::new(id::VIEW_CHANGES)));
+        assert!(registry.state(id::FEATURE_GIT).running);
+        registry.set_active_view(UiSlot::ToolDock, Some(ViewId::new(id::VIEW_FILES)));
+        assert!(!registry.state(id::FEATURE_GIT).running);
 
         registry.activate(ActivationEvent::CommandInvoked(CommandId::new(
             id::COMMAND_FIND_WORKSPACE,
@@ -252,6 +269,7 @@ mod tests {
             id::VIEW_FILES,
             id::VIEW_SEARCH,
             id::VIEW_GIT,
+            id::VIEW_CHANGES,
             id::VIEW_PROJECT_TASKS,
             id::VIEW_PREVIEW,
             id::VIEW_PROBLEMS,

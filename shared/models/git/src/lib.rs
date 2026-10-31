@@ -7,9 +7,10 @@ use serde::{Deserialize, Serialize};
 
 mod action;
 mod connection;
-pub use action::{ConflictSide, GitAction, GitActionRequest, GitActionResult};
+pub use action::{ConflictSide, GitAction, GitActionRequest, GitActionResult, GitStash};
 pub use connection::{
-    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitSnapshot, WorktreeSnapshot,
+    GitConnection, GitDiffSnapshot, GitFileSnapshot, GitRepositorySnapshot, GitRepositoryStatus,
+    GitSnapshot, GitSubscription, GitUpdate, WorktreeSnapshot,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -67,7 +68,35 @@ pub struct TaskWorktree {
     pub conflict: Option<String>,
 }
 
+pub trait GitWatch: Send {
+    fn take_changed(&self) -> bool;
+    fn is_healthy(&self) -> bool {
+        true
+    }
+}
+
 pub trait GitBackend: Send + Sync {
+    fn watch_repository(
+        &self,
+        _repository: &std::path::Path,
+        _notify: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Result<Box<dyn GitWatch>, GitError> {
+        Err(GitError::new(
+            GitErrorKind::Io,
+            "repository watch is unsupported",
+        ))
+    }
+
+    fn discover_repositories(
+        &self,
+        _workspace: &std::path::Path,
+    ) -> Result<Vec<PathBuf>, GitError> {
+        Err(GitError::new(
+            GitErrorKind::Io,
+            "repository discovery is unsupported",
+        ))
+    }
+
     fn execute(
         &self,
         _repository: &std::path::Path,

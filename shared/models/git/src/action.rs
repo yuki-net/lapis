@@ -13,6 +13,10 @@ pub enum GitAction {
     Unstage {
         path: String,
     },
+    Restore {
+        path: String,
+        expected_patch: String,
+    },
     StageHunk {
         path: String,
         staged: bool,
@@ -20,6 +24,9 @@ pub enum GitAction {
         expected_patch: String,
     },
     Commit {
+        message: String,
+    },
+    Amend {
         message: String,
     },
     History,
@@ -79,7 +86,9 @@ impl GitAction {
     pub fn needs_confirmation(&self) -> bool {
         matches!(
             self,
-            Self::SwitchBranch { .. }
+            Self::Restore { .. }
+                | Self::Amend { .. }
+                | Self::SwitchBranch { .. }
                 | Self::DeleteBranch { .. }
                 | Self::Pull
                 | Self::Push
@@ -97,6 +106,7 @@ impl GitAction {
             Self::Diff { path, .. }
             | Self::Stage { path }
             | Self::Unstage { path }
+            | Self::Restore { path, .. }
             | Self::StageHunk { path, .. }
             | Self::Resolve { path, .. } => Some(path),
             _ => None,
@@ -114,4 +124,15 @@ pub struct GitActionRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GitActionResult {
     pub output: String,
+    #[serde(default)]
+    pub diff: Option<crate::GitDiffSnapshot>,
+    #[serde(default)]
+    pub stashes: Vec<GitStash>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GitStash {
+    pub index: u32,
+    pub oid: String,
+    pub subject: String,
 }

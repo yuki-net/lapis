@@ -71,11 +71,21 @@ impl BackendService {
             .map_err(|_| BackendServiceError::Unavailable)?
             .map_err(BackendServiceError::State)
     }
-    pub fn start(state: BackendState) -> Result<Self, BackendServiceError> {
+    pub fn start(mut state: BackendState) -> Result<Self, BackendServiceError> {
         let (sender, receiver) = mpsc::sync_channel(64);
+        let git_sender = sender.clone();
+        let git_publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync> =
+            Arc::new(move |workspace_id, repository_id, status| {
+                let _ = git_sender.send(Command::GitStatusChanged {
+                    workspace_id,
+                    repository_id,
+                    status,
+                });
+            });
+        state.start_git_updates(git_publish.clone());
         let thread = thread::Builder::new()
             .name("lapis-backend-state".to_owned())
-            .spawn(move || run_worker(state, receiver))
+            .spawn(move || run_worker(state, receiver, git_publish))
             .map_err(BackendServiceError::ThreadSpawn)?;
         Ok(Self {
             inner: Arc::new(ServiceInner {
@@ -130,6 +140,11 @@ impl BackendService {
         request: lapis_client_api::WorkspaceOperationRequest,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
         let changed = request.operation.is_mutation();
+        let worktrees_changed = matches!(
+            request.operation,
+            lapis_client_api::WorkspaceOperation::CreateWorktree
+                | lapis_client_api::WorkspaceOperation::DiscardWorktree { .. }
+        ) || matches!(&request.operation, lapis_client_api::WorkspaceOperation::StartTask { input } if input.isolated);
         let workspace_id = session.workspace_id.clone();
         let removing = match &request.operation {
             lapis_client_api::WorkspaceOperation::DiscardWorktree { worktree_id } => {
@@ -181,6 +196,7 @@ impl BackendService {
             .send(Command::CompleteWorkspaceOperation {
                 workspace_id,
                 changed,
+                worktrees_changed,
                 request_id,
                 result,
                 reserved,
@@ -259,7 +275,7 @@ impl Drop for ServiceInner {
         if let Ok(sender) = self.sender.get_mut()
             && let Some(sender) = sender.take()
         {
-            let _ = sender.try_send(Command::Shutdown);
+            let _ = sender.send(Command::Shutdown);
             drop(sender);
         }
         if let Ok(thread) = self.thread.get_mut()
@@ -271,6 +287,11 @@ impl Drop for ServiceInner {
 }
 
 enum Command {
+    GitStatusChanged {
+        workspace_id: WorkspaceId,
+        repository_id: String,
+        status: lapis_git::GitSnapshot,
+    },
     ReserveWorktreeRemoval {
         root: std::path::PathBuf,
         respond: mpsc::SyncSender<Result<(), BackendStateError>>,
@@ -289,6 +310,7 @@ enum Command {
     CompleteWorkspaceOperation {
         workspace_id: WorkspaceId,
         changed: bool,
+        worktrees_changed: bool,
         request_id: lapis_client_api::RequestId,
         result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
         reserved: Option<std::path::PathBuf>,
@@ -341,10 +363,25 @@ impl BackendEventSink for ChannelEventSink {
     }
 }
 
-fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
+fn run_worker(
+    mut state: BackendState,
+    receiver: mpsc::Receiver<Command>,
+    git_publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync>,
+) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
     loop {
         match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+            Ok(Command::GitStatusChanged {
+                workspace_id,
+                repository_id,
+                status,
+            }) => {
+                if let Ok(Some(event)) =
+                    state.publish_git_status(workspace_id, repository_id, status)
+                {
+                    publish_events(&mut subscribers, vec![event]);
+                }
+            }
             Ok(Command::ReserveWorktreeRemoval { root, respond }) => {
                 let _ = respond.send(state.reserve_worktree_removal(root));
             }
@@ -365,6 +402,7 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
             Ok(Command::CompleteWorkspaceOperation {
                 workspace_id,
                 changed,
+                worktrees_changed,
                 request_id,
                 result,
                 reserved,
@@ -377,8 +415,13 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
                 if let Some(root) = reserved {
                     state.release_worktree_removal(&root);
                 }
-                let outcome =
-                    state.complete_workspace_operation(workspace_id, changed, request_id, result);
+                let outcome = state.complete_workspace_operation(
+                    workspace_id,
+                    changed,
+                    worktrees_changed,
+                    request_id,
+                    result,
+                );
                 let _ = respond.send(outcome.response);
                 publish_events(&mut subscribers, outcome.events);
             }
@@ -406,7 +449,11 @@ fn run_worker(mut state: BackendState, receiver: mpsc::Receiver<Command>) {
                 registration,
                 respond,
             }) => {
-                let _ = respond.send(state.register_workspace(registration));
+                let result = state.register_workspace(registration);
+                if result.is_ok() {
+                    state.start_git_updates(git_publish.clone());
+                }
+                let _ = respond.send(result);
             }
             Ok(Command::Dispatch {
                 session,
