@@ -331,19 +331,24 @@ mod tests {
     fn changes_from_different_windows_keep_the_other_theme_selection(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(|cx| {
+        let (first, second) = cx.update(|cx| {
             theme::init(&ThemeId::new("lapis.dark"), None, cx);
             let settings =
                 lapis_desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
             SettingsCoordinator::init(settings, cx);
-            let first = cx.new(SettingsFeature::new);
-            let second = cx.new(SettingsFeature::new);
+            (cx.new(SettingsFeature::new), cx.new(SettingsFeature::new))
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
             first.update(cx, |feature, cx| {
                 feature.select_theme(ThemeId::new("lapis.white"), cx)
             });
             second.update(cx, |feature, cx| {
                 feature.select_syntax_theme(SyntaxTheme::Zed, cx)
             });
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
             assert_eq!(theme::active_id(cx).as_str(), "lapis.white");
             assert_eq!(theme::syntax::active_family(cx), SyntaxTheme::Zed);
         });
