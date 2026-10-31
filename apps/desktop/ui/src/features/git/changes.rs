@@ -337,8 +337,8 @@ impl Render for ChangesFeature {
                 let restore_id = repository_id.clone();
                 let restore_path = selection.path.clone();
                 let restore_patch = diff.patch.clone();
-                content = content.child(action_button("Restore...", false, cx).on_click(cx.listener(
-                    move |this, _, window, cx| {
+                content = content.child(action_button("Restore...", false, cx).on_click(
+                    cx.listener(move |this, _, window, cx| {
                         this.git.update(cx, |git, cx| {
                             git.execute_repository_action(
                                 restore_id.clone(),
@@ -350,8 +350,8 @@ impl Render for ChangesFeature {
                                 cx,
                             )
                         });
-                    },
-                )));
+                    }),
+                ));
             }
             content = content.children(diff.patch.lines().map(|line| {
                 div()
