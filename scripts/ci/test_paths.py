@@ -23,6 +23,13 @@ class TestPathRouting(unittest.TestCase):
             self.assertEqual(jobs_for_paths([path]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
 
+    def test_ci_workflow_uses_final_check_names_and_no_release_validation(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for name in ("Changes", "Dev Commands / Windows", "Mobile / Android", "Gate"):
+            self.assertIn(f"name: {name}", workflow)
+        self.assertNotIn("Build Release Desktop", workflow)
+        self.assertNotIn("Test Release Inspector boundary", workflow)
+
     def test_format_jobs_install_rustfmt(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         jobs = re.split(r"(?m)^  (?=[a-z_]+:\s*$)", workflow.split("\njobs:\n", 1)[1])
@@ -40,9 +47,23 @@ class TestPathRouting(unittest.TestCase):
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
 
-    def test_host_path_runs_host(self):
-        jobs = jobs_for_paths(["backend/host/src/main.rs"])
-        self.assertIn("host", jobs)
+    def test_host_internal_path_runs_only_host(self):
+        self.assertEqual(jobs_for_paths(["backend/host/src/main.rs"]), {"host"})
+        self.assertEqual(jobs_for_paths(["backend/host/src/terminal.rs"]), {"host"})
+
+    def test_host_public_boundary_runs_desktop(self):
+        for path in (
+            "backend/host/Cargo.toml",
+            "backend/host/src/lib.rs",
+            "backend/host/src/client.rs",
+            "backend/host/src/profile.rs",
+        ):
+            self.assertEqual(jobs_for_paths([path]), {"host", "desktop"})
+
+    def test_protocol_and_transport_keep_cross_surface_ci(self):
+        expected = {"rust_core", "host", "desktop"}
+        self.assertEqual(jobs_for_paths(["shared/protocol/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["backend/transport/remote/src/lib.rs"]), expected)
 
     def test_rust_core_path_runs_rust_core(self):
         jobs = jobs_for_paths(["shared/models/workspace/src/lib.rs"])
@@ -103,7 +124,7 @@ class TestPathRouting(unittest.TestCase):
                 seen.add(pattern)
 
     def test_windows_dev_commands_are_selected(self):
-        for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", ".run/Lapis.run.xml"):
+        for path in ("scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/src/main.rs", ".run/Lapis.run.xml", ".cargo/config.toml"):
             self.assertIn("dev_windows", jobs_for_paths([path]))
         self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
 

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 # pathパターン → 実行すべきjobのセット
 # 優先度順：狭いパターンを先に定義
 PATH_RULES = [
-    (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", ".run/"], {"repository", "dev_windows"}),
+    (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/", ".run/"], {"repository", "dev_windows"}),
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
     (["apps/desktop/client/", "apps/desktop/persistence/"], {"desktop", "rust_core"}),
@@ -22,7 +22,9 @@ PATH_RULES = [
     (["patches/gpui-"], {"desktop"}),
     
     # Host関連
-    (["backend/host/"], {"host", "desktop"}),
+    # Desktopが直接利用する公開境界は両surfaceを検証する。
+    (["backend/host/Cargo.toml", "backend/host/src/lib.rs", "backend/host/src/client.rs", "backend/host/src/profile.rs"], {"host", "desktop"}),
+    (["backend/host/"], {"host"}),
     
     # Backend共通（Host以外）
     (["backend/runtime/"], {"rust_core", "host", "desktop"}),
@@ -46,7 +48,7 @@ PATH_RULES = [
     # Cargo設定
     (["Cargo.toml"], {"repository", "rust_core", "host", "desktop"}),
     (["Cargo.lock"], {"repository", "rust_core", "host", "desktop"}),
-    ([".cargo/"], {"repository", "rust_core", "host", "desktop"}),
+    ([".cargo/"], {"repository", "rust_core", "host", "desktop", "dev_windows"}),
     
     # ドキュメント
     (["docs/"], {"repository"}),

@@ -67,7 +67,8 @@ impl Startup {
                 connector_directory,
             }))
         } else {
-            let backend = BackendClient::local_in(directory.join("hosts"))?;
+            let hosts_directory = local_hosts_directory(arguments, &directory)?;
+            let backend = BackendClient::local_in(hosts_directory)?;
             Ok(Some(Self {
                 backend,
                 root: None,
@@ -77,6 +78,18 @@ impl Startup {
         }
     }
 }
+
+fn local_hosts_directory(arguments: &[OsString], directory: &Path) -> Result<PathBuf, Error> {
+    let hosts = option(arguments, "--local-host-directory")?
+        .map(PathBuf::from)
+        .unwrap_or_else(|| directory.join("hosts"));
+    if hosts.is_absolute() {
+        Ok(hosts)
+    } else {
+        Ok(std::env::current_dir()?.join(hosts))
+    }
+}
+
 fn default_state_directory() -> Result<PathBuf, Error> {
     let preferred = BackendClient::user_directory()?;
     let legacy = std::env::var_os("LOCALAPPDATA")
@@ -135,6 +148,32 @@ fn option<'a>(arguments: &'a [OsString], name: &str) -> Result<Option<&'a OsStri
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn local_host_directory_can_be_separated_from_desktop_state() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let session = temp.path().join("session-hosts");
+        let args = [
+            OsString::from("lapis"),
+            OsString::from("--local-host-directory"),
+            session.as_os_str().to_owned(),
+        ];
+        assert_eq!(local_hosts_directory(&args, &state).unwrap(), session);
+        assert_eq!(
+            local_hosts_directory(&[OsString::from("lapis")], &state).unwrap(),
+            state.join("hosts")
+        );
+        assert!(
+            local_hosts_directory(
+                &[
+                    OsString::from("lapis"),
+                    OsString::from("--local-host-directory")
+                ],
+                &state
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn explicit_worktree_state_keeps_settings_and_hosts_separate() {
         let temp = tempfile::tempdir().unwrap();

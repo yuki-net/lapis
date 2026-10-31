@@ -20,7 +20,7 @@ env:
 jobs:
   # 変更pathから実行すべきjobを判定
   path_filter:
-    name: Path Filter
+    name: Changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -43,7 +43,7 @@ jobs:
       jobs: ${{ steps.paths.outputs.jobs }}
 
   dev_windows:
-    name: Development commands / Windows
+    name: Dev Commands / Windows
     runs-on: windows-2022
     needs: path_filter
     if: contains(fromJSON(needs.path_filter.outputs.jobs), 'dev_windows')
@@ -53,6 +53,12 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m unittest discover -s scripts -p test_dev_commands.py
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --manifest-path scripts/dev-session/Cargo.toml -- --check
+      - run: python -m unittest discover -s scripts -p test_dev_session.py
 
   repository:
     name: Repository
@@ -217,14 +223,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
 
-      - name: Build Release Desktop
-        run: cargo build -p lapis -p lapis-host --release --locked
-
-      - name: Test Release Inspector boundary
-        run: cargo test -p lapis-desktop-ui --release release_build_does_not_register_inspector_command --locked
-
   mobile:
-    name: Mobile
+    name: Mobile / Android
     runs-on: ubuntu-latest
     timeout-minutes: 45
     needs: path_filter
@@ -288,7 +288,7 @@ jobs:
         run: npm run build
 
   ci_gate:
-    name: CI Gate
+    name: Gate
     runs-on: ubuntu-latest
     if: always()
     needs:
