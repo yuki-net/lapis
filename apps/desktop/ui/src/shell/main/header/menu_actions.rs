@@ -4,21 +4,26 @@ use super::menu_definition::MenuAction;
 use crate::shell::HeaderMenuSection as MenuId;
 
 impl Shell {
-    pub(super) fn toggle_header_menu(
+    pub(super) fn toggle_header_popup(
         &mut self,
-        position: gpui::Point<gpui::Pixels>,
+        popup: super::HeaderPopup,
         cx: &mut Context<Self>,
     ) {
-        self.shell.header_menu_open = !self.shell.header_menu_open;
-        self.shell.header_menu_anchor = position;
+        use super::HeaderPopup;
+        let open = !match popup {
+            HeaderPopup::Main => self.shell.header_menu_open,
+            HeaderPopup::Workspace => self.shell.workspace_menu_open,
+            HeaderPopup::Settings => self.shell.settings_menu_open,
+        };
+        self.shell.header_menu_open = open && popup == HeaderPopup::Main;
+        self.shell.workspace_menu_open = open && popup == HeaderPopup::Workspace;
+        self.shell.settings_menu_open = open && popup == HeaderPopup::Settings;
         self.shell.header_menu_section = None;
-        if self.shell.header_menu_open {
-            self.shell.command_palette_open = false;
+        if open || popup == HeaderPopup::Settings {
             self.shell.tool_picker = None;
-            self.shell.settings_menu_open = false;
-            self.shell.theme_picker_open = false;
-        } else {
-            self.shell.header_menu_section = None;
+        }
+        if open && popup != HeaderPopup::Settings {
+            self.shell.command_palette_open = false;
         }
         cx.notify();
     }

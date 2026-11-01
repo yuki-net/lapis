@@ -3,6 +3,7 @@ use crate::{
     features::id,
 };
 
+mod branch_picker;
 mod changes;
 mod state;
 mod view;
@@ -10,6 +11,7 @@ mod view;
 use crate::theme;
 use lapis_git::ChangeKind;
 
+pub(crate) use branch_picker::BranchPicker;
 pub(crate) use changes::ChangesFeature;
 pub(crate) use state::{GitEvent, GitFeature, GitInputRequest};
 

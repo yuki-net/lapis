@@ -1,4 +1,3 @@
-use crate::extension_ui::ThemeId;
 use lapis_editor_core::DocumentId;
 use std::path::PathBuf;
 
@@ -46,6 +45,5 @@ pub(crate) enum UiCommand {
         view: ViewInstanceKey,
         scope: ViewScope,
     },
-    Theme(ThemeId),
     QuickSearch,
 }

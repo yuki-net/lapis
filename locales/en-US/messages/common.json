@@ -87,6 +87,8 @@
   "workspace.open": "Open...",
   "workspace.clone": "Clone from Git...",
   "workspace.no-recent": "No recent workspaces",
+  "settings.menu.keymap": "Keymap",
+  "settings.menu.plugins": "Plugins",
   "settings.title": "Settings",
   "settings.appearance": "Appearance / Theme",
   "settings.syntax-theme": "Code syntax colors",

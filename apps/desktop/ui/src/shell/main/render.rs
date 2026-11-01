@@ -41,13 +41,14 @@ impl Shell {
             .on_key_down(cx.listener(Self::tool_picker_key_down))
             .on_key_down(cx.listener(Self::settings_menu_key_down))
             .on_key_down(cx.listener(Self::header_menu_key_down))
+            .on_key_down(cx.listener(Self::workspace_menu_key_down))
             .on_mouse_move(cx.listener(Self::resize_panels))
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| this.stop_resize(cx)),
             )
             .child(self.tab_drag_events(cx))
-            .child(self.render_header(cx))
+            .child(self.render_header(window, cx))
             .child(self.render_main(window, cx))
             .child(self.render_footer(cx))
             .child(
@@ -99,12 +100,6 @@ impl Shell {
             })
             .when_some(self.shell.tool_picker.clone(), |root, target| {
                 root.child(self.render_tool_picker(target, cx))
-            })
-            .when(self.shell.settings_menu_open, |root| {
-                root.child(self.render_settings_menu(cx))
-            })
-            .when(self.shell.header_menu_open, |root| {
-                root.child(self.render_header_menu(cx))
             })
     }
 }

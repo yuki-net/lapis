@@ -68,6 +68,11 @@ impl SettingsCoordinator {
         cx.set_global(SettingsGlobal(entity));
     }
 
+    #[cfg(test)]
+    pub(super) fn test_is_idle(&self) -> bool {
+        self.pending.is_empty()
+    }
+
     pub(crate) fn shared(cx: &App) -> Entity<Self> {
         cx.global::<SettingsGlobal>().0.clone()
     }

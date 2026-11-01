@@ -20,7 +20,9 @@ impl Shell {
             now,
         );
         let mut frame = div()
+            .debug_selector(|| "dock-frame".into())
             .relative()
+            .mt(px(geometry.frame.y) - tokens::size::TITLE_BAR_HEIGHT)
             .flex_1()
             .min_w(px(0.0))
             .min_h(px(0.0))

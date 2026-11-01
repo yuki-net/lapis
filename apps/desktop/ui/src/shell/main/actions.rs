@@ -219,24 +219,9 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn toggle_settings_menu(
-        &mut self,
-        position: gpui::Point<gpui::Pixels>,
-        cx: &mut Context<Self>,
-    ) {
-        self.shell.settings_menu_open = !self.shell.settings_menu_open;
-        self.shell.settings_menu_anchor = position;
-        self.shell.tool_picker = None;
-        if !self.shell.settings_menu_open {
-            self.shell.theme_picker_open = false;
-        }
-        cx.notify();
-    }
-
     pub(crate) fn close_settings_menu(&mut self, cx: &mut Context<Self>) {
         if self.shell.settings_menu_open {
             self.shell.settings_menu_open = false;
-            self.shell.theme_picker_open = false;
             cx.notify();
         }
     }
@@ -255,25 +240,10 @@ impl Shell {
     pub(crate) fn open_settings_view(&mut self, cx: &mut Context<Self>) {
         self.open_view_in_zone(ZonePosition::Main, ViewId::new(id::VIEW_SETTINGS), cx);
         self.shell.settings_menu_open = false;
-        self.shell.theme_picker_open = false;
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    pub(crate) fn toggle_theme_preference(&mut self, cx: &mut Context<Self>) {
-        if self.shell.theme_save_in_flight {
-            return;
-        }
-        self.shell.theme_picker_open = !self.shell.theme_picker_open;
-        cx.notify();
-    }
-
-    pub(crate) fn select_theme(&mut self, theme: ThemeId, cx: &mut Context<Self>) {
-        self.shell.theme_picker_open = false;
-        self.shell.settings_menu_open = false;
-        cx.emit(UiCommand::Theme(theme));
-        cx.notify();
-    }
     pub(crate) fn select_tab_in_panel(
         &mut self,
         panel_id: PanelId,

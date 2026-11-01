@@ -7,7 +7,7 @@ use crate::{
         Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, panel_empty_state,
         panel_empty_state_element, scroll_viewport,
     },
-    extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, ThemeId, UiSlot, ViewId},
+    extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, UiSlot, ViewId},
     features::{self, id},
     localization::Localizer,
     theme,
@@ -42,6 +42,7 @@ mod tab_drag;
 mod tool_picker;
 
 pub(crate) struct Shell {
+    pub(crate) branch_picker: Option<gpui::Entity<crate::features::git::BranchPicker>>,
     pub(crate) shell: ShellState,
     pub(crate) host: super::window_group::HostId,
     pub(crate) group: Option<gpui::EntityId>,
@@ -212,6 +213,7 @@ impl Shell {
         }
         Self {
             shell: ShellState::default(),
+            branch_picker: None,
             host: 0,
             group: None,
             detached: false,
@@ -402,6 +404,7 @@ impl Shell {
         self.shell.command_palette_open = false;
         self.shell.tool_picker = None;
         self.shell.header_menu_open = false;
+        self.shell.workspace_menu_open = false;
         self.shell.settings_menu_open = false;
         cx.notify();
     }

@@ -1,8 +1,37 @@
 use super::*;
-use crate::components::{header_button, icon_button};
+use crate::components::{Popup, PopupPlacement, PopupScope, header_button, icon_button};
 
 impl Shell {
-    pub(super) fn render_header_left(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_header_left(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let scope = PopupScope::default();
+        let menu = Popup::new(
+            icon_button("header-menu", IconName::Menu, cx)
+                .debug_selector(|| "header-menu-trigger".into())
+                .when(self.shell.header_menu_open, |button| {
+                    button.bg(theme::colors(cx).button_background_selected)
+                })
+                .on_click(cx.listener(|this, _, window, cx| {
+                    window.focus(&this.focus_handle);
+                    this.toggle_header_popup(super::HeaderPopup::Main, cx);
+                })),
+            PopupPlacement::BelowStart,
+            scope.clone(),
+        )
+        .on_dismiss(cx.listener(|this, _: &(), window, cx| {
+            this.close_header_menu(cx);
+            window.focus(&this.focus_handle);
+        }))
+        .when(self.shell.header_menu_open, |popup| {
+            popup.content(self.render_header_menu(
+                &scope,
+                window.viewport_size().height - px(16.),
+                cx,
+            ))
+        });
         let panel_controls = div().flex().items_center().gap(tokens::spacing::XS).when(
             self.shell.show_panel_controls,
             |controls| {
@@ -72,13 +101,7 @@ impl Shell {
                     .text_size(tokens::typography::FONT_XS)
                     .child("L"),
             )
-            .child(
-                icon_button("header-menu", IconName::Menu, cx).on_click(cx.listener(
-                    |this, event: &ClickEvent, _, cx| {
-                        this.toggle_header_menu(event.position(), cx);
-                    },
-                )),
-            )
+            .child(menu)
             .child(panel_controls)
     }
 }

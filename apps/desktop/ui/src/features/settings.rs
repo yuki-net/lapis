@@ -327,6 +327,21 @@ mod tests {
         }
     }
 
+    fn wait_for_settings(cx: &mut gpui::TestAppContext) {
+        let coordinator = cx.update(|cx| SettingsCoordinator::shared(cx));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while cx.update(|cx| !coordinator.read(cx).test_is_idle()) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "settings queue did not drain"
+            );
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
+            std::thread::yield_now();
+        }
+    }
+
     #[gpui::test]
     fn changes_from_different_windows_keep_the_other_theme_selection(
         cx: &mut gpui::TestAppContext,
@@ -347,7 +362,7 @@ mod tests {
                 feature.select_syntax_theme(SyntaxTheme::Zed, cx)
             });
         });
-        cx.run_until_parked();
+        wait_for_settings(cx);
         cx.update(|cx| {
             assert_eq!(theme::active_id(cx).as_str(), "lapis.white");
             assert_eq!(theme::syntax::active_family(cx), SyntaxTheme::Zed);
@@ -375,7 +390,7 @@ mod tests {
                 feature.select_locale(lapis_localization::LocaleId::new("ja-JP"), cx)
             });
         });
-        cx.run_until_parked();
+        wait_for_settings(cx);
         cx.update(|cx| {
             for feature in [&first, &second] {
                 let values = &feature.read(cx).values;

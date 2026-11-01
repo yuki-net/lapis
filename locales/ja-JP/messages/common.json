@@ -87,6 +87,8 @@
   "workspace.open": "開く...",
   "workspace.clone": "Gitからクローン...",
   "workspace.no-recent": "最近開いたワークスペースはありません",
+  "settings.menu.keymap": "キーマップ",
+  "settings.menu.plugins": "プラグイン",
   "settings.title": "設定",
   "settings.appearance": "外観 / テーマ",
   "settings.syntax-theme": "コードの構文配色",
