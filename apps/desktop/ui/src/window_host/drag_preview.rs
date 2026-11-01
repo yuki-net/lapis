@@ -112,7 +112,7 @@ pub(crate) fn open(
     handle
         .update(cx, |_, window, _| {
             platform::disable_input(window);
-            platform::position(window, point)
+            platform::show(window, point, size)
         })
         .ok()?;
     Some(handle)
@@ -186,6 +186,45 @@ mod platform {
                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE | SWP_SHOWWINDOW,
             )
         };
+    }
+
+    pub(super) fn show(
+        window: &Window,
+        point: crate::window_host::drag::ScreenPoint,
+        size: gpui::Size<gpui::Pixels>,
+    ) {
+        let Some(hwnd) = hwnd(window) else { return };
+        let width = (f32::from(size.width) * window.scale_factor()).round() as i32;
+        let height = (f32::from(size.height) * window.scale_factor()).round() as i32;
+        // 非表示で作成したウィンドウは、最初の表示時にサイズも指定する。
+        let _ = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                point.x - width / 2,
+                point.y - height / 2,
+                width,
+                height,
+                initial_show_flags(),
+            )
+        };
+    }
+
+    fn initial_show_flags() -> windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS {
+        SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn first_show_applies_the_tab_size() {
+            let flags = initial_show_flags();
+            assert_eq!(flags.0 & SWP_NOSIZE.0, 0);
+            assert_ne!(flags.0 & SWP_NOACTIVATE.0, 0);
+            assert_ne!(flags.0 & SWP_SHOWWINDOW.0, 0);
+        }
     }
 
     pub(super) fn hide(window: &Window) {
