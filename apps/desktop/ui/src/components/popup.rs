@@ -8,13 +8,10 @@ use gpui::{
     anchored, canvas, deferred, div, point, prelude::*, px,
 };
 
-/// Popupの閉じるコールバック
 type DismissCallback = Rc<dyn Fn(&(), &mut Window, &mut App)>;
 
 /// 一つのPopupとそのサブメニューが共有する、描画中の操作範囲。
 /// 開閉状態や選択項目は呼び出し側が所有する。
-type DismissCallback = Rc<dyn Fn(&(), &mut Window, &mut App)>;
-
 type PopupBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 #[derive(Clone, Default)]
@@ -78,8 +75,11 @@ impl Popup {
         self
     }
 
-    pub(crate) fn on_dismiss(mut self, dismiss: DismissCallback) -> Self {
-        self.dismiss = Some(dismiss);
+    pub(crate) fn on_dismiss(
+        mut self,
+        dismiss: impl Fn(&(), &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.dismiss = Some(Rc::new(dismiss));
         self
     }
 }

@@ -17,10 +17,10 @@ impl Shell {
             PopupPlacement::BelowStart,
             scope,
         )
-        .on_dismiss(std::rc::Rc::new(cx.listener(|this, _: &(), window, cx| {
+        .on_dismiss(cx.listener(|this, _: &(), window, cx| {
             this.close_settings_menu(cx);
             window.focus(&this.focus_handle);
-        })))
+        }))
         .when(self.shell.settings_menu_open, |popup| {
             popup.content(self.render_settings_menu(cx))
         });

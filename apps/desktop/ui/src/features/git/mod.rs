@@ -3,7 +3,6 @@ use crate::{
     features::id,
 };
 
-mod branch_panel;
 mod branch_picker;
 mod changes;
 mod state;
@@ -37,13 +36,6 @@ pub(super) fn descriptor() -> FeatureDescriptor {
         "view.changes",
         "git",
         29,
-    ))
-    .contributes(UiContribution::view(
-        id::VIEW_BRANCHES,
-        UiSlot::ToolDock,
-        "view.branches",
-        "git",
-        28,
     ))
     .requires("workspace.git")
 }

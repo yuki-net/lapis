@@ -64,7 +64,6 @@ pub mod id {
     pub const VIEW_SEARCH: &str = "lapis.view.search";
     pub const VIEW_GIT: &str = "lapis.view.git";
     pub const VIEW_CHANGES: &str = "lapis.view.changes";
-    pub const VIEW_BRANCHES: &str = "lapis.view.branches";
     pub const VIEW_PROJECT_TASKS: &str = "lapis.view.project-tasks";
     pub const VIEW_PREVIEW: &str = "lapis.view.preview";
     pub const VIEW_ASSISTANT: &str = "lapis.view.assistant";

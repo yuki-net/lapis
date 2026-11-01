@@ -488,9 +488,7 @@ impl Render for BranchPicker {
         .on_click(cx.listener(|this, _, window, cx| this.toggle(window, cx)));
         div().on_key_down(cx.listener(Self::key_down)).child(
             Popup::new(trigger, PopupPlacement::BelowStart, scope)
-                .on_dismiss(std::rc::Rc::new(
-                    cx.listener(|this, _: &(), window, cx| this.dismiss(window, cx)),
-                ))
+                .on_dismiss(cx.listener(|this, _: &(), window, cx| this.dismiss(window, cx)))
                 .when(self.open, |popup| popup.content(self.panel(window, cx))),
         )
     }
