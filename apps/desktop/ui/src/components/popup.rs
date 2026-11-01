@@ -8,10 +8,10 @@ use gpui::{
     anchored, canvas, deferred, div, point, prelude::*, px,
 };
 
-/// 一つのPopupとそのサブメニューが共有する、描画中の操作範囲。
-/// 開閉状態や選択項目は呼び出し側が所有する。
 type DismissCallback = Rc<dyn Fn(&(), &mut Window, &mut App)>;
 
+/// 一つのPopupとそのサブメニューが共有する、描画中の操作範囲。
+/// 開閉状態や選択項目は呼び出し側が所有する。
 type PopupBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 #[derive(Clone, Default)]
