@@ -10,6 +10,8 @@ use gpui::{
 
 /// 一つのPopupとそのサブメニューが共有する、描画中の操作範囲。
 /// 開閉状態や選択項目は呼び出し側が所有する。
+type DismissCallback = Rc<dyn Fn(&(), &mut Window, &mut App)>;
+
 type PopupBounds = Rc<Cell<Option<Bounds<Pixels>>>>;
 
 #[derive(Clone, Default)]
@@ -50,7 +52,7 @@ pub(crate) struct Popup {
     content: Option<AnyElement>,
     placement: PopupPlacement,
     scope: PopupScope,
-    dismiss: Option<Rc<dyn Fn(&(), &mut Window, &mut App)>>,
+    dismiss: Option<DismissCallback>,
 }
 
 impl Popup {
