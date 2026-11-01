@@ -414,10 +414,6 @@ impl DesktopRoot {
         }
         match command {
             UiCommand::ReleaseTab(drag, point) => self.release_tab(host, drag, point, window, cx),
-            UiCommand::DetachTab(tab) => self.detach_tab(host, tab, cx),
-            UiCommand::DockTab(tab) => {
-                self.transfer_tab(host, ROOT_HOST, ZonePosition::Main, tab, cx)
-            }
             UiCommand::MoveTab(drag, panel_id) => {
                 if drag.group == Some(self.group.entity_id()) {
                     self.transfer_tab_to_panel(drag.source_host, host, panel_id, drag.tab, cx);
@@ -425,6 +421,7 @@ impl DesktopRoot {
             }
             UiCommand::CloseWindow => self.close_hosts(host, None, window, cx),
             UiCommand::CloseDocument(id) => self.close_hosts(host, Some(id), window, cx),
+            UiCommand::CloseTabs(tabs) => self.close_tabs(host, tabs, window, cx),
             UiCommand::ActivateDocument(id) => {
                 if self.group.read(cx).documents(host).contains(&id) {
                     let editor = self.group.read(cx).members[&host].editor.clone();
@@ -507,6 +504,12 @@ impl DesktopRoot {
         {
             return;
         }
+        let was_pinned = self
+            .group
+            .read(cx)
+            .members
+            .get(&source)
+            .is_some_and(|member| member.shell.read(cx).shell.layout.tab_is_pinned(&tab));
         let view = match &tab {
             PanelTab::Document(id) => self
                 .group
@@ -528,6 +531,9 @@ impl DesktopRoot {
         };
         self.group.update(cx, |group, cx| {
             if group.layout.move_tab_to(source, target, destination, &tab) {
+                if was_pinned {
+                    group.layout.pending_pins.insert(tab.clone(), target);
+                }
                 group.members[&target].shell.update(cx, |shell, cx| {
                     shell.shell.focused_panel = focus_panel;
                     cx.notify();
@@ -622,9 +628,17 @@ fn apply_panel_layout(
         .filter(|(_, (owner, _))| *owner == host)
         .map(|(tab, (_, target_panel))| (tab.clone(), target_panel.clone()))
         .collect::<Vec<_>>();
+    let pending_pins = group.read(cx).layout.pending_pins.clone();
+    let mut applied_pins = Vec::new();
     shell.update(cx, |shell, cx| {
         let mut changed = false;
         for (tab, target) in placements {
+            if pending_pins.get(&tab) == Some(&host)
+                && shell.shell.layout.set_tab_pinned(&tab, true)
+            {
+                applied_pins.push(tab.clone());
+                changed = true;
+            }
             let source = shell.shell.layout.panel_for_tab(&tab);
             if source.as_ref().is_some_and(|source| match &target {
                 TabDestination::Panel(target) => source == target,
@@ -652,6 +666,11 @@ fn apply_panel_layout(
                     .is_ok(),
             };
             if success {
+                if pending_pins.get(&tab) == Some(&host)
+                    && shell.shell.layout.set_tab_pinned(&tab, true)
+                {
+                    applied_pins.push(tab.clone());
+                }
                 if let Some(source) = source
                     && shell
                         .shell
@@ -668,6 +687,13 @@ fn apply_panel_layout(
             cx.notify();
         }
     });
+    if !applied_pins.is_empty() {
+        group.update(cx, |group, _| {
+            for tab in applied_pins {
+                group.layout.pending_pins.remove(&tab);
+            }
+        });
+    }
 }
 
 #[cfg(test)]

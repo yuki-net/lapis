@@ -39,6 +39,7 @@ pub(crate) enum UiCommand {
     Paste,
     ActivateDocument(DocumentId),
     CloseDocument(DocumentId),
+    CloseTabs(Vec<crate::shell::PanelTab>),
     SelectTask(lapis_editor_core::ConversationId),
     SetWorkbenchMode(WorkbenchMode),
     BindViewToSelectedTask(crate::workbench::ViewInstanceKey),

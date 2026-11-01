@@ -2,7 +2,13 @@ use super::*;
 use crate::client_adapter::{ClientWorker, DocumentClient, PersistedView};
 use lapis_desktop_client::{DocumentAction, DocumentCloseDisposition};
 
-type ClosedGroup = (Entity<WindowGroup>, ClientSnapshot, Vec<HostId>);
+type ClosedGroup = (
+    Entity<WindowGroup>,
+    ClientSnapshot,
+    Vec<HostId>,
+    HostId,
+    Vec<PanelTab>,
+);
 
 type Decision = (
     DocumentId,
@@ -16,7 +22,8 @@ struct CloseRequest {
     view: PersistedView,
     snapshot: Option<std::sync::mpsc::Receiver<Result<ClientSnapshot, String>>>,
     host: HostId,
-    document: Option<DocumentId>,
+    documents: Option<Vec<DocumentId>>,
+    close_tools: Vec<PanelTab>,
     placements: HashMap<DocumentId, HostId>,
     windows: Vec<HostId>,
     remote: bool,
@@ -39,7 +46,7 @@ impl DesktopRoot {
     fn close_request(
         &self,
         host: HostId,
-        document: Option<DocumentId>,
+        documents: Option<Vec<DocumentId>>,
         cx: &gpui::App,
     ) -> Result<CloseRequest, String> {
         let group = self.group.read(cx);
@@ -55,10 +62,13 @@ impl DesktopRoot {
             return Err("未確定の入力を新しい文書へ退避・復旧してから閉じてください".into());
         }
         let owned = group.documents(host);
-        if document.as_ref().is_some_and(|id| !owned.contains(id)) {
+        if documents
+            .as_ref()
+            .is_some_and(|ids| ids.iter().any(|id| !owned.contains(id)))
+        {
             return Err("このWindowには対象のタブがありません".into());
         }
-        let windows = if document.is_some() {
+        let windows = if documents.is_some() {
             vec![]
         } else if host == ROOT_HOST {
             group.members.keys().copied().collect()
@@ -77,7 +87,8 @@ impl DesktopRoot {
                 client.snapshot()
             })?),
             host,
-            document,
+            documents,
+            close_tools: Vec::new(),
             placements: group
                 .layout
                 .tabs
@@ -101,8 +112,69 @@ impl DesktopRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.close_request(host, document, cx) {
+        if let Some(id) = &document {
+            let tab = PanelTab::Document(id.clone());
+            if self
+                .group
+                .read(cx)
+                .members
+                .get(&host)
+                .is_some_and(|member| member.shell.read(cx).shell.layout.tab_is_pinned(&tab))
+            {
+                return;
+            }
+        }
+        match self.close_request(host, document.map(|id| vec![id]), cx) {
             Ok(request) => self.start_close(vec![request], window, cx),
+            Err(error) => self.set_status(error, cx),
+        }
+    }
+
+    pub(crate) fn close_tabs(
+        &mut self,
+        host: HostId,
+        tabs: Vec<PanelTab>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let group = self.group.read(cx);
+        let Some(member) = group.members.get(&host) else {
+            return;
+        };
+        let shell = member.shell.read(cx);
+        let tabs = tabs
+            .into_iter()
+            .filter(|tab| {
+                let owned = match tab {
+                    PanelTab::Document(_) => group
+                        .layout
+                        .tabs
+                        .get(tab)
+                        .is_some_and(|(owner, _)| *owner == host),
+                    PanelTab::Tool { .. } => shell.shell.layout.panel_for_tab(tab).is_some(),
+                };
+                owned && !shell.shell.layout.tab_is_pinned(tab)
+            })
+            .collect::<Vec<_>>();
+        let documents: Vec<_> = tabs
+            .iter()
+            .filter_map(|tab| match tab {
+                PanelTab::Document(id) => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+        let tools = tabs
+            .into_iter()
+            .filter(|tab| matches!(tab, PanelTab::Tool { .. }))
+            .collect::<Vec<_>>();
+        if documents.is_empty() && tools.is_empty() {
+            return;
+        }
+        match self.close_request(host, Some(documents), cx) {
+            Ok(mut request) => {
+                request.close_tools = tools;
+                self.start_close(vec![request], window, cx);
+            }
             Err(error) => self.set_status(error, cx),
         }
     }
@@ -234,8 +306,8 @@ impl DesktopRoot {
                     }
                     let mut decisions = Vec::new();
                     let mut saves = Vec::new();
-                    for tab in snapshot.tabs.iter().filter(|tab| request.document.as_ref().map_or_else(
-                        || request.host == ROOT_HOST || request.placements.get(&tab.id).copied().or_else(|| snapshot.document_owners.get(&tab.id).copied()).unwrap_or(ROOT_HOST) == request.host, |id| id == &tab.id))
+                    for tab in snapshot.tabs.iter().filter(|tab| request.documents.as_ref().map_or_else(
+                        || request.host == ROOT_HOST || request.placements.get(&tab.id).copied().or_else(|| snapshot.document_owners.get(&tab.id).copied()).unwrap_or(ROOT_HOST) == request.host, |ids| ids.contains(&tab.id)))
                     {
                         let cache = snapshot.documents.iter().find(|cache| cache.id == tab.id).ok_or("文書の状態を取得できません")?;
                         let answer = if let Some((answer, revision)) = approvals.get(&tab.id) {
@@ -314,7 +386,7 @@ impl DesktopRoot {
                         .map_err(|e| e.to_string())?;
                     if let Some(error) = error { return Err(error); }
                     committed.extend(ids);
-                    results.push((request.group, snapshot, request.windows));
+                    results.push((request.group, snapshot, request.windows, request.host, request.close_tools));
                 }
                 Ok(results)
             }.await;
@@ -354,7 +426,11 @@ impl DesktopRoot {
                     }
                     Ok(results) => {
                         let mut handles = Vec::new();
-                        for (group, snapshot, windows) in results {
+                        for (group, snapshot, windows, host, tools) in results {
+                            let target = group.read(cx).members.get(&host).map(|member| member.shell.clone());
+                            if let Some(shell) = target {
+                                shell.update(cx, |shell, cx| shell.close_tools_after_batch(&tools, cx));
+                            }
                             group.update(cx, |group, cx| {
                                 group.publish_reconciled(snapshot, cx);
                                 for id in windows {
@@ -374,16 +450,17 @@ impl DesktopRoot {
 
 /// Publishes a group's closing state and disables or enables all member editors accordingly.
 fn set_closing(group: &Entity<WindowGroup>, closing: bool, cx: &mut gpui::App) {
-    let editors = group.update(cx, |group, cx| {
+    let members = group.update(cx, |group, cx| {
         group.closing = closing;
         cx.notify();
         group
             .members
             .values()
-            .map(|member| member.editor.clone())
+            .map(|member| (member.editor.clone(), member.shell.clone()))
             .collect::<Vec<_>>()
     });
-    for editor in editors {
+    for (editor, shell) in members {
+        shell.update(cx, |shell, cx| shell.set_tab_mutations_blocked(closing, cx));
         let enabled = !closing && !group.read(cx).synchronization_required;
         editor.update(cx, |editor, cx| editor.set_enabled(enabled, cx));
     }

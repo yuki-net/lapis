@@ -4,11 +4,29 @@ use gpui::{App, Context, IntoElement, Render, Window, div, prelude::*, px};
 pub(crate) struct DragPreview {
     label: String,
     visible: bool,
+    icon: Option<crate::components::FileIconId>,
+    pinned: bool,
+    size: gpui::Size<gpui::Pixels>,
+    offset: gpui::Point<gpui::Pixels>,
 }
 
 impl DragPreview {
-    pub(crate) fn new(label: String, visible: bool) -> Self {
-        Self { label, visible }
+    pub(crate) fn new(
+        label: String,
+        icon: Option<crate::components::FileIconId>,
+        pinned: bool,
+        size: gpui::Size<gpui::Pixels>,
+        offset: gpui::Point<gpui::Pixels>,
+        visible: bool,
+    ) -> Self {
+        Self {
+            label,
+            icon,
+            pinned,
+            size,
+            offset,
+            visible,
+        }
     }
 }
 
@@ -18,19 +36,34 @@ impl Render for DragPreview {
             return div().size(px(0.0));
         }
         div()
-            .w(px(260.0))
-            .h(px(28.0))
+            .relative()
+            .left(self.offset.x)
+            .top(self.offset.y)
+            .w(self.size.width)
+            .h(self.size.height)
             .flex()
             .items_center()
-            .px(crate::tokens::spacing::XS)
+            .px(px(4.0))
+            .gap(px(3.0))
             .rounded(crate::tokens::radius::CONTROL)
             .bg(crate::theme::colors(cx).button_background_focused)
             .border_1()
             .border_color(crate::theme::colors(cx).button_border_focused)
             .text_color(crate::theme::colors(cx).text_primary)
-            .text_size(crate::tokens::typography::FONT_XS)
-            .truncate()
-            .child(self.label.clone())
+            .text_size(crate::tokens::typography::FONT_SM)
+            .when_some(self.icon, |tab, icon| {
+                tab.child(crate::components::FileIcon::new(icon).size(px(12.)))
+            })
+            .child(
+                div()
+                    .min_w(px(0.))
+                    .flex_1()
+                    .truncate()
+                    .child(self.label.clone()),
+            )
+            .when(!self.pinned, |tab| {
+                tab.child(crate::components::Icon::new(crate::components::IconName::X).size(px(9.)))
+            })
     }
 }
 
@@ -38,12 +71,15 @@ impl Render for DragPreview {
 #[cfg(target_os = "windows")]
 pub(crate) fn open(
     label: &str,
+    icon: Option<crate::components::FileIconId>,
+    pinned: bool,
+    size: gpui::Size<gpui::Pixels>,
     position: gpui::Point<gpui::Pixels>,
     source: &Window,
     cx: &mut App,
 ) -> Option<gpui::AnyWindowHandle> {
     let point = crate::window_host::drag::screen_position(position, source)?;
-    let bounds = gpui::Bounds::centered(None, gpui::size(px(260.0), px(32.0)), cx);
+    let bounds = gpui::Bounds::centered(None, size, cx);
     let handle = cx
         .open_window(
             gpui::WindowOptions {
@@ -58,12 +94,26 @@ pub(crate) fn open(
                 window_background: gpui::WindowBackgroundAppearance::Transparent,
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| DragPreview::new(label.to_owned(), true)),
+            |_, cx| {
+                cx.new(|_| {
+                    DragPreview::new(
+                        label.to_owned(),
+                        icon,
+                        pinned,
+                        size,
+                        gpui::point(px(0.), px(0.)),
+                        true,
+                    )
+                })
+            },
         )
         .ok()?;
     let handle: gpui::AnyWindowHandle = handle.into();
     handle
-        .update(cx, |_, window, _| platform::position(window, point))
+        .update(cx, |_, window, _| {
+            platform::disable_input(window);
+            platform::position(window, point)
+        })
         .ok()?;
     Some(handle)
 }
@@ -72,6 +122,9 @@ pub(crate) fn open(
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn open(
     _: &str,
+    _: Option<crate::components::FileIconId>,
+    _: bool,
+    _: gpui::Size<gpui::Pixels>,
     _: gpui::Point<gpui::Pixels>,
     _: &Window,
     _: &mut App,
@@ -96,8 +149,10 @@ mod platform {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     use windows::Win32::{
         Foundation::HWND,
+        UI::Input::KeyboardAndMouse::EnableWindow,
         UI::WindowsAndMessaging::{
-            SW_HIDE, SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos, ShowWindow,
+            SW_HIDE, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowPos,
+            ShowWindow,
         },
     };
 
@@ -108,18 +163,27 @@ mod platform {
         }
     }
 
+    pub(super) fn disable_input(window: &Window) {
+        if let Some(hwnd) = hwnd(window) {
+            let _ = unsafe { EnableWindow(hwnd, false) };
+        }
+    }
+
     pub(super) fn position(window: &Window, point: crate::window_host::drag::ScreenPoint) {
         let Some(hwnd) = hwnd(window) else { return };
-        // The cursor stays outside the preview so native hit testing still sees the drop target.
+        let size = window.viewport_size();
+        let width = (f32::from(size.width) * window.scale_factor()).round() as i32;
+        let height = (f32::from(size.height) * window.scale_factor()).round() as i32;
+        // 入力を無効化し、移動先をカーソル下で判定する。
         let _ = unsafe {
             SetWindowPos(
                 hwnd,
                 None,
-                point.x + 14,
-                point.y + 18,
-                (260.0 * window.scale_factor()).round() as i32,
-                (28.0 * window.scale_factor()).round() as i32,
-                SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                point.x - width / 2,
+                point.y - height / 2,
+                0,
+                0,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSIZE | SWP_SHOWWINDOW,
             )
         };
     }

@@ -266,6 +266,9 @@ impl Shell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.tab_mutations_blocked || self.shell.layout.tab_is_pinned(&tab) {
+            return;
+        }
         let PanelTab::Document(document_id) = tab else {
             if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.shell
@@ -281,6 +284,32 @@ impl Shell {
         };
 
         self.request_document_close(document_id, window, cx);
+    }
+
+    pub(crate) fn set_tab_mutations_blocked(&mut self, blocked: bool, cx: &mut Context<Self>) {
+        self.tab_mutations_blocked = blocked;
+        if blocked {
+            self.tab_context = None;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn close_tools_after_batch(&mut self, tabs: &[PanelTab], cx: &mut Context<Self>) {
+        for tab in tabs {
+            if !matches!(tab, PanelTab::Tool { .. }) || self.shell.layout.tab_is_pinned(tab) {
+                continue;
+            }
+            if let Some(panel_id) = self.shell.layout.panel_for_tab(tab) {
+                self.shell
+                    .layout
+                    .remove_tab(&panel_id, tab, std::time::Instant::now());
+                self.schedule_empty_close(panel_id, cx);
+                self.feature_registry
+                    .close_view_instance(&tab.instance_id());
+            }
+        }
+        self.refresh_feature_activation(cx);
+        cx.notify();
     }
 
     pub(crate) fn toggle_panel_controls(&mut self, cx: &mut Context<Self>) {

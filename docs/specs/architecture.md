@@ -73,11 +73,11 @@ Document/Toolのタブ配置へInspectorを登録しない。公式との差分�
 - 正本の再取得が失敗しても、Clientの確認済み所属と最後のcacheをsequence付きで配信する。未確認cacheでの編集・移動・保存は止め、再度Close / Quitを実行したときのworker上の再照合で解除する。通常の遅延Snapshotでは復旧待ちを解除しない。残すDocumentは再attachして最新revisionと保存判断を確認し、応答不明のcloseやdiscardを成功と推測しない。DocumentCloseは正本文書の削除ではなく接続のattachment解除であり、再attachは残す意図を再確立する。worker自体が終了して再照合できない場合は、Windowとcacheを保持したまま操作を停止する。
 - Editorの処理待ちでGroup Snapshotの適用を見送った場合は、古い世代の応答も含めて待ち処理が解消した時点でHostへ通知し、Groupの最新状態を再適用する。Shellは個別の遅延応答を直接表示せず、sequence検証後のGroup状態から更新する。
 
-Document は取り外しボタンと Root への再ドックに加え、Windows ではタブを Window 外で離すと新 Window を作り、同じグループの Panel へ離すと再ドックする。Root / 子 / 子同士を同じ移動経路で扱い、移動先で文書を選択する。空になった子 Window は開いたままとし、閉じる操作で解放する。配置モデルは Document / Tool 共通だが、Tool の Window 間移動は未有効。Terminal は focus と入力先・出力購読、Task / Agent は選択 execution とストリームの寿命を持つため、既存 Entity を再利用して再購読範囲を検証するまで移動させない。個別の Window Manager や汎用 Trait は増やさない。
+Windows では Document のタブを Window 外で離すと新 Window を作り、同じグループの Panel へ離すと再ドックする。Root / 子 / 子同士を同じ移動経路で扱い、移動先で文書を選択する。空になった子 Window は開いたままとし、閉じる操作で解放する。配置モデルは Document / Tool 共通だが、Tool の Window 間移動は未有効。Terminal は focus と入力先・出力購読、Task / Agent は選択 execution とストリームの寿命を持つため、既存 Entity を再利用して再購読範囲を検証するまで移動させない。個別の Window Manager や汎用 Trait は増やさない。
 
 GPUI 0.2.2 の Windows backend は MouseDown で `SetCapture`、MouseUp で `ReleaseCapture` し、GPUI は受信した Window の MouseUp 後に active drag を破棄する。Shell は元 Window の capture phase で解放を受け、`ClientToScreen` / `ScreenToClient` で各 Window の DPI をまたぐ物理座標を変換する。`WindowFromPoint` の手前の Window と描画時の Panel bounds を照合し、背後の Window へ移動しない。別グループの Lapis Window と、Lapis の Panel 以外の領域では取り消す。外部アプリ上では新 Window を生成する。新 Window は離した位置のモニターの作業領域内へ置く。GPUI の変更やイベントの定期監視は加えない。
 
-ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。同一Window内の移動先はOverlayで強調する。Window外の追従プレビューと別Windowの移動先の強調表示は未実装。Windows 以外では既存の Window 内ドラッグとボタン操作を維持するが、Window 間ドラッグは未対応。
+ドラッグ開始時には配置を変更しない。Escape は GPUI の key binding より前に処理し、focus を失った場合も取り消す。取消後の MouseUp、古い所属、終了中・入力処理中、Tool の Window 間移動は受理しない。同一Window内の移動先はOverlayで強調する。Windowsではタブのサイズと位置に合わせた追従プレビューを表示する。別Windowの移動先の強調表示は未実装。Windows 以外では Window 内のドラッグに対応し、Window 間ドラッグは未対応。
 
 WindowGroup の再起動復元は未実装。後続では group / window の永続 ID、親子関係、bounds、Panel ごとのタブ順・Active Tab・サイズを、Document の復元用 ID と関連づけて保存する。現状の HostId / GPUI EntityId を永続 ID に使わない。明示 close 後の更新済み Document 一覧を保存し、閉じたタブ・Window を復活させない。既存の文書復元は OS Window の配置復元を意味しない。
 
@@ -97,6 +97,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
+- ピン留めはPanelの共通Tab状態として保存し、左側に配置する。タブの単独・一括Closeではピン留め済みを対象から外すが、Windowやアプリの終了は妨げない。移動時はPINを維持する。
 - ボタン起点のPopupは`components::Popup`でボタン直下へ、サブメニューは起点行の横へ配置する。クリック座標やShellに保存した位置は使わない。`PopupScope`は親子の表示範囲と起点ボタンを一つの操作範囲として外側クリックを判定する。Window端補正は共通部品、開閉・選択状態とEscape・Focus復帰は呼び出し側が所有する。`components::Menu`は`MenuEntry`の配列から行・アイコン・区切りを描画し、表示フォントで計測したラベル・ショートカット・矢印の最大行幅にpadding・borderを加えて幅を決める。呼び出し側に固定幅や文字数による幅推定を置かず、Window幅を上限にする。
 - HeaderのZone操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じZone Commandを実行できる。
 

@@ -19,7 +19,7 @@ impl Shell {
                 .unwrap_or_else(|| "Document".to_owned()),
         }
     }
-    /// Renders scrollable tabs with selection, close, and drag handlers and document detach or dock buttons.
+    /// Renders scrollable tabs with selection, close, context menu, and drag handlers.
     /// Detached windows omit the tool-add button.
     pub(super) fn render_tool_panel_header(
         &self,
@@ -90,12 +90,18 @@ impl Shell {
                 };
                 let tab = tab.clone();
                 let close_tab = tab.clone();
-                let detach_tab = tab.clone();
+                let context_tab = tab.clone();
+                let context_panel = panel_id.clone();
+                let pinned = panel.pinned.contains(&tab);
+                let debug_id = format!("panel-tab-{}-{index}", panel_id.as_str());
                 let select_panel = panel_id.clone();
                 let close_panel_id = panel_id.clone();
-                let movable = matches!(tab, PanelTab::Document(_));
                 let drag_shell = cx.entity().downgrade();
                 let drag_label = label.clone();
+                let measured = std::rc::Rc::new(std::cell::Cell::new(None::<gpui::Bounds<Pixels>>));
+                let measure_bounds = measured.clone();
+                let tab_bounds = self.tab_bounds.clone();
+                let measured_tab = tab.clone();
                 let drag = DraggedPanelTab {
                     group: self.group,
                     source_host: self.host,
@@ -127,7 +133,20 @@ impl Shell {
                     .id(ElementId::Name(
                         format!("panel-tab-{}-{index}", panel_id.as_str()).into(),
                     ))
+                    .debug_selector(move || debug_id.clone())
                     .h(px(26.0))
+                    .relative()
+                    .child(
+                        gpui::canvas(
+                            move |bounds, _, _| {
+                                measure_bounds.set(Some(bounds));
+                                tab_bounds.borrow_mut().insert(measured_tab.clone(), bounds);
+                            },
+                            |_, _, _, _| {},
+                        )
+                        .absolute()
+                        .inset_0(),
+                    )
                     .px(px(4.0))
                     .gap(px(3.0))
                     .rounded(tokens::radius::CONTROL)
@@ -148,10 +167,17 @@ impl Shell {
                         }
                     })
                     .cursor(CursorStyle::PointingHand)
-                    .on_drag(drag, move |drag: &DraggedPanelTab, position, window, cx| {
+                    .on_drag(drag, move |drag: &DraggedPanelTab, offset, window, cx| {
+                        let size = measured
+                            .get()
+                            .map(|bounds| bounds.size)
+                            .unwrap_or(gpui::size(px(160.), px(26.)));
                         let preview = crate::window_host::drag_preview::open(
                             &drag_label,
-                            position,
+                            file_icon,
+                            pinned,
+                            size,
+                            window.mouse_position(),
                             window,
                             cx,
                         );
@@ -163,10 +189,27 @@ impl Shell {
                         cx.new(|_| {
                             crate::window_host::drag_preview::DragPreview::new(
                                 drag_label.clone(),
+                                file_icon,
+                                pinned,
+                                size,
+                                point(offset.x - size.width / 2., offset.y - size.height / 2.),
                                 !cfg!(target_os = "windows"),
                             )
                         })
                     })
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            if this.tab_mutations_blocked {
+                                return;
+                            }
+                            this.tab_context =
+                                Some((context_panel.clone(), context_tab.clone(), event.position));
+                            window.focus(&this.focus_handle);
+                            cx.notify();
+                        }),
+                    )
                     .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
                         PanelTab::Tool { .. } => this.select_tab_in_panel(
                             select_panel.clone(),
@@ -189,58 +232,38 @@ impl Shell {
                         tab_el.child(crate::components::FileIcon::new(icon).size(px(12.0)))
                     })
                     .child(label)
-                    .when(movable, |element| {
+                    .when(!pinned, |element| {
                         element.child(
                             div()
                                 .id(ElementId::Name(
-                                    format!("detach-tab-{}-{index}", panel_id.as_str()).into(),
+                                    format!("close-tab-{}-{index}", panel_id.as_str()).into(),
                                 ))
-                                .px(px(3.0))
-                                .child(if self.detached { "↩" } else { "↗" })
+                                .size(px(11.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(theme::colors(cx).text_secondary)
+                                .cursor(CursorStyle::PointingHand)
+                                .hover(|style| style.text_color(theme::colors(cx).text_primary))
                                 .on_mouse_down(
                                     MouseButton::Left,
-                                    cx.listener(|_, _, _, cx| cx.stop_propagation()),
+                                    cx.listener(|_, _, _, cx| {
+                                        cx.stop_propagation();
+                                    }),
                                 )
-                                .on_click(cx.listener(move |this, _, _, cx| {
+                                .on_click(cx.listener(move |this, _, window, cx| {
                                     cx.stop_propagation();
-                                    cx.emit(if this.detached {
-                                        UiCommand::DockTab(detach_tab.clone())
-                                    } else {
-                                        UiCommand::DetachTab(detach_tab.clone())
-                                    });
-                                })),
+                                    this.close_tab_in_panel(
+                                        close_panel_id.clone(),
+                                        position,
+                                        close_tab.clone(),
+                                        window,
+                                        cx,
+                                    );
+                                }))
+                                .child(Icon::new(IconName::X).size(px(9.0))),
                         )
                     })
-                    .child(
-                        div()
-                            .id(ElementId::Name(
-                                format!("close-tab-{}-{index}", panel_id.as_str()).into(),
-                            ))
-                            .size(px(11.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(theme::colors(cx).text_secondary)
-                            .cursor(CursorStyle::PointingHand)
-                            .hover(|style| style.text_color(theme::colors(cx).text_primary))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|_, _, _, cx| {
-                                    cx.stop_propagation();
-                                }),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                cx.stop_propagation();
-                                this.close_tab_in_panel(
-                                    close_panel_id.clone(),
-                                    position,
-                                    close_tab.clone(),
-                                    window,
-                                    cx,
-                                );
-                            }))
-                            .child(Icon::new(IconName::X).size(px(9.0))),
-                    )
                     .into_any_element()
             })
             .collect();

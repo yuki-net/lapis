@@ -15,6 +15,7 @@ impl Shell {
         self.zone_panel_bounds.borrow_mut().clear();
         self.panel_bounds.borrow_mut().clear();
         self.zone_bounds.borrow_mut().clear();
+        self.tab_bounds.borrow_mut().clear();
         div()
             .size_full()
             .relative()
@@ -95,6 +96,9 @@ impl Shell {
                             }),
                     ),
             )
+            .when_some(self.tab_context.clone(), |root, context| {
+                root.child(self.render_tab_context(context, cx))
+            })
             .when(self.shell.command_palette_open, |root| {
                 root.child(self.render_command_palette(cx))
             })

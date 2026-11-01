@@ -40,43 +40,72 @@ impl Shell {
                         return;
                     }
                     let active = cx.has_active_drag();
-                    let _ = released.update(cx, |shell, cx| {
-                        shell.close_drag_preview(cx);
-                        let drag = shell.release_tab_drag_at(event.position, active);
-                        let Some(drag) = drag else {
-                            cx.notify();
-                            return;
-                        };
-                        let screen =
-                            crate::window_host::drag::screen_position(event.position, window);
-                        let inside = gpui::Bounds::new(Point::default(), window.viewport_size())
-                            .contains(&event.position);
-                        if inside
-                            && screen.is_none_or(|point| {
-                                crate::window_host::drag::is_source_window(window, point)
-                            })
-                        {
-                            if let Some(preview) = shell.drop_target.take()
-                                && !preview.invalid
-                                && drag.source_host == shell.host
+                    let _ =
+                        released.update(cx, |shell, cx| {
+                            shell.close_drag_preview(cx);
+                            let drag = shell.release_tab_drag_at(event.position, active);
+                            let Some(drag) = drag else {
+                                cx.notify();
+                                return;
+                            };
+                            let screen =
+                                crate::window_host::drag::screen_position(event.position, window);
+                            let inside =
+                                gpui::Bounds::new(Point::default(), window.viewport_size())
+                                    .contains(&event.position);
+                            if inside
+                                && screen.is_none_or(|point| {
+                                    crate::window_host::drag::is_source_window(window, point)
+                                })
                             {
-                                shell.drop_panel_tab(
-                                    drag.source_panel.clone(),
-                                    drag.tab.clone(),
-                                    preview.target,
-                                    cx,
+                                let reorder_target = shell.tab_bounds.borrow().iter().find_map(
+                                    |(target, bounds)| {
+                                        (target != &drag.tab
+                                            && bounds.contains(&event.position)
+                                            && shell
+                                                .panel_bounds
+                                                .borrow()
+                                                .get(&drag.source_panel)
+                                                .is_some_and(|panel| {
+                                                    panel.contains(&event.position)
+                                                })
+                                            && shell.shell.layout.panel_for_tab(target).as_ref()
+                                                == Some(&drag.source_panel))
+                                        .then_some((
+                                            target.clone(),
+                                            event.position.x > bounds.center().x,
+                                        ))
+                                    },
                                 );
+                                if let Some((target, after)) = reorder_target {
+                                    shell.shell.layout.reorder_tabs(
+                                        &drag.source_panel,
+                                        &drag.tab,
+                                        &target,
+                                        after,
+                                    );
+                                    shell.drop_target = None;
+                                } else if let Some(preview) = shell.drop_target.take()
+                                    && !preview.invalid
+                                    && drag.source_host == shell.host
+                                {
+                                    shell.drop_panel_tab(
+                                        drag.source_panel.clone(),
+                                        drag.tab.clone(),
+                                        preview.target,
+                                        cx,
+                                    );
+                                }
+                            } else {
+                                shell.drop_target = None;
+                                if let Some(point) = screen {
+                                    cx.emit(UiCommand::ReleaseTab(drag, point));
+                                }
                             }
-                        } else {
-                            shell.drop_target = None;
-                            if let Some(point) = screen {
-                                cx.emit(UiCommand::ReleaseTab(drag, point));
-                            }
-                        }
-                        cx.stop_active_drag(window);
-                        cx.stop_propagation();
-                        cx.notify();
-                    });
+                            cx.stop_active_drag(window);
+                            cx.stop_propagation();
+                            cx.notify();
+                        });
                 });
                 window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
                     if phase != gpui::DispatchPhase::Capture || !cx.has_active_drag() {

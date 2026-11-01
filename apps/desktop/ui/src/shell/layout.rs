@@ -312,6 +312,29 @@ impl DockLayout {
         Ok(id)
     }
 
+    pub(crate) fn tab_is_pinned(&self, tab: &PanelTab) -> bool {
+        self.find_tab(tab)
+            .and_then(|id| self.panel(&id))
+            .is_some_and(|panel| panel.pinned.contains(tab))
+    }
+
+    pub(crate) fn set_tab_pinned(&mut self, tab: &PanelTab, pinned: bool) -> bool {
+        self.find_tab(tab)
+            .and_then(|id| self.panel_mut(&id))
+            .is_some_and(|panel| panel.set_pinned(tab, pinned))
+    }
+
+    pub(crate) fn reorder_tabs(
+        &mut self,
+        panel: &PanelId,
+        tab: &PanelTab,
+        target: &PanelTab,
+        after: bool,
+    ) -> bool {
+        self.panel_mut(panel)
+            .is_some_and(|panel| panel.reorder(tab, target, after))
+    }
+
     pub(crate) fn move_tab_to_zone(
         &mut self,
         position: ZonePosition,
@@ -338,6 +361,7 @@ impl DockLayout {
             return Ok(result);
         }
         let mut candidate = self.clone();
+        let pinned = candidate.tab_is_pinned(&tab);
         let source_position = candidate.zone_for_panel(&source).ok_or(())?;
         let id = candidate.allocate_id();
         if !candidate.zones.get_mut(&position).unwrap().add_panel(
@@ -348,6 +372,9 @@ impl DockLayout {
             return Err(());
         }
         candidate.panel_mut(&source).unwrap().remove(&tab);
+        if pinned {
+            candidate.panel_mut(&id).unwrap().set_pinned(&tab, true);
+        }
         if candidate.panel(&source).unwrap().tabs.is_empty() {
             candidate
                 .zones
@@ -406,6 +433,7 @@ impl DockLayout {
             *self = candidate;
             return Ok(id);
         }
+        let pinned = candidate.tab_is_pinned(tab);
         let source_position = candidate.zone_for_panel(source).ok_or(())?;
         if !candidate
             .panel(source)
@@ -474,6 +502,12 @@ impl DockLayout {
                 .get_mut(&target_position)
                 .unwrap()
                 .cancel_empty_close(&destination);
+        }
+        if pinned {
+            candidate
+                .panel_mut(&destination)
+                .unwrap()
+                .set_pinned(tab, true);
         }
         if candidate.panel(source).unwrap().tabs.is_empty() {
             candidate
@@ -683,6 +717,68 @@ mod tests {
         let mut obsolete = saved;
         obsolete.zones[0].position.push_str("-panel");
         assert!(DockLayout::restore(&obsolete, |_| None).is_none());
+    }
+
+    #[test]
+    fn tab_reordering_keeps_pinned_tabs_on_the_left() {
+        let mut layout = DockLayout::default();
+        let one = PanelTab::tool("one");
+        let two = PanelTab::tool("two");
+        let three = PanelTab::tool("three");
+        let panel = layout.open_tab(ZonePosition::Main, one.clone()).unwrap();
+        layout.open_tab(ZonePosition::Main, two.clone()).unwrap();
+        layout.open_tab(ZonePosition::Main, three.clone()).unwrap();
+        layout.set_tab_pinned(&one, true);
+        layout.set_tab_pinned(&two, true);
+        assert!(layout.reorder_tabs(&panel, &two, &one, false));
+        assert_eq!(
+            layout.panel(&panel).unwrap().tabs,
+            vec![two.clone(), one.clone(), three.clone()]
+        );
+        assert!(layout.reorder_tabs(&panel, &three, &two, false));
+        assert_eq!(layout.panel(&panel).unwrap().tabs, vec![two, one, three]);
+    }
+
+    #[test]
+    fn pinned_tabs_sort_first_survive_restore_and_panel_moves() {
+        let mut layout = DockLayout::default();
+        let first = PanelTab::tool("pin-test-first");
+        let pinned = PanelTab::tool("pin-test-pinned");
+        let source = layout.open_tab(ZonePosition::Main, first.clone()).unwrap();
+        layout.open_tab(ZonePosition::Main, pinned.clone()).unwrap();
+        assert!(layout.set_tab_pinned(&pinned, true));
+        assert_eq!(
+            layout.panel(&source).unwrap().tabs,
+            vec![pinned.clone(), first.clone()]
+        );
+        let saved = layout.capture();
+        let all = [
+            first.clone(),
+            pinned.clone(),
+            PanelTab::tool(crate::features::id::VIEW_FILES),
+        ];
+        let mut restored = DockLayout::restore(&saved, |raw| {
+            all.iter().find(|tab| serialize_tab(tab) == raw).cloned()
+        })
+        .unwrap();
+        assert!(restored.tab_is_pinned(&pinned));
+        let source = restored.find_tab(&pinned).unwrap();
+        let target = restored
+            .open_tab(ZonePosition::Right, PanelTab::tool("target"))
+            .unwrap();
+        restored
+            .drop_tab(
+                &source,
+                &pinned,
+                &PanelDrop::Into(target.clone()),
+                (1000., 700.),
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(restored.tab_is_pinned(&pinned));
+        assert_eq!(restored.panel(&target).unwrap().tabs.first(), Some(&pinned));
+        assert!(restored.set_tab_pinned(&pinned, false));
+        assert!(!restored.tab_is_pinned(&pinned));
     }
 
     #[test]
