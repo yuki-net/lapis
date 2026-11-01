@@ -219,15 +219,6 @@ impl Shell {
         cx.notify();
     }
 
-    pub(crate) fn toggle_settings_menu(&mut self, cx: &mut Context<Self>) {
-        self.shell.settings_menu_open = !self.shell.settings_menu_open;
-        self.shell.workspace_menu_open = false;
-        self.shell.tool_picker = None;
-        self.shell.header_menu_open = false;
-        self.shell.header_menu_section = None;
-        cx.notify();
-    }
-
     pub(crate) fn close_settings_menu(&mut self, cx: &mut Context<Self>) {
         if self.shell.settings_menu_open {
             self.shell.settings_menu_open = false;

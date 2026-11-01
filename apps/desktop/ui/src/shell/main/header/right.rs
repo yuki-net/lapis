@@ -12,7 +12,7 @@ impl Shell {
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     window.focus(&this.focus_handle);
-                    this.toggle_settings_menu(cx);
+                    this.toggle_header_popup(super::HeaderPopup::Settings, cx);
                 })),
             PopupPlacement::BelowStart,
             scope,

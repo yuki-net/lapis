@@ -8,6 +8,13 @@ mod right;
 
 use super::*;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HeaderPopup {
+    Main,
+    Workspace,
+    Settings,
+}
+
 impl Shell {
     /// Composes the persistent application header, separating app content (left/center/right)
     /// from OS window controls (minimize/maximize/close).

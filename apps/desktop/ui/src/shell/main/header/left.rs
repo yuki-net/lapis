@@ -16,7 +16,7 @@ impl Shell {
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
                     window.focus(&this.focus_handle);
-                    this.toggle_header_menu(cx);
+                    this.toggle_header_popup(super::HeaderPopup::Main, cx);
                 })),
             PopupPlacement::BelowStart,
             scope.clone(),

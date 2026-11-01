@@ -318,8 +318,20 @@ mod tests {
             assert!(shell.shell.header_menu_open);
             assert!(!shell.shell.settings_menu_open);
         });
+        let workspace = visual.debug_bounds("workspace-menu-trigger").unwrap();
+        visual.simulate_click(workspace.center(), Modifiers::none());
+        shell.read_with(visual, |shell, _| {
+            assert!(!shell.shell.header_menu_open);
+            assert!(!shell.shell.settings_menu_open);
+            assert!(shell.shell.workspace_menu_open);
+        });
+        visual.simulate_click(settings.center(), Modifiers::none());
+        shell.read_with(visual, |shell, _| {
+            assert!(!shell.shell.workspace_menu_open);
+            assert!(shell.shell.settings_menu_open);
+        });
         visual.simulate_keystrokes("escape");
-        shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.settings_menu_open));
     }
     #[gpui::test]
     fn workspace_menu_opens_recent_and_dismisses(cx: &mut TestAppContext) {

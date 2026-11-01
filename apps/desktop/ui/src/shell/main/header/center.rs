@@ -24,16 +24,10 @@ impl Shell {
             button.bg(theme::colors(cx).button_background_selected)
         })
         .on_click(cx.listener(|this, _, window, cx| {
-            this.shell.workspace_menu_open = !this.shell.workspace_menu_open;
+            this.toggle_header_popup(super::HeaderPopup::Workspace, cx);
             if this.shell.workspace_menu_open {
-                this.shell.header_menu_open = false;
-                this.shell.header_menu_section = None;
-                this.shell.settings_menu_open = false;
-                this.shell.command_palette_open = false;
-                this.shell.tool_picker = None;
                 window.focus(&this.focus_handle);
             }
-            cx.notify();
         }));
         let popup = Popup::new(trigger, PopupPlacement::BelowStart, PopupScope::default())
             .on_dismiss(cx.listener(|this, _: &(), _, cx| this.close_workspace_menu(cx)))
