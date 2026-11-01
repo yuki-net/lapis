@@ -1,7 +1,45 @@
 use super::*;
+use crate::components::{
+    Menu, MenuEntry, MenuItemSpec, Popup, PopupPlacement, PopupScope, header_button,
+};
 
 impl Shell {
-    pub(super) fn render_header_center(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(super) fn render_header_center(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let trigger = header_button(
+            "header-workspace",
+            self.session
+                .root
+                .as_deref()
+                .and_then(|root| root.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| self.session.workspace_name().to_owned()),
+            cx,
+        )
+        .debug_selector(|| "workspace-menu-trigger".into())
+        .when(self.shell.workspace_menu_open, |button| {
+            button.bg(theme::colors(cx).button_background_selected)
+        })
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.shell.workspace_menu_open = !this.shell.workspace_menu_open;
+            if this.shell.workspace_menu_open {
+                this.shell.header_menu_open = false;
+                this.shell.header_menu_section = None;
+                this.shell.settings_menu_open = false;
+                this.shell.command_palette_open = false;
+                this.shell.tool_picker = None;
+                window.focus(&this.focus_handle);
+            }
+            cx.notify();
+        }));
+        let popup = Popup::new(trigger, PopupPlacement::BelowStart, PopupScope::default())
+            .on_dismiss(cx.listener(|this, _: &(), _, cx| this.close_workspace_menu(cx)))
+            .when(self.shell.workspace_menu_open, |popup| {
+                popup.content(self.render_workspace_menu(window, cx))
+            });
         div()
             .w(px(0.0))
             .min_w(px(0.0))
@@ -12,22 +50,143 @@ impl Shell {
             .justify_center()
             .gap(tokens::spacing::XS)
             .text_size(tokens::typography::FONT_SM)
-            .child(
-                crate::components::header_button(
-                    "header-workspace",
-                    self.session
-                        .root
-                        .as_deref()
-                        .and_then(|root| root.file_name())
-                        .map(|name| name.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| self.session.workspace_name().to_owned()),
-                    cx,
-                )
-                .on_click(cx.listener(|_, _, _, cx| cx.notify())),
-            )
+            .child(popup)
             .child(Icon::new(IconName::ChevronRight).size(px(12.)))
             .when_some(self.branch_picker.clone(), |header, picker| {
                 header.child(picker)
             })
+    }
+
+    fn close_workspace_menu(&mut self, cx: &mut Context<Self>) {
+        if self.shell.workspace_menu_open {
+            self.shell.workspace_menu_open = false;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn workspace_menu_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.shell.workspace_menu_open && event.keystroke.key == "escape" {
+            self.close_workspace_menu(cx);
+        }
+    }
+
+    fn render_workspace_menu(&self, window: &Window, cx: &mut Context<Self>) -> Menu {
+        let spec = |id: String, label: String, icon, enabled, separator_before| MenuItemSpec {
+            id: id.into(),
+            label: label.into(),
+            shortcut: None,
+            icon,
+            enabled,
+            selected: false,
+            indent: 0,
+            tree: None,
+            submenu: false,
+            separator_before,
+        };
+        let open = spec(
+            "workspace-open".into(),
+            "開く…".into(),
+            Some(IconName::Files),
+            true,
+            false,
+        );
+        let mut entries = vec![MenuEntry::new(open, cx, |row| {
+            row.debug_selector(|| "workspace-menu-open".into())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    this.close_workspace_menu(cx);
+                    this.open_project(window, cx);
+                }))
+                .into_any_element()
+        })];
+        let clone = spec(
+            "workspace-clone".into(),
+            "Git からクローン…".into(),
+            Some(IconName::Git),
+            false,
+            false,
+        );
+        entries.push(MenuEntry::new(clone, cx, |row| row.into_any_element()));
+        let host = spec(
+            "workspace-host".into(),
+            "Host に接続…".into(),
+            Some(IconName::Plug),
+            true,
+            false,
+        );
+        entries.push(MenuEntry::new(host, cx, |row| {
+            row.debug_selector(|| "workspace-menu-host".into())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.close_workspace_menu(cx);
+                    cx.emit(UiCommand::ConnectHost);
+                }))
+                .into_any_element()
+        }));
+        let rename = spec(
+            "workspace-rename".into(),
+            "ワークスペース名を変更…".into(),
+            Some(IconName::Pencil),
+            false,
+            true,
+        );
+        entries.push(MenuEntry::new(rename, cx, |row| row.into_any_element()));
+        let heading = spec(
+            "workspace-recent-title".into(),
+            "最近のワークスペース".into(),
+            Some(IconName::History),
+            false,
+            true,
+        );
+        entries.push(MenuEntry::new(heading, cx, |row| row.into_any_element()));
+        let mut recent = Vec::new();
+        if let Some(root) = &self.session.root {
+            recent.push(root.clone());
+        }
+        for root in &self.session.recent_workspaces {
+            if !recent.contains(root) {
+                recent.push(root.clone());
+            }
+        }
+        recent.truncate(8);
+        if recent.is_empty() {
+            let empty = spec(
+                "workspace-recent-empty".into(),
+                "履歴はありません".into(),
+                None,
+                false,
+                false,
+            );
+            entries.push(MenuEntry::new(empty, cx, |row| row.into_any_element()));
+        }
+        for (index, root) in recent.into_iter().enumerate() {
+            let name = root
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| root.display().to_string());
+            let label = format!("{}  {}", name, root.display());
+            let mut item = spec(
+                format!("workspace-recent-{index}"),
+                label,
+                Some(IconName::Files),
+                true,
+                false,
+            );
+            item.selected = self.session.root.as_ref() == Some(&root);
+            entries.push(MenuEntry::new(item, cx, |row| {
+                row.debug_selector(move || format!("workspace-menu-recent-{index}"))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.close_workspace_menu(cx);
+                        this.open_recent_workspace(root.clone(), window, cx);
+                    }))
+                    .into_any_element()
+            }));
+        }
+        Menu::new("workspace-menu", entries)
+            .debug_selector("workspace-menu-panel")
+            .max_height((window.viewport_size().height - px(16.)).max(px(0.)))
     }
 }

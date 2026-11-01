@@ -11,7 +11,7 @@ impl Shell {
             self.shell.command_palette_open = false;
             self.shell.tool_picker = None;
             self.shell.settings_menu_open = false;
-            self.shell.theme_picker_open = false;
+            self.shell.workspace_menu_open = false;
         } else {
             self.shell.header_menu_section = None;
         }

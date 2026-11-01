@@ -39,7 +39,7 @@ impl Shell {
             .when(!self.detached, |header| {
                 header
                     .child(self.render_header_left(window, cx))
-                    .child(self.render_header_center(cx))
+                    .child(self.render_header_center(window, cx))
                     .child(self.render_header_right(cx))
             })
     }

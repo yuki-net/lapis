@@ -11,6 +11,12 @@ const ICON_SIZE: Pixels = px(16.);
 const CHEVRON_SIZE: Pixels = px(14.);
 const LABEL_GAP: Pixels = px(16.);
 
+#[derive(Clone, Copy)]
+pub(crate) enum TreeItem {
+    Group { expanded: bool },
+    Leaf,
+}
+
 #[derive(Clone)]
 pub(crate) struct MenuItemSpec {
     pub(crate) id: SharedString,
@@ -20,6 +26,7 @@ pub(crate) struct MenuItemSpec {
     pub(crate) enabled: bool,
     pub(crate) selected: bool,
     pub(crate) indent: usize,
+    pub(crate) tree: Option<TreeItem>,
     pub(crate) submenu: bool,
     pub(crate) separator_before: bool,
 }
@@ -111,7 +118,12 @@ fn row_width(spec: &MenuItemSpec, measure: impl Fn(&SharedString) -> Pixels) -> 
         + tokens::spacing::SM
         + measure(&spec.label)
         + trailing
-        + px(spec.indent as f32 * 12.)
+        + px(spec.indent as f32 * 16.)
+        + if spec.tree.is_some() {
+            ICON_SIZE
+        } else {
+            px(0.)
+        }
 }
 
 impl RenderOnce for Menu {
@@ -164,7 +176,7 @@ fn menu_item(spec: MenuItemSpec, cx: &gpui::App) -> Stateful<gpui::Div> {
         .flex_shrink_0()
         .w_full()
         .px(tokens::spacing::SM)
-        .pl(tokens::spacing::SM + px(spec.indent as f32 * 12.))
+        .pl(tokens::spacing::SM + px(spec.indent as f32 * 16.))
         .rounded(tokens::radius::MENU_ITEM)
         .border_1()
         .border_color(if selected {
@@ -184,6 +196,24 @@ fn menu_item(spec: MenuItemSpec, cx: &gpui::App) -> Stateful<gpui::Div> {
         })
         .when(enabled && !selected, |item| {
             item.hover(|style| style.bg(colors.button_background_hover))
+        })
+        .when_some(spec.tree, |item, tree| {
+            item.child(
+                div()
+                    .size(ICON_SIZE)
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when_some(
+                        match tree {
+                            TreeItem::Group { expanded: true } => Some(IconName::ChevronDown),
+                            TreeItem::Group { expanded: false } => Some(IconName::ChevronRight),
+                            TreeItem::Leaf => None,
+                        },
+                        |slot, icon| slot.child(Icon::new(icon).size(CHEVRON_SIZE)),
+                    ),
+            )
         })
         .child(
             div()
@@ -244,6 +274,7 @@ mod tests {
                     enabled: true,
                     selected: false,
                     indent: 0,
+                    tree: None,
                     submenu: false,
                     separator_before: false,
                 },
@@ -255,6 +286,7 @@ mod tests {
                     enabled: true,
                     selected: false,
                     indent: 0,
+                    tree: None,
                     submenu: self.submenu,
                     separator_before: true,
                 },
@@ -295,6 +327,7 @@ mod tests {
                     enabled: true,
                     selected: true,
                     indent: 0,
+                    tree: None,
                     submenu: false,
                     separator_before: false,
                 };

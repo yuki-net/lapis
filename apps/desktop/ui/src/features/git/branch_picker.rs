@@ -2,7 +2,7 @@ use super::GitFeature;
 use crate::{
     components::{
         Icon, IconName, Menu, MenuEntry, MenuItemSpec, Popup, PopupPlacement, PopupScope,
-        SearchInput, SearchInputEvent, header_button,
+        SearchInput, SearchInputEvent, TreeItem, header_button,
     },
     theme,
 };
@@ -61,7 +61,11 @@ enum BranchRow {
     },
 }
 
-fn branch_rows(branches: &[Branch], query: &str, collapsed: &HashSet<String>) -> Vec<BranchRow> {
+fn branch_rows(
+    branches: &[Branch],
+    query: &str,
+    expanded_groups: &HashSet<String>,
+) -> Vec<BranchRow> {
     let query = query.to_lowercase();
     let mut root = BranchTree::default();
     for branch in branches
@@ -79,10 +83,12 @@ fn branch_rows(branches: &[Branch], query: &str, collapsed: &HashSet<String>) ->
         parent: &str,
         depth: usize,
         query: bool,
-        collapsed: &HashSet<String>,
+        expanded_groups: &HashSet<String>,
         rows: &mut Vec<BranchRow>,
     ) {
-        for (label, child) in node.children {
+        let mut children = node.children.into_iter().collect::<Vec<_>>();
+        children.sort_by_key(|(_, child)| child.branch.is_some());
+        for (label, child) in children {
             let path = if parent.is_empty() {
                 label.clone()
             } else {
@@ -95,7 +101,7 @@ fn branch_rows(branches: &[Branch], query: &str, collapsed: &HashSet<String>) ->
                     depth,
                 });
             } else {
-                let expanded = query || !collapsed.contains(&path);
+                let expanded = query || expanded_groups.contains(&path);
                 rows.push(BranchRow::Group {
                     path: path.clone(),
                     label,
@@ -103,13 +109,13 @@ fn branch_rows(branches: &[Branch], query: &str, collapsed: &HashSet<String>) ->
                     expanded,
                 });
                 if expanded {
-                    append(child, &path, depth + 1, query, collapsed, rows);
+                    append(child, &path, depth + 1, query, expanded_groups, rows);
                 }
             }
         }
     }
     let mut rows = Vec::new();
-    append(root, "", 0, !query.is_empty(), collapsed, &mut rows);
+    append(root, "", 0, !query.is_empty(), expanded_groups, &mut rows);
     rows
 }
 
@@ -119,7 +125,9 @@ pub(crate) struct BranchPicker {
     open: bool,
     query: String,
     branches: Vec<Branch>,
-    collapsed: HashSet<String>,
+    expanded_groups: HashSet<String>,
+    local_open: bool,
+    remote_open: bool,
     highlighted: Option<String>,
     pending_selection: Option<String>,
     context: Option<(WorkspaceId, String, String)>,
@@ -175,7 +183,9 @@ impl BranchPicker {
             open: false,
             query: String::new(),
             branches: Vec::new(),
-            collapsed: HashSet::new(),
+            expanded_groups: HashSet::new(),
+            local_open: true,
+            remote_open: true,
             highlighted: None,
             pending_selection: None,
             context,
@@ -203,6 +213,9 @@ impl BranchPicker {
             return;
         }
         self.open = true;
+        self.local_open = true;
+        self.remote_open = true;
+        self.expanded_groups.clear();
         self.previous_focus = window.focused(cx);
         self.error = None;
         self.context = self.git.read(cx).header_context();
@@ -274,12 +287,18 @@ impl BranchPicker {
         match event.keystroke.key.as_str() {
             "escape" => self.dismiss(window, cx),
             "enter" => {
-                if let Some(name) = self.highlighted.clone() {
+                if self.local_open && !self.loading
+                    && let Some(name) = self.highlighted.clone()
+                    && branch_rows(&self.branches, &self.query, &self.expanded_groups).iter().any(|row| matches!(row, BranchRow::Branch { branch, .. } if branch.name == name))
+                {
                     self.choose(name, window, cx);
                 }
             }
             "up" | "down" => {
-                let names = branch_rows(&self.branches, &self.query, &self.collapsed)
+                if !self.local_open {
+                    return;
+                }
+                let names = branch_rows(&self.branches, &self.query, &self.expanded_groups)
                     .into_iter()
                     .filter_map(|row| match row {
                         BranchRow::Branch { branch, .. } => Some(branch.name),
@@ -320,6 +339,7 @@ impl BranchPicker {
             enabled: true,
             selected: false,
             indent: 0,
+            tree: None,
             submenu: false,
             separator_before: false,
         }
@@ -328,23 +348,46 @@ impl BranchPicker {
         let mut entries = Vec::new();
         let mut create = Self::spec("branch-create", "新規ブランチ…", IconName::FilePlus);
         create.enabled = self.context.is_some() && !self.loading;
+        let create_enabled = create.enabled;
         entries.push(MenuEntry::new(create, cx, |row| {
-            row.on_click(cx.listener(|this, _, window, cx| {
-                this.dismiss(window, cx);
-                this.git.update(cx, |git, cx| git.header_create_branch(cx));
-            }))
+            row.when(create_enabled, |row| {
+                row.on_click(cx.listener(|this, _, window, cx| {
+                    this.dismiss(window, cx);
+                    this.git.update(cx, |git, cx| git.header_create_branch(cx));
+                }))
+            })
             .into_any_element()
         }));
-        let mut section = Self::spec("branch-local", "ローカルブランチ", IconName::Git);
-        section.enabled = false;
+        let mut section = Self::spec(
+            "branch-local",
+            "ローカル",
+            if self.local_open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            },
+        );
         section.separator_before = true;
-        entries.push(MenuEntry::new(section, cx, |row| row.into_any_element()));
-        let rows = branch_rows(&self.branches, &self.query, &self.collapsed);
-        if self.loading || rows.is_empty() {
+        entries.push(MenuEntry::new(section, cx, |row| {
+            row.debug_selector(|| "branch-local-section".into())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.local_open = !this.local_open;
+                    cx.notify();
+                }))
+                .into_any_element()
+        }));
+        let rows = if self.local_open && !self.loading {
+            branch_rows(&self.branches, &self.query, &self.expanded_groups)
+        } else {
+            Vec::new()
+        };
+        if self.local_open && (self.loading || rows.is_empty()) {
             let mut status = Self::spec(
                 "branch-status",
                 if self.loading {
                     "読み込み中…"
+                } else if self.error.is_some() {
+                    "ブランチを取得できません"
                 } else {
                     "一致するブランチがありません"
                 },
@@ -361,20 +404,14 @@ impl BranchPicker {
                     depth,
                     expanded,
                 } => {
-                    let mut spec = Self::spec(
-                        format!("branch-group-{path}"),
-                        label,
-                        if expanded {
-                            IconName::ChevronDown
-                        } else {
-                            IconName::ChevronRight
-                        },
-                    );
-                    spec.indent = depth;
+                    let mut spec =
+                        Self::spec(format!("branch-group-{path}"), label, IconName::Files);
+                    spec.tree = Some(TreeItem::Group { expanded });
+                    spec.indent = depth + 1;
                     entries.push(MenuEntry::new(spec, cx, |row| {
                         row.on_click(cx.listener(move |this, _, _, cx| {
-                            if !this.collapsed.insert(path.clone()) {
-                                this.collapsed.remove(&path);
+                            if !this.expanded_groups.insert(path.clone()) {
+                                this.expanded_groups.remove(&path);
                             }
                             cx.notify();
                         }))
@@ -387,8 +424,21 @@ impl BranchPicker {
                     depth,
                 } => {
                     let name = branch.name;
-                    let mut spec = Self::spec(format!("branch-{name}"), label, IconName::Git);
-                    spec.indent = depth;
+                    let current = self
+                        .context
+                        .as_ref()
+                        .is_some_and(|context| context.2 == name);
+                    let mut spec = Self::spec(
+                        format!("branch-{name}"),
+                        label,
+                        if current {
+                            IconName::BranchCurrent
+                        } else {
+                            IconName::Git
+                        },
+                    );
+                    spec.indent = depth + 1;
+                    spec.tree = Some(TreeItem::Leaf);
                     spec.enabled = !self.loading;
                     spec.selected = self.highlighted.as_ref().map_or_else(
                         || {
@@ -426,26 +476,36 @@ impl BranchPicker {
                 }
             }
         }
-        let mut all = Self::spec("branch-all", "すべてのローカルブランチ", IconName::Files);
-        all.separator_before = true;
-        entries.push(MenuEntry::new(all, cx, |row| {
-            row.on_click(cx.listener(|this, _, _, cx| {
-                this.collapsed.clear();
-                this.input
-                    .update(cx, |input, cx| input.set_text(String::new(), cx));
-                cx.notify();
-            }))
-            .into_any_element()
-        }));
-        let mut remote = Self::spec("branch-remote", "リモートブランチ", IconName::Git);
-        remote.enabled = false;
-        remote.shortcut = Some("未対応".into());
-        entries.push(MenuEntry::new(remote, cx, |row| row.into_any_element()));
-        let refresh = Self::spec("branch-refresh", "ブランチ一覧を更新", IconName::History);
-        entries.push(MenuEntry::new(refresh, cx, |row| {
-            row.on_click(cx.listener(|this, _, _, cx| this.reload(cx)))
+        let mut remote = Self::spec(
+            "branch-remote",
+            "リモート",
+            if self.remote_open {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            },
+        );
+        remote.separator_before = true;
+        entries.push(MenuEntry::new(remote, cx, |row| {
+            row.debug_selector(|| "branch-remote-section".into())
+                .on_click(cx.listener(|this, _, _, cx| {
+                    this.remote_open = !this.remote_open;
+                    cx.notify();
+                }))
                 .into_any_element()
         }));
+        if self.remote_open {
+            let mut unavailable = Self::spec(
+                "branch-remote-unavailable",
+                "リモートブランチ一覧は未対応です",
+                IconName::Git,
+            );
+            unavailable.enabled = false;
+            unavailable.indent = 1;
+            entries.push(MenuEntry::new(unavailable, cx, |row| {
+                row.into_any_element()
+            }));
+        }
         if let Some(error) = &self.error {
             let mut spec = Self::spec("branch-error", error.clone(), IconName::Problems);
             spec.enabled = false;
@@ -502,15 +562,27 @@ mod tests {
         let branches =
             parse_branches("* fix/menu abc1234\n  fix/headers/branch def5678\n  develop 123abcd\n")
                 .unwrap();
-        let collapsed = HashSet::from(["fix".into()]);
-        let rows = branch_rows(&branches, "", &collapsed);
+        let mut expanded_groups = HashSet::new();
+        let rows = branch_rows(&branches, "", &expanded_groups);
         assert_eq!(rows.len(), 2);
-        let rows = branch_rows(&branches, "HEADERS", &collapsed);
+        assert!(matches!(
+            &rows[0],
+            BranchRow::Group {
+                expanded: false,
+                ..
+            }
+        ));
+        expanded_groups.insert("fix".into());
+        let rows = branch_rows(&branches, "", &expanded_groups);
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(&rows[0], BranchRow::Group { label, .. } if label == "fix"));
+        assert!(matches!(&rows[3], BranchRow::Branch { branch, .. } if branch.name == "develop"));
+        let rows = branch_rows(&branches, "HEADERS", &expanded_groups);
         assert_eq!(rows.len(), 3);
         assert!(
             matches!(&rows[2], BranchRow::Branch { branch, depth: 2, .. } if branch.name == "fix/headers/branch")
         );
-        assert!(branch_rows(&branches, "missing", &collapsed).is_empty());
+        assert!(branch_rows(&branches, "missing", &expanded_groups).is_empty());
         assert!(parse_branches("not a valid branch row").is_err());
     }
 }

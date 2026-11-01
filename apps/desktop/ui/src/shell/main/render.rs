@@ -41,6 +41,7 @@ impl Shell {
             .on_key_down(cx.listener(Self::tool_picker_key_down))
             .on_key_down(cx.listener(Self::settings_menu_key_down))
             .on_key_down(cx.listener(Self::header_menu_key_down))
+            .on_key_down(cx.listener(Self::workspace_menu_key_down))
             .on_mouse_move(cx.listener(Self::resize_panels))
             .on_mouse_up(
                 MouseButton::Left,

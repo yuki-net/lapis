@@ -66,6 +66,7 @@ impl Shell {
             enabled: true,
             selected,
             indent: 0,
+            tree: None,
             submenu: true,
             separator_before: false,
         }
@@ -100,6 +101,7 @@ impl Shell {
                             enabled: true,
                             selected: false,
                             indent: 0,
+                            tree: None,
                             submenu: false,
                             separator_before: index == 0,
                         },
@@ -149,6 +151,7 @@ impl Shell {
                 enabled,
                 selected: false,
                 indent: 0,
+                tree: None,
                 submenu: false,
                 separator_before: item.separator_before,
             },
@@ -317,5 +320,54 @@ mod tests {
         });
         visual.simulate_keystrokes("escape");
         shell.read_with(visual, |shell, _| assert!(!shell.shell.header_menu_open));
+    }
+    #[gpui::test]
+    fn workspace_menu_opens_recent_and_dismisses(cx: &mut TestAppContext) {
+        let (shell, visual) = setup(cx);
+        let recent = std::path::PathBuf::from("example-project");
+        shell.update(visual, |shell, _| {
+            shell.session.recent_workspaces = vec![recent.clone(), recent.clone()];
+        });
+        let opened = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let observed = opened.clone();
+        let _subscription = visual.update(|_, cx| {
+            cx.subscribe(&shell, move |_, command, _| {
+                if let UiCommand::OpenRecent(path) = command {
+                    *observed.borrow_mut() = Some(path.clone());
+                }
+            })
+        });
+        draw(visual);
+        let trigger = visual.debug_bounds("workspace-menu-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let menu = visual.debug_bounds("workspace-menu-panel").unwrap();
+        assert_eq!(menu.top(), trigger.bottom() + tokens::spacing::XS);
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.workspace_menu_open));
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let row = visual.debug_bounds("workspace-menu-recent-0").unwrap();
+        visual.simulate_click(row.center(), Modifiers::none());
+        assert_eq!(*opened.borrow(), Some(recent));
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.workspace_menu_open));
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        visual.simulate_click(point(px(600.), px(500.)), Modifiers::none());
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.workspace_menu_open));
+    }
+    #[gpui::test]
+    fn settings_menu_lists_settings_keymap_and_plugins(cx: &mut TestAppContext) {
+        let (_, visual) = setup(cx);
+        draw(visual);
+        let trigger = visual.debug_bounds("settings-menu-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let settings = visual.debug_bounds("settings-menu-settings").unwrap();
+        let keymap = visual.debug_bounds("settings-menu-keymap").unwrap();
+        let plugins = visual.debug_bounds("settings-menu-plugins").unwrap();
+        assert!(settings.top() < keymap.top());
+        assert!(keymap.top() < plugins.top());
+        assert!(visual.debug_bounds("settings-menu-theme").is_none());
     }
 }

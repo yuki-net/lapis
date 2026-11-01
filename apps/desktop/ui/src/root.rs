@@ -1401,9 +1401,6 @@ impl DesktopRoot {
             | UiCommand::DockTab(_)
             | UiCommand::MoveTab(_, _)
             | UiCommand::ReleaseTab(_, _)) => self.host_command(0, command, window, cx),
-            UiCommand::Theme(theme) => self
-                .settings
-                .update(cx, |settings, cx| settings.select_theme(theme, cx)),
             UiCommand::QuickSearch => {
                 self.path_request = None;
                 self.git_input = None;
