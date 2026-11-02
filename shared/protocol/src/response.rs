@@ -10,6 +10,10 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ResponseBody {
+    #[serde(rename = "workbench.get")]
+    WorkbenchGet(crate::WorkbenchSnapshot),
+    #[serde(rename = "workbench.put")]
+    WorkbenchPut(crate::WorkbenchPutResponse),
     #[serde(rename = "host.worktree_path")]
     HostWorktree(String),
     #[serde(rename = "host.register_workspace")]
@@ -69,6 +73,8 @@ pub enum ResponseBody {
 impl ResponseBody {
     pub const fn method(&self) -> Option<&'static str> {
         match self {
+            Self::WorkbenchGet(_) => Some("workbench.get"),
+            Self::WorkbenchPut(_) => Some("workbench.put"),
             Self::HostWorktree(_) => Some("host.worktree_path"),
             Self::HostRegister(_) => Some("host.register_workspace"),
             Self::DocumentRelocate(_) => Some("document.relocate"),

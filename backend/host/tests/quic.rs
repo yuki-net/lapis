@@ -196,6 +196,101 @@ fn hello(id: &str) -> ClientHello {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workbench_updates_and_conflicts_cross_authenticated_quic_sessions() {
+    let fixture = Fixture::new().await;
+    let (mut first, _) = fixture.pair("workbench-first").await;
+    let (mut second, _) = fixture.pair("workbench-second").await;
+    connect_workspace(&mut first, &fixture.workspace).await;
+    connect_workspace(&mut second, &fixture.workspace).await;
+    let ResponseBody::WorkbenchGet(initial) = request(
+        &mut first,
+        2,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: fixture.workspace.clone(),
+        }),
+    )
+    .await
+    else {
+        panic!("initial workbench")
+    };
+    assert!(initial.view.is_null());
+    let put = WorkbenchPutRequest {
+        workspace_id: fixture.workspace.clone(),
+        expected_revision: initial.revision,
+        view: serde_json::json!({"show_panel_controls": false}),
+    };
+    let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(updated)) =
+        request(&mut first, 3, RequestBody::WorkbenchPut(put.clone())).await
+    else {
+        panic!("workbench update")
+    };
+    let ServerMessage::Event(event) = receive(&mut second).await else {
+        panic!("workbench event")
+    };
+    assert!(
+        matches!(event.body, EventBody::WorkbenchChanged { workspace_id, revision } if workspace_id == fixture.workspace && revision == updated.revision)
+    );
+    let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(current)) =
+        request(&mut second, 2, RequestBody::WorkbenchPut(put)).await
+    else {
+        panic!("stale write")
+    };
+    assert_eq!(current, updated);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workbench_write_is_rejected_for_read_only_grant() {
+    let fixture = Fixture::new().await;
+    let mut client = fixture.connect().await;
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut identity = hello("workbench-read-only");
+    identity.requested_capabilities = CapabilitySet::try_new([
+        CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap(),
+        CapabilityId::try_new(capability::WORKSPACE_SYNC).unwrap(),
+    ])
+    .unwrap();
+    client
+        .send(&ClientMessage::Pair(PairRequest::new(
+            identity,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut client).await,
+        ServerMessage::Paired(_)
+    ));
+    connect_workspace(&mut client, &fixture.workspace).await;
+    let ResponseBody::WorkbenchGet(initial) = request(
+        &mut client,
+        2,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: fixture.workspace.clone(),
+        }),
+    )
+    .await
+    else {
+        panic!("workbench read")
+    };
+    let result = request(
+        &mut client,
+        3,
+        RequestBody::WorkbenchPut(WorkbenchPutRequest {
+            workspace_id: fixture.workspace.clone(),
+            expected_revision: initial.revision,
+            view: serde_json::json!({}),
+        }),
+    )
+    .await;
+    assert!(matches!(result, ResponseBody::Error(error) if error.code.as_str() == FORBIDDEN));
+}
+
 async fn receive(client: &mut QuicClient) -> ServerMessage {
     tokio::time::timeout(Duration::from_secs(10), client.recv())
         .await

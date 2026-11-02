@@ -6,6 +6,121 @@ use lapis_client_api::{
 use lapis_host::BackendHost;
 
 #[test]
+fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
+    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use std::sync::{Arc, Barrier};
+
+    let root = tempfile::tempdir().unwrap();
+    let host = BackendHost::start().unwrap();
+    let first = host.connect(root.path()).unwrap();
+    let second = host.connect(root.path()).unwrap();
+    let workspace_id = first.workspace_id().clone();
+    let barrier = Arc::new(Barrier::new(3));
+    let spawn = |client: lapis_backend_state::EmbeddedClient, label: &str| {
+        let barrier = barrier.clone();
+        let workspace_id = workspace_id.clone();
+        let label = label.to_owned();
+        std::thread::spawn(move || {
+            barrier.wait();
+            client.request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                workspace_id,
+                expected_revision: 0,
+                view: serde_json::json!({"workbench": {"bindings": [{"view": label, "scope": "shared-workbench"}]}}),
+            })).unwrap()
+        })
+    };
+    let a = spawn(first, "first");
+    let b = spawn(second, "second");
+    barrier.wait();
+    let responses = [a.join().unwrap(), b.join().unwrap()];
+    let accepted = responses
+        .iter()
+        .filter_map(|response| match response {
+            ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) => Some(snapshot),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let rejected = responses
+        .iter()
+        .filter_map(|response| match response {
+            ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)) => Some(snapshot),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(accepted.len(), 1);
+    assert_eq!(rejected, accepted);
+    let observer = host.connect(root.path()).unwrap();
+    let ResponseBody::WorkbenchGet(current) = observer
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id,
+        }))
+        .unwrap()
+    else {
+        panic!("workbench get")
+    };
+    assert_eq!(&current, accepted[0]);
+}
+
+#[test]
+fn clients_share_workbench_updates_and_reject_stale_writes() {
+    use lapis_client_api::{
+        EventBody, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
+    };
+    use std::time::Duration;
+
+    let root = tempfile::tempdir().unwrap();
+    let host = BackendHost::start().unwrap();
+    let first = host.connect(root.path()).unwrap();
+    let second = host.connect(root.path()).unwrap();
+    let workspace_id = first.workspace_id().clone();
+    let events = second.subscribe().unwrap();
+    let ResponseBody::WorkbenchGet(initial) = first
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: workspace_id.clone(),
+        }))
+        .unwrap()
+    else {
+        panic!("workbench get")
+    };
+    assert!(initial.view.is_null());
+    let view = serde_json::json!({"show_panel_controls": false});
+    let request = WorkbenchPutRequest {
+        workspace_id: workspace_id.clone(),
+        expected_revision: initial.revision,
+        view: view.clone(),
+    };
+    let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(updated)) = first
+        .request(RequestBody::WorkbenchPut(request.clone()))
+        .unwrap()
+    else {
+        panic!("workbench put")
+    };
+    assert_eq!(updated.revision, initial.revision + 1);
+    assert_eq!(updated.view["show_panel_controls"], false);
+    assert!(
+        matches!(events.recv_timeout(Duration::from_secs(2)).unwrap().body, EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision)
+    );
+    let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(current)) =
+        second.request(RequestBody::WorkbenchPut(request)).unwrap()
+    else {
+        panic!("stale update")
+    };
+    assert_eq!(current, updated);
+    drop(first);
+    drop(second);
+    let reconnected = host.connect(root.path()).unwrap();
+    let ResponseBody::WorkbenchGet(restored) = reconnected
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id,
+        }))
+        .unwrap()
+    else {
+        panic!("workbench restore")
+    };
+    assert_eq!(restored, updated);
+}
+
+#[test]
 fn registering_the_same_workspace_reuses_its_runtime_identity() {
     let root = tempfile::tempdir().unwrap();
     let host = BackendHost::start().unwrap();

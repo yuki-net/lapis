@@ -8,6 +8,11 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum EventBody {
+    #[serde(rename = "workbench.changed")]
+    WorkbenchChanged {
+        workspace_id: WorkspaceId,
+        revision: u64,
+    },
     #[serde(rename = "workspace.changed")]
     WorkspaceChanged { workspace_id: WorkspaceId },
     #[serde(rename = "git.status_changed")]

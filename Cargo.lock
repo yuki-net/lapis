@@ -3473,6 +3473,8 @@ dependencies = [
  "lapis-task",
  "lapis-terminal",
  "lapis-text",
+ "lapis-workbench",
+ "serde_json",
  "tempfile",
 ]
 

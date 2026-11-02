@@ -9,6 +9,7 @@ mod ports;
 mod service;
 mod state;
 mod terminal_state;
+mod workbench;
 
 pub use client::EmbeddedClient;
 pub use error::BackendStateError;

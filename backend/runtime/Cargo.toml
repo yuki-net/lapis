@@ -13,6 +13,8 @@ lapis-client-api = { path = "../../shared/protocol" }
 lapis-document = { path = "../../shared/models/document" }
 lapis-text = { path = "../../shared/models/text" }
 lapis-terminal = { path = "../../shared/models/terminal" }
+lapis-workbench = { path = "../../shared/models/workbench" }
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

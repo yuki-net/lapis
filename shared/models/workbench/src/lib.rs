@@ -108,3 +108,81 @@ pub struct ZonePanelViewState {
     pub active_tab: Option<String>,
     pub open: bool,
 }
+
+/// Hostが保持する表示状態。revisionは同時更新の検出に使う。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct VersionedViewState {
+    pub revision: u64,
+    pub view: Option<ConversationViewState>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewUpdateError {
+    Conflict { expected: u64, actual: u64 },
+    RevisionOverflow,
+}
+
+impl VersionedViewState {
+    /// 呼出元が参照したrevisionから変化していない場合だけ更新する。
+    pub fn update(
+        &mut self,
+        expected: u64,
+        view: ConversationViewState,
+    ) -> Result<u64, ViewUpdateError> {
+        if expected != self.revision {
+            return Err(ViewUpdateError::Conflict {
+                expected,
+                actual: self.revision,
+            });
+        }
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or(ViewUpdateError::RevisionOverflow)?;
+        self.view = Some(view);
+        self.revision = revision;
+        Ok(revision)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stale_update_does_not_replace_the_accepted_view() {
+        let mut state = VersionedViewState::default();
+        let first = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        assert_eq!(state.update(0, first.clone()), Ok(1));
+        assert_eq!(
+            state.update(0, ConversationViewState::default()),
+            Err(ViewUpdateError::Conflict {
+                expected: 0,
+                actual: 1
+            })
+        );
+        assert_eq!(state.view, Some(first));
+        assert_eq!(state.revision, 1);
+    }
+
+    #[test]
+    fn overflow_does_not_replace_the_view() {
+        let mut state = VersionedViewState {
+            revision: u64::MAX,
+            ..Default::default()
+        };
+        let previous = state.clone();
+        let next = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        assert_eq!(
+            state.update(u64::MAX, next),
+            Err(ViewUpdateError::RevisionOverflow)
+        );
+        assert_eq!(state, previous);
+    }
+}

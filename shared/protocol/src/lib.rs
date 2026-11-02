@@ -16,6 +16,7 @@ mod revision;
 mod snapshot;
 mod terminal;
 mod version;
+mod workbench;
 mod workspace;
 
 pub mod capability;
@@ -61,6 +62,9 @@ pub use terminal::{
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
+};
+pub use workbench::{
+    WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkbenchSnapshot,
 };
 pub use workspace::{
     HostRegisterRequest, WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,

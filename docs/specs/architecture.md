@@ -31,6 +31,7 @@
 - Git/Worktree/Task の公開操作は Workspace・Worktree・Execution の ID を指定する。実行ディレクトリ、内部 TaskRecord、OS の絶対パスを wire に公開せず、実行 ID と初期状態は Runtime が生成する。
 - Document の close や接続切断は attachment の解除であり、未保存内容・履歴・Terminal・Agent の終了ではない。実行終了には明示的な終了操作が必要。
 - Document の古い revision は拒否する。保存済みの Client 表示状態を復元しても、すでに存在する正規 Document の新しい内容を上書きしない。
+- Workspaceの共有Workbench表示状態はHostのRuntimeが所有する。更新時は取得済みrevisionを指定し、不一致なら現在値を返して変更しない。更新通知は同じWorkspaceの購読者へ配信する。未登録状態と既定表示を区別し、書き込みには専用capabilityを要求する。現段階ではHostのメモリー内にあり、Host再起動後の復元やDesktopからの利用は未実装。
 - 重なる Workspace grant から同じ canonical path を別の Document として開く操作は競合として拒否する。別 Workspace の内容を暗黙に共有して認可範囲を広げない。
 - Terminal の購読欠落は snapshot と sequence で回復する。一時的な poll・通信失敗を実行終了とみなさず、出力の置換 snapshot と追記イベントを区別する。
 

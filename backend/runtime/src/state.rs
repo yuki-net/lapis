@@ -527,6 +527,55 @@ impl BackendState {
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         self.require_available_workspace(&session.workspace_id)?;
         match request {
+            RequestBody::WorkbenchGet(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let workspace = self.workspace_mut(session)?;
+                Ok((
+                    ResponseBody::WorkbenchGet(crate::workbench::snapshot(&workspace.workbench)?),
+                    Vec::new(),
+                ))
+            }
+            RequestBody::WorkbenchPut(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let view = crate::workbench::parse_view(request.view)?;
+                let workspace = self.workspace_mut(session)?;
+                if workspace.workbench.revision == request.expected_revision {
+                    workspace
+                        .events
+                        .watermark()
+                        .checked_next()
+                        .ok_or(BackendStateError::CounterOverflow)?;
+                }
+                match workspace.workbench.update(request.expected_revision, view) {
+                    Ok(revision) => {
+                        let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
+                        let event = workspace.publish(EventBody::WorkbenchChanged {
+                            workspace_id: request.workspace_id,
+                            revision,
+                        })?;
+                        Ok((
+                            ResponseBody::WorkbenchPut(
+                                lapis_client_api::WorkbenchPutResponse::Updated(snapshot),
+                            ),
+                            vec![event],
+                        ))
+                    }
+                    Err(lapis_workbench::ViewUpdateError::Conflict { .. }) => {
+                        let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
+                        Ok((
+                            ResponseBody::WorkbenchPut(
+                                lapis_client_api::WorkbenchPutResponse::Conflict(snapshot),
+                            ),
+                            Vec::new(),
+                        ))
+                    }
+                    Err(lapis_workbench::ViewUpdateError::RevisionOverflow) => {
+                        Err(BackendStateError::CounterOverflow)
+                    }
+                }
+            }
             RequestBody::CreateDirectory(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
@@ -1379,6 +1428,7 @@ impl BackendState {
 }
 
 struct WorkspaceState {
+    workbench: lapis_workbench::VersionedViewState,
     summary: WorkspaceSummary,
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
@@ -1396,6 +1446,7 @@ struct WorkspaceState {
 impl WorkspaceState {
     fn new(registration: WorkspaceRegistration) -> Result<Self, BackendStateError> {
         Ok(Self {
+            workbench: lapis_workbench::VersionedViewState::default(),
             summary: WorkspaceSummary {
                 workspace_id: registration.workspace_id.clone(),
                 name: registration.name,
@@ -1549,6 +1600,7 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         | BackendStateError::DuplicateWorkspace
         | BackendStateError::Document(_)
         | BackendStateError::TerminalNotRunning
+        | BackendStateError::InvalidWorkbench
         | BackendStateError::InvalidTerminalSize => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,
         BackendStateError::CounterOverflow
