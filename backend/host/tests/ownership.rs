@@ -1,7 +1,7 @@
 use lapis_client_api::{
-    DocumentEditRequest, DocumentOpenRequest, DocumentTextEdit, DocumentTransaction, RequestBody,
-    ResponseBody, SnapshotReason, SnapshotRequest, TerminalStatus, TerminalTerminateRequest,
-    WorkspaceRelativePath,
+    DocumentEditRequest, DocumentOpenRequest, DocumentTextEdit, DocumentTransaction, EventBody,
+    RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalStatus,
+    TerminalTerminateRequest, WorkspaceRelativePath,
 };
 use lapis_host::BackendHost;
 
@@ -35,6 +35,8 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
     };
     let original = open(&first);
     assert_eq!(open(&second), original);
+    let first_events = first.subscribe().unwrap();
+    let second_events = second.subscribe().unwrap();
     let transaction =
         DocumentTransaction::try_new(vec![DocumentTextEdit::try_new(0, 7, "updated").unwrap()])
             .unwrap();
@@ -47,15 +49,47 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
         first.request(request.clone()).unwrap(),
         ResponseBody::DocumentEdit(_)
     ));
+    let first_event = first_events
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let second_event = second_events
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(first_event, second_event);
+    let EventBody::DocumentEdited { revision, .. } = second_event.body else {
+        panic!("expected first edit event")
+    };
     let ResponseBody::Error(conflict) = second.request(request).unwrap() else {
         panic!("stale edit must fail")
     };
     assert_eq!(conflict.code.as_str(), lapis_client_api::REVISION_CONFLICT);
+    let second_edit = RequestBody::DocumentEdit(DocumentEditRequest {
+        document_id: original.document_id.clone(),
+        base_revision: revision,
+        transaction: DocumentTransaction::try_new(vec![
+            DocumentTextEdit::try_new(7, 7, "!").unwrap(),
+        ])
+        .unwrap(),
+    });
+    assert!(matches!(
+        second.request(second_edit).unwrap(),
+        ResponseBody::DocumentEdit(_)
+    ));
+    let first_event = first_events
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    let second_event = second_events
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap();
+    assert_eq!(first_event, second_event);
+    assert!(
+        matches!(first_event.body, EventBody::DocumentEdited { base_revision, .. } if base_revision == revision)
+    );
     drop(first);
     drop(second);
     let reconnected = host.connect(root.path()).unwrap();
     let restored = open(&reconnected);
-    assert_eq!(restored.content, "updated");
+    assert_eq!(restored.content, "updated!");
     assert_eq!(restored.document_id, original.document_id);
     assert!(restored.revision > original.revision);
 }

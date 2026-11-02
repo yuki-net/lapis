@@ -16,6 +16,7 @@ lapis-settings = { path = "../../../shared/models/settings" }
 lapis-task = { path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
+lapis-workbench = { path = "../../../shared/models/workbench" }
 serde.workspace = true
 
 [dev-dependencies]

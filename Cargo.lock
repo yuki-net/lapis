@@ -3501,6 +3501,7 @@ dependencies = [
  "lapis-settings",
  "lapis-task",
  "lapis-terminal",
+ "lapis-workbench",
  "lapis-workspace",
  "serde",
  "serde_json",
@@ -3721,6 +3722,14 @@ name = "lapis-text"
 version = "0.1.0"
 dependencies = [
  "ropey",
+]
+
+[[package]]
+name = "lapis-workbench"
+version = "0.1.0"
+dependencies = [
+ "lapis-editor-core",
+ "serde",
 ]
 
 [[package]]
