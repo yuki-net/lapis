@@ -52,6 +52,21 @@ impl WorkbenchSync {
         self.replica.refresh(snapshot)
     }
 
+    /// 新しい接続で正本を確認し、未確定値を保持してから接続を交換する。
+    pub fn reconnect(
+        &mut self,
+        connection: Arc<dyn WorkbenchConnection>,
+    ) -> Result<Option<VersionedViewState>, String> {
+        let workspace = self
+            .workspace
+            .as_ref()
+            .ok_or("Workspaceが接続されていません")?;
+        let snapshot = connection.get(workspace)?;
+        let refreshed = self.replica.refresh(snapshot)?;
+        self.connection = connection;
+        Ok(refreshed)
+    }
+
     pub fn save(&mut self, view: ConversationViewState) -> Result<WorkbenchSyncResult, String> {
         let plan = self.replica.stage(view)?;
         let workspace = self.workspace.as_ref().ok_or("Workspace??????????")?;
@@ -72,6 +87,16 @@ impl WorkbenchSync {
     /// ????Host??????????????????????
     pub fn accept_remote(&mut self) -> Result<VersionedViewState, String> {
         self.replica.accept_remote()
+    }
+
+    /// 送信が中断された値を再送する。競合している場合は上書きしない。
+    pub fn retry_pending(&mut self) -> Result<WorkbenchSyncResult, String> {
+        let pending = self
+            .replica
+            .pending()
+            .cloned()
+            .ok_or("未確定のWorkbench変更がありません")?;
+        self.save(pending)
     }
 
     /// ??????????????????????revision?????????
@@ -171,6 +196,28 @@ mod tests {
         assert_eq!(accepted.revision, 1);
         assert!(sync.pending().is_none());
         assert!(sync.conflict().is_none());
+    }
+
+    #[test]
+    fn reconnect_retains_pending_and_retries_with_the_new_connection() {
+        let old = Arc::new(Store::default());
+        let replacement = Arc::new(Store::default());
+        let mut sync = WorkbenchSync::new(old.clone());
+        sync.open(WorkspaceId::new("workspace")).unwrap();
+        *old.fail.lock().unwrap() = true;
+        let pending = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        assert!(sync.save(pending.clone()).is_err());
+        assert!(sync.reconnect(replacement.clone()).unwrap().is_none());
+        assert_eq!(sync.pending(), Some(&pending));
+        assert!(matches!(
+            sync.retry_pending().unwrap(),
+            WorkbenchSyncResult::Updated(_)
+        ));
+        assert_eq!(replacement.state.lock().unwrap().view, Some(pending));
+        assert!(sync.pending().is_none());
     }
 
     #[test]
