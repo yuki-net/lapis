@@ -38,8 +38,15 @@ impl LocalWorkbenchStore {
                 "workbench state too large",
             ));
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        let state: VersionedViewState = serde_json::from_slice(&bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if !state.is_consistent() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "inconsistent workbench state",
+            ));
+        }
+        Ok(state)
     }
 
     /// 保存中はWorkspace単位のlockを保持し、古いrevisionの更新を拒否する。
@@ -189,6 +196,22 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(path).unwrap(), b"broken");
+    }
+
+    #[test]
+    fn inconsistent_revision_is_not_overwritten() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let bytes = br#"{"revision":2,"view":null}"#;
+        fs::write(&path, bytes).unwrap();
+        let store = LocalWorkbenchStore::new(path.clone());
+        assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+        assert!(
+            store
+                .compare_and_save(0, ConversationViewState::default())
+                .is_err()
+        );
+        assert_eq!(fs::read(path).unwrap(), bytes);
     }
 
     #[test]

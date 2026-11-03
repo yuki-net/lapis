@@ -2,16 +2,15 @@ use std::sync::Arc;
 
 use lapis_editor_core::WorkspaceId;
 use lapis_workbench::{
-    ConversationViewState, VersionedViewState, WorkbenchConnection, WorkbenchUpdate,
+    ConversationViewState, VersionedViewState, WorkbenchConnection, WorkbenchReplica,
+    WorkbenchUpdate, WorkbenchWritePlan,
 };
 
-/// Client側の未確定変更を保持し、古いHost状態で上書きしない。
+/// Client??????????????Host??????????
 pub struct WorkbenchSync {
     connection: Arc<dyn WorkbenchConnection>,
     workspace: Option<WorkspaceId>,
-    confirmed: Option<VersionedViewState>,
-    pending: Option<ConversationViewState>,
-    conflict: Option<VersionedViewState>,
+    replica: WorkbenchReplica,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,105 +24,59 @@ impl WorkbenchSync {
         Self {
             connection,
             workspace: None,
-            confirmed: None,
-            pending: None,
-            conflict: None,
+            replica: WorkbenchReplica::default(),
         }
     }
 
     pub fn open(&mut self, workspace: WorkspaceId) -> Result<VersionedViewState, String> {
-        if self.pending.is_some() {
-            return Err("未確定のWorkbench変更があります".into());
-        }
+        self.replica.ensure_can_open()?;
         let snapshot = self.connection.get(&workspace)?;
+        self.replica.open(snapshot.clone())?;
         self.workspace = Some(workspace);
-        self.confirmed = Some(snapshot.clone());
-        self.conflict = None;
         Ok(snapshot)
     }
 
     pub fn pending(&self) -> Option<&ConversationViewState> {
-        self.pending.as_ref()
+        self.replica.pending()
     }
     pub fn confirmed(&self) -> Option<&VersionedViewState> {
-        self.confirmed.as_ref()
+        self.replica.confirmed()
     }
     pub fn conflict(&self) -> Option<&VersionedViewState> {
-        self.conflict.as_ref()
+        self.replica.conflict()
     }
 
     pub fn refresh(&mut self) -> Result<Option<VersionedViewState>, String> {
-        let workspace = self
-            .workspace
-            .as_ref()
-            .ok_or("Workspaceが接続されていません")?;
+        let workspace = self.workspace.as_ref().ok_or("Workspace??????????")?;
         let snapshot = self.connection.get(workspace)?;
-        let previous = self
-            .confirmed
-            .as_ref()
-            .ok_or("Workbenchが初期化されていません")?;
-        if snapshot.revision < previous.revision
-            || (snapshot.revision == previous.revision && snapshot != *previous)
-        {
-            return Err("HostのWorkbench状態が以前のrevisionと一致しません".into());
-        }
-        if snapshot.revision == previous.revision {
-            return Ok(None);
-        }
-        if self.pending.is_some() {
-            self.conflict = Some(snapshot);
-            return Ok(None);
-        }
-        self.confirmed = Some(snapshot.clone());
-        self.conflict = None;
-        Ok(Some(snapshot))
+        self.replica.refresh(snapshot)
     }
 
     pub fn save(&mut self, view: ConversationViewState) -> Result<WorkbenchSyncResult, String> {
-        self.pending = Some(view.clone());
-        let workspace = self
-            .workspace
-            .as_ref()
-            .ok_or("Workspaceが接続されていません")?;
-        let revision = self
-            .confirmed
-            .as_ref()
-            .ok_or("Workbenchが初期化されていません")?
-            .revision;
-        if let Some(current) = self.conflict.clone() {
-            return Ok(WorkbenchSyncResult::Conflict(current));
-        }
-        match self.connection.update(workspace, revision, view)? {
-            WorkbenchUpdate::Updated(snapshot) => {
-                self.confirmed = Some(snapshot.clone());
-                self.pending = None;
-                self.conflict = None;
-                Ok(WorkbenchSyncResult::Updated(snapshot))
+        let plan = self.replica.stage(view)?;
+        let workspace = self.workspace.as_ref().ok_or("Workspace??????????")?;
+        let result = match plan {
+            WorkbenchWritePlan::Conflict(snapshot) => {
+                return Ok(WorkbenchSyncResult::Conflict(snapshot));
             }
-            WorkbenchUpdate::Conflict(snapshot) => {
-                self.conflict = Some(snapshot.clone());
-                Ok(WorkbenchSyncResult::Conflict(snapshot))
+            WorkbenchWritePlan::Update { revision, view } => {
+                self.connection.update(workspace, revision, view)?
             }
-        }
+        };
+        Ok(match self.replica.finish(result)? {
+            WorkbenchUpdate::Updated(snapshot) => WorkbenchSyncResult::Updated(snapshot),
+            WorkbenchUpdate::Conflict(snapshot) => WorkbenchSyncResult::Conflict(snapshot),
+        })
     }
 
-    /// 利用者がHostの状態を選んだ場合だけ未確定変更を破棄する。
+    /// ????Host??????????????????????
     pub fn accept_remote(&mut self) -> Result<VersionedViewState, String> {
-        let current = self.conflict.take().ok_or("解決する競合がありません")?;
-        self.confirmed = Some(current.clone());
-        self.pending = None;
-        Ok(current)
+        self.replica.accept_remote()
     }
 
-    /// 利用者がローカル変更を選んだ場合だけ、競合したrevisionを基点に再送する。
+    /// ??????????????????????revision?????????
     pub fn retry_local(&mut self) -> Result<WorkbenchSyncResult, String> {
-        let current = self.conflict.clone().ok_or("解決する競合がありません")?;
-        let pending = self
-            .pending
-            .clone()
-            .ok_or("未確定のWorkbench変更がありません")?;
-        self.conflict = None;
-        self.confirmed = Some(current);
+        let pending = self.replica.prepare_retry()?;
         self.save(pending)
     }
 }
@@ -218,5 +171,34 @@ mod tests {
         assert_eq!(accepted.revision, 1);
         assert!(sync.pending().is_none());
         assert!(sync.conflict().is_none());
+    }
+
+    #[test]
+    fn conflict_refresh_does_not_replace_a_newer_observed_state() {
+        let store = Arc::new(Store::default());
+        let workspace = WorkspaceId::new("workspace");
+        let mut sync = WorkbenchSync::new(store.clone());
+        sync.open(workspace.clone()).unwrap();
+        store
+            .update(&workspace, 0, ConversationViewState::default())
+            .unwrap();
+        store
+            .update(&workspace, 1, ConversationViewState::default())
+            .unwrap();
+        let pending = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        assert!(matches!(
+            sync.save(pending.clone()).unwrap(),
+            WorkbenchSyncResult::Conflict(_)
+        ));
+        *store.state.lock().unwrap() = VersionedViewState {
+            revision: 1,
+            view: Some(ConversationViewState::default()),
+        };
+        assert!(sync.refresh().is_err());
+        assert_eq!(sync.conflict().unwrap().revision, 2);
+        assert_eq!(sync.pending(), Some(&pending));
     }
 }

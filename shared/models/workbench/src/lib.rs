@@ -3,6 +3,9 @@
 use lapis_editor_core::ConversationId;
 use serde::{Deserialize, Serialize};
 
+mod replica;
+pub use replica::{WorkbenchReplica, WorkbenchWritePlan};
+
 /// 表示状態の正本と、競合時に保持された現在値。
 pub enum WorkbenchUpdate {
     Updated(VersionedViewState),
@@ -150,6 +153,11 @@ pub enum ViewUpdateError {
 }
 
 impl VersionedViewState {
+    /// 未登録状態だけがrevision 0で、更新済み状態には必ず表示値がある。
+    pub fn is_consistent(&self) -> bool {
+        (self.revision == 0) == self.view.is_none()
+    }
+
     /// 呼出元が参照したrevisionから変化していない場合だけ更新する。
     pub fn update(
         &mut self,
