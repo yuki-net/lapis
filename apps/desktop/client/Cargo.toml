@@ -18,6 +18,10 @@ lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 lapis-workbench = { path = "../../../shared/models/workbench" }
 serde.workspace = true
+getrandom.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
 serde_json.workspace = true

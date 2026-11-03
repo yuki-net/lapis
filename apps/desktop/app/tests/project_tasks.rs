@@ -269,6 +269,48 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
 }
 
 #[test]
+fn independently_created_tasks_do_not_reuse_local_sequence_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = ConversationSession::new(
+        Arc::new(LocalConversationRepository::new(
+            directory.path().join("first.json"),
+        )),
+        Default::default(),
+    );
+    let second = ConversationSession::new(
+        Arc::new(LocalConversationRepository::new(
+            directory.path().join("second.json"),
+        )),
+        Default::default(),
+    );
+    assert!(first.load_error().is_none());
+    assert!(second.load_error().is_none());
+    assert_ne!(first.active_id(), second.active_id());
+}
+
+#[test]
+fn existing_sequential_task_id_is_preserved_when_reopened() {
+    use lapis_desktop_client::ConversationRepository;
+    use lapis_editor_core::ConversationId;
+
+    let directory = tempfile::tempdir().unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(
+        directory.path().join("tasks.json"),
+    ));
+    let initial = ConversationSession::new(repository.clone(), Default::default());
+    let mut records = initial.records().to_vec();
+    let old_id = ConversationId::new("conversation-1");
+    records[0].id = old_id.clone();
+    repository
+        .save(&Default::default(), &[], &records, &old_id)
+        .unwrap();
+
+    let restored = ConversationSession::new(repository, Default::default());
+    assert!(restored.load_error().is_none());
+    assert_eq!(restored.active_id(), &old_id);
+}
+
+#[test]
 fn concurrent_removal_does_not_persist_a_missing_active_task() {
     use lapis_desktop_client::ConversationRepository;
 
