@@ -4,6 +4,7 @@
 /apps/mobile/local.properties
 /apps/web/dist/
 /apps/web/node_modules/
+/apps/web/src/generated/
 *.tsbuildinfo
 *.log
 .idea/libraries
