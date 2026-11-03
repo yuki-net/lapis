@@ -82,6 +82,43 @@ fn persisted_workbench_survives_host_restart() {
 }
 
 #[test]
+fn legacy_workbench_without_registry_is_retained_when_workspace_is_opened() {
+    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    let root = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let (workspace, saved) = {
+        let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let client = host.connect(root.path()).unwrap();
+        let workspace = client.workspace_id().clone();
+        let response = client
+            .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                workspace_id: workspace.clone(),
+                expected_revision: 0,
+                view: serde_json::json!({"show_panel_controls": false}),
+            }))
+            .unwrap();
+        let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(saved)) = response else {
+            panic!("save")
+        };
+        (workspace, saved)
+    };
+    let record = state
+        .path()
+        .join("workspaces")
+        .join(format!("{}.json", workspace.as_str()));
+    std::fs::remove_file(&record).unwrap();
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let client = host.connect(root.path()).unwrap();
+    let response = client
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: workspace,
+        }))
+        .unwrap();
+    assert!(matches!(response, ResponseBody::WorkbenchGet(snapshot) if snapshot == saved));
+    assert!(record.is_file());
+}
+
+#[test]
 fn shared_workbench_documents_are_scoped_and_survive_restart() {
     use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     use lapis_workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
