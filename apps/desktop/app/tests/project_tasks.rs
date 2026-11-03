@@ -189,6 +189,9 @@ fn unchanged_window_adopts_latest_task_on_capture_and_switch_without_forking_or_
 
 #[test]
 fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
+    use lapis_desktop_client::{
+        ConversationViewState, ViewBindingState, ViewScopeState, WorkbenchLayoutState,
+    };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     for name in ["a.ts", "b.ts"] {
@@ -220,8 +223,23 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     first
         .capture(&mut first_editor, Default::default(), None, &[])
         .unwrap();
+    let original_id = second.active_id().clone();
+    let mut local_view = ConversationViewState::default();
+    local_view.workbench.selected_task = Some(original_id.clone());
+    local_view.workbench.ide_context = Some(original_id.clone());
+    local_view.workbench.bindings.push(ViewBindingState {
+        view: "editor".into(),
+        scope: ViewScopeState::Task(original_id.clone()),
+    });
+    local_view.workbench.task_layouts.insert(
+        original_id.clone(),
+        WorkbenchLayoutState {
+            layout: None,
+            show_panel_controls: true,
+        },
+    );
     second
-        .capture(&mut second_editor, Default::default(), None, &[])
+        .capture(&mut second_editor, local_view, None, &[])
         .unwrap();
     assert_ne!(first.active_id(), second.active_id());
     assert!(
@@ -230,6 +248,21 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
             .unwrap()
             .title
             .contains("競合から復旧")
+    );
+    let recovered_view = &second.active_record().unwrap().view.workbench;
+    assert_eq!(
+        recovered_view.selected_task.as_ref(),
+        Some(second.active_id())
+    );
+    assert_eq!(
+        recovered_view.ide_context.as_ref(),
+        Some(second.active_id())
+    );
+    assert!(recovered_view.task_layouts.contains_key(second.active_id()));
+    assert!(recovered_view.task_layouts.contains_key(&original_id));
+    assert_eq!(
+        recovered_view.bindings[0].scope,
+        ViewScopeState::Task(second.active_id().clone())
     );
     let count = second.records().len();
     second

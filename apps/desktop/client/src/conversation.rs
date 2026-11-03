@@ -14,6 +14,30 @@ fn new_conversation_id() -> Result<ConversationId, WorkspaceError> {
     Ok(ConversationId::new(value))
 }
 
+fn remap_own_view_references(
+    view: &mut ConversationViewState,
+    old: &ConversationId,
+    new: &ConversationId,
+) {
+    let workbench = &mut view.workbench;
+    for id in [&mut workbench.selected_task, &mut workbench.ide_context] {
+        if id.as_ref() == Some(old) {
+            *id = Some(new.clone());
+        }
+    }
+    for binding in &mut workbench.bindings {
+        if let ViewScopeState::Task(id) = &mut binding.scope
+            && id == old
+        {
+            *id = new.clone();
+        }
+    }
+    // Workbenchは他TaskのLayoutも保持するため、元Taskの値も残す。
+    if let Some(layout) = workbench.task_layouts.get(old).cloned() {
+        workbench.task_layouts.insert(new.clone(), layout);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
     pub id: ConversationId,
@@ -258,6 +282,10 @@ impl ConversationSession {
                     if latest.records.iter().any(|item| item.id == local.id) {
                         return Err(WorkspaceError::new("Task IDが重複しました"));
                     }
+                    if local.view.workbench.task_layouts.contains_key(&local.id) {
+                        return Err(WorkspaceError::new("Task IDが表示状態と重複しました"));
+                    }
+                    remap_own_view_references(&mut local.view, &record.id, &local.id);
                     local.title.push_str("（競合から復旧）");
                     if record.id == self.active {
                         desired_active = local.id.clone();
