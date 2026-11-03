@@ -71,6 +71,7 @@ pub use version::{
 };
 pub use workbench::{
     WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkbenchSnapshot,
+    encode_workbench_view,
 };
 pub use workspace::{
     HostRegisterRequest, WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,

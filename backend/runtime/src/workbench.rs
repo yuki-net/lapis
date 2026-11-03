@@ -30,6 +30,28 @@ pub(crate) fn parse_view(
     serde_json::from_value(value).map_err(|_| BackendStateError::InvalidWorkbench)
 }
 
+/// 旧Clientが知らないworkspaceを省略した場合は、Host側の値を引き継ぐ。
+pub(crate) fn parse_update_view(
+    value: serde_json::Value,
+    current: Option<&lapis_workbench::SharedWorkspaceView>,
+) -> Result<ConversationViewState, BackendStateError> {
+    let omitted = value
+        .as_object()
+        .is_some_and(|object| !object.contains_key("workspace"));
+    let mut view = parse_view(value)?;
+    if omitted {
+        view.workspace = current.cloned();
+    }
+    if serde_json::to_vec(&view)
+        .map_err(|_| BackendStateError::InvalidWorkbench)?
+        .len()
+        > MAX_VIEW_BYTES
+    {
+        return Err(BackendStateError::InvalidWorkbench);
+    }
+    Ok(view)
+}
+
 pub(crate) fn validate_workspace(
     view: &ConversationViewState,
     workspace: &lapis_client_api::WorkspaceId,

@@ -166,6 +166,65 @@ fn in_memory_workbench_rejects_another_workspaces_document_state() {
 }
 
 #[test]
+fn legacy_layout_updates_preserve_shared_documents_until_explicitly_cleared() {
+    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use lapis_workbench::{ConversationViewState, SharedWorkspaceView, WorkbenchUpdate};
+    for persisted in [false, true] {
+        let root = tempfile::tempdir().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let host = if persisted {
+            BackendHost::start_with_state_directory(state.path().to_owned()).unwrap()
+        } else {
+            BackendHost::start().unwrap()
+        };
+        let client = host.connect(root.path()).unwrap();
+        let id = client.workspace_id().clone();
+        let model_id = lapis_editor_core::WorkspaceId::new(id.as_str());
+        let port = lapis_host::BackendClient::from(host).workbench();
+        let view = ConversationViewState {
+            workspace: Some(SharedWorkspaceView {
+                workspace_id: model_id.clone(),
+                open_documents: vec![],
+                active_path: None,
+                active_document_id: None,
+            }),
+            ..Default::default()
+        };
+        assert!(matches!(
+            port.update(&model_id, 0, view.clone()).unwrap(),
+            WorkbenchUpdate::Updated(_)
+        ));
+        let legacy = client
+            .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                workspace_id: id.clone(),
+                expected_revision: 1,
+                view: serde_json::json!({"show_panel_controls": false}),
+            }))
+            .unwrap();
+        let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) = legacy else {
+            panic!("legacy update failed")
+        };
+        let decoded: Option<ConversationViewState> = serde_json::from_value(snapshot.view).unwrap();
+        assert_eq!(decoded.unwrap().workspace, view.workspace);
+        let clear = ConversationViewState::default();
+        assert!(matches!(
+            port.update(&model_id, 2, clear).unwrap(),
+            WorkbenchUpdate::Updated(_)
+        ));
+        let ResponseBody::WorkbenchGet(snapshot) = client
+            .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+                workspace_id: id,
+            }))
+            .unwrap()
+        else {
+            panic!("read failed")
+        };
+        let decoded: Option<ConversationViewState> = serde_json::from_value(snapshot.view).unwrap();
+        assert!(decoded.unwrap().workspace.is_none());
+    }
+}
+
+#[test]
 fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
     use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     use std::sync::{Arc, Barrier};

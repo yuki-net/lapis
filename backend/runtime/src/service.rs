@@ -204,7 +204,13 @@ impl BackendService {
                 body: ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)),
             });
         }
-        let view = match crate::workbench::parse_view(put.view) {
+        let current: Option<lapis_workbench::ConversationViewState> =
+            serde_json::from_value(snapshot.view.clone())
+                .map_err(|_| BackendServiceError::Unavailable)?;
+        let view = match crate::workbench::parse_update_view(
+            put.view,
+            current.as_ref().and_then(|view| view.workspace.as_ref()),
+        ) {
             Ok(view) => view,
             Err(error) => {
                 return Ok(ResponseEnvelope {

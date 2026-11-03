@@ -72,7 +72,7 @@ impl WorkbenchConnection for HostWorkbench {
         view: ConversationViewState,
     ) -> Result<WorkbenchUpdate, String> {
         let client = self.client(workspace)?;
-        let view = serde_json::to_value(view).map_err(|e| e.to_string())?;
+        let view = lapis_client_api::encode_workbench_view(&view).map_err(|e| e.to_string())?;
         match client
             .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
                 workspace_id: client.workspace_id().clone(),

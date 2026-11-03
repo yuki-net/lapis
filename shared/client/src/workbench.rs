@@ -110,7 +110,7 @@ pub async fn update(
     expected: u64,
     view: &ConversationViewState,
 ) -> Result<WorkbenchUpdate, String> {
-    let view = serde_json::to_value(view).map_err(|error| error.to_string())?;
+    let view = lapis_client_api::encode_workbench_view(view).map_err(|error| error.to_string())?;
     match connection
         .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
             workspace_id: workspace.clone(),

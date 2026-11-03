@@ -34,6 +34,7 @@
 - Document の古い revision は拒否する。保存済みの Client 表示状態を復元しても、すでに存在する正規 Document の新しい内容を上書きしない。正規内容と復旧用 draft が異なる場合は、draft を別の未保存文書として保持する。
 - Workspaceの共有Workbench表示状態はHostのRuntimeが所有する。更新時は取得済みrevisionを指定し、不一致なら現在値を返して変更しない。更新通知は同じWorkspaceの購読者へ配信する。未登録状態と既定表示を区別し、書き込みには専用capabilityを要求する。管理Hostと保存先を指定した独立Hostでは状態を永続化する。Desktopからの利用は未実装。
 - 共有Workbenchの文書表示状態はWorkspace ID、Workspace相対path、文書ID、表示位置と復旧draftで表し、Client固有の絶対pathを含めない。Hostは別Workspaceの状態を拒否する。旧形式からの変換に失敗した場合は元の保存値を保持する。
+- 旧ClientがWorkbench更新で文書表示状態を省略した場合、Hostは保存済みの文書状態を保持する。新Clientは変更しない値も含めて明示し、`null`を指定した場合だけ文書状態を消去する。
 - WorkbenchのClient側状態遷移は同期・非同期の通信方式で共通とする。送信失敗、処理の中断、競合、不正な更新応答では未確定値を保持し、競合時のHost状態と分けて扱う。Hostの状態を採用して未確定値を破棄する操作と、ローカル値の再送は明示的に行う。
 - 重なる Workspace grant から同じ canonical path を別の Document として開く操作は競合として拒否する。別 Workspace の内容を暗黙に共有して認可範囲を広げない。
 - Terminal の購読欠落は snapshot と sequence で回復する。一時的な poll・通信失敗を実行終了とみなさず、出力の置換 snapshot と追記イベントを区別する。

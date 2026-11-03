@@ -591,7 +591,14 @@ impl BackendState {
             RequestBody::WorkbenchPut(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
-                let view = crate::workbench::parse_view(request.view)?;
+                let current = self
+                    .workspace(session)?
+                    .workbench
+                    .view
+                    .as_ref()
+                    .and_then(|view| view.workspace.as_ref())
+                    .cloned();
+                let view = crate::workbench::parse_update_view(request.view, current.as_ref())?;
                 crate::workbench::validate_workspace(&view, &request.workspace_id)?;
                 let workspace = self.workspace_mut(session)?;
                 if workspace.workbench.revision == request.expected_revision {

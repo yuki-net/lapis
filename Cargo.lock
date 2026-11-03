@@ -4249,6 +4249,7 @@ dependencies = [
  "lapis-git",
  "lapis-task",
  "lapis-terminal",
+ "lapis-workbench",
  "lapis-workspace",
  "serde",
  "serde_json",
