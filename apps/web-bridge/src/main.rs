@@ -101,6 +101,7 @@ impl Options {
 #[derive(Clone)]
 struct Bridge {
     endpoint: quinn::Endpoint,
+    certificate: PathBuf,
     host: SocketAddr,
     server_name: String,
     origin: String,
@@ -110,18 +111,8 @@ struct Bridge {
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
-    let certificate = CertificateDer::from(std::fs::read(&options.certificate)?);
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(certificate)?;
-    let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
-        rustls::crypto::aws_lc_rs::default_provider(),
-    ))
-    .with_protocol_versions(&[&rustls::version::TLS13])?
-    .with_root_certificates(roots)
-    .with_no_client_auth();
-    tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
-    tls.enable_early_data = false;
-    let mut endpoint = quinn::Endpoint::client(
+    let _ = client_config(std::fs::read(&options.certificate)?)?;
+    let endpoint = quinn::Endpoint::client(
         if options.host.is_ipv4() {
             "127.0.0.1:0"
         } else {
@@ -129,11 +120,9 @@ async fn main() -> Result<(), Error> {
         }
         .parse()?,
     )?;
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
-        QuicClientConfig::try_from(tls)?,
-    )));
     let bridge = Bridge {
         endpoint,
+        certificate: options.certificate,
         host: options.host,
         server_name: options.server_name,
         origin: options.origin,
@@ -152,6 +141,23 @@ async fn main() -> Result<(), Error> {
     })
     .await?;
     Ok(())
+}
+
+fn client_config(certificate: Vec<u8>) -> Result<quinn::ClientConfig, Error> {
+    let certificate = CertificateDer::from(certificate);
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(certificate)?;
+    let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::aws_lc_rs::default_provider(),
+    ))
+    .with_protocol_versions(&[&rustls::version::TLS13])?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+    tls.enable_early_data = false;
+    Ok(quinn::ClientConfig::new(Arc::new(
+        QuicClientConfig::try_from(tls)?,
+    )))
 }
 
 async fn upgrade(
@@ -185,9 +191,13 @@ async fn upgrade(
 }
 
 async fn forward(socket: WebSocket, bridge: Bridge) -> Result<(), Error> {
+    let certificate = tokio::fs::read(&bridge.certificate).await?;
+    let config = client_config(certificate)?;
     let connection = tokio::time::timeout(
         Duration::from_secs(10),
-        bridge.endpoint.connect(bridge.host, &bridge.server_name)?,
+        bridge
+            .endpoint
+            .connect_with(config, bridge.host, &bridge.server_name)?,
     )
     .await??;
     let (send, recv) =
@@ -306,17 +316,48 @@ mod tests {
         let server_config = quinn::ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(server_tls).unwrap(),
         ));
+        let next = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let next_certificate = next.cert.der().clone();
+        let next_key =
+            rustls::pki_types::PrivateKeyDer::Pkcs8(next.signing_key.serialize_der().into());
+        let mut next_tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![next_certificate.clone()], next_key)
+        .unwrap();
+        next_tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+        let next_server = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(next_tls).unwrap(),
+        ));
         let host = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
         let host_address = host.local_addr().unwrap();
+        let (rotate, rotated) = tokio::sync::oneshot::channel();
+        let (ready, wait_ready) = tokio::sync::oneshot::channel();
         let host_task = tokio::spawn(async move {
-            let connection = host.accept().await.unwrap().await.unwrap();
-            let (send, recv) = connection.accept_bi().await.unwrap();
-            let mut reader = LengthDelimitedCodec::builder().new_read(recv);
-            let mut writer = LengthDelimitedCodec::builder().new_write(send);
-            let message = reader.next().await.unwrap().unwrap();
-            writer.send(message.freeze()).await.unwrap();
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            let mut rotated = Some(rotated);
+            let mut ready = Some(ready);
+            let mut next_server = Some(next_server);
+            for index in 0..2 {
+                if index == 1 {
+                    rotated.take().unwrap().await.unwrap();
+                    host.set_server_config(next_server.take());
+                    ready.take().unwrap().send(()).unwrap();
+                }
+                let connection = host.accept().await.unwrap().await.unwrap();
+                let (send, recv) = connection.accept_bi().await.unwrap();
+                let mut reader = LengthDelimitedCodec::builder().new_read(recv);
+                let mut writer = LengthDelimitedCodec::builder().new_write(send);
+                let message = reader.next().await.unwrap().unwrap();
+                writer.send(message.freeze()).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
         });
+        let directory = tempfile::tempdir().unwrap();
+        let certificate_path = directory.path().join("host.der");
+        std::fs::write(&certificate_path, &certificate).unwrap();
         let mut roots = rustls::RootCertStore::empty();
         roots.add(certificate).unwrap();
         let mut tls = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -333,6 +374,7 @@ mod tests {
         )));
         let bridge = Bridge {
             endpoint,
+            certificate: certificate_path.clone(),
             host: host_address,
             server_name: "localhost".into(),
             origin: "http://localhost:5173".into(),
@@ -377,6 +419,28 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(message.into_text().unwrap(), "{\"type\":\"opaque\"}");
+        drop(socket);
+        std::fs::write(&certificate_path, next_certificate).unwrap();
+        rotate.send(()).unwrap();
+        wait_ready.await.unwrap();
+        let mut good = url.as_str().into_client_request().unwrap();
+        good.headers_mut()
+            .insert("origin", "http://localhost:5173".parse().unwrap());
+        good.headers_mut().insert(
+            "sec-websocket-protocol",
+            lapis_wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(good).await.unwrap();
+        socket
+            .send(ClientMessage::Text("second".into()))
+            .await
+            .unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(message.into_text().unwrap(), "second");
         drop(socket);
         host_task.await.unwrap();
         task.abort();

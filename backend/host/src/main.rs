@@ -19,6 +19,7 @@ struct Options {
     certificate: PathBuf,
     listen: SocketAddr,
     state_directory: Option<PathBuf>,
+    replace_certificate: bool,
 }
 
 impl Options {
@@ -28,7 +29,12 @@ impl Options {
         let mut certificate = None;
         let mut listen = "127.0.0.1:0".parse()?;
         let mut state_directory = None;
+        let mut replace_certificate = false;
         while let Some(argument) = arguments.next() {
+            if argument == "--replace-certificate" {
+                replace_certificate = true;
+                continue;
+            }
             let value = arguments.next().ok_or("option requires a value")?;
             match argument.to_str() {
                 Some("--workspace") => workspace = Some(PathBuf::from(value)),
@@ -43,6 +49,7 @@ impl Options {
             certificate: certificate.ok_or("--certificate is required")?,
             listen,
             state_directory,
+            replace_certificate,
         })
     }
 }
@@ -89,7 +96,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <new-public.der> [--listen <ip:port>] [--state-directory <directory>]"
+            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>]"
         );
         std::process::exit(1);
     }
@@ -102,7 +109,7 @@ fn run() -> Result<(), Error> {
         None => BackendHost::start()?,
     };
     let workspace = host.register_workspace(&options.workspace)?;
-    // 秘密鍵はHostのメモリ内だけに保持する。公開証明書は明示した新規ファイルへ出力。
+    // 秘密鍵はHostのメモリ内だけに保持する。
     let certified =
         rcgen::generate_simple_self_signed(vec!["localhost".to_owned(), "lapis-host".to_owned()])?;
     let key = Zeroizing::new(certified.signing_key.serialize_der());
@@ -110,12 +117,6 @@ fn run() -> Result<(), Error> {
         vec![certified.cert.der().clone()],
         PrivateKeyDer::Pkcs8(key.to_vec().into()),
     )?;
-    let mut certificate = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&options.certificate)?;
-    certificate.write_all(certified.cert.der())?;
-    certificate.sync_all()?;
     let auth = Arc::new(Mutex::new(RemoteAuth::system(
         AuthConfig::new(PairingLifetime::new(300)?, CredentialLifetime::new(86400)?),
         AuthPolicy::new(lapis_host::supported_capabilities()),
@@ -141,6 +142,8 @@ fn run() -> Result<(), Error> {
     runtime.block_on(async {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
             Arc::new(lapis_host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
+        // listenに失敗した起動が稼働中Hostの証明書を置き換えない。
+        write_public_certificate(&options.certificate, certified.cert.der(), options.replace_certificate)?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
         println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
@@ -210,9 +213,39 @@ fn run() -> Result<(), Error> {
     })
 }
 
+fn write_public_certificate(
+    path: &std::path::Path,
+    bytes: &[u8],
+    replace: bool,
+) -> Result<(), Error> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    if replace {
+        temporary.persist(path)?;
+    } else {
+        temporary.persist_noclobber(path)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn public_certificate_is_replaced_only_when_requested() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("host.der");
+        write_public_certificate(&path, b"first", false).unwrap();
+        assert!(write_public_certificate(&path, b"second", false).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+        write_public_certificate(&path, b"second", true).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+    }
     #[test]
     fn requires_explicit_workspace_and_new_certificate_path() {
         assert!(Options::parse([].into_iter()).is_err());
