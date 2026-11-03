@@ -37,6 +37,7 @@ pub async fn bridge_smoke(
     url: String,
     token: String,
     workspace: String,
+    other_workspace: String,
 ) -> Result<String, JsValue> {
     let token = zeroize::Zeroizing::new(token);
     let bytes = token.as_bytes();
@@ -59,7 +60,10 @@ pub async fn bridge_smoke(
         client_name: "wasm-smoke".into(),
         client_kind: ClientKind::Desktop,
         requested_capabilities: CapabilitySet::try_new([
+            CapabilityId::try_new("workspace.list").unwrap(),
             CapabilityId::try_new("workspace.connect").unwrap(),
+            CapabilityId::try_new("workspace.switch").unwrap(),
+            CapabilityId::try_new("host.manage").unwrap(),
             CapabilityId::try_new("workspace.sync").unwrap(),
             CapabilityId::try_new("workspace.workbench.write").unwrap(),
             CapabilityId::try_new("workspace.documents.read").unwrap(),
@@ -71,6 +75,8 @@ pub async fn bridge_smoke(
     };
     let workspace =
         WorkspaceId::try_new(workspace).map_err(|_| JsValue::from_str("invalid workspace"))?;
+    let other_workspace = WorkspaceId::try_new(other_workspace)
+        .map_err(|_| JsValue::from_str("invalid other workspace"))?;
     let auth = ClientMessage::Pair(PairRequest::new(hello.clone(), &secret));
     drop(secret);
     let (mut connection, result) = crate::connection::BrowserConnection::connect(&url, auth)
@@ -79,6 +85,20 @@ pub async fn bridge_smoke(
     let ServerMessage::Paired(mut paired) = result else {
         return Err(JsValue::from_str("unexpected authentication reply"));
     };
+    if !paired
+        .hello
+        .granted_capabilities
+        .contains(&CapabilityId::try_new("workspace.switch").unwrap())
+    {
+        return Err(JsValue::from_str("workspace switch was not granted"));
+    }
+    if paired
+        .hello
+        .granted_capabilities
+        .contains(&CapabilityId::try_new("host.manage").unwrap())
+    {
+        return Err(JsValue::from_str("user session was given host management"));
+    }
     let credential_id = paired
         .credential_id()
         .map_err(|_| JsValue::from_str("invalid credential"))?;
@@ -323,6 +343,49 @@ pub async fn bridge_smoke(
     drop(connection);
     drop(other);
     gloo_timers::future::TimeoutFuture::new(250).await;
+    let auth = ClientMessage::Authenticate(AuthenticateRequest::new(
+        hello.clone(),
+        other_workspace.clone(),
+        &credential_id,
+        &secret,
+    ));
+    let (switched, _) = crate::connection::BrowserConnection::connect(&url, auth)
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+    let connected = lapis_client_core::AsyncHostConnection::request(
+        &switched,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: other_workspace.clone(),
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(connected, ResponseBody::WorkspaceConnect(_)) {
+        return Err(JsValue::from_str("other workspace connection failed"));
+    }
+    let list = lapis_client_core::AsyncHostConnection::request(
+        &switched,
+        RequestBody::WorkspaceList(lapis_client_api::WorkspaceListRequest::default()),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(list, ResponseBody::WorkspaceList(ref list) if list.workspaces.iter().any(|item| item.workspace_id == workspace) && list.workspaces.iter().any(|item| item.workspace_id == other_workspace))
+    {
+        return Err(JsValue::from_str("user workspace list is incomplete"));
+    }
+    let forbidden = lapis_client_core::AsyncHostConnection::request(
+        &switched,
+        RequestBody::HostRegister(lapis_client_api::HostRegisterRequest {
+            root: "not-authorized".into(),
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(forbidden, ResponseBody::Error(ref error) if error.code.as_str() == lapis_client_api::FORBIDDEN)
+    {
+        return Err(JsValue::from_str("host management was not rejected"));
+    }
+    drop(switched);
     let auth = ClientMessage::Authenticate(AuthenticateRequest::new(
         hello,
         workspace.clone(),

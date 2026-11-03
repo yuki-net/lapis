@@ -32,7 +32,7 @@ def proxy(downstream, bridge_port):
 
 def accept_clients(listener, bridge_port):
     try:
-        for _ in range(3):
+        for _ in range(4):
             downstream, _ = listener.accept()
             threading.Thread(target=proxy, args=(downstream, bridge_port), daemon=True).start()
     finally:
@@ -49,8 +49,14 @@ with tempfile.TemporaryDirectory() as directory:
         if not match: raise RuntimeError('host startup failed')
         address, server_name, workspace = match.groups()
         host.stdout.readline()
-        host.stdin.write('pair\n'); host.stdin.flush()
-        match = re.fullmatch(r'Pairing token \(5 minutes, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
+        other = Path(directory) / 'other workspace'
+        other.mkdir()
+        host.stdin.write(f'register {other}\n'); host.stdin.flush()
+        match = re.fullmatch(r'workspace=(\S+)', host.stdout.readline().strip())
+        if not match: raise RuntimeError('workspace registration failed')
+        other_workspace = match.group(1)
+        host.stdin.write('pair-user\n'); host.stdin.flush()
+        match = re.fullmatch(r'User session pairing token \(5 minutes, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
         if not match: raise RuntimeError('pairing failed')
         token = match.group(1)
         port_socket = socket.socket()
@@ -64,8 +70,8 @@ with tempfile.TemporaryDirectory() as directory:
         proxy_port = listener.getsockname()[1]
         thread = threading.Thread(target=accept_clients, args=(listener, bridge_port), daemon=True)
         thread.start()
-        data = json.dumps({'url': f'ws://127.0.0.1:{proxy_port}/remote', 'token': token, 'workspace': workspace})
-        script = "const fs=require('fs'); const api=require(process.argv[1]); const x=JSON.parse(fs.readFileSync(0,'utf8')); api.bridge_smoke(x.url,x.token,x.workspace).then(v=>{if(v!=='ok') throw Error('unexpected result'); console.log('Wasm workbench, document conflicts and reconnect: OK')}).catch(e=>{console.error(String(e));process.exitCode=1})"
+        data = json.dumps({'url': f'ws://127.0.0.1:{proxy_port}/remote', 'token': token, 'workspace': workspace, 'other_workspace': other_workspace})
+        script = "const fs=require('fs'); const api=require(process.argv[1]); const x=JSON.parse(fs.readFileSync(0,'utf8')); api.bridge_smoke(x.url,x.token,x.workspace,x.other_workspace).then(v=>{if(v!=='ok') throw Error('unexpected result'); console.log('Wasm workspace switch, workbench, document conflicts and reconnect: OK')}).catch(e=>{console.error(String(e));process.exitCode=1})"
         result = subprocess.run(['node', '-e', script, str(bindings / 'lapis_web.js')], input=data, text=True, capture_output=True, timeout=20, creationflags=flags)
         if result.returncode: raise RuntimeError('Wasm client failed: ' + result.stderr)
         print(result.stdout.strip())

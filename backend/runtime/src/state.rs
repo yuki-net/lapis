@@ -30,6 +30,7 @@ const MAX_RETAINED_EVENTS: usize = 1024;
 pub struct BackendSession {
     pub session_id: SessionId,
     pub workspace_id: WorkspaceId,
+    list_user_workspaces: bool,
 }
 
 impl BackendSession {
@@ -37,7 +38,14 @@ impl BackendSession {
         Self {
             session_id,
             workspace_id,
+            list_user_workspaces: false,
         }
+    }
+
+    /// 認証境界が明示的に許可した場合だけWorkspace一覧を広げる。
+    pub fn with_user_workspace_listing(mut self, allowed: bool) -> Self {
+        self.list_user_workspaces = allowed;
+        self
     }
 }
 
@@ -747,6 +755,19 @@ impl BackendState {
         &self,
         session: &BackendSession,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        if session.list_user_workspaces {
+            let mut workspaces: Vec<_> = self
+                .workspaces
+                .values()
+                .map(|workspace| workspace.summary.clone())
+                .collect();
+            workspaces
+                .sort_by(|left, right| left.workspace_id.as_str().cmp(right.workspace_id.as_str()));
+            return Ok((
+                ResponseBody::WorkspaceList(WorkspaceListResponse { workspaces }),
+                Vec::new(),
+            ));
+        }
         let workspace = self
             .workspaces
             .get(&session.workspace_id)

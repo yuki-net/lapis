@@ -163,6 +163,14 @@ impl Error for AuthError {
 struct PendingPairing {
     workspace_id: WorkspaceId,
     expires_at: u64,
+    scope: PairingScope,
+}
+
+#[derive(Clone, Copy)]
+enum PairingScope {
+    Workspace,
+    User,
+    Owner,
 }
 
 /// Pairing、credential、session grantのライフサイクルを所有する認証サービス。
@@ -215,6 +223,30 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     }
 
     pub fn begin_pairing(&mut self, workspace_id: WorkspaceId) -> Result<PairingToken, AuthError> {
+        self.begin_pairing_inner(workspace_id, PairingScope::Workspace)
+    }
+
+    /// Host所有者が明示した場合だけ、登録済みWorkspaceを切り替えられる招待を発行する。
+    pub fn begin_user_session_pairing(
+        &mut self,
+        workspace_id: WorkspaceId,
+    ) -> Result<PairingToken, AuthError> {
+        self.begin_pairing_inner(workspace_id, PairingScope::User)
+    }
+
+    /// 管理Hostの起動元だけが使用する所有者用credentialの発行経路。
+    pub fn begin_owner_pairing(
+        &mut self,
+        workspace_id: WorkspaceId,
+    ) -> Result<PairingToken, AuthError> {
+        self.begin_pairing_inner(workspace_id, PairingScope::Owner)
+    }
+
+    fn begin_pairing_inner(
+        &mut self,
+        workspace_id: WorkspaceId,
+        scope: PairingScope,
+    ) -> Result<PairingToken, AuthError> {
         self.require_enabled()?;
         let now = self.clock.now_unix_seconds();
         self.pairings.retain(|_, pairing| pairing.expires_at > now);
@@ -232,6 +264,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
                 PendingPairing {
                     workspace_id,
                     expires_at: self.expiry(self.config.pairing_lifetime.seconds()),
+                    scope,
                 },
             );
             return Ok(token);
@@ -263,10 +296,28 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         self.random
             .fill_bytes(&mut secret)
             .map_err(AuthError::Random)?;
+        let granted = requested_capabilities.intersection(self.policy.allowed_capabilities());
+        let capabilities = CapabilitySet::try_new(
+            granted
+                .iter()
+                .filter(|capability| match pairing.scope {
+                    PairingScope::Workspace => !matches!(
+                        capability.as_str(),
+                        lapis_client_api::capability::HOST_MANAGE
+                            | lapis_client_api::capability::WORKSPACES_SWITCH
+                    ),
+                    PairingScope::User => {
+                        capability.as_str() != lapis_client_api::capability::HOST_MANAGE
+                    }
+                    PairingScope::Owner => true,
+                })
+                .cloned(),
+        )
+        .expect("intersection cannot exceed capability limit");
         let record = CredentialRecord {
             client_id: client_id.clone(),
             workspace_id: pairing.workspace_id,
-            capabilities: requested_capabilities.intersection(self.policy.allowed_capabilities()),
+            capabilities,
             digest: digest(&secret),
             expires_at: self.expiry(self.config.credential_lifetime.seconds()),
         };
@@ -311,11 +362,14 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         if !constant_time_digest_matches(credential.secret_bytes(), &record.digest) {
             return Err(AuthError::CredentialUnavailable);
         }
-        let owner = record
-            .capabilities
-            .iter()
-            .any(|capability| capability.as_str() == lapis_client_api::capability::HOST_MANAGE);
-        if &record.client_id != client_id || (!owner && &record.workspace_id != workspace_id) {
+        let may_switch = record.capabilities.iter().any(|capability| {
+            matches!(
+                capability.as_str(),
+                lapis_client_api::capability::HOST_MANAGE
+                    | lapis_client_api::capability::WORKSPACES_SWITCH
+            )
+        });
+        if &record.client_id != client_id || (!may_switch && &record.workspace_id != workspace_id) {
             return Err(AuthError::CredentialBindingMismatch);
         }
         let now = self.clock.now_unix_seconds();
@@ -556,7 +610,7 @@ mod tests {
             auth.authenticate(&guest, &client, &other),
             Err(AuthError::CredentialBindingMismatch)
         ));
-        let token = auth.begin_pairing(workspace).unwrap();
+        let token = auth.begin_owner_pairing(workspace).unwrap();
         let credential = auth
             .complete_pairing(&token, &client, &capabilities)
             .unwrap();
@@ -583,6 +637,39 @@ mod tests {
             ))
         ));
         assert!(auth.revoke(credential.id()));
+        assert!(auth.require_active_session(&grant).is_err());
+    }
+
+    #[test]
+    fn user_session_pairing_allows_switch_without_host_management() {
+        let mut auth = setup();
+        let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+        let manage = CapabilityId::try_new(capability::HOST_MANAGE).unwrap();
+        let list = CapabilityId::try_new(capability::WORKSPACES).unwrap();
+        let requested = CapabilitySet::try_new([switch.clone(), manage.clone(), list]).unwrap();
+        auth.policy = AuthPolicy::new(requested.clone());
+        auth.enable();
+        let (client, workspace) = ids();
+        let other = WorkspaceId::try_new("workspace-2").unwrap();
+        let normal = auth.begin_pairing(workspace.clone()).unwrap();
+        let normal = auth.complete_pairing(&normal, &client, &requested).unwrap();
+        let normal_grant = auth.authenticate(&normal, &client, &workspace).unwrap();
+        assert!(!normal_grant.capabilities().contains(&switch));
+        assert!(!normal_grant.capabilities().contains(&manage));
+        assert!(matches!(
+            auth.authenticate(&normal, &client, &other),
+            Err(AuthError::CredentialBindingMismatch)
+        ));
+        let user = auth.begin_user_session_pairing(workspace.clone()).unwrap();
+        let user = auth.complete_pairing(&user, &client, &requested).unwrap();
+        let grant = auth.authenticate(&user, &client, &other).unwrap();
+        assert!(grant.capabilities().contains(&switch));
+        assert!(!grant.capabilities().contains(&manage));
+        assert!(matches!(
+            grant.require_workspace(&workspace),
+            Err(AuthorizationError::WorkspaceDenied)
+        ));
+        assert!(auth.revoke(user.id()));
         assert!(auth.require_active_session(&grant).is_err());
     }
 

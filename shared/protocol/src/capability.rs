@@ -6,6 +6,8 @@ pub const WORKSPACES: &str = "workspace.list";
 /// Hostを起動した所有者だけに与える管理権限。通常のペアリングでは付与しない。
 pub const HOST_MANAGE: &str = "host.manage";
 pub const WORKSPACES_CONNECT: &str = "workspace.connect";
+/// 明示的に発行されたユーザー用credentialだけが、登録済みWorkspaceを切り替えられる。
+pub const WORKSPACES_SWITCH: &str = "workspace.switch";
 pub const WORKSPACE_SYNC: &str = "workspace.sync";
 pub const WORKBENCH_WRITE: &str = "workspace.workbench.write";
 pub const FILES_READ: &str = "workspace.files.read";

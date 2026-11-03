@@ -50,6 +50,47 @@ async fn request(client: &mut QuicClient, id: &str, body: RequestBody) -> Respon
 }
 
 #[test]
+fn owner_console_registers_workspace_and_issues_user_pairing() {
+    let directory = tempfile::tempdir().unwrap();
+    let other = directory.path().join("other workspace");
+    std::fs::create_dir(&other).unwrap();
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lapis-host"));
+    command
+        .arg("--workspace")
+        .arg(directory.path())
+        .arg("--certificate")
+        .arg(directory.path().join("host.der"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut process = HostProcess(command.spawn().unwrap());
+    let mut input = process.0.stdin.take().unwrap();
+    let mut output = BufReader::new(process.0.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    writeln!(input, "register {}", other.display()).unwrap();
+    input.flush().unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    assert!(line.trim().starts_with("workspace=workspace-"));
+    writeln!(input, "pair-user").unwrap();
+    input.flush().unwrap();
+    let mut token = zeroize::Zeroizing::new(String::new());
+    output.read_line(&mut token).unwrap();
+    assert!(token.starts_with("User session pairing token (5 minutes, one use): "));
+    assert_eq!(token.trim().rsplit(' ').next().unwrap().len(), 64);
+    writeln!(input, "quit").unwrap();
+    input.flush().unwrap();
+}
+
+#[test]
 fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificate_overwrite() {
     let directory = tempfile::tempdir().unwrap();
     let certificate = directory.path().join("host.der");

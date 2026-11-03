@@ -142,7 +142,7 @@ fn run() -> Result<(), Error> {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
             Arc::new(BackendRemoteHandler::new(host.service())), RemoteLimits::default()).await?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
-        println!("Commands: pair / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
+        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
         let mut input_open = true;
         loop {
@@ -153,15 +153,35 @@ fn run() -> Result<(), Error> {
                     let line = line?;
                     let line = line.trim();
                     if line == "quit" { break; }
-                    if line == "pair" {
-                        let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
+                    if line == "pair" || line == "pair-user" {
+                        let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
+                        let token = if line == "pair-user" {
+                            auth.begin_user_session_pairing(workspace.clone())?
+                        } else {
+                            auth.begin_pairing(workspace.clone())?
+                        };
+                        drop(auth);
                         // 利用者が要求したローカル招待だけを表示し、ログへ自動出力しない。
                         let mut invitation = Zeroizing::new(String::with_capacity(64));
                         for byte in token.secret_bytes() {
                             use std::fmt::Write;
                             write!(invitation, "{byte:02x}")?;
                         }
-                        println!("Pairing token (5 minutes, one use): {}", invitation.as_str());
+                        if line == "pair-user" {
+                            println!("User session pairing token (5 minutes, one use): {}", invitation.as_str());
+                        } else {
+                            println!("Pairing token (5 minutes, one use): {}", invitation.as_str());
+                        }
+                    } else if let Some(path) = line.strip_prefix("register ") {
+                        let path = path.trim();
+                        if path.is_empty() {
+                            eprintln!("Usage: register <directory>");
+                        } else {
+                            match host.register_workspace(std::path::Path::new(path)) {
+                                Ok(id) => println!("workspace={}", id.as_str()),
+                                Err(_) => eprintln!("Workspaceを登録できません"),
+                            }
+                        }
                     } else if let Some(input) = line.strip_prefix("invite ") {
                         let mut parts = input.splitn(2, char::is_whitespace);
                         let address = parts.next().and_then(|value| value.parse().ok());

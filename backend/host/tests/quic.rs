@@ -392,6 +392,111 @@ fn run(test: impl std::future::Future<Output = ()>) {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_user_session_lists_and_connects_registered_workspaces_without_management() {
+    let fixture = Fixture::new().await;
+    let other_root = tempfile::tempdir().unwrap();
+    let other = fixture.host.register_workspace(other_root.path()).unwrap();
+    let (mut scoped, _) = fixture.pair("scoped-client").await;
+    let ResponseBody::WorkspaceList(scoped_list) = request(
+        &mut scoped,
+        1,
+        RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+    )
+    .await
+    else {
+        panic!("scoped list")
+    };
+    assert_eq!(scoped_list.workspaces.len(), 1);
+    assert_eq!(scoped_list.workspaces[0].workspace_id, fixture.workspace);
+
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_user_session_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut first = fixture.connect().await;
+    first
+        .send(&ClientMessage::Pair(PairRequest::new(
+            hello("user-client"),
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    let ServerMessage::Paired(mut paired) = receive(&mut first).await else {
+        panic!("user pairing")
+    };
+    let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+    let manage = CapabilityId::try_new(capability::HOST_MANAGE).unwrap();
+    assert!(paired.hello.granted_capabilities.contains(&switch));
+    assert!(!paired.hello.granted_capabilities.contains(&manage));
+    let credential = paired.credential_id().unwrap();
+    let secret = zeroize::Zeroizing::new(paired.take_secret().unwrap());
+    let ResponseBody::WorkspaceList(list) = request(
+        &mut first,
+        1,
+        RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+    )
+    .await
+    else {
+        panic!("user list")
+    };
+    assert_eq!(list.workspaces.len(), 2);
+    assert!(
+        list.workspaces
+            .iter()
+            .any(|workspace| workspace.workspace_id == other)
+    );
+    let mut second = fixture.connect().await;
+    second
+        .send(&ClientMessage::Authenticate(AuthenticateRequest::new(
+            hello("user-client"),
+            other.clone(),
+            &credential,
+            &secret,
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut second).await,
+        ServerMessage::Authenticated(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut second,
+            1,
+            RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: other
+            })
+        )
+        .await,
+        ResponseBody::WorkspaceConnect(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut second,
+            2,
+            RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: fixture.workspace.clone()
+            })
+        )
+        .await,
+        ResponseBody::Error(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut first,
+            2,
+            RequestBody::HostRegister(HostRegisterRequest {
+                root: other_root.path().to_string_lossy().into_owned()
+            })
+        )
+        .await,
+        ResponseBody::Error(_)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn common_async_client_sends_requests_to_real_host() {
     let fixture = Fixture::new().await;
     let config = fixture.config("async-client").await;

@@ -436,7 +436,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    let token = auth.begin_pairing(workspace.clone())?;
+    let token = auth.begin_owner_pairing(workspace.clone())?;
     let credential =
         auth.complete_pairing(&token, &ClientId::try_new(&client)?, &owner_capabilities)?;
     let auth = Arc::new(Mutex::new(auth));
