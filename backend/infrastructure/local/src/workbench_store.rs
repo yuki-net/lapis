@@ -8,7 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+/// 画面配置と未保存下書きを1つの状態として扱うため、Remoteのmessage上限と同じ16 MiBまで許す。
+const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone)]
 pub struct LocalWorkbenchStore {
@@ -212,6 +213,41 @@ mod tests {
                 .is_err()
         );
         assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn large_draft_survives_reopening() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("state.json");
+        let store = LocalWorkbenchStore::new(path.clone());
+        let draft = "x".repeat(3 * 1024 * 1024);
+        let view = ConversationViewState {
+            workspace: Some(lapis_workbench::SharedWorkspaceView {
+                workspace_id: lapis_editor_core::WorkspaceId::new("workspace-1"),
+                open_documents: vec![lapis_workbench::SharedDocumentView {
+                    document_id: None,
+                    path: None,
+                    cursor_char: 0,
+                    selection_start: 0,
+                    selection_end: 0,
+                    scroll_x: 0.0,
+                    scroll_y: 0.0,
+                    draft_content: Some(draft.clone()),
+                }],
+                active_path: None,
+                active_document_id: None,
+            }),
+            ..Default::default()
+        };
+        let WorkbenchStoreResult::Updated(saved) = store.compare_and_save(0, view).unwrap() else {
+            panic!("save")
+        };
+        let reopened = LocalWorkbenchStore::new(path).load().unwrap();
+        assert_eq!(reopened, saved);
+        assert_eq!(
+            reopened.view.unwrap().workspace.unwrap().open_documents[0].draft_content,
+            Some(draft)
+        );
     }
 
     #[test]

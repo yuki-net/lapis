@@ -175,6 +175,57 @@ fn shared_workbench_documents_are_scoped_and_survive_restart() {
 }
 
 #[test]
+fn large_unsaved_draft_survives_host_restart() {
+    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use lapis_workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
+    let root = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let draft = "x".repeat(3 * 1024 * 1024);
+    let expected = {
+        let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let client = host.connect(root.path()).unwrap();
+        let id = client.workspace_id().clone();
+        let view = ConversationViewState {
+            workspace: Some(SharedWorkspaceView {
+                workspace_id: lapis_editor_core::WorkspaceId::new(id.as_str()),
+                open_documents: vec![SharedDocumentView {
+                    document_id: None,
+                    path: Some(WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
+                    cursor_char: 2,
+                    selection_start: 1,
+                    selection_end: 2,
+                    scroll_x: 0.0,
+                    scroll_y: 4.0,
+                    draft_content: Some(draft),
+                }],
+                active_path: Some(WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
+                active_document_id: None,
+            }),
+            ..Default::default()
+        };
+        let response = client
+            .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                workspace_id: id,
+                expected_revision: 0,
+                view: serde_json::to_value(view).unwrap(),
+            }))
+            .unwrap();
+        let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(saved)) = response else {
+            panic!("large draft rejected")
+        };
+        saved
+    };
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let client = host.connect(root.path()).unwrap();
+    let restored = client
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: client.workspace_id().clone(),
+        }))
+        .unwrap();
+    assert!(matches!(restored, ResponseBody::WorkbenchGet(snapshot) if snapshot == expected));
+}
+
+#[test]
 fn in_memory_workbench_rejects_another_workspaces_document_state() {
     use lapis_client_api::WorkbenchPutRequest;
     let root = tempfile::tempdir().unwrap();
