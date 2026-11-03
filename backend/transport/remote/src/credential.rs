@@ -1,55 +1,18 @@
-use std::{error::Error, fmt};
+use std::fmt;
 
 use lapis_client_api::{ClientId, WorkspaceId};
 use zeroize::Zeroize;
 
 use crate::{random::RandomSource, secret::SECRET_BYTES};
 
-#[derive(Clone, PartialEq, Eq, Hash)]
-pub struct CredentialId(String);
+pub use lapis_client_api::{CredentialId, InvalidCredentialId};
 
-impl CredentialId {
-    pub(crate) fn generate(random: &mut impl RandomSource) -> Result<Self, super::RandomError> {
-        let mut bytes = [0; 16];
-        random.fill_bytes(&mut bytes)?;
-        Ok(Self(hex_encode(&bytes)))
-    }
-
-    pub fn parse(value: impl Into<String>) -> Result<Self, InvalidCredentialId> {
-        let value = value.into();
-        if value.len() != 32
-            || !value
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-        {
-            return Err(InvalidCredentialId);
-        }
-        Ok(Self(value))
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InvalidCredentialId;
-
-impl fmt::Display for InvalidCredentialId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("credential ID must be 32 lowercase hexadecimal characters")
-    }
-}
-
-impl Error for InvalidCredentialId {}
-
-impl fmt::Debug for CredentialId {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("CredentialId")
-            .field(&self.0)
-            .finish()
-    }
+pub(crate) fn generate_id(
+    random: &mut impl RandomSource,
+) -> Result<CredentialId, super::RandomError> {
+    let mut bytes = [0; 16];
+    random.fill_bytes(&mut bytes)?;
+    Ok(CredentialId::parse(hex_encode(&bytes)).expect("generated credential ID is valid"))
 }
 
 /// Clientが保持するcredential。secretはDebug/Serializeされず、サーバーもdigestだけを保存する。

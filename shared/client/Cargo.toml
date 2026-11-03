@@ -1,0 +1,10 @@
+[package]
+name = "lapis-client-core"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+futures-channel = "0.3"
+lapis-client-api = { path = "../protocol" }

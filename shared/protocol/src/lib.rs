@@ -1,6 +1,7 @@
 //! DesktopとMobileが共有する、transport非依存のclient契約。
 
 mod connection;
+mod credential_id;
 mod document;
 mod envelope;
 mod error;
@@ -10,6 +11,7 @@ mod handshake;
 mod ids;
 mod operations;
 mod path;
+mod remote_wire;
 mod request;
 mod response;
 mod revision;
@@ -23,6 +25,7 @@ pub mod capability;
 
 pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCapabilities};
 pub use connection::ConnectionState;
+pub use credential_id::{CredentialId, InvalidCredentialId};
 pub use document::{
     DocumentCloseRequest, DocumentCloseResponse, DocumentCreateRequest, DocumentCreateResponse,
     DocumentDiscardRequest, DocumentDiscardResponse, DocumentEditRequest, DocumentEditResponse,
@@ -49,6 +52,10 @@ pub use ids::{
 };
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
 pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};
+pub use remote_wire::{
+    AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
+    ServerMessage,
+};
 pub use request::RequestBody;
 pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision};

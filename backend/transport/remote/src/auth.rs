@@ -401,14 +401,14 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     }
 
     fn generate_session_id(&mut self) -> Result<SessionId, AuthError> {
-        let id = CredentialId::generate(&mut self.random).map_err(AuthError::Random)?;
+        let id = crate::credential::generate_id(&mut self.random).map_err(AuthError::Random)?;
         SessionId::try_new(format!("session-{}", id.as_str()))
             .map_err(|_| AuthError::CredentialUnavailable)
     }
 
     fn generate_credential_id(&mut self) -> Result<CredentialId, AuthError> {
         for _ in 0..4 {
-            let id = CredentialId::generate(&mut self.random).map_err(AuthError::Random)?;
+            let id = crate::credential::generate_id(&mut self.random).map_err(AuthError::Random)?;
             if !self.credentials.contains_key(&id) {
                 return Ok(id);
             }
