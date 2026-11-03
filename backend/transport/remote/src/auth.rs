@@ -301,14 +301,15 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             granted
                 .iter()
                 .filter(|capability| match pairing.scope {
-                    PairingScope::Workspace => !matches!(
-                        capability.as_str(),
-                        lapis_client_api::capability::HOST_MANAGE
-                            | lapis_client_api::capability::WORKSPACES_SWITCH
-                    ),
-                    PairingScope::User => {
-                        capability.as_str() != lapis_client_api::capability::HOST_MANAGE
+                    PairingScope::Workspace => {
+                        !capability.as_str().starts_with("host.")
+                            && !matches!(
+                                capability.as_str(),
+                                lapis_client_api::capability::WORKSPACES_SWITCH
+                                    | lapis_client_api::capability::WORKSPACES_REGISTER
+                            )
                     }
+                    PairingScope::User => !capability.as_str().starts_with("host."),
                     PairingScope::Owner => true,
                 })
                 .cloned(),
@@ -644,9 +645,18 @@ mod tests {
     fn user_session_pairing_allows_switch_without_host_management() {
         let mut auth = setup();
         let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+        let register = CapabilityId::try_new(capability::WORKSPACES_REGISTER).unwrap();
         let manage = CapabilityId::try_new(capability::HOST_MANAGE).unwrap();
+        let future_host_capability = CapabilityId::try_new("host.future-admin").unwrap();
         let list = CapabilityId::try_new(capability::WORKSPACES).unwrap();
-        let requested = CapabilitySet::try_new([switch.clone(), manage.clone(), list]).unwrap();
+        let requested = CapabilitySet::try_new([
+            switch.clone(),
+            register.clone(),
+            manage.clone(),
+            future_host_capability.clone(),
+            list,
+        ])
+        .unwrap();
         auth.policy = AuthPolicy::new(requested.clone());
         auth.enable();
         let (client, workspace) = ids();
@@ -655,7 +665,13 @@ mod tests {
         let normal = auth.complete_pairing(&normal, &client, &requested).unwrap();
         let normal_grant = auth.authenticate(&normal, &client, &workspace).unwrap();
         assert!(!normal_grant.capabilities().contains(&switch));
+        assert!(!normal_grant.capabilities().contains(&register));
         assert!(!normal_grant.capabilities().contains(&manage));
+        assert!(
+            !normal_grant
+                .capabilities()
+                .contains(&future_host_capability)
+        );
         assert!(matches!(
             auth.authenticate(&normal, &client, &other),
             Err(AuthError::CredentialBindingMismatch)
@@ -664,7 +680,9 @@ mod tests {
         let user = auth.complete_pairing(&user, &client, &requested).unwrap();
         let grant = auth.authenticate(&user, &client, &other).unwrap();
         assert!(grant.capabilities().contains(&switch));
+        assert!(grant.capabilities().contains(&register));
         assert!(!grant.capabilities().contains(&manage));
+        assert!(!grant.capabilities().contains(&future_host_capability));
         assert!(matches!(
             grant.require_workspace(&workspace),
             Err(AuthorizationError::WorkspaceDenied)

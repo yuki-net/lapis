@@ -106,9 +106,8 @@ impl RequestBody {
         match self {
             Self::WorkbenchGet(_) => capability::WORKSPACE_SYNC,
             Self::WorkbenchPut(_) => capability::WORKBENCH_WRITE,
-            Self::HostRegister(_) | Self::HostWorktree(_) | Self::DocumentRelocate(_) => {
-                capability::HOST_MANAGE
-            }
+            Self::HostRegister(_) => capability::WORKSPACES_REGISTER,
+            Self::HostWorktree(_) | Self::DocumentRelocate(_) => capability::HOST_MANAGE,
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)

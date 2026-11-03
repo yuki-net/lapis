@@ -22,6 +22,7 @@ pub fn supported_capabilities() -> lapis_client_api::CapabilitySet {
             WORKSPACES,
             WORKSPACES_CONNECT,
             WORKSPACES_SWITCH,
+            WORKSPACES_REGISTER,
             WORKSPACE_SYNC,
             WORKBENCH_WRITE,
             FILES_READ,

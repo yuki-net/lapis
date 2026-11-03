@@ -8,6 +8,8 @@ pub const HOST_MANAGE: &str = "host.manage";
 pub const WORKSPACES_CONNECT: &str = "workspace.connect";
 /// 明示的に発行されたユーザー用credentialだけが、登録済みWorkspaceを切り替えられる。
 pub const WORKSPACES_SWITCH: &str = "workspace.switch";
+/// ユーザー用接続でHost上のWorkspaceを明示的に登録する。
+pub const WORKSPACES_REGISTER: &str = "workspace.register";
 pub const WORKSPACE_SYNC: &str = "workspace.sync";
 pub const WORKBENCH_WRITE: &str = "workspace.workbench.write";
 pub const FILES_READ: &str = "workspace.files.read";

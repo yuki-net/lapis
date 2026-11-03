@@ -1,7 +1,7 @@
 use lapis_host::BackendHost;
 use lapis_remote::{
-    AuthConfig, AuthPolicy, BackendRemoteHandler, CredentialId, CredentialLifetime,
-    PairingLifetime, QuicServer, RemoteAuth, RemoteLimits, tls13_server_config,
+    AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
+    RemoteAuth, RemoteLimits, tls13_server_config,
 };
 use rustls::pki_types::PrivateKeyDer;
 use std::{
@@ -140,7 +140,7 @@ fn run() -> Result<(), Error> {
         })?;
     runtime.block_on(async {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
-            Arc::new(BackendRemoteHandler::new(host.service())), RemoteLimits::default()).await?;
+            Arc::new(lapis_host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
         println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;

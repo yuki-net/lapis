@@ -70,8 +70,8 @@ with tempfile.TemporaryDirectory() as directory:
         proxy_port = listener.getsockname()[1]
         thread = threading.Thread(target=accept_clients, args=(listener, bridge_port), daemon=True)
         thread.start()
-        data = json.dumps({'url': f'ws://127.0.0.1:{proxy_port}/remote', 'token': token, 'workspace': workspace, 'other_workspace': other_workspace})
-        script = "const fs=require('fs'); const api=require(process.argv[1]); const x=JSON.parse(fs.readFileSync(0,'utf8')); api.bridge_smoke(x.url,x.token,x.workspace,x.other_workspace).then(v=>{if(v!=='ok') throw Error('unexpected result'); console.log('Wasm workspace switch, workbench, document conflicts and reconnect: OK')}).catch(e=>{console.error(String(e));process.exitCode=1})"
+        data = json.dumps({'url': f'ws://127.0.0.1:{proxy_port}/remote', 'token': token, 'workspace': workspace, 'other_workspace': other_workspace, 'other_root': str(other)})
+        script = "const fs=require('fs'); const api=require(process.argv[1]); const x=JSON.parse(fs.readFileSync(0,'utf8')); api.bridge_smoke(x.url,x.token,x.workspace,x.other_workspace,x.other_root).then(v=>{if(v!=='ok') throw Error('unexpected result'); console.log('Wasm workspace switch, workbench, document conflicts and reconnect: OK')}).catch(e=>{console.error(String(e));process.exitCode=1})"
         result = subprocess.run(['node', '-e', script, str(bindings / 'lapis_web.js')], input=data, text=True, capture_output=True, timeout=20, creationflags=flags)
         if result.returncode: raise RuntimeError('Wasm client failed: ' + result.stderr)
         print(result.stdout.strip())

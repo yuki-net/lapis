@@ -56,7 +56,7 @@ impl Fixture {
             "127.0.0.1:0".parse().unwrap(),
             tls,
             auth.clone(),
-            Arc::new(BackendRemoteHandler::new(host.service())),
+            Arc::new(lapis_host::HostRemoteHandler::new(host.clone())),
             RemoteLimits::default(),
         )
         .await
@@ -483,16 +483,21 @@ async fn explicit_user_session_lists_and_connects_registered_workspaces_without_
         .await,
         ResponseBody::Error(_)
     ));
+    let third_root = tempfile::tempdir().unwrap();
     assert!(matches!(
         request(
             &mut first,
             2,
             RequestBody::HostRegister(HostRegisterRequest {
-                root: other_root.path().to_string_lossy().into_owned()
+                root: third_root.path().to_string_lossy().into_owned()
             })
         )
         .await,
-        ResponseBody::Error(_)
+        ResponseBody::HostRegister(_)
+    ));
+    assert!(matches!(
+        request(&mut first, 3, RequestBody::HostWorktree(lapis_editor_core::TaskId::new("untrusted"))).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
     ));
 }
 

@@ -38,6 +38,7 @@ pub async fn bridge_smoke(
     token: String,
     workspace: String,
     other_workspace: String,
+    other_root: String,
 ) -> Result<String, JsValue> {
     let token = zeroize::Zeroizing::new(token);
     let bytes = token.as_bytes();
@@ -63,6 +64,7 @@ pub async fn bridge_smoke(
             CapabilityId::try_new("workspace.list").unwrap(),
             CapabilityId::try_new("workspace.connect").unwrap(),
             CapabilityId::try_new("workspace.switch").unwrap(),
+            CapabilityId::try_new("workspace.register").unwrap(),
             CapabilityId::try_new("host.manage").unwrap(),
             CapabilityId::try_new("workspace.sync").unwrap(),
             CapabilityId::try_new("workspace.workbench.write").unwrap(),
@@ -373,11 +375,19 @@ pub async fn bridge_smoke(
     {
         return Err(JsValue::from_str("user workspace list is incomplete"));
     }
+    let registered = lapis_client_core::AsyncHostConnection::request(
+        &switched,
+        RequestBody::HostRegister(lapis_client_api::HostRegisterRequest { root: other_root }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(registered, ResponseBody::HostRegister(ref result) if result.workspace_id == other_workspace)
+    {
+        return Err(JsValue::from_str("workspace registration failed"));
+    }
     let forbidden = lapis_client_core::AsyncHostConnection::request(
         &switched,
-        RequestBody::HostRegister(lapis_client_api::HostRegisterRequest {
-            root: "not-authorized".into(),
-        }),
+        RequestBody::HostWorktree(lapis_editor_core::TaskId::new("not-authorized")),
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;

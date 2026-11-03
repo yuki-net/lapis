@@ -30,10 +30,16 @@ impl RemoteRequestHandler for HostRemoteHandler {
         let host = self.host.clone();
         Box::pin(async move {
             let id = request.request_id.clone();
-            let allowed = grant
+            let owner = grant
                 .capabilities()
                 .iter()
                 .any(|capability| capability.as_str() == capability::HOST_MANAGE);
+            let allowed = owner
+                || (matches!(request.body, RequestBody::HostRegister(_))
+                    && grant
+                        .capabilities()
+                        .iter()
+                        .any(|capability| capability.as_str() == capability::WORKSPACES_REGISTER));
             if !allowed {
                 return ResponseEnvelope {
                     request_id: id,
