@@ -90,6 +90,16 @@ impl<'a, C: AsyncHostConnection> AsyncWorkbenchSync<'a, C> {
         self.replica.accept_remote()
     }
 
+    /// 中断された送信を同じrevisionから再試行する。競合があれば上書きしない。
+    pub async fn retry_pending(&mut self) -> Result<WorkbenchUpdate, String> {
+        let pending = self
+            .replica
+            .pending()
+            .cloned()
+            .ok_or("未確定のWorkbench変更がありません")?;
+        self.save(pending).await
+    }
+
     pub async fn retry_local(&mut self) -> Result<WorkbenchUpdate, String> {
         let pending = self.replica.prepare_retry()?;
         self.save(pending).await
@@ -234,7 +244,61 @@ mod tests {
         assert_eq!(sync.pending(), Some(&local));
         assert_eq!(sync.conflict().unwrap().view, Some(remote));
         {
+            let mut retry = std::pin::pin!(sync.retry_pending());
+            assert!(matches!(
+                retry.as_mut().poll(&mut context),
+                Poll::Ready(Ok(WorkbenchUpdate::Conflict(_)))
+            ));
+        }
+        assert_eq!(sync.pending(), Some(&local));
+        {
             let mut retry = std::pin::pin!(sync.retry_local());
+            assert!(matches!(
+                retry.as_mut().poll(&mut context),
+                Poll::Ready(Ok(WorkbenchUpdate::Updated(_)))
+            ));
+        }
+        assert!(sync.pending().is_none());
+        assert_eq!(sync.confirmed().unwrap().view, Some(local));
+    }
+
+    #[test]
+    fn reconnect_can_retry_a_pending_write_without_a_remote_change() {
+        let snapshot = WorkbenchSnapshot {
+            revision: 0,
+            view: serde_json::Value::Null,
+        };
+        let initial = ReconnectConnection {
+            snapshot: snapshot.clone(),
+            hang_write: true,
+        };
+        let replacement = ReconnectConnection {
+            snapshot,
+            hang_write: false,
+        };
+        let mut sync = AsyncWorkbenchSync::new(&initial);
+        let mut context = Context::from_waker(Waker::noop());
+        {
+            let mut open = std::pin::pin!(sync.open(WorkspaceId::try_new("workspace-1").unwrap()));
+            assert!(matches!(
+                open.as_mut().poll(&mut context),
+                Poll::Ready(Ok(_))
+            ));
+        }
+        let local = ConversationViewState::default();
+        {
+            let mut save = std::pin::pin!(sync.save(local.clone()));
+            assert!(save.as_mut().poll(&mut context).is_pending());
+        }
+        {
+            let mut reconnect = std::pin::pin!(sync.reconnect(&replacement));
+            assert!(matches!(
+                reconnect.as_mut().poll(&mut context),
+                Poll::Ready(Ok(None))
+            ));
+        }
+        {
+            let mut retry = std::pin::pin!(sync.retry_pending());
             assert!(matches!(
                 retry.as_mut().poll(&mut context),
                 Poll::Ready(Ok(WorkbenchUpdate::Updated(_)))
