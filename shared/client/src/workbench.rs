@@ -54,6 +54,21 @@ impl<'a, C: AsyncHostConnection> AsyncWorkbenchSync<'a, C> {
         self.replica.refresh(snapshot)
     }
 
+    /// 接続を交換する前に正本を再取得し、未確定値と競合を保持する。
+    pub async fn reconnect(
+        &mut self,
+        connection: &'a C,
+    ) -> Result<Option<VersionedViewState>, String> {
+        let workspace = self
+            .workspace
+            .as_ref()
+            .ok_or("Workspaceが接続されていません")?;
+        let snapshot = get(connection, workspace).await?;
+        let refreshed = self.replica.refresh(snapshot)?;
+        self.connection = connection;
+        Ok(refreshed)
+    }
+
     pub async fn save(&mut self, view: ConversationViewState) -> Result<WorkbenchUpdate, String> {
         let plan = self.replica.stage(view)?;
         let workspace = self
@@ -150,6 +165,83 @@ mod tests {
                 _ => Err("unexpected request".into()),
             }
         }
+    }
+
+    struct ReconnectConnection {
+        snapshot: WorkbenchSnapshot,
+        hang_write: bool,
+    }
+
+    impl AsyncHostConnection for ReconnectConnection {
+        async fn request(&self, body: RequestBody) -> Result<ResponseBody, String> {
+            match body {
+                RequestBody::WorkbenchGet(_) => {
+                    Ok(ResponseBody::WorkbenchGet(self.snapshot.clone()))
+                }
+                RequestBody::WorkbenchPut(_) if self.hang_write => std::future::pending().await,
+                RequestBody::WorkbenchPut(request) => Ok(ResponseBody::WorkbenchPut(
+                    WorkbenchPutResponse::Updated(WorkbenchSnapshot {
+                        revision: request.expected_revision + 1,
+                        view: request.view,
+                    }),
+                )),
+                _ => Err("unexpected request".into()),
+            }
+        }
+    }
+
+    #[test]
+    fn reconnect_retains_pending_view_and_detects_a_remote_change() {
+        let initial = ReconnectConnection {
+            snapshot: WorkbenchSnapshot {
+                revision: 0,
+                view: serde_json::Value::Null,
+            },
+            hang_write: true,
+        };
+        let remote = ConversationViewState::default();
+        let replacement = ReconnectConnection {
+            snapshot: WorkbenchSnapshot {
+                revision: 1,
+                view: serde_json::to_value(&remote).unwrap(),
+            },
+            hang_write: false,
+        };
+        let mut sync = AsyncWorkbenchSync::new(&initial);
+        let mut context = Context::from_waker(Waker::noop());
+        {
+            let mut open = std::pin::pin!(sync.open(WorkspaceId::try_new("workspace-1").unwrap()));
+            assert!(matches!(
+                open.as_mut().poll(&mut context),
+                Poll::Ready(Ok(_))
+            ));
+        }
+        let local = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        {
+            let mut save = std::pin::pin!(sync.save(local.clone()));
+            assert!(save.as_mut().poll(&mut context).is_pending());
+        }
+        {
+            let mut reconnect = std::pin::pin!(sync.reconnect(&replacement));
+            assert!(matches!(
+                reconnect.as_mut().poll(&mut context),
+                Poll::Ready(Ok(None))
+            ));
+        }
+        assert_eq!(sync.pending(), Some(&local));
+        assert_eq!(sync.conflict().unwrap().view, Some(remote));
+        {
+            let mut retry = std::pin::pin!(sync.retry_local());
+            assert!(matches!(
+                retry.as_mut().poll(&mut context),
+                Poll::Ready(Ok(WorkbenchUpdate::Updated(_)))
+            ));
+        }
+        assert!(sync.pending().is_none());
+        assert_eq!(sync.confirmed().unwrap().view, Some(local));
     }
 
     #[test]
