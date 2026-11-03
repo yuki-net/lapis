@@ -6,6 +6,49 @@ use lapis_client_api::{
 use lapis_host::BackendHost;
 
 #[test]
+fn workbench_port_shares_updates_and_returns_conflicts() {
+    use lapis_workbench::{ConversationViewState, WorkbenchUpdate};
+    let root = tempfile::tempdir().unwrap();
+    let host = BackendHost::start().unwrap();
+    let id = host.register_workspace(root.path()).unwrap();
+    let workspace = lapis_editor_core::WorkspaceId::new(id.as_str());
+    let client = lapis_host::BackendClient::from(host);
+    let first = client.workbench();
+    let second = client.workbench();
+    let mut subscription = second.subscribe(&workspace).unwrap();
+    let initial = first.get(&workspace).unwrap();
+    assert!(initial.view.is_none());
+    let view = ConversationViewState {
+        show_panel_controls: false,
+        ..Default::default()
+    };
+    let WorkbenchUpdate::Updated(saved) = first
+        .update(&workspace, initial.revision, view.clone())
+        .unwrap()
+    else {
+        panic!("update failed")
+    };
+    assert_eq!(
+        subscription
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap(),
+        Some(saved.revision)
+    );
+    let WorkbenchUpdate::Conflict(current) = second
+        .update(
+            &workspace,
+            initial.revision,
+            ConversationViewState::default(),
+        )
+        .unwrap()
+    else {
+        panic!("stale update accepted")
+    };
+    assert_eq!(current, saved);
+    assert_eq!(second.get(&workspace).unwrap().view, Some(view));
+}
+
+#[test]
 fn persisted_workbench_survives_host_restart() {
     use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     let root = tempfile::tempdir().unwrap();

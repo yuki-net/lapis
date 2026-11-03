@@ -197,6 +197,42 @@ fn hello(id: &str) -> ClientHello {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desktop_workbench_port_receives_remote_updates() {
+    use lapis_workbench::{ConversationViewState, WorkbenchUpdate};
+    let fixture = Fixture::new().await;
+    let first = fixture.config("workbench-port-first").await;
+    let second = fixture.config("workbench-port-second").await;
+    tokio::task::spawn_blocking(move || {
+        let root = std::env::temp_dir().join("lapis-virtual-workbench-test");
+        let first = lapis_host::BackendClient::remote(root.clone(), first).unwrap();
+        let second = lapis_host::BackendClient::remote(root.clone(), second).unwrap();
+        let workspace =
+            lapis_editor_core::WorkspaceId::new(first.register_workspace(&root).unwrap().as_str());
+        let writer = first.workbench();
+        let reader = second.workbench();
+        let mut subscription = reader.subscribe(&workspace).unwrap();
+        let initial = reader.get(&workspace).unwrap();
+        let view = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        let WorkbenchUpdate::Updated(updated) = writer
+            .update(&workspace, initial.revision, view.clone())
+            .unwrap()
+        else {
+            panic!("update")
+        };
+        assert_eq!(
+            subscription.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Some(updated.revision)
+        );
+        assert_eq!(reader.get(&workspace).unwrap().view, Some(view));
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workbench_updates_and_conflicts_cross_authenticated_quic_sessions() {
     let fixture = Fixture::new().await;
     let (mut first, _) = fixture.pair("workbench-first").await;

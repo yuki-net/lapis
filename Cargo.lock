@@ -3576,6 +3576,7 @@ dependencies = [
  "lapis-remote",
  "lapis-task",
  "lapis-terminal",
+ "lapis-workbench",
  "lapis-workspace",
  "libc",
  "rcgen",

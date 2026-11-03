@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 lapis-workspace = { path = "../../shared/models/workspace" }
+lapis-workbench = { path = "../../shared/models/workbench" }
 lapis-document = { path = "../../shared/models/document" }
 lapis-git = { path = "../../shared/models/git" }
 lapis-task = { path = "../../shared/models/task" }

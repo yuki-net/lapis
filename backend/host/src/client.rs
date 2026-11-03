@@ -129,6 +129,9 @@ impl BackendClient {
     pub fn documents(&self) -> Arc<dyn lapis_document::DocumentConnection> {
         Arc::new(crate::document::HostDocuments::new(self.clone()))
     }
+    pub fn workbench(&self) -> Arc<dyn lapis_workbench::WorkbenchConnection> {
+        Arc::new(crate::workbench::HostWorkbench::new(self.clone()))
+    }
     pub fn git(&self) -> Arc<dyn lapis_git::GitConnection> {
         Arc::new(crate::features::HostGit::new(self.clone()))
     }

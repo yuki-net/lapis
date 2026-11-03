@@ -11,6 +11,7 @@ mod document;
 pub use client::BackendClient;
 mod features;
 mod terminal;
+mod workbench;
 mod workspace;
 
 /// Hostが提供する操作だけをペアリングで許可する。
