@@ -66,6 +66,20 @@ impl WorkbenchReplica {
         if snapshot.revision == previous.revision {
             return Ok(None);
         }
+        // 応答だけが失われた場合、Hostの正本が未確定値と一致すれば変更は残っている。
+        if self.pending.as_ref() == snapshot.view.as_ref()
+            && self.pending.is_some()
+            && self
+                .confirmed
+                .as_ref()
+                .and_then(|state| state.revision.checked_add(1))
+                == Some(snapshot.revision)
+        {
+            self.confirmed = Some(snapshot.clone());
+            self.pending = None;
+            self.conflict = None;
+            return Ok(Some(snapshot));
+        }
         if self.pending.is_some() {
             self.conflict = Some(snapshot);
             return Ok(None);
@@ -181,6 +195,22 @@ mod tests {
                 .is_err()
         );
         assert_eq!(replica.pending(), Some(&pending));
+    }
+
+    #[test]
+    fn matching_host_state_confirms_a_write_whose_response_was_lost() {
+        let mut replica = WorkbenchReplica::default();
+        replica.open(VersionedViewState::default()).unwrap();
+        let pending = ConversationViewState::default();
+        replica.stage(pending.clone()).unwrap();
+        let saved = VersionedViewState {
+            revision: 1,
+            view: Some(pending),
+        };
+        assert_eq!(replica.refresh(saved.clone()).unwrap(), Some(saved.clone()));
+        assert!(replica.pending().is_none());
+        assert!(replica.conflict().is_none());
+        assert_eq!(replica.confirmed(), Some(&saved));
     }
 
     #[test]
