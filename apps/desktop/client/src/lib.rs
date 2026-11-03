@@ -31,7 +31,9 @@ use lapis_workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, Workspa
 use serde::{Deserialize, Serialize};
 
 mod view_state;
+mod workbench_sync;
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
+pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult};
 
 /// グローバル設定を UI に公開し、変更を永続化するアプリケーション境界。
 #[derive(Clone)]
