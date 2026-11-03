@@ -76,6 +76,53 @@ fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     assert_eq!(editor.active_text().unwrap(), "unsaved workspace draft 😀");
 }
 
+#[test]
+fn restoring_an_older_draft_keeps_both_live_host_content_and_backup() {
+    use lapis_desktop_client::{EditorSession, WorkspaceStateRepository};
+    use std::sync::Arc;
+    let root = tempfile::tempdir().unwrap();
+    let host = BackendHost::start().unwrap();
+    let store = Arc::new(ViewStore::default());
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        store.clone(),
+        host.documents(),
+    );
+    editor.open_workspace(root.path().to_owned()).unwrap();
+    editor.new_document();
+    editor.replace_range(0..0, "保存前の入力").unwrap();
+    let snapshot = editor.snapshot();
+    let canonical_id = editor.active_document_id().unwrap().clone();
+    editor
+        .replace_range(0.."保存前の入力".chars().count(), "Hostの新しい内容")
+        .unwrap();
+    editor.restore_snapshot(snapshot).unwrap();
+    assert_eq!(editor.active_document_id(), Some(&canonical_id));
+    assert_eq!(editor.active_text().unwrap(), "Hostの新しい内容");
+    let backup = editor
+        .tabs()
+        .into_iter()
+        .find(|tab| tab.id != canonical_id)
+        .unwrap();
+    assert!(editor.activate_document(&backup.id));
+    assert_eq!(editor.active_text().unwrap(), "保存前の入力");
+    editor.update_active_view(0..0, 0, 0.0, 0.0);
+    let saved = store.load().unwrap().unwrap();
+    assert!(
+        saved
+            .open_documents
+            .iter()
+            .any(|view| view.draft_content.as_deref() == Some("保存前の入力"))
+    );
+    assert!(
+        saved
+            .open_documents
+            .iter()
+            .any(|view| view.draft_content.as_deref() == Some("Hostの新しい内容"))
+    );
+}
+
 #[derive(Default)]
 struct ViewStore(std::sync::Mutex<Option<lapis_desktop_client::WorkspaceSnapshot>>);
 

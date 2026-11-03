@@ -2192,11 +2192,13 @@ impl EditorSession {
                     cache
                 }
             };
-            if !recovered
-                && let Some(draft) = &view.draft_content
+            if let Some(draft) = &view.draft_content
                 && cache.document.content_for_save() != *draft
             {
-                if cache.reused {
+                if recovered || cache.reused {
+                    if recovered && was_active {
+                        restored_active = Some(self.documents.len());
+                    }
                     self.documents
                         .push(OpenDocument::from_cache(cache, view.clone()));
                     cache = self
@@ -2228,7 +2230,7 @@ impl EditorSession {
                 }
             }
             let id = cache.id.clone();
-            if was_active {
+            if was_active && restored_active.is_none() {
                 restored_active = Some(self.documents.len());
             }
             self.documents.push(OpenDocument::from_cache(
