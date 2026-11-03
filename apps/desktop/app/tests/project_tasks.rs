@@ -289,6 +289,52 @@ fn independently_created_tasks_do_not_reuse_local_sequence_ids() {
 }
 
 #[test]
+fn independently_started_clients_keep_both_initial_tasks_when_saving() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let host = BackendHost::start().unwrap();
+    let make_editor = |name: &str| {
+        let mut editor = EditorSession::new_empty(
+            host.workspaces(),
+            Arc::new(NoDialog),
+            Arc::new(LocalWorkspaceStateRepository::new(root.join(name))),
+            host.documents(),
+        );
+        editor.open_workspace(root.clone()).unwrap();
+        editor
+    };
+    let mut first_editor = make_editor("first.json");
+    let mut second_editor = make_editor("second.json");
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut first = ConversationSession::new(repository.clone(), first_editor.snapshot());
+    let mut second = ConversationSession::new(repository.clone(), second_editor.snapshot());
+    let first_id = first.active_id().clone();
+    let second_id = second.active_id().clone();
+    assert_ne!(first_id, second_id);
+    first
+        .capture(&mut first_editor, Default::default(), None, &[])
+        .unwrap();
+    second
+        .capture(&mut second_editor, Default::default(), None, &[])
+        .unwrap();
+    let restored = ConversationSession::new(repository, Default::default());
+    assert!(restored.load_error().is_none());
+    assert!(
+        restored
+            .records()
+            .iter()
+            .any(|record| record.id == first_id)
+    );
+    assert!(
+        restored
+            .records()
+            .iter()
+            .any(|record| record.id == second_id)
+    );
+    assert_eq!(restored.active_id(), &second_id);
+}
+
+#[test]
 fn existing_sequential_task_id_is_preserved_when_reopened() {
     use lapis_desktop_client::ConversationRepository;
     use lapis_editor_core::ConversationId;
