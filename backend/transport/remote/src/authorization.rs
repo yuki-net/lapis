@@ -56,6 +56,11 @@ impl SessionGrant {
         let capability = CapabilityId::try_new(request.required_capability())
             .expect("built-in request capability must be valid");
         self.require_capability(&capability)?;
+        if matches!(request, RequestBody::WorkbenchPut(_)) {
+            let read = CapabilityId::try_new(lapis_client_api::capability::WORKSPACE_SYNC)
+                .expect("built-in capability must be valid");
+            self.require_capability(&read)?;
+        }
         if let RequestBody::WorkspaceExecute(request) = request
             && let Some(additional) = request.operation.additional_required_capability()
         {
@@ -92,6 +97,28 @@ impl Error for AuthorizationError {}
 mod tests {
     use super::*;
     use lapis_client_api::capability;
+
+    #[test]
+    fn workbench_write_also_requires_read_access() {
+        let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+        let grant = SessionGrant::from_authenticated(
+            SessionId::try_new("session-1").unwrap(),
+            workspace.clone(),
+            CapabilitySet::try_new([CapabilityId::try_new(capability::WORKBENCH_WRITE).unwrap()])
+                .unwrap(),
+        );
+        let request = RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+            workspace_id: workspace,
+            expected_revision: 0,
+            view: serde_json::json!({}),
+        });
+        assert_eq!(
+            grant.require_request(&request),
+            Err(AuthorizationError::CapabilityDenied(
+                capability::WORKSPACE_SYNC.into()
+            ))
+        );
+    }
 
     #[test]
     fn isolated_task_start_requires_both_task_start_and_git_write() {

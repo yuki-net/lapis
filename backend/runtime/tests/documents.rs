@@ -607,3 +607,157 @@ fn fingerprint(path: &Path, bytes: &[u8]) -> Result<FileFingerprint, DocumentErr
         hasher.finish(),
     ))
 }
+
+#[test]
+fn workbench_save_finishes_after_client_disconnect_without_blocking_other_requests() {
+    use lapis_backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
+    use lapis_workbench::{ConversationViewState, VersionedViewState};
+    use std::sync::{Mutex, mpsc};
+
+    struct BlockingStore {
+        entered: mpsc::SyncSender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        state: Mutex<VersionedViewState>,
+    }
+    impl WorkbenchPersistence for BlockingStore {
+        fn load(&self) -> std::io::Result<VersionedViewState> {
+            Ok(self.state.lock().unwrap().clone())
+        }
+        fn compare_and_save(
+            &self,
+            expected: u64,
+            view: ConversationViewState,
+        ) -> std::io::Result<WorkbenchStoreResult> {
+            self.entered.send(()).unwrap();
+            self.release.lock().unwrap().recv().unwrap();
+            let mut state = self.state.lock().unwrap();
+            state.update(expected, view).unwrap();
+            Ok(WorkbenchStoreResult::Updated(state.clone()))
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let workspace_id = WorkspaceId::try_new("workspace-workbench").unwrap();
+    let (entered, wait_entered) = mpsc::sync_channel(1);
+    let (release, wait_release) = mpsc::sync_channel(1);
+    let store = Arc::new(BlockingStore {
+        entered,
+        release: Mutex::new(wait_release),
+        state: Mutex::new(VersionedViewState::default()),
+    });
+    let service = BackendService::start(BackendState::new([]).unwrap()).unwrap();
+    service
+        .register_workspace(
+            WorkspaceRegistration::new(
+                workspace_id.clone(),
+                "test",
+                root.path().to_owned(),
+                Arc::new(TestFiles),
+            )
+            .with_workbench_persistence(store),
+        )
+        .unwrap();
+    let writer = BackendSession::new(SessionId::try_new("writer").unwrap(), workspace_id.clone());
+    let reader = BackendSession::new(SessionId::try_new("reader").unwrap(), workspace_id.clone());
+    connect(&service, &writer, workspace_id.clone(), 1);
+    connect(&service, &reader, workspace_id.clone(), 2);
+    let writer_service = service.clone();
+    let writer_session = writer.clone();
+    let writer_workspace = workspace_id.clone();
+    let pending = std::thread::spawn(move || {
+        dispatch(
+            &writer_service,
+            &writer_session,
+            3,
+            RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+                workspace_id: writer_workspace,
+                expected_revision: 0,
+                view: serde_json::json!({"show_panel_controls": false}),
+            }),
+        )
+    });
+    wait_entered.recv_timeout(Duration::from_secs(2)).unwrap();
+    service.disconnect(writer.session_id.clone()).unwrap();
+    let initial = dispatch(
+        &service,
+        &reader,
+        4,
+        RequestBody::WorkbenchGet(lapis_client_api::WorkbenchGetRequest {
+            workspace_id: workspace_id.clone(),
+        }),
+    );
+    assert!(matches!(initial, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 0));
+    release.send(()).unwrap();
+    assert!(matches!(
+        pending.join().unwrap(),
+        ResponseBody::WorkbenchPut(lapis_client_api::WorkbenchPutResponse::Updated(_))
+    ));
+    let after = dispatch(
+        &service,
+        &reader,
+        5,
+        RequestBody::WorkbenchGet(lapis_client_api::WorkbenchGetRequest { workspace_id }),
+    );
+    assert!(
+        matches!(after, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 1 && snapshot.view["show_panel_controls"] == false)
+    );
+}
+
+#[test]
+fn failed_workbench_save_does_not_advance_the_host_state() {
+    use lapis_backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
+    use lapis_workbench::{ConversationViewState, VersionedViewState};
+    struct FailingStore;
+    impl WorkbenchPersistence for FailingStore {
+        fn load(&self) -> std::io::Result<VersionedViewState> {
+            Ok(VersionedViewState::default())
+        }
+        fn compare_and_save(
+            &self,
+            _: u64,
+            _: ConversationViewState,
+        ) -> std::io::Result<WorkbenchStoreResult> {
+            Err(std::io::Error::other("disk failure"))
+        }
+    }
+    let root = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::try_new("workspace-failed-save").unwrap();
+    let service = BackendService::start(BackendState::new([]).unwrap()).unwrap();
+    service
+        .register_workspace(
+            WorkspaceRegistration::new(
+                workspace.clone(),
+                "test",
+                root.path().to_owned(),
+                Arc::new(TestFiles),
+            )
+            .with_workbench_persistence(Arc::new(FailingStore)),
+        )
+        .unwrap();
+    let session = BackendSession::new(SessionId::try_new("writer").unwrap(), workspace.clone());
+    connect(&service, &session, workspace.clone(), 1);
+    let event_receiver = service.subscribe(session.clone()).unwrap();
+    let result = service.dispatch(
+        session.clone(),
+        RequestEnvelope {
+            request_id: RequestId::try_new("write-failure").unwrap(),
+            body: RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+                workspace_id: workspace.clone(),
+                expected_revision: 0,
+                view: serde_json::json!({"show_panel_controls": false}),
+            }),
+        },
+    );
+    assert!(result.is_err());
+    assert!(event_receiver.try_recv().is_err());
+    let current = dispatch(
+        &service,
+        &session,
+        2,
+        RequestBody::WorkbenchGet(lapis_client_api::WorkbenchGetRequest {
+            workspace_id: workspace,
+        }),
+    );
+    assert!(
+        matches!(current, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 0 && snapshot.view.is_null())
+    );
+}

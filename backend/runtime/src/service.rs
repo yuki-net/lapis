@@ -91,14 +91,27 @@ impl BackendService {
             inner: Arc::new(ServiceInner {
                 sender: Mutex::new(Some(sender)),
                 thread: Mutex::new(Some(thread)),
+                workbenches: Mutex::new(HashMap::new()),
             }),
         })
     }
 
     pub fn register_workspace(
         &self,
-        registration: WorkspaceRegistration,
+        mut registration: WorkspaceRegistration,
     ) -> Result<(), BackendServiceError> {
+        let workspace_id = registration.workspace_id.clone();
+        let persistence = registration.workbench_persistence.take();
+        if let Some(store) = &persistence {
+            registration.workbench_initial =
+                store.load().map_err(|_| BackendServiceError::Unavailable)?;
+        }
+        // 登録完了前に永続化なしの更新経路へ入らせない。
+        let mut workbenches = self
+            .inner
+            .workbenches
+            .lock()
+            .map_err(|_| BackendServiceError::Unavailable)?;
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
             .sender()?
@@ -110,7 +123,17 @@ impl BackendService {
         receive
             .recv()
             .map_err(|_| BackendServiceError::Unavailable)?
-            .map_err(BackendServiceError::State)
+            .map_err(BackendServiceError::State)?;
+        if let Some(store) = persistence {
+            workbenches.insert(
+                workspace_id,
+                Arc::new(PersistedWorkbench {
+                    store,
+                    gate: Mutex::new(()),
+                }),
+            );
+        }
+        Ok(())
     }
 
     pub fn dispatch(
@@ -118,6 +141,18 @@ impl BackendService {
         session: BackendSession,
         request: RequestEnvelope,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
+        if let lapis_client_api::RequestBody::WorkbenchPut(ref put) = request.body {
+            let persistence = self
+                .inner
+                .workbenches
+                .lock()
+                .map_err(|_| BackendServiceError::Unavailable)?
+                .get(&session.workspace_id)
+                .cloned();
+            if let Some(persistence) = persistence {
+                return self.persist_workbench(session, request.clone(), put.clone(), persistence);
+            }
+        }
         if let lapis_client_api::RequestBody::WorkspaceExecute(operation) = request.body {
             return self.execute_workspace_operation(session, request.request_id, operation);
         }
@@ -131,6 +166,81 @@ impl BackendService {
             })
             .map_err(|_| BackendServiceError::Unavailable)?;
         receive.recv().map_err(|_| BackendServiceError::Unavailable)
+    }
+
+    fn persist_workbench(
+        &self,
+        session: BackendSession,
+        request: RequestEnvelope,
+        put: lapis_client_api::WorkbenchPutRequest,
+        persistence: Arc<PersistedWorkbench>,
+    ) -> Result<ResponseEnvelope, BackendServiceError> {
+        use lapis_client_api::{RequestBody, WorkbenchGetRequest, WorkbenchPutResponse};
+        let _guard = persistence
+            .gate
+            .lock()
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        let preflight = self.dispatch(
+            session,
+            RequestEnvelope {
+                request_id: request.request_id.clone(),
+                body: RequestBody::WorkbenchGet(WorkbenchGetRequest {
+                    workspace_id: put.workspace_id.clone(),
+                }),
+            },
+        )?;
+        let snapshot = match preflight.body {
+            ResponseBody::WorkbenchGet(snapshot) => snapshot,
+            body => {
+                return Ok(ResponseEnvelope {
+                    request_id: request.request_id,
+                    body,
+                });
+            }
+        };
+        if snapshot.revision != put.expected_revision {
+            return Ok(ResponseEnvelope {
+                request_id: request.request_id,
+                body: ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)),
+            });
+        }
+        let view = match crate::workbench::parse_view(put.view) {
+            Ok(view) => view,
+            Err(error) => {
+                return Ok(ResponseEnvelope {
+                    request_id: request.request_id,
+                    body: ResponseBody::Error(crate::state::protocol_error(error)),
+                });
+            }
+        };
+        let saved = match persistence
+            .store
+            .compare_and_save(put.expected_revision, view)
+        {
+            Ok(crate::WorkbenchStoreResult::Updated(saved)) => saved,
+            Ok(crate::WorkbenchStoreResult::Conflict(_)) | Err(_) => {
+                return Err(BackendServiceError::Unavailable);
+            }
+        };
+        let (respond, receive) = mpsc::sync_channel(1);
+        self.inner
+            .sender()?
+            .send(Command::CommitWorkbench {
+                workspace_id: put.workspace_id,
+                expected: put.expected_revision,
+                saved: saved.clone(),
+                respond,
+            })
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        receive
+            .recv()
+            .map_err(|_| BackendServiceError::Unavailable)?
+            .map_err(BackendServiceError::State)?;
+        let snapshot = crate::workbench::snapshot(&saved).map_err(BackendServiceError::State)?;
+        Ok(ResponseEnvelope {
+            request_id: request.request_id,
+            body: ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)),
+        })
     }
 
     fn execute_workspace_operation(
@@ -231,6 +341,7 @@ impl BackendService {
         if matches!(
             request.body,
             lapis_client_api::RequestBody::WorkspaceExecute(_)
+                | lapis_client_api::RequestBody::WorkbenchPut(_)
         ) {
             return self.dispatch(session, request);
         }
@@ -258,6 +369,12 @@ impl BackendService {
 struct ServiceInner {
     sender: Mutex<Option<mpsc::SyncSender<Command>>>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
+    workbenches: Mutex<HashMap<WorkspaceId, Arc<PersistedWorkbench>>>,
+}
+
+struct PersistedWorkbench {
+    store: Arc<dyn crate::WorkbenchPersistence>,
+    gate: Mutex<()>,
 }
 
 impl ServiceInner {
@@ -287,6 +404,12 @@ impl Drop for ServiceInner {
 }
 
 enum Command {
+    CommitWorkbench {
+        workspace_id: WorkspaceId,
+        expected: u64,
+        saved: lapis_workbench::VersionedViewState,
+        respond: mpsc::SyncSender<Result<(), BackendStateError>>,
+    },
     GitStatusChanged {
         workspace_id: WorkspaceId,
         repository_id: String,
@@ -371,6 +494,20 @@ fn run_worker(
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
     loop {
         match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+            Ok(Command::CommitWorkbench {
+                workspace_id,
+                expected,
+                saved,
+                respond,
+            }) => match state.commit_saved_workbench(&workspace_id, expected, saved) {
+                Ok(event) => {
+                    publish_events(&mut subscribers, vec![event]);
+                    let _ = respond.send(Ok(()));
+                }
+                Err(error) => {
+                    let _ = respond.send(Err(error));
+                }
+            },
             Ok(Command::GitStatusChanged {
                 workspace_id,
                 repository_id,

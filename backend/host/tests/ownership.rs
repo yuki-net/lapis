@@ -6,12 +6,46 @@ use lapis_client_api::{
 use lapis_host::BackendHost;
 
 #[test]
+fn persisted_workbench_survives_host_restart() {
+    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    let root = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let saved = {
+        let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let client = host.connect(root.path()).unwrap();
+        let result = client
+            .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                workspace_id: client.workspace_id().clone(),
+                expected_revision: 0,
+                view: serde_json::json!({"show_panel_controls": false}),
+            }))
+            .unwrap();
+        let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) = result else {
+            panic!("workbench save")
+        };
+        snapshot
+    };
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let client = restarted.connect(root.path()).unwrap();
+    let ResponseBody::WorkbenchGet(restored) = client
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: client.workspace_id().clone(),
+        }))
+        .unwrap()
+    else {
+        panic!("workbench restore")
+    };
+    assert_eq!(restored, saved);
+}
+
+#[test]
 fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
     use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     use std::sync::{Arc, Barrier};
 
     let root = tempfile::tempdir().unwrap();
-    let host = BackendHost::start().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
     let first = host.connect(root.path()).unwrap();
     let second = host.connect(root.path()).unwrap();
     let workspace_id = first.workspace_id().clone();

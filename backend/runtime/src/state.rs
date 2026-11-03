@@ -49,6 +49,8 @@ pub struct WorkspaceRegistration {
     pub terminal: Option<Arc<dyn TerminalBackend>>,
     pub git: Option<Arc<dyn lapis_git::GitBackend>>,
     pub tasks: Option<Arc<dyn lapis_task::TaskBackend>>,
+    pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
+    pub(crate) workbench_initial: lapis_workbench::VersionedViewState,
 }
 
 impl WorkspaceRegistration {
@@ -66,6 +68,8 @@ impl WorkspaceRegistration {
             terminal: None,
             git: None,
             tasks: None,
+            workbench_persistence: None,
+            workbench_initial: lapis_workbench::VersionedViewState::default(),
         }
     }
 
@@ -79,6 +83,13 @@ impl WorkspaceRegistration {
     }
     pub fn with_terminal(mut self, terminal: Arc<dyn TerminalBackend>) -> Self {
         self.terminal = Some(terminal);
+        self
+    }
+    pub fn with_workbench_persistence(
+        mut self,
+        persistence: Arc<dyn crate::WorkbenchPersistence>,
+    ) -> Self {
+        self.workbench_persistence = Some(persistence);
         self
     }
 }
@@ -141,6 +152,37 @@ impl PreparedWorkspaceOperation {
 }
 
 impl BackendState {
+    pub(crate) fn commit_saved_workbench(
+        &mut self,
+        workspace_id: &WorkspaceId,
+        expected: u64,
+        saved: lapis_workbench::VersionedViewState,
+    ) -> Result<PublishedEvent, BackendStateError> {
+        let workspace = self
+            .workspaces
+            .get_mut(workspace_id)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        if workspace.workbench.revision != expected
+            || saved.revision
+                != expected
+                    .checked_add(1)
+                    .ok_or(BackendStateError::CounterOverflow)?
+        {
+            return Err(BackendStateError::Operation(
+                "workbench persistence revision mismatch".into(),
+            ));
+        }
+        workspace
+            .events
+            .watermark()
+            .checked_next()
+            .ok_or(BackendStateError::CounterOverflow)?;
+        workspace.workbench = saved;
+        workspace.publish(EventBody::WorkbenchChanged {
+            workspace_id: workspace_id.clone(),
+            revision: expected + 1,
+        })
+    }
     pub(crate) fn start_git_updates(
         &mut self,
         publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync>,
@@ -447,6 +489,11 @@ impl BackendState {
         &mut self,
         registration: WorkspaceRegistration,
     ) -> Result<(), BackendStateError> {
+        if registration.workbench_persistence.is_some() {
+            return Err(BackendStateError::Operation(
+                "persistent workbench requires BackendService::register_workspace".into(),
+            ));
+        }
         let workspace_id = registration.workspace_id.clone();
         if self.workspaces.contains_key(&workspace_id) {
             return Err(BackendStateError::DuplicateWorkspace);
@@ -468,6 +515,11 @@ impl BackendState {
     ) -> Result<Self, BackendStateError> {
         let mut workspaces = HashMap::new();
         for registration in registrations {
+            if registration.workbench_persistence.is_some() {
+                return Err(BackendStateError::Operation(
+                    "persistent workbench requires BackendService::register_workspace".into(),
+                ));
+            }
             let workspace_id = registration.workspace_id.clone();
             let workspace = WorkspaceState::new(registration)?;
             if workspaces.insert(workspace_id, workspace).is_some() {
@@ -1446,7 +1498,7 @@ struct WorkspaceState {
 impl WorkspaceState {
     fn new(registration: WorkspaceRegistration) -> Result<Self, BackendStateError> {
         Ok(Self {
-            workbench: lapis_workbench::VersionedViewState::default(),
+            workbench: registration.workbench_initial,
             summary: WorkspaceSummary {
                 workspace_id: registration.workspace_id.clone(),
                 name: registration.name,

@@ -18,3 +18,4 @@ pub use path::{PathSecurityError, WorkspacePathResolver};
 pub use ports::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 pub use service::{BackendService, BackendServiceError};
 pub use state::{BackendSession, BackendState, WorkspaceRegistration};
+pub use workbench::{WorkbenchPersistence, WorkbenchStoreResult};

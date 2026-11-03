@@ -18,6 +18,7 @@ struct Options {
     workspace: PathBuf,
     certificate: PathBuf,
     listen: SocketAddr,
+    state_directory: Option<PathBuf>,
 }
 
 impl Options {
@@ -26,12 +27,14 @@ impl Options {
         let mut workspace = None;
         let mut certificate = None;
         let mut listen = "127.0.0.1:0".parse()?;
+        let mut state_directory = None;
         while let Some(argument) = arguments.next() {
             let value = arguments.next().ok_or("option requires a value")?;
             match argument.to_str() {
                 Some("--workspace") => workspace = Some(PathBuf::from(value)),
                 Some("--certificate") => certificate = Some(PathBuf::from(value)),
                 Some("--listen") => listen = value.to_str().ok_or("invalid address")?.parse()?,
+                Some("--state-directory") => state_directory = Some(PathBuf::from(value)),
                 _ => return Err("unknown option".into()),
             }
         }
@@ -39,6 +42,7 @@ impl Options {
             workspace: workspace.ok_or("--workspace is required")?,
             certificate: certificate.ok_or("--certificate is required")?,
             listen,
+            state_directory,
         })
     }
 }
@@ -85,7 +89,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <new-public.der> [--listen <ip:port>]"
+            "Usage: lapis-host --workspace <directory> --certificate <new-public.der> [--listen <ip:port>] [--state-directory <directory>]"
         );
         std::process::exit(1);
     }
@@ -93,7 +97,10 @@ fn main() {
 
 fn run() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
-    let host = BackendHost::start()?;
+    let host = match options.state_directory {
+        Some(directory) => BackendHost::start_with_state_directory(directory)?,
+        None => BackendHost::start()?,
+    };
     let workspace = host.register_workspace(&options.workspace)?;
     // 秘密鍵はHostのメモリ内だけに保持する。公開証明書は明示した新規ファイルへ出力。
     let certified =
@@ -199,5 +206,20 @@ mod tests {
         .unwrap();
         assert!(options.listen.ip().is_loopback());
         assert_eq!(options.workspace, PathBuf::from("repo"));
+        assert!(options.state_directory.is_none());
+        let options = Options::parse(
+            [
+                "--workspace",
+                "repo",
+                "--certificate",
+                "host.der",
+                "--state-directory",
+                "state",
+            ]
+            .map(Into::into)
+            .into_iter(),
+        )
+        .unwrap();
+        assert_eq!(options.state_directory, Some(PathBuf::from("state")));
     }
 }

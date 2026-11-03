@@ -65,6 +65,7 @@ struct HostInner {
     service: BackendService,
     workspaces: Mutex<HashMap<PathBuf, WorkspaceId>>,
     next_session: AtomicU64,
+    workbench_directory: Option<PathBuf>,
 }
 
 impl BackendHost {
@@ -75,12 +76,21 @@ impl BackendHost {
         BackendClient::from(self.clone()).documents()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
+        Self::start_inner(None)
+    }
+
+    pub fn start_with_state_directory(directory: PathBuf) -> Result<Self, BackendServiceError> {
+        Self::start_inner(Some(directory))
+    }
+
+    fn start_inner(workbench_directory: Option<PathBuf>) -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
         Ok(Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
                 workspaces: Mutex::new(HashMap::new()),
                 next_session: AtomicU64::new(1),
+                workbench_directory,
             }),
         })
     }
@@ -117,7 +127,7 @@ impl BackendHost {
         let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
         let workspace_id =
             WorkspaceId::try_new(format!("workspace-{key}")).expect("bounded workspace id");
-        let registration = WorkspaceRegistration::new(
+        let mut registration = WorkspaceRegistration::new(
             workspace_id.clone(),
             root.file_name().unwrap_or_default().to_string_lossy(),
             root.clone(),
@@ -126,6 +136,14 @@ impl BackendHost {
         .with_terminal(Arc::new(LocalTerminalBackend::default()))
         .with_git(Arc::new(LocalGitBackend::user_default()))
         .with_tasks(Arc::new(LocalTaskBackend::user_default()));
+        if let Some(directory) = &self.inner.workbench_directory {
+            let path = directory
+                .join("workbench")
+                .join(format!("{}.json", workspace_id.as_str()));
+            registration = registration.with_workbench_persistence(Arc::new(
+                lapis_platform::LocalWorkbenchStore::new(path),
+            ));
+        }
         self.inner.service.register_workspace(registration)?;
         workspaces.insert(root, workspace_id.clone());
         Ok(workspace_id)

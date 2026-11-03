@@ -3637,6 +3637,7 @@ dependencies = [
  "lapis-lsp",
  "lapis-task-runner",
  "lapis-terminal",
+ "lapis-workbench",
  "lapis-workspace",
  "notify",
  "portable-pty",

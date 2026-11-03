@@ -5,6 +5,21 @@ use lapis_workbench::{ConversationViewState, VersionedViewState};
 
 const MAX_VIEW_BYTES: usize = 1024 * 1024;
 
+/// 保存処理は状態workerの外で実行する。
+pub trait WorkbenchPersistence: Send + Sync {
+    fn load(&self) -> std::io::Result<VersionedViewState>;
+    fn compare_and_save(
+        &self,
+        expected: u64,
+        view: ConversationViewState,
+    ) -> std::io::Result<WorkbenchStoreResult>;
+}
+
+pub enum WorkbenchStoreResult {
+    Updated(VersionedViewState),
+    Conflict(VersionedViewState),
+}
+
 pub(crate) fn parse_view(
     value: serde_json::Value,
 ) -> Result<ConversationViewState, BackendStateError> {

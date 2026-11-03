@@ -43,7 +43,9 @@ use serde::{Deserialize, Serialize};
 mod git_action;
 mod git_watch;
 mod terminal_engine;
+mod workbench_store;
 use terminal_engine::{TerminalEngine, normalized_size};
+pub use workbench_store::LocalWorkbenchStore;
 
 #[derive(Clone, Default)]
 pub struct ConnectionGate(Arc<AtomicBool>);
