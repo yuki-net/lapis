@@ -213,6 +213,12 @@ impl BackendService {
                 });
             }
         };
+        if let Err(error) = crate::workbench::validate_workspace(&view, &put.workspace_id) {
+            return Ok(ResponseEnvelope {
+                request_id: request.request_id,
+                body: ResponseBody::Error(crate::state::protocol_error(error)),
+            });
+        }
         let saved = match persistence
             .store
             .compare_and_save(put.expected_revision, view)

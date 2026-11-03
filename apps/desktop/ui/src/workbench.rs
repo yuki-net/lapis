@@ -303,6 +303,7 @@ fn capture_layout(view: &ConversationViewState) -> WorkbenchLayoutState {
 
 fn layout_only(mut view: ConversationViewState) -> ConversationViewState {
     view.workbench = Default::default();
+    view.workspace = None;
     view
 }
 

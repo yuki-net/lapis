@@ -123,6 +123,65 @@ fn restoring_an_older_draft_keeps_both_live_host_content_and_backup() {
     );
 }
 
+#[test]
+fn shared_workbench_document_view_restores_another_client_without_losing_edits() {
+    use lapis_desktop_client::{
+        ConversationViewState, EditorSession, WorkbenchSync, WorkbenchSyncResult,
+    };
+    use std::sync::Arc;
+    let root = tempfile::tempdir().unwrap();
+    let host = BackendHost::start().unwrap();
+    let make_editor = || {
+        EditorSession::new_empty(
+            host.workspaces(),
+            Arc::new(NoDialog),
+            Arc::new(ViewStore::default()),
+            host.documents(),
+        )
+    };
+    let mut first = make_editor();
+    first.open_workspace(root.path().to_owned()).unwrap();
+    first.new_document();
+    first.replace_range(0..0, "未保存の入力").unwrap();
+    let id = first.active_document_id().unwrap().clone();
+    let workspace = first.workspace_id().unwrap().clone();
+    let portable = first.snapshot().to_shared(workspace.clone()).unwrap();
+    let connection = lapis_host::BackendClient::from(host.clone()).workbench();
+    let mut writer = WorkbenchSync::new(connection.clone());
+    writer.open(workspace.clone()).unwrap();
+    assert!(matches!(
+        writer
+            .save(ConversationViewState {
+                workspace: Some(portable),
+                ..Default::default()
+            })
+            .unwrap(),
+        WorkbenchSyncResult::Updated(_)
+    ));
+    let mut reader = WorkbenchSync::new(connection);
+    let shared = reader
+        .open(workspace.clone())
+        .unwrap()
+        .view
+        .unwrap()
+        .workspace
+        .unwrap();
+    let local = lapis_desktop_client::WorkspaceSnapshot::from_shared(
+        &shared,
+        &workspace,
+        root.path().to_owned(),
+    )
+    .unwrap();
+    let mut second = make_editor();
+    second.restore_snapshot(local).unwrap();
+    assert_eq!(second.active_document_id(), Some(&id));
+    assert_eq!(second.active_text().unwrap(), "未保存の入力");
+    let end = "未保存の入力".chars().count();
+    second.replace_range(end..end, "・続き").unwrap();
+    first.poll_external_changes();
+    assert_eq!(first.active_text().unwrap(), "未保存の入力・続き");
+}
+
 #[derive(Default)]
 struct ViewStore(std::sync::Mutex<Option<lapis_desktop_client::WorkspaceSnapshot>>);
 

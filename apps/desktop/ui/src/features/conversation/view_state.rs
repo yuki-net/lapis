@@ -9,6 +9,7 @@ pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
         layout: Some(shell.layout.capture()),
         show_panel_controls: shell.show_panel_controls,
         workbench: Default::default(),
+        workspace: None,
     }
 }
 

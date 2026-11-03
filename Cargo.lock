@@ -4551,7 +4551,9 @@ name = "lapis-workbench"
 version = "0.1.0"
 dependencies = [
  "lapis-editor-core",
+ "lapis-workspace",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -30,6 +30,20 @@ pub(crate) fn parse_view(
     serde_json::from_value(value).map_err(|_| BackendStateError::InvalidWorkbench)
 }
 
+pub(crate) fn validate_workspace(
+    view: &ConversationViewState,
+    workspace: &lapis_client_api::WorkspaceId,
+) -> Result<(), BackendStateError> {
+    if view
+        .workspace
+        .as_ref()
+        .is_some_and(|state| state.workspace_id.as_str() != workspace.as_str())
+    {
+        return Err(BackendStateError::InvalidWorkbench);
+    }
+    Ok(())
+}
+
 pub(crate) fn snapshot(
     state: &VersionedViewState,
 ) -> Result<lapis_client_api::WorkbenchSnapshot, BackendStateError> {

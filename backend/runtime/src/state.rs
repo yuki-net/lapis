@@ -592,6 +592,7 @@ impl BackendState {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
                 let view = crate::workbench::parse_view(request.view)?;
+                crate::workbench::validate_workspace(&view, &request.workspace_id)?;
                 let workspace = self.workspace_mut(session)?;
                 if workspace.workbench.revision == request.expected_revision {
                     workspace
@@ -1497,6 +1498,12 @@ struct WorkspaceState {
 
 impl WorkspaceState {
     fn new(registration: WorkspaceRegistration) -> Result<Self, BackendStateError> {
+        if !registration.workbench_initial.is_consistent() {
+            return Err(BackendStateError::InvalidWorkbench);
+        }
+        if let Some(view) = &registration.workbench_initial.view {
+            crate::workbench::validate_workspace(view, &registration.workspace_id)?;
+        }
         Ok(Self {
             workbench: registration.workbench_initial,
             summary: WorkspaceSummary {

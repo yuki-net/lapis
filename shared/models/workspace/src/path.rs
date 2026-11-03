@@ -130,4 +130,12 @@ mod tests {
                 .is_err()
         );
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_unpaired_surrogates_instead_of_changing_names() {
+        use std::os::windows::ffi::OsStringExt;
+        let name = std::ffi::OsString::from_wide(&[0xd800]);
+        assert!(WorkspaceRelativePath::from_path(Path::new(&name)).is_err());
+    }
 }

@@ -82,6 +82,90 @@ fn persisted_workbench_survives_host_restart() {
 }
 
 #[test]
+fn shared_workbench_documents_are_scoped_and_survive_restart() {
+    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use lapis_workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
+    let root = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let expected = {
+        let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let client = host.connect(root.path()).unwrap();
+        let id = client.workspace_id().clone();
+        let mut view = ConversationViewState {
+            workspace: Some(SharedWorkspaceView {
+                workspace_id: lapis_editor_core::WorkspaceId::new("other-workspace"),
+                open_documents: vec![SharedDocumentView {
+                    document_id: None,
+                    path: Some(WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
+                    cursor_char: 2,
+                    selection_start: 1,
+                    selection_end: 2,
+                    scroll_x: 0.0,
+                    scroll_y: 4.0,
+                    draft_content: Some("未保存😀".into()),
+                }],
+                active_path: Some(WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
+                active_document_id: None,
+            }),
+            ..Default::default()
+        };
+        let put = |view: &ConversationViewState| {
+            client
+                .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                    workspace_id: id.clone(),
+                    expected_revision: 0,
+                    view: serde_json::to_value(view).unwrap(),
+                }))
+                .unwrap()
+        };
+        assert!(matches!(put(&view), ResponseBody::Error(_)));
+        view.workspace.as_mut().unwrap().workspace_id =
+            lapis_editor_core::WorkspaceId::new(id.as_str());
+        let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(saved)) = put(&view) else {
+            panic!("valid shared state rejected")
+        };
+        assert_eq!(saved.revision, 1);
+        saved
+    };
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let client = host.connect(root.path()).unwrap();
+    let restored = client
+        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: client.workspace_id().clone(),
+        }))
+        .unwrap();
+    assert!(matches!(restored, ResponseBody::WorkbenchGet(snapshot) if snapshot == expected));
+}
+
+#[test]
+fn in_memory_workbench_rejects_another_workspaces_document_state() {
+    use lapis_client_api::WorkbenchPutRequest;
+    let root = tempfile::tempdir().unwrap();
+    let host = BackendHost::start().unwrap();
+    let client = host.connect(root.path()).unwrap();
+    let response = client.request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+        workspace_id: client.workspace_id().clone(),
+        expected_revision: 0,
+        view: serde_json::json!({"workspace": {"workspace_id": "other-workspace", "open_documents": [], "active_path": null, "active_document_id": null}}),
+    })).unwrap();
+    assert!(matches!(response, ResponseBody::Error(_)));
+    let response = client.request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
+        workspace_id: client.workspace_id().clone(),
+        expected_revision: 0,
+        view: serde_json::json!({"workspace": {"workspace_id": client.workspace_id().as_str(), "open_documents": [], "active_path": "../outside", "active_document_id": null}}),
+    })).unwrap();
+    assert!(matches!(response, ResponseBody::Error(_)));
+    let response = client
+        .request(RequestBody::WorkbenchGet(
+            lapis_client_api::WorkbenchGetRequest {
+                workspace_id: client.workspace_id().clone(),
+            },
+        ))
+        .unwrap();
+    assert!(matches!(response, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 0));
+}
+
+#[test]
 fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
     use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     use std::sync::{Arc, Barrier};

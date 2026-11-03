@@ -1,6 +1,7 @@
 //! ClientとHostが共有する作業画面の配置値。
 
-use lapis_editor_core::ConversationId;
+use lapis_editor_core::{ConversationId, DocumentId, WorkspaceId};
+use lapis_workspace::WorkspaceRelativePath;
 use serde::{Deserialize, Serialize};
 
 mod replica;
@@ -42,6 +43,9 @@ pub struct ConversationViewState {
     pub show_panel_controls: bool,
     #[serde(default)]
     pub workbench: WorkbenchViewState,
+    /// Workspaceに属する文書と表示位置。端末側の絶対pathは含めない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<SharedWorkspaceView>,
 }
 
 fn default_show_panel_controls() -> bool {
@@ -54,8 +58,29 @@ impl Default for ConversationViewState {
             layout: None,
             show_panel_controls: true,
             workbench: WorkbenchViewState::default(),
+            workspace: None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedWorkspaceView {
+    pub workspace_id: WorkspaceId,
+    pub open_documents: Vec<SharedDocumentView>,
+    pub active_path: Option<WorkspaceRelativePath>,
+    pub active_document_id: Option<DocumentId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SharedDocumentView {
+    pub document_id: Option<DocumentId>,
+    pub path: Option<WorkspaceRelativePath>,
+    pub cursor_char: u64,
+    pub selection_start: u64,
+    pub selection_end: u64,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    pub draft_content: Option<String>,
 }
 
 /// Viewの配置とTaskへの参照。Host上の実行資源は含めない。
@@ -183,6 +208,15 @@ impl VersionedViewState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn old_layout_without_workspace_round_trips_without_adding_a_new_field() {
+        let old = serde_json::json!({"show_panel_controls": false});
+        let view: ConversationViewState = serde_json::from_value(old).unwrap();
+        assert!(view.workspace.is_none());
+        let encoded = serde_json::to_value(view).unwrap();
+        assert!(encoded.get("workspace").is_none());
+    }
 
     #[test]
     fn stale_update_does_not_replace_the_accepted_view() {

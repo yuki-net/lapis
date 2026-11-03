@@ -7,4 +7,8 @@ license.workspace = true
 
 [dependencies]
 lapis-editor-core = { path = "../editor-core" }
+lapis-workspace = { path = "../workspace" }
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
