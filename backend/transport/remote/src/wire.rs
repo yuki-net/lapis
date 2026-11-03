@@ -9,8 +9,7 @@ use zeroize::Zeroize;
 
 use crate::{CredentialId, InvalidCredentialId};
 
-pub const REMOTE_WEBSOCKET_PATH: &str = "/remote";
-pub const REMOTE_WEBSOCKET_PROTOCOL: &str = "lapis.v0";
+pub use lapis_wire::{REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL};
 const SECRET_BYTES: usize = 32;
 
 #[derive(Serialize, Deserialize)]

@@ -10,6 +10,7 @@ axum.workspace = true
 axum-server.workspace = true
 lapis-backend-state = { path = "../../runtime" }
 lapis-client-api = { path = "../../../shared/protocol" }
+lapis-wire = { path = "../../../shared/models/wire" }
 getrandom.workspace = true
 rcgen.workspace = true
 rustls.workspace = true

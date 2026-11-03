@@ -3671,6 +3671,7 @@ dependencies = [
  "lapis-editor-core",
  "lapis-git",
  "lapis-task",
+ "lapis-wire",
  "quinn",
  "rcgen",
  "rustls",
@@ -3727,6 +3728,25 @@ version = "0.1.0"
 dependencies = [
  "ropey",
 ]
+
+[[package]]
+name = "lapis-web-bridge"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "lapis-wire",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "tokio",
+ "tokio-tungstenite",
+ "tokio-util",
+]
+
+[[package]]
+name = "lapis-wire"
+version = "0.1.0"
 
 [[package]]
 name = "lapis-workbench"

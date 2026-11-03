@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "apps/desktop/*",
+    "apps/web-bridge",
     "backend/runtime",
     "backend/host",
     "backend/infrastructure/*",
