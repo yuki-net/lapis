@@ -4519,6 +4519,7 @@ dependencies = [
  "gloo-timers",
  "lapis-client-api",
  "lapis-client-core",
+ "lapis-editor-core",
  "lapis-wire",
  "lapis-workbench",
  "serde_json",

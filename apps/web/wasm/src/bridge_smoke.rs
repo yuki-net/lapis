@@ -136,6 +136,23 @@ pub async fn bridge_smoke(
         .map_err(|e| JsValue::from_str(&e))?;
     let view = lapis_workbench::ConversationViewState {
         show_panel_controls: false,
+        workspace: Some(lapis_workbench::SharedWorkspaceView {
+            workspace_id: lapis_editor_core::WorkspaceId::new(workspace.as_str()),
+            open_documents: vec![lapis_workbench::SharedDocumentView {
+                document_id: None,
+                path: Some(lapis_client_api::WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
+                cursor_char: 2,
+                selection_start: 1,
+                selection_end: 2,
+                scroll_x: 0.0,
+                scroll_y: 1.0,
+                draft_content: Some("未保存😀".into()),
+            }],
+            active_path: Some(
+                lapis_client_api::WorkspaceRelativePath::parse("src/画面.rs").unwrap(),
+            ),
+            active_document_id: None,
+        }),
         ..Default::default()
     };
     let lapis_workbench::WorkbenchUpdate::Updated(updated) = first_sync

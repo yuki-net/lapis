@@ -17,6 +17,7 @@ futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 lapis-client-api = { path = "../../../shared/protocol" }
 lapis-client-core = { path = "../../../shared/client" }
+lapis-editor-core = { path = "../../../shared/models/editor-core" }
 lapis-wire = { path = "../../../shared/models/wire" }
 lapis-workbench = { path = "../../../shared/models/workbench" }
 serde_json.workspace = true
