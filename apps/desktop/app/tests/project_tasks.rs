@@ -269,6 +269,54 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
 }
 
 #[test]
+fn concurrent_removal_does_not_persist_a_missing_active_task() {
+    use lapis_desktop_client::ConversationRepository;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(root.join("editor.json"))),
+        host.documents(),
+    );
+    editor.open_workspace(root.clone()).unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut first = ConversationSession::new(repository.clone(), editor.snapshot());
+    first
+        .capture(&mut editor, Default::default(), None, &[])
+        .unwrap();
+    let retained = first.active_id().clone();
+    let removed = first.create(&mut editor, Default::default()).unwrap();
+    let mut stale = ConversationSession::new(repository.clone(), editor.snapshot());
+
+    let expected = repository.load().unwrap();
+    let records: Vec<_> = expected
+        .1
+        .iter()
+        .filter(|record| record.id != removed)
+        .cloned()
+        .collect();
+    repository
+        .save(&expected, &expected.0, &records, &retained)
+        .unwrap();
+
+    let project_root = root.join("another-project");
+    std::fs::create_dir(&project_root).unwrap();
+    stale.register_project(&mut editor, project_root).unwrap();
+    assert_eq!(stale.active_id(), &retained);
+    let stored = repository.load().unwrap();
+    assert_eq!(stored.2.as_ref(), Some(&retained));
+    assert!(
+        stored
+            .1
+            .iter()
+            .any(|record| Some(&record.id) == stored.2.as_ref())
+    );
+}
+
+#[test]
 fn closing_workspace_uses_a_scratch_record_and_keeps_the_task_draft() {
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();

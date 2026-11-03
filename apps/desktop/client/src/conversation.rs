@@ -188,7 +188,7 @@ impl ConversationSession {
             if latest.load_error.is_some() || latest.persisted == self.persisted {
                 return Err(error);
             }
-            latest.active = self.active.clone();
+            let mut desired_active = self.active.clone();
             let mut projects = Vec::new();
             for project in &self.projects {
                 let index = if let Some(index) = latest
@@ -249,7 +249,7 @@ impl ConversationSession {
                     latest.next_id += 1;
                     local.title.push_str("（競合から復旧）");
                     if record.id == self.active {
-                        latest.active = local.id.clone();
+                        desired_active = local.id.clone();
                     }
                     latest.records.push(local);
                 } else if let Some(index) = index {
@@ -257,6 +257,15 @@ impl ConversationSession {
                 } else {
                     latest.records.push(local);
                 }
+            }
+            // 他のClientが選択中のTaskを削除した場合、存在しないIDを保存しない。
+            // ローカルで変更したTaskが復旧された場合は、そのIDを優先する。
+            if latest
+                .records
+                .iter()
+                .any(|record| record.id == desired_active)
+            {
+                latest.active = desired_active;
             }
             latest.repository.save(
                 &latest.persisted,
