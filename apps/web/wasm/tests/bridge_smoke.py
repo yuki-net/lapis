@@ -40,9 +40,10 @@ def accept_clients(listener, bridge_port):
 
 with tempfile.TemporaryDirectory() as directory:
     cert = Path(directory) / 'host.der'
+    state = Path(directory) / 'host-state'
     bindings = Path(directory) / 'bindings'
     subprocess.run(['wasm-bindgen', '--target', 'nodejs', '--out-dir', str(bindings), str(root / 'target/wasm32-unknown-unknown/web/lapis_web.wasm')], check=True, creationflags=flags)
-    host = subprocess.Popen([str(root / f'target/debug/lapis-host{suffix}'), '--workspace', directory, '--certificate', str(cert), '--listen', '127.0.0.1:0'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
+    host = subprocess.Popen([str(root / f'target/debug/lapis-host{suffix}'), '--workspace', directory, '--certificate', str(cert), '--listen', '127.0.0.1:0', '--state-directory', str(state)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
     bridge = None
     try:
         match = re.fullmatch(r'address=(\S+) server_name=(\S+) workspace=(\S+)', host.stdout.readline().strip())
@@ -75,6 +76,27 @@ with tempfile.TemporaryDirectory() as directory:
         result = subprocess.run(['node', '-e', script, str(bindings / 'lapis_web.js')], input=data, text=True, capture_output=True, timeout=20, creationflags=flags)
         if result.returncode: raise RuntimeError('Wasm client failed: ' + result.stderr)
         print(result.stdout.strip())
+        thread.join(timeout=5)
+        previous_certificate = cert.read_bytes()
+        host.stdin.write('quit\n'); host.stdin.flush()
+        if host.wait(timeout=10): raise RuntimeError('host shutdown failed')
+        host = subprocess.Popen([str(root / f'target/debug/lapis-host{suffix}'), '--workspace', directory, '--certificate', str(cert), '--replace-certificate', '--listen', address, '--state-directory', str(state)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
+        match = re.fullmatch(r'address=(\S+) server_name=(\S+) workspace=(\S+)', host.stdout.readline().strip())
+        if not match or match.group(1) != address or match.group(3) != workspace: raise RuntimeError('host restart failed')
+        if cert.read_bytes() == previous_certificate: raise RuntimeError('host certificate did not rotate')
+        host.stdout.readline()
+        host.stdin.write('pair-user\n'); host.stdin.flush()
+        match = re.fullmatch(r'User session pairing token \(5 minutes, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
+        if not match: raise RuntimeError('pairing after restart failed')
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0)); listener.listen(1)
+        proxy_port = listener.getsockname()[1]
+        thread = threading.Thread(target=accept_clients, args=(listener, bridge_port), daemon=True)
+        thread.start()
+        data = json.dumps({'url': f'ws://127.0.0.1:{proxy_port}/remote', 'token': match.group(1), 'workspace': workspace, 'other_workspace': other_workspace, 'other_root': str(other)})
+        result = subprocess.run(['node', '-e', script, str(bindings / 'lapis_web.js')], input=data, text=True, capture_output=True, timeout=20, creationflags=flags)
+        if result.returncode: raise RuntimeError('Wasm client after host restart failed: ' + result.stderr)
+        print('Host restart with running bridge: OK')
         thread.join(timeout=5)
     finally:
         if bridge:
