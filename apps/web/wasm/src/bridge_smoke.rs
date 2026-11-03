@@ -237,7 +237,7 @@ pub async fn bridge_smoke(
         return Err(JsValue::from_str("reverse workbench event missing"));
     }
     let current = first_sync
-        .refresh()
+        .reconnect(&other)
         .await
         .map_err(|e| JsValue::from_str(&e))?
         .ok_or_else(|| JsValue::from_str("first client did not refresh"))?;
