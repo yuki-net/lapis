@@ -37,11 +37,7 @@ impl WorkspaceSnapshot {
             .root
             .as_ref()
             .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
-        if !root.is_absolute() {
-            return Err(WorkspaceError::new(
-                "Workspaceのpathが絶対pathではありません",
-            ));
-        }
+        validate_root(root)?;
         let relative = |path: &std::path::Path| -> Result<lapis_workspace::WorkspaceRelativePath, WorkspaceError> {
             let path = path.strip_prefix(root).map_err(|_| WorkspaceError::new("Workspace外のpathは共有できません"))?;
             lapis_workspace::WorkspaceRelativePath::from_path(path).map_err(|error| WorkspaceError::new(error.to_string()))
@@ -84,11 +80,7 @@ impl WorkspaceSnapshot {
         if &shared.workspace_id != expected {
             return Err(WorkspaceError::new("Workspace IDが一致しません"));
         }
-        if !root.is_absolute() {
-            return Err(WorkspaceError::new(
-                "Workspaceのpathが絶対pathではありません",
-            ));
-        }
+        validate_root(&root)?;
         let documents = shared
             .open_documents
             .iter()
@@ -122,6 +114,19 @@ impl WorkspaceSnapshot {
             open_documents: documents,
         })
     }
+}
+
+fn validate_root(root: &std::path::Path) -> Result<(), WorkspaceError> {
+    if !root.is_absolute()
+        || root
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir))
+    {
+        return Err(WorkspaceError::new(
+            "Workspaceのpathが正規化された絶対pathではありません",
+        ));
+    }
+    Ok(())
 }
 
 pub trait WorkspaceStateRepository: Send + Sync {
@@ -212,6 +217,14 @@ mod tests {
                 &shared,
                 &WorkspaceId::new("workspace-2"),
                 std::env::temp_dir()
+            )
+            .is_err()
+        );
+        assert!(
+            WorkspaceSnapshot::from_shared(
+                &shared,
+                &WorkspaceId::new("workspace-1"),
+                std::env::temp_dir().join("a").join("..").join("b"),
             )
             .is_err()
         );
