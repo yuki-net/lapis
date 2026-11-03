@@ -391,6 +391,99 @@ fn run(test: impl std::future::Future<Output = ()>) {
         .block_on(test);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn common_async_client_sends_requests_to_real_host() {
+    let fixture = Fixture::new().await;
+    let config = fixture.config("async-client").await;
+    let connection = tokio::task::spawn_blocking(move || QuicConnection::connect(config))
+        .await
+        .unwrap()
+        .unwrap();
+    let result = AsyncHostConnection::request(
+        &connection,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id: fixture.workspace.clone(),
+            reason: SnapshotReason::Initial,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, ResponseBody::SnapshotResync(_)));
+    let mut sync = async_workbench::AsyncWorkbenchSync::new(&connection);
+    let initial = sync.open(fixture.workspace.clone()).await.unwrap();
+    let view = lapis_workbench::ConversationViewState {
+        show_panel_controls: false,
+        ..Default::default()
+    };
+    let updated = async_workbench::update(&connection, &fixture.workspace, initial.revision, &view)
+        .await
+        .unwrap();
+    assert!(matches!(
+        updated,
+        lapis_workbench::WorkbenchUpdate::Updated(_)
+    ));
+    let local = lapis_workbench::ConversationViewState::default();
+    let conflict = sync.save(local.clone()).await.unwrap();
+    assert!(matches!(
+        conflict,
+        lapis_workbench::WorkbenchUpdate::Conflict(_)
+    ));
+    assert_eq!(sync.pending(), Some(&local));
+    assert!(matches!(
+        sync.retry_local().await.unwrap(),
+        lapis_workbench::WorkbenchUpdate::Updated(_)
+    ));
+    assert!(sync.pending().is_none());
+    let connection = connection.clone();
+    let workspace = fixture.workspace.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
+            use std::{
+                future::Future,
+                task::{Context, Poll, Wake, Waker},
+            };
+            struct ThreadWake(std::thread::Thread);
+            impl Wake for ThreadWake {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+                fn wake_by_ref(self: &Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut context = Context::from_waker(&waker);
+            let request = AsyncHostConnection::request(
+                &connection,
+                RequestBody::SnapshotResync(SnapshotRequest {
+                    workspace_id: workspace,
+                    reason: SnapshotReason::Initial,
+                }),
+            );
+            let mut request = std::pin::pin!(request);
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match request.as_mut().poll(&mut context) {
+                    Poll::Ready(result) => break result,
+                    Poll::Pending => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "async request timed out"
+                        );
+                        std::thread::park_timeout(Duration::from_millis(100));
+                    }
+                }
+            }
+        })
+        .join()
+        .unwrap()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(response, ResponseBody::SnapshotResync(_)));
+}
+
 #[test]
 fn quic_connection_recovers_attachments_without_replaying_successful_edits() {
     run(async {

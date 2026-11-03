@@ -131,6 +131,7 @@ pub fn popup_by_default(kind: &str, severity: Severity) -> bool {
     ) || severity == Severity::Error
 }
 
+#[cfg_attr(target_family = "wasm", allow(clippy::let_unit_value))]
 pub fn publish(cx: &mut App, event: Event) {
     let target = cx.active_window().map(|window| window.window_id());
     let show_popup = popup_by_default(&event.kind, event.severity);
@@ -139,7 +140,7 @@ pub fn publish(cx: &mut App, event: Event) {
     if show_popup && let Some(window) = target {
         store.popups.push((id, window));
         cx.spawn(async move |cx| {
-            gpui::Timer::after(std::time::Duration::from_secs(6)).await;
+            crate::timer::Timer::after(std::time::Duration::from_secs(6)).await;
             let _ = cx.update(|cx| {
                 if cx
                     .global::<Store>()

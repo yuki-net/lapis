@@ -30,7 +30,7 @@ impl Shell {
     ) -> gpui::Div {
         let is_panel_focused = self.shell.focused_panel.as_ref() == Some(panel_id);
         let scroll_state = self.scroll_states.panel_tabs(panel_id);
-        let max_offset = scroll_state.handle().max_offset();
+        let max_offset = crate::gpui_compat::max_offset(&scroll_state.handle());
         let offset = scroll_state.handle().offset();
         let has_overflow = max_offset.width > px(0.0);
         let show_right_gradient = has_overflow && -offset.x < max_offset.width - px(1.0);

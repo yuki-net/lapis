@@ -79,7 +79,7 @@ pub(crate) fn run_native_smoke(
     let handle = window.window_handle();
     cx.spawn(async move |this, cx| {
         // 起動直後の描画とidleのCPUサンプルを分ける。
-        gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(500)).await;
         #[cfg(debug_assertions)]
         if std::env::var_os("LAPIS_INSPECTOR_SMOKE").is_some() {
             crate::devtools::native_smoke::run(handle, cx).await;
@@ -89,7 +89,7 @@ pub(crate) fn run_native_smoke(
         #[cfg(target_os = "windows")]
         verify_panel_drag_resize(&this, handle, cx).await;
         eprintln!("SMOKE baseline sample begin");
-        gpui::Timer::after(std::time::Duration::from_secs(5)).await;
+        crate::timer::Timer::after(std::time::Duration::from_secs(5)).await;
         // UI と同じ on_drag → Escape / Window 外 MouseUp を通す。
         #[cfg(target_os = "windows")]
         {
@@ -131,9 +131,9 @@ pub(crate) fn run_native_smoke(
         })
         .unwrap();
         verify_ide_task_list_with_detached_window(&this, handle, cx).await;
-        gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(500)).await;
         eprintln!("SMOKE idle sample begin");
-        gpui::Timer::after(std::time::Duration::from_secs(5)).await;
+        crate::timer::Timer::after(std::time::Duration::from_secs(5)).await;
         this.update(cx, |root, cx| {
             assert_eq!(root.group.read(cx).members.len(), 2);
             let child = *root
@@ -385,7 +385,7 @@ pub(crate) fn run_native_smoke(
             root.schedule_persist(cx);
         })
         .unwrap();
-        gpui::Timer::after(std::time::Duration::from_millis(700)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(700)).await;
         let barrier = this
             .update(cx, |root, _| root.worker.request(|_| Ok(())))
             .unwrap();
@@ -404,7 +404,7 @@ pub(crate) fn run_native_smoke(
             root.schedule_persist(cx);
         })
         .unwrap();
-        gpui::Timer::after(std::time::Duration::from_millis(700)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(700)).await;
         let barrier = this
             .update(cx, |root, _| root.worker.request(|_| Ok(())))
             .unwrap();
@@ -907,7 +907,7 @@ async fn verify_panel_layout_resize(
         handle
             .update(cx, |_, window, _| window.resize(requested))
             .unwrap();
-        gpui::Timer::after(std::time::Duration::from_millis(150)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(150)).await;
         handle
             .update(cx, |_, window, cx| {
                 window.refresh();
@@ -1097,10 +1097,10 @@ async fn verify_panel_drag_resize(
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), moved) }.unwrap();
     wait_for_drag_state(cx, true, count + 1).await;
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), end) }.unwrap();
-    gpui::Timer::after(std::time::Duration::from_millis(80)).await;
+    crate::timer::Timer::after(std::time::Duration::from_millis(80)).await;
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), end) }.unwrap();
     wait_for_drag_state(cx, false, count).await;
-    gpui::Timer::after(std::time::Duration::from_millis(160)).await;
+    crate::timer::Timer::after(std::time::Duration::from_millis(160)).await;
     let (before, down, shifted) = handle
         .update(cx, |_, window, cx| {
             window.refresh();
@@ -1146,7 +1146,7 @@ async fn verify_panel_drag_resize(
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), down) }.unwrap();
     unsafe { PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), shifted) }.unwrap();
     unsafe { PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), shifted) }.unwrap();
-    gpui::Timer::after(std::time::Duration::from_millis(100)).await;
+    crate::timer::Timer::after(std::time::Duration::from_millis(100)).await;
     shell
         .update(cx, |shell, cx| {
             assert_ne!(
@@ -1170,7 +1170,7 @@ async fn wait_for_drag_state(cx: &mut gpui::AsyncApp, dragging: bool, window_cou
         {
             return;
         }
-        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(16)).await;
     }
     panic!("Native drag state did not settle (dragging={dragging}, windows={window_count})");
 }
@@ -1706,7 +1706,7 @@ async fn verify_workbench_routes(
 
 async fn wait_for(root: &WeakEntity<DesktopRoot>, cx: &mut gpui::AsyncApp, windows: Option<usize>) {
     for _ in 0..625 {
-        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+        crate::timer::Timer::after(std::time::Duration::from_millis(16)).await;
         if root
             .update(cx, |root, cx| {
                 let group = root.group.read(cx);

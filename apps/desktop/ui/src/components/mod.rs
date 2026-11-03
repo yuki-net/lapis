@@ -16,7 +16,7 @@ pub(crate) use icon::{FileIcon, FileIconId, Icon, IconAssets, IconName};
 pub(crate) use icon_button::{ButtonSize, action_button, button, header_button, icon_button};
 pub(crate) use menu::{Menu, MenuEntry, MenuItemSpec, TreeItem};
 pub(crate) use popup::{Popup, PopupPlacement, PopupScope};
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, not(target_family = "wasm")))]
 pub(crate) use scroll::scroll_surface;
 pub(crate) use scroll::{ScrollState, scroll_viewport};
 pub(crate) use search_input::{SearchInput, SearchInputEvent};

@@ -101,13 +101,34 @@ struct ConnectionInner {
     sender: tokio::sync::mpsc::Sender<Command>,
 }
 enum Command {
-    Request(
-        RequestBody,
-        std::time::Instant,
-        mpsc::SyncSender<Result<ResponseBody, BackendServiceError>>,
-    ),
+    Request(RequestBody, std::time::Instant, RequestReply),
     Subscribe(mpsc::SyncSender<BackendEventReceiver>),
     Disconnect(mpsc::SyncSender<()>),
+}
+
+enum RequestReply {
+    Sync(mpsc::SyncSender<Result<ResponseBody, BackendServiceError>>),
+    Async(tokio::sync::oneshot::Sender<Result<ResponseBody, BackendServiceError>>),
+}
+
+impl RequestReply {
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Sync(_) => false,
+            Self::Async(sender) => sender.is_closed(),
+        }
+    }
+
+    fn send(self, result: Result<ResponseBody, BackendServiceError>) {
+        match self {
+            Self::Sync(sender) => {
+                let _ = sender.send(result);
+            }
+            Self::Async(sender) => {
+                let _ = sender.send(result);
+            }
+        }
+    }
 }
 
 impl QuicConnection {
@@ -151,7 +172,7 @@ impl QuicConnection {
             .try_send(Command::Request(
                 body,
                 std::time::Instant::now() + Duration::from_secs(70),
-                sender,
+                RequestReply::Sync(sender),
             ))
             .map_err(|_| BackendServiceError::Unavailable)?;
         receiver
@@ -178,6 +199,24 @@ impl QuicConnection {
         receiver
             .recv_timeout(Duration::from_secs(75))
             .map_err(|_| BackendServiceError::Unavailable)
+    }
+}
+
+impl lapis_client_core::AsyncHostConnection for QuicConnection {
+    async fn request(&self, body: RequestBody) -> Result<ResponseBody, String> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.inner
+            .sender
+            .try_send(Command::Request(
+                body,
+                std::time::Instant::now() + Duration::from_secs(70),
+                RequestReply::Async(sender),
+            ))
+            .map_err(|_| "Clientの処理待ちが上限に達したか接続が終了しました".to_owned())?;
+        receiver
+            .await
+            .map_err(|_| "Host接続が終了しました".to_owned())?
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -232,8 +271,12 @@ async fn run(
                 let _ = reply.send(BackendEventReceiver::from_receiver(receiver));
             }
             Command::Request(body, deadline, reply) => {
+                // まだ送信していない操作は、待ち手が破棄された後に実行しない。
+                if reply.is_cancelled() {
+                    continue;
+                }
                 if std::time::Instant::now() >= deadline {
-                    let _ = reply.send(Err(BackendServiceError::Unavailable));
+                    reply.send(Err(BackendServiceError::Unavailable));
                     continue;
                 }
                 let result =
@@ -254,7 +297,7 @@ async fn run(
                     core.disconnect();
                     subscribers.clear();
                 }
-                let _ = reply.send(result);
+                reply.send(result);
             }
         }
     }
@@ -356,9 +399,6 @@ async fn exchange(
             }
             match reply.try_recv() {
                 Ok(Some(Ok(body))) => {
-                    if let ResponseBody::SnapshotResync(snapshot) = &body {
-                        core.set_watermark(snapshot.snapshot.event_watermark);
-                    }
                     return Ok(body);
                 }
                 Ok(None) => {}
@@ -368,4 +408,18 @@ async fn exchange(
     })
     .await;
     result.unwrap_or(Err(BackendServiceError::Unavailable))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequestReply;
+
+    #[test]
+    fn cancelled_async_request_is_detected_before_dispatch() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let reply = RequestReply::Async(sender);
+        assert!(!reply.is_cancelled());
+        drop(receiver);
+        assert!(reply.is_cancelled());
+    }
 }

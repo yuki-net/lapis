@@ -8,3 +8,5 @@ license.workspace = true
 [dependencies]
 futures-channel = "0.3"
 lapis-client-api = { path = "../protocol" }
+lapis-workbench = { path = "../models/workbench" }
+serde_json.workspace = true

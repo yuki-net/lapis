@@ -1,5 +1,6 @@
+use crate::timer::Timer;
 use crate::{client_adapter::ClientWorker, commands::UiCommand};
-use gpui::{Context, Timer};
+use gpui::Context;
 use lapis_desktop_client::WorkspaceSearchSession;
 use lapis_workspace::SearchHit;
 use std::{path::PathBuf, time::Duration};

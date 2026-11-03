@@ -37,7 +37,7 @@ impl Editor {
         cx: &mut Context<Self>,
     ) {
         self.is_selecting = true;
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         let offset = self.index_for_mouse_position(event.position);
         if event.modifiers.shift {
             self.select_to(offset, cx);

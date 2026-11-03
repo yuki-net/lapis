@@ -98,6 +98,7 @@ pub(crate) struct DesktopRoot {
     factory: crate::app::WindowFactory,
     persist_task: Option<gpui::Task<()>>,
     persist_signature: Option<PersistSignature>,
+    #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
     workbench: WorkbenchState,
     task_context_gate: crate::client_adapter::ResponseGate,
@@ -193,7 +194,7 @@ impl DesktopRoot {
                                 .update(cx, |shell, cx| shell.close_zone(ZonePosition::Right, cx));
                         }
                     }
-                    window.focus(&root.editor.focus_handle(cx));
+                    crate::gpui_compat::focus(window, &root.editor.focus_handle(cx), cx);
                 });
             })
         });
@@ -347,7 +348,11 @@ impl DesktopRoot {
                             cx,
                         )
                     });
-                    window.focus(&root.quick_search.read(cx).focus_handle());
+                    crate::gpui_compat::focus(
+                        window,
+                        &root.quick_search.read(cx).focus_handle(),
+                        cx,
+                    );
                 }
             }),
             cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
@@ -355,6 +360,7 @@ impl DesktopRoot {
                     root.group
                         .update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
                     root.synchronize_group(cx);
+                    #[cfg(not(target_family = "wasm"))]
                     if root.native_smoke_requested {
                         root.native_smoke_requested = false;
                         crate::window_host::run_native_smoke(root, window, cx);
@@ -455,13 +461,13 @@ impl DesktopRoot {
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
                         Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                            crate::timer::Timer::after(std::time::Duration::from_millis(16)).await;
                         }
                     }
                 }
             }
         }));
-        window.focus(&editor.focus_handle(cx));
+        crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
         Self {
             group,
             shell,
@@ -486,6 +492,7 @@ impl DesktopRoot {
             factory,
             persist_task: None,
             persist_signature: None,
+            #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
             workbench: WorkbenchState::default(),
             task_context: None,
@@ -1163,7 +1170,7 @@ impl DesktopRoot {
         }
         self.persist_signature = Some(signature);
         self.persist_task = Some(cx.spawn(async move |this, cx| {
-            gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+            crate::timer::Timer::after(std::time::Duration::from_millis(500)).await;
             let _ = this.update(cx, |root, cx| {
                 if root.group.read(cx).closing
                     || root.group.read(cx).synchronization_required
@@ -1273,7 +1280,7 @@ impl DesktopRoot {
         self.shell.update(cx, |shell, cx| {
             shell.open_view_in_zone(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
         });
-        window.focus(&self.quick_search.read(cx).focus_handle());
+        crate::gpui_compat::focus(window, &self.quick_search.read(cx).focus_handle(), cx);
     }
 
     pub(crate) fn request_close_path(
@@ -1415,11 +1422,11 @@ impl DesktopRoot {
                 self.shell.update(cx, |shell, cx| {
                     shell.open_view_in_zone(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
                 });
-                window.focus(&self.quick_search.read(cx).focus_handle());
+                crate::gpui_compat::focus(window, &self.quick_search.read(cx).focus_handle(), cx);
             }
             UiCommand::ActivateDocument(id) => {
                 self.editor.update(cx, |editor, cx| editor.activate(id, cx));
-                window.focus(&self.editor.focus_handle(cx));
+                crate::gpui_compat::focus(window, &self.editor.focus_handle(cx), cx);
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::SelectTask(id) => self.select_task(id, cx),

@@ -1,6 +1,7 @@
+use crate::timer::Timer;
 use std::{sync::mpsc, time::Duration};
 
-use gpui::{Context, Timer};
+use gpui::Context;
 use lapis_desktop_client::{
     ConversationRecord, ConversationSession, ConversationViewState, DocumentTab, EditorSession,
     LspSession,

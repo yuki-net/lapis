@@ -1,5 +1,6 @@
 use crate::client_adapter::{ClientWorker, ResponseGate};
-use gpui::{Context, PromptButton, PromptLevel, Timer, Window};
+use crate::timer::Timer;
+use gpui::{Context, PromptButton, PromptLevel, Window};
 use lapis_desktop_client::GitSession;
 use lapis_editor_core::{TaskId, WorkspaceId};
 use lapis_git::{GitAction, GitActionRequest, GitDiffSnapshot, GitSnapshot};

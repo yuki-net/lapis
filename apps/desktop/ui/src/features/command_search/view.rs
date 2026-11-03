@@ -320,7 +320,7 @@ impl QuickSearch {
     }
 
     fn mouse_down(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         let index = self.index_for_mouse_position(event.position);
         self.move_to(index, cx);
     }
@@ -648,10 +648,7 @@ impl Element for SearchTextElement {
         if let Some(selection) = prepaint.selection.take() {
             window.paint_quad(selection);
         }
-        prepaint
-            .line
-            .paint(bounds.origin, px(22.0), window, cx)
-            .ok();
+        crate::gpui_compat::paint_line(&prepaint.line, bounds.origin, px(22.0), window, cx);
         if focus.is_focused(window)
             && let Some(cursor) = prepaint.cursor.take()
         {

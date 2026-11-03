@@ -8,7 +8,18 @@ use lapis_client_api::{
     ResponseBody, ServerMessage,
 };
 
+pub mod workbench;
+
 const MAX_PENDING: usize = 64;
+
+/// DesktopとWebがHostへ非同期要求を送るための共通境界。
+/// futureの実行場所は各platformが決める。
+pub trait AsyncHostConnection {
+    fn request(
+        &self,
+        body: RequestBody,
+    ) -> impl std::future::Future<Output = Result<ResponseBody, String>>;
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClientError {
@@ -18,6 +29,20 @@ pub enum ClientError {
     Protocol,
     EventGap,
 }
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Disconnected => "Hostに接続されていません",
+            Self::TooManyRequests => "Hostへの未完了要求が上限に達しました",
+            Self::CounterOverflow => "Clientの要求番号が上限に達しました",
+            Self::Protocol => "Host応答が要求と一致しません",
+            Self::EventGap => "Hostからのイベントが欠落しました",
+        })
+    }
+}
+
+impl std::error::Error for ClientError {}
 
 struct Pending {
     request: RequestEnvelope,
@@ -111,6 +136,18 @@ impl ClientCore {
                     self.disconnect();
                     return Err(ClientError::Protocol);
                 }
+                if matches!(
+                    (&pending.request.body, &response.body),
+                    (RequestBody::SnapshotResync(request), ResponseBody::SnapshotResync(response))
+                        if request.workspace_id != response.snapshot.workspace.workspace_id
+                ) {
+                    let _ = pending.respond.send(Err(ClientError::Protocol));
+                    self.disconnect();
+                    return Err(ClientError::Protocol);
+                }
+                if let ResponseBody::SnapshotResync(snapshot) = &response.body {
+                    self.set_watermark(snapshot.snapshot.event_watermark);
+                }
                 let _ = pending.respond.send(Ok(response.body));
                 Ok(None)
             }
@@ -184,6 +221,27 @@ mod tests {
     }
 
     #[test]
+    fn pending_limit_is_distinct_from_disconnection() {
+        let mut client = ClientCore::default();
+        client.connected().unwrap();
+        let mut replies = Vec::new();
+        for _ in 0..MAX_PENDING {
+            let (_, reply) = client
+                .begin(RequestBody::WorkspaceList(WorkspaceListRequest::default()))
+                .unwrap();
+            replies.push(reply);
+        }
+        assert!(matches!(
+            client.begin(RequestBody::WorkspaceList(WorkspaceListRequest::default())),
+            Err(ClientError::TooManyRequests)
+        ));
+        assert_ne!(
+            ClientError::TooManyRequests.to_string(),
+            ClientError::Disconnected.to_string()
+        );
+    }
+
+    #[test]
     fn response_is_matched_to_request_and_delivered() {
         let mut client = ClientCore::default();
         client.connected().unwrap();
@@ -227,5 +285,91 @@ mod tests {
             receive.try_recv(),
             Ok(Some(Err(ClientError::Disconnected)))
         ));
+    }
+
+    #[test]
+    fn snapshot_watermark_is_installed_before_the_waiter_is_polled() {
+        use lapis_client_api::{
+            SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot, WorkspaceSummary,
+        };
+
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let mut client = ClientCore::default();
+        client.connected().unwrap();
+        let (ClientMessage::Request(request), _unpolled_reply) = client
+            .begin(RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: workspace_id.clone(),
+                reason: SnapshotReason::Initial,
+            }))
+            .unwrap()
+        else {
+            panic!("request")
+        };
+        client
+            .receive(ServerMessage::Response(ResponseEnvelope {
+                request_id: request.request_id,
+                body: ResponseBody::SnapshotResync(SnapshotResponse {
+                    snapshot: WorkspaceSnapshot {
+                        event_watermark: EventSequence::new(5),
+                        workspace: WorkspaceSummary {
+                            workspace_id: workspace_id.clone(),
+                            name: "test".into(),
+                        },
+                        documents: vec![],
+                        terminals: vec![],
+                        git_repositories: vec![],
+                    },
+                }),
+            }))
+            .unwrap();
+        let event = |sequence| {
+            ServerMessage::Event(EventEnvelope {
+                event_sequence: EventSequence::new(sequence),
+                body: EventBody::WorkspaceChanged {
+                    workspace_id: workspace_id.clone(),
+                },
+            })
+        };
+        assert!(client.receive(event(5)).unwrap().is_none());
+        assert!(client.receive(event(6)).unwrap().is_some());
+    }
+
+    #[test]
+    fn snapshot_for_another_workspace_is_rejected_before_advancing_watermark() {
+        use lapis_client_api::{
+            SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot, WorkspaceSummary,
+        };
+        let mut client = ClientCore::default();
+        client.connected().unwrap();
+        let (ClientMessage::Request(request), mut reply) = client
+            .begin(RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
+                reason: SnapshotReason::Initial,
+            }))
+            .unwrap()
+        else {
+            panic!("request")
+        };
+        let result = client.receive(ServerMessage::Response(ResponseEnvelope {
+            request_id: request.request_id,
+            body: ResponseBody::SnapshotResync(SnapshotResponse {
+                snapshot: WorkspaceSnapshot {
+                    event_watermark: EventSequence::new(500),
+                    workspace: WorkspaceSummary {
+                        workspace_id: WorkspaceId::try_new("workspace-2").unwrap(),
+                        name: "other".into(),
+                    },
+                    documents: vec![],
+                    terminals: vec![],
+                    git_repositories: vec![],
+                },
+            }),
+        }));
+        assert!(matches!(result, Err(ClientError::Protocol)));
+        assert!(matches!(
+            reply.try_recv(),
+            Ok(Some(Err(ClientError::Protocol)))
+        ));
+        assert!(client.event_sequence.is_none());
     }
 }

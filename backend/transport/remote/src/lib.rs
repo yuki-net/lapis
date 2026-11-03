@@ -32,6 +32,7 @@ pub use handler::{
     RemoteSubscriptionFuture,
 };
 pub use lapis_backend_state::{PathSecurityError, WorkspacePathResolver};
+pub use lapis_client_core::{AsyncHostConnection, workbench as async_workbench};
 pub use limits::{
     AuthenticationTimeout, IdleTimeout, LimitError, MaxConcurrentRequests, MaxFrameSize,
     MaxMessageSize, RemoteLimits, RequestTimeout,

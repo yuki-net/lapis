@@ -77,6 +77,7 @@ impl SettingsCoordinator {
         cx.global::<SettingsGlobal>().0.clone()
     }
 
+    #[cfg(any(not(target_family = "wasm"), test))]
     pub(crate) fn quit_after_pending(&mut self, cx: &mut Context<Self>) {
         self.quit_when_idle = true;
         self.finish_quit(cx);
@@ -116,7 +117,7 @@ impl SettingsCoordinator {
                         break;
                     }
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        gpui::Timer::after(std::time::Duration::from_millis(5)).await;
+                        crate::timer::Timer::after(std::time::Duration::from_millis(5)).await;
                     }
                 }
             }

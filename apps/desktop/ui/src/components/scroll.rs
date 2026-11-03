@@ -135,7 +135,7 @@ impl ScrollState {
         drag.last_pointer = Some(pointer);
 
         let viewport = self.inner.handle.bounds().size;
-        let max_offset = self.inner.handle.max_offset();
+        let max_offset = crate::gpui_compat::max_offset(&self.inner.handle);
         let (track_length, max_scroll) = match drag.axis {
             ScrollAxis::Vertical => (viewport.height, max_offset.height),
             ScrollAxis::Horizontal => (viewport.width, max_offset.width),
@@ -227,7 +227,7 @@ fn scrollbar_track(
     cx: &gpui::App,
 ) -> gpui::Stateful<gpui::Div> {
     let handle = state.handle();
-    let max_offset = handle.max_offset();
+    let max_offset = crate::gpui_compat::max_offset(&handle);
 
     let has_overflow = match axis {
         ScrollAxis::Vertical => max_offset.height > px(0.0),
@@ -302,7 +302,7 @@ fn scrollbar_thumb(
     let handle = state.handle();
     let bounds = handle.bounds();
     let viewport = bounds.size;
-    let max_offset = handle.max_offset();
+    let max_offset = crate::gpui_compat::max_offset(&handle);
     let offset = handle.offset();
     let (track_length, max_scroll, current_scroll) = match axis {
         ScrollAxis::Vertical => (viewport.height, max_offset.height, -offset.y),

@@ -122,7 +122,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) {
         self.toggle_zone(position, cx);
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         self.shell.command_palette_open = false;
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -161,7 +161,7 @@ impl Shell {
     ) {
         self.open_view_in_zone(position, view.clone(), cx);
         self.shell.focused_panel = self.shell.layout.find_tab(&PanelTab::tool(view));
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
     }
 
     pub(crate) fn request_zone_open_with_duration(
@@ -198,7 +198,7 @@ impl Shell {
         self.shell.tool_picker = Some(PickerTarget::Panel(panel_id));
         self.shell.tool_picker_anchor = anchor;
         self.shell.set_tool_picker_query(String::new());
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         cx.notify();
     }
 
@@ -215,7 +215,7 @@ impl Shell {
         self.shell.tool_picker = Some(PickerTarget::Zone(position));
         self.shell.tool_picker_anchor = anchor;
         self.shell.set_tool_picker_query(String::new());
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         cx.notify();
     }
 
@@ -291,7 +291,7 @@ impl Shell {
     pub(crate) fn close_tool_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.shell.tool_picker.take().is_some() {
             self.shell.set_tool_picker_query(String::new());
-            window.focus(&self.focus_handle);
+            crate::gpui_compat::focus(window, &self.focus_handle, cx);
             cx.notify();
         }
     }
@@ -348,7 +348,7 @@ impl Shell {
         self.synchronize_view_instances(cx);
         self.shell.tool_picker = None;
         self.shell.set_tool_picker_query(String::new());
-        window.focus(&self.focus_handle);
+        crate::gpui_compat::focus(window, &self.focus_handle, cx);
         self.refresh_feature_activation(cx);
         cx.notify();
     }

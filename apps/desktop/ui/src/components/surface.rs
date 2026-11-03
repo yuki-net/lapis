@@ -52,12 +52,16 @@ pub(crate) fn surface(variant: SurfaceVariant, cx: &gpui::App) -> gpui::Div {
                         offset: gpui::point(gpui::px(0.), gpui::px(8.)),
                         blur_radius: gpui::px(24.),
                         spread_radius: gpui::px(0.),
+                        #[cfg(target_family = "wasm")]
+                        inset: false,
                     },
                     gpui::BoxShadow {
                         color: gpui::rgba(0x00000040).into(),
                         offset: gpui::point(gpui::px(0.), gpui::px(2.)),
                         blur_radius: gpui::px(6.),
                         spread_radius: gpui::px(0.),
+                        #[cfg(target_family = "wasm")]
+                        inset: false,
                     },
                 ])
             })
