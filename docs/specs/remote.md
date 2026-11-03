@@ -7,6 +7,7 @@
 - LAN内の接続元であっても信用しません。Remoteは利用者が明示的に有効化する設計とします。
 - 認証前にWorkspace等の情報を返さず、認証後も操作ごとのcapabilityを実行側が確認します。
 - Client由来のpathをそのままOSへ渡さず、Workspaceと検証済みの相対pathから解決し、親参照・symlink等による範囲外アクセスを拒否します。
+- OSのpathを相対pathへ変換するときは、表現できない名前を別の文字や区切りに置き換えずエラーとします。
 - Local所有者だけが持つ `host.manage` は、フォルダの登録とWorkspace間のDocument移動を許可します。登録時のみ利用者が指定した絶対pathを渡し、Hostが実在・正規化を検証します。通常のresource操作は相対pathとIDを使い、Remote招待にはこの管理権限を付与しません。所有者も各sessionの通常操作は接続Workspaceに限定します。
 - Document・Terminalなどのresource identityをWorkspaceとsessionのattachmentへ関連付けます。同じWorkspaceを許可されたClientはsnapshotから再アタッチできます。別Workspaceや未認証sessionからの利用は拒否します。
 - 認証情報、ファイル内容、Terminalの入出力を不用意にログへ記録しません。

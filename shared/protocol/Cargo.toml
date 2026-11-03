@@ -10,6 +10,7 @@ lapis-git = { path = "../models/git" }
 lapis-task = { path = "../models/task" }
 lapis-editor-core = { path = "../models/editor-core" }
 lapis-terminal = { path = "../models/terminal" }
+lapis-workspace = { path = "../models/workspace" }
 serde.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true

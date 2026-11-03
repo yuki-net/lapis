@@ -239,13 +239,8 @@ impl BackendClient {
             None
         } else {
             Some(
-                WorkspaceRelativePath::parse(
-                    relative
-                        .to_str()
-                        .ok_or(BackendServiceError::Unavailable)?
-                        .replace('\\', "/"),
-                )
-                .map_err(|_| BackendServiceError::Unavailable)?,
+                WorkspaceRelativePath::from_path(relative)
+                    .map_err(|_| BackendServiceError::Unavailable)?,
             )
         };
         Ok((root, relative))

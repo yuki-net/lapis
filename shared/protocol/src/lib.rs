@@ -10,7 +10,6 @@ mod files;
 mod handshake;
 mod ids;
 mod operations;
-mod path;
 mod remote_wire;
 mod request;
 mod response;
@@ -50,8 +49,8 @@ pub use handshake::{ClientHello, ClientKind, ServerHello};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };
+pub use lapis_workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
-pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use remote_wire::{
     AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
     ServerMessage,
