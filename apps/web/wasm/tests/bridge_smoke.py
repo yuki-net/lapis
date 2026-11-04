@@ -38,6 +38,16 @@ def accept_clients(listener, bridge_port):
     finally:
         listener.close()
 
+def read_address(host):
+    for _ in range(10):
+        line = host.stdout.readline().strip()
+        match = re.fullmatch(r'address=(\S+) server_name=(\S+) workspace=(\S+)', line)
+        if match:
+            return match.groups()
+        if line:
+            print(line, flush=True)
+    raise RuntimeError('host startup failed')
+
 with tempfile.TemporaryDirectory() as directory:
     cert = Path(directory) / 'host.der'
     state = Path(directory) / 'host-state'
@@ -46,9 +56,8 @@ with tempfile.TemporaryDirectory() as directory:
     host = subprocess.Popen([str(root / f'target/debug/lapis-host{suffix}'), '--workspace', directory, '--certificate', str(cert), '--listen', '127.0.0.1:0', '--state-directory', str(state)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
     bridge = None
     try:
-        match = re.fullmatch(r'address=(\S+) server_name=(\S+) workspace=(\S+)', host.stdout.readline().strip())
-        if not match: raise RuntimeError('host startup failed')
-        address, server_name, workspace = match.groups()
+        match = read_address(host)
+        address, server_name, workspace = match
         host.stdout.readline()
         other = Path(directory) / 'other workspace'
         other.mkdir()
@@ -57,7 +66,7 @@ with tempfile.TemporaryDirectory() as directory:
         if not match: raise RuntimeError('workspace registration failed')
         other_workspace = match.group(1)
         host.stdin.write('pair-user\n'); host.stdin.flush()
-        match = re.fullmatch(r'User session pairing token \(5 minutes, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
+        match = re.fullmatch(r'User session pairing token \(1 hour, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
         if not match: raise RuntimeError('pairing failed')
         token = match.group(1)
         port_socket = socket.socket()
@@ -81,12 +90,12 @@ with tempfile.TemporaryDirectory() as directory:
         host.stdin.write('quit\n'); host.stdin.flush()
         if host.wait(timeout=10): raise RuntimeError('host shutdown failed')
         host = subprocess.Popen([str(root / f'target/debug/lapis-host{suffix}'), '--workspace', directory, '--certificate', str(cert), '--replace-certificate', '--listen', address, '--state-directory', str(state)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
-        match = re.fullmatch(r'address=(\S+) server_name=(\S+) workspace=(\S+)', host.stdout.readline().strip())
-        if not match or match.group(1) != address or match.group(3) != workspace: raise RuntimeError('host restart failed')
+        match = read_address(host)
+        if match[0] != address or match[2] != workspace: raise RuntimeError('host restart failed')
         if cert.read_bytes() == previous_certificate: raise RuntimeError('host certificate did not rotate')
         host.stdout.readline()
         host.stdin.write('pair-user\n'); host.stdin.flush()
-        match = re.fullmatch(r'User session pairing token \(5 minutes, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
+        match = re.fullmatch(r'User session pairing token \(1 hour, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
         if not match: raise RuntimeError('pairing after restart failed')
         listener = socket.socket()
         listener.bind(('127.0.0.1', 0)); listener.listen(1)

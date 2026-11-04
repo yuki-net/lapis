@@ -1,18 +1,24 @@
 use lapis_host::BackendHost;
 use lapis_remote::{
     AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
-    RemoteAuth, RemoteLimits, tls13_server_config,
+    RemoteAuth, RemoteLimits, StoredCredential, tls13_server_config,
 };
 use rustls::pki_types::PrivateKeyDer;
 use std::{
     io::{BufRead, Write},
     net::SocketAddr,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 use zeroize::Zeroizing;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// 実質無期限。Hostの再起動後も同じURLで接続できるようにする。
+const CREDENTIAL_LIFETIME_SECONDS: u64 = 100 * 365 * 24 * 60 * 60;
+const CREDENTIAL_SAVE_INTERVAL: Duration = Duration::from_secs(5);
+const CREDENTIAL_FILE: &str = "credentials.json";
 
 struct Options {
     workspace: PathBuf,
@@ -104,10 +110,12 @@ fn main() {
 
 fn run() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
+    let state_directory = options.state_directory.clone();
     let host = match options.state_directory {
         Some(directory) => BackendHost::start_with_state_directory(directory)?,
         None => BackendHost::start()?,
     };
+    let credentials_path = state_directory.map(|directory| directory.join(CREDENTIAL_FILE));
     let workspace = host.register_workspace(&options.workspace)?;
     // 秘密鍵はHostのメモリ内だけに保持する。
     let certified =
@@ -118,9 +126,27 @@ fn run() -> Result<(), Error> {
         PrivateKeyDer::Pkcs8(key.to_vec().into()),
     )?;
     let auth = Arc::new(Mutex::new(RemoteAuth::system(
-        AuthConfig::new(PairingLifetime::new(300)?, CredentialLifetime::new(86400)?),
+        AuthConfig::new(
+            PairingLifetime::new(3600)?,
+            CredentialLifetime::new(CREDENTIAL_LIFETIME_SECONDS)?,
+        ),
         AuthPolicy::new(lapis_host::supported_capabilities()),
     )));
+    if let Some(path) = &credentials_path
+        && let Ok(bytes) = std::fs::read(path)
+    {
+        match serde_json::from_slice::<Vec<StoredCredential>>(&bytes) {
+            Ok(records) => {
+                let loaded = {
+                    let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
+                    auth.import_credentials(records);
+                    auth.export_credentials().len()
+                };
+                println!("Loaded {loaded} credential(s) from {}", path.display());
+            }
+            Err(error) => eprintln!("Ignoring invalid credential file: {error}"),
+        }
+    }
     auth.lock()
         .map_err(|_| "authentication unavailable")?
         .enable();
@@ -147,10 +173,18 @@ fn run() -> Result<(), Error> {
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
         println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
+        let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
+        credential_save.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut saved_credentials = None;
         let mut input_open = true;
         loop {
             tokio::select! {
                 signal = tokio::signal::ctrl_c() => { signal?; break; }
+                _ = credential_save.tick() => {
+                    if let Some(path) = &credentials_path {
+                        save_credentials(path, &auth, &mut saved_credentials)?;
+                    }
+                }
                 line = input.recv(), if input_open => {
                     let Some(line) = line else { input_open = false; continue };
                     let line = line?;
@@ -171,9 +205,9 @@ fn run() -> Result<(), Error> {
                             write!(invitation, "{byte:02x}")?;
                         }
                         if line == "pair-user" {
-                            println!("User session pairing token (5 minutes, one use): {}", invitation.as_str());
+                            println!("User session pairing token (1 hour, one use): {}", invitation.as_str());
                         } else {
-                            println!("Pairing token (5 minutes, one use): {}", invitation.as_str());
+                            println!("Pairing token (1 hour, one use): {}", invitation.as_str());
                         }
                     } else if let Some(path) = line.strip_prefix("register ") {
                         let path = path.trim();
@@ -194,7 +228,7 @@ fn run() -> Result<(), Error> {
                             let invitation = lapis_host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
                                 workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: token.secret_bytes().to_vec() };
                             match lapis_host::write_invitation(std::path::Path::new(path), &invitation) {
-                                Ok(()) => println!("招待を作成しました（5分間・一回限り）。安全な経路でClientへ渡してください。"),
+                                Ok(()) => println!("招待を作成しました（1時間・一回限り）。安全な経路でClientへ渡してください。"),
                                 Err(_) => eprintln!("招待ファイルを作成できません。新規ファイルを指定してください。"),
                             }
                         } else { eprintln!("Usage: invite <address:port> <new-file.json>"); }
@@ -208,9 +242,38 @@ fn run() -> Result<(), Error> {
                 }
             }
         }
+        if let Some(path) = &credentials_path {
+            save_credentials(path, &auth, &mut saved_credentials)?;
+        }
         server.shutdown().await;
         Ok::<_, Error>(())
     })
+}
+
+fn save_credentials(
+    path: &Path,
+    auth: &Mutex<RemoteAuth>,
+    last_saved: &mut Option<Vec<u8>>,
+) -> Result<(), Error> {
+    let records = auth
+        .lock()
+        .map_err(|_| "authentication unavailable")?
+        .export_credentials();
+    let bytes = serde_json::to_vec(&records)?;
+    if last_saved.as_deref() == Some(bytes.as_slice()) {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    *last_saved = Some(bytes);
+    Ok(())
 }
 
 fn write_public_certificate(

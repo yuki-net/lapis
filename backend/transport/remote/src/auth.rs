@@ -1,6 +1,9 @@
 use std::{collections::HashMap, error::Error, fmt, marker::PhantomData};
 
-use lapis_client_api::{CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId};
+use lapis_client_api::{
+    CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId,
+};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     authorization::{AuthorizationError, SessionGrant},
@@ -171,6 +174,105 @@ enum PairingScope {
     Workspace,
     User,
     Owner,
+}
+
+/// 永続化するcredential。secretそのものは保存せず、digestだけを保持する。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct StoredCredential {
+    pub id: String,
+    pub client_id: String,
+    pub workspace_id: String,
+    pub capabilities: Vec<String>,
+    pub digest: String,
+    pub expires_at: u64,
+}
+
+impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
+    pub fn export_credentials(&self) -> Vec<StoredCredential> {
+        self.credentials
+            .iter()
+            .map(|(id, record)| StoredCredential {
+                id: id.as_str().to_owned(),
+                client_id: record.client_id.as_str().to_owned(),
+                workspace_id: record.workspace_id.as_str().to_owned(),
+                capabilities: record
+                    .capabilities
+                    .iter()
+                    .map(|capability| capability.as_str().to_owned())
+                    .collect(),
+                digest: hex_encode(&record.digest),
+                expires_at: record.expires_at,
+            })
+            .collect()
+    }
+
+    pub fn import_credentials(&mut self, records: Vec<StoredCredential>) {
+        let now = self.clock.now_unix_seconds();
+        for record in records {
+            let Ok(id) = CredentialId::parse(record.id) else {
+                continue;
+            };
+            let Ok(client_id) = ClientId::try_new(record.client_id) else {
+                continue;
+            };
+            let Ok(workspace_id) = WorkspaceId::try_new(record.workspace_id) else {
+                continue;
+            };
+            let capabilities = record
+                .capabilities
+                .iter()
+                .map(|capability| CapabilityId::try_new(capability.clone()))
+                .collect::<Result<Vec<_>, _>>();
+            let Ok(capabilities) = capabilities else {
+                continue;
+            };
+            let Ok(capabilities) = CapabilitySet::try_new(capabilities) else {
+                continue;
+            };
+            let Some(digest) = hex_decode(&record.digest) else {
+                continue;
+            };
+            if record.expires_at <= now {
+                continue;
+            }
+            self.credentials.insert(
+                id,
+                CredentialRecord {
+                    client_id,
+                    workspace_id,
+                    capabilities,
+                    digest,
+                    expires_at: record.expires_at,
+                },
+            );
+        }
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn hex_decode(value: &str) -> Option<[u8; SECRET_BYTES]> {
+    if value.len() != SECRET_BYTES * 2 {
+        return None;
+    }
+    let mut output = [0u8; SECRET_BYTES];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        output[index] = (digit(pair[0])? << 4) | digit(pair[1])?;
+    }
+    Some(output)
 }
 
 /// Pairing、credential、session grantのライフサイクルを所有する認証サービス。
@@ -588,6 +690,33 @@ mod tests {
             auth.authenticate(&credential, &client, &workspace),
             Err(AuthError::CredentialExpired)
         ));
+    }
+
+    #[test]
+    fn exported_credentials_survive_a_restart_and_expired_ones_are_dropped() {
+        let mut auth = setup();
+        auth.enable();
+        let (client, workspace) = ids();
+        let token = auth.begin_pairing(workspace.clone()).unwrap();
+        let credential = auth
+            .complete_pairing(&token, &client, &CapabilitySet::default())
+            .unwrap();
+        let exported = auth.export_credentials();
+        assert_eq!(exported.len(), 1);
+
+        let mut restarted = setup();
+        restarted.enable();
+        restarted.import_credentials(exported);
+        assert!(
+            restarted
+                .authenticate(&credential, &client, &workspace)
+                .is_ok()
+        );
+
+        let mut expired = setup();
+        expired.clock.0 = 130;
+        expired.import_credentials(restarted.export_credentials());
+        assert!(expired.export_credentials().is_empty());
     }
 
     #[test]
