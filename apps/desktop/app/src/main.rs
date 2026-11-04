@@ -6,12 +6,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use lapis_desktop_client::{
-    ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
-    TerminalSession, WorkspaceSearchSession,
+    ConversationRepository, ConversationSession, EditorSession, GitSession, LspSession,
+    SettingsSession, TaskSession, TerminalSession, WorkspaceSearchSession,
 };
 use lapis_host::BackendHost;
 use lapis_persistence::{
-    LocalConversationRepository, LocalGlobalSettingsRepository, LocalWorkspaceStateRepository,
+    HostConversationRepository, LocalConversationRepository, LocalGlobalSettingsRepository,
+    LocalWorkspaceStateRepository,
 };
 use lapis_platform::{
     ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend,
@@ -102,12 +103,19 @@ fn main() {
             std::process::exit(1);
         }
     }
-    let mut conversation_session = ConversationSession::new(
-        Arc::new(LocalConversationRepository::new(
-            startup.directory.join("conversations-v1.json"),
+    let local_conversations = Arc::new(LocalConversationRepository::new(
+        startup.directory.join("conversations-v1.json"),
+    ));
+    let conversation_repository: Arc<dyn ConversationRepository> = match session.workspace_id() {
+        Some(workspace) => Arc::new(HostConversationRepository::new(
+            local_conversations,
+            host.workbench(),
+            workspace.clone(),
         )),
-        session.snapshot(),
-    );
+        None => local_conversations,
+    };
+    let mut conversation_session =
+        ConversationSession::new(conversation_repository, session.snapshot());
     if let Some(root) = session.workspace_root().map(ToOwned::to_owned)
         && conversation_session.load_error().is_none()
         && conversation_session

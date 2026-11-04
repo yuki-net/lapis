@@ -4420,6 +4420,7 @@ dependencies = [
  "lapis-localization",
  "lapis-settings",
  "lapis-terminal",
+ "lapis-workbench",
  "lapis-workspace",
  "serde",
  "serde_json",

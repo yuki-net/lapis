@@ -10,6 +10,7 @@ lapis-desktop-client = { path = "../client" }
 lapis-editor-core = { path = "../../../shared/models/editor-core" }
 lapis-settings = { path = "../../../shared/models/settings" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
+lapis-workbench = { path = "../../../shared/models/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
