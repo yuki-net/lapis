@@ -1,16 +1,15 @@
 # Web Client
 
-ブラウザーから、同じPC上のHostが持つ作業状態をDesktopと共有して継続するためのClientです。DesktopやMobileの変更を自動で移植する対象ではありません。
+Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示する試作です。ページの HTML は GPUI を起動するための最小限のシェルだけです。
 
-`wasm/` はHostの認証、共通request/event、Workbench状態を扱うBrowser WebSocket接続です。`src/main.ts` はページからWasm Clientを呼び出し、共有Workbenchの文書と未保存下書きを表示・編集します。
+`wasm/` は `lapis-desktop-ui` の `run_web` を呼び、GPUI の canvas をページへ描画します。ファイルと設定はメモリー上にあり、Host や Desktop の実データにはまだ接続していません。
 
-## 前提と制限
+## 現状
 
-- 単一ユーザー・設定済みHostを前提とし、ログイン画面はありません。
-- 初回はHostが発行するpairing tokenで接続し、以後はlocalStorageのcredentialで再接続します。
-- credentialはブラウザーのlocalStorageに保存します。共用端末では使い終わったらサイトデータを削除してください。
-- Hostを再起動するとHost側のcredentialが消えるため、再度pairing tokenが必要です。
-- 現時点のページは共有Workbench（開いている文書、パス、未保存下書き、カーソル位置）の表示と編集までです。Desktopの全機能（Terminal、Git、Taskなど）はまだページから操作できません。
+- 表示・編集・タブ・ファイルツリー・コマンドパレットなど、Desktop の GPUI UI が動きます。
+- ファイルと設定はページ内のメモリーだけです。再読み込みで初期状態に戻ります。
+- Terminal、Git、LSP、Task runner は未接続です（呼ぶと未対応エラーになります）。
+- Host の共有 Workbench への接続はまだ配線していません。`wasm/src/session.rs` に Host 接続用の非同期 API がありますが、GPUI UI の同期 Client からは未使用です。
 
 ## 開発
 
@@ -20,36 +19,24 @@ npm ci
 npm run dev
 ```
 
-`npm run dev` と `npm run build` は先に `wasm-bindgen` でWasmを生成します。Node.js 24と `wasm-bindgen-cli` 0.2.129が必要です。
+`npm run dev` と `npm run build` は先に `wasm-bindgen` で Wasm を生成します。Node.js 24 と `wasm-bindgen-cli` 0.2.129 が必要です。
 
-Hostとweb-bridgeを起動し、ページのURL・Workspace ID・pairing tokenを入力して接続します。URLとWorkspaceはクエリ文字列でも指定できます。
-
-```text
-http://127.0.0.1:5173/?url=ws://127.0.0.1:8787/remote&workspace=<id>&token=<token>
-```
+ブラウザーで開くと自動的に起動します。WebGPU が使えない環境では `?backend=webgl` を付けてください。
 
 ## Tailscaleで開く
 
-同じtailnet内の端末から直接開けます。ページとBridgeをtailnetで待ち受け、Bridgeは `--allow-remote` と、ブラウザーが使うOriginを明示します。
+同じ tailnet 内の端末から直接開けます。
 
 ```powershell
 cd apps/web
 npm run dev -- --host 0.0.0.0 --port 5174
-
-cargo run -p lapis-web-bridge -- --listen 0.0.0.0:8787 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://TAILSCALE_IP:5174
 ```
 
-開くURL:
+`http://TAILSCALE_IP:5174/` を開きます。ページ自体にログインはないため、tailnet 内の到達端末は Tailscale ACL で制限し、Windows ファイアウォールで 5174 の受信を許可してください。
 
-```text
-http://TAILSCALE_IP:5174/?url=ws://TAILSCALE_IP:8787/remote&workspace=<id>&token=<token>
-```
+## 結合検証（Host / Bridge）
 
-`http://` のTailscale IPはセキュアコンテキストではないため、client IDは `crypto.getRandomValues` で生成します。ページ自体にログインはないので、Tailscale ACLで到達端末を制限し、Windowsファイアウォールで5174と8787の受信を許可してください。SSHポート転送を使う場合は待ち受けをloopbackのままにできます。
-
-## 結合検証
-
-隔離した一時WorkspaceでHostとweb-bridgeを起動し、ユーザー用接続のWorkspace切替と権限、2つのWasm接続間でのWorkbench更新とrevision競合、全接続の切断後に未保存文書とTerminalを再取得できることを確認します。
+Host と web-bridge の通信、Workspace 切替、文書の競合、再接続は `bridge_smoke.py` で検証します。GPUI UI の起動とは独立しています。
 
 ```powershell
 cargo build -p lapis-host -p lapis-web-bridge
