@@ -28,6 +28,25 @@ Hostとweb-bridgeを起動し、ページのURL・Workspace ID・pairing token�
 http://127.0.0.1:5173/?url=ws://127.0.0.1:8787/remote&workspace=<id>&token=<token>
 ```
 
+## Tailscaleで開く
+
+同じtailnet内の端末から直接開けます。ページとBridgeをtailnetで待ち受け、Bridgeは `--allow-remote` と、ブラウザーが使うOriginを明示します。
+
+```powershell
+cd apps/web
+npm run dev -- --host 0.0.0.0 --port 5174
+
+cargo run -p lapis-web-bridge -- --listen 0.0.0.0:8787 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://TAILSCALE_IP:5174
+```
+
+開くURL:
+
+```text
+http://TAILSCALE_IP:5174/?url=ws://TAILSCALE_IP:8787/remote&workspace=<id>&token=<token>
+```
+
+`http://` のTailscale IPはセキュアコンテキストではないため、client IDは `crypto.getRandomValues` で生成します。ページ自体にログインはないので、Tailscale ACLで到達端末を制限し、Windowsファイアウォールで5174と8787の受信を許可してください。SSHポート転送を使う場合は待ち受けをloopbackのままにできます。
+
 ## 結合検証
 
 隔離した一時WorkspaceでHostとweb-bridgeを起動し、ユーザー用接続のWorkspace切替と権限、2つのWasm接続間でのWorkbench更新とrevision競合、全接続の切断後に未保存文書とTerminalを再取得できることを確認します。
