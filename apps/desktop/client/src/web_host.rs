@@ -25,7 +25,8 @@ use lapis_client_api::{
     ProtocolRange, RequestBody, ResponseBody, Revision as ApiRevision, ServerMessage,
     SnapshotReason, SnapshotRequest, TerminalId as ApiTerminalId, TerminalInputRequest,
     TerminalResizeRequest, TerminalSize, TerminalStartRequest,
-    TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkspaceConnectRequest,
+    TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkbenchGetRequest,
+    WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceConnectRequest,
     WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
 use lapis_client_core::{AsyncHostConnection, browser::BrowserConnection};
@@ -46,12 +47,13 @@ use lapis_terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
     TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot, TerminalStatus,
 };
+use lapis_workbench::{ConversationViewState, VersionedViewState};
 use lapis_workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
 };
 
-pub const ROOT: &str = "/Lapis Host";
+pub const ROOT: &str = r"C:\Lapis Host";
 const UNAVAILABLE: &str = "Webではこの機能に接続していません";
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
@@ -72,6 +74,8 @@ struct Replica {
     documents: HashMap<DocumentId, DocumentState>,
     by_path: HashMap<PathBuf, DocumentId>,
     terminals: HashMap<String, TerminalState>,
+    workbench: Option<VersionedViewState>,
+    workbench_conflict: bool,
     next: u64,
     next_terminal: u64,
     initial: Option<PathBuf>,
@@ -85,6 +89,8 @@ impl Replica {
             documents: HashMap::new(),
             by_path: HashMap::new(),
             terminals: HashMap::new(),
+            workbench: None,
+            workbench_conflict: false,
             next: 1,
             next_terminal: 1,
             initial: None,
@@ -160,6 +166,9 @@ enum Command {
     },
     TerminalTerminate {
         local: TerminalId,
+    },
+    SaveWorkbench {
+        view: ConversationViewState,
     },
 }
 
@@ -255,6 +264,19 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             );
         }
     }
+    if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
+        &connection,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: api_workspace.clone(),
+        }),
+    )
+    .await
+    {
+        replica.borrow_mut().workbench = Some(VersionedViewState {
+            revision: snapshot.revision,
+            view: serde_json::from_value(snapshot.view).ok(),
+        });
+    }
     let (commands, receiver) = mpsc::unbounded();
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
@@ -265,7 +287,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     });
     wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
     if let Some(events) = events {
-        wasm_bindgen_futures::spawn_local(event_pump(events, replica.clone()));
+        wasm_bindgen_futures::spawn_local(event_pump(connection.clone(), events, replica.clone()));
     }
     preload(&connection, &replica).await?;
     Ok(fresh_credential)
@@ -456,12 +478,16 @@ async fn pump(
     }
 }
 
-async fn event_pump(mut events: mpsc::Receiver<EventEnvelope>, replica: Rc<RefCell<Replica>>) {
+async fn event_pump(
+    connection: Rc<BrowserConnection>,
+    mut events: mpsc::Receiver<EventEnvelope>,
+    replica: Rc<RefCell<Replica>>,
+) {
     while let Some(event) = events.next().await {
-        let mut replica = replica.borrow_mut();
         match event.body {
             EventBody::TerminalDelta { terminal_id, delta } => {
                 if let Some(state) = replica
+                    .borrow_mut()
                     .terminals
                     .values_mut()
                     .find(|state| state.host.as_ref() == Some(&terminal_id))
@@ -474,6 +500,7 @@ async fn event_pump(mut events: mpsc::Receiver<EventEnvelope>, replica: Rc<RefCe
                 status,
             } => {
                 if let Some(state) = replica
+                    .borrow_mut()
                     .terminals
                     .values_mut()
                     .find(|state| state.host.as_ref() == Some(&terminal_id))
@@ -491,6 +518,23 @@ async fn event_pump(mut events: mpsc::Receiver<EventEnvelope>, replica: Rc<RefCe
                         }
                         _ => {}
                     }
+                }
+            }
+            EventBody::WorkbenchChanged { .. } => {
+                let workspace = api_workspace(&replica.borrow().workspace);
+                if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
+                    &connection,
+                    RequestBody::WorkbenchGet(WorkbenchGetRequest {
+                        workspace_id: workspace,
+                    }),
+                )
+                .await
+                    && let Ok(mut replica) = replica.try_borrow_mut()
+                {
+                    replica.workbench = Some(VersionedViewState {
+                        revision: snapshot.revision,
+                        view: serde_json::from_value(snapshot.view).ok(),
+                    });
                 }
             }
             _ => {}
@@ -835,6 +879,52 @@ async fn handle(
             if let Some(state) = replica.borrow_mut().terminals.get_mut(local.as_str()) {
                 state.events.push(TerminalEvent::Exited { code: None });
                 state.finished = true;
+            }
+        }
+        Command::SaveWorkbench { view } => {
+            let (workspace, expected, conflict) = {
+                let replica = replica.borrow();
+                (
+                    api_workspace(&replica.workspace),
+                    replica
+                        .workbench
+                        .as_ref()
+                        .map(|versioned| versioned.revision)
+                        .unwrap_or(0),
+                    replica.workbench_conflict,
+                )
+            };
+            if conflict {
+                return Err("Workbenchが競合しています".into());
+            }
+            let encoded = lapis_client_api::encode_workbench_view(&view)
+                .map_err(|error| error.to_string())?;
+            let body = request(
+                connection,
+                RequestBody::WorkbenchPut(WorkbenchPutRequest {
+                    workspace_id: workspace,
+                    expected_revision: expected,
+                    view: encoded,
+                }),
+            )
+            .await?;
+            match body {
+                ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) => {
+                    let mut replica = replica.borrow_mut();
+                    replica.workbench = Some(VersionedViewState {
+                        revision: snapshot.revision,
+                        view: serde_json::from_value(snapshot.view).ok(),
+                    });
+                }
+                ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)) => {
+                    let mut replica = replica.borrow_mut();
+                    replica.workbench = Some(VersionedViewState {
+                        revision: snapshot.revision,
+                        view: serde_json::from_value(snapshot.view).ok(),
+                    });
+                    replica.workbench_conflict = true;
+                }
+                _ => return Err("WorkbenchPut応答が不正です".into()),
             }
         }
     }
@@ -1251,22 +1341,157 @@ impl GlobalSettingsRepository for WebBackend {
     }
 }
 
+fn workspace_from_shared(
+    shared: &lapis_workbench::SharedWorkspaceView,
+    expected: &WorkspaceId,
+    root: PathBuf,
+) -> Result<crate::WorkspaceSnapshot, WorkspaceError> {
+    if &shared.workspace_id != expected {
+        return Err(WorkspaceError::new("Workspace IDが一致しません"));
+    }
+    let documents = shared
+        .open_documents
+        .iter()
+        .map(|view| crate::DocumentViewState {
+            document_id: view.document_id.clone(),
+            path: view
+                .path
+                .as_ref()
+                .map(|path| root.join(path.as_str()))
+                .unwrap_or_default(),
+            cursor_char: usize::try_from(view.cursor_char).unwrap_or(usize::MAX),
+            selection_start: usize::try_from(view.selection_start).unwrap_or(usize::MAX),
+            selection_end: usize::try_from(view.selection_end).unwrap_or(usize::MAX),
+            scroll_x: view.scroll_x,
+            scroll_y: view.scroll_y,
+            draft_content: view.draft_content.clone(),
+        })
+        .collect();
+    Ok(crate::WorkspaceSnapshot {
+        root: Some(root),
+        open_documents: documents,
+        active_path: shared
+            .active_path
+            .as_ref()
+            .map(|path| Path::new(ROOT).join(path.as_str())),
+        active_document_id: shared.active_document_id.clone(),
+    })
+}
+
+fn shared_workspace(
+    snapshot: &crate::WorkspaceSnapshot,
+    workspace_id: WorkspaceId,
+) -> Result<lapis_workbench::SharedWorkspaceView, WorkspaceError> {
+    // wasmにはOSのpath意味論が無いため、絶対path検証を通さず同じ変換だけを行う。
+    let root = snapshot
+        .root
+        .as_ref()
+        .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
+    let relative = |path: &Path| -> Result<WorkspaceRelativePath, WorkspaceError> {
+        let path = path
+            .strip_prefix(root)
+            .map_err(|_| WorkspaceError::new("Workspace外のpathは共有できません"))?;
+        WorkspaceRelativePath::from_path(path)
+            .map_err(|error| WorkspaceError::new(error.to_string()))
+    };
+    let documents = snapshot
+        .open_documents
+        .iter()
+        .map(|view| {
+            Ok(lapis_workbench::SharedDocumentView {
+                document_id: view.document_id.clone(),
+                path: (!view.path.as_os_str().is_empty())
+                    .then(|| relative(&view.path))
+                    .transpose()?,
+                cursor_char: u64::try_from(view.cursor_char)
+                    .map_err(|_| WorkspaceError::new("カーソル位置が範囲外です"))?,
+                selection_start: u64::try_from(view.selection_start)
+                    .map_err(|_| WorkspaceError::new("選択位置が範囲外です"))?,
+                selection_end: u64::try_from(view.selection_end)
+                    .map_err(|_| WorkspaceError::new("選択位置が範囲外です"))?,
+                scroll_x: view.scroll_x,
+                scroll_y: view.scroll_y,
+                draft_content: view.draft_content.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, WorkspaceError>>()?;
+    Ok(lapis_workbench::SharedWorkspaceView {
+        workspace_id,
+        open_documents: documents,
+        active_path: snapshot.active_path.as_deref().map(relative).transpose()?,
+        active_document_id: snapshot.active_document_id.clone(),
+    })
+}
+
 impl crate::ConversationRepository for WebBackend {
     fn load(&self) -> Result<crate::ConversationState, WorkspaceError> {
-        Ok((
-            Vec::<Project>::new(),
-            Vec::<ConversationRecord>::new(),
-            None,
-        ))
+        self.with(|state| {
+            let replica = state.replica.borrow();
+            let Some(view) = replica
+                .workbench
+                .as_ref()
+                .and_then(|versioned| versioned.view.as_ref())
+            else {
+                return Ok((Vec::new(), Vec::new(), None));
+            };
+            let Some(workspace) = view.workspace.as_ref().and_then(|shared| {
+                workspace_from_shared(shared, &replica.workspace, PathBuf::from(ROOT)).ok()
+            }) else {
+                return Ok((Vec::new(), Vec::new(), None));
+            };
+            let id = lapis_editor_core::ConversationId::new("web-conversation");
+            let record = ConversationRecord {
+                id: id.clone(),
+                title: "Web".to_owned(),
+                workspace,
+                view: ConversationViewState {
+                    workspace: None,
+                    ..view.clone()
+                },
+                selected_execution: None,
+                terminals: Vec::new(),
+                environment: None,
+                source_role: crate::SourceRole::Primary,
+                other_workspace: None,
+                other_terminals: Vec::new(),
+                other_execution: None,
+                parked_sources: Vec::new(),
+            };
+            Ok((Vec::new(), vec![record], Some(id)))
+        })
+        .map_err(WorkspaceError::new)?
     }
+
     fn save(
         &self,
         _: &crate::ConversationState,
         _: &[Project],
-        _: &[ConversationRecord],
-        _: &lapis_editor_core::ConversationId,
+        records: &[ConversationRecord],
+        active: &lapis_editor_core::ConversationId,
     ) -> Result<(), WorkspaceError> {
-        Ok(())
+        self.with(|state| {
+            let record = records
+                .iter()
+                .find(|record| &record.id == active)
+                .or_else(|| records.first())
+                .ok_or_else(|| WorkspaceError::new("保存するConversationがありません"))?;
+            let replica = state.replica.borrow();
+            if replica.workbench_conflict {
+                return Err(WorkspaceError::new("Workbenchが競合しています"));
+            }
+            let workspace = shared_workspace(&record.workspace, replica.workspace.clone())?;
+            let view = ConversationViewState {
+                layout: record.view.layout.clone(),
+                show_panel_controls: record.view.show_panel_controls,
+                workbench: record.view.workbench.clone(),
+                workspace: Some(workspace),
+            };
+            let _ = state
+                .commands
+                .unbounded_send(Command::SaveWorkbench { view });
+            Ok(())
+        })
+        .map_err(WorkspaceError::new)?
     }
 }
 
