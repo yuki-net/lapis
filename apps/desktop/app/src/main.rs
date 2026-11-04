@@ -106,11 +106,13 @@ fn main() {
     let local_conversations = Arc::new(LocalConversationRepository::new(
         startup.directory.join("conversations-v1.json"),
     ));
+    let workbench_watch = lapis_desktop_client::WorkbenchWatch::new();
     let conversation_repository: Arc<dyn ConversationRepository> = match session.workspace_id() {
         Some(workspace) => Arc::new(HostConversationRepository::new(
             local_conversations,
             host.workbench(),
             workspace.clone(),
+            workbench_watch.clone(),
         )),
         None => local_conversations,
     };
@@ -211,6 +213,7 @@ fn main() {
         conversation_session,
         settings_session,
     )
+    .with_workbench_watch(workbench_watch)
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
     lapis_desktop_ui::run(session, desktop_services, initial_view);
 }

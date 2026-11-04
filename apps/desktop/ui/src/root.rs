@@ -130,6 +130,7 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
+        let workbench_watch = services.workbench_watch.clone();
         let conversation_id = services.conversation.active_id().clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale;
@@ -472,6 +473,50 @@ impl DesktopRoot {
             }
         }));
         crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(watch) = workbench_watch {
+            let worker = worker.clone();
+            cx.spawn(async move |root, cx| {
+                let mut last = watch.revision();
+                loop {
+                    crate::timer::Timer::after(std::time::Duration::from_millis(800)).await;
+                    let Some((revision, view)) = watch.take_if_changed(last) else {
+                        continue;
+                    };
+                    let Some(shared) = view.workspace.clone() else {
+                        continue;
+                    };
+                    let layout = lapis_desktop_client::ConversationViewState {
+                        workspace: None,
+                        ..view
+                    };
+                    let worker = worker.clone();
+                    let applied = root
+                        .update(cx, |root, cx| {
+                            if root.editor.read(cx).has_in_flight() {
+                                return false;
+                            }
+                            root.shell
+                                .update(cx, |shell, cx| shell.restore_view(layout, cx));
+                            let _ = worker.submit(
+                                cx,
+                                move |client| client.restore_workbench(shared),
+                                |root, result, cx| {
+                                    if let Ok(snapshot) = result {
+                                        root.apply_snapshot(&snapshot, cx);
+                                    }
+                                },
+                            );
+                            true
+                        })
+                        .unwrap_or(false);
+                    if applied {
+                        last = revision;
+                    }
+                }
+            })
+            .detach();
+        }
         Self {
             group,
             shell,

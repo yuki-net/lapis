@@ -8,7 +8,7 @@ use std::{
 
 use lapis_desktop_client::{
     ConversationRecord, ConversationRepository, ConversationState, ConversationViewState, Project,
-    WorkbenchSync, ZoneLayoutViewState,
+    WorkbenchSync, WorkbenchWatch, ZoneLayoutViewState,
 };
 use lapis_editor_core::{ConversationId, WorkspaceId};
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
@@ -209,11 +209,39 @@ impl HostConversationRepository {
         local: Arc<dyn ConversationRepository>,
         connection: Arc<dyn WorkbenchConnection>,
         workspace: WorkspaceId,
+        watch: WorkbenchWatch,
     ) -> Self {
-        let mut sync = WorkbenchSync::new(connection);
+        let mut sync = WorkbenchSync::new(connection.clone());
         if let Err(error) = sync.open(workspace.clone()) {
             eprintln!("HostのWorkbenchを開けません: {error}");
+        } else if let Some(state) = sync.confirmed()
+            && let Some(view) = state.view.clone()
+        {
+            watch.publish(state.revision, view);
         }
+        let subscription_watch = watch.clone();
+        let subscription_workspace = workspace.clone();
+        std::thread::spawn(move || {
+            let Ok(mut subscription) = connection.subscribe(&subscription_workspace) else {
+                return;
+            };
+            let mut sync = WorkbenchSync::new(connection);
+            if sync.open(subscription_workspace.clone()).is_err() {
+                return;
+            }
+            loop {
+                match subscription.recv_timeout(std::time::Duration::from_secs(1)) {
+                    Ok(_) => {
+                        if let Ok(Some(state)) = sync.refresh()
+                            && let Some(view) = state.view.clone()
+                        {
+                            subscription_watch.publish(state.revision, view);
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
         Self {
             local,
             sync: Mutex::new(sync),
@@ -546,8 +574,12 @@ mod tests {
         ));
         let workbench = Arc::new(SharedWorkbench(Mutex::new(VersionedViewState::default())));
         let workspace = WorkspaceId::new("workspace-1");
-        let repository =
-            HostConversationRepository::new(local, workbench.clone(), workspace.clone());
+        let repository = HostConversationRepository::new(
+            local,
+            workbench.clone(),
+            workspace.clone(),
+            WorkbenchWatch::new(),
+        );
         let record = ConversationRecord {
             id: ConversationId::new("conversation-1"),
             title: "Web".to_owned(),

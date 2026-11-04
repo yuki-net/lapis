@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use lapis_editor_core::WorkspaceId;
 use lapis_workbench::{
@@ -11,6 +14,42 @@ pub struct WorkbenchSync {
     connection: Arc<dyn WorkbenchConnection>,
     workspace: Option<WorkspaceId>,
     replica: WorkbenchReplica,
+}
+
+/// 別Clientが保存したWorkbenchをUIへ渡すための共有スロット。
+#[derive(Clone, Default)]
+pub struct WorkbenchWatch {
+    revision: Arc<AtomicU64>,
+    view: Arc<Mutex<Option<ConversationViewState>>>,
+}
+
+impl WorkbenchWatch {
+    pub fn new() -> Self {
+        Self {
+            revision: Arc::new(AtomicU64::new(u64::MAX)),
+            view: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision.load(Ordering::Acquire)
+    }
+
+    pub fn publish(&self, revision: u64, view: ConversationViewState) {
+        if let Ok(mut slot) = self.view.lock() {
+            *slot = Some(view);
+            self.revision.store(revision, Ordering::Release);
+        }
+    }
+
+    pub fn take_if_changed(&self, last: u64) -> Option<(u64, ConversationViewState)> {
+        let revision = self.revision();
+        if revision == last || revision == u64::MAX {
+            return None;
+        }
+        let view = self.view.lock().ok()?.clone()?;
+        Some((revision, view))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -111,6 +150,23 @@ mod tests {
     use super::*;
     use lapis_workbench::{WorkbenchSubscription, WorkbenchUpdate};
     use std::sync::Mutex;
+
+    #[test]
+    fn watch_exposes_only_unseen_views() {
+        let watch = WorkbenchWatch::new();
+        assert!(watch.take_if_changed(watch.revision()).is_none());
+        watch.publish(
+            3,
+            ConversationViewState {
+                show_panel_controls: false,
+                ..Default::default()
+            },
+        );
+        assert!(watch.take_if_changed(3).is_none());
+        let (revision, view) = watch.take_if_changed(2).unwrap();
+        assert_eq!(revision, 3);
+        assert!(!view.show_panel_controls);
+    }
 
     #[derive(Default)]
     struct Store {

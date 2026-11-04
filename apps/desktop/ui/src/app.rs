@@ -71,6 +71,7 @@ pub struct DesktopServices {
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
+    pub(crate) workbench_watch: Option<lapis_desktop_client::WorkbenchWatch>,
 }
 
 impl DesktopServices {
@@ -92,6 +93,7 @@ impl DesktopServices {
             search,
             conversation,
             settings,
+            workbench_watch: None,
         }
     }
     pub fn with_host_connector(
@@ -100,6 +102,13 @@ impl DesktopServices {
     ) -> Self {
         self.connect_host = Some(std::sync::Arc::new(connector));
         self
+    }
+    pub fn with_workbench_watch(mut self, watch: lapis_desktop_client::WorkbenchWatch) -> Self {
+        self.workbench_watch = Some(watch);
+        self
+    }
+    pub fn workbench_watch(&self) -> Option<&lapis_desktop_client::WorkbenchWatch> {
+        self.workbench_watch.as_ref()
     }
 }
 

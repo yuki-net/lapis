@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 mod view_state;
 mod workbench_sync;
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
-pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult};
+pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(target_arch = "wasm32")]
 pub mod web_host;
@@ -131,9 +131,9 @@ pub enum DocumentCloseDisposition {
 }
 
 pub use lapis_workbench::{
-    ConversationViewState, PanelLayoutViewState, ViewBindingState, ViewScopeState,
-    WorkbenchLayoutState, WorkbenchModeState, WorkbenchViewState, ZONE_LAYOUT_VERSION,
-    ZoneLayoutViewState, ZonePanelViewState, ZoneViewState,
+    ConversationViewState, PanelLayoutViewState, SharedDocumentView, SharedWorkspaceView,
+    ViewBindingState, ViewScopeState, WorkbenchLayoutState, WorkbenchModeState, WorkbenchViewState,
+    ZONE_LAYOUT_VERSION, ZoneLayoutViewState, ZonePanelViewState, ZoneViewState,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
