@@ -6,6 +6,28 @@
 cargo run -p lapis-web-bridge -- --listen 127.0.0.1:8787 --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://localhost:5173
 ```
 
-`--host` と `--certificate` は起動中Hostのアドレスと公開証明書です。証明書とサーバー名を検証し、検証失敗時に接続を許可しません。待ち受けとHost接続はloopbackに限定し、指定したOriginと `lapis.v0` subprotocolだけを受け付けます。Webページ自体は配信しません。
+`--host` と `--certificate` は起動中Hostのアドレスと公開証明書です。証明書とサーバー名を検証し、検証失敗時に接続を許可しません。Hostへの接続は常にloopbackに限定し、指定したOriginと `lapis.v0` subprotocolだけを受け付けます。Webページ自体は配信しません。
 
-別PCから開く開発時は、SSHローカルポート転送でWebの開発サーバーとBridgeのTCPポートを転送し、ブラウザーから転送先のlocalhostを開きます。Hostの認証・Workspaceへの接続はClient側で別途必要です。
+## 別PCから開く
+
+**SSHポート転送（既定のまま）**
+
+Webの開発サーバーとBridgeのTCPポートをSSHで転送し、ブラウザーから転送先のlocalhostを開きます。待ち受けはloopbackのままで、Originもlocalhostのまま使えます。
+
+**Tailscaleで直接つなぐ**
+
+Bridgeをtailnetへ公開する場合は、明示的に `--allow-remote` を付け、ブラウザーが使うOriginを指定します。
+
+```powershell
+cargo run -p lapis-web-bridge -- --listen 0.0.0.0:8787 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://100.64.0.1:5174
+```
+
+Webの開発サーバーもtailnetで待ち受けます。
+
+```powershell
+npm run dev -- --host 0.0.0.0 --port 5174
+```
+
+ページは `http://TAILSCALE_IP:5174/?url=ws://TAILSCALE_IP:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN` を開きます。
+
+`--allow-remote` を付けると、tailnet内の端末からページとBridgeへ到達できます。Origin検証は認証ではないため、Hostへの接続に必要なcredentialやpairing tokenとは別に、Tailscale ACLで到達端末を制限してください。Windowsファイアウォールで該当ポートの受信許可も必要です。

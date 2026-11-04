@@ -33,7 +33,12 @@ impl Options {
         let mut args = args;
         let (mut listen, mut host, mut server_name, mut certificate, mut origin) =
             (None, None, None, None, None);
+        let mut allow_remote = false;
         while let Some(flag) = args.next() {
+            if flag.to_str() == Some("--allow-remote") {
+                allow_remote = true;
+                continue;
+            }
             let value = args.next().ok_or("option requires a value")?;
             match flag.to_str() {
                 Some("--listen") => {
@@ -64,16 +69,24 @@ impl Options {
         }
         let listen = listen.ok_or("--listen is required")?;
         let host = host.ok_or("--host is required")?;
-        if !listen.ip().is_loopback() || !host.ip().is_loopback() {
-            return Err("listen and host must use loopback addresses".into());
+        if !host.ip().is_loopback() {
+            return Err("host must use a loopback address".into());
+        }
+        if !listen.ip().is_loopback() && !allow_remote {
+            return Err("non-loopback listen requires --allow-remote".into());
         }
         let origin: String = origin.ok_or("--origin is required")?;
-        if !origin.starts_with("http://localhost:")
-            && !origin.starts_with("http://127.0.0.1:")
-            && !origin.starts_with("https://localhost:")
-            && !origin.starts_with("https://127.0.0.1:")
+        let authority = origin
+            .strip_prefix("http://")
+            .or_else(|| origin.strip_prefix("https://"))
+            .ok_or("origin must be an http(s) origin")?;
+        if authority.is_empty()
+            || authority.contains('/')
+            || authority.contains('?')
+            || authority.contains('#')
+            || authority.chars().any(char::is_whitespace)
         {
-            return Err("origin must be an explicit localhost origin".into());
+            return Err("origin must be an http(s) origin without a path".into());
         }
         Ok(Self {
             listen,
@@ -213,33 +226,66 @@ mod tests {
     use tokio_tungstenite::tungstenite::{Message as ClientMessage, client::IntoClientRequest};
 
     #[test]
-    fn options_reject_non_loopback_endpoints() {
-        let args = [
-            "--listen",
-            "0.0.0.0:8080",
+    fn options_require_explicit_remote_listen_and_reject_bad_origins() {
+        let base = [
             "--host",
             "127.0.0.1:5000",
             "--server-name",
             "localhost",
             "--certificate",
             "cert.der",
-            "--origin",
-            "http://localhost:5173",
         ];
-        assert!(Options::parse(args.map(Into::into).into_iter()).is_err());
-        let args = [
+        let parse = |extra: &[&str]| {
+            let args = base
+                .iter()
+                .chain(extra.iter())
+                .map(|value| std::ffi::OsString::from(*value))
+                .collect::<Vec<_>>();
+            Options::parse(args.into_iter())
+        };
+
+        // 既定ではループバック以外で待ち受けない。
+        assert!(
+            parse(&[
+                "--listen",
+                "0.0.0.0:8080",
+                "--origin",
+                "http://localhost:5173"
+            ])
+            .is_err()
+        );
+        // 明示した場合だけ、指定したoriginでTailscaleなどから待ち受ける。
+        let remote = parse(&[
             "--listen",
-            "127.0.0.1:8080",
-            "--host",
-            "192.0.2.1:5000",
-            "--server-name",
-            "localhost",
-            "--certificate",
-            "cert.der",
+            "0.0.0.0:8080",
+            "--allow-remote",
             "--origin",
-            "http://localhost:5173",
-        ];
-        assert!(Options::parse(args.map(Into::into).into_iter()).is_err());
+            "http://100.64.0.1:5174",
+        ])
+        .unwrap();
+        assert!(remote.listen.ip().is_unspecified());
+        // Hostへの接続は常にループバック。
+        assert!(
+            parse(&[
+                "--listen",
+                "127.0.0.1:8080",
+                "--host",
+                "192.0.2.1:5000",
+                "--origin",
+                "http://localhost:5173",
+            ])
+            .is_err()
+        );
+        // originにパスは含めない。
+        assert!(
+            parse(&[
+                "--listen",
+                "127.0.0.1:8080",
+                "--origin",
+                "https://example.test/lapis",
+            ])
+            .is_err()
+        );
     }
 
     #[tokio::test]
