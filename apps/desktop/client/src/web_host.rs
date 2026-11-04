@@ -154,6 +154,7 @@ enum Command {
         cwd: Option<PathBuf>,
         columns: u16,
         rows: u16,
+        shell: lapis_terminal::TerminalShell,
     },
     TerminalInput {
         local: TerminalId,
@@ -836,6 +837,7 @@ async fn handle(
             cwd,
             columns,
             rows,
+            shell,
         } => {
             let workspace_id = replica.borrow().workspace.clone();
             let cwd = match cwd.as_deref() {
@@ -855,7 +857,7 @@ async fn handle(
                     workspace_id: api_workspace(&workspace_id),
                     cwd,
                     command: None,
-                    shell: Default::default(),
+                    shell,
                     size: TerminalSize { columns, rows },
                 }),
             )
@@ -1703,9 +1705,6 @@ impl TerminalBackend for WebBackend {
         rows: u16,
         shell: lapis_terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
-        if shell != lapis_terminal::TerminalShell::Default {
-            return Err(TerminalError::new("この接続ではshellを指定できません"));
-        }
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
             let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
@@ -1724,6 +1723,7 @@ impl TerminalBackend for WebBackend {
                 cwd: Some(cwd.to_owned()),
                 columns,
                 rows,
+                shell,
             });
             local
         })

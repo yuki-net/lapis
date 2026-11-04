@@ -159,6 +159,8 @@ pub(crate) struct ShellState {
     pub tool_picker_anchor: gpui::Point<gpui::Pixels>,
     pub tool_picker_query: String,
     pub tool_picker_selected: usize,
+    /// 最後にEditorの正本としたactive document。snapshot更新でToolタブを奪わないために使う。
+    active_document: Option<lapis_editor_core::DocumentId>,
     pub workspace_menu_open: bool,
     pub settings_menu_open: bool,
     pub header_menu_open: bool,
@@ -183,6 +185,7 @@ impl Default for ShellState {
             tool_picker_anchor: gpui::point(gpui::px(120.0), gpui::px(82.0)),
             tool_picker_query: String::new(),
             tool_picker_selected: 0,
+            active_document: None,
             workspace_menu_open: false,
             settings_menu_open: false,
             header_menu_open: false,
@@ -348,15 +351,30 @@ impl ShellState {
         for (tab, panel_id) in stale {
             self.layout.remove_tab(&panel_id, &tab, Instant::now());
         }
+        let next_active = documents
+            .iter()
+            .find(|document| document.active)
+            .map(|document| document.id.clone());
+        let active_changed = next_active != self.active_document;
         for document in documents {
             let tab = PanelTab::Document(document.id.clone());
             if !self.panels().iter().any(|panel| panel.contains(&tab)) {
                 let _ = self.layout.open_tab(ZonePosition::Main, tab.clone());
             }
             if document.active {
-                self.layout.activate_existing_tab(&tab);
+                // 同じactive documentのままsnapshotが更新されても、
+                // 利用者が選んだToolタブをDocumentタブへ戻さない。
+                let tool_active = self
+                    .layout
+                    .panel_for_tab(&tab)
+                    .and_then(|panel_id| self.layout.panel(&panel_id))
+                    .is_some_and(|panel| matches!(panel.active, Some(PanelTab::Tool { .. })));
+                if active_changed || !tool_active {
+                    self.layout.activate_existing_tab(&tab);
+                }
             }
         }
+        self.active_document = next_active;
     }
 
     pub fn synchronize_activation(&self, registry: &mut FeatureRegistry) {
@@ -410,6 +428,75 @@ mod tests {
         assert!(!shell.open_panel_tab(&PanelId::new(999), tab));
         assert_eq!(shell.layout.capture(), before);
         assert!(shell.layout.valid());
+    }
+
+    #[test]
+    fn presentation_refresh_keeps_an_explicit_tool_tab_active() {
+        let mut shell = ShellState::default();
+        let document = test_document("doc", true);
+        let document_tab = PanelTab::Document(document.id.clone());
+        let tool = PanelTab::tool(id::VIEW_TERMINAL);
+        shell
+            .layout
+            .open_tab(ZonePosition::Main, document_tab.clone())
+            .unwrap();
+        shell
+            .layout
+            .open_tab(ZonePosition::Main, tool.clone())
+            .unwrap();
+        shell.synchronize_documents(std::slice::from_ref(&document));
+        shell.layout.activate_existing_tab(&tool);
+
+        shell.synchronize_documents(std::slice::from_ref(&document));
+
+        let panel = shell.layout.panel_for_tab(&tool).unwrap();
+        assert_eq!(
+            shell.layout.panel(&panel).unwrap().active.as_ref(),
+            Some(&tool)
+        );
+    }
+
+    #[test]
+    fn presentation_refresh_activates_a_new_active_document() {
+        let mut shell = ShellState::default();
+        let first = test_document("doc", true);
+        let tool = PanelTab::tool(id::VIEW_TERMINAL);
+        shell
+            .layout
+            .open_tab(ZonePosition::Main, PanelTab::Document(first.id.clone()))
+            .unwrap();
+        shell
+            .layout
+            .open_tab(ZonePosition::Main, tool.clone())
+            .unwrap();
+        shell.synchronize_documents(std::slice::from_ref(&first));
+        shell.layout.activate_existing_tab(&tool);
+        let second = test_document("other", true);
+        let mut first = first;
+        first.active = false;
+
+        shell.synchronize_documents(&[first, second.clone()]);
+
+        let panel = shell
+            .layout
+            .panel_for_tab(&PanelTab::Document(second.id.clone()))
+            .unwrap();
+        assert_eq!(
+            shell.layout.panel(&panel).unwrap().active.as_ref(),
+            Some(&PanelTab::Document(second.id))
+        );
+    }
+
+    fn test_document(id: &str, active: bool) -> DocumentTab {
+        DocumentTab {
+            id: lapis_editor_core::DocumentId::new(id),
+            display_name: id.to_owned(),
+            path: None,
+            dirty: false,
+            external_change: lapis_document::ExternalChange::Unchanged,
+            encoding: Default::default(),
+            active,
+        }
     }
 
     #[test]
