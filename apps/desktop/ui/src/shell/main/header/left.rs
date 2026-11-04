@@ -15,7 +15,7 @@ impl Shell {
                     button.bg(theme::colors(cx).button_background_selected)
                 })
                 .on_click(cx.listener(|this, _, window, cx| {
-                    window.focus(&this.focus_handle);
+                    crate::gpui_compat::focus(window, &this.focus_handle, cx);
                     this.toggle_header_popup(super::HeaderPopup::Main, cx);
                 })),
             PopupPlacement::BelowStart,
@@ -23,7 +23,7 @@ impl Shell {
         )
         .on_dismiss(cx.listener(|this, _: &(), window, cx| {
             this.close_header_menu(cx);
-            window.focus(&this.focus_handle);
+            crate::gpui_compat::focus(window, &this.focus_handle, cx);
         }))
         .when(self.shell.header_menu_open, |popup| {
             popup.content(self.render_header_menu(

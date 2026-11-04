@@ -329,10 +329,10 @@ mod tests {
 
     fn wait_for_settings(cx: &mut gpui::TestAppContext) {
         let coordinator = cx.update(|cx| SettingsCoordinator::shared(cx));
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(3);
         while cx.update(|cx| !coordinator.read(cx).test_is_idle()) {
             assert!(
-                std::time::Instant::now() < deadline,
+                crate::time::Instant::now() < deadline,
                 "settings queue did not drain"
             );
             cx.executor()

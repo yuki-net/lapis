@@ -110,7 +110,7 @@ impl Shell {
                             row.on_click(cx.listener(move |this, _, window, cx| {
                                 this.toggle_panel_visibility(panel_id.clone(), cx);
                                 this.close_header_menu(cx);
-                                window.focus(&this.focus_handle);
+                                crate::gpui_compat::focus(window, &this.focus_handle, cx);
                             }))
                             .into_any_element()
                         },

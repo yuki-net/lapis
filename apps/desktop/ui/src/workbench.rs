@@ -303,6 +303,7 @@ fn capture_layout(view: &ConversationViewState) -> WorkbenchLayoutState {
 
 fn layout_only(mut view: ConversationViewState) -> ConversationViewState {
     view.workbench = Default::default();
+    view.workspace = None;
     view
 }
 
@@ -387,7 +388,7 @@ mod tests {
                         edge: direction,
                     },
                     (800.0, 600.0),
-                    std::time::Instant::now(),
+                    crate::time::Instant::now(),
                 )
                 .unwrap();
             let preview = PanelTab::tool(crate::features::id::VIEW_PREVIEW);
@@ -402,7 +403,7 @@ mod tests {
                         edge: direction,
                     },
                     (800.0, 600.0),
-                    std::time::Instant::now(),
+                    crate::time::Instant::now(),
                 )
                 .unwrap();
             shell

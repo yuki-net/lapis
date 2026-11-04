@@ -26,7 +26,7 @@ impl Shell {
         .on_click(cx.listener(|this, _, window, cx| {
             this.toggle_header_popup(super::HeaderPopup::Workspace, cx);
             if this.shell.workspace_menu_open {
-                window.focus(&this.focus_handle);
+                crate::gpui_compat::focus(window, &this.focus_handle, cx);
             }
         }));
         let popup = Popup::new(trigger, PopupPlacement::BelowStart, PopupScope::default())

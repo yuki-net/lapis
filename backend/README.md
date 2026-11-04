@@ -25,11 +25,13 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 
 `cargo run -p lapis-host -- --workspace <既存フォルダ> --certificate <新規の公開証明書.der>`
 
+`--state-directory <directory>` を指定すると、共有Workbench表示状態をHostの再起動後も復元します。未指定の独立Hostではメモリー内だけに保持します。管理Hostは既存のHost状態ディレクトリを使用します。
+
 既定ではloopbackの空きUDP portでQUICを受け付けます。別端末から接続する場合は `--listen <ip:port>` を明示します。表示されたaddress・server_name・Workspace IDと、信頼できる経路で渡した公開証明書をClientで使用します。既存の証明書ファイルは上書きしません。
 
-Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の招待.json>` を実行すると、公開証明書・Workspace・5分間で一回限りの招待をファイルにまとめます。信頼できる経路でClientごとに渡してください。`pair` は招待tokenをconsoleへ表示する低水準の操作です。`revoke <credential-id>` は資格情報を失効させ、`quit` またはCtrl+CはHost自体を終了します。Client切断や標準入力のEOFではHostを終了しません。
+Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の招待.json>` を実行すると、公開証明書・Workspace・1時間で一回限りの招待をファイルにまとめます。信頼できる経路でClientごとに渡してください。`pair` はWorkspace限定の招待token、`pair-user` はWorkspaceの一覧・切替・登録を許可するユーザー用tokenをconsoleへ表示する低水準の操作です。ユーザー用tokenにはその他のHost管理権限はありません。Host所有者は `register <directory>` で別のWorkspaceを登録できます。`revoke <credential-id>` は資格情報を失効させ、`quit` またはCtrl+CはHost自体を終了します。Client切断や標準入力のEOFではHostを終了しません。
 
-Host側の秘密鍵とcredentialはメモリ内に保持するため、Host再起動後は新しい公開証明書とペアリングが必要です。Remote credentialの期限は1日です。Desktopは「ファイル → Hostに接続…」または `cargo run -p lapis -- --host <招待.jsonまたは保存済みprofile.host>` で接続します。取り込んだ証明書とcredentialはWindowsのユーザー単位DPAPIで保護して保存し、以後はprofileから接続します。認証・証明書の不一致時に自動で信頼し直しません。
+Host側の秘密鍵とcredentialはメモリ内に保持するため、Host再起動後は新しい公開証明書とペアリングが必要です。Remote credentialの期限は1日です。状態ディレクトリを指定したHostは登録済みWorkspaceを再起動後に復元します。見つからないフォルダの登録情報は削除しません。旧形式には登録一覧がないため、既存Workspaceは次に開いたとき一覧へ記録し、従来のWorkbench状態を引き続き使います。Desktopは「ファイル → Hostに接続…」または `cargo run -p lapis -- --host <招待.jsonまたは保存済みprofile.host>` で接続します。取り込んだ証明書とcredentialはWindowsのユーザー単位DPAPIで保護して保存し、以後はprofileから接続します。認証・証明書の不一致時に自動で信頼し直しません。
 
 Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立processで起動し、loopback QUICで接続します。同じユーザーのstate directoryで一つのHostを共有し、複数のフォルダを登録できます。所有者credentialは匿名pipeで渡し、DPAPIで保護した `hosts/local-v1.host` に保存します。Local所有者の鍵はHostの寿命に紐付き、Remoteの招待には配布しません。通信失敗だけで既存Hostを終了・置換しません。Desktopを閉じてもHostのDocument・Terminalは残ります。Host自体の終了後は実行状態を復元しません。
 

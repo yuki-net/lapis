@@ -1,7 +1,7 @@
 //! ZoneとPanelの配置を所有する。TabはView参照でありResourceを所有しない。
 
+use crate::time::Instant;
 use std::collections::{BTreeMap, HashSet};
-use std::time::Instant;
 
 use super::panel_layout::{Axis, PanelEdge};
 use super::zone::Zone;

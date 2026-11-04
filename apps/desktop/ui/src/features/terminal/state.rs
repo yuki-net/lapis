@@ -201,7 +201,7 @@ impl TerminalFeature {
         };
         cx.spawn(async move |this, cx| {
             loop {
-                gpui::Timer::after(std::time::Duration::from_millis(250)).await;
+                crate::timer::Timer::after(std::time::Duration::from_millis(250)).await;
                 if this.update(cx, |feature, cx| feature.poll(cx)).is_err() {
                     break;
                 }

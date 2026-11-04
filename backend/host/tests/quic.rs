@@ -56,7 +56,7 @@ impl Fixture {
             "127.0.0.1:0".parse().unwrap(),
             tls,
             auth.clone(),
-            Arc::new(BackendRemoteHandler::new(host.service())),
+            Arc::new(lapis_host::HostRemoteHandler::new(host.clone())),
             RemoteLimits::default(),
         )
         .await
@@ -196,6 +196,137 @@ fn hello(id: &str) -> ClientHello {
     }
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desktop_workbench_port_receives_remote_updates() {
+    use lapis_workbench::{ConversationViewState, WorkbenchUpdate};
+    let fixture = Fixture::new().await;
+    let first = fixture.config("workbench-port-first").await;
+    let second = fixture.config("workbench-port-second").await;
+    tokio::task::spawn_blocking(move || {
+        let root = std::env::temp_dir().join("lapis-virtual-workbench-test");
+        let first = lapis_host::BackendClient::remote(root.clone(), first).unwrap();
+        let second = lapis_host::BackendClient::remote(root.clone(), second).unwrap();
+        let workspace =
+            lapis_editor_core::WorkspaceId::new(first.register_workspace(&root).unwrap().as_str());
+        let writer = first.workbench();
+        let reader = second.workbench();
+        let mut subscription = reader.subscribe(&workspace).unwrap();
+        let initial = reader.get(&workspace).unwrap();
+        let view = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        let WorkbenchUpdate::Updated(updated) = writer
+            .update(&workspace, initial.revision, view.clone())
+            .unwrap()
+        else {
+            panic!("update")
+        };
+        assert_eq!(
+            subscription.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Some(updated.revision)
+        );
+        assert_eq!(reader.get(&workspace).unwrap().view, Some(view));
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workbench_updates_and_conflicts_cross_authenticated_quic_sessions() {
+    let fixture = Fixture::new().await;
+    let (mut first, _) = fixture.pair("workbench-first").await;
+    let (mut second, _) = fixture.pair("workbench-second").await;
+    connect_workspace(&mut first, &fixture.workspace).await;
+    connect_workspace(&mut second, &fixture.workspace).await;
+    let ResponseBody::WorkbenchGet(initial) = request(
+        &mut first,
+        2,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: fixture.workspace.clone(),
+        }),
+    )
+    .await
+    else {
+        panic!("initial workbench")
+    };
+    assert!(initial.view.is_null());
+    let put = WorkbenchPutRequest {
+        workspace_id: fixture.workspace.clone(),
+        expected_revision: initial.revision,
+        view: serde_json::json!({"show_panel_controls": false}),
+    };
+    let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(updated)) =
+        request(&mut first, 3, RequestBody::WorkbenchPut(put.clone())).await
+    else {
+        panic!("workbench update")
+    };
+    let ServerMessage::Event(event) = receive(&mut second).await else {
+        panic!("workbench event")
+    };
+    assert!(
+        matches!(event.body, EventBody::WorkbenchChanged { workspace_id, revision } if workspace_id == fixture.workspace && revision == updated.revision)
+    );
+    let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(current)) =
+        request(&mut second, 2, RequestBody::WorkbenchPut(put)).await
+    else {
+        panic!("stale write")
+    };
+    assert_eq!(current, updated);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workbench_write_is_rejected_for_read_only_grant() {
+    let fixture = Fixture::new().await;
+    let mut client = fixture.connect().await;
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut identity = hello("workbench-read-only");
+    identity.requested_capabilities = CapabilitySet::try_new([
+        CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap(),
+        CapabilityId::try_new(capability::WORKSPACE_SYNC).unwrap(),
+    ])
+    .unwrap();
+    client
+        .send(&ClientMessage::Pair(PairRequest::new(
+            identity,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut client).await,
+        ServerMessage::Paired(_)
+    ));
+    connect_workspace(&mut client, &fixture.workspace).await;
+    let ResponseBody::WorkbenchGet(initial) = request(
+        &mut client,
+        2,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: fixture.workspace.clone(),
+        }),
+    )
+    .await
+    else {
+        panic!("workbench read")
+    };
+    let result = request(
+        &mut client,
+        3,
+        RequestBody::WorkbenchPut(WorkbenchPutRequest {
+            workspace_id: fixture.workspace.clone(),
+            expected_revision: initial.revision,
+            view: serde_json::json!({}),
+        }),
+    )
+    .await;
+    assert!(matches!(result, ResponseBody::Error(error) if error.code.as_str() == FORBIDDEN));
+}
+
 async fn receive(client: &mut QuicClient) -> ServerMessage {
     tokio::time::timeout(Duration::from_secs(10), client.recv())
         .await
@@ -258,6 +389,209 @@ fn run(test: impl std::future::Future<Output = ()>) {
         .build()
         .unwrap()
         .block_on(test);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_user_session_lists_and_connects_registered_workspaces_without_management() {
+    let fixture = Fixture::new().await;
+    let other_root = tempfile::tempdir().unwrap();
+    let other = fixture.host.register_workspace(other_root.path()).unwrap();
+    let (mut scoped, _) = fixture.pair("scoped-client").await;
+    let ResponseBody::WorkspaceList(scoped_list) = request(
+        &mut scoped,
+        1,
+        RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+    )
+    .await
+    else {
+        panic!("scoped list")
+    };
+    assert_eq!(scoped_list.workspaces.len(), 1);
+    assert_eq!(scoped_list.workspaces[0].workspace_id, fixture.workspace);
+
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_user_session_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut first = fixture.connect().await;
+    first
+        .send(&ClientMessage::Pair(PairRequest::new(
+            hello("user-client"),
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    let ServerMessage::Paired(mut paired) = receive(&mut first).await else {
+        panic!("user pairing")
+    };
+    let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+    let manage = CapabilityId::try_new(capability::HOST_MANAGE).unwrap();
+    assert!(paired.hello.granted_capabilities.contains(&switch));
+    assert!(!paired.hello.granted_capabilities.contains(&manage));
+    let credential = paired.credential_id().unwrap();
+    let secret = zeroize::Zeroizing::new(paired.take_secret().unwrap());
+    let ResponseBody::WorkspaceList(list) = request(
+        &mut first,
+        1,
+        RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+    )
+    .await
+    else {
+        panic!("user list")
+    };
+    assert_eq!(list.workspaces.len(), 2);
+    assert!(
+        list.workspaces
+            .iter()
+            .any(|workspace| workspace.workspace_id == other)
+    );
+    let mut second = fixture.connect().await;
+    second
+        .send(&ClientMessage::Authenticate(AuthenticateRequest::new(
+            hello("user-client"),
+            other.clone(),
+            &credential,
+            &secret,
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut second).await,
+        ServerMessage::Authenticated(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut second,
+            1,
+            RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: other
+            })
+        )
+        .await,
+        ResponseBody::WorkspaceConnect(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut second,
+            2,
+            RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: fixture.workspace.clone()
+            })
+        )
+        .await,
+        ResponseBody::Error(_)
+    ));
+    let third_root = tempfile::tempdir().unwrap();
+    assert!(matches!(
+        request(
+            &mut first,
+            2,
+            RequestBody::HostRegister(HostRegisterRequest {
+                root: third_root.path().to_string_lossy().into_owned()
+            })
+        )
+        .await,
+        ResponseBody::HostRegister(_)
+    ));
+    assert!(matches!(
+        request(&mut first, 3, RequestBody::HostWorktree(lapis_editor_core::TaskId::new("untrusted"))).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn common_async_client_sends_requests_to_real_host() {
+    let fixture = Fixture::new().await;
+    let config = fixture.config("async-client").await;
+    let connection = tokio::task::spawn_blocking(move || QuicConnection::connect(config))
+        .await
+        .unwrap()
+        .unwrap();
+    let result = AsyncHostConnection::request(
+        &connection,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id: fixture.workspace.clone(),
+            reason: SnapshotReason::Initial,
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(result, ResponseBody::SnapshotResync(_)));
+    let mut sync = async_workbench::AsyncWorkbenchSync::new(&connection);
+    let initial = sync.open(fixture.workspace.clone()).await.unwrap();
+    let view = lapis_workbench::ConversationViewState {
+        show_panel_controls: false,
+        ..Default::default()
+    };
+    let updated = async_workbench::update(&connection, &fixture.workspace, initial.revision, &view)
+        .await
+        .unwrap();
+    assert!(matches!(
+        updated,
+        lapis_workbench::WorkbenchUpdate::Updated(_)
+    ));
+    let local = lapis_workbench::ConversationViewState::default();
+    let conflict = sync.save(local.clone()).await.unwrap();
+    assert!(matches!(
+        conflict,
+        lapis_workbench::WorkbenchUpdate::Conflict(_)
+    ));
+    assert_eq!(sync.pending(), Some(&local));
+    assert!(matches!(
+        sync.retry_local().await.unwrap(),
+        lapis_workbench::WorkbenchUpdate::Updated(_)
+    ));
+    assert!(sync.pending().is_none());
+    let connection = connection.clone();
+    let workspace = fixture.workspace.clone();
+    let response = tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
+            use std::{
+                future::Future,
+                task::{Context, Poll, Wake, Waker},
+            };
+            struct ThreadWake(std::thread::Thread);
+            impl Wake for ThreadWake {
+                fn wake(self: Arc<Self>) {
+                    self.0.unpark();
+                }
+                fn wake_by_ref(self: &Arc<Self>) {
+                    self.0.unpark();
+                }
+            }
+            let waker = Waker::from(Arc::new(ThreadWake(std::thread::current())));
+            let mut context = Context::from_waker(&waker);
+            let request = AsyncHostConnection::request(
+                &connection,
+                RequestBody::SnapshotResync(SnapshotRequest {
+                    workspace_id: workspace,
+                    reason: SnapshotReason::Initial,
+                }),
+            );
+            let mut request = std::pin::pin!(request);
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                match request.as_mut().poll(&mut context) {
+                    Poll::Ready(result) => break result,
+                    Poll::Pending => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "async request timed out"
+                        );
+                        std::thread::park_timeout(Duration::from_millis(100));
+                    }
+                }
+            }
+        })
+        .join()
+        .unwrap()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(response, ResponseBody::SnapshotResync(_)));
 }
 
 #[test]

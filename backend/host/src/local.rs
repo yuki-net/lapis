@@ -406,7 +406,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     // Host自身が終了まで所有する。PIDが他ユーザーへ再利用されても、このleaseはOSが解放する。
     let _lease = HostLease::acquire(directory)?;
     let root = root.canonicalize()?;
-    let host = BackendHost::start()?;
+    let host = BackendHost::start_with_state_directory(directory.to_owned())?;
     let workspace = host.register_workspace(&root)?;
     let certified = rcgen::generate_simple_self_signed(vec!["lapis-host".to_owned()])?;
     let tls = tls13_server_config(
@@ -436,7 +436,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>()
     );
-    let token = auth.begin_pairing(workspace.clone())?;
+    let token = auth.begin_owner_pairing(workspace.clone())?;
     let credential =
         auth.complete_pairing(&token, &ClientId::try_new(&client)?, &owner_capabilities)?;
     let auth = Arc::new(Mutex::new(auth));

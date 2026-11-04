@@ -1,5 +1,6 @@
 use crate::client_adapter::{ClientWorker, DocumentClient, ResponseGate};
-use gpui::{Context, Timer};
+use crate::timer::Timer;
+use gpui::Context;
 use lapis_document::Revision;
 use lapis_editor_core::DocumentId;
 use lapis_lsp::{DefinitionTarget, Diagnostic, LspPosition};

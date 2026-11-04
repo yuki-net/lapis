@@ -101,13 +101,34 @@ struct ConnectionInner {
     sender: tokio::sync::mpsc::Sender<Command>,
 }
 enum Command {
-    Request(
-        RequestBody,
-        std::time::Instant,
-        mpsc::SyncSender<Result<ResponseBody, BackendServiceError>>,
-    ),
+    Request(RequestBody, std::time::Instant, RequestReply),
     Subscribe(mpsc::SyncSender<BackendEventReceiver>),
     Disconnect(mpsc::SyncSender<()>),
+}
+
+enum RequestReply {
+    Sync(mpsc::SyncSender<Result<ResponseBody, BackendServiceError>>),
+    Async(tokio::sync::oneshot::Sender<Result<ResponseBody, BackendServiceError>>),
+}
+
+impl RequestReply {
+    fn is_cancelled(&self) -> bool {
+        match self {
+            Self::Sync(_) => false,
+            Self::Async(sender) => sender.is_closed(),
+        }
+    }
+
+    fn send(self, result: Result<ResponseBody, BackendServiceError>) {
+        match self {
+            Self::Sync(sender) => {
+                let _ = sender.send(result);
+            }
+            Self::Async(sender) => {
+                let _ = sender.send(result);
+            }
+        }
+    }
 }
 
 impl QuicConnection {
@@ -151,7 +172,7 @@ impl QuicConnection {
             .try_send(Command::Request(
                 body,
                 std::time::Instant::now() + Duration::from_secs(70),
-                sender,
+                RequestReply::Sync(sender),
             ))
             .map_err(|_| BackendServiceError::Unavailable)?;
         receiver
@@ -181,14 +202,32 @@ impl QuicConnection {
     }
 }
 
+impl lapis_client_core::AsyncHostConnection for QuicConnection {
+    async fn request(&self, body: RequestBody) -> Result<ResponseBody, String> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        self.inner
+            .sender
+            .try_send(Command::Request(
+                body,
+                std::time::Instant::now() + Duration::from_secs(70),
+                RequestReply::Async(sender),
+            ))
+            .map_err(|_| "Clientの処理待ちが上限に達したか接続が終了しました".to_owned())?;
+        receiver
+            .await
+            .map_err(|_| "Host接続が終了しました".to_owned())?
+            .map_err(|error| error.to_string())
+    }
+}
+
 async fn run(
     config: QuicConnectionConfig,
     mut commands: tokio::sync::mpsc::Receiver<Command>,
     started: mpsc::SyncSender<Result<(), BackendServiceError>>,
 ) {
-    let mut sequence = 0u64;
+    let mut core = lapis_client_core::ClientCore::default();
     let mut subscribers = Vec::new();
-    let mut socket = match restore(&config, &mut sequence, &mut subscribers).await {
+    let mut socket = match restore(&config, &mut core, &mut subscribers).await {
         Ok(client) => Some(client),
         Err(error) => {
             let _ = started.send(Err(error));
@@ -205,8 +244,12 @@ async fn run(
                 command = commands.recv() => command,
                 message = client.recv() => {
                     match message {
-                        Ok(ServerMessage::Event(event)) => publish(&mut subscribers, event),
-                        _ => { socket = None; subscribers.clear(); }
+                        Ok(message) => match core.receive(message) {
+                            Ok(Some(event)) => publish(&mut subscribers, event),
+                            Ok(None) => {},
+                            Err(_) => { socket = None; subscribers.clear(); }
+                        },
+                        _ => { core.disconnect(); socket = None; subscribers.clear(); }
                     }
                     continue;
                 }
@@ -218,6 +261,7 @@ async fn run(
         match command {
             Command::Disconnect(reply) => {
                 close(&mut socket).await;
+                core.disconnect();
                 subscribers.clear();
                 let _ = reply.send(());
             }
@@ -227,17 +271,21 @@ async fn run(
                 let _ = reply.send(BackendEventReceiver::from_receiver(receiver));
             }
             Command::Request(body, deadline, reply) => {
+                // まだ送信していない操作は、待ち手が破棄された後に実行しない。
+                if reply.is_cancelled() {
+                    continue;
+                }
                 if std::time::Instant::now() >= deadline {
-                    let _ = reply.send(Err(BackendServiceError::Unavailable));
+                    reply.send(Err(BackendServiceError::Unavailable));
                     continue;
                 }
                 let result =
                     tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
                         if socket.is_none() {
-                            socket = Some(restore(&config, &mut sequence, &mut subscribers).await?);
+                            socket = Some(restore(&config, &mut core, &mut subscribers).await?);
                         }
                         if let Some(client) = socket.as_mut() {
-                            exchange(client, body, &mut sequence, &mut subscribers).await
+                            exchange(client, body, &mut core, &mut subscribers).await
                         } else {
                             Err(BackendServiceError::Unavailable)
                         }
@@ -246,9 +294,10 @@ async fn run(
                     .unwrap_or(Err(BackendServiceError::Unavailable));
                 if result.is_err() {
                     close(&mut socket).await;
+                    core.disconnect();
                     subscribers.clear();
                 }
-                let _ = reply.send(result);
+                reply.send(result);
             }
         }
     }
@@ -263,12 +312,12 @@ async fn close(socket: &mut Option<QuicClient>) {
 
 async fn restore(
     config: &QuicConnectionConfig,
-    sequence: &mut u64,
+    core: &mut lapis_client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<QuicClient, BackendServiceError> {
     timeout(
         Duration::from_secs(30),
-        restore_inner(config, sequence, subscribers),
+        restore_inner(config, core, subscribers),
     )
     .await
     .unwrap_or(Err(BackendServiceError::Unavailable))
@@ -276,19 +325,21 @@ async fn restore(
 
 async fn restore_inner(
     config: &QuicConnectionConfig,
-    sequence: &mut u64,
+    core: &mut lapis_client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<QuicClient, BackendServiceError> {
     let mut client = config
         .authenticate()
         .await
         .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
+    core.connected()
+        .map_err(|_| BackendServiceError::Unavailable)?;
     let connected = exchange(
         &mut client,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
             workspace_id: config.workspace_id.clone(),
         }),
-        sequence,
+        core,
         subscribers,
     )
     .await?;
@@ -304,7 +355,7 @@ async fn restore_inner(
             workspace_id: config.workspace_id.clone(),
             reason: SnapshotReason::Reconnect,
         }),
-        sequence,
+        core,
         subscribers,
     )
     .await?;
@@ -324,35 +375,51 @@ fn publish(subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>, event: EventE
 async fn exchange(
     client: &mut QuicClient,
     body: RequestBody,
-    sequence: &mut u64,
+    core: &mut lapis_client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<ResponseBody, BackendServiceError> {
-    *sequence = sequence
-        .checked_add(1)
-        .ok_or(BackendServiceError::Unavailable)?;
-    let request = RequestEnvelope {
-        request_id: RequestId::try_new(format!("quic-{sequence}")).expect("bounded request id"),
-        body,
-    };
+    let (request, mut reply) = core
+        .begin(body)
+        .map_err(|_| BackendServiceError::Unavailable)?;
     let result = timeout(Duration::from_secs(35), async {
         client
-            .send(&ClientMessage::Request(request.clone()))
+            .send(&request)
             .await
             .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
         loop {
-            match client
+            let message = client
                 .recv()
                 .await
-                .map_err(|error| BackendServiceError::Connection(error.to_string()))?
+                .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
+            if let Some(event) = core
+                .receive(message)
+                .map_err(|_| BackendServiceError::Unavailable)?
             {
-                ServerMessage::Event(event) => publish(subscribers, event),
-                ServerMessage::Response(response) if response.matches_request(&request) => {
-                    return Ok(response.body);
+                publish(subscribers, event);
+            }
+            match reply.try_recv() {
+                Ok(Some(Ok(body))) => {
+                    return Ok(body);
                 }
+                Ok(None) => {}
                 _ => return Err(BackendServiceError::Unavailable),
             }
         }
     })
     .await;
     result.unwrap_or(Err(BackendServiceError::Unavailable))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RequestReply;
+
+    #[test]
+    fn cancelled_async_request_is_detected_before_dispatch() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let reply = RequestReply::Async(sender);
+        assert!(!reply.is_cancelled());
+        drop(receiver);
+        assert!(reply.is_cancelled());
+    }
 }

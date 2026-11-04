@@ -1,0 +1,6 @@
+[package]
+name = "lapis-wire"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true

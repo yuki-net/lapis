@@ -7,12 +7,15 @@ use std::{
 };
 
 use lapis_desktop_client::{
-    ConversationRecord, ConversationRepository, ConversationState, Project, ZoneLayoutViewState,
+    ConversationRecord, ConversationRepository, ConversationState, ConversationViewState, Project,
+    WorkbenchSync, WorkbenchWatch, ZoneLayoutViewState,
 };
-use lapis_editor_core::ConversationId;
+use lapis_editor_core::{ConversationId, WorkspaceId};
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use lapis_workbench::WorkbenchConnection;
 use lapis_workspace::WorkspaceError;
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 
 mod workspace;
 pub use workspace::LocalWorkspaceStateRepository;
@@ -194,6 +197,98 @@ impl ConversationRepository for LocalConversationRepository {
     }
 }
 
+/// ローカル保存に加えて、Desktop の Workbench を Host へ公開する。
+pub struct HostConversationRepository {
+    local: Arc<dyn ConversationRepository>,
+    sync: Mutex<WorkbenchSync>,
+    workspace: WorkspaceId,
+}
+
+impl HostConversationRepository {
+    pub fn new(
+        local: Arc<dyn ConversationRepository>,
+        connection: Arc<dyn WorkbenchConnection>,
+        workspace: WorkspaceId,
+        watch: WorkbenchWatch,
+    ) -> Self {
+        let mut sync = WorkbenchSync::new(connection.clone());
+        if let Err(error) = sync.open(workspace.clone()) {
+            eprintln!("HostのWorkbenchを開けません: {error}");
+        } else if let Some(state) = sync.confirmed()
+            && let Some(view) = state.view.clone()
+        {
+            watch.publish(state.revision, view);
+        }
+        let subscription_watch = watch.clone();
+        let subscription_workspace = workspace.clone();
+        std::thread::spawn(move || {
+            let Ok(mut subscription) = connection.subscribe(&subscription_workspace) else {
+                return;
+            };
+            let mut sync = WorkbenchSync::new(connection);
+            if sync.open(subscription_workspace.clone()).is_err() {
+                return;
+            }
+            while subscription
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .is_ok()
+            {
+                if let Ok(Some(state)) = sync.refresh()
+                    && let Some(view) = state.view.clone()
+                {
+                    subscription_watch.publish(state.revision, view);
+                }
+            }
+        });
+        Self {
+            local,
+            sync: Mutex::new(sync),
+            workspace,
+        }
+    }
+}
+
+impl ConversationRepository for HostConversationRepository {
+    fn load(&self) -> Result<ConversationState, WorkspaceError> {
+        self.local.load()
+    }
+
+    fn save(
+        &self,
+        expected: &ConversationState,
+        projects: &[Project],
+        records: &[ConversationRecord],
+        active: &ConversationId,
+    ) -> Result<(), WorkspaceError> {
+        self.local.save(expected, projects, records, active)?;
+        let Some(record) = records
+            .iter()
+            .find(|record| &record.id == active)
+            .or_else(|| records.first())
+        else {
+            return Ok(());
+        };
+        let Ok(workspace) = record.workspace.to_shared(self.workspace.clone()) else {
+            return Ok(());
+        };
+        let view = ConversationViewState {
+            layout: record.view.layout.clone(),
+            show_panel_controls: record.view.show_panel_controls,
+            workbench: record.view.workbench.clone(),
+            workspace: Some(workspace),
+        };
+        match self.sync.lock() {
+            Ok(mut sync) => {
+                if let Err(error) = sync.save(view) {
+                    eprintln!("WorkbenchをHostへ保存できません: {error}");
+                }
+            }
+            Err(error) => eprintln!("Workbench同期のlockに失敗しました: {error}"),
+        }
+        Ok(())
+    }
+}
+
 fn atomic_json_write(path: &Path, value: &impl Serialize) -> Result<(), WorkspaceError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|error| WorkspaceError::new(error.to_string()))?;
@@ -223,6 +318,7 @@ mod tests {
     use lapis_localization::LocaleId;
     use lapis_settings::GlobalSettingsRepository;
     use lapis_terminal::TerminalStatus;
+    use lapis_workbench::VersionedViewState;
 
     use super::*;
 
@@ -435,5 +531,87 @@ mod tests {
             LocalConversationRepository::new(path).load().unwrap().2,
             Some(winner)
         );
+    }
+
+    struct SharedWorkbench(Mutex<VersionedViewState>);
+
+    impl lapis_workbench::WorkbenchConnection for SharedWorkbench {
+        fn get(&self, _: &WorkspaceId) -> Result<VersionedViewState, String> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+
+        fn update(
+            &self,
+            _: &WorkspaceId,
+            expected: u64,
+            view: ConversationViewState,
+        ) -> Result<lapis_workbench::WorkbenchUpdate, String> {
+            let mut state = self.0.lock().unwrap();
+            match state.update(expected, view) {
+                Ok(_) => Ok(lapis_workbench::WorkbenchUpdate::Updated(state.clone())),
+                Err(lapis_workbench::ViewUpdateError::Conflict { .. }) => {
+                    Ok(lapis_workbench::WorkbenchUpdate::Conflict(state.clone()))
+                }
+                Err(_) => Err("overflow".into()),
+            }
+        }
+
+        fn subscribe(
+            &self,
+            _: &WorkspaceId,
+        ) -> Result<Box<dyn lapis_workbench::WorkbenchSubscription>, String> {
+            Err("unsupported".into())
+        }
+    }
+
+    #[test]
+    fn host_conversation_repository_publishes_the_workbench_view() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalConversationRepository::new(
+            directory.path().join("conversations.json"),
+        ));
+        let workbench = Arc::new(SharedWorkbench(Mutex::new(VersionedViewState::default())));
+        let workspace = WorkspaceId::new("workspace-1");
+        let repository = HostConversationRepository::new(
+            local,
+            workbench.clone(),
+            workspace.clone(),
+            WorkbenchWatch::new(),
+        );
+        let record = ConversationRecord {
+            id: ConversationId::new("conversation-1"),
+            title: "Web".to_owned(),
+            workspace: WorkspaceSnapshot {
+                root: Some(directory.path().to_owned()),
+                open_documents: Vec::new(),
+                active_path: None,
+                active_document_id: None,
+            },
+            view: ConversationViewState {
+                show_panel_controls: false,
+                ..Default::default()
+            },
+            selected_execution: None,
+            terminals: Vec::new(),
+            environment: None,
+            source_role: lapis_desktop_client::SourceRole::Primary,
+            other_workspace: None,
+            other_terminals: Vec::new(),
+            other_execution: None,
+            parked_sources: Vec::new(),
+        };
+        repository
+            .save(
+                &Default::default(),
+                &[],
+                std::slice::from_ref(&record),
+                &record.id,
+            )
+            .unwrap();
+        let state = workbench.0.lock().unwrap();
+        assert_eq!(state.revision, 1);
+        let view = state.view.as_ref().unwrap();
+        assert!(!view.show_panel_controls);
+        assert_eq!(view.workspace.as_ref().unwrap().workspace_id, workspace);
     }
 }

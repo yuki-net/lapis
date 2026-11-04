@@ -203,7 +203,7 @@ impl BranchPicker {
         self.loading = false;
         self.pending_selection = None;
         if let Some(focus) = self.previous_focus.take() {
-            window.focus(&focus);
+            crate::gpui_compat::focus(window, &focus, cx);
         }
         cx.notify();
     }
@@ -223,7 +223,7 @@ impl BranchPicker {
         self.input
             .update(cx, |input, cx| input.set_text(String::new(), cx));
         self.reload(cx);
-        window.focus(&self.input.focus_handle(cx));
+        crate::gpui_compat::focus(window, &self.input.focus_handle(cx), cx);
         cx.notify();
     }
     fn reload(&mut self, cx: &mut Context<Self>) {

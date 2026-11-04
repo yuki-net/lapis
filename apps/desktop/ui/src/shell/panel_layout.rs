@@ -464,9 +464,9 @@ mod tests {
         let tab_b = PanelTab::tool("b");
         assert!(zone.add_panel(a.clone(), vec![tab_a.clone()], None));
         assert!(zone.add_panel(b.clone(), vec![tab_b], Some((&a, Axis::Horizontal, false))));
-        assert!(!zone.begin_empty_close(&a, std::time::Instant::now()));
+        assert!(!zone.begin_empty_close(&a, crate::time::Instant::now()));
         assert!(zone.panels.get_mut(&a).unwrap().remove(&tab_a));
-        let now = std::time::Instant::now();
+        let now = crate::time::Instant::now();
         assert!(zone.begin_empty_close(&a, now));
         assert_eq!(zone.closing_since(&a), Some(now));
         assert!(zone.valid());
@@ -483,7 +483,7 @@ mod tests {
         let tab = PanelTab::tool("a");
         assert!(zone.add_panel(id.clone(), vec![tab.clone()], None));
         assert!(zone.panels.get_mut(&id).unwrap().remove(&tab));
-        assert!(zone.begin_empty_close(&id, std::time::Instant::now()));
+        assert!(zone.begin_empty_close(&id, crate::time::Instant::now()));
         zone.panels.get_mut(&id).unwrap().activate_without_open(tab);
         assert!(zone.set_panel_open(&id, true));
         assert!(!zone.finish_empty_close(&id));
@@ -521,7 +521,7 @@ mod tests {
         let id = PanelId::new(1);
         assert!(zone.add_panel(id.clone(), vec![PanelTab::tool("a")], None));
         zone.finish_transition_immediately();
-        let start = std::time::Instant::now();
+        let start = crate::time::Instant::now();
         zone.set_open(false);
         let middle = zone.visual_factor(start + std::time::Duration::from_millis(60));
         assert!(middle > 0.0 && middle < 1.0);
@@ -563,7 +563,7 @@ mod tests {
         let restored = Zone::restore(&decoded, &mut parse).unwrap();
         assert_eq!(restored.capture(), saved);
         assert!(zone.panels.get_mut(&first).unwrap().remove(&a));
-        assert!(zone.begin_empty_close(&first, std::time::Instant::now()));
+        assert!(zone.begin_empty_close(&first, crate::time::Instant::now()));
         let saved = zone.capture();
         assert_eq!(saved.panels.len(), 1);
         assert_eq!(saved.panels[0].id, second.as_str());

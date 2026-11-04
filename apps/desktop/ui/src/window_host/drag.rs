@@ -4,6 +4,7 @@ use crate::shell::DraggedPanelTab;
 
 /// 画面全体の物理座標。異なる DPI の Window 間で論理座標を混ぜない。
 #[derive(Clone, Copy, Debug)]
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) struct ScreenPoint {
     pub x: i32,
     pub y: i32,
@@ -103,7 +104,7 @@ impl DesktopRoot {
             let editor = self.group.read(cx).members[&target].editor.clone();
             let _ = handle.update(cx, |_, window, cx| {
                 window.activate_window();
-                window.focus(&editor.focus_handle(cx));
+                crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
             });
         } else if !lapis_target {
             self.detach_tab_at(host, drag.tab, Some(point), cx);

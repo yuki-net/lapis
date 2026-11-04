@@ -134,19 +134,19 @@ impl Render for TerminalFeature {
                     .child(action_button("Shell", true, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.start(cx);
-                            window.focus(&this.focus);
+                            crate::gpui_compat::focus(window, &this.focus, cx);
                         },
                     )))
                     .child(action_button("PowerShell", false, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.start_shell(TerminalShell::PowerShell, cx);
-                            window.focus(&this.focus);
+                            crate::gpui_compat::focus(window, &this.focus, cx);
                         },
                     )))
                     .child(action_button("cmd", false, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.start_shell(TerminalShell::Cmd, cx);
-                            window.focus(&this.focus);
+                            crate::gpui_compat::focus(window, &this.focus, cx);
                         },
                     )))
                     .child(
@@ -156,7 +156,7 @@ impl Render for TerminalFeature {
                     .child(action_button("Paste", false, cx).on_click(cx.listener(
                         |this, _, window, cx| {
                             this.send_clipboard(cx);
-                            window.focus(&this.focus);
+                            crate::gpui_compat::focus(window, &this.focus, cx);
                         },
                     )))
                     .child(
@@ -181,7 +181,7 @@ impl Render for TerminalFeature {
                         action_button(format!("{} - {status:?}", index + 1), selected, cx).on_click(
                             cx.listener(move |this, _, window, cx| {
                                 this.selected = Some(id.clone());
-                                window.focus(&this.focus);
+                                crate::gpui_compat::focus(window, &this.focus, cx);
                                 cx.notify();
                             }),
                         )
@@ -191,7 +191,7 @@ impl Render for TerminalFeature {
                 let label = format!("Attach: {} - {:?}", terminal.id.as_str(), terminal.status);
                 action_button(label, false, cx).on_click(cx.listener(move |this, _, window, cx| {
                     this.attach(terminal.id.clone(), cx);
-                    window.focus(&this.focus);
+                    crate::gpui_compat::focus(window, &this.focus, cx);
                 }))
             }))
             .child(self.message.clone())
@@ -210,7 +210,9 @@ impl Render for TerminalFeature {
                         .text_color(theme::colors(cx).text_primary)
                         .on_mouse_down(
                             gpui::MouseButton::Left,
-                            cx.listener(|this, _, window, _| window.focus(&this.focus)),
+                            cx.listener(|this, _, window, cx| {
+                                crate::gpui_compat::focus(window, &this.focus, cx)
+                            }),
                         )
                         // top spacer: 見えていない上部行の高さを確保
                         .when(top_spacer_height > px(0.0), |el| {

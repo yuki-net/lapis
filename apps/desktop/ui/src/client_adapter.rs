@@ -1,6 +1,7 @@
+use crate::timer::Timer;
 use std::{sync::mpsc, time::Duration};
 
-use gpui::{Context, Timer};
+use gpui::Context;
 use lapis_desktop_client::{
     ConversationRecord, ConversationSession, ConversationViewState, DocumentTab, EditorSession,
     LspSession,
@@ -65,6 +66,33 @@ impl DocumentCloseReport {
 }
 
 impl DocumentClient {
+    /// HostのWorkbenchを、未保存変更が無い場合だけEditorへ適用する。
+    pub(crate) fn restore_workbench(
+        &mut self,
+        shared: lapis_desktop_client::SharedWorkspaceView,
+    ) -> Result<ClientSnapshot, String> {
+        if self.editor.is_dirty() {
+            return Err("未保存の変更があるためHostの状態を適用しません".into());
+        }
+        let workspace = self
+            .editor
+            .workspace_id()
+            .cloned()
+            .ok_or("Workspaceがありません")?;
+        let root = self
+            .editor
+            .workspace_root()
+            .map(ToOwned::to_owned)
+            .ok_or("Workspaceがありません")?;
+        let snapshot =
+            lapis_desktop_client::WorkspaceSnapshot::from_shared(&shared, &workspace, root)
+                .map_err(|error| error.to_string())?;
+        self.editor
+            .restore_snapshot(snapshot)
+            .map_err(|error| error.to_string())?;
+        Ok(self.reconcile_snapshot())
+    }
+
     /// close済みIDは、表示状態保存や正本再取得の結果から独立して返す。
     pub(crate) fn close_documents(
         &mut self,

@@ -10,6 +10,10 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum RequestBody {
+    #[serde(rename = "workbench.get")]
+    WorkbenchGet(crate::WorkbenchGetRequest),
+    #[serde(rename = "workbench.put")]
+    WorkbenchPut(crate::WorkbenchPutRequest),
     #[serde(rename = "host.worktree_path")]
     HostWorktree(lapis_editor_core::TaskId),
     #[serde(rename = "host.register_workspace")]
@@ -67,6 +71,8 @@ pub enum RequestBody {
 impl RequestBody {
     pub const fn method(&self) -> &'static str {
         match self {
+            Self::WorkbenchGet(_) => "workbench.get",
+            Self::WorkbenchPut(_) => "workbench.put",
             Self::HostWorktree(_) => "host.worktree_path",
             Self::HostRegister(_) => "host.register_workspace",
             Self::DocumentRelocate(_) => "document.relocate",
@@ -98,9 +104,10 @@ impl RequestBody {
 
     pub const fn required_capability(&self) -> &'static str {
         match self {
-            Self::HostRegister(_) | Self::HostWorktree(_) | Self::DocumentRelocate(_) => {
-                capability::HOST_MANAGE
-            }
+            Self::WorkbenchGet(_) => capability::WORKSPACE_SYNC,
+            Self::WorkbenchPut(_) => capability::WORKBENCH_WRITE,
+            Self::HostRegister(_) => capability::WORKSPACES_REGISTER,
+            Self::HostWorktree(_) | Self::DocumentRelocate(_) => capability::HOST_MANAGE,
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)
@@ -128,6 +135,8 @@ impl RequestBody {
     /// Request自身が明示するWorkspace。Resource ID経由のRequestはbackend所有権表で解決する。
     pub const fn workspace_id(&self) -> Option<&WorkspaceId> {
         match self {
+            Self::WorkbenchGet(request) => Some(&request.workspace_id),
+            Self::WorkbenchPut(request) => Some(&request.workspace_id),
             Self::HostRegister(_) | Self::HostWorktree(_) | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),
@@ -160,6 +169,22 @@ impl RequestBody {
 mod tests {
     use super::*;
     use crate::{TerminalSize, WorkspaceId};
+
+    #[test]
+    fn workbench_write_requires_its_own_capability_and_workspace() {
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let read = RequestBody::WorkbenchGet(crate::WorkbenchGetRequest {
+            workspace_id: workspace_id.clone(),
+        });
+        let write = RequestBody::WorkbenchPut(crate::WorkbenchPutRequest {
+            workspace_id: workspace_id.clone(),
+            expected_revision: 0,
+            view: serde_json::json!({}),
+        });
+        assert_eq!(read.required_capability(), capability::WORKSPACE_SYNC);
+        assert_eq!(write.required_capability(), capability::WORKBENCH_WRITE);
+        assert_eq!(write.workspace_id(), Some(&workspace_id));
+    }
 
     #[test]
     fn document_discard_is_revision_checked_write_operation() {

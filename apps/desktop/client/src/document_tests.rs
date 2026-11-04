@@ -631,6 +631,11 @@ fn restored_views_do_not_overwrite_live_canonical_content() {
     editor.replace_range(0..3, "new").unwrap();
     editor.restore_snapshot(snapshot).unwrap();
     assert_eq!(editor.active_text().unwrap(), "new");
+    assert!(editor.restore_warning().is_some());
+    let backup = editor.tabs().into_iter().find(|tab| !tab.active).unwrap();
+    assert!(editor.activate_document(&backup.id));
+    assert_eq!(editor.active_text().unwrap(), "old");
+    assert!(editor.is_dirty());
 }
 
 #[test]

@@ -20,6 +20,7 @@ pub(crate) enum UiCommand {
     CloseWindow,
     DetachTab(crate::shell::PanelTab),
     DockTab(crate::shell::PanelTab),
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     MoveTab(crate::shell::DraggedPanelTab, crate::shell::PanelId),
     ReleaseTab(
         crate::shell::DraggedPanelTab,
