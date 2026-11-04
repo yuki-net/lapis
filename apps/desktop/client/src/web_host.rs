@@ -23,9 +23,10 @@ use lapis_client_api::{
     DocumentInspectRequest, DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit,
     DocumentTransaction, EventBody, EventEnvelope, FileTreeKind, FileTreeRequest, PairRequest,
     ProtocolRange, RequestBody, ResponseBody, Revision as ApiRevision, ServerMessage,
-    TerminalId as ApiTerminalId, TerminalInputRequest, TerminalResizeRequest, TerminalSize,
-    TerminalStartRequest, TerminalStatus as WireTerminalStatus, TerminalTerminateRequest,
-    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
+    SnapshotReason, SnapshotRequest, TerminalId as ApiTerminalId, TerminalInputRequest,
+    TerminalResizeRequest, TerminalSize, TerminalStartRequest,
+    TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkspaceConnectRequest,
+    WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
 use lapis_client_core::{AsyncHostConnection, browser::BrowserConnection};
 use lapis_document::{
@@ -224,7 +225,36 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     )
     .await?;
     let entries = fetch_tree(&connection, &api_workspace).await?;
+    let terminals = match request(
+        &connection,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id: api_workspace.clone(),
+            reason: SnapshotReason::Reconnect,
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
+        _ => Vec::new(),
+    };
     let replica = Rc::new(RefCell::new(Replica::new(workspace.clone(), entries)));
+    {
+        let mut replica = replica.borrow_mut();
+        for terminal in terminals {
+            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
+            replica.next_terminal += 1;
+            let snapshot = model_terminal_snapshot(&local, &terminal);
+            replica.terminals.insert(
+                local.as_str().to_owned(),
+                TerminalState {
+                    host: Some(terminal.terminal_id.clone()),
+                    snapshot: Some(snapshot.clone()),
+                    events: vec![TerminalEvent::Snapshot(snapshot)],
+                    finished: false,
+                },
+            );
+        }
+    }
     let (commands, receiver) = mpsc::unbounded();
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
