@@ -229,16 +229,14 @@ impl HostConversationRepository {
             if sync.open(subscription_workspace.clone()).is_err() {
                 return;
             }
-            loop {
-                match subscription.recv_timeout(std::time::Duration::from_secs(1)) {
-                    Ok(_) => {
-                        if let Ok(Some(state)) = sync.refresh()
-                            && let Some(view) = state.view.clone()
-                        {
-                            subscription_watch.publish(state.revision, view);
-                        }
-                    }
-                    Err(_) => break,
+            while subscription
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .is_ok()
+            {
+                if let Ok(Some(state)) = sync.refresh()
+                    && let Some(view) = state.view.clone()
+                {
+                    subscription_watch.publish(state.revision, view);
                 }
             }
         });
