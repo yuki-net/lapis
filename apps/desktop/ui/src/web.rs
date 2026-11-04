@@ -7,13 +7,14 @@ use std::{
     sync::Arc,
 };
 
+use crate::{
+    DesktopServices, InitialView,
+    web_prototype::{PrototypeBackend, ROOT},
+};
 use lapis_desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
-use lapis_desktop_ui::{DesktopServices, InitialView};
-
-use crate::prototype::{PrototypeBackend, ROOT};
 
 thread_local! {
     static APPLICATION: RefCell<Option<gpui_preview::ApplicationHandle>> = const { RefCell::new(None) };
@@ -52,13 +53,13 @@ pub fn start(backend_preference: &str) {
         conversation,
         settings,
     );
-    let handle = lapis_desktop_ui::run_web(
+    let handle = crate::run_web(
         session,
         services,
         InitialView::default(),
         vec![
-            Cow::Borrowed(include_bytes!("../assets/IBMPlexSans-Regular.ttf")),
-            Cow::Borrowed(include_bytes!("../assets/IBMPlexSans-SemiBold.ttf")),
+            Cow::<'static, [u8]>::Borrowed(include_bytes!("../assets/IBMPlexSans-Regular.ttf")),
+            Cow::<'static, [u8]>::Borrowed(include_bytes!("../assets/IBMPlexSans-SemiBold.ttf")),
         ],
         backend_preference,
         || READY.with(|ready| ready.set(true)),

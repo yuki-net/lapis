@@ -20,8 +20,15 @@ mod shell;
 pub mod theme;
 mod timer;
 pub mod tokens;
+#[cfg(target_family = "wasm")]
+mod web;
+#[cfg(target_family = "wasm")]
+mod web_prototype;
 mod window_host;
 mod workbench;
+
+#[cfg(target_family = "wasm")]
+pub use web::{is_ready, start};
 
 /// wasmにはstdの時刻APIが無いため、ブラウザーではweb-timeを使う。
 pub(crate) mod time {

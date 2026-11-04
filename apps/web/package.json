@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "wasm": "cargo build -p lapis-web --target wasm32-unknown-unknown --profile web && wasm-bindgen --target web --out-dir src/generated/wasm --out-name lapis_web ../../target/wasm32-unknown-unknown/web/lapis_web.wasm",
+    "wasm": "cargo build -p lapis-desktop-ui --target wasm32-unknown-unknown --profile web && wasm-bindgen --target web --out-dir src/generated/wasm --out-name lapis_ui ../../target/wasm32-unknown-unknown/web/lapis_desktop_ui.wasm",
     "predev": "npm run wasm",
     "dev": "vite",
     "prebuild": "npm run wasm",

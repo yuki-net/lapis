@@ -1,5 +1,5 @@
 import "./style.css";
-import init, { is_ready, start } from "./generated/wasm/lapis_web.js";
+import init, { is_ready, start } from "./generated/wasm/lapis_ui.js";
 
 const root = document.querySelector<HTMLElement>("#app");
 if (root === null) {

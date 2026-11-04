@@ -4293,6 +4293,7 @@ version = "0.1.0"
 dependencies = [
  "async-channel 2.5.0",
  "chrono",
+ "console_error_panic_hook",
  "dioxus-devtools",
  "getrandom 0.3.4",
  "gloo-timers",
@@ -4316,6 +4317,7 @@ dependencies = [
  "serde_json",
  "subsecond",
  "syntect",
+ "wasm-bindgen",
  "web-time",
  "windows 0.61.3",
 ]
@@ -4516,26 +4518,15 @@ dependencies = [
 name = "lapis-web"
 version = "0.1.0"
 dependencies = [
- "console_error_panic_hook",
  "futures-channel",
  "futures-util",
  "gloo-timers",
- "gpui-pre",
  "js-sys",
  "lapis-client-api",
  "lapis-client-core",
- "lapis-desktop-client",
- "lapis-desktop-ui",
- "lapis-document",
  "lapis-editor-core",
- "lapis-git",
- "lapis-lsp",
- "lapis-settings",
- "lapis-task",
- "lapis-terminal",
  "lapis-wire",
  "lapis-workbench",
- "lapis-workspace",
  "serde",
  "serde_json",
  "wasm-bindgen",
