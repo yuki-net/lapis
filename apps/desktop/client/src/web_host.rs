@@ -21,9 +21,11 @@ use lapis_client_api::{
     AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
     ClientKind, ClientMessage, CredentialId, DocumentEditRequest, DocumentId as ApiDocumentId,
     DocumentInspectRequest, DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit,
-    DocumentTransaction, FileTreeKind, FileTreeRequest, PairRequest, ProtocolRange, RequestBody,
-    ResponseBody, Revision as ApiRevision, ServerMessage, WorkspaceConnectRequest,
-    WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
+    DocumentTransaction, EventBody, EventEnvelope, FileTreeKind, FileTreeRequest, PairRequest,
+    ProtocolRange, RequestBody, ResponseBody, Revision as ApiRevision, ServerMessage,
+    TerminalId as ApiTerminalId, TerminalInputRequest, TerminalResizeRequest, TerminalSize,
+    TerminalStartRequest, TerminalStatus as WireTerminalStatus, TerminalTerminateRequest,
+    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
 use lapis_client_core::{AsyncHostConnection, browser::BrowserConnection};
 use lapis_document::{
@@ -39,7 +41,10 @@ use lapis_lsp::{
 };
 use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use lapis_task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
-use lapis_terminal::{TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId};
+use lapis_terminal::{
+    TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
+    TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot, TerminalStatus,
+};
 use lapis_workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
@@ -65,7 +70,9 @@ struct Replica {
     entries: Vec<FileEntry>,
     documents: HashMap<DocumentId, DocumentState>,
     by_path: HashMap<PathBuf, DocumentId>,
+    terminals: HashMap<String, TerminalState>,
     next: u64,
+    next_terminal: u64,
     initial: Option<PathBuf>,
 }
 
@@ -76,7 +83,9 @@ impl Replica {
             entries,
             documents: HashMap::new(),
             by_path: HashMap::new(),
+            terminals: HashMap::new(),
             next: 1,
+            next_terminal: 1,
             initial: None,
         }
     }
@@ -107,13 +116,50 @@ struct DocumentState {
     external_change: ExternalChange,
 }
 
+struct TerminalState {
+    host: Option<ApiTerminalId>,
+    snapshot: Option<TerminalSnapshot>,
+    events: Vec<TerminalEvent>,
+    finished: bool,
+}
+
 enum Command {
-    Open { local: DocumentId },
-    Sync { local: DocumentId },
-    Save { local: DocumentId },
-    Reload { local: DocumentId },
-    Discard { local: DocumentId },
-    Close { local: DocumentId },
+    Open {
+        local: DocumentId,
+    },
+    Sync {
+        local: DocumentId,
+    },
+    Save {
+        local: DocumentId,
+    },
+    Reload {
+        local: DocumentId,
+    },
+    Discard {
+        local: DocumentId,
+    },
+    Close {
+        local: DocumentId,
+    },
+    StartTerminal {
+        local: TerminalId,
+        cwd: Option<PathBuf>,
+        columns: u16,
+        rows: u16,
+    },
+    TerminalInput {
+        local: TerminalId,
+        input: TerminalInput,
+    },
+    TerminalResize {
+        local: TerminalId,
+        columns: u16,
+        rows: u16,
+    },
+    TerminalTerminate {
+        local: TerminalId,
+    },
 }
 
 /// Host接続の設定。ページのクエリかlocalStorageから渡される。
@@ -132,41 +178,44 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     let workspace = WorkspaceId::new(api_workspace.as_str());
     let hello = hello(&config.client_id)?;
     let mut fresh_credential = None;
+    let can_retry_pair = config.credential.is_some() && config.token.is_some();
     let auth = match config.credential.as_deref() {
         Some(credential) => {
             let stored: StoredCredential =
                 serde_json::from_str(credential).map_err(|_| "credentialの形式が不正です")?;
             let id = CredentialId::parse(stored.id).map_err(|_| "credential IDが不正です")?;
             let secret = decode_hex(&stored.secret)?;
-            let request = AuthenticateRequest::new(hello, api_workspace.clone(), &id, &secret);
+            let request =
+                AuthenticateRequest::new(hello.clone(), api_workspace.clone(), &id, &secret);
             ClientMessage::Authenticate(request)
         }
         None => {
             let token = config.token.as_deref().ok_or("pairing tokenが必要です")?;
             let secret = decode_hex(token)?;
-            let request = PairRequest::new(hello, &secret);
+            let request = PairRequest::new(hello.clone(), &secret);
             ClientMessage::Pair(request)
         }
     };
-    let (connection, response) = BrowserConnection::connect(&config.url, auth)
-        .await
-        .map_err(|error| error.to_string())?;
-    if let ServerMessage::Paired(mut paired) = response {
-        let id = paired
-            .credential_id()
-            .map_err(|_| "credential IDが不正です")?;
-        let secret = paired
-            .take_secret()
-            .map_err(|_| "credential secretが不正です")?;
-        fresh_credential = Some(
-            serde_json::to_string(&StoredCredential {
-                id: id.as_str().to_owned(),
-                secret: encode_hex(&secret),
-            })
-            .map_err(|_| "credentialを保存できません")?,
-        );
-    }
-    let connection = Rc::new(connection);
+    let connection = match BrowserConnection::connect(&config.url, auth).await {
+        Ok((connection, response)) => {
+            store_credential(&mut fresh_credential, response)?;
+            connection
+        }
+        Err(_) if can_retry_pair => {
+            let token = config.token.as_deref().ok_or("pairing tokenが必要です")?;
+            let secret = decode_hex(token)?;
+            let request = PairRequest::new(hello.clone(), &secret);
+            let (connection, response) =
+                BrowserConnection::connect(&config.url, ClientMessage::Pair(request))
+                    .await
+                    .map_err(|error| error.to_string())?;
+            store_credential(&mut fresh_credential, response)?;
+            connection
+        }
+        Err(error) => return Err(error),
+    };
+    let mut connection = Rc::new(connection);
+    let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
     request(
         &connection,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
@@ -185,6 +234,9 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         })
     });
     wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
+    if let Some(events) = events {
+        wasm_bindgen_futures::spawn_local(event_pump(events, replica.clone()));
+    }
     preload(&connection, &replica).await?;
     Ok(fresh_credential)
 }
@@ -199,6 +251,8 @@ fn hello(client_id: &str) -> Result<ClientHello, String> {
         "workspace.documents.write",
         "workspace.files.read",
         "workspace.files.write",
+        "workspace.terminal.start",
+        "workspace.terminal.control",
     ]
     .into_iter()
     .map(|capability| {
@@ -369,6 +423,98 @@ async fn pump(
         if let Err(error) = handle(&connection, &replica, command).await {
             web_sys::console::warn_1(&format!("Host同期: {error}").into());
         }
+    }
+}
+
+async fn event_pump(mut events: mpsc::Receiver<EventEnvelope>, replica: Rc<RefCell<Replica>>) {
+    while let Some(event) = events.next().await {
+        let mut replica = replica.borrow_mut();
+        match event.body {
+            EventBody::TerminalDelta { terminal_id, delta } => {
+                if let Some(state) = replica
+                    .terminals
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&terminal_id))
+                {
+                    state.events.push(TerminalEvent::Delta(delta));
+                }
+            }
+            EventBody::TerminalStatus {
+                terminal_id,
+                status,
+            } => {
+                if let Some(state) = replica
+                    .terminals
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&terminal_id))
+                {
+                    match status {
+                        WireTerminalStatus::Exited | WireTerminalStatus::Terminated => {
+                            state.events.push(TerminalEvent::Exited { code: None });
+                            state.finished = true;
+                        }
+                        WireTerminalStatus::Failed => {
+                            state
+                                .events
+                                .push(TerminalEvent::Failed("Terminalが失敗しました".into()));
+                            state.finished = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatus {
+    match status {
+        WireTerminalStatus::Starting | WireTerminalStatus::Running => TerminalStatus::Running,
+        WireTerminalStatus::Exited | WireTerminalStatus::Terminated => TerminalStatus::Exited,
+        WireTerminalStatus::Failed => TerminalStatus::Failed,
+        WireTerminalStatus::Disconnected => TerminalStatus::Disconnected,
+    }
+}
+
+fn model_terminal_snapshot(
+    local: &TerminalId,
+    snapshot: &lapis_client_api::TerminalSnapshot,
+) -> TerminalSnapshot {
+    TerminalSnapshot {
+        id: local.clone(),
+        cwd: snapshot
+            .cwd
+            .as_ref()
+            .map(|path| Path::new(ROOT).join(path.as_str()))
+            .unwrap_or_default(),
+        status: model_terminal_status(snapshot.status),
+        revision: snapshot.revision,
+        screen: snapshot.screen.clone(),
+    }
+}
+
+fn full_terminal_delta(snapshot: &TerminalSnapshot) -> TerminalDelta {
+    TerminalDelta {
+        revision: snapshot.revision,
+        size: snapshot.screen.size,
+        changed_rows: snapshot
+            .screen
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(row, value)| TerminalRowUpdate {
+                row: row as u16,
+                value: value.clone(),
+            })
+            .collect(),
+        cursor: snapshot.screen.cursor,
+        modes: snapshot.screen.modes,
+        scrollback: Some(TerminalScrollbackDelta {
+            reset: true,
+            dropped: 0,
+            rows: snapshot.screen.scrollback.clone(),
+        }),
     }
 }
 
@@ -549,6 +695,118 @@ async fn handle(
                 replica.by_path.remove(&path);
             }
         }
+        Command::StartTerminal {
+            local,
+            cwd,
+            columns,
+            rows,
+        } => {
+            let workspace_id = replica.borrow().workspace.clone();
+            let cwd = match cwd.as_deref() {
+                Some(path) => match path.strip_prefix(ROOT) {
+                    Ok(relative) if relative.as_os_str().is_empty() => None,
+                    Ok(relative) => Some(
+                        WorkspaceRelativePath::from_path(relative)
+                            .map_err(|_| "Terminalのcwdが不正です")?,
+                    ),
+                    Err(_) => None,
+                },
+                None => None,
+            };
+            let body = request(
+                connection,
+                RequestBody::TerminalStart(TerminalStartRequest {
+                    workspace_id: api_workspace(&workspace_id),
+                    cwd,
+                    command: None,
+                    shell: Default::default(),
+                    size: TerminalSize { columns, rows },
+                }),
+            )
+            .await?;
+            let ResponseBody::TerminalStart(response) = body else {
+                return Err("TerminalStart応答が不正です".into());
+            };
+            let mut replica = replica.borrow_mut();
+            if let Some(state) = replica.terminals.get_mut(local.as_str()) {
+                state.host = Some(response.terminal.terminal_id.clone());
+                let snapshot = model_terminal_snapshot(&local, &response.terminal);
+                state.snapshot = Some(snapshot.clone());
+                state.events.push(TerminalEvent::Snapshot(snapshot));
+            }
+        }
+        Command::TerminalInput { local, input } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .terminals
+                    .get(local.as_str())
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let _ = request(
+                    connection,
+                    RequestBody::TerminalInput(TerminalInputRequest {
+                        terminal_id: host,
+                        input,
+                    }),
+                )
+                .await;
+            }
+        }
+        Command::TerminalResize {
+            local,
+            columns,
+            rows,
+        } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .terminals
+                    .get(local.as_str())
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let body = request(
+                    connection,
+                    RequestBody::TerminalResize(TerminalResizeRequest {
+                        terminal_id: host,
+                        size: TerminalSize { columns, rows },
+                    }),
+                )
+                .await?;
+                let ResponseBody::TerminalResize(response) = body else {
+                    return Err("TerminalResize応答が不正です".into());
+                };
+                let mut replica = replica.borrow_mut();
+                if let Some(state) = replica.terminals.get_mut(local.as_str()) {
+                    let snapshot = model_terminal_snapshot(&local, &response.terminal);
+                    let delta = full_terminal_delta(&snapshot);
+                    state.snapshot = Some(snapshot);
+                    state.events.push(TerminalEvent::Delta(delta));
+                }
+            }
+        }
+        Command::TerminalTerminate { local } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .terminals
+                    .get(local.as_str())
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let _ = request(
+                    connection,
+                    RequestBody::TerminalTerminate(TerminalTerminateRequest { terminal_id: host }),
+                )
+                .await;
+            }
+            if let Some(state) = replica.borrow_mut().terminals.get_mut(local.as_str()) {
+                state.events.push(TerminalEvent::Exited { code: None });
+                state.finished = true;
+            }
+        }
     }
     Ok(())
 }
@@ -633,6 +891,25 @@ fn decode_hex(value: &str) -> Result<[u8; 32], String> {
         output[index] = (high << 4) | low;
     }
     Ok(output)
+}
+
+fn store_credential(fresh: &mut Option<String>, response: ServerMessage) -> Result<(), String> {
+    if let ServerMessage::Paired(mut paired) = response {
+        let id = paired
+            .credential_id()
+            .map_err(|_| "credential IDが不正です")?;
+        let secret = paired
+            .take_secret()
+            .map_err(|_| "credential secretが不正です")?;
+        *fresh = Some(
+            serde_json::to_string(&StoredCredential {
+                id: id.as_str().to_owned(),
+                secret: encode_hex(&secret),
+            })
+            .map_err(|_| "credentialを保存できません")?,
+        );
+    }
+    Ok(())
 }
 
 fn encode_hex(bytes: &[u8]) -> String {
@@ -1065,23 +1342,133 @@ impl LanguageServerBackend for WebBackend {
 }
 
 impl TerminalBackend for WebBackend {
-    fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
-        Err(TerminalError::new(UNAVAILABLE))
+    fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
     }
-    fn input(
+
+    fn start_with_shell(
         &self,
-        _: &TerminalId,
-        _: &lapis_terminal::TerminalInput,
-    ) -> Result<(), TerminalError> {
-        Err(TerminalError::new(UNAVAILABLE))
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        shell: lapis_terminal::TerminalShell,
+    ) -> Result<TerminalId, TerminalError> {
+        if shell != lapis_terminal::TerminalShell::Default {
+            return Err(TerminalError::new("この接続ではshellを指定できません"));
+        }
+        self.with(|state| {
+            let mut replica = state.replica.borrow_mut();
+            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
+            replica.next_terminal += 1;
+            replica.terminals.insert(
+                local.as_str().to_owned(),
+                TerminalState {
+                    host: None,
+                    snapshot: None,
+                    events: Vec::new(),
+                    finished: false,
+                },
+            );
+            let _ = state.commands.unbounded_send(Command::StartTerminal {
+                local: local.clone(),
+                cwd: Some(cwd.to_owned()),
+                columns,
+                rows,
+            });
+            local
+        })
+        .map_err(TerminalError::new)
     }
-    fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<TerminalDelta, TerminalError> {
-        Err(TerminalError::new(UNAVAILABLE))
+
+    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
+        self.with(|state| {
+            let _ = state.commands.unbounded_send(Command::TerminalInput {
+                local: id.clone(),
+                input: input.clone(),
+            });
+        })
+        .map_err(TerminalError::new)
     }
-    fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
-        Err(TerminalError::new(UNAVAILABLE))
+
+    fn resize(
+        &self,
+        id: &TerminalId,
+        columns: u16,
+        rows: u16,
+    ) -> Result<TerminalDelta, TerminalError> {
+        let delta = self
+            .with(|state| {
+                let replica = state.replica.borrow();
+                let delta = match replica
+                    .terminals
+                    .get(id.as_str())
+                    .and_then(|state| state.snapshot.as_ref())
+                {
+                    Some(snapshot) => full_terminal_delta(snapshot),
+                    None => return Err("Terminalがまだ開始していません".to_owned()),
+                };
+                let _ = state.commands.unbounded_send(Command::TerminalResize {
+                    local: id.clone(),
+                    columns,
+                    rows,
+                });
+                Ok(delta)
+            })
+            .map_err(TerminalError::new)?;
+        delta.map_err(TerminalError::new)
     }
-    fn terminate(&self, _: &TerminalId) -> Result<(), TerminalError> {
-        Err(TerminalError::new(UNAVAILABLE))
+
+    fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+        let events = self
+            .with(|state| {
+                let mut replica = state.replica.borrow_mut();
+                let terminal = replica
+                    .terminals
+                    .get_mut(id.as_str())
+                    .ok_or_else(|| "Terminalがありません".to_owned())?;
+                if terminal.finished && terminal.events.is_empty() {
+                    return Err("Terminalは終了しました".to_owned());
+                }
+                Ok(std::mem::take(&mut terminal.events))
+            })
+            .map_err(TerminalError::new)?;
+        events.map_err(TerminalError::new)
+    }
+
+    fn list(&self, _: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        self.with(|state| {
+            state
+                .replica
+                .borrow()
+                .terminals
+                .values()
+                .filter_map(|state| state.snapshot.clone())
+                .collect()
+        })
+        .map_err(TerminalError::new)
+    }
+
+    fn attach(&self, _: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+        let snapshot = self
+            .with(|state| {
+                state
+                    .replica
+                    .borrow()
+                    .terminals
+                    .get(id.as_str())
+                    .and_then(|state| state.snapshot.clone())
+                    .ok_or_else(|| "Terminalがありません".to_owned())
+            })
+            .map_err(TerminalError::new)?;
+        snapshot.map_err(TerminalError::new)
+    }
+
+    fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.with(|state| {
+            let _ = state
+                .commands
+                .unbounded_send(Command::TerminalTerminate { local: id.clone() });
+        })
+        .map_err(TerminalError::new)
     }
 }
