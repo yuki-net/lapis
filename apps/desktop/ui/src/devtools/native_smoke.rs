@@ -1,8 +1,9 @@
 //! 明示的なNative smokeだけで動かすInspector検証と短時間の性能サンプル。
 use super::{inspection::Inspection, inspector_controller::InspectorController};
+use crate::time::Instant;
 use crate::timer::Timer;
 use gpui::{AnyWindowHandle, AsyncApp};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 async fn sample(name: &str, target: AnyWindowHandle, cx: &mut AsyncApp) {
     let mut total = Duration::ZERO;

@@ -154,7 +154,7 @@ impl Shell {
                 &drag.tab,
                 &target,
                 size,
-                std::time::Instant::now(),
+                crate::time::Instant::now(),
             );
             let rect = match (&target, &result) {
                 (PanelDrop::Edge { .. }, Ok((candidate, id))) => {

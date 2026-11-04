@@ -1594,7 +1594,7 @@ impl Render for DesktopRoot {
                 |root, event: &gpui::ModifiersChangedEvent, window, cx| {
                     if root
                         .double_shift
-                        .modifiers_changed(event.modifiers, std::time::Instant::now())
+                        .modifiers_changed(event.modifiers, crate::time::Instant::now())
                     {
                         root.command(UiCommand::QuickSearch, window, cx);
                     }

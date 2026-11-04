@@ -1,6 +1,7 @@
+use crate::time::Instant;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use gpui::{
     CursorStyle, ElementId, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,

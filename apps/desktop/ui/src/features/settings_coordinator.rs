@@ -208,9 +208,10 @@ impl SettingsCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::Instant;
     use lapis_settings::{GlobalSettingsRepository, SettingsError};
     use std::sync::{Arc, Mutex};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     #[derive(Default)]
     struct Repository {

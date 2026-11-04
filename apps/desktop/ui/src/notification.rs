@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use crate::time::SystemTime;
 
 use crate::extension_ui::CommandId;
 use gpui::{App, Context as GpuiContext, Render, Subscription, Window, div, prelude::*};
@@ -299,7 +299,13 @@ impl Render for Center {
 }
 
 fn local_time(time: SystemTime) -> String {
-    let local: chrono::DateTime<chrono::Local> = time.into();
+    let millis = time
+        .duration_since(web_time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or_default();
+    let local = chrono::DateTime::from_timestamp_millis(millis)
+        .unwrap_or_default()
+        .with_timezone(&chrono::Local);
     local.format("%H:%M").to_string()
 }
 

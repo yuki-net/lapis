@@ -875,7 +875,7 @@ async fn verify_panel_layout_resize(
                             edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 let source = shell
@@ -894,7 +894,7 @@ async fn verify_panel_layout_resize(
                             edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 original
@@ -1480,7 +1480,7 @@ async fn verify_workbench_routes(
                             edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 let source = shell
@@ -1499,7 +1499,7 @@ async fn verify_workbench_routes(
                             edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 cx.notify();
@@ -1623,7 +1623,7 @@ async fn verify_workbench_routes(
                             edge: crate::shell::PanelEdge::Right,
                         },
                         (800.0, 600.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 cx.notify();

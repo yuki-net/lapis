@@ -1,4 +1,5 @@
-use std::time::{Duration, Instant};
+use crate::time::Instant;
+use std::time::Duration;
 
 use lapis_desktop_client::DocumentTab;
 
@@ -369,8 +370,9 @@ impl ShellState {
 
 #[cfg(test)]
 mod tests {
+    use crate::time::Instant;
     use crate::{extension_ui::ViewId, features::id};
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use super::*;
 

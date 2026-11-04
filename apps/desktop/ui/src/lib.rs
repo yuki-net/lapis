@@ -23,6 +23,11 @@ pub mod tokens;
 mod window_host;
 mod workbench;
 
+/// wasmにはstdの時刻APIが無いため、ブラウザーではweb-timeを使う。
+pub(crate) mod time {
+    pub(crate) use web_time::{Duration, Instant, SystemTime};
+}
+
 #[cfg(not(target_family = "wasm"))]
 pub use app::run;
 #[cfg(target_family = "wasm")]

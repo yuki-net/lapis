@@ -1,7 +1,6 @@
-use std::{
-    ops::Range,
-    time::{Duration, Instant},
-};
+use std::ops::Range;
+
+use crate::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,

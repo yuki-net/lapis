@@ -513,7 +513,7 @@ mod tests {
     #[test]
     #[ignore = "手動性能測定"]
     fn measure_editor_syntax() {
-        use std::time::Instant;
+        use crate::time::Instant;
         let start = Instant::now();
         LazyLock::force(&SYNTAXES);
         println!(

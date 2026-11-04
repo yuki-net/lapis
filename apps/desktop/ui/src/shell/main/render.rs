@@ -11,7 +11,7 @@ impl Shell {
     fn render_content(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.shell
             .layout
-            .finish_due_closes(std::time::Instant::now());
+            .finish_due_closes(crate::time::Instant::now());
         self.zone_panel_bounds.borrow_mut().clear();
         self.panel_bounds.borrow_mut().clear();
         self.zone_bounds.borrow_mut().clear();

@@ -1,7 +1,7 @@
 //! 保存済みの比率とWindow寸法から、描画・操作で共有する矩形を計算する。
 
+use crate::time::Instant;
 use std::collections::BTreeMap;
-use std::time::Instant;
 
 use super::PanelDrop;
 use super::panel_layout::Axis;

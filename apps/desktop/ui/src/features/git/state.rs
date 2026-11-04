@@ -201,14 +201,14 @@ mod event_order_tests {
             );
         });
         release.send(()).unwrap();
-        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let deadline = crate::time::Instant::now() + Duration::from_secs(3);
         loop {
             cx.executor().advance_clock(Duration::from_millis(20));
             cx.run_until_parked();
             if cx.update(|cx| feature.read(cx).pending == 0) {
                 break;
             }
-            assert!(std::time::Instant::now() < deadline);
+            assert!(crate::time::Instant::now() < deadline);
             std::thread::yield_now();
         }
         cx.update(|cx| {

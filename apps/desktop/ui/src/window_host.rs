@@ -643,12 +643,12 @@ fn apply_panel_layout(
                 TabDestination::Zone(position) => shell
                     .shell
                     .layout
-                    .move_tab_to_zone(position, tab.clone(), std::time::Instant::now())
+                    .move_tab_to_zone(position, tab.clone(), crate::time::Instant::now())
                     .is_ok(),
                 TabDestination::Panel(_) => shell
                     .shell
                     .layout
-                    .move_tab_to_zone(ZonePosition::Main, tab.clone(), std::time::Instant::now())
+                    .move_tab_to_zone(ZonePosition::Main, tab.clone(), crate::time::Instant::now())
                     .is_ok(),
             };
             if success {

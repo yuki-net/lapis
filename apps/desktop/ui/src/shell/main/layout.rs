@@ -4,7 +4,7 @@ use crate::shell::panel_layout::Axis;
 impl Shell {
     /// 全Zoneを同じPanel配置Rendererで描画する。
     pub(crate) fn render_main(&self, window: &mut Window, cx: &mut Context<Self>) -> gpui::Div {
-        let now = std::time::Instant::now();
+        let now = crate::time::Instant::now();
         if self.shell.layout.has_closing_panels() || self.shell.bottom_span_is_animating(now) {
             window.request_animation_frame();
         }
@@ -96,7 +96,7 @@ impl Shell {
         &self,
         position: ZonePosition,
         geometry: &crate::shell::dock_geometry::DockGeometry,
-        now: std::time::Instant,
+        now: crate::time::Instant,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         let zone = self.shell.layout.zone(position);
@@ -250,7 +250,7 @@ mod tests {
                         shell.render_zone(
                             ZonePosition::Left,
                             &geometry,
-                            std::time::Instant::now(),
+                            crate::time::Instant::now(),
                             cx,
                         )
                     }
@@ -293,7 +293,7 @@ mod tests {
                             edge: PanelEdge::Right,
                         },
                         (1000.0, 700.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 shell
@@ -307,7 +307,7 @@ mod tests {
                             edge: PanelEdge::Right,
                         },
                         (1000.0, 700.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
             });
@@ -399,7 +399,7 @@ mod tests {
                 panel: source.clone(),
                 edge: PanelEdge::Right,
             };
-            let now = std::time::Instant::now();
+            let now = crate::time::Instant::now();
             let (preview, id) = shell
                 .shell
                 .layout

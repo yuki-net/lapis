@@ -1,27 +1,35 @@
+use std::sync::mpsc;
+
+#[cfg(not(target_family = "wasm"))]
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc,
 };
 
+#[cfg(not(target_family = "wasm"))]
 const QUEUE_CAPACITY: usize = 64;
+#[cfg(not(target_family = "wasm"))]
 type Job<State> = Box<dyn FnOnce(&mut State) + Send>;
 
+#[cfg(not(target_family = "wasm"))]
 struct WorkerHandle<State> {
     sender: mpsc::SyncSender<Job<State>>,
     cancelled: Arc<AtomicBool>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<State> Drop for WorkerHandle<State> {
     fn drop(&mut self) {
         self.cancelled.store(true, Ordering::Release);
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 pub(crate) struct ClientWorker<State> {
     handle: Arc<WorkerHandle<State>>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<State> Clone for ClientWorker<State> {
     fn clone(&self) -> Self {
         Self {
@@ -30,6 +38,7 @@ impl<State> Clone for ClientWorker<State> {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl<State: Send + 'static> ClientWorker<State> {
     pub(crate) fn new(mut state: State) -> Self {
         let (sender, receiver) = mpsc::sync_channel::<Job<State>>(QUEUE_CAPACITY);
@@ -77,6 +86,54 @@ impl<State: Send + 'static> ClientWorker<State> {
             };
             return Err(message.to_owned());
         }
+        Ok(receiver)
+    }
+}
+
+#[cfg(target_family = "wasm")]
+pub(crate) struct ClientWorker<State> {
+    state: std::rc::Rc<std::cell::RefCell<State>>,
+}
+
+#[cfg(target_family = "wasm")]
+impl<State> Clone for ClientWorker<State> {
+    fn clone(&self) -> Self {
+        Self {
+            state: self.state.clone(),
+        }
+    }
+}
+
+#[cfg(target_family = "wasm")]
+impl<State: 'static> ClientWorker<State> {
+    pub(crate) fn new(state: State) -> Self {
+        Self {
+            state: std::rc::Rc::new(std::cell::RefCell::new(state)),
+        }
+    }
+
+    pub(crate) fn request<Output: 'static>(
+        &self,
+        operation: impl FnOnce(&mut State) -> Result<Output, String> + 'static,
+    ) -> mpsc::Receiver<Result<Output, String>> {
+        match self.try_request(operation) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                let (sender, receiver) = mpsc::channel();
+                let _ = sender.send(Err(error));
+                receiver
+            }
+        }
+    }
+
+    /// ブラウザーにはworker threadが無いため、同じthreadで実行して結果を返す。
+    pub(crate) fn try_request<Output: 'static>(
+        &self,
+        operation: impl FnOnce(&mut State) -> Result<Output, String> + 'static,
+    ) -> Result<mpsc::Receiver<Result<Output, String>>, String> {
+        let (sender, receiver) = mpsc::channel();
+        let result = operation(&mut self.state.borrow_mut());
+        let _ = sender.send(result);
         Ok(receiver)
     }
 }

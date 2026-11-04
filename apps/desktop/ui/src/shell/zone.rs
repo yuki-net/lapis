@@ -14,9 +14,9 @@ pub(super) struct Zone {
     pub(super) panels: std::collections::BTreeMap<PanelId, PanelHost>,
     pub(super) open: bool,
     pub(super) extent_ratio: f32,
-    closing: std::collections::BTreeMap<PanelId, std::time::Instant>,
-    hiding: std::collections::BTreeMap<PanelId, std::time::Instant>,
-    transition: Option<(std::time::Instant, f32, f32)>,
+    closing: std::collections::BTreeMap<PanelId, crate::time::Instant>,
+    hiding: std::collections::BTreeMap<PanelId, crate::time::Instant>,
+    transition: Option<(crate::time::Instant, f32, f32)>,
 }
 
 impl Zone {
@@ -39,7 +39,7 @@ impl Zone {
         let policy = super::zone_policy::ZonePolicy::for_position(self.position);
         let open = open || !policy.user_closable;
         if self.open != open {
-            let now = std::time::Instant::now();
+            let now = crate::time::Instant::now();
             let from = self.visual_factor(now);
             self.open = open;
             self.transition = Some((now, from, if open { 1.0 } else { 0.0 }));
@@ -50,7 +50,7 @@ impl Zone {
         self.transition = None;
     }
 
-    pub(super) fn visual_factor(&self, now: std::time::Instant) -> f32 {
+    pub(super) fn visual_factor(&self, now: crate::time::Instant) -> f32 {
         self.transition
             .map_or(if self.open { 1.0 } else { 0.0 }, |(started, from, to)| {
                 let elapsed = now.saturating_duration_since(started).as_secs_f32();
@@ -62,18 +62,18 @@ impl Zone {
             })
     }
 
-    pub(super) fn animating(&self, now: std::time::Instant) -> bool {
+    pub(super) fn animating(&self, now: crate::time::Instant) -> bool {
         self.transition.is_some_and(|(start, _, _)| {
             now.saturating_duration_since(start) < super::panel_transition::PANEL_ANIMATION_DURATION
         }) || !self.closing.is_empty()
             || !self.hiding.is_empty()
     }
 
-    pub(super) fn hiding_since(&self, id: &PanelId) -> Option<std::time::Instant> {
+    pub(super) fn hiding_since(&self, id: &PanelId) -> Option<crate::time::Instant> {
         self.hiding.get(id).copied()
     }
 
-    pub(super) fn panel_visual_factor(&self, id: &PanelId, now: std::time::Instant) -> f32 {
+    pub(super) fn panel_visual_factor(&self, id: &PanelId, now: crate::time::Instant) -> f32 {
         self.closing_since(id)
             .or_else(|| self.hiding_since(id))
             .map_or(1.0, |started| {
@@ -98,7 +98,7 @@ impl Zone {
         } else if was_open {
             self.hiding
                 .entry(id.clone())
-                .or_insert_with(std::time::Instant::now);
+                .or_insert_with(crate::time::Instant::now);
         }
         if open {
             self.set_open(true);
@@ -154,7 +154,7 @@ impl Zone {
     }
 
     /// 最後のTabの移動後は閉鎖中として保持し、描画側が遷移終了後に除去する。
-    pub(super) fn begin_empty_close(&mut self, id: &PanelId, now: std::time::Instant) -> bool {
+    pub(super) fn begin_empty_close(&mut self, id: &PanelId, now: crate::time::Instant) -> bool {
         if super::zone_policy::ZonePolicy::for_position(self.position).keep_empty_panel {
             return false;
         }
@@ -176,7 +176,7 @@ impl Zone {
         true
     }
 
-    pub(super) fn closing_since(&self, id: &PanelId) -> Option<std::time::Instant> {
+    pub(super) fn closing_since(&self, id: &PanelId) -> Option<crate::time::Instant> {
         self.closing.get(id).copied()
     }
 
@@ -219,7 +219,7 @@ impl Zone {
         self.closing.keys().cloned().collect()
     }
 
-    pub(super) fn finish_animations(&mut self, now: std::time::Instant) {
+    pub(super) fn finish_animations(&mut self, now: crate::time::Instant) {
         let duration = super::panel_transition::PANEL_ANIMATION_DURATION;
         self.hiding
             .retain(|_, started| now.saturating_duration_since(*started) < duration);
@@ -498,7 +498,7 @@ impl Zone {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         for id in empty {
-            zone.begin_empty_close(&id, std::time::Instant::now());
+            zone.begin_empty_close(&id, crate::time::Instant::now());
             zone.finish_empty_close(&id);
         }
         zone.valid().then_some(zone)

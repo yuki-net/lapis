@@ -137,7 +137,7 @@ impl Shell {
         let _ = self.shell.layout.move_tab_to_zone(
             position,
             PanelTab::tool(view),
-            std::time::Instant::now(),
+            crate::time::Instant::now(),
         );
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -270,7 +270,7 @@ impl Shell {
             if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.shell
                     .layout
-                    .remove_tab(&panel_id, &tab, std::time::Instant::now());
+                    .remove_tab(&panel_id, &tab, crate::time::Instant::now());
                 self.schedule_empty_close(panel_id, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
@@ -336,7 +336,7 @@ impl Shell {
             PickerTarget::Zone(position) => self
                 .shell
                 .layout
-                .move_tab_to_zone(position, tab, std::time::Instant::now())
+                .move_tab_to_zone(position, tab, crate::time::Instant::now())
                 .map(|id| {
                     self.shell.focused_panel = Some(id);
                 })
@@ -501,7 +501,7 @@ impl Shell {
         match self
             .shell
             .layout
-            .drop_tab(&source, &tab, &target, size, std::time::Instant::now())
+            .drop_tab(&source, &tab, &target, size, crate::time::Instant::now())
         {
             Ok(destination) => {
                 self.shell.focused_panel = Some(destination);
@@ -728,7 +728,7 @@ mod visibility_tests {
                     let tab = PanelTab::tool(format!("fixture-{position:?}"));
                     let id = shell.shell.layout.open_tab(position, tab.clone()).unwrap();
                     let tabs = shell.shell.layout.panel(&id).unwrap().tabs.clone();
-                    let now = std::time::Instant::now();
+                    let now = crate::time::Instant::now();
                     for tab in tabs {
                         assert!(shell.shell.layout.remove_tab(&id, &tab, now));
                     }
@@ -865,7 +865,7 @@ mod visibility_tests {
                             edge: PanelEdge::Right,
                         },
                         (600.0, 400.0),
-                        std::time::Instant::now(),
+                        crate::time::Instant::now(),
                     )
                     .unwrap();
                 let placements = shell.shell.layout.placements();
