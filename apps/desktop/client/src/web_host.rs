@@ -1485,6 +1485,24 @@ fn shared_workspace(
     })
 }
 
+/// 接続時に取得したHostのWorkbenchから、UIへ復元するレイアウト。
+pub fn restore_view() -> Option<lapis_workbench::ConversationViewState> {
+    BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref()?;
+        let replica = state.replica.borrow();
+        let view = replica
+            .workbench
+            .as_ref()
+            .and_then(|versioned| versioned.view.as_ref())?
+            .clone();
+        Some(lapis_workbench::ConversationViewState {
+            workspace: None,
+            ..view
+        })
+    })
+}
+
 /// 接続時に取得したHostのWorkbenchから、UIへ復元する文書状態を作る。
 pub fn restore_snapshot(root: PathBuf) -> Option<crate::WorkspaceSnapshot> {
     BACKEND.with(|backend| {

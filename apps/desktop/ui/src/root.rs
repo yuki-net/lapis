@@ -232,6 +232,10 @@ impl DesktopRoot {
                     cx,
                 );
             }
+            #[cfg(target_family = "wasm")]
+            if let Some(view) = lapis_desktop_client::web_host::restore_view() {
+                shell.restore_view(view, cx);
+            }
         });
         let group = cx.new(|_| {
             crate::window_host::WindowGroup::new(
