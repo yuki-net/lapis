@@ -277,6 +277,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             view: serde_json::from_value(snapshot.view).ok(),
         });
     }
+    preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
@@ -371,6 +372,67 @@ async fn fetch_tree(
         }
     }
     Ok(entries)
+}
+
+async fn preload_workbench(
+    connection: &BrowserConnection,
+    replica: &Rc<RefCell<Replica>>,
+    workspace: &ApiWorkspaceId,
+) {
+    let paths: Vec<(PathBuf, WorkspaceRelativePath)> = {
+        let replica = replica.borrow();
+        replica
+            .workbench
+            .as_ref()
+            .and_then(|versioned| versioned.view.as_ref())
+            .and_then(|view| view.workspace.as_ref())
+            .map(|shared| {
+                shared
+                    .open_documents
+                    .iter()
+                    .filter_map(|document| document.path.as_ref())
+                    .filter_map(|path| {
+                        WorkspaceRelativePath::from_path(Path::new(path.as_str()))
+                            .ok()
+                            .map(|relative| (Path::new(ROOT).join(path.as_str()), relative))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    for (path, relative) in paths {
+        if replica.borrow().by_path.contains_key(&path) {
+            continue;
+        }
+        let Ok(ResponseBody::DocumentOpen(response)) = request(
+            connection,
+            RequestBody::DocumentOpen(DocumentOpenRequest {
+                workspace_id: workspace.clone(),
+                path: relative,
+            }),
+        )
+        .await
+        else {
+            continue;
+        };
+        let snapshot = response.document;
+        let mut replica = replica.borrow_mut();
+        let local = local_id(&mut replica);
+        let document = document_from_snapshot(&snapshot, Some(path.clone()));
+        replica.by_path.insert(path.clone(), local.clone());
+        replica.documents.insert(
+            local,
+            DocumentState {
+                host: Some(snapshot.document_id.clone()),
+                path: Some(path),
+                document,
+                acked: snapshot.content.clone(),
+                host_revision: snapshot.revision,
+                loaded: true,
+                external_change: ExternalChange::Unchanged,
+            },
+        );
+    }
 }
 
 async fn preload(
@@ -1087,7 +1149,7 @@ impl DocumentConnection for WebBackend {
                 document,
                 acked: String::new(),
                 host_revision: ApiRevision::new(0),
-                loaded: false,
+                loaded: true,
                 external_change: ExternalChange::Unchanged,
             };
             let cache = cache_of(&local, &state.document, state.external_change);
@@ -1420,6 +1482,21 @@ fn shared_workspace(
         open_documents: documents,
         active_path: snapshot.active_path.as_deref().map(relative).transpose()?,
         active_document_id: snapshot.active_document_id.clone(),
+    })
+}
+
+/// 接続時に取得したHostのWorkbenchから、UIへ復元する文書状態を作る。
+pub fn restore_snapshot(root: PathBuf) -> Option<crate::WorkspaceSnapshot> {
+    BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref()?;
+        let replica = state.replica.borrow();
+        let shared = replica
+            .workbench
+            .as_ref()
+            .and_then(|versioned| versioned.view.as_ref())
+            .and_then(|view| view.workspace.as_ref())?;
+        workspace_from_shared(shared, &replica.workspace, root).ok()
     })
 }
 

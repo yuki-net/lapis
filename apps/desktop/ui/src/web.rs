@@ -115,10 +115,15 @@ where
     session
         .open_workspace(PathBuf::from(root))
         .map_err(|error| error.to_string())?;
-    if let Some(path) = initial {
+    let conversation = ConversationSession::new(backend.clone(), session.snapshot());
+    let restored = lapis_desktop_client::web_host::restore_snapshot(PathBuf::from(root));
+    if let Some(snapshot) = restored {
+        session
+            .restore_snapshot(snapshot)
+            .map_err(|error| error.to_string())?;
+    } else if let Some(path) = initial {
         let _ = session.open_path(path);
     }
-    let conversation = ConversationSession::new(backend.clone(), session.snapshot());
     let settings = SettingsSession::load(backend.clone()).map_err(|error| error.to_string())?;
     let services = DesktopServices::new(
         TaskSession::new(backend.clone()),
