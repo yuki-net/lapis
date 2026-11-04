@@ -84,7 +84,7 @@ fn owner_console_registers_workspace_and_issues_user_pairing() {
     input.flush().unwrap();
     let mut token = zeroize::Zeroizing::new(String::new());
     output.read_line(&mut token).unwrap();
-    assert!(token.starts_with("User session pairing token (5 minutes, one use): "));
+    assert!(token.starts_with("User session pairing token (1 hour, one use): "));
     assert_eq!(token.trim().rsplit(' ').next().unwrap().len(), 64);
     writeln!(input, "quit").unwrap();
     input.flush().unwrap();
