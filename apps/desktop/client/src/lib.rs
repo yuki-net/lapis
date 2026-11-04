@@ -35,6 +35,9 @@ mod workbench_sync;
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult};
 
+#[cfg(target_arch = "wasm32")]
+pub mod web_host;
+
 /// グローバル設定を UI に公開し、変更を永続化するアプリケーション境界。
 #[derive(Clone)]
 pub struct SettingsSession {

@@ -10,6 +10,9 @@ use lapis_client_api::{
 
 pub mod workbench;
 
+#[cfg(target_arch = "wasm32")]
+pub mod browser;
+
 const MAX_PENDING: usize = 64;
 
 /// DesktopとWebがHostへ非同期要求を送るための共通境界。

@@ -8,10 +8,23 @@ if (root === null) {
 
 root.innerHTML = `<section class="loading" role="status"><strong>Lapis Web</strong><span>Desktop UI を読み込んでいます…</span></section>`;
 
-const badge = document.createElement("aside");
-badge.className = "web-badge";
-badge.textContent = "Web · メモリー上のWorkspace";
-document.body.append(badge);
+const STORAGE = {
+  url: "lapis.url",
+  workspace: "lapis.workspace",
+  clientId: "lapis.clientId",
+};
+
+function createClientId(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
+}
 
 function fail(error: unknown) {
   root!.hidden = false;
@@ -22,8 +35,31 @@ function fail(error: unknown) {
 
 async function boot() {
   try {
+    const params = new URLSearchParams(location.search);
+    const url = params.get("url") ?? localStorage.getItem(STORAGE.url) ?? "";
+    const workspace =
+      params.get("workspace") ?? localStorage.getItem(STORAGE.workspace) ?? "";
+    const token = params.get("token") ?? "";
+    const clientId = localStorage.getItem(STORAGE.clientId) ?? createClientId();
+    localStorage.setItem(STORAGE.clientId, clientId);
+    const credentialKey = url !== "" && workspace !== "" ? `${url}|${workspace}` : "";
+    const credential = credentialKey === "" ? null : localStorage.getItem(credentialKey);
+    if (url !== "" && workspace !== "") {
+      localStorage.setItem(STORAGE.url, url);
+      localStorage.setItem(STORAGE.workspace, workspace);
+    }
     await init();
-    start(new URLSearchParams(location.search).get("backend") ?? "auto");
+    const fresh = await start(
+      params.get("backend") ?? "auto",
+      url === "" ? null : url,
+      workspace === "" ? null : workspace,
+      token === "" ? null : token,
+      credential,
+      clientId,
+    );
+    if (fresh !== undefined && fresh !== null && credentialKey !== "") {
+      localStorage.setItem(credentialKey, fresh);
+    }
     const deadline = performance.now() + 20_000;
     while (!is_ready()) {
       if (document.body.dataset.lapis === "error") {

@@ -4261,16 +4261,26 @@ name = "lapis-client-core"
 version = "0.1.0"
 dependencies = [
  "futures-channel",
+ "futures-util",
+ "gloo-timers",
  "lapis-client-api",
+ "lapis-wire",
  "lapis-workbench",
  "serde_json",
+ "wasm-bindgen",
+ "web-sys",
+ "zeroize",
 ]
 
 [[package]]
 name = "lapis-desktop-client"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
+ "futures-util",
  "getrandom 0.3.4",
+ "lapis-client-api",
+ "lapis-client-core",
  "lapis-document",
  "lapis-editor-core",
  "lapis-git",
@@ -4285,6 +4295,9 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -4301,6 +4314,7 @@ dependencies = [
  "gpui-pre",
  "gpui-pre-platform",
  "gpui-pre-web",
+ "lapis-client-api",
  "lapis-desktop-client",
  "lapis-document",
  "lapis-editor-core",
@@ -4318,6 +4332,7 @@ dependencies = [
  "subsecond",
  "syntect",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-time",
  "windows 0.61.3",
 ]

@@ -10,3 +10,11 @@ futures-channel = "0.3"
 lapis-client-api = { path = "../protocol" }
 lapis-workbench = { path = "../models/workbench" }
 serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+futures-util = "0.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+lapis-wire = { path = "../models/wire" }
+wasm-bindgen = "=0.2.129"
+web-sys = { version = "=0.3.106", features = ["WebSocket", "MessageEvent", "Event", "ErrorEvent"] }
+zeroize.workspace = true

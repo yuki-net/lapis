@@ -1,15 +1,27 @@
 # Web Client
 
-Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示する試作です。ページの HTML は GPUI を起動するための最小限のシェルだけです。
+Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示します。ページの HTML は GPUI を起動するための最小限のシェルだけです。
 
-`wasm/` は `lapis-desktop-ui` の `run_web` を呼び、GPUI の canvas をページへ描画します。ファイルと設定はメモリー上にあり、Host や Desktop の実データにはまだ接続していません。
+`apps/desktop/ui` が GPUI の起動と Wasm エントリを持ち、`apps/web` はその Wasm を読み込んで配信します。Host へ接続した場合は、ファイルの読み込み・編集・保存を Host 経由で行います。
 
-## 現状
+## Host へ接続する
 
-- 表示・編集・タブ・ファイルツリー・コマンドパレットなど、Desktop の GPUI UI が動きます。
-- ファイルと設定はページ内のメモリーだけです。再読み込みで初期状態に戻ります。
-- Terminal、Git、LSP、Task runner は未接続です（呼ぶと未対応エラーになります）。
-- Host の共有 Workbench への接続はまだ配線していません。`wasm/src/session.rs` に Host 接続用の非同期 API がありますが、GPUI UI の同期 Client からは未使用です。
+URL と Workspace ID をクエリか localStorage に渡します。初回は pairing token、以降は保存済み credential で接続します。
+
+```text
+http://127.0.0.1:5174/?url=ws://127.0.0.1:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
+```
+
+- 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
+- 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
+- 3つのクエリが無い場合は、メモリー上のサンプル Workspace で起動します（再読み込みで初期化）。
+
+## 現状の制限
+
+- Host 接続時、起動時に開くのは1ファイルだけです。他のファイルは開いた直後は空で、Host からの読み込みが終わると次の再取得で表示されます。
+- Workbench（タブ・パネル・開いている文書・未保存下書き）の Host 同期はまだありません。
+- Terminal、Git、LSP、Search、Task は未接続です。
+- Host のイベント購読はまだ無く、他の Client の変更はこちらから操作したときに再取得されます。
 
 ## 開発
 
@@ -21,22 +33,18 @@ npm run dev
 
 `npm run dev` と `npm run build` は先に `wasm-bindgen` で Wasm を生成します。Node.js 24 と `wasm-bindgen-cli` 0.2.129 が必要です。
 
-ブラウザーで開くと自動的に起動します。WebGPU が使えない環境では `?backend=webgl` を付けてください。
+WebGPU が使えない環境では `?backend=webgl` を付けてください。
 
 ## Tailscaleで開く
-
-同じ tailnet 内の端末から直接開けます。
 
 ```powershell
 cd apps/web
 npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-`http://TAILSCALE_IP:5174/` を開きます。ページ自体にログインはないため、tailnet 内の到達端末は Tailscale ACL で制限し、Windows ファイアウォールで 5174 の受信を許可してください。
+`http://TAILSCALE_IP:5174/` を開きます。Host と web-bridge も tailnet から到達できるように起動してください。ページにログインは無いため、Tailscale ACL で端末を制限します。
 
 ## 結合検証（Host / Bridge）
-
-Host と web-bridge の通信、Workspace 切替、文書の競合、再接続は `bridge_smoke.py` で検証します。GPUI UI の起動とは独立しています。
 
 ```powershell
 cargo build -p lapis-host -p lapis-web-bridge
