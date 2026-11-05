@@ -45,6 +45,11 @@ impl Localizer {
         true
     }
 
+    /// 現在選択中のロケールを返す。
+    pub fn active(&self) -> &LocaleId {
+        &self.active
+    }
+
     pub fn resolve(&self, message: &MessageId) -> String {
         self.packs
             .get(&self.active)

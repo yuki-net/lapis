@@ -59,7 +59,7 @@ pub(crate) const EXTRA_COMMANDS: &[&str] = &[
     crate::features::id::COMMAND_BIND_VIEW_SHARED,
     crate::features::id::COMMAND_BIND_VIEW_TASK,
     #[cfg(debug_assertions)]
-    crate::features::id::COMMAND_TOGGLE_INSPECTOR,
+    crate::features::id::COMMAND_TOGGLE_DEVTOOL,
 ];
 
 pub struct DesktopServices {

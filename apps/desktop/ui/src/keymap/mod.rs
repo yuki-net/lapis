@@ -274,7 +274,13 @@ impl KeymapRegistry {
         self.overrides = settings
             .overrides
             .iter()
-            .map(|entry| (CommandId::new(&entry.command), entry.entry.clone()))
+            .map(|entry| {
+                let command = match entry.command.as_str() {
+                    "lapis.command.dev.toggle-inspector" => "lapis.command.dev.toggle-devtool",
+                    _ => entry.command.as_str(),
+                };
+                (CommandId::new(command), entry.entry.clone())
+            })
             .collect();
     }
 
@@ -422,6 +428,22 @@ mod tests {
         assert_eq!(
             registry.shortcut_label(&CommandId::new("extension.unknown")),
             ""
+        );
+    }
+
+    #[test]
+    fn legacy_devtool_override_applies_to_new_command() {
+        let mut registry = KeymapRegistry::bundled();
+        registry.apply_settings(&KeymapSettings {
+            preset: None,
+            overrides: vec![KeymapOverride {
+                command: "lapis.command.dev.toggle-inspector".into(),
+                entry: KeymapEntry::Bindings(vec![shortcut("ctrl-alt-d")]),
+            }],
+        });
+        assert_eq!(
+            registry.shortcut_label(&CommandId::new("lapis.command.dev.toggle-devtool")),
+            "Ctrl Alt D"
         );
     }
 
