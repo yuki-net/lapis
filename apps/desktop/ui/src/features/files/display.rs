@@ -27,18 +27,17 @@ pub(crate) fn display_info(
     FileDisplayInfo {
         icon: language
             .as_ref()
-            .map(icon_for_language)
+            .and_then(icon_override_for_language)
             .unwrap_or(FileIconId::TextAlignStart),
         language,
     }
 }
 
-pub(crate) fn icon_for_language(language: &LanguageId) -> FileIconId {
+fn icon_override_for_language(language: &LanguageId) -> Option<FileIconId> {
     match language.as_str() {
-        "javascript" | "javascriptreact" => FileIconId::Javascript,
-        "typescript" | "typescriptreact" => FileIconId::Typescript,
-        "html" | "css" | "markdown" | "json" | "xml" | "yaml" => FileIconId::TextAlignStart,
-        _ => FileIconId::TextAlignStart,
+        "javascript" | "javascriptreact" => Some(FileIconId::Javascript),
+        "typescript" | "typescriptreact" => Some(FileIconId::Typescript),
+        _ => None,
     }
 }
 
@@ -47,25 +46,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_supported_languages_to_file_icons() {
-        assert_eq!(
-            icon_for_language(&LanguageId::new("javascriptreact")),
-            FileIconId::Javascript
-        );
-        assert_eq!(
-            icon_for_language(&LanguageId::new("typescriptreact")),
-            FileIconId::Typescript
-        );
-
-        for language in [
-            "html", "css", "markdown", "json", "xml", "yaml", "rust", "go",
+    fn language_icons_override_fallback_only_when_available() {
+        let languages = LanguageRegistry::bundled();
+        for (path, expected) in [
+            ("component.jsx", FileIconId::Javascript),
+            ("component.tsx", FileIconId::Typescript),
+            (".coderabbit.yaml", FileIconId::TextAlignStart),
+            ("main.rs", FileIconId::TextAlignStart),
+            ("unknown.ext", FileIconId::TextAlignStart),
         ] {
             assert_eq!(
-                icon_for_language(&LanguageId::new(language)),
-                FileIconId::TextAlignStart,
-                "fallback icon mismatch for {language}"
+                display_info(Path::new(path), FileEntryKind::File, &languages).icon,
+                expected,
+                "{path}"
             );
         }
+        assert!(
+            display_info(
+                Path::new(".coderabbit.yaml"),
+                FileEntryKind::File,
+                &languages
+            )
+            .language
+            .is_some()
+        );
     }
 
     #[test]
