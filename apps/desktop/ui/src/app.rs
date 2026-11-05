@@ -125,10 +125,13 @@ pub struct InitialView {
 /// Release ビルドでも tracing のエラーを stderr に出力する。
 #[cfg(all(not(debug_assertions), not(target_family = "wasm")))]
 fn init_release_tracing() {
+    use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
 
-    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
     let _ = tracing_subscriber::registry().with(stderr_layer).try_init();
 }
 
