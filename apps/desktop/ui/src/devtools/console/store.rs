@@ -4,7 +4,7 @@
 //! GPUI の Global としてアプリ全体で共有され、DevTool Console がこれを読み取る。
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::App;
 
@@ -12,6 +12,9 @@ use super::entry::DiagnosticLogEntry;
 
 /// 診断ログ store の最大件数。
 const MAX_ENTRIES: usize = 10_000;
+
+/// tracing subscriber が書き込む store。GPUI Global と同じ実体を共有する。
+static SUBSCRIBER_STORE: OnceLock<Arc<DiagnosticLogStore>> = OnceLock::new();
 
 /// 診断ログ store。
 ///
@@ -22,7 +25,8 @@ pub(crate) struct DiagnosticLogStore {
     entries: Mutex<VecDeque<DiagnosticLogEntry>>,
     sequence: Mutex<u64>,
 }
-impl gpui::Global for DiagnosticLogStore {}
+struct SharedStore(Arc<DiagnosticLogStore>);
+impl gpui::Global for SharedStore {}
 
 impl DiagnosticLogStore {
     /// エントリを追加する。上限を超えると古いエントリを削除する。
@@ -63,12 +67,21 @@ impl DiagnosticLogStore {
 
 /// 診断ログ store を GPUI の Global として登録する。
 pub(crate) fn init(cx: &mut App) {
-    cx.set_global(DiagnosticLogStore::default());
+    let store = SUBSCRIBER_STORE
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Arc::new(DiagnosticLogStore::default()));
+    cx.set_global(SharedStore(store));
+}
+
+/// tracing subscriber が使用する store を登録する。
+pub(crate) fn install_subscriber_store(store: Arc<DiagnosticLogStore>) {
+    let _ = SUBSCRIBER_STORE.set(store);
 }
 
 /// 診断ログ store にアクセスする（読み取り）。
 pub(crate) fn store(cx: &App) -> &DiagnosticLogStore {
-    cx.global::<DiagnosticLogStore>()
+    cx.global::<SharedStore>().0.as_ref()
 }
 
 #[cfg(test)]

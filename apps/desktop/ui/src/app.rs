@@ -125,10 +125,9 @@ pub struct InitialView {
 /// Runs the desktop event loop with an initial root window and quits after the last window closes.
 #[cfg(not(target_family = "wasm"))]
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
-    // 診断ログの tracing subscriber を初期化（Debug/Release 共通）
+    // 診断ログの tracing subscriber を初期化（Debugのみ）
     #[cfg(debug_assertions)]
-    let _diagnostic_store = crate::devtools::console::init_subscriber();
-    let _ = _diagnostic_store;
+    let _ = crate::devtools::console::init_subscriber();
 
     Application::new()
         .with_assets(crate::components::IconAssets)
