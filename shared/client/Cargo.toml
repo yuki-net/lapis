@@ -15,6 +15,7 @@ serde_json.workspace = true
 futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 lapis-wire = { path = "../models/wire" }
+serde.workspace = true
 wasm-bindgen = "=0.2.129"
 web-sys = { version = "=0.3.106", features = ["WebSocket", "MessageEvent", "Event", "ErrorEvent"] }
 zeroize.workspace = true

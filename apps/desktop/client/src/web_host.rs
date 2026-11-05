@@ -18,18 +18,19 @@ use crate::{
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 use lapis_client_api::{
-    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
-    ClientKind, ClientMessage, CredentialId, DocumentEditRequest, DocumentId as ApiDocumentId,
-    DocumentInspectRequest, DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit,
-    DocumentTransaction, EventBody, EventEnvelope, FileTreeKind, FileTreeRequest, PairRequest,
-    ProtocolRange, RequestBody, ResponseBody, Revision as ApiRevision, ServerMessage,
-    SnapshotReason, SnapshotRequest, TerminalId as ApiTerminalId, TerminalInputRequest,
-    TerminalResizeRequest, TerminalSize, TerminalStartRequest,
+    ClientKind, DocumentEditRequest, DocumentId as ApiDocumentId, DocumentInspectRequest,
+    DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody,
+    EventEnvelope, FileTreeKind, FileTreeRequest, RequestBody, ResponseBody,
+    Revision as ApiRevision, SnapshotReason, SnapshotRequest, TerminalId as ApiTerminalId,
+    TerminalInputRequest, TerminalResizeRequest, TerminalSize, TerminalStartRequest,
     TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkbenchGetRequest,
     WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceConnectRequest,
     WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
-use lapis_client_core::{AsyncHostConnection, browser::BrowserConnection};
+use lapis_client_core::{
+    AsyncHostConnection,
+    browser::{BrowserConnection, WebClientConnectOptions, connect_web_client},
+};
 use lapis_document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange,
     FileFingerprint, Revision,
@@ -57,6 +58,18 @@ pub const ROOT: &str = r"C:\Lapis Host";
 const UNAVAILABLE: &str = "Webではこの機能に接続していません";
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
+const WEB_CAPABILITIES: &[&str] = &[
+    "workspace.list",
+    "workspace.connect",
+    "workspace.sync",
+    "workspace.workbench.write",
+    "workspace.documents.read",
+    "workspace.documents.write",
+    "workspace.files.read",
+    "workspace.files.write",
+    "workspace.terminal.start",
+    "workspace.terminal.control",
+];
 
 thread_local! {
     static BACKEND: RefCell<Option<BackendState>> = const { RefCell::new(None) };
@@ -187,44 +200,17 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     let api_workspace =
         ApiWorkspaceId::try_new(config.workspace.clone()).map_err(|_| "Workspace IDが不正です")?;
     let workspace = WorkspaceId::new(api_workspace.as_str());
-    let hello = hello(&config.client_id)?;
-    let mut fresh_credential = None;
-    let can_retry_pair = config.credential.is_some() && config.token.is_some();
-    let auth = match config.credential.as_deref() {
-        Some(credential) => {
-            let stored: StoredCredential =
-                serde_json::from_str(credential).map_err(|_| "credentialの形式が不正です")?;
-            let id = CredentialId::parse(stored.id).map_err(|_| "credential IDが不正です")?;
-            let secret = decode_hex(&stored.secret)?;
-            let request =
-                AuthenticateRequest::new(hello.clone(), api_workspace.clone(), &id, &secret);
-            ClientMessage::Authenticate(request)
-        }
-        None => {
-            let token = config.token.as_deref().ok_or("pairing tokenが必要です")?;
-            let secret = decode_hex(token)?;
-            let request = PairRequest::new(hello.clone(), &secret);
-            ClientMessage::Pair(request)
-        }
-    };
-    let connection = match BrowserConnection::connect(&config.url, auth).await {
-        Ok((connection, response)) => {
-            store_credential(&mut fresh_credential, response)?;
-            connection
-        }
-        Err(_) if can_retry_pair => {
-            let token = config.token.as_deref().ok_or("pairing tokenが必要です")?;
-            let secret = decode_hex(token)?;
-            let request = PairRequest::new(hello.clone(), &secret);
-            let (connection, response) =
-                BrowserConnection::connect(&config.url, ClientMessage::Pair(request))
-                    .await
-                    .map_err(|error| error.to_string())?;
-            store_credential(&mut fresh_credential, response)?;
-            connection
-        }
-        Err(error) => return Err(error),
-    };
+    let (connection, fresh_credential) = connect_web_client(WebClientConnectOptions {
+        url: &config.url,
+        workspace: api_workspace.clone(),
+        client_id: &config.client_id,
+        client_name: "lapis-web",
+        client_kind: ClientKind::Desktop,
+        token: config.token.as_deref(),
+        credential: config.credential.as_deref(),
+        capabilities: WEB_CAPABILITIES,
+    })
+    .await?;
     let mut connection = Rc::new(connection);
     let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
     request(
@@ -293,34 +279,6 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     }
     preload(&connection, &replica).await?;
     Ok(fresh_credential)
-}
-
-fn hello(client_id: &str) -> Result<ClientHello, String> {
-    let capabilities = [
-        "workspace.list",
-        "workspace.connect",
-        "workspace.sync",
-        "workspace.workbench.write",
-        "workspace.documents.read",
-        "workspace.documents.write",
-        "workspace.files.read",
-        "workspace.files.write",
-        "workspace.terminal.start",
-        "workspace.terminal.control",
-    ]
-    .into_iter()
-    .map(|capability| {
-        CapabilityId::try_new(capability).map_err(|_| "capabilityが不正です".to_owned())
-    })
-    .collect::<Result<Vec<_>, _>>()?;
-    Ok(ClientHello {
-        protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
-        client_id: ClientId::try_new(client_id).map_err(|_| "Client IDが不正です")?,
-        client_name: "lapis-web".into(),
-        client_kind: ClientKind::Desktop,
-        requested_capabilities: CapabilitySet::try_new(capabilities)
-            .map_err(|_| "capabilityが不正です")?,
-    })
 }
 
 async fn request(
@@ -1052,60 +1010,6 @@ fn diff_chars(previous: &str, next: &str) -> (u64, u64, String) {
     (start as u64, end as u64, replacement)
 }
 
-#[derive(serde::Deserialize, serde::Serialize)]
-struct StoredCredential {
-    id: String,
-    secret: String,
-}
-
-fn decode_hex(value: &str) -> Result<[u8; 32], String> {
-    let value = value.trim();
-    if value.len() != 64 {
-        return Err("secretの長さが不正です".into());
-    }
-    let mut output = [0u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            _ => None,
-        };
-        let high = digit(pair[0]).ok_or("secretが不正です")?;
-        let low = digit(pair[1]).ok_or("secretが不正です")?;
-        output[index] = (high << 4) | low;
-    }
-    Ok(output)
-}
-
-fn store_credential(fresh: &mut Option<String>, response: ServerMessage) -> Result<(), String> {
-    if let ServerMessage::Paired(mut paired) = response {
-        let id = paired
-            .credential_id()
-            .map_err(|_| "credential IDが不正です")?;
-        let secret = paired
-            .take_secret()
-            .map_err(|_| "credential secretが不正です")?;
-        *fresh = Some(
-            serde_json::to_string(&StoredCredential {
-                id: id.as_str().to_owned(),
-                secret: encode_hex(&secret),
-            })
-            .map_err(|_| "credentialを保存できません")?,
-        );
-    }
-    Ok(())
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
-}
-
 /// 起動時に開くHost上のファイル。
 pub fn initial_path() -> Option<PathBuf> {
     BACKEND.with(|backend| {
@@ -1137,7 +1041,7 @@ impl DocumentConnection for WebBackend {
 
     fn workspace(&self, _: &Path) -> Result<WorkspaceId, DocumentError> {
         self.with(|state| state.workspace.clone())
-            .map_err(|error| DocumentError::io(error))
+            .map_err(DocumentError::io)
     }
 
     fn create(&self, _: Option<&Path>) -> Result<DocumentCache, DocumentError> {

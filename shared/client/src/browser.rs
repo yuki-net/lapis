@@ -8,10 +8,13 @@ use futures_channel::{mpsc, oneshot};
 use futures_util::future::{Either, select};
 use gloo_timers::future::TimeoutFuture;
 use lapis_client_api::{
-    CURRENT_PROTOCOL, ClientMessage, EventEnvelope, RequestBody, ResponseBody, ServerMessage,
+    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
+    ClientKind, ClientMessage, CredentialId, EventEnvelope, PairRequest, ProtocolRange,
+    RequestBody, ResponseBody, ServerMessage, WorkspaceId,
 };
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{Event, MessageEvent, WebSocket};
+use zeroize::Zeroize;
 
 type Reply<T> = oneshot::Sender<Result<T, String>>;
 
@@ -208,6 +211,151 @@ fn failure_handler(
             shared.borrow_mut().fail(message);
         }
     }) as Box<dyn FnMut(Event)>)
+}
+
+/// ページが保存するcredential。
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct StoredCredential {
+    pub id: String,
+    pub secret: String,
+}
+
+/// WebSocket経由のClient接続設定。
+pub struct WebClientConnectOptions<'a> {
+    pub url: &'a str,
+    pub workspace: WorkspaceId,
+    pub client_id: &'a str,
+    pub client_name: &'a str,
+    pub client_kind: ClientKind,
+    pub token: Option<&'a str>,
+    pub credential: Option<&'a str>,
+    pub capabilities: &'a [&'a str],
+}
+
+/// WebSocket経由でHostへ接続し、pairing/credential認証を完了する。
+///
+/// `credential` が失敗し `token` もある場合はpairingへフォールバックする。
+/// 返り値の `Some` はpairing直後のcredential JSON。
+pub async fn connect_web_client(
+    options: WebClientConnectOptions<'_>,
+) -> Result<(BrowserConnection, Option<String>), String> {
+    let WebClientConnectOptions {
+        url,
+        workspace,
+        client_id,
+        client_name,
+        client_kind,
+        token,
+        credential,
+        capabilities,
+    } = options;
+    let hello = client_hello(client_id, client_name, client_kind, capabilities)?;
+    let can_retry_pair = credential.is_some() && token.is_some();
+    let auth = match credential {
+        Some(credential) => {
+            let stored: StoredCredential = serde_json::from_str(credential)
+                .map_err(|_| "credentialの形式が不正です".to_owned())?;
+            let id =
+                CredentialId::parse(stored.id).map_err(|_| "credential IDが不正です".to_owned())?;
+            let mut secret = decode_hex(&stored.secret)?;
+            let request = AuthenticateRequest::new(hello.clone(), workspace, &id, &secret);
+            secret.zeroize();
+            ClientMessage::Authenticate(request)
+        }
+        None => {
+            let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
+            let mut secret = decode_hex(token)?;
+            let request = PairRequest::new(hello.clone(), &secret);
+            secret.zeroize();
+            ClientMessage::Pair(request)
+        }
+    };
+    let (connection, response) = match BrowserConnection::connect(url, auth).await {
+        Ok(result) => result,
+        Err(_) if can_retry_pair => {
+            let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
+            let mut secret = decode_hex(token)?;
+            let request = PairRequest::new(hello, &secret);
+            secret.zeroize();
+            BrowserConnection::connect(url, ClientMessage::Pair(request)).await?
+        }
+        Err(error) => return Err(error),
+    };
+    Ok((connection, credential_from_response(response)?))
+}
+
+fn client_hello(
+    client_id: &str,
+    client_name: &str,
+    client_kind: ClientKind,
+    capabilities: &[&str],
+) -> Result<ClientHello, String> {
+    let capabilities = capabilities
+        .iter()
+        .map(|capability| {
+            CapabilityId::try_new(*capability).map_err(|_| "capabilityが不正です".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(ClientHello {
+        protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
+        client_id: ClientId::try_new(client_id).map_err(|_| "Client IDが不正です".to_owned())?,
+        client_name: client_name.to_owned(),
+        client_kind,
+        requested_capabilities: CapabilitySet::try_new(capabilities)
+            .map_err(|_| "capabilityが不正です".to_owned())?,
+    })
+}
+
+fn credential_from_response(response: ServerMessage) -> Result<Option<String>, String> {
+    match response {
+        ServerMessage::Paired(mut paired) => {
+            let id = paired
+                .credential_id()
+                .map_err(|_| "credential IDが不正です".to_owned())?;
+            let secret = paired
+                .take_secret()
+                .map_err(|_| "credential secretが不正です".to_owned())?;
+            let stored = StoredCredential {
+                id: id.as_str().to_owned(),
+                secret: encode_hex(&secret),
+            };
+            Ok(Some(
+                serde_json::to_string(&stored)
+                    .map_err(|_| "credentialを保存できません".to_owned())?,
+            ))
+        }
+        ServerMessage::Authenticated(_) => Ok(None),
+        _ => Err("認証応答が不正です".to_owned()),
+    }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output
+}
+
+fn decode_hex(value: &str) -> Result<[u8; 32], String> {
+    let value = value.trim();
+    if value.len() != 64 {
+        return Err("secretの長さが不正です".to_owned());
+    }
+    let mut output = [0u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let digit = |byte: u8| match byte {
+            b'0'..=b'9' => Some(byte - b'0'),
+            b'a'..=b'f' => Some(byte - b'a' + 10),
+            _ => None,
+        };
+        let high = digit(pair[0]).ok_or_else(|| "secretが不正です".to_owned())?;
+        let low = digit(pair[1]).ok_or_else(|| "secretが不正です".to_owned())?;
+        output[index] = (high << 4) | low;
+    }
+    Ok(output)
 }
 
 fn handle_message(shared: &mut Shared, message: ServerMessage) -> Result<(), String> {

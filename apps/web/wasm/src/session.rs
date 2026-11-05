@@ -5,9 +5,7 @@ use std::rc::Rc;
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 use lapis_client_api::{
-    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
-    ClientKind, ClientMessage, CredentialId, EventBody, EventEnvelope, PairRequest, ProtocolRange,
-    RequestBody, ServerMessage, WorkspaceConnectRequest, WorkspaceId,
+    ClientKind, EventBody, EventEnvelope, RequestBody, WorkspaceConnectRequest, WorkspaceId,
 };
 use lapis_client_core::{
     AsyncHostConnection,
@@ -15,7 +13,6 @@ use lapis_client_core::{
 };
 use lapis_workbench::{ConversationViewState, WorkbenchReplica, WorkbenchWritePlan};
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroize;
 
 use crate::connection::BrowserConnection;
 
@@ -27,13 +24,6 @@ const CAPABILITIES: &[&str] = &[
     "workspace.documents.read",
     "workspace.documents.write",
 ];
-
-/// ページが保持するcredential。secretはlocalStorageへ保存する前提でhex文字列にする。
-#[derive(serde::Deserialize, serde::Serialize)]
-struct StoredCredential {
-    id: String,
-    secret: String,
-}
 
 #[wasm_bindgen]
 pub struct WebSession {
@@ -57,54 +47,25 @@ impl WebSession {
     ) -> Result<WebSession, JsValue> {
         let workspace = WorkspaceId::try_new(workspace)
             .map_err(|_| JsValue::from_str("Workspace IDが不正です"))?;
-        let hello = hello(&client_id)?;
-        let auth = match credential {
-            Some(credential) => {
-                let stored: StoredCredential = serde_json::from_str(&credential)
-                    .map_err(|_| JsValue::from_str("保存済みcredentialが不正です"))?;
-                let id = CredentialId::parse(stored.id)
-                    .map_err(|_| JsValue::from_str("credential IDが不正です"))?;
-                let mut secret = decode_hex(&stored.secret)?;
-                let request = AuthenticateRequest::new(hello, workspace.clone(), &id, &secret);
-                secret.zeroize();
-                ClientMessage::Authenticate(request)
-            }
-            None => {
-                let token = token.ok_or_else(|| JsValue::from_str("pairing tokenが必要です"))?;
-                let mut secret = decode_hex(&token)?;
-                let request = PairRequest::new(hello, &secret);
-                secret.zeroize();
-                ClientMessage::Pair(request)
-            }
-        };
-        let (connection, response) = BrowserConnection::connect(&url, auth)
-            .await
-            .map_err(|error| JsValue::from_str(&error))?;
+        let (connection, credential) = lapis_client_core::browser::connect_web_client(
+            lapis_client_core::browser::WebClientConnectOptions {
+                url: &url,
+                workspace: workspace.clone(),
+                client_id: &client_id,
+                client_name: "lapis-web-test",
+                client_kind: ClientKind::Desktop,
+                token: token.as_deref(),
+                credential: credential.as_deref(),
+                capabilities: CAPABILITIES,
+            },
+        )
+        .await
+        .map_err(|error| JsValue::from_str(&error))?;
         let mut connection = Rc::new(connection);
         let events = Rc::get_mut(&mut connection)
             .ok_or_else(|| JsValue::from_str("接続を初期化できません"))?
             .take_events()
             .ok_or_else(|| JsValue::from_str("イベント購読を開始できません"))?;
-        let mut credential = None;
-        match response {
-            ServerMessage::Paired(mut paired) => {
-                let id = paired
-                    .credential_id()
-                    .map_err(|_| JsValue::from_str("credential IDが不正です"))?;
-                let secret = paired
-                    .take_secret()
-                    .map_err(|_| JsValue::from_str("credential secretが不正です"))?;
-                credential = Some(
-                    serde_json::to_string(&StoredCredential {
-                        id: id.as_str().to_owned(),
-                        secret: encode_hex(&secret),
-                    })
-                    .map_err(|_| JsValue::from_str("credentialを保存できません"))?,
-                );
-            }
-            ServerMessage::Authenticated(_) => {}
-            _ => return Err(JsValue::from_str("認証応答が不正です")),
-        }
         match AsyncHostConnection::request(
             &*connection,
             RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
@@ -233,52 +194,4 @@ impl WebSession {
             .map_err(|error| JsValue::from_str(&error))?;
         self.state_json()
     }
-}
-
-fn hello(client_id: &str) -> Result<ClientHello, JsValue> {
-    let capabilities = CAPABILITIES
-        .iter()
-        .map(|capability| {
-            CapabilityId::try_new(*capability)
-                .map_err(|_| JsValue::from_str("capabilityが不正です"))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    Ok(ClientHello {
-        protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
-        client_id: ClientId::try_new(client_id)
-            .map_err(|_| JsValue::from_str("Client IDが不正です"))?,
-        client_name: "lapis-web".into(),
-        client_kind: ClientKind::Desktop,
-        requested_capabilities: CapabilitySet::try_new(capabilities)
-            .map_err(|_| JsValue::from_str("capabilityが不正です"))?,
-    })
-}
-
-fn decode_hex(value: &str) -> Result<[u8; 32], JsValue> {
-    let value = value.trim();
-    if value.len() != 64 {
-        return Err(JsValue::from_str("secretの長さが不正です"));
-    }
-    let mut output = [0u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Some(byte - b'0'),
-            b'a'..=b'f' => Some(byte - b'a' + 10),
-            _ => None,
-        };
-        let high = digit(pair[0]).ok_or_else(|| JsValue::from_str("secretが不正です"))?;
-        let low = digit(pair[1]).ok_or_else(|| JsValue::from_str("secretが不正です"))?;
-        output[index] = (high << 4) | low;
-    }
-    Ok(output)
-}
-
-fn encode_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut output = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        output.push(HEX[(byte >> 4) as usize] as char);
-        output.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    output
 }
