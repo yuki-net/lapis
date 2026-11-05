@@ -4266,6 +4266,7 @@ dependencies = [
  "lapis-client-api",
  "lapis-wire",
  "lapis-workbench",
+ "serde",
  "serde_json",
  "wasm-bindgen",
  "web-sys",
