@@ -12,9 +12,15 @@ URL と Workspace ID をクエリか localStorage に渡します。初回は pa
 http://127.0.0.1:5174/?url=ws://127.0.0.1:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
 ```
 
+Host なしのデモ:
+
+```text
+http://127.0.0.1:5174/?demo=1
+```
+
 - 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
-- 3つのクエリが無い場合は、メモリー上のサンプル Workspace で起動します（再読み込みで初期化）。
+- `?demo=1` を明示した場合だけ、メモリー上のサンプル Workspace で起動します（再読み込みで初期化）。
 
 ## 現状の制限
 
