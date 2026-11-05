@@ -1,4 +1,6 @@
-//! Browser向けClientの通信境界。GPUI UIの起動は lapis-desktop-ui 側が持つ。
+//! ブラウザー向けClientの通信・回帰検証用。本番のWeb UIは `lapis-desktop-ui` のWasm entryから起動する。
+//!
+//! 本番経路と混同しないよう、このcrateはテスト・検証用途に限定する。
 
 #[cfg(target_arch = "wasm32")]
 pub mod connection;

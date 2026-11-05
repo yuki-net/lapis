@@ -1599,13 +1599,13 @@ impl WorkspaceSearchBackend for WebBackend {
         _: &str,
         _: &std::sync::atomic::AtomicBool,
     ) -> Result<Vec<SearchHit>, SearchError> {
-        Ok(Vec::new())
+        Err(SearchError::new(UNAVAILABLE))
     }
 }
 
 impl TaskConnection for WebBackend {
     fn load(&self, _: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
-        Ok(Vec::new())
+        Err(TaskError::new(UNAVAILABLE))
     }
     fn start(&self, _: &WorkspaceId, _: TaskStart) -> Result<TaskSnapshot, TaskError> {
         Err(TaskError::new(UNAVAILABLE))
@@ -1637,7 +1637,7 @@ impl GitConnection for WebBackend {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
     }
     fn worktrees(&self, _: &WorkspaceId) -> Result<Vec<WorktreeSnapshot>, GitError> {
-        Ok(Vec::new())
+        Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
     }
     fn create_worktree(&self, _: &WorkspaceId) -> Result<WorktreeSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
