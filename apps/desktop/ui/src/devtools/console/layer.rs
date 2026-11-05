@@ -97,11 +97,18 @@ impl tracing::field::Visit for FieldVisitor {
 /// 返された Arc<DiagnosticLogStore> を GPUI の Global として登録する。
 pub(crate) fn init_subscriber() -> Arc<DiagnosticLogStore> {
     let store = Arc::new(DiagnosticLogStore::default());
+    super::store::install_subscriber_store(store.clone());
     let layer = DiagnosticLayer::new(store.clone());
+    let stderr_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
 
     // tracing_subscriber::set_global_default は2回呼び出すと panic する。
     // テスト環境でも安全に動作するよう、try_init を使用する。
-    let _ = tracing_subscriber::registry().with(layer).try_init();
+    let _ = tracing_subscriber::registry()
+        .with(layer)
+        .with(stderr_layer)
+        .try_init();
 
     store
 }

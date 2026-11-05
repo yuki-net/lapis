@@ -879,6 +879,41 @@ fn devtool_tab_switch_preserves_elements_state(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn devtool_state_tab_renders_snapshot_values(cx: &mut TestAppContext) {
+    let target = setup(cx);
+    target
+        .update(cx, |_, window, cx| {
+            InspectorController::toggle(window, cx).unwrap()
+        })
+        .unwrap();
+    draw(target, cx);
+    let inspector = inspector(target, cx);
+
+    cx.update(|cx| {
+        let mut snapshot = super::state::snapshot::DesktopStateSnapshot::default();
+        snapshot.nodes.push(super::state::snapshot::StateNode {
+            name: "Shell".into(),
+            entries: vec![super::state::snapshot::StateEntry {
+                key: "focused_panel".into(),
+                value: "main".into(),
+                source: super::state::snapshot::StateSource::Desktop,
+            }],
+            children: vec![super::state::snapshot::StateNode::leaf(
+                "Tabs",
+                vec![super::state::snapshot::StateEntry {
+                    key: "dirty".into(),
+                    value: "true".into(),
+                    source: super::state::snapshot::StateSource::Desktop,
+                }],
+            )],
+        });
+        super::state::store::store(cx).set_snapshot(snapshot);
+        InspectorController::set_active_tab(DevToolTab::State, inspector.entity_id(), cx);
+    });
+    draw(target, cx);
+}
+
+#[gpui::test]
 fn devtool_keeps_target_sessions_independent_across_tabs(cx: &mut TestAppContext) {
     let first = setup(cx);
     let second = cx.add_window(|_, _| Target {

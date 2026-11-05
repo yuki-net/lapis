@@ -22,10 +22,14 @@ struct InspectorSession {
     tree_scroll: ScrollState,
     tree_list: gpui::UniformListScrollHandle,
     content_scroll: ScrollState,
+    console_list: gpui::UniformListScrollHandle,
+    console_scroll: ScrollState,
+    network_scroll: ScrollState,
+    performance_scroll: ScrollState,
+    state_tree_scroll: ScrollState,
+    state_watch_scroll: ScrollState,
     /// 現在選択中のDevToolタブ
     active_tab: DevToolTab,
-    /// 表示言語。DevToolはShellとは別Windowなので、開いた時点のLocaleを保持する。
-    locale: lapis_localization::LocaleId,
 }
 
 #[derive(Default)]
@@ -167,26 +171,47 @@ impl InspectorController {
             .map(|session| session.content_scroll.clone())
             .unwrap_or_default()
     }
-
-    pub(super) fn open(target: &mut Window, cx: &mut App) -> Result<AnyWindowHandle, String> {
-        Self::open_with_locale(target, cx, &lapis_localization::LocaleId::new("en-US"))
+    pub(super) fn console_list(entity: EntityId, cx: &App) -> gpui::UniformListScrollHandle {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.console_list.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn console_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.console_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn network_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.network_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn performance_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.performance_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn state_tree_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.state_tree_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn state_watch_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.state_watch_scroll.clone())
+            .unwrap_or_default()
     }
 
-    pub(super) fn open_with_locale(
-        target: &mut Window,
-        cx: &mut App,
-        locale: &lapis_localization::LocaleId,
-    ) -> Result<AnyWindowHandle, String> {
+    pub(super) fn open(target: &mut Window, cx: &mut App) -> Result<AnyWindowHandle, String> {
         let handle = target.window_handle();
         if let Some(viewer) = cx.global::<Self>().inspector_handle(handle.window_id()) {
             // 同じTargetへのOpenは既存Windowへ戻る。重複した検査Entityを作らない。
-            if let Some(session) = cx
-                .global_mut::<Self>()
-                .sessions
-                .get_mut(&handle.window_id())
-            {
-                session.locale = locale.clone();
-            }
             viewer
                 .update(cx, |_, window, _| window.activate_window())
                 .map_err(|error| error.to_string())?;
@@ -222,6 +247,8 @@ impl InspectorController {
         let inspection = Inspection::attach(observed, viewer, cx);
         let tree_list = gpui::UniformListScrollHandle::new();
         let tree_scroll = ScrollState::with_handle(tree_list.0.borrow().base_handle.clone());
+        let console_list = gpui::UniformListScrollHandle::new();
+        let console_scroll = ScrollState::with_handle(console_list.0.borrow().base_handle.clone());
         cx.global_mut::<Self>().sessions.insert(
             handle.window_id(),
             InspectorSession {
@@ -232,8 +259,13 @@ impl InspectorController {
                 tree_scroll,
                 tree_list,
                 content_scroll: ScrollState::default(),
+                console_list,
+                console_scroll,
+                network_scroll: ScrollState::default(),
+                performance_scroll: ScrollState::default(),
+                state_tree_scroll: ScrollState::default(),
+                state_watch_scroll: ScrollState::default(),
                 active_tab: DevToolTab::default(),
-                locale: locale.clone(),
             },
         );
         let _ = viewer.update(cx, |_, window, _| window.refresh());
@@ -241,14 +273,6 @@ impl InspectorController {
     }
 
     pub(super) fn toggle(target: &mut Window, cx: &mut App) -> Result<bool, String> {
-        Self::toggle_with_locale(target, cx, &lapis_localization::LocaleId::new("en-US"))
-    }
-
-    pub(super) fn toggle_with_locale(
-        target: &mut Window,
-        cx: &mut App,
-        locale: &lapis_localization::LocaleId,
-    ) -> Result<bool, String> {
         if let Some(session) = cx
             .global_mut::<Self>()
             .sessions
@@ -260,18 +284,11 @@ impl InspectorController {
             let _ = viewer.update(cx, |_, window, _| window.remove_window());
             Ok(false)
         } else {
-            Self::open_with_locale(target, cx, locale).map(|_| true)
+            Self::open(target, cx).map(|_| true)
         }
     }
 
-    pub(super) fn locale(entity: EntityId, cx: &App) -> lapis_localization::LocaleId {
-        cx.global::<Self>()
-            .session(entity)
-            .map(|session| session.locale.clone())
-            .unwrap_or_else(|| lapis_localization::LocaleId::new("en-US"))
-    }
-
-    fn target(entity: EntityId, cx: &App) -> Option<AnyWindowHandle> {
+    pub(super) fn target(entity: EntityId, cx: &App) -> Option<AnyWindowHandle> {
         cx.global::<Self>()
             .session(entity)
             .map(|session| session.target)
