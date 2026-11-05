@@ -42,7 +42,7 @@ impl CommandSearchProvider {
     }
 
     #[cfg(test)]
-    fn new(items: Vec<SearchItem>) -> Self {
+    pub(super) fn new(items: Vec<SearchItem>) -> Self {
         Self { items }
     }
 }

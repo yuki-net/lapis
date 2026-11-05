@@ -10,7 +10,7 @@ use gpui::{
 };
 
 use crate::{
-    components::{ScrollAxis, ScrollState, scroll_viewport},
+    components::{Icon, IconName, ScrollAxis, ScrollState, scroll_viewport},
     extension_ui::CommandId,
     features::command_search::provider::{CommandSearchProvider, SearchItem, SearchProvider},
     theme,
@@ -88,10 +88,47 @@ enum QuickInputMode {
     Text,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum SearchCategory {
+    #[default]
+    All,
+    Actions,
+    Files,
+    Symbols,
+    Text,
+}
+
+impl SearchCategory {
+    const ALL: [Self; 5] = [
+        Self::All,
+        Self::Actions,
+        Self::Files,
+        Self::Symbols,
+        Self::Text,
+    ];
+    /// カテゴリの表示メッセージIDを返す。
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "quick-search.all",
+            Self::Actions => "quick-search.actions",
+            Self::Files => "quick-search.files",
+            Self::Symbols => "quick-search.symbols",
+            Self::Text => "quick-search.text",
+        }
+    }
+    /// 検索結果を表示できるカテゴリか返す。
+    fn available(self) -> bool {
+        matches!(self, Self::All | Self::Actions)
+    }
+}
+
 type QuickSearchEventHandler = dyn Fn(QuickSearchEvent, &mut Window, &mut Context<QuickSearch>);
 
 pub(crate) struct QuickSearch {
     focus_handle: FocusHandle,
+    universal: bool,
+    category: SearchCategory,
+    locale: crate::localization::Localizer,
     query: String,
     path_title: Option<String>,
     input_mode: Option<QuickInputMode>,
@@ -114,6 +151,9 @@ impl QuickSearch {
     ) -> Self {
         Self {
             focus_handle: cx.focus_handle(),
+            universal: false,
+            category: SearchCategory::All,
+            locale: crate::localization::Localizer::bundled(),
             query: String::new(),
             path_title: None,
             input_mode: None,
@@ -146,6 +186,34 @@ impl QuickSearch {
         cx.notify();
     }
 
+    /// 全体検索を中央オーバーレイとして開く。
+    pub(crate) fn open_universal(
+        &mut self,
+        provider: CommandSearchProvider,
+        locale: &lapis_localization::LocaleId,
+        cx: &mut Context<Self>,
+    ) {
+        self.universal = true;
+        self.category = SearchCategory::All;
+        self.selected_index = 0;
+        self.open(provider, cx);
+        self.locale.set_active(locale);
+    }
+
+    /// 現在のロケールでメッセージを解決する。
+    fn t(&self, key: &str) -> String {
+        self.locale
+            .resolve(&lapis_localization::MessageId::new(key))
+    }
+
+    /// カテゴリを切り替え、結果と選択位置を更新する。
+    fn select_category(&mut self, category: SearchCategory, cx: &mut Context<Self>) {
+        self.category = category;
+        self.selected_index = 0;
+        self.refresh_matches();
+        cx.notify();
+    }
+
     pub(crate) fn open_path(&mut self, title: &str, suggested: &str, cx: &mut Context<Self>) {
         self.path_title = Some(title.to_owned());
         self.input_mode = Some(QuickInputMode::Path);
@@ -169,11 +237,12 @@ impl QuickSearch {
     }
 
     fn refresh_matches(&mut self) {
-        self.matches = if self.path_title.is_some() {
-            Vec::new()
-        } else {
-            self.provider.search(&self.query)
-        };
+        self.matches =
+            if self.path_title.is_some() || (self.universal && !self.category.available()) {
+                Vec::new()
+            } else {
+                self.provider.search(&self.query)
+            };
         self.selected_index = self
             .selected_index
             .min(self.matches.len().saturating_sub(1));
@@ -545,6 +614,8 @@ impl Element for SearchTextElement {
         let display_text: gpui::SharedString = if input.query.is_empty() {
             if input.path_title.is_some() {
                 "relative/path.ts".into()
+            } else if input.universal {
+                input.t("quick-search.placeholder").into()
             } else {
                 "Search commands…".into()
             }
@@ -692,6 +763,34 @@ impl Render for QuickSearch {
             .on_action(cx.listener(Self::next))
             .on_action(cx.listener(Self::confirm))
             .on_action(cx.listener(Self::dismiss))
+            .when(self.universal, |view| {
+                view.child(div().px_2().pt_2().flex().items_center().gap_1().children(
+                    SearchCategory::ALL.into_iter().map(|category| {
+                        let active = self.category == category;
+                        div()
+                            .id(category.label())
+                            .px_3()
+                            .py_1()
+                            .rounded(px(5.))
+                            .cursor_pointer()
+                            .text_size(px(13.))
+                            .text_color(theme::colors(cx).text_primary)
+                            .when(active, |tab| {
+                                tab.bg(theme::colors(cx).button_background_selected)
+                            })
+                            .when(!active, |tab| {
+                                tab.hover(|style| {
+                                    style.bg(theme::colors(cx).button_background_hover)
+                                })
+                            })
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.select_category(category, cx);
+                                crate::gpui_compat::focus(window, &this.focus_handle, cx);
+                            }))
+                            .child(self.t(category.label()))
+                    }),
+                ))
+            })
             .when_some(self.path_title.clone(), |view, title| {
                 view.child(div().p_2().child(title))
             })
@@ -715,7 +814,7 @@ impl Render for QuickSearch {
                     .child(
                         div()
                             .text_color(theme::colors(cx).text_secondary)
-                            .child("S"),
+                            .child(Icon::new(IconName::Search).size(px(16.))),
                     )
                     .child(
                         div()
@@ -732,6 +831,12 @@ impl Render for QuickSearch {
                     .text_color(theme::colors(cx).text_tertiary)
                     .child(if self.path_title.is_some() {
                         "Workspaceからの相対path · Enterで確定 · Escで戻る".to_owned()
+                    } else if self.universal {
+                        self.t(if self.category.available() {
+                            "quick-search.actions-only"
+                        } else {
+                            "quick-search.unavailable"
+                        })
                     } else {
                         format!("{} commands · ↑↓ select · Enter run", rows.len())
                     }),
@@ -747,15 +852,24 @@ impl Render for QuickSearch {
                         .flex()
                         .flex_col()
                         .gap_1()
-                        .when(rows.is_empty() && self.path_title.is_none(), |results| {
-                            results.child(
-                                div()
-                                    .p_3()
-                                    .text_size(px(12.0))
-                                    .text_color(theme::colors(cx).text_tertiary)
-                                    .child("No matching commands"),
-                            )
-                        })
+                        .when(
+                            rows.is_empty()
+                                && self.path_title.is_none()
+                                && (!self.universal || self.category.available()),
+                            |results| {
+                                results.child(
+                                    div()
+                                        .p_3()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_tertiary)
+                                        .child(if self.universal {
+                                            self.t("quick-search.no-results")
+                                        } else {
+                                            "No matching commands".to_owned()
+                                        }),
+                                )
+                            },
+                        )
                         .children(rows.into_iter().map(|(index, item)| {
                             let command_label = item.command.as_str().to_owned();
                             div()
@@ -904,5 +1018,29 @@ mod tests {
             "command.second"
         );
         assert!(selected_command(&matches, 2).is_none());
+    }
+    #[gpui::test]
+    fn categories_only_run_available_providers_and_reset_on_reopen(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let search = cx.update(|cx| cx.new(|cx| QuickSearch::new(cx, |_, _, _| {})));
+        cx.update(|cx| {
+            search.update(cx, |search, cx| {
+                let provider = CommandSearchProvider::new(vec![search_item("command.first")]);
+                search.open_universal(
+                    provider.clone(),
+                    &lapis_localization::LocaleId::new("en-US"),
+                    cx,
+                );
+                assert_eq!(search.matches.len(), 1);
+                search.select_category(SearchCategory::Files, cx);
+                assert!(search.matches.is_empty());
+                search.select_category(SearchCategory::Actions, cx);
+                assert_eq!(search.matches.len(), 1);
+                search.select_category(SearchCategory::Text, cx);
+                search.open_universal(provider, &lapis_localization::LocaleId::new("en-US"), cx);
+                assert_eq!(search.category, SearchCategory::All);
+                assert_eq!(search.matches.len(), 1);
+            });
+        });
     }
 }

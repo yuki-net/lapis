@@ -90,6 +90,9 @@ pub(crate) struct DesktopRoot {
     )>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
+    universal_search: Entity<QuickSearch>,
+    universal_search_open: bool,
+    universal_previous_focus: Option<gpui::FocusHandle>,
     path_request: Option<PathRequest>,
     git_input: Option<GitInputRequest>,
     _subscriptions: Vec<Subscription>,
@@ -130,6 +133,7 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
+        #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
         let conversation_id = services.conversation.active_id().clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
@@ -196,6 +200,18 @@ impl DesktopRoot {
                         }
                     }
                     crate::gpui_compat::focus(window, &root.editor.focus_handle(cx), cx);
+                });
+            })
+        });
+        let universal_root = cx.entity().downgrade();
+        let universal_search = cx.new(|cx| {
+            QuickSearch::new(cx, move |event, window, cx| {
+                let _ = universal_root.update(cx, |root, cx| {
+                    root.close_universal_search(window, cx);
+                    if let QuickSearchEvent::Execute(command) = event {
+                        root.shell
+                            .update(cx, |shell, cx| shell.execute_command(command, window, cx));
+                    }
                 });
             })
         });
@@ -533,6 +549,9 @@ impl DesktopRoot {
             line_ending_cache: None,
             settings,
             quick_search,
+            universal_search,
+            universal_search_open: false,
+            universal_previous_focus: None,
             path_request: None,
             git_input: None,
             _subscriptions: subscriptions,
@@ -1315,6 +1334,17 @@ impl DesktopRoot {
             .map(|initial| self.shell.read(cx).session.root.clone().unwrap_or(initial))
     }
 
+    /// 全体検索を閉じ、以前のフォーカスへ戻す。
+    fn close_universal_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.universal_search_open {
+            self.universal_search_open = false;
+            if let Some(focus) = self.universal_previous_focus.take() {
+                crate::gpui_compat::focus(window, &focus, cx);
+            }
+            cx.notify();
+        }
+    }
+
     fn show_path_request(
         &mut self,
         request: PathRequest,
@@ -1458,20 +1488,28 @@ impl DesktopRoot {
             | UiCommand::MoveTab(_, _)
             | UiCommand::ReleaseTab(_, _)) => self.host_command(0, command, window, cx),
             UiCommand::QuickSearch => {
-                self.path_request = None;
-                self.git_input = None;
                 self.double_shift.reset();
+                let locale = self.group.read(cx).locale.clone();
+                let mut localizer = crate::localization::Localizer::bundled();
+                localizer.set_active(&locale);
                 let provider = CommandSearchProvider::from_registry(
                     &features::bundled_registry(),
-                    &crate::localization::Localizer::bundled(),
+                    &localizer,
                     crate::keymap::KeymapRegistry::active(cx),
                 );
-                self.quick_search
-                    .update(cx, |search, cx| search.open(provider, cx));
-                self.shell.update(cx, |shell, cx| {
-                    shell.open_view_in_zone(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
+                if !self.universal_search_open {
+                    self.universal_previous_focus = window.focused(cx);
+                }
+                self.universal_search_open = true;
+                self.universal_search.update(cx, |search, cx| {
+                    search.open_universal(provider, &locale, cx)
                 });
-                crate::gpui_compat::focus(window, &self.quick_search.read(cx).focus_handle(), cx);
+                crate::gpui_compat::focus(
+                    window,
+                    &self.universal_search.read(cx).focus_handle(),
+                    cx,
+                );
+                cx.notify();
             }
             UiCommand::ActivateDocument(id) => {
                 self.editor.update(cx, |editor, cx| editor.activate(id, cx));
@@ -1632,9 +1670,12 @@ impl DesktopRoot {
 }
 impl Render for DesktopRoot {
     /// Renders the root shell with application quit and command-search keyboard handlers.
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let panel_height = gpui::px(520.)
+            .min((window.viewport_size().height - gpui::px(100.)).max(gpui::px(100.)));
         div()
             .size_full()
+            .relative()
             .on_action(cx.listener(|root, _: &crate::app::Quit, window, cx| {
                 cx.stop_propagation();
                 root.close_application(window, cx);
@@ -1655,6 +1696,38 @@ impl Render for DesktopRoot {
                 }
             }))
             .child(self.shell.clone())
+            .when(self.universal_search_open, |root| {
+                root.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .flex()
+                        .justify_center()
+                        .items_start()
+                        .pt(gpui::px(72.))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this, _, window, cx| {
+                                this.close_universal_search(window, cx);
+                            }),
+                        )
+                        .child(
+                            crate::components::floating_panel(
+                                "universal-search",
+                                crate::components::SurfaceVariant::Popover,
+                                cx,
+                            )
+                            .debug_selector(|| "universal-search-popup".into())
+                            .w(gpui::relative(0.9))
+                            .max_w(gpui::px(820.))
+                            .h(panel_height)
+                            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .child(self.universal_search.clone()),
+                        ),
+                )
+            })
     }
 }
 
