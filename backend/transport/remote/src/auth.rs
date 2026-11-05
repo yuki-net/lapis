@@ -177,7 +177,7 @@ enum PairingScope {
 }
 
 /// 永続化するcredential。secretそのものは保存せず、digestだけを保持する。
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredCredential {
     pub id: String,
     pub client_id: String,

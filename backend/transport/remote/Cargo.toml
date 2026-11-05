@@ -14,6 +14,7 @@ lapis-client-core = { path = "../../../shared/client" }
 lapis-wire = { path = "../../../shared/models/wire" }
 getrandom.workspace = true
 rcgen.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
 rustls.workspace = true
 quinn.workspace = true
 tokio-util.workspace = true
