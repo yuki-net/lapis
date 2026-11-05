@@ -3,47 +3,71 @@ package dev.lapis.mobile.protocol
 import kotlinx.serialization.encodeToString
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
+/**
+ * Rust `shared/protocol/tests/wire_fixtures.rs` と同じ JSON を検証する。
+ * wire 形式の正本は Rust 側の fixture。
+ */
 class ProtocolSerializationTest {
     @Test
-    fun testClientHelloAndAuthSerialization() {
-        val hello = ClientHello(
-            protocol = ProtocolRange.EXACT_V0,
-            clientId = "test-client-1",
-            clientName = "Test Mobile",
-            clientKind = ClientKind.Android,
-        )
-        val authReq = AuthenticateRequest(
-            hello = hello,
-            workspaceId = "workspace-default",
-            credentialId = "cred-1",
-            secret = "secret-hex",
-        )
-        val msg: ClientMessage = ClientMessage.Authenticate(authReq)
-        val jsonStr = lapisJson.encodeToString(msg)
+    fun clientHelloMatchesRustFixture() {
+        val json =
+            """{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"""
 
-        assertTrue(jsonStr.contains("auth.authenticate"))
-        assertTrue(jsonStr.contains("workspace-default"))
+        val hello = lapisJson.decodeFromString<ClientHello>(json)
 
-        val decoded = lapisJson.decodeFromString<ClientMessage>(jsonStr)
-        assertEquals(msg, decoded)
+        assertEquals(ProtocolRange(0, 5, 5), hello.protocol)
+        assertEquals(json, lapisJson.encodeToString(hello))
     }
 
     @Test
-    fun testServerHelloSerialization() {
-        val serverHello = ServerHello(
-            protocol = ProtocolVersion(0, 0),
-            sessionId = "session-123",
-            grantedCapabilities = listOf("files.read", "terminal.start"),
-        )
-        val serverMsg: ServerMessage = ServerMessage.Authenticated(serverHello)
-        val jsonStr = lapisJson.encodeToString(serverMsg)
+    fun authenticateMessageMatchesRustFixture() {
+        val json =
+            """{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"""
 
-        assertTrue(jsonStr.contains("auth.authenticated"))
-        assertTrue(jsonStr.contains("session-123"))
+        val message = lapisJson.decodeFromString<ClientMessage>(json)
 
-        val decoded = lapisJson.decodeFromString<ServerMessage>(jsonStr)
-        assertEquals(serverMsg, decoded)
+        assertEquals(json, lapisJson.encodeToString(message))
+    }
+
+    @Test
+    fun requestEnvelopeMatchesRustFixture() {
+        val json = """{"request_id":"request-1","type":"workspace.list","payload":{}}"""
+
+        val envelope = lapisJson.decodeFromString<RequestEnvelope>(json)
+
+        assertEquals("workspace.list", envelope.type)
+        assertEquals(json, lapisJson.encodeToString(envelope))
+    }
+
+    @Test
+    fun eventEnvelopeMatchesRustFixture() {
+        val json =
+            """{"event_sequence":7,"type":"workspace.changed","payload":{"workspace_id":"workspace-1"}}"""
+
+        val envelope = lapisJson.decodeFromString<EventEnvelope>(json)
+
+        assertEquals(7L, envelope.eventSequence)
+        assertEquals("workspace.changed", envelope.type)
+        assertEquals(json, lapisJson.encodeToString(envelope))
+    }
+
+    @Test
+    fun protocolErrorMatchesRustFixture() {
+        val json = """{"type":"error","payload":{"code":"invalid_request","retryable":false}}"""
+
+        val message = lapisJson.decodeFromString<ServerMessage>(json)
+
+        assertEquals(json, lapisJson.encodeToString(message))
+    }
+
+    @Test
+    fun pairedResponseMatchesRustFixture() {
+        val json =
+            """{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":5},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
+
+        val message = lapisJson.decodeFromString<ServerMessage>(json)
+
+        assertEquals(json, lapisJson.encodeToString(message))
     }
 }
