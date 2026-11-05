@@ -16,6 +16,10 @@ pub(crate) fn init(cx: &mut App) {
     });
 }
 
-pub(crate) fn toggle_devtool(window: &mut Window, cx: &mut App) -> Result<bool, String> {
-    inspector_controller::InspectorController::toggle(window, cx)
+pub(crate) fn toggle_devtool(
+    window: &mut Window,
+    cx: &mut App,
+    locale: &lapis_localization::LocaleId,
+) -> Result<bool, String> {
+    inspector_controller::InspectorController::toggle_with_locale(window, cx, locale)
 }

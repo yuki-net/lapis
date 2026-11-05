@@ -24,6 +24,8 @@ struct InspectorSession {
     content_scroll: ScrollState,
     /// 現在選択中のDevToolタブ
     active_tab: DevToolTab,
+    /// 表示言語。DevToolはShellとは別Windowなので、開いた時点のLocaleを保持する。
+    locale: lapis_localization::LocaleId,
 }
 
 #[derive(Default)]
@@ -167,9 +169,24 @@ impl InspectorController {
     }
 
     pub(super) fn open(target: &mut Window, cx: &mut App) -> Result<AnyWindowHandle, String> {
+        Self::open_with_locale(target, cx, &lapis_localization::LocaleId::new("en-US"))
+    }
+
+    pub(super) fn open_with_locale(
+        target: &mut Window,
+        cx: &mut App,
+        locale: &lapis_localization::LocaleId,
+    ) -> Result<AnyWindowHandle, String> {
         let handle = target.window_handle();
         if let Some(viewer) = cx.global::<Self>().inspector_handle(handle.window_id()) {
             // 同じTargetへのOpenは既存Windowへ戻る。重複した検査Entityを作らない。
+            if let Some(session) = cx
+                .global_mut::<Self>()
+                .sessions
+                .get_mut(&handle.window_id())
+            {
+                session.locale = locale.clone();
+            }
             viewer
                 .update(cx, |_, window, _| window.activate_window())
                 .map_err(|error| error.to_string())?;
@@ -216,6 +233,7 @@ impl InspectorController {
                 tree_list,
                 content_scroll: ScrollState::default(),
                 active_tab: DevToolTab::default(),
+                locale: locale.clone(),
             },
         );
         let _ = viewer.update(cx, |_, window, _| window.refresh());
@@ -223,6 +241,14 @@ impl InspectorController {
     }
 
     pub(super) fn toggle(target: &mut Window, cx: &mut App) -> Result<bool, String> {
+        Self::toggle_with_locale(target, cx, &lapis_localization::LocaleId::new("en-US"))
+    }
+
+    pub(super) fn toggle_with_locale(
+        target: &mut Window,
+        cx: &mut App,
+        locale: &lapis_localization::LocaleId,
+    ) -> Result<bool, String> {
         if let Some(session) = cx
             .global_mut::<Self>()
             .sessions
@@ -234,8 +260,15 @@ impl InspectorController {
             let _ = viewer.update(cx, |_, window, _| window.remove_window());
             Ok(false)
         } else {
-            Self::open(target, cx).map(|_| true)
+            Self::open_with_locale(target, cx, locale).map(|_| true)
         }
+    }
+
+    pub(super) fn locale(entity: EntityId, cx: &App) -> lapis_localization::LocaleId {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.locale.clone())
+            .unwrap_or_else(|| lapis_localization::LocaleId::new("en-US"))
     }
 
     fn target(entity: EntityId, cx: &App) -> Option<AnyWindowHandle> {

@@ -64,9 +64,10 @@ pub(super) fn render_inspector(
         }));
 
     // タブコンテンツ
+    let locale = InspectorController::locale(entity, cx);
     let tab_content = match active_tab {
         DevToolTab::Elements => render_elements_tab(inspector, window, cx, &content_scroll),
-        _ => render_placeholder_tab(active_tab, cx),
+        _ => render_placeholder_tab(active_tab, &locale, cx),
     };
 
     div()
@@ -171,7 +172,13 @@ fn render_elements_tab(
         )
 }
 
-fn render_placeholder_tab(tab: DevToolTab, cx: &gpui::App) -> Div {
+fn render_placeholder_tab(
+    tab: DevToolTab,
+    locale_id: &lapis_localization::LocaleId,
+    cx: &gpui::App,
+) -> Div {
+    let mut locale = crate::localization::Localizer::bundled();
+    locale.set_active(locale_id);
     div()
         .size_full()
         .flex()
@@ -191,12 +198,16 @@ fn render_placeholder_tab(tab: DevToolTab, cx: &gpui::App) -> Div {
             div()
                 .text_size(px(13.))
                 .text_color(theme::colors(cx).text_secondary)
-                .child("この診断ツールは後続実装です"),
+                .child(locale.resolve(&lapis_localization::MessageId::new(
+                    "devtool.placeholder.description",
+                ))),
         )
         .child(
             div()
                 .text_size(px(11.))
                 .text_color(theme::colors(cx).text_secondary)
-                .child("この機能は今後のPRで追加されます"),
+                .child(locale.resolve(&lapis_localization::MessageId::new(
+                    "devtool.placeholder.coming-soon",
+                ))),
         )
 }

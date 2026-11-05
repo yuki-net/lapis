@@ -394,7 +394,7 @@ impl Shell {
     pub(crate) fn toggle_devtool_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         #[cfg(all(debug_assertions, not(target_family = "wasm")))]
         {
-            let _ = crate::devtools::toggle_devtool(window, cx);
+            let _ = crate::devtools::toggle_devtool(window, cx, self.locale.active());
         }
         #[cfg(all(debug_assertions, target_family = "wasm"))]
         window.toggle_inspector(cx);

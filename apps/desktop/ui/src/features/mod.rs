@@ -366,10 +366,9 @@ mod tests {
                 .contributions(UiSlot::CommandPalette)
                 .iter()
                 .all(|contribution| {
-                    contribution
-                        .command
-                        .as_ref()
-                        .is_none_or(|command| command.as_str() != id::COMMAND_TOGGLE_DEVTOOL)
+                    contribution.command.as_ref().is_none_or(|command| {
+                        command.as_str() != "lapis.command.dev.toggle-devtool"
+                    })
                 })
         );
     }
