@@ -1483,9 +1483,8 @@ impl DesktopRoot {
         }
         match command {
             UiCommand::Save if self.editor.read(cx).document_id().is_none() => {}
-            command @ (UiCommand::DetachTab(_)
-            | UiCommand::DockTab(_)
-            | UiCommand::MoveTab(_, _)
+            command @ (UiCommand::MoveTab(_, _)
+            | UiCommand::CloseTabs(_)
             | UiCommand::ReleaseTab(_, _)) => self.host_command(0, command, window, cx),
             UiCommand::QuickSearch => {
                 self.double_shift.reset();

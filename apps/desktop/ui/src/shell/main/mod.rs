@@ -39,6 +39,7 @@ mod panel_frame;
 mod panel_tabs;
 mod render;
 mod resize;
+mod tab_context;
 mod tab_drag;
 mod tool_picker;
 
@@ -50,6 +51,9 @@ pub(crate) struct Shell {
     pub(crate) detached: bool,
     tab_drag: super::tab_state::TabDragState,
     drag_preview: Option<gpui::AnyWindowHandle>,
+    tab_context: Option<(PanelId, PanelTab, Point<Pixels>)>,
+    tab_mutations_blocked: bool,
+    tab_bounds: std::rc::Rc<RefCell<HashMap<PanelTab, gpui::Bounds<Pixels>>>>,
     _drag_keys: gpui::Subscription,
     _notifications: gpui::Subscription,
     pub(crate) zone_panel_bounds: RefCell<HashMap<ZonePosition, gpui::Bounds<Pixels>>>,
@@ -220,6 +224,9 @@ impl Shell {
             detached: false,
             tab_drag: Default::default(),
             drag_preview: None,
+            tab_context: None,
+            tab_mutations_blocked: false,
+            tab_bounds: Default::default(),
             _drag_keys: drag_keys,
             _notifications: notifications,
             zone_panel_bounds: Default::default(),
@@ -405,6 +412,7 @@ impl Shell {
     }
     pub(crate) fn dismiss(&mut self, _: &Dismiss, _: &mut Window, cx: &mut Context<Self>) {
         self.shell.command_palette_open = false;
+        self.tab_context = None;
         self.shell.tool_picker = None;
         self.shell.header_menu_open = false;
         self.shell.workspace_menu_open = false;

@@ -160,6 +160,9 @@ pub enum PanelLayoutViewState {
 pub struct ZonePanelViewState {
     pub id: String,
     pub tabs: Vec<String>,
+    /// ピン留めされたタブ。古い保存データには存在しないため default で補う。
+    #[serde(default)]
+    pub pinned_tabs: Vec<String>,
     pub active_tab: Option<String>,
     pub open: bool,
 }

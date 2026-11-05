@@ -18,6 +18,7 @@ pub(crate) struct GroupLayout {
     next_host: HostId,
     pub(crate) windows: HashMap<HostId, Option<HostId>>,
     pub(crate) tabs: HashMap<PanelTab, (HostId, TabDestination)>,
+    pub(crate) pending_pins: HashMap<PanelTab, HostId>,
 }
 
 impl GroupLayout {
@@ -27,6 +28,7 @@ impl GroupLayout {
             next_host: 1,
             windows: HashMap::from([(ROOT_HOST, None)]),
             tabs: HashMap::new(),
+            pending_pins: HashMap::new(),
         }
     }
 
@@ -84,6 +86,7 @@ impl GroupLayout {
     pub(crate) fn remove_window(&mut self, host: HostId) {
         self.windows.remove(&host);
         self.tabs.retain(|_, (owner, _)| *owner != host);
+        self.pending_pins.retain(|_, target| *target != host);
     }
 }
 

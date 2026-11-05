@@ -18,8 +18,6 @@ pub(crate) enum UiCommand {
     NewWindow,
     ConnectHost,
     CloseWindow,
-    DetachTab(crate::shell::PanelTab),
-    DockTab(crate::shell::PanelTab),
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     MoveTab(crate::shell::DraggedPanelTab, crate::shell::PanelId),
     ReleaseTab(
@@ -39,6 +37,7 @@ pub(crate) enum UiCommand {
     Paste,
     ActivateDocument(DocumentId),
     CloseDocument(DocumentId),
+    CloseTabs(Vec<crate::shell::PanelTab>),
     SelectTask(lapis_editor_core::ConversationId),
     SetWorkbenchMode(WorkbenchMode),
     BindViewToSelectedTask(crate::workbench::ViewInstanceKey),

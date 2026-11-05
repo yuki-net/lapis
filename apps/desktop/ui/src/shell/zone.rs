@@ -416,6 +416,12 @@ impl Zone {
                         .iter()
                         .map(super::layout::serialize_tab)
                         .collect(),
+                    pinned_tabs: panel
+                        .tabs
+                        .iter()
+                        .filter(|tab| panel.pinned.contains(*tab))
+                        .map(super::layout::serialize_tab)
+                        .collect(),
                     active_tab: panel.active.as_ref().map(super::layout::serialize_tab),
                     open: panel.requested_open(),
                 })
@@ -463,6 +469,18 @@ impl Zone {
                 .or_else(|| tabs.first().cloned());
             let mut panel = PanelHost::new(tabs, item.open);
             panel.active = active;
+            let pinned = panel
+                .tabs
+                .iter()
+                .filter(|tab| {
+                    item.pinned_tabs
+                        .contains(&super::layout::serialize_tab(tab))
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for tab in pinned {
+                panel.set_pinned(&tab, true);
+            }
             panel.set_open_immediate(item.open);
             if panels.insert(id, panel).is_some() {
                 return None;
