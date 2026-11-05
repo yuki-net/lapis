@@ -9,6 +9,7 @@ val lapisJson = Json {
     ignoreUnknownKeys = true
     isLenient = true
     encodeDefaults = true
+    explicitNulls = false
 }
 
 @Serializable
@@ -16,16 +17,23 @@ enum class ClientKind {
     @SerialName("desktop") Desktop,
     @SerialName("android") Android,
     @SerialName("ios") Ios,
-    @SerialName("web") Web,
 }
 
 @Serializable
 data class ProtocolVersion(val major: Int, val minor: Int)
 
+/// Rust `ProtocolRange` と同じ wire 形式。`min`/`max` ではなく範囲を直接持つ。
 @Serializable
-data class ProtocolRange(val min: ProtocolVersion, val max: ProtocolVersion) {
+data class ProtocolRange(
+    val major: Int,
+    @SerialName("minimum_minor") val minimumMinor: Int,
+    @SerialName("maximum_minor") val maximumMinor: Int,
+) {
     companion object {
-        val EXACT_V0 = ProtocolRange(ProtocolVersion(0, 0), ProtocolVersion(0, 0))
+        val EXACT_V0 = ProtocolRange(0, 0, 0)
+
+        fun exact(version: ProtocolVersion) =
+            ProtocolRange(version.major, version.minor, version.minor)
     }
 }
 
@@ -69,26 +77,31 @@ data class AuthenticateRequest(
 @Serializable
 data class ProtocolError(
     val code: String,
-    val message: String? = null,
+    val detail: String? = null,
     val retryable: Boolean = false,
+    @SerialName("revision_conflict") val revisionConflict: JsonElement? = null,
 )
 
+/// Rust `RequestEnvelope` は `RequestBody` を flatten するため、`type`/`payload` を直接持つ。
 @Serializable
 data class RequestEnvelope(
     @SerialName("request_id") val requestId: String,
-    val body: JsonElement,
+    val type: String,
+    val payload: JsonElement,
 )
 
 @Serializable
 data class ResponseEnvelope(
     @SerialName("request_id") val requestId: String,
-    val body: JsonElement,
+    val type: String,
+    val payload: JsonElement,
 )
 
 @Serializable
 data class EventEnvelope(
     @SerialName("event_sequence") val eventSequence: Long,
-    val body: JsonElement,
+    val type: String,
+    val payload: JsonElement,
 )
 
 @Serializable

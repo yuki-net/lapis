@@ -99,15 +99,15 @@ class LapisRemoteClient(
                 _events.emit(message.payload)
             }
             is ServerMessage.Error -> {
-                _status.value = ConnectionStatus.Error(message.payload.message ?: message.payload.code)
+                _status.value = ConnectionStatus.Error(message.payload.detail ?: message.payload.code)
             }
         }
     }
 
-    suspend fun sendRequest(body: JsonElement): ResponseEnvelope {
+    suspend fun sendRequest(type: String, payload: JsonElement): ResponseEnvelope {
         val currentSession = session ?: throw IllegalStateException("Not connected")
         val reqId = "req-${nextRequestId++}"
-        val envelope = RequestEnvelope(requestId = reqId, body = body)
+        val envelope = RequestEnvelope(requestId = reqId, type = type, payload = payload)
         val msg = ClientMessage.Request(envelope)
         val deferred = CompletableDeferred<ResponseEnvelope>()
         pendingRequests[reqId] = deferred
