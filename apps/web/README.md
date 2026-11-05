@@ -18,6 +18,8 @@ Host なしのデモ:
 http://127.0.0.1:5174/?demo=1
 ```
 
+URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。
+
 - 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
 - `?demo=1` を明示した場合だけ、メモリー上のサンプル Workspace で起動します（再読み込みで初期化）。

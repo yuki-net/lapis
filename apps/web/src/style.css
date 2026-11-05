@@ -77,3 +77,82 @@ body > canvas {
 body[data-lapis="ready"] .loading {
   display: none;
 }
+
+.login {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 28px;
+  border: 1px solid #2a2e38;
+  border-radius: 14px;
+  background: #171a21;
+  box-shadow: 0 18px 60px rgb(0 0 0 / 35%);
+}
+
+.login h1 {
+  margin: 0;
+  color: #f1f4fa;
+  font-size: 24px;
+  letter-spacing: 0.02em;
+}
+
+.login-lead {
+  margin: 0;
+  color: #8d96a8;
+  line-height: 1.6;
+}
+
+.login label {
+  display: grid;
+  gap: 6px;
+  color: #c6cedb;
+  font-size: 13px;
+}
+
+.login label small {
+  color: #8d96a8;
+}
+
+.login input {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #343a46;
+  border-radius: 7px;
+  background: #111318;
+  color: #e6eaf2;
+  font: inherit;
+}
+
+.login input:focus {
+  outline: 2px solid #4c8dff;
+  outline-offset: 1px;
+}
+
+.login button {
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: #4c8dff;
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login button:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.login-error {
+  margin: 0;
+  color: #f7768e;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.login-demo {
+  color: #8d96a8;
+  font-size: 12px;
+  text-align: center;
+}
