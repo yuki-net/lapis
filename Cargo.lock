@@ -1334,9 +1334,9 @@ dependencies = [
 
 [[package]]
 name = "const_format"
-version = "0.2.36"
+version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4481a617ad9a412be3b97c5d403fef8ed023103368908b9c50af598ff467cc1e"
+checksum = "a3decb4d6965448659923544a634a0571ba44cede4e11ef15a5a317126840454"
 dependencies = [
  "const_format_proc_macros",
  "konst",
@@ -1344,9 +1344,9 @@ dependencies = [
 
 [[package]]
 name = "const_format_proc_macros"
-version = "0.2.34"
+version = "0.2.37"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1d57c2eccfb16dbac1f4e61e206105db5820c9d26c3c472bc17c774259ef7744"
+checksum = "941b570269a642506f08cb5b688c04bfa6cfd41a26f8bcdc49db8fd00c0ab659"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4331,6 +4331,8 @@ dependencies = [
  "serde_json",
  "subsecond",
  "syntect",
+ "tracing",
+ "tracing-subscriber",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-time",
@@ -5221,6 +5223,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3b335231dfd352ffb0f8017f3b6027a4917f7df785ea2143d8af2adc66980ae"
 dependencies = [
  "winapi",
+]
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+dependencies = [
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6739,7 +6750,7 @@ dependencies = [
  "log",
  "pico-args",
  "rgb",
- "svgtypes 0.16.1",
+ "svgtypes 0.16.2",
  "tiny-skia",
  "usvg 0.46.0",
  "zune-jpeg",
@@ -7335,6 +7346,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sharded-slab"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
+dependencies = [
+ "lazy_static",
+]
+
+[[package]]
 name = "shared_library"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7793,9 +7813,9 @@ dependencies = [
 
 [[package]]
 name = "svgtypes"
-version = "0.16.1"
+version = "0.16.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
+checksum = "9f12b12995e3638c70618c1facb1ce65302f6a6f706b675f07c58a5d7391120e"
 dependencies = [
  "kurbo 0.13.1",
  "siphasher",
@@ -8115,6 +8135,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "thread_local"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ad99c4c6d32803332c548b1af0540b357b3f5fc0be8f6c6bfe8b2e6ae784070"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -8449,6 +8478,32 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db97caf9d906fbde555dd62fa95ddba9eecfd14cb388e4f491a66d74cd5fb79a"
 dependencies = [
  "once_cell",
+ "valuable",
+]
+
+[[package]]
+name = "tracing-log"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
+dependencies = [
+ "log",
+ "once_cell",
+ "tracing-core",
+]
+
+[[package]]
+name = "tracing-subscriber"
+version = "0.3.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb7f578e5945fb242538965c2d0b04418d38ec25c79d160cd279bf0731c8d319"
+dependencies = [
+ "nu-ansi-term",
+ "sharded-slab",
+ "smallvec",
+ "thread_local",
+ "tracing-core",
+ "tracing-log",
 ]
 
 [[package]]
@@ -8706,7 +8761,7 @@ dependencies = [
  "simplecss",
  "siphasher",
  "strict-num",
- "svgtypes 0.16.1",
+ "svgtypes 0.16.2",
  "tiny-skia-path",
  "unicode-bidi",
  "unicode-script",
@@ -8755,6 +8810,12 @@ dependencies = [
  "num-traits",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "valuable"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
 
 [[package]]
 name = "value-bag"
