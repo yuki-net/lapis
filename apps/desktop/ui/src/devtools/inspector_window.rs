@@ -70,6 +70,8 @@ pub(super) fn render_inspector(
     let tab_content = match active_tab {
         DevToolTab::Elements => render_elements_tab(inspector, window, cx, &content_scroll),
         DevToolTab::Console => render_console_tab(inspector, window, cx),
+        DevToolTab::Network => render_network_tab(cx),
+        DevToolTab::Performance => render_performance_tab(cx),
         _ => render_placeholder_tab(active_tab, &locale, cx),
     };
 
@@ -313,6 +315,251 @@ fn render_console_tab(
                                     .truncate()
                                     .child(entry.message.clone()),
                             )
+                    })),
+                cx,
+            )
+            .min_h(px(0.))
+            .min_w(px(0.))
+            .flex_1(),
+        )
+}
+
+fn render_network_tab(cx: &mut Context<Inspector>) -> Div {
+    let entries = super::network::store::store(cx).entries();
+    let is_recording = super::network::store::store(cx).is_recording();
+    div()
+        .size_full()
+        .min_h(px(0.))
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .id("network-filter-bar")
+                .flex()
+                .items_center()
+                .px(tokens::spacing::SM)
+                .py(px(4.))
+                .gap(px(4.))
+                .bg(theme::colors(cx).background_secondary)
+                .border_b_1()
+                .border_color(theme::colors(cx).border_default)
+                .child(
+                    header_button(
+                        "network-record",
+                        if is_recording {
+                            "● Record"
+                        } else {
+                            "○ Record"
+                        },
+                        cx,
+                    )
+                    .cursor_pointer()
+                    .when(is_recording, |el| {
+                        el.text_color(theme::colors(cx).text_dangerous)
+                    })
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        let store = super::network::store::store(cx);
+                        store.set_recording(!store.is_recording());
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    header_button("network-clear", "Clear", cx)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            super::network::store::store(cx).clear();
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.))
+                        .px(tokens::spacing::SM)
+                        .py(px(2.))
+                        .rounded(px(4.))
+                        .bg(theme::colors(cx).button_background_hover)
+                        .text_size(px(11.))
+                        .child("Filter..."),
+                ),
+        )
+        .child(
+            scroll_viewport(
+                "network-scroll",
+                ScrollAxis::Both,
+                &ScrollState::default(),
+                div()
+                    .id("network-entry-list")
+                    .min_h(px(0.))
+                    .flex_1()
+                    .children(entries.iter().enumerate().map(|(i, entry)| {
+                        let duration_str = entry
+                            .duration
+                            .map(|d| format!("{:.1} ms", d.as_millis() as f64))
+                            .unwrap_or_else(|| "-".to_string());
+                        let status_color = match entry.status {
+                            super::network::entry::NetworkStatus::Ok => {
+                                theme::colors(cx).text_primary
+                            }
+                            super::network::entry::NetworkStatus::Error => {
+                                theme::colors(cx).text_dangerous
+                            }
+                            super::network::entry::NetworkStatus::Pending => {
+                                theme::colors(cx).text_secondary
+                            }
+                        };
+                        let timestamp = entry.occurred_at.elapsed();
+                        let time_str = format!(
+                            "{:02}:{:02}.{:03}",
+                            timestamp.as_secs() % 3600 % 60,
+                            timestamp.as_secs() % 60,
+                            timestamp.subsec_millis()
+                        );
+                        div()
+                            .id(("network-entry", i))
+                            .flex()
+                            .items_baseline()
+                            .px(tokens::spacing::SM)
+                            .py(px(2.))
+                            .gap(px(6.))
+                            .text_size(px(12.))
+                            .font_family("Cascadia Mono")
+                            .child(
+                                div()
+                                    .text_color(theme::colors(cx).text_secondary)
+                                    .child(time_str),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::colors(cx).text_secondary)
+                                    .w(px(50.))
+                                    .child(entry.network_type.title()),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w(px(0.))
+                                    .truncate()
+                                    .child(entry.method.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(status_color)
+                                    .w(px(50.))
+                                    .child(entry.status.title()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(theme::colors(cx).text_secondary)
+                                    .w(px(70.))
+                                    .child(duration_str),
+                            )
+                    })),
+                cx,
+            )
+            .min_h(px(0.))
+            .min_w(px(0.))
+            .flex_1(),
+        )
+}
+
+fn render_performance_tab(cx: &mut Context<Inspector>) -> Div {
+    let entries = super::performance::store::store(cx).entries();
+    let is_recording = super::performance::store::store(cx).is_recording();
+    div()
+        .size_full()
+        .min_h(px(0.))
+        .min_w(px(0.))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .id("performance-filter-bar")
+                .flex()
+                .items_center()
+                .px(tokens::spacing::SM)
+                .py(px(4.))
+                .gap(px(4.))
+                .bg(theme::colors(cx).background_secondary)
+                .border_b_1()
+                .border_color(theme::colors(cx).border_default)
+                .child(
+                    header_button(
+                        "performance-record",
+                        if is_recording {
+                            "● Record"
+                        } else {
+                            "○ Record"
+                        },
+                        cx,
+                    )
+                    .cursor_pointer()
+                    .when(is_recording, |el| {
+                        el.text_color(theme::colors(cx).text_dangerous)
+                    })
+                    .on_click(cx.listener(|_, _, _, cx| {
+                        let store = super::performance::store::store(cx);
+                        store.set_recording(!store.is_recording());
+                        cx.notify();
+                    })),
+                )
+                .child(
+                    header_button("performance-clear", "Clear", cx)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|_, _, _, cx| {
+                            super::performance::store::store(cx).clear();
+                            cx.notify();
+                        })),
+                ),
+        )
+        .child(
+            scroll_viewport(
+                "performance-scroll",
+                ScrollAxis::Both,
+                &ScrollState::default(),
+                div()
+                    .id("performance-entry-list")
+                    .min_h(px(0.))
+                    .flex_1()
+                    .children(entries.iter().enumerate().map(|(i, entry)| {
+                        let duration_ms = entry.duration.as_millis() as f64;
+                        let slow = duration_ms > 16.67;
+                        let status_color = if slow {
+                            theme::colors(cx).text_dangerous
+                        } else {
+                            theme::colors(cx).text_primary
+                        };
+                        div()
+                            .id(("performance-entry", i))
+                            .flex()
+                            .items_baseline()
+                            .px(tokens::spacing::SM)
+                            .py(px(2.))
+                            .gap(px(6.))
+                            .text_size(px(12.))
+                            .font_family("Cascadia Mono")
+                            .child(
+                                div()
+                                    .text_color(theme::colors(cx).text_secondary)
+                                    .w(px(80.))
+                                    .child(entry.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_color(status_color)
+                                    .w(px(80.))
+                                    .child(format!("{:.1} ms", duration_ms)),
+                            )
+                            .child(
+                                div().text_color(theme::colors(cx).text_secondary).child(
+                                    entry
+                                        .frame_number
+                                        .map(|f| format!("Frame #{}", f))
+                                        .unwrap_or_default(),
+                                ),
+                            )
+                            .when(slow, |el| el.child(div().child("⚠ Slow")))
                     })),
                 cx,
             )
