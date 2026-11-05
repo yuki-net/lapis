@@ -1,0 +1,20 @@
+[package]
+name = "lapis-web-bridge"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+axum.workspace = true
+futures-util.workspace = true
+lapis-wire = { path = "../../shared/models/wire" }
+quinn.workspace = true
+rustls.workspace = true
+tokio = { workspace = true, features = ["fs", "macros", "net", "signal"] }
+tokio-util.workspace = true
+
+[dev-dependencies]
+rcgen.workspace = true
+tempfile.workspace = true
+tokio-tungstenite = "0.29"

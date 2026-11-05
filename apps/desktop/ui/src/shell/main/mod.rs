@@ -1,4 +1,5 @@
 use super::ShellState;
+use crate::timer::Timer;
 pub(crate) use crate::tokens;
 use crate::{
     app::*,
@@ -22,7 +23,7 @@ use crate::{
 use gpui::{
     AnyView, App, ClickEvent, Context, CursorStyle, ElementId, FocusHandle, Focusable,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
-    Timer, Window, div, point, prelude::*, px, relative,
+    Window, div, point, prelude::*, px, relative,
 };
 use lapis_workspace::FileEntryKind;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
@@ -391,10 +392,12 @@ impl Shell {
         cx.emit(UiCommand::NewWindow);
     }
     pub(crate) fn toggle_inspector_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, not(target_family = "wasm")))]
         {
             let _ = crate::devtools::toggle_inspector(window, cx);
         }
+        #[cfg(all(debug_assertions, target_family = "wasm"))]
+        window.toggle_inspector(cx);
         let _ = (window, cx);
     }
     pub(crate) fn open_quick_search(&mut self, _: &mut Window, cx: &mut Context<Self>) {

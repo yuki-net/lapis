@@ -2,6 +2,42 @@ use super::*;
 use lapis_editor_core::ProjectId;
 use lapis_git::GitConnection;
 
+fn new_conversation_id() -> Result<ConversationId, WorkspaceError> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|_| WorkspaceError::new("Task IDを生成できません"))?;
+    let mut value = String::with_capacity(45);
+    value.push_str("conversation-");
+    for byte in bytes {
+        use std::fmt::Write;
+        write!(&mut value, "{byte:02x}").expect("Stringへの書き込み");
+    }
+    Ok(ConversationId::new(value))
+}
+
+fn remap_own_view_references(
+    view: &mut ConversationViewState,
+    old: &ConversationId,
+    new: &ConversationId,
+) {
+    let workbench = &mut view.workbench;
+    for id in [&mut workbench.selected_task, &mut workbench.ide_context] {
+        if id.as_ref() == Some(old) {
+            *id = Some(new.clone());
+        }
+    }
+    for binding in &mut workbench.bindings {
+        if let ViewScopeState::Task(id) = &mut binding.scope
+            && id == old
+        {
+            *id = new.clone();
+        }
+    }
+    // Workbenchは他TaskのLayoutも保持するため、元Taskの値も残す。
+    if let Some(layout) = workbench.task_layouts.get(old).cloned() {
+        workbench.task_layouts.insert(new.clone(), layout);
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
     pub id: ConversationId,
@@ -62,12 +98,16 @@ pub struct ConversationSession {
 impl ConversationSession {
     pub fn new(repository: Arc<dyn ConversationRepository>, initial: WorkspaceSnapshot) -> Self {
         let loaded = repository.load();
-        let load_error = loaded.as_ref().err().map(ToString::to_string);
+        let mut load_error = loaded.as_ref().err().map(ToString::to_string);
         let persisted = loaded.as_ref().cloned().unwrap_or_default();
         let (mut projects, mut records, active) = loaded.unwrap_or_default();
         if records.is_empty() {
+            let id = new_conversation_id().unwrap_or_else(|error| {
+                load_error.get_or_insert_with(|| error.to_string());
+                ConversationId::new("conversation-unavailable")
+            });
             records.push(ConversationRecord {
-                id: ConversationId::new("conversation-1"),
+                id,
                 title: "Task 1".to_owned(),
                 workspace: initial,
                 view: ConversationViewState::default(),
@@ -188,7 +228,7 @@ impl ConversationSession {
             if latest.load_error.is_some() || latest.persisted == self.persisted {
                 return Err(error);
             }
-            latest.active = self.active.clone();
+            let mut desired_active = self.active.clone();
             let mut projects = Vec::new();
             for project in &self.projects {
                 let index = if let Some(index) = latest
@@ -238,18 +278,17 @@ impl ConversationSession {
                 }
                 if index.is_some_and(|index| Some(&latest.records[index]) != base) {
                     // 同じTaskを両Windowが変更した場合は、どちらの下書きも上書きしない。
-                    while latest
-                        .records
-                        .iter()
-                        .any(|item| item.id.as_str() == format!("conversation-{}", latest.next_id))
-                    {
-                        latest.next_id += 1;
+                    local.id = new_conversation_id()?;
+                    if latest.records.iter().any(|item| item.id == local.id) {
+                        return Err(WorkspaceError::new("Task IDが重複しました"));
                     }
-                    local.id = ConversationId::new(format!("conversation-{}", latest.next_id));
-                    latest.next_id += 1;
+                    if local.view.workbench.task_layouts.contains_key(&local.id) {
+                        return Err(WorkspaceError::new("Task IDが表示状態と重複しました"));
+                    }
+                    remap_own_view_references(&mut local.view, &record.id, &local.id);
                     local.title.push_str("（競合から復旧）");
                     if record.id == self.active {
-                        latest.active = local.id.clone();
+                        desired_active = local.id.clone();
                     }
                     latest.records.push(local);
                 } else if let Some(index) = index {
@@ -257,6 +296,15 @@ impl ConversationSession {
                 } else {
                     latest.records.push(local);
                 }
+            }
+            // 他のClientが選択中のTaskを削除した場合、存在しないIDを保存しない。
+            // ローカルで変更したTaskが復旧された場合は、そのIDを優先する。
+            if latest
+                .records
+                .iter()
+                .any(|record| record.id == desired_active)
+            {
+                latest.active = desired_active;
             }
             latest.repository.save(
                 &latest.persisted,
@@ -446,14 +494,10 @@ impl ConversationSession {
             })
             .transpose()?;
         let previous = self.clone();
-        while self
-            .records
-            .iter()
-            .any(|record| record.id.as_str() == format!("conversation-{}", self.next_id))
-        {
-            self.next_id += 1;
+        let id = new_conversation_id()?;
+        if self.records.iter().any(|record| record.id == id) {
+            return Err(WorkspaceError::new("Task IDが重複しました"));
         }
-        let id = ConversationId::new(format!("conversation-{}", self.next_id));
         self.next_id += 1;
         self.records.push(ConversationRecord {
             id: id.clone(),
@@ -654,14 +698,10 @@ impl ConversationSession {
         }
         self.transaction(editor, move |session, editor| {
             editor.open_workspace(primary)?;
-            while session
-                .records
-                .iter()
-                .any(|record| record.id.as_str() == format!("conversation-{}", session.next_id))
-            {
-                session.next_id += 1;
+            let id = new_conversation_id()?;
+            if session.records.iter().any(|record| record.id == id) {
+                return Err(WorkspaceError::new("Task IDが重複しました"));
             }
-            let id = ConversationId::new(format!("conversation-{}", session.next_id));
             session.next_id += 1;
             session.records.push(ConversationRecord {
                 id: id.clone(),

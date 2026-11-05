@@ -1,11 +1,11 @@
+use crate::timer::Timer;
 use std::{collections::HashMap, ops::Range, time::Duration};
 
 use gpui::{
     App, Bounds, Context, CursorStyle, Element, ElementId, ElementInputHandler, Entity,
     EntityInputHandler, FocusHandle, Focusable, GlobalElementId, LayoutId, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PaintQuad, Pixels, Point, Render, ShapedLine,
-    SharedString, Style, TextRun, Timer, UTF16Selection, Window, div, fill, point, prelude::*, px,
-    size,
+    SharedString, Style, TextRun, UTF16Selection, Window, div, fill, point, prelude::*, px, size,
 };
 
 use crate::{

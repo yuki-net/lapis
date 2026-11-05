@@ -271,7 +271,7 @@ impl Render for SearchInput {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                    window.focus(&this.focus);
+                    crate::gpui_compat::focus(window, &this.focus, cx);
                     let index = this.line.as_ref().zip(this.bounds).map_or(
                         this.text.len(),
                         |(line, bounds)| {
@@ -336,7 +336,7 @@ impl Render for SearchInput {
                                 theme::colors(cx).editor_selection,
                             ));
                         }
-                        line.paint(bounds.origin, px(22.), window, cx).ok();
+                        crate::gpui_compat::paint_line(&line, bounds.origin, px(22.), window, cx);
                         if focus.is_focused(window) {
                             let x = if empty {
                                 px(0.)

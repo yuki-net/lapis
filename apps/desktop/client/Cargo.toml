@@ -6,6 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+lapis-client-api = { path = "../../../shared/protocol" }
 lapis-document = { path = "../../../shared/models/document" }
 lapis-editor-core = { path = "../../../shared/models/editor-core" }
 lapis-git = { path = "../../../shared/models/git" }
@@ -16,7 +17,19 @@ lapis-settings = { path = "../../../shared/models/settings" }
 lapis-task = { path = "../../../shared/models/task" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
+lapis-workbench = { path = "../../../shared/models/workbench" }
 serde.workspace = true
+getrandom.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
+lapis-client-core = { path = "../../../shared/client" }
+futures-channel = "0.3"
+futures-util = "0.3"
+wasm-bindgen = "=0.2.129"
+wasm-bindgen-futures = "=0.4.79"
+web-sys = { version = "=0.3.106", features = ["console"] }
+serde_json.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true

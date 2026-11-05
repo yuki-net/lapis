@@ -1,6 +1,7 @@
 //! DesktopとMobileが共有する、transport非依存のclient契約。
 
 mod connection;
+mod credential_id;
 mod document;
 mod envelope;
 mod error;
@@ -9,19 +10,21 @@ mod files;
 mod handshake;
 mod ids;
 mod operations;
-mod path;
+mod remote_wire;
 mod request;
 mod response;
 mod revision;
 mod snapshot;
 mod terminal;
 mod version;
+mod workbench;
 mod workspace;
 
 pub mod capability;
 
 pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCapabilities};
 pub use connection::ConnectionState;
+pub use credential_id::{CredentialId, InvalidCredentialId};
 pub use document::{
     DocumentCloseRequest, DocumentCloseResponse, DocumentCreateRequest, DocumentCreateResponse,
     DocumentDiscardRequest, DocumentDiscardResponse, DocumentEditRequest, DocumentEditResponse,
@@ -46,8 +49,12 @@ pub use handshake::{ClientHello, ClientKind, ServerHello};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };
+pub use lapis_workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
-pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};
+pub use remote_wire::{
+    AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
+    ServerMessage,
+};
 pub use request::RequestBody;
 pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision};
@@ -61,6 +68,10 @@ pub use terminal::{
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
+};
+pub use workbench::{
+    WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkbenchSnapshot,
+    encode_workbench_view,
 };
 pub use workspace::{
     HostRegisterRequest, WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,

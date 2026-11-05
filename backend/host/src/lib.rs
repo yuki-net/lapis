@@ -11,7 +11,9 @@ mod document;
 pub use client::BackendClient;
 mod features;
 mod terminal;
+mod workbench;
 mod workspace;
+mod workspace_registry;
 
 /// Hostが提供する操作だけをペアリングで許可する。
 pub fn supported_capabilities() -> lapis_client_api::CapabilitySet {
@@ -20,7 +22,10 @@ pub fn supported_capabilities() -> lapis_client_api::CapabilitySet {
         [
             WORKSPACES,
             WORKSPACES_CONNECT,
+            WORKSPACES_SWITCH,
+            WORKSPACES_REGISTER,
             WORKSPACE_SYNC,
+            WORKBENCH_WRITE,
             FILES_READ,
             FILES_WRITE,
             DOCUMENTS_READ,
@@ -64,6 +69,13 @@ struct HostInner {
     service: BackendService,
     workspaces: Mutex<HashMap<PathBuf, WorkspaceId>>,
     next_session: AtomicU64,
+    state_directory: Option<PathBuf>,
+}
+
+fn workspace_id_for_root(root: &Path) -> WorkspaceId {
+    use sha2::{Digest, Sha256};
+    let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
+    WorkspaceId::try_new(format!("workspace-{key}")).expect("bounded workspace id")
 }
 
 impl BackendHost {
@@ -74,14 +86,42 @@ impl BackendHost {
         BackendClient::from(self.clone()).documents()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
+        Self::start_inner(None)
+    }
+
+    pub fn start_with_state_directory(directory: PathBuf) -> Result<Self, BackendServiceError> {
+        Self::start_inner(Some(directory))
+    }
+
+    fn start_inner(state_directory: Option<PathBuf>) -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
-        Ok(Self {
+        let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
                 workspaces: Mutex::new(HashMap::new()),
                 next_session: AtomicU64::new(1),
+                state_directory,
             }),
-        })
+        };
+        if let Some(directory) = &host.inner.state_directory {
+            let records = workspace_registry::load(directory)
+                .map_err(|_| BackendServiceError::Unavailable)?;
+            for (expected, root) in records {
+                let canonical = match root.canonicalize() {
+                    Ok(root) => root,
+                    Err(_) => {
+                        eprintln!("保存されたWorkspaceを復元できません。登録情報は保持します。");
+                        continue;
+                    }
+                };
+                if workspace_id_for_root(&canonical) != expected {
+                    eprintln!("保存されたWorkspaceの識別が一致しません。登録情報は保持します。");
+                    continue;
+                }
+                host.register_workspace(&canonical)?;
+            }
+        }
+        Ok(host)
     }
 
     pub fn service(&self) -> BackendService {
@@ -95,8 +135,10 @@ impl BackendHost {
             .lock()
             .map_err(|_| BackendServiceError::Unavailable)?
             .get(root)
+            .cloned()
         {
-            return Ok(id.clone());
+            self.persist_workspace(root, &id)?;
+            return Ok(id);
         }
         let root = root
             .canonicalize()
@@ -107,16 +149,14 @@ impl BackendHost {
             .lock()
             .map_err(|_| BackendServiceError::Unavailable)?;
         if let Some(workspace_id) = workspaces.get(&root) {
+            self.persist_workspace(&root, workspace_id)?;
             return Ok(workspace_id.clone());
         }
         if !root.is_dir() {
             return Err(BackendServiceError::Unavailable);
         }
-        use sha2::{Digest, Sha256};
-        let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
-        let workspace_id =
-            WorkspaceId::try_new(format!("workspace-{key}")).expect("bounded workspace id");
-        let registration = WorkspaceRegistration::new(
+        let workspace_id = workspace_id_for_root(&root);
+        let mut registration = WorkspaceRegistration::new(
             workspace_id.clone(),
             root.file_name().unwrap_or_default().to_string_lossy(),
             root.clone(),
@@ -125,9 +165,26 @@ impl BackendHost {
         .with_terminal(Arc::new(LocalTerminalBackend::default()))
         .with_git(Arc::new(LocalGitBackend::user_default()))
         .with_tasks(Arc::new(LocalTaskBackend::user_default()));
+        if let Some(directory) = &self.inner.state_directory {
+            let path = directory
+                .join("workbench")
+                .join(format!("{}.json", workspace_id.as_str()));
+            registration = registration.with_workbench_persistence(Arc::new(
+                lapis_platform::LocalWorkbenchStore::new(path),
+            ));
+        }
         self.inner.service.register_workspace(registration)?;
-        workspaces.insert(root, workspace_id.clone());
+        workspaces.insert(root.clone(), workspace_id.clone());
+        self.persist_workspace(&root, &workspace_id)?;
         Ok(workspace_id)
+    }
+
+    fn persist_workspace(&self, root: &Path, id: &WorkspaceId) -> Result<(), BackendServiceError> {
+        if let Some(directory) = &self.inner.state_directory {
+            workspace_registry::save(directory, id, root)
+                .map_err(|_| BackendServiceError::Unavailable)?;
+        }
+        Ok(())
     }
 
     pub fn connect(&self, root: &Path) -> Result<EmbeddedClient, BackendServiceError> {

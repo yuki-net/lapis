@@ -352,7 +352,8 @@ mod keymap_tests {
             saves: 0,
         });
         cx.update(|window, cx| {
-            window.focus(&target.read(cx).focus);
+            let focus = target.read(cx).focus.clone();
+            crate::gpui_compat::focus(window, &focus, cx);
             window.activate_window();
         });
         cx.simulate_keystrokes("ctrl-s");

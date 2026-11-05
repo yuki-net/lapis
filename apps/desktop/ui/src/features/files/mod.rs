@@ -49,9 +49,6 @@ impl FilesFeature {
             self.expanded_directories.clear();
         }
         self.root = snapshot.root.clone();
-        if let Some(root) = &self.root {
-            self.expanded_directories.insert(root.clone());
-        }
         self.workspace_name = snapshot.workspace_name.clone();
         self.entries = snapshot.files.clone();
         self.active_path = snapshot

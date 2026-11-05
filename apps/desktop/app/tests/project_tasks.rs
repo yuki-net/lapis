@@ -189,6 +189,9 @@ fn unchanged_window_adopts_latest_task_on_capture_and_switch_without_forking_or_
 
 #[test]
 fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
+    use lapis_desktop_client::{
+        ConversationViewState, ViewBindingState, ViewScopeState, WorkbenchLayoutState,
+    };
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
     for name in ["a.ts", "b.ts"] {
@@ -220,8 +223,23 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
     first
         .capture(&mut first_editor, Default::default(), None, &[])
         .unwrap();
+    let original_id = second.active_id().clone();
+    let mut local_view = ConversationViewState::default();
+    local_view.workbench.selected_task = Some(original_id.clone());
+    local_view.workbench.ide_context = Some(original_id.clone());
+    local_view.workbench.bindings.push(ViewBindingState {
+        view: "editor".into(),
+        scope: ViewScopeState::Task(original_id.clone()),
+    });
+    local_view.workbench.task_layouts.insert(
+        original_id.clone(),
+        WorkbenchLayoutState {
+            layout: None,
+            show_panel_controls: true,
+        },
+    );
     second
-        .capture(&mut second_editor, Default::default(), None, &[])
+        .capture(&mut second_editor, local_view, None, &[])
         .unwrap();
     assert_ne!(first.active_id(), second.active_id());
     assert!(
@@ -230,6 +248,21 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
             .unwrap()
             .title
             .contains("競合から復旧")
+    );
+    let recovered_view = &second.active_record().unwrap().view.workbench;
+    assert_eq!(
+        recovered_view.selected_task.as_ref(),
+        Some(second.active_id())
+    );
+    assert_eq!(
+        recovered_view.ide_context.as_ref(),
+        Some(second.active_id())
+    );
+    assert!(recovered_view.task_layouts.contains_key(second.active_id()));
+    assert!(recovered_view.task_layouts.contains_key(&original_id));
+    assert_eq!(
+        recovered_view.bindings[0].scope,
+        ViewScopeState::Task(second.active_id().clone())
     );
     let count = second.records().len();
     second
@@ -265,6 +298,142 @@ fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
             .projects()
             .iter()
             .any(|project| project.root() == first_root)
+    );
+}
+
+#[test]
+fn independently_created_tasks_do_not_reuse_local_sequence_ids() {
+    let directory = tempfile::tempdir().unwrap();
+    let first = ConversationSession::new(
+        Arc::new(LocalConversationRepository::new(
+            directory.path().join("first.json"),
+        )),
+        Default::default(),
+    );
+    let second = ConversationSession::new(
+        Arc::new(LocalConversationRepository::new(
+            directory.path().join("second.json"),
+        )),
+        Default::default(),
+    );
+    assert!(first.load_error().is_none());
+    assert!(second.load_error().is_none());
+    assert_ne!(first.active_id(), second.active_id());
+}
+
+#[test]
+fn independently_started_clients_keep_both_initial_tasks_when_saving() {
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let host = BackendHost::start().unwrap();
+    let make_editor = |name: &str| {
+        let mut editor = EditorSession::new_empty(
+            host.workspaces(),
+            Arc::new(NoDialog),
+            Arc::new(LocalWorkspaceStateRepository::new(root.join(name))),
+            host.documents(),
+        );
+        editor.open_workspace(root.clone()).unwrap();
+        editor
+    };
+    let mut first_editor = make_editor("first.json");
+    let mut second_editor = make_editor("second.json");
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut first = ConversationSession::new(repository.clone(), first_editor.snapshot());
+    let mut second = ConversationSession::new(repository.clone(), second_editor.snapshot());
+    let first_id = first.active_id().clone();
+    let second_id = second.active_id().clone();
+    assert_ne!(first_id, second_id);
+    first
+        .capture(&mut first_editor, Default::default(), None, &[])
+        .unwrap();
+    second
+        .capture(&mut second_editor, Default::default(), None, &[])
+        .unwrap();
+    let restored = ConversationSession::new(repository, Default::default());
+    assert!(restored.load_error().is_none());
+    assert!(
+        restored
+            .records()
+            .iter()
+            .any(|record| record.id == first_id)
+    );
+    assert!(
+        restored
+            .records()
+            .iter()
+            .any(|record| record.id == second_id)
+    );
+    assert_eq!(restored.active_id(), &second_id);
+}
+
+#[test]
+fn existing_sequential_task_id_is_preserved_when_reopened() {
+    use lapis_desktop_client::ConversationRepository;
+    use lapis_editor_core::ConversationId;
+
+    let directory = tempfile::tempdir().unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(
+        directory.path().join("tasks.json"),
+    ));
+    let initial = ConversationSession::new(repository.clone(), Default::default());
+    let mut records = initial.records().to_vec();
+    let old_id = ConversationId::new("conversation-1");
+    records[0].id = old_id.clone();
+    repository
+        .save(&Default::default(), &[], &records, &old_id)
+        .unwrap();
+
+    let restored = ConversationSession::new(repository, Default::default());
+    assert!(restored.load_error().is_none());
+    assert_eq!(restored.active_id(), &old_id);
+}
+
+#[test]
+fn concurrent_removal_does_not_persist_a_missing_active_task() {
+    use lapis_desktop_client::ConversationRepository;
+
+    let directory = tempfile::tempdir().unwrap();
+    let root = directory.path().canonicalize().unwrap();
+    let host = BackendHost::start().unwrap();
+    let mut editor = EditorSession::new_empty(
+        host.workspaces(),
+        Arc::new(NoDialog),
+        Arc::new(LocalWorkspaceStateRepository::new(root.join("editor.json"))),
+        host.documents(),
+    );
+    editor.open_workspace(root.clone()).unwrap();
+    let repository = Arc::new(LocalConversationRepository::new(root.join("tasks.json")));
+    let mut first = ConversationSession::new(repository.clone(), editor.snapshot());
+    first
+        .capture(&mut editor, Default::default(), None, &[])
+        .unwrap();
+    let retained = first.active_id().clone();
+    let removed = first.create(&mut editor, Default::default()).unwrap();
+    let mut stale = ConversationSession::new(repository.clone(), editor.snapshot());
+
+    let expected = repository.load().unwrap();
+    let records: Vec<_> = expected
+        .1
+        .iter()
+        .filter(|record| record.id != removed)
+        .cloned()
+        .collect();
+    repository
+        .save(&expected, &expected.0, &records, &retained)
+        .unwrap();
+
+    let project_root = root.join("another-project");
+    std::fs::create_dir(&project_root).unwrap();
+    stale.register_project(&mut editor, project_root).unwrap();
+    assert_eq!(stale.active_id(), &retained);
+    let stored = repository.load().unwrap();
+    assert_eq!(stored.2.as_ref(), Some(&retained));
+    assert!(
+        stored
+            .1
+            .iter()
+            .any(|record| Some(&record.id) == stored.2.as_ref())
     );
 }
 

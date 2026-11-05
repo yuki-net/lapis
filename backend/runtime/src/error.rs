@@ -18,6 +18,7 @@ pub enum BackendStateError {
     TerminalNotAttached,
     TerminalNotRunning,
     InvalidTerminalSize,
+    InvalidWorkbench,
     RevisionConflict(RevisionConflict),
     Path(PathSecurityError),
     Document(DocumentError),
@@ -43,6 +44,7 @@ impl fmt::Display for BackendStateError {
             Self::InvalidTerminalSize => {
                 formatter.write_str("terminal size must be greater than zero")
             }
+            Self::InvalidWorkbench => formatter.write_str("invalid workbench state"),
             Self::RevisionConflict(_) => formatter.write_str("document revision conflicts"),
             Self::Path(error) => error.fmt(formatter),
             Self::Document(error) => error.fmt(formatter),

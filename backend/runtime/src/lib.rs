@@ -9,6 +9,7 @@ mod ports;
 mod service;
 mod state;
 mod terminal_state;
+mod workbench;
 
 pub use client::EmbeddedClient;
 pub use error::BackendStateError;
@@ -17,3 +18,4 @@ pub use path::{PathSecurityError, WorkspacePathResolver};
 pub use ports::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 pub use service::{BackendService, BackendServiceError};
 pub use state::{BackendSession, BackendState, WorkspaceRegistration};
+pub use workbench::{WorkbenchPersistence, WorkbenchStoreResult};

@@ -101,6 +101,7 @@ pub(crate) struct DesktopRoot {
     factory: crate::app::WindowFactory,
     persist_task: Option<gpui::Task<()>>,
     persist_signature: Option<PersistSignature>,
+    #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
     workbench: WorkbenchState,
     task_context_gate: crate::client_adapter::ResponseGate,
@@ -132,6 +133,7 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
+        let workbench_watch = services.workbench_watch.clone();
         let conversation_id = services.conversation.active_id().clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale;
@@ -196,7 +198,7 @@ impl DesktopRoot {
                                 .update(cx, |shell, cx| shell.close_zone(ZonePosition::Right, cx));
                         }
                     }
-                    window.focus(&root.editor.focus_handle(cx));
+                    crate::gpui_compat::focus(window, &root.editor.focus_handle(cx), cx);
                 });
             })
         });
@@ -245,6 +247,10 @@ impl DesktopRoot {
                     .into(),
                     cx,
                 );
+            }
+            #[cfg(target_family = "wasm")]
+            if let Some(view) = lapis_desktop_client::web_host::restore_view() {
+                shell.restore_view(view, cx);
             }
         });
         let group = cx.new(|_| {
@@ -362,7 +368,11 @@ impl DesktopRoot {
                             cx,
                         )
                     });
-                    window.focus(&root.quick_search.read(cx).focus_handle());
+                    crate::gpui_compat::focus(
+                        window,
+                        &root.quick_search.read(cx).focus_handle(),
+                        cx,
+                    );
                 }
             }),
             cx.subscribe_in(&editor, window, |root, _, event, window, cx| match event {
@@ -370,6 +380,7 @@ impl DesktopRoot {
                     root.group
                         .update(cx, |group, cx| group.publish(*snapshot.clone(), cx));
                     root.synchronize_group(cx);
+                    #[cfg(not(target_family = "wasm"))]
                     if root.native_smoke_requested {
                         root.native_smoke_requested = false;
                         crate::window_host::run_native_smoke(root, window, cx);
@@ -470,13 +481,57 @@ impl DesktopRoot {
                         }
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
                         Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                            crate::timer::Timer::after(std::time::Duration::from_millis(16)).await;
                         }
                     }
                 }
             }
         }));
-        window.focus(&editor.focus_handle(cx));
+        crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(watch) = workbench_watch {
+            let worker = worker.clone();
+            cx.spawn(async move |root, cx| {
+                let mut last = watch.revision();
+                loop {
+                    crate::timer::Timer::after(std::time::Duration::from_millis(800)).await;
+                    let Some((revision, view)) = watch.take_if_changed(last) else {
+                        continue;
+                    };
+                    let Some(shared) = view.workspace.clone() else {
+                        continue;
+                    };
+                    let layout = lapis_desktop_client::ConversationViewState {
+                        workspace: None,
+                        ..view
+                    };
+                    let worker = worker.clone();
+                    let applied = root
+                        .update(cx, |root, cx| {
+                            if root.editor.read(cx).has_in_flight() {
+                                return false;
+                            }
+                            root.shell
+                                .update(cx, |shell, cx| shell.restore_view(layout, cx));
+                            let _ = worker.submit(
+                                cx,
+                                move |client| client.restore_workbench(shared),
+                                |root, result, cx| {
+                                    if let Ok(snapshot) = result {
+                                        root.apply_snapshot(&snapshot, cx);
+                                    }
+                                },
+                            );
+                            true
+                        })
+                        .unwrap_or(false);
+                    if applied {
+                        last = revision;
+                    }
+                }
+            })
+            .detach();
+        }
         Self {
             group,
             shell,
@@ -504,6 +559,7 @@ impl DesktopRoot {
             factory,
             persist_task: None,
             persist_signature: None,
+            #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
             workbench: WorkbenchState::default(),
             task_context: None,
@@ -1181,7 +1237,7 @@ impl DesktopRoot {
         }
         self.persist_signature = Some(signature);
         self.persist_task = Some(cx.spawn(async move |this, cx| {
-            gpui::Timer::after(std::time::Duration::from_millis(500)).await;
+            crate::timer::Timer::after(std::time::Duration::from_millis(500)).await;
             let _ = this.update(cx, |root, cx| {
                 if root.group.read(cx).closing
                     || root.group.read(cx).synchronization_required
@@ -1301,7 +1357,7 @@ impl DesktopRoot {
         self.shell.update(cx, |shell, cx| {
             shell.open_view_in_zone(ZonePosition::Right, id::VIEW_COMMAND_SEARCH.into(), cx)
         });
-        window.focus(&self.quick_search.read(cx).focus_handle());
+        crate::gpui_compat::focus(window, &self.quick_search.read(cx).focus_handle(), cx);
     }
 
     pub(crate) fn request_close_path(
@@ -1446,12 +1502,16 @@ impl DesktopRoot {
                 self.universal_search.update(cx, |search, cx| {
                     search.open_universal(provider, &locale, cx)
                 });
-                window.focus(&self.universal_search.read(cx).focus_handle());
+                crate::gpui_compat::focus(
+                    window,
+                    &self.universal_search.read(cx).focus_handle(),
+                    cx,
+                );
                 cx.notify();
             }
             UiCommand::ActivateDocument(id) => {
                 self.editor.update(cx, |editor, cx| editor.activate(id, cx));
-                window.focus(&self.editor.focus_handle(cx));
+                crate::gpui_compat::focus(window, &self.editor.focus_handle(cx), cx);
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::SelectTask(id) => self.select_task(id, cx),
@@ -1622,7 +1682,7 @@ impl Render for DesktopRoot {
                 |root, event: &gpui::ModifiersChangedEvent, window, cx| {
                     if root
                         .double_shift
-                        .modifiers_changed(event.modifiers, std::time::Instant::now())
+                        .modifiers_changed(event.modifiers, crate::time::Instant::now())
                     {
                         root.command(UiCommand::QuickSearch, window, cx);
                     }

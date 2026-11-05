@@ -1,4 +1,8 @@
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    path::{Component, Path},
+};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
@@ -25,6 +29,18 @@ impl WorkspaceRelativePath {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// OSの相対pathを文字化けや区切り文字の置換なしにwire表現へ変換する。
+    pub fn from_path(path: &Path) -> Result<Self, InvalidWorkspacePath> {
+        let mut components = Vec::new();
+        for component in path.components() {
+            let Component::Normal(part) = component else {
+                return Err(InvalidWorkspacePath);
+            };
+            components.push(part.to_str().ok_or(InvalidWorkspacePath)?);
+        }
+        Self::parse(components.join("/"))
     }
 }
 
@@ -90,5 +106,36 @@ mod tests {
         assert!(serde_json::from_str::<WorkspaceRelativePath>(r#""src/main.rs""#).is_ok());
         assert!(serde_json::from_str::<WorkspaceRelativePath>(r#""../secret""#).is_err());
         assert!(serde_json::from_str::<WorkspaceRelativePath>(r#""C:\\secret""#).is_err());
+    }
+
+    #[test]
+    fn converts_platform_relative_paths_without_allowing_parent_components() {
+        assert_eq!(
+            WorkspaceRelativePath::from_path(Path::new("src").join("画面.rs").as_path())
+                .unwrap()
+                .as_str(),
+            "src/画面.rs"
+        );
+        assert!(WorkspaceRelativePath::from_path(Path::new("../secret")).is_err());
+        assert!(WorkspaceRelativePath::from_path(Path::new("")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_unrepresentable_names_instead_of_changing_them() {
+        use std::os::unix::ffi::OsStrExt;
+        assert!(WorkspaceRelativePath::from_path(Path::new(r"a\b")).is_err());
+        assert!(
+            WorkspaceRelativePath::from_path(Path::new(std::ffi::OsStr::from_bytes(b"bad\xff")))
+                .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn rejects_unpaired_surrogates_instead_of_changing_names() {
+        use std::os::windows::ffi::OsStringExt;
+        let name = std::ffi::OsString::from_wide(&[0xd800]);
+        assert!(WorkspaceRelativePath::from_path(Path::new(&name)).is_err());
     }
 }

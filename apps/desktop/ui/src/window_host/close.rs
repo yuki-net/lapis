@@ -217,7 +217,7 @@ impl DesktopRoot {
                         if !pending {
                             break;
                         }
-                        gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                        crate::timer::Timer::after(std::time::Duration::from_millis(16)).await;
                     }
                     let recovery_required = this
                         .update(cx, |_, cx| {

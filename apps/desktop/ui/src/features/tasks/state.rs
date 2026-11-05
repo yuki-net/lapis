@@ -1,9 +1,10 @@
+use crate::timer::Timer;
 use crate::{
     client_adapter::{ClientWorker, ResponseGate},
     components::ScrollState,
     theme,
 };
-use gpui::{Context, Timer};
+use gpui::Context;
 use lapis_desktop_client::TaskSession;
 use lapis_editor_core::{ExecutionId, WorkspaceId};
 use lapis_task::{ExecutionStatus, TaskControl, TaskMode, TaskSnapshot};

@@ -30,6 +30,7 @@ const MAX_RETAINED_EVENTS: usize = 1024;
 pub struct BackendSession {
     pub session_id: SessionId,
     pub workspace_id: WorkspaceId,
+    list_user_workspaces: bool,
 }
 
 impl BackendSession {
@@ -37,7 +38,14 @@ impl BackendSession {
         Self {
             session_id,
             workspace_id,
+            list_user_workspaces: false,
         }
+    }
+
+    /// 認証境界が明示的に許可した場合だけWorkspace一覧を広げる。
+    pub fn with_user_workspace_listing(mut self, allowed: bool) -> Self {
+        self.list_user_workspaces = allowed;
+        self
     }
 }
 
@@ -49,6 +57,8 @@ pub struct WorkspaceRegistration {
     pub terminal: Option<Arc<dyn TerminalBackend>>,
     pub git: Option<Arc<dyn lapis_git::GitBackend>>,
     pub tasks: Option<Arc<dyn lapis_task::TaskBackend>>,
+    pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
+    pub(crate) workbench_initial: lapis_workbench::VersionedViewState,
 }
 
 impl WorkspaceRegistration {
@@ -66,6 +76,8 @@ impl WorkspaceRegistration {
             terminal: None,
             git: None,
             tasks: None,
+            workbench_persistence: None,
+            workbench_initial: lapis_workbench::VersionedViewState::default(),
         }
     }
 
@@ -79,6 +91,13 @@ impl WorkspaceRegistration {
     }
     pub fn with_terminal(mut self, terminal: Arc<dyn TerminalBackend>) -> Self {
         self.terminal = Some(terminal);
+        self
+    }
+    pub fn with_workbench_persistence(
+        mut self,
+        persistence: Arc<dyn crate::WorkbenchPersistence>,
+    ) -> Self {
+        self.workbench_persistence = Some(persistence);
         self
     }
 }
@@ -141,6 +160,37 @@ impl PreparedWorkspaceOperation {
 }
 
 impl BackendState {
+    pub(crate) fn commit_saved_workbench(
+        &mut self,
+        workspace_id: &WorkspaceId,
+        expected: u64,
+        saved: lapis_workbench::VersionedViewState,
+    ) -> Result<PublishedEvent, BackendStateError> {
+        let workspace = self
+            .workspaces
+            .get_mut(workspace_id)
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        if workspace.workbench.revision != expected
+            || saved.revision
+                != expected
+                    .checked_add(1)
+                    .ok_or(BackendStateError::CounterOverflow)?
+        {
+            return Err(BackendStateError::Operation(
+                "workbench persistence revision mismatch".into(),
+            ));
+        }
+        workspace
+            .events
+            .watermark()
+            .checked_next()
+            .ok_or(BackendStateError::CounterOverflow)?;
+        workspace.workbench = saved;
+        workspace.publish(EventBody::WorkbenchChanged {
+            workspace_id: workspace_id.clone(),
+            revision: expected + 1,
+        })
+    }
     pub(crate) fn start_git_updates(
         &mut self,
         publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync>,
@@ -447,6 +497,11 @@ impl BackendState {
         &mut self,
         registration: WorkspaceRegistration,
     ) -> Result<(), BackendStateError> {
+        if registration.workbench_persistence.is_some() {
+            return Err(BackendStateError::Operation(
+                "persistent workbench requires BackendService::register_workspace".into(),
+            ));
+        }
         let workspace_id = registration.workspace_id.clone();
         if self.workspaces.contains_key(&workspace_id) {
             return Err(BackendStateError::DuplicateWorkspace);
@@ -468,6 +523,11 @@ impl BackendState {
     ) -> Result<Self, BackendStateError> {
         let mut workspaces = HashMap::new();
         for registration in registrations {
+            if registration.workbench_persistence.is_some() {
+                return Err(BackendStateError::Operation(
+                    "persistent workbench requires BackendService::register_workspace".into(),
+                ));
+            }
             let workspace_id = registration.workspace_id.clone();
             let workspace = WorkspaceState::new(registration)?;
             if workspaces.insert(workspace_id, workspace).is_some() {
@@ -527,6 +587,63 @@ impl BackendState {
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         self.require_available_workspace(&session.workspace_id)?;
         match request {
+            RequestBody::WorkbenchGet(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let workspace = self.workspace_mut(session)?;
+                Ok((
+                    ResponseBody::WorkbenchGet(crate::workbench::snapshot(&workspace.workbench)?),
+                    Vec::new(),
+                ))
+            }
+            RequestBody::WorkbenchPut(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let current = self
+                    .workspace(session)?
+                    .workbench
+                    .view
+                    .as_ref()
+                    .and_then(|view| view.workspace.as_ref())
+                    .cloned();
+                let view = crate::workbench::parse_update_view(request.view, current.as_ref())?;
+                crate::workbench::validate_workspace(&view, &request.workspace_id)?;
+                let workspace = self.workspace_mut(session)?;
+                if workspace.workbench.revision == request.expected_revision {
+                    workspace
+                        .events
+                        .watermark()
+                        .checked_next()
+                        .ok_or(BackendStateError::CounterOverflow)?;
+                }
+                match workspace.workbench.update(request.expected_revision, view) {
+                    Ok(revision) => {
+                        let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
+                        let event = workspace.publish(EventBody::WorkbenchChanged {
+                            workspace_id: request.workspace_id,
+                            revision,
+                        })?;
+                        Ok((
+                            ResponseBody::WorkbenchPut(
+                                lapis_client_api::WorkbenchPutResponse::Updated(snapshot),
+                            ),
+                            vec![event],
+                        ))
+                    }
+                    Err(lapis_workbench::ViewUpdateError::Conflict { .. }) => {
+                        let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
+                        Ok((
+                            ResponseBody::WorkbenchPut(
+                                lapis_client_api::WorkbenchPutResponse::Conflict(snapshot),
+                            ),
+                            Vec::new(),
+                        ))
+                    }
+                    Err(lapis_workbench::ViewUpdateError::RevisionOverflow) => {
+                        Err(BackendStateError::CounterOverflow)
+                    }
+                }
+            }
             RequestBody::CreateDirectory(request) => {
                 self.require_workspace(session, &request.workspace_id)?;
                 self.require_connected(session)?;
@@ -638,6 +755,19 @@ impl BackendState {
         &self,
         session: &BackendSession,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        if session.list_user_workspaces {
+            let mut workspaces: Vec<_> = self
+                .workspaces
+                .values()
+                .map(|workspace| workspace.summary.clone())
+                .collect();
+            workspaces
+                .sort_by(|left, right| left.workspace_id.as_str().cmp(right.workspace_id.as_str()));
+            return Ok((
+                ResponseBody::WorkspaceList(WorkspaceListResponse { workspaces }),
+                Vec::new(),
+            ));
+        }
         let workspace = self
             .workspaces
             .get(&session.workspace_id)
@@ -1379,6 +1509,7 @@ impl BackendState {
 }
 
 struct WorkspaceState {
+    workbench: lapis_workbench::VersionedViewState,
     summary: WorkspaceSummary,
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
@@ -1395,7 +1526,14 @@ struct WorkspaceState {
 
 impl WorkspaceState {
     fn new(registration: WorkspaceRegistration) -> Result<Self, BackendStateError> {
+        if !registration.workbench_initial.is_consistent() {
+            return Err(BackendStateError::InvalidWorkbench);
+        }
+        if let Some(view) = &registration.workbench_initial.view {
+            crate::workbench::validate_workspace(view, &registration.workspace_id)?;
+        }
         Ok(Self {
+            workbench: registration.workbench_initial,
             summary: WorkspaceSummary {
                 workspace_id: registration.workspace_id.clone(),
                 name: registration.name,
@@ -1549,6 +1687,7 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         | BackendStateError::DuplicateWorkspace
         | BackendStateError::Document(_)
         | BackendStateError::TerminalNotRunning
+        | BackendStateError::InvalidWorkbench
         | BackendStateError::InvalidTerminalSize => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,
         BackendStateError::CounterOverflow

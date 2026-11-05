@@ -55,7 +55,19 @@ impl SessionGrant {
     pub(crate) fn require_request(&self, request: &RequestBody) -> Result<(), AuthorizationError> {
         let capability = CapabilityId::try_new(request.required_capability())
             .expect("built-in request capability must be valid");
-        self.require_capability(&capability)?;
+        let owner_registration = matches!(request, RequestBody::HostRegister(_))
+            && self
+                .capabilities
+                .iter()
+                .any(|value| value.as_str() == lapis_client_api::capability::HOST_MANAGE);
+        if !owner_registration {
+            self.require_capability(&capability)?;
+        }
+        if matches!(request, RequestBody::WorkbenchPut(_)) {
+            let read = CapabilityId::try_new(lapis_client_api::capability::WORKSPACE_SYNC)
+                .expect("built-in capability must be valid");
+            self.require_capability(&read)?;
+        }
         if let RequestBody::WorkspaceExecute(request) = request
             && let Some(additional) = request.operation.additional_required_capability()
         {
@@ -92,6 +104,56 @@ impl Error for AuthorizationError {}
 mod tests {
     use super::*;
     use lapis_client_api::capability;
+
+    #[test]
+    fn workspace_registration_is_separate_from_other_host_management() {
+        let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+        let make_grant = |capabilities: &[&str]| {
+            SessionGrant::from_authenticated(
+                SessionId::try_new("session-1").unwrap(),
+                workspace.clone(),
+                CapabilitySet::try_new(
+                    capabilities
+                        .iter()
+                        .map(|value| CapabilityId::try_new(*value).unwrap()),
+                )
+                .unwrap(),
+            )
+        };
+        let register = RequestBody::HostRegister(lapis_client_api::HostRegisterRequest {
+            root: "absolute".into(),
+        });
+        let worktree = RequestBody::HostWorktree(lapis_editor_core::TaskId::new("task-1"));
+        let user = make_grant(&[capability::WORKSPACES_REGISTER]);
+        assert!(user.require_request(&register).is_ok());
+        assert!(user.require_request(&worktree).is_err());
+        let owner = make_grant(&[capability::HOST_MANAGE]);
+        assert!(owner.require_request(&register).is_ok());
+        assert!(owner.require_request(&worktree).is_ok());
+        assert!(make_grant(&[]).require_request(&register).is_err());
+    }
+
+    #[test]
+    fn workbench_write_also_requires_read_access() {
+        let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+        let grant = SessionGrant::from_authenticated(
+            SessionId::try_new("session-1").unwrap(),
+            workspace.clone(),
+            CapabilitySet::try_new([CapabilityId::try_new(capability::WORKBENCH_WRITE).unwrap()])
+                .unwrap(),
+        );
+        let request = RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+            workspace_id: workspace,
+            expected_revision: 0,
+            view: serde_json::json!({}),
+        });
+        assert_eq!(
+            grant.require_request(&request),
+            Err(AuthorizationError::CapabilityDenied(
+                capability::WORKSPACE_SYNC.into()
+            ))
+        );
+    }
 
     #[test]
     fn isolated_task_start_requires_both_task_start_and_git_write() {

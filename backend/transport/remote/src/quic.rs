@@ -21,7 +21,7 @@ use crate::{
     socket::RemoteSocket,
 };
 
-pub const QUIC_PROTOCOL: &[u8] = b"lapis.v0";
+pub const QUIC_PROTOCOL: &[u8] = lapis_wire::REMOTE_QUIC_PROTOCOL;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// 呼出元のTokio runtime上で動作する。接続終了はHostの終了を意味しない。

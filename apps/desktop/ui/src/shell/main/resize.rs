@@ -106,7 +106,7 @@ impl Shell {
         let gap = f32::from(tokens::spacing::GAP);
         if mode == ResizeMode::BottomSpan {
             let delta = f32::from(event.position.x - start.x);
-            let now = std::time::Instant::now();
+            let now = crate::time::Instant::now();
             match target {
                 ResizeTarget::Left => self.set_bottom_span_left(delta <= -gap * 3.0, now),
                 ResizeTarget::Right => self.set_bottom_span_right(delta >= gap * 3.0, now),
@@ -117,7 +117,7 @@ impl Shell {
         }
         if matches!(mode, ResizeMode::RestoreLeft | ResizeMode::RestoreRight) {
             let delta = f32::from(event.position.y - start.y);
-            let now = std::time::Instant::now();
+            let now = crate::time::Instant::now();
             match mode {
                 ResizeMode::RestoreLeft if delta >= gap * 3.0 => {
                     self.set_bottom_span_left(false, now)
@@ -159,7 +159,7 @@ impl Shell {
         cx.notify();
     }
 
-    fn set_bottom_span_left(&mut self, enabled: bool, now: std::time::Instant) {
+    fn set_bottom_span_left(&mut self, enabled: bool, now: crate::time::Instant) {
         if self.shell.layout.bottom_span_left == enabled {
             return;
         }
@@ -173,7 +173,7 @@ impl Shell {
             now,
         ));
     }
-    fn set_bottom_span_right(&mut self, enabled: bool, now: std::time::Instant) {
+    fn set_bottom_span_right(&mut self, enabled: bool, now: crate::time::Instant) {
         if self.shell.layout.bottom_span_right == enabled {
             return;
         }

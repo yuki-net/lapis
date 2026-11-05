@@ -118,11 +118,10 @@ impl RenderOnce for Popup {
                 }
             };
             let anchor = anchored()
-                .anchor(if matches!(self.placement, PopupPlacement::BelowEnd) {
-                    gpui::Corner::TopRight
-                } else {
-                    gpui::Corner::TopLeft
-                })
+                .anchor(crate::gpui_compat::popup_anchor(matches!(
+                    self.placement,
+                    PopupPlacement::BelowEnd
+                )))
                 .offset(offset)
                 .snap_to_window_with_margin(px(8.));
             // GPUIはdeferredの入れ子を許さない。カスケード全体を親で一度だけ遅延描画する。

@@ -71,6 +71,7 @@ pub struct DesktopServices {
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
+    pub(crate) workbench_watch: Option<lapis_desktop_client::WorkbenchWatch>,
 }
 
 impl DesktopServices {
@@ -92,6 +93,7 @@ impl DesktopServices {
             search,
             conversation,
             settings,
+            workbench_watch: None,
         }
     }
     pub fn with_host_connector(
@@ -100,6 +102,13 @@ impl DesktopServices {
     ) -> Self {
         self.connect_host = Some(std::sync::Arc::new(connector));
         self
+    }
+    pub fn with_workbench_watch(mut self, watch: lapis_desktop_client::WorkbenchWatch) -> Self {
+        self.workbench_watch = Some(watch);
+        self
+    }
+    pub fn workbench_watch(&self) -> Option<&lapis_desktop_client::WorkbenchWatch> {
+        self.workbench_watch.as_ref()
     }
 }
 
@@ -114,6 +123,7 @@ pub struct InitialView {
 }
 
 /// Runs the desktop event loop with an initial root window and quits after the last window closes.
+#[cfg(not(target_family = "wasm"))]
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
     Application::new()
         .with_assets(crate::components::IconAssets)
@@ -143,6 +153,50 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
             })
             .detach();
         });
+}
+
+#[cfg(target_family = "wasm")]
+pub fn run_web(
+    session: EditorSession,
+    services: DesktopServices,
+    initial_view: InitialView,
+    fonts: Vec<std::borrow::Cow<'static, [u8]>>,
+    backend: &str,
+    on_ready: fn(),
+) -> gpui::ApplicationHandle {
+    gpui_platform::web_init();
+    let preference = match backend {
+        "webgl" => gpui_web::WebBackendPreference::WebGl,
+        "webgpu" => gpui_web::WebBackendPreference::WebGpu,
+        _ => gpui_web::WebBackendPreference::Auto,
+    };
+    let platform = std::rc::Rc::new(gpui_web::WebPlatform::new_with_backend_and_font_fallback(
+        false,
+        preference,
+        gpui_web::CanvasFontFallback::EmojiAndCjk,
+    ));
+    let http_client = std::sync::Arc::new(platform.fetch_http_client());
+    Application::with_platform(platform)
+        .with_http_client(http_client)
+        .with_assets(crate::components::IconAssets)
+        .run_embedded(move |cx| {
+            cx.text_system()
+                .add_fonts(fonts)
+                .expect("Web fonts should load");
+            let settings = services.settings.settings();
+            crate::theme::init(
+                &crate::extension_ui::ThemeId::new(settings.theme),
+                settings.syntax_theme,
+                cx,
+            );
+            crate::features::settings_coordinator::SettingsCoordinator::init(
+                services.settings.clone(),
+                cx,
+            );
+            crate::keymap::gpui::bind_keys(cx);
+            open_desktop_window(session, services, initial_view, cx);
+            on_ready();
+        })
 }
 
 #[derive(Clone)]

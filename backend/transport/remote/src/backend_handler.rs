@@ -36,7 +36,14 @@ impl RemoteRequestHandler for BackendRemoteHandler {
         let backend = self.backend.clone();
         let cleanup_backend = self.backend.clone();
         let request_id = request.request_id.clone();
-        let session = BackendSession::new(grant.session_id().clone(), grant.workspace_id().clone());
+        let can_list_user_workspaces = grant.capabilities().contains(
+            &lapis_client_api::CapabilityId::try_new(
+                lapis_client_api::capability::WORKSPACES_SWITCH,
+            )
+            .expect("valid capability"),
+        );
+        let session = BackendSession::new(grant.session_id().clone(), grant.workspace_id().clone())
+            .with_user_workspace_listing(can_list_user_workspaces);
         let opens_workspace = matches!(&request.body, RequestBody::WorkspaceConnect(_));
         let can_read_git = grant.capabilities().contains(
             &lapis_client_api::CapabilityId::try_new("workspace.git.read")

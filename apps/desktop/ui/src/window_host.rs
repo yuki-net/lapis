@@ -5,7 +5,9 @@ pub(crate) mod chrome;
 mod close;
 pub(crate) mod drag;
 pub(crate) mod drag_preview;
+#[cfg(not(target_family = "wasm"))]
 mod native_smoke;
+#[cfg(not(target_family = "wasm"))]
 pub(crate) use native_smoke::run_native_smoke;
 
 use gpui::{
@@ -260,7 +262,7 @@ impl WindowHost {
                 cx.notify();
             });
         }));
-        window.focus(&editor.focus_handle(cx));
+        crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
         let mut this = Self {
             root,
             group,
@@ -427,7 +429,7 @@ impl DesktopRoot {
                 if self.group.read(cx).documents(host).contains(&id) {
                     let editor = self.group.read(cx).members[&host].editor.clone();
                     editor.update(cx, |editor, cx| editor.activate(id, cx));
-                    window.focus(&editor.focus_handle(cx));
+                    crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
                 }
             }
             UiCommand::Save => {
@@ -599,7 +601,7 @@ async fn wait_client<T>(
                 return Err("Client workerが終了しました".into());
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
-                gpui::Timer::after(std::time::Duration::from_millis(16)).await;
+                crate::timer::Timer::after(std::time::Duration::from_millis(16)).await;
             }
         }
     }
@@ -641,12 +643,12 @@ fn apply_panel_layout(
                 TabDestination::Zone(position) => shell
                     .shell
                     .layout
-                    .move_tab_to_zone(position, tab.clone(), std::time::Instant::now())
+                    .move_tab_to_zone(position, tab.clone(), crate::time::Instant::now())
                     .is_ok(),
                 TabDestination::Panel(_) => shell
                     .shell
                     .layout
-                    .move_tab_to_zone(ZonePosition::Main, tab.clone(), std::time::Instant::now())
+                    .move_tab_to_zone(ZonePosition::Main, tab.clone(), crate::time::Instant::now())
                     .is_ok(),
             };
             if success {

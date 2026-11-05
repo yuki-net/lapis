@@ -91,3 +91,71 @@ fn desktop_tree_uses_the_same_workspace_and_file_contract_as_wire_clients() {
         *client.workspace_id()
     );
 }
+#[test]
+fn persistent_host_restores_registered_workspaces_and_retains_missing_records() {
+    use lapis_backend_state::BackendSession;
+    use lapis_client_api::{
+        RequestBody, RequestEnvelope, RequestId, ResponseBody, SessionId, WorkspaceListRequest,
+    };
+    let base = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let first_root = base.path().join("first");
+    let second_root = base.path().join("second");
+    std::fs::create_dir(&first_root).unwrap();
+    std::fs::create_dir(&second_root).unwrap();
+    let (first, second) = {
+        let host =
+            lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        (
+            host.register_workspace(&first_root).unwrap(),
+            host.register_workspace(&second_root).unwrap(),
+        )
+    };
+    let record = state
+        .path()
+        .join("workspaces")
+        .join(format!("{}.json", second.as_str()));
+    let original_record = std::fs::read(&record).unwrap();
+    let list = |host: &lapis_host::BackendHost| {
+        let session =
+            BackendSession::new(SessionId::try_new("registry-test").unwrap(), first.clone())
+                .with_user_workspace_listing(true);
+        let response = host
+            .service()
+            .dispatch(
+                session,
+                RequestEnvelope {
+                    request_id: RequestId::try_new("list").unwrap(),
+                    body: RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+                },
+            )
+            .unwrap();
+        let ResponseBody::WorkspaceList(list) = response.body else {
+            panic!("workspace list")
+        };
+        list.workspaces
+            .into_iter()
+            .map(|workspace| workspace.workspace_id)
+            .collect::<Vec<_>>()
+    };
+    {
+        let host =
+            lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let listed = list(&host);
+        assert!(listed.contains(&first));
+        assert!(listed.contains(&second));
+    }
+    std::fs::remove_dir(&second_root).unwrap();
+    {
+        let host =
+            lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let listed = list(&host);
+        assert!(listed.contains(&first));
+        assert!(!listed.contains(&second));
+        assert_eq!(std::fs::read(&record).unwrap(), original_record);
+    }
+    std::fs::create_dir(&second_root).unwrap();
+    let host =
+        lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(list(&host).contains(&second));
+}

@@ -391,11 +391,9 @@ impl DocumentConnection for HostDocuments {
 }
 
 fn relative(root: &Path, path: &Path) -> Result<wire::WorkspaceRelativePath, DocumentError> {
-    wire::WorkspaceRelativePath::parse(
+    wire::WorkspaceRelativePath::from_path(
         path.strip_prefix(root)
-            .map_err(|_| DocumentError::io("保存先は Workspace 内に指定してください"))?
-            .to_string_lossy()
-            .replace('\\', "/"),
+            .map_err(|_| DocumentError::io("保存先は Workspace 内に指定してください"))?,
     )
     .map_err(|error| DocumentError::io(error.to_string()))
 }

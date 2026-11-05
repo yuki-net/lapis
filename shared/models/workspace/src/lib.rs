@@ -7,6 +7,9 @@ use std::{
 
 use lapis_editor_core::{ProjectId, WorkspaceId};
 
+mod path;
+pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceLocation {
     Local,

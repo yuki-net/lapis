@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "apps/desktop/*",
+    "shared/client",
+    "apps/web-bridge",
+    "apps/web/wasm",
     "backend/runtime",
     "backend/host",
     "backend/infrastructure/*",
@@ -26,6 +29,10 @@ opt-level = 1
 [profile.hot-reload]
 inherits = "dev"
 lto = "off"
+
+[profile.web]
+inherits = "dev"
+debug = 0
 
 [workspace.dependencies]
 axum = { version = "0.8", features = ["ws"] }
