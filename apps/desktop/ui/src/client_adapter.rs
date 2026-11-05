@@ -67,6 +67,7 @@ impl DocumentCloseReport {
 
 impl DocumentClient {
     /// HostのWorkbenchを、未保存変更が無い場合だけEditorへ適用する。
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn restore_workbench(
         &mut self,
         shared: lapis_desktop_client::SharedWorkspaceView,

@@ -106,6 +106,7 @@ impl SearchCategory {
         Self::Symbols,
         Self::Text,
     ];
+    /// カテゴリの表示メッセージIDを返す。
     fn label(self) -> &'static str {
         match self {
             Self::All => "quick-search.all",
@@ -115,6 +116,7 @@ impl SearchCategory {
             Self::Text => "quick-search.text",
         }
     }
+    /// 検索結果を表示できるカテゴリか返す。
     fn available(self) -> bool {
         matches!(self, Self::All | Self::Actions)
     }
@@ -184,6 +186,7 @@ impl QuickSearch {
         cx.notify();
     }
 
+    /// 全体検索を中央オーバーレイとして開く。
     pub(crate) fn open_universal(
         &mut self,
         provider: CommandSearchProvider,
@@ -197,11 +200,13 @@ impl QuickSearch {
         self.locale.set_active(locale);
     }
 
+    /// 現在のロケールでメッセージを解決する。
     fn t(&self, key: &str) -> String {
         self.locale
             .resolve(&lapis_localization::MessageId::new(key))
     }
 
+    /// カテゴリを切り替え、結果と選択位置を更新する。
     fn select_category(&mut self, category: SearchCategory, cx: &mut Context<Self>) {
         self.category = category;
         self.selected_index = 0;
@@ -780,7 +785,7 @@ impl Render for QuickSearch {
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.select_category(category, cx);
-                                window.focus(&this.focus_handle);
+                                crate::gpui_compat::focus(window, &this.focus_handle, cx);
                             }))
                             .child(self.t(category.label()))
                     }),

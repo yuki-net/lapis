@@ -133,6 +133,7 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
+        #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
         let conversation_id = services.conversation.active_id().clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
@@ -1333,11 +1334,12 @@ impl DesktopRoot {
             .map(|initial| self.shell.read(cx).session.root.clone().unwrap_or(initial))
     }
 
+    /// 全体検索を閉じ、以前のフォーカスへ戻す。
     fn close_universal_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.universal_search_open {
             self.universal_search_open = false;
             if let Some(focus) = self.universal_previous_focus.take() {
-                window.focus(&focus);
+                crate::gpui_compat::focus(window, &focus, cx);
             }
             cx.notify();
         }
