@@ -206,7 +206,7 @@ impl Shell {
                             }
                             this.tab_context =
                                 Some((context_panel.clone(), context_tab.clone(), event.position));
-                            window.focus(&this.focus_handle);
+                            crate::gpui_compat::focus(window, &this.focus_handle, cx);
                             cx.notify();
                         }),
                     )

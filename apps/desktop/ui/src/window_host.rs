@@ -555,6 +555,7 @@ impl DesktopRoot {
     }
 
     /// Opens a detached window at the default bounds for an eligible document tab.
+    #[cfg(not(target_family = "wasm"))]
     fn detach_tab(&mut self, host: HostId, tab: PanelTab, cx: &mut Context<Self>) {
         self.detach_tab_at(host, tab, None, cx);
     }

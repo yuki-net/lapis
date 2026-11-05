@@ -214,6 +214,12 @@ mod platform {
         SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW
     }
 
+    pub(super) fn hide(window: &Window) {
+        if let Some(hwnd) = hwnd(window) {
+            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -224,12 +230,6 @@ mod platform {
             assert_eq!(flags.0 & SWP_NOSIZE.0, 0);
             assert_ne!(flags.0 & SWP_NOACTIVATE.0, 0);
             assert_ne!(flags.0 & SWP_SHOWWINDOW.0, 0);
-        }
-    }
-
-    pub(super) fn hide(window: &Window) {
-        if let Some(hwnd) = hwnd(window) {
-            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
         }
     }
 }

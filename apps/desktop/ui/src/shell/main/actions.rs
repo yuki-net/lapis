@@ -302,7 +302,7 @@ impl Shell {
             if let Some(panel_id) = self.shell.layout.panel_for_tab(tab) {
                 self.shell
                     .layout
-                    .remove_tab(&panel_id, tab, std::time::Instant::now());
+                    .remove_tab(&panel_id, tab, crate::time::Instant::now());
                 self.schedule_empty_close(panel_id, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
