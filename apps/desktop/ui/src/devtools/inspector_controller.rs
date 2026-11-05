@@ -22,6 +22,12 @@ struct InspectorSession {
     tree_scroll: ScrollState,
     tree_list: gpui::UniformListScrollHandle,
     content_scroll: ScrollState,
+    console_list: gpui::UniformListScrollHandle,
+    console_scroll: ScrollState,
+    network_scroll: ScrollState,
+    performance_scroll: ScrollState,
+    state_tree_scroll: ScrollState,
+    state_watch_scroll: ScrollState,
     /// 現在選択中のDevToolタブ
     active_tab: DevToolTab,
 }
@@ -165,6 +171,42 @@ impl InspectorController {
             .map(|session| session.content_scroll.clone())
             .unwrap_or_default()
     }
+    pub(super) fn console_list(entity: EntityId, cx: &App) -> gpui::UniformListScrollHandle {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.console_list.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn console_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.console_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn network_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.network_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn performance_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.performance_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn state_tree_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.state_tree_scroll.clone())
+            .unwrap_or_default()
+    }
+    pub(super) fn state_watch_scroll(entity: EntityId, cx: &App) -> ScrollState {
+        cx.global::<Self>()
+            .session(entity)
+            .map(|session| session.state_watch_scroll.clone())
+            .unwrap_or_default()
+    }
 
     pub(super) fn open(target: &mut Window, cx: &mut App) -> Result<AnyWindowHandle, String> {
         let handle = target.window_handle();
@@ -205,6 +247,8 @@ impl InspectorController {
         let inspection = Inspection::attach(observed, viewer, cx);
         let tree_list = gpui::UniformListScrollHandle::new();
         let tree_scroll = ScrollState::with_handle(tree_list.0.borrow().base_handle.clone());
+        let console_list = gpui::UniformListScrollHandle::new();
+        let console_scroll = ScrollState::with_handle(console_list.0.borrow().base_handle.clone());
         cx.global_mut::<Self>().sessions.insert(
             handle.window_id(),
             InspectorSession {
@@ -215,6 +259,12 @@ impl InspectorController {
                 tree_scroll,
                 tree_list,
                 content_scroll: ScrollState::default(),
+                console_list,
+                console_scroll,
+                network_scroll: ScrollState::default(),
+                performance_scroll: ScrollState::default(),
+                state_tree_scroll: ScrollState::default(),
+                state_watch_scroll: ScrollState::default(),
                 active_tab: DevToolTab::default(),
             },
         );

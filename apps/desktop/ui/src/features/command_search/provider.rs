@@ -99,7 +99,7 @@ mod tests {
         let provider = CommandSearchProvider::new(vec![
             item(
                 "lapis.command.dev.toggle-devtool",
-                "dev: Open Lapis DevTool",
+                "dev: Toggle Lapis DevTool",
             ),
             item("lapis.command.open-workspace", "Open Workspace…"),
         ]);
@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(provider.search("toggle devtool").len(), 1);
         assert_eq!(
             provider.search("dev devtool")[0].title,
-            "dev: Open Lapis DevTool"
+            "dev: Toggle Lapis DevTool"
         );
         assert_eq!(
             provider.search("open-workspace")[0].command.as_str(),

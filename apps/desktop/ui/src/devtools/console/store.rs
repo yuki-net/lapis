@@ -22,7 +22,7 @@ static SUBSCRIBER_STORE: OnceLock<Arc<DiagnosticLogStore>> = OnceLock::new();
 /// Console UI から同期的に読み取る。
 #[derive(Default)]
 pub(crate) struct DiagnosticLogStore {
-    entries: Mutex<VecDeque<DiagnosticLogEntry>>,
+    entries: Mutex<VecDeque<Arc<DiagnosticLogEntry>>>,
     sequence: Mutex<u64>,
 }
 struct SharedStore(Arc<DiagnosticLogStore>);
@@ -32,14 +32,16 @@ impl DiagnosticLogStore {
     /// エントリを追加する。上限を超えると古いエントリを削除する。
     pub(crate) fn push(&self, entry: DiagnosticLogEntry) {
         let mut entries = self.entries.lock().unwrap();
-        entries.push_back(entry);
+        entries.push_back(Arc::new(entry));
         if entries.len() > MAX_ENTRIES {
             entries.pop_front();
         }
     }
 
     /// 現在の全エントリをシーケンス順で返す。
-    pub(crate) fn entries(&self) -> Vec<DiagnosticLogEntry> {
+    ///
+    /// UI 側で内容を複製しないよう、各エントリは Arc で共有する。
+    pub(crate) fn entries(&self) -> Vec<Arc<DiagnosticLogEntry>> {
         let entries = self.entries.lock().unwrap();
         entries.iter().cloned().collect()
     }

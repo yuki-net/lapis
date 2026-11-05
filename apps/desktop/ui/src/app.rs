@@ -122,12 +122,25 @@ pub struct InitialView {
     pub show_problems: bool,
 }
 
+/// Release ビルドでも tracing のエラーを stderr に出力する。
+#[cfg(all(not(debug_assertions), not(target_family = "wasm")))]
+fn init_release_tracing() {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let stderr_layer = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let _ = tracing_subscriber::registry().with(stderr_layer).try_init();
+}
+
 /// Runs the desktop event loop with an initial root window and quits after the last window closes.
 #[cfg(not(target_family = "wasm"))]
 pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
-    // 診断ログの tracing subscriber を初期化（Debugのみ）
+    // 診断ログの tracing subscriber を初期化（Debug は Console 用 store も含む）
     #[cfg(debug_assertions)]
     let _ = crate::devtools::console::init_subscriber();
+    // Release でも保存失敗などのエラーを stderr に残す
+    #[cfg(not(debug_assertions))]
+    init_release_tracing();
 
     Application::new()
         .with_assets(crate::components::IconAssets)

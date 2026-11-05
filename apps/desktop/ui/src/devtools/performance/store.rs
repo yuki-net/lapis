@@ -16,7 +16,6 @@ const MAX_ENTRIES: usize = 2_000;
 
 /// Slow frame の閾値 (60Hz 前提の 16.67ms)。
 /// これは厳密なディスプレイリフレッシュレートではなく、初期閾値として使用する。
-#[allow(dead_code)]
 pub(crate) const SLOW_FRAME_THRESHOLD_MS: f64 = 16.67;
 
 /// Performance 診断ログ store。

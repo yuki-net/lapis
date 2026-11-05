@@ -34,18 +34,6 @@ impl DevToolTab {
             DevToolTab::State => "State",
         }
     }
-
-    /// このToolが現在実装済みかどうか（後続PRで各Toolが追加される）
-    #[allow(dead_code)]
-    pub(crate) fn is_implemented(self) -> bool {
-        matches!(
-            self,
-            DevToolTab::Elements
-                | DevToolTab::Console
-                | DevToolTab::Network
-                | DevToolTab::Performance
-        )
-    }
 }
 
 #[cfg(test)]
@@ -66,15 +54,6 @@ mod tests {
     #[test]
     fn dev_tool_default_tab_is_elements() {
         assert_eq!(DevToolTab::default(), DevToolTab::Elements);
-    }
-
-    #[test]
-    fn elements_console_network_performance_are_implemented() {
-        assert!(DevToolTab::Elements.is_implemented());
-        assert!(DevToolTab::Console.is_implemented());
-        assert!(DevToolTab::Network.is_implemented());
-        assert!(DevToolTab::Performance.is_implemented());
-        assert!(!DevToolTab::State.is_implemented());
     }
 
     #[test]

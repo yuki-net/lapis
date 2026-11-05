@@ -204,7 +204,7 @@ const WINDOW_MENU: &[MenuItemDefinition] = &[
 const HELP_MENU: &[MenuItemDefinition] = &[
     MenuItemDefinition::action(
         "toggle-devtool",
-        "Open Lapis DevTool",
+        "Toggle Lapis DevTool",
         Some("F12"),
         MenuAction::ToggleInspector,
     ),
