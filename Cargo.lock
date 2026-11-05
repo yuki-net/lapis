@@ -4261,6 +4261,7 @@ dependencies = [
  "lapis-terminal",
  "lapis-text",
  "lapis-workbench",
+ "serde",
  "serde_json",
  "tempfile",
 ]
@@ -4469,6 +4470,7 @@ dependencies = [
  "lapis-workspace",
  "notify",
  "portable-pty",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
@@ -4502,7 +4504,6 @@ dependencies = [
  "lapis-wire",
  "quinn",
  "rcgen",
- "rusqlite",
  "rustls",
  "serde",
  "serde_json",

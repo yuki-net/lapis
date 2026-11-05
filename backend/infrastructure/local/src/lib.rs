@@ -40,10 +40,12 @@ use lapis_workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend,
 };
 use serde::{Deserialize, Serialize};
+mod credential_store;
 mod git_action;
 mod git_watch;
 mod terminal_engine;
 mod workbench_store;
+pub use credential_store::{CredentialStore, CredentialStoreError};
 use terminal_engine::{TerminalEngine, normalized_size};
 pub use workbench_store::LocalWorkbenchStore;
 

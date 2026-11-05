@@ -16,6 +16,7 @@ lapis-git = { path = "../../../shared/models/git" }
 lapis-lsp = { path = "../../../shared/models/lsp" }
 lapis-terminal = { path = "../../../shared/models/terminal" }
 portable-pty.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
 lapis-task-runner = { path = "../task-runner" }
 lapis-workspace = { path = "../../../shared/models/workspace" }
 lapis-workbench = { path = "../../../shared/models/workbench" }

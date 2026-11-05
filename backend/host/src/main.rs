@@ -1,7 +1,8 @@
 use lapis_host::BackendHost;
+use lapis_platform::CredentialStore;
 use lapis_remote::{
-    AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, CredentialStore, PairingLifetime,
-    QuicServer, RemoteAuth, RemoteLimits, tls13_server_config,
+    AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
+    RemoteAuth, RemoteLimits, tls13_server_config,
 };
 use rustls::pki_types::PrivateKeyDer;
 use std::{
@@ -134,20 +135,21 @@ fn run() -> Result<(), Error> {
     )));
     let mut credential_store = match &credentials_path {
         Some(path) => match CredentialStore::open(path) {
-            Ok(store) => {
-                match store.load() {
-                    Ok(records) => {
-                        let loaded = {
-                            let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
-                            auth.import_credentials(records);
-                            auth.export_credentials().len()
-                        };
-                        println!("Loaded {loaded} credential(s) from {}", path.display());
-                    }
-                    Err(error) => eprintln!("Ignoring invalid credential database: {error}"),
+            Ok(store) => match store.load() {
+                Ok(records) => {
+                    let loaded = {
+                        let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
+                        auth.import_credentials(records);
+                        auth.export_credentials().len()
+                    };
+                    println!("Loaded {loaded} credential(s) from {}", path.display());
+                    Some(store)
                 }
-                Some(store)
-            }
+                Err(error) => {
+                    eprintln!("Ignoring invalid credential database: {error}");
+                    None
+                }
+            },
             Err(error) => {
                 eprintln!("Credential database unavailable: {error}");
                 None

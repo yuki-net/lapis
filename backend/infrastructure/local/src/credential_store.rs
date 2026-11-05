@@ -2,9 +2,8 @@
 
 use std::{error::Error, fmt, path::Path};
 
+use lapis_backend_state::StoredCredential;
 use rusqlite::{Connection, params};
-
-use crate::auth::StoredCredential;
 
 /// SQLite の credential store。
 pub struct CredentialStore {
@@ -14,7 +13,9 @@ pub struct CredentialStore {
 impl CredentialStore {
     /// 指定したパスの SQLite を開き、必要なテーブルを作成する。
     pub fn open(path: impl AsRef<Path>) -> Result<Self, CredentialStoreError> {
+        let path = path.as_ref();
         let connection = Connection::open(path).map_err(CredentialStoreError::Sqlite)?;
+        restrict_permissions(path)?;
         Self::from_connection(connection)
     }
 
@@ -124,10 +125,24 @@ impl CredentialStore {
     }
 }
 
+#[cfg(unix)]
+fn restrict_permissions(path: &Path) -> Result<(), CredentialStoreError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .map_err(CredentialStoreError::Io)
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_: &Path) -> Result<(), CredentialStoreError> {
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum CredentialStoreError {
     Sqlite(rusqlite::Error),
     Json(serde_json::Error),
+    Io(std::io::Error),
 }
 
 impl fmt::Display for CredentialStoreError {
@@ -135,6 +150,7 @@ impl fmt::Display for CredentialStoreError {
         match self {
             Self::Sqlite(error) => write!(formatter, "credential database error: {error}"),
             Self::Json(error) => write!(formatter, "credential JSON error: {error}"),
+            Self::Io(error) => write!(formatter, "credential file error: {error}"),
         }
     }
 }
@@ -144,6 +160,7 @@ impl Error for CredentialStoreError {
         match self {
             Self::Sqlite(error) => Some(error),
             Self::Json(error) => Some(error),
+            Self::Io(error) => Some(error),
         }
     }
 }
@@ -184,6 +201,20 @@ mod tests {
         let loaded = store.load().unwrap();
 
         assert_eq!(loaded, vec![record("b")]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn credentials_file_is_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.sqlite3");
+
+        let _store = CredentialStore::open(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
     }
 
     #[test]
