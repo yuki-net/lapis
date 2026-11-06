@@ -55,6 +55,8 @@ pub mod id {
     pub const COMMAND_WORKBENCH_AGENT: &str = "lapis.command.workbench-agent";
     pub const COMMAND_BIND_VIEW_SHARED: &str = "lapis.command.bind-view-shared";
     pub const COMMAND_BIND_VIEW_TASK: &str = "lapis.command.bind-view-task";
+    pub const COMMAND_ACCEPT_REMOTE_WORKBENCH: &str = "lapis.command.accept-remote-workbench";
+    pub const COMMAND_RETRY_LOCAL_WORKBENCH: &str = "lapis.command.retry-local-workbench";
     pub const COMMAND_START_CODEX: &str = "lapis.command.start-codex";
     pub const COMMAND_START_TERMINAL: &str = "lapis.command.start-terminal";
     #[cfg(debug_assertions)]
@@ -124,6 +126,18 @@ pub fn bundled_registry() -> FeatureRegistry {
                 "command.bind-view-task",
                 "panel",
                 44,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_ACCEPT_REMOTE_WORKBENCH,
+                "command.accept-remote-workbench",
+                "panel",
+                45,
+            ))
+            .contributes(crate::extension_ui::UiContribution::command(
+                id::COMMAND_RETRY_LOCAL_WORKBENCH,
+                "command.retry-local-workbench",
+                "panel",
+                46,
             ))
             .contributes(crate::extension_ui::UiContribution::command(
                 id::COMMAND_TOGGLE_BOTTOM_ZONE,
@@ -338,6 +352,8 @@ mod tests {
             id::COMMAND_WORKBENCH_AGENT,
             id::COMMAND_BIND_VIEW_SHARED,
             id::COMMAND_BIND_VIEW_TASK,
+            id::COMMAND_ACCEPT_REMOTE_WORKBENCH,
+            id::COMMAND_RETRY_LOCAL_WORKBENCH,
         ] {
             assert!(commands.iter().any(|registered| registered == command));
         }

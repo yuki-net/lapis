@@ -1519,6 +1519,48 @@ impl DesktopRoot {
             UiCommand::SetWorkbenchMode(mode) => self.set_workbench_mode(mode, cx),
             UiCommand::SetViewBinding { view, scope } => self.set_view_binding(view, scope, cx),
             UiCommand::BindViewToSelectedTask(view) => self.bind_view_to_selected_task(view, cx),
+            UiCommand::AcceptRemoteWorkbench => {
+                let admitted = self.worker.submit(
+                    cx,
+                    |client| {
+                        client
+                            .conversation
+                            .accept_workbench_remote()
+                            .map_err(|error| error.to_string())
+                    },
+                    |root, result, cx| match result {
+                        Ok(Some(view)) => {
+                            root.restore_workbench_layout(view, cx);
+                            root.set_status("HostのWorkbench状態を採用しました".into(), cx);
+                        }
+                        Ok(None) => {
+                            root.set_status("解決するWorkbenchの競合はありません".into(), cx)
+                        }
+                        Err(error) => root.set_status(error, cx),
+                    },
+                );
+                if let Err(error) = admitted {
+                    self.set_status(error, cx);
+                }
+            }
+            UiCommand::RetryLocalWorkbench => {
+                let admitted = self.worker.submit(
+                    cx,
+                    |client| {
+                        client
+                            .conversation
+                            .retry_workbench_local()
+                            .map_err(|error| error.to_string())
+                    },
+                    |root, result, cx| match result {
+                        Ok(()) => root.set_status("Workbenchの変更を再送しました".into(), cx),
+                        Err(error) => root.set_status(error, cx),
+                    },
+                );
+                if let Err(error) = admitted {
+                    self.set_status(error, cx);
+                }
+            }
             UiCommand::Undo => self
                 .editor
                 .update(cx, |editor, cx| editor.undo(&crate::app::Undo, window, cx)),

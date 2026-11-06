@@ -141,6 +141,14 @@ impl Shell {
                     cx.emit(UiCommand::BindViewToSelectedTask(view));
                 }
             }
+            id::COMMAND_ACCEPT_REMOTE_WORKBENCH => {
+                self.shell.command_palette_open = false;
+                cx.emit(UiCommand::AcceptRemoteWorkbench);
+            }
+            id::COMMAND_RETRY_LOCAL_WORKBENCH => {
+                self.shell.command_palette_open = false;
+                cx.emit(UiCommand::RetryLocalWorkbench);
+            }
             #[cfg(debug_assertions)]
             id::COMMAND_TOGGLE_DEVTOOL => self.toggle_devtool_window(window, cx),
             _ => {

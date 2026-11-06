@@ -53,6 +53,14 @@ impl WorkbenchReplica {
         if !snapshot.is_consistent() {
             return Err("HostのWorkbench状態が不正です".into());
         }
+        if self.confirmed.is_none() && self.conflict.is_none() {
+            let has_pending = self.pending.is_some();
+            self.confirmed = Some(snapshot.clone());
+            if has_pending {
+                self.conflict = Some(snapshot.clone());
+            }
+            return Ok(Some(snapshot));
+        }
         let previous = self
             .conflict
             .as_ref()
@@ -90,12 +98,12 @@ impl WorkbenchReplica {
     }
 
     pub fn stage(&mut self, view: ConversationViewState) -> Result<WorkbenchWritePlan, String> {
-        self.pending = Some(view.clone());
         let revision = self
             .confirmed
             .as_ref()
             .ok_or("Workbenchが初期化されていません")?
             .revision;
+        self.pending = Some(view.clone());
         if let Some(current) = self.conflict.clone() {
             return Ok(WorkbenchWritePlan::Conflict(current));
         }
@@ -166,6 +174,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn refresh_initializes_an_uninitialized_replica() {
+        let mut replica = WorkbenchReplica::default();
+        let snapshot = VersionedViewState::default();
+
+        assert_eq!(
+            replica.refresh(snapshot.clone()).unwrap(),
+            Some(snapshot.clone())
+        );
+
+        assert_eq!(replica.confirmed(), Some(&snapshot));
+        assert!(replica.pending().is_none());
+        assert!(replica.conflict().is_none());
+    }
+
+    #[test]
+    fn stage_before_initialization_does_not_leave_pending() {
+        let mut replica = WorkbenchReplica::default();
+
+        assert!(replica.stage(ConversationViewState::default()).is_err());
+        assert!(replica.pending().is_none());
+    }
+
+    #[test]
     fn invalid_update_response_preserves_pending_view() {
         let mut replica = WorkbenchReplica::default();
         replica.open(VersionedViewState::default()).unwrap();
@@ -229,5 +260,55 @@ mod tests {
         );
         assert_eq!(replica.pending(), Some(&pending));
         assert!(replica.conflict().is_none());
+    }
+
+    #[test]
+    fn conflict_keeps_pending_until_local_changes_are_retried() {
+        let mut replica = WorkbenchReplica::default();
+        replica.open(VersionedViewState::default()).unwrap();
+        let pending = ConversationViewState {
+            show_panel_controls: false,
+            ..Default::default()
+        };
+        replica.stage(pending.clone()).unwrap();
+        let remote = VersionedViewState {
+            revision: 1,
+            view: Some(ConversationViewState::default()),
+        };
+        match replica
+            .finish(WorkbenchUpdate::Conflict(remote.clone()))
+            .unwrap()
+        {
+            WorkbenchUpdate::Conflict(snapshot) => assert_eq!(snapshot, remote),
+            WorkbenchUpdate::Updated(_) => panic!("競合応答がUpdatedになりました"),
+        }
+        assert_eq!(replica.pending(), Some(&pending));
+        assert_eq!(replica.conflict(), Some(&remote));
+
+        let retried = replica.prepare_retry().unwrap();
+
+        assert_eq!(retried, pending);
+        assert_eq!(replica.confirmed(), Some(&remote));
+        assert!(replica.conflict().is_none());
+        assert!(replica.stage(retried).is_ok());
+    }
+
+    #[test]
+    fn accept_remote_discards_pending_and_conflict() {
+        let mut replica = WorkbenchReplica::default();
+        replica.open(VersionedViewState::default()).unwrap();
+        replica.stage(ConversationViewState::default()).unwrap();
+        let remote = VersionedViewState {
+            revision: 1,
+            view: Some(ConversationViewState::default()),
+        };
+        replica
+            .finish(WorkbenchUpdate::Conflict(remote.clone()))
+            .unwrap();
+
+        assert_eq!(replica.accept_remote().unwrap(), remote);
+        assert!(replica.pending().is_none());
+        assert!(replica.conflict().is_none());
+        assert_eq!(replica.confirmed(), Some(&remote));
     }
 }

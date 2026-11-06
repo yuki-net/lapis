@@ -38,6 +38,8 @@
   "command.workbench-agent": "Agent Workbench",
   "command.bind-view-shared": "ViewをWorkbenchで共有",
   "command.bind-view-task": "Viewを現在選択中のTaskに固定",
+  "command.accept-remote-workbench": "Workbench: Hostの状態を採用",
+  "command.retry-local-workbench": "Workbench: ローカルの変更を再送",
   "command.dev.toggle-devtool": "開発: Lapis DevToolを切り替え",
   "menu.file": "ファイル",
   "menu.edit": "編集",

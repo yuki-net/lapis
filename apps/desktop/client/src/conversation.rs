@@ -82,6 +82,18 @@ pub trait ConversationRepository: Send + Sync {
         records: &[ConversationRecord],
         active: &ConversationId,
     ) -> Result<(), WorkspaceError>;
+
+    /// 競合中のWorkbenchをHostの状態で置き換え、UIへ適用するレイアウトを返す。
+    /// 競合を扱わないRepositoryはNoneを返す。
+    fn accept_workbench_remote(&self) -> Result<Option<ConversationViewState>, WorkspaceError> {
+        Ok(None)
+    }
+
+    /// 競合中のローカル変更を最新のHost revisionで再送する。
+    /// 競合を扱わないRepositoryは何もしない。
+    fn retry_workbench_local(&self) -> Result<(), WorkspaceError> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -214,6 +226,12 @@ impl ConversationSession {
     }
     pub fn load_error(&self) -> Option<&str> {
         self.load_error.as_deref()
+    }
+    pub fn accept_workbench_remote(&self) -> Result<Option<ConversationViewState>, WorkspaceError> {
+        self.repository.accept_workbench_remote()
+    }
+    pub fn retry_workbench_local(&self) -> Result<(), WorkspaceError> {
+        self.repository.retry_workbench_local()
     }
     fn save(&mut self, editor: &mut EditorSession) -> Result<(), WorkspaceError> {
         let mut restore = None;

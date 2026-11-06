@@ -38,6 +38,8 @@
   "command.workbench-agent": "Agent Workbench",
   "command.bind-view-shared": "Share View Across Workbench",
   "command.bind-view-task": "Bind View to Selected Task",
+  "command.accept-remote-workbench": "Workbench: Use Host State",
+  "command.retry-local-workbench": "Workbench: Resend Local Changes",
   "command.dev.toggle-devtool": "dev: Toggle Lapis DevTool",
   "menu.file": "File",
   "menu.edit": "Edit",
