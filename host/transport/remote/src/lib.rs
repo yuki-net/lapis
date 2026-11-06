@@ -7,6 +7,7 @@ mod clock;
 mod credential;
 mod handler;
 mod limits;
+mod oidc;
 mod pairing;
 mod quic;
 mod random;
@@ -37,6 +38,7 @@ pub use limits::{
     AuthenticationTimeout, IdleTimeout, LimitError, MaxConcurrentRequests, MaxFrameSize,
     MaxMessageSize, RemoteLimits, RequestTimeout,
 };
+pub use oidc::{OidcClaims, OidcConfig, OidcError, OidcVerifier};
 pub use pairing::PairingToken;
 pub use quic::{QUIC_PROTOCOL, QuicClient, QuicServer};
 pub use random::{OsRandom, RandomError, RandomSource};
