@@ -56,6 +56,7 @@ impl WebSession {
                 client_kind: ClientKind::Desktop,
                 token: token.as_deref(),
                 credential: credential.as_deref(),
+                id_token: None,
                 capabilities: CAPABILITIES,
             },
         )

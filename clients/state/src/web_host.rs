@@ -83,6 +83,7 @@ pub struct HostConfig {
     pub client_id: String,
     pub token: Option<String>,
     pub credential: Option<String>,
+    pub id_token: Option<String>,
 }
 
 /// Hostへ接続し、初期状態を取得してバックエンドを設置する。pairing時はcredentialを返す。
@@ -98,6 +99,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         client_kind: ClientKind::Desktop,
         token: config.token.as_deref(),
         credential: config.credential.as_deref(),
+        id_token: config.id_token.as_deref(),
         capabilities: WEB_CAPABILITIES,
     })
     .await?;

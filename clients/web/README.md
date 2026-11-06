@@ -6,7 +6,7 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 
 ## Host へ接続する
 
-URL と Workspace ID をクエリか localStorage に渡します。初回は pairing token、以降は保存済み credential で接続します。
+URL と Workspace ID をクエリか localStorage に渡します。OIDC を使う場合はログインフォームから IdP で認証します。OIDC を使わない場合は、初回は pairing token、以降は保存済み credential で接続します。
 
 ```text
 http://127.0.0.1:5174/?url=ws://127.0.0.1:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
@@ -18,7 +18,7 @@ Host なしのデモ:
 http://127.0.0.1:5174/?demo=1
 ```
 
-URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。
+URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
 
 - 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
@@ -51,7 +51,7 @@ cd clients/web
 npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
-`http://TAILSCALE_IP:5174/` を開きます。Host と web-bridge も tailnet から到達できるように起動してください。ページにログインは無いため、Tailscale ACL で端末を制限します。
+`http://TAILSCALE_IP:5174/` を開きます。Host と web-bridge も tailnet から到達できるように起動してください。OIDC を使わない場合は pairing token が必要です。Tailscale ACL で端末を制限してください。
 
 ## 結合検証（Host / Bridge）
 

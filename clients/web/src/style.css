@@ -144,6 +144,11 @@ body[data-lapis="ready"] .loading {
   opacity: 0.6;
 }
 
+.login button.secondary {
+  background: #2a2e38;
+  color: #d9dee8;
+}
+
 .login-error {
   margin: 0;
   color: #f7768e;
