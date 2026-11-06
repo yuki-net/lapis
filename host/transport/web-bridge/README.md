@@ -33,3 +33,14 @@ npm run dev -- --host 0.0.0.0 --port 5174
 ページは `http://TAILSCALE_IP:5174/?url=ws://TAILSCALE_IP:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN` を開きます。
 
 `--allow-remote` を付けると、tailnet内の端末からページとBridgeへ到達できます。Origin検証は認証ではないため、Hostへの接続に必要なcredentialやpairing tokenとは別に、Tailscale ACLで到達端末を制限してください。Windowsファイアウォールで該当ポートの受信許可も必要です。
+
+## OIDC ログイン
+
+次の環境変数がすべて設定された場合、`GET /auth/oidc/start` が有効になります。
+
+- `LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT`（HTTPS）
+- `LAPIS_WEB_OIDC_CLIENT_ID`
+- `LAPIS_WEB_OIDC_REDIRECT_URI`（HTTPS）
+- `LAPIS_WEB_OIDC_SCOPES`（任意、既定 `openid profile`）
+
+`/auth/oidc/start` は PKCE の verifier / state を生成して IdP へリダイレクトします。state は Bridge のメモリーに5分間保持します。callback と token 交換は未実装です。

@@ -16,6 +16,8 @@ use rustls::pki_types::CertificateDer;
 use tokio::sync::Semaphore;
 use tokio_util::codec::LengthDelimitedCodec;
 
+mod oidc;
+
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -106,11 +108,16 @@ struct Bridge {
     server_name: String,
     origin: String,
     slots: Arc<Semaphore>,
+    oidc: Option<Arc<oidc::OidcBroker>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
+    let oidc = oidc::OidcBroker::from_env()?;
+    if oidc.is_some() {
+        eprintln!("web-bridge OIDC login enabled");
+    }
     let _ = client_config(std::fs::read(&options.certificate)?)?;
     let endpoint = quinn::Endpoint::client(
         if options.host.is_ipv4() {
@@ -127,6 +134,7 @@ async fn main() -> Result<(), Error> {
         server_name: options.server_name,
         origin: options.origin,
         slots: Arc::new(Semaphore::new(128)),
+        oidc: oidc.map(Arc::new),
     };
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
     eprintln!("web-bridge listening on {}", listener.local_addr()?);
@@ -134,6 +142,7 @@ async fn main() -> Result<(), Error> {
         listener,
         Router::new()
             .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
+            .route("/auth/oidc/start", get(oidc::start))
             .with_state(bridge),
     )
     .with_graceful_shutdown(async {
@@ -379,6 +388,7 @@ mod tests {
             server_name: "localhost".into(),
             origin: "http://localhost:5173".into(),
             slots: Arc::new(Semaphore::new(2)),
+            oidc: None,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

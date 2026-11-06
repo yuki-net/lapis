@@ -9251,7 +9251,9 @@ name = "web-bridge"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "client-core",
  "futures-util",
+ "getrandom 0.3.4",
  "quinn",
  "rcgen",
  "rustls",
