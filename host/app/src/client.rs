@@ -148,7 +148,7 @@ impl BackendClient {
             Source::Local(hosts) => hosts
                 .config(root)
                 .map(|config| config.workspace_id)
-                .map_err(|_| BackendServiceError::Unavailable),
+                .map_err(|error| BackendServiceError::Connection(error.to_string())),
             Source::Quic {
                 root: expected,
                 config,
@@ -189,7 +189,9 @@ impl BackendClient {
                 .map(|(root, id)| (root.clone(), id.clone()))
                 .collect()),
             Source::Quic { root, config } => Ok(vec![(root.clone(), config.workspace_id.clone())]),
-            Source::Local(hosts) => hosts.roots().map_err(|_| BackendServiceError::Unavailable),
+            Source::Local(hosts) => hosts
+                .roots()
+                .map_err(|error| BackendServiceError::Connection(error.to_string())),
         }
     }
     pub(crate) fn root_for(&self, workspace: &WorkspaceId) -> Result<PathBuf, BackendServiceError> {
@@ -211,7 +213,7 @@ impl BackendClient {
             Source::Local(hosts) => QuicConnection::connect(
                 hosts
                     .by_id(&workspace)
-                    .map_err(|_| BackendServiceError::Unavailable)?,
+                    .map_err(|error| BackendServiceError::Connection(error.to_string()))?,
             )
             .map(Client::Quic),
             Source::Quic { config, .. } if config.workspace_id == workspace => {

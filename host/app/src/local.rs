@@ -199,7 +199,7 @@ impl LocalHosts {
             let line = receiver
                 .recv_timeout(Duration::from_secs(30))
                 .map_err(|_| "Hostの起動がtimeoutしました")??;
-            let record: Record = serde_json::from_str(&line)?;
+            let record = parse_bootstrap(&line)?;
             if record.pid != pid || record.key != key || !record.address.ip().is_loopback() {
                 return Err::<Record, Error>("Hostの起動情報が一致しません".into());
             }
@@ -427,8 +427,16 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
         AuthPolicy::new(owner_capabilities.clone()),
     );
     auth.enable();
-    if let Some(verifier) = crate::oidc_verifier_from_env()? {
-        auth.enable_oidc(verifier);
+    match crate::oidc_verifier_from_env() {
+        Ok(Some(verifier)) => auth.enable_oidc(verifier),
+        Ok(None) => {}
+        Err(error) => {
+            eprintln!("OIDC設定エラー: {error}");
+            let mut stdout = io::stdout().lock();
+            writeln!(stdout, "error: OIDC設定エラー: {error}")?;
+            stdout.flush()?;
+            return Err(format!("OIDC設定エラー: {error}").into());
+        }
     }
     let mut random = [0u8; 16];
     getrandom::fill(&mut random)?;
@@ -484,6 +492,13 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
         })
 }
 
+fn parse_bootstrap(line: &str) -> Result<Record, Error> {
+    if let Some(error) = line.strip_prefix("error: ") {
+        return Err(error.trim().to_owned().into());
+    }
+    Ok(serde_json::from_str(line)?)
+}
+
 fn register(mut config: QuicConnectionConfig, root: &Path) -> Result<QuicConnectionConfig, Error> {
     let connection = QuicConnection::connect(config.clone())?;
     let response = connection.request(RequestBody::HostRegister(HostRegisterRequest {
@@ -519,6 +534,16 @@ mod tests {
             credential: "00000000000000000000000000000000".to_owned(),
             secret: vec![0; 32],
         }
+    }
+
+    #[test]
+    fn bootstrap_error_prefix_is_preserved() {
+        let error = match parse_bootstrap("error: OIDC設定エラー: JWKSを読めません\n") {
+            Ok(_) => panic!("error line must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("OIDC設定エラー"));
+        assert!(!error.to_string().contains("起動情報が一致しません"));
     }
 
     #[test]
