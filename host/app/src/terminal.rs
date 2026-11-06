@@ -1,15 +1,15 @@
 use crate::BackendClient;
 use crate::client::Client;
-use lapis_backend_state::BackendEventReceiver;
-use lapis_client_api::{
-    EventBody, RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalInputRequest,
-    TerminalResizeRequest, TerminalSize, TerminalStartRequest, TerminalStatus,
-    TerminalTerminateRequest, WorkspaceConnectRequest,
-};
-use lapis_terminal::{
+use ::terminal::{
     MAX_SCROLLBACK_LINES, TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId,
     TerminalInput, TerminalRevision, TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot,
     TerminalStatus as ModelTerminalStatus,
+};
+use backend_state::BackendEventReceiver;
+use client_api::{
+    EventBody, RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalInputRequest,
+    TerminalResizeRequest, TerminalSize, TerminalStartRequest, TerminalStatus,
+    TerminalTerminateRequest, WorkspaceConnectRequest,
 };
 use std::{
     collections::HashMap,
@@ -30,7 +30,7 @@ pub(super) struct HostTerminals {
 struct Attachment {
     client: Option<Client>,
     receiver: Option<BackendEventReceiver>,
-    terminal_id: lapis_client_api::TerminalId,
+    terminal_id: client_api::TerminalId,
     cwd: PathBuf,
     event_watermark: Option<u64>,
     revision: TerminalRevision,
@@ -42,7 +42,7 @@ struct Attachment {
 struct Recovery {
     receiver: BackendEventReceiver,
     event_watermark: u64,
-    terminal: lapis_client_api::TerminalSnapshot,
+    terminal: client_api::TerminalSnapshot,
 }
 
 impl Attachment {
@@ -247,7 +247,7 @@ impl HostTerminals {
     fn command(
         &self,
         id: &TerminalId,
-        body: impl FnOnce(&lapis_client_api::TerminalId) -> RequestBody,
+        body: impl FnOnce(&client_api::TerminalId) -> RequestBody,
     ) -> Result<ResponseBody, TerminalError> {
         let attachments = self.attachments.lock().map_err(error)?;
         let attachment = attachments
@@ -262,7 +262,7 @@ impl HostTerminals {
         drop(attachments);
         let mut response = client.request(request.clone()).map_err(error)?;
         if matches!(&response, ResponseBody::Error(problem)
-            if matches!(problem.code.as_str(), lapis_client_api::FORBIDDEN | lapis_client_api::INVALID_REQUEST))
+            if matches!(problem.code.as_str(), client_api::FORBIDDEN | client_api::INVALID_REQUEST))
         {
             match client
                 .request(RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
@@ -306,7 +306,7 @@ impl HostTerminals {
 
 impl TerminalBackend for HostTerminals {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
     }
 
     fn start_with_shell(
@@ -314,7 +314,7 @@ impl TerminalBackend for HostTerminals {
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
         let (client, relative_cwd) = self.host.connect_directory(cwd).map_err(error)?;
         let receiver = client.subscribe().map_err(error)?;
@@ -489,7 +489,7 @@ fn model_status(status: TerminalStatus) -> ModelTerminalStatus {
 
 fn model_snapshot(
     root: &Path,
-    terminal: lapis_client_api::TerminalSnapshot,
+    terminal: client_api::TerminalSnapshot,
 ) -> Result<TerminalSnapshot, TerminalError> {
     validate_snapshot(&terminal)?;
     Ok(TerminalSnapshot {
@@ -504,7 +504,7 @@ fn model_snapshot(
     })
 }
 
-fn validate_snapshot(terminal: &lapis_client_api::TerminalSnapshot) -> Result<(), TerminalError> {
+fn validate_snapshot(terminal: &client_api::TerminalSnapshot) -> Result<(), TerminalError> {
     let screen = &terminal.screen;
     if screen.size.columns == 0
         || screen.size.columns > 512
@@ -526,9 +526,7 @@ fn validate_snapshot(terminal: &lapis_client_api::TerminalSnapshot) -> Result<()
     Ok(())
 }
 
-fn snapshot_delta(
-    terminal: &lapis_client_api::TerminalSnapshot,
-) -> Result<TerminalDelta, TerminalError> {
+fn snapshot_delta(terminal: &client_api::TerminalSnapshot) -> Result<TerminalDelta, TerminalError> {
     validate_snapshot(terminal)?;
     Ok(TerminalDelta {
         revision: terminal.revision,

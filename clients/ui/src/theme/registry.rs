@@ -1,5 +1,5 @@
 use gpui::{App, Global};
-use lapis_settings::SyntaxTheme;
+use settings::SyntaxTheme;
 use std::collections::BTreeMap;
 
 use crate::extension_ui::ThemeId;

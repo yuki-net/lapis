@@ -10,10 +10,10 @@ mod native_smoke;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) use native_smoke::run_native_smoke;
 
+use editor_core::DocumentId;
 use gpui::{
     AppContext, Context, Entity, Focusable, Render, Subscription, WeakEntity, Window, prelude::*,
 };
-use lapis_editor_core::DocumentId;
 
 use crate::{
     client_adapter::ClientSnapshot,
@@ -41,7 +41,7 @@ pub(crate) struct WindowGroup {
     pub latest: Option<ClientSnapshot>,
     pub closing: bool,
     pub synchronization_required: bool,
-    pub locale: lapis_localization::LocaleId,
+    pub locale: localization::LocaleId,
     pub status: String,
 }
 
@@ -51,7 +51,7 @@ impl WindowGroup {
         window: &Window,
         editor: Entity<Editor>,
         shell: Entity<Shell>,
-        locale: lapis_localization::LocaleId,
+        locale: localization::LocaleId,
     ) -> Self {
         Self {
             layout: GroupLayout::new(),

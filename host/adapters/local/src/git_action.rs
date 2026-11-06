@@ -1,5 +1,5 @@
 use super::*;
-use lapis_git::{ConflictSide, GitAction, GitActionRequest, GitActionResult};
+use git::{ConflictSide, GitAction, GitActionRequest, GitActionResult};
 
 /// 全Git操作を非対話で実行し、期限超過時は子プロセスも終了する。
 pub(super) fn git_output(
@@ -492,7 +492,7 @@ impl LocalGitBackend {
         };
         let output = limit_git_output(mutation, text)?;
         let diff = match &action {
-            GitAction::Diff { path, .. } => Some(lapis_git::GitDiffSnapshot {
+            GitAction::Diff { path, .. } => Some(git::GitDiffSnapshot {
                 path: path.clone(),
                 additions: output
                     .lines()
@@ -521,7 +521,7 @@ impl LocalGitBackend {
                         .and_then(|v| v.parse().ok());
                     match (index, fields.next(), fields.next()) {
                         (Some(index), Some(oid), Some(subject)) if !oid.is_empty() => {
-                            Ok(lapis_git::GitStash {
+                            Ok(git::GitStash {
                                 index,
                                 oid: oid.to_owned(),
                                 subject: subject.to_owned(),

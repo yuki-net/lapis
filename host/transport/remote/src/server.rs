@@ -18,7 +18,7 @@ use axum::{
     routing::any,
 };
 use axum_server::{Handle, tls_rustls::RustlsConfig};
-use lapis_client_api::{
+use client_api::{
     ErrorCode, EventEnvelope, INTERNAL, PROTOCOL_ERROR, ProtocolError, ResponseBody,
     ResponseEnvelope, UNAUTHORIZED,
 };
@@ -568,7 +568,7 @@ impl Drop for ConnectionGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_client_api::CapabilitySet;
+    use client_api::CapabilitySet;
 
     use crate::{
         AuthConfig, AuthPolicy, CredentialLifetime, PairingLifetime, RemoteAuth,
@@ -581,7 +581,7 @@ mod tests {
         fn handle(
             &self,
             _session: crate::SessionGrant,
-            _request: lapis_client_api::RequestEnvelope,
+            _request: client_api::RequestEnvelope,
         ) -> RemoteResponseFuture<'_> {
             Box::pin(async { panic!("disabled server must not dispatch requests") })
         }

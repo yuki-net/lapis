@@ -1,4 +1,4 @@
-//! ブラウザー向けClientの通信・回帰検証用。本番のWeb UIは `lapis-desktop-ui` のWasm entryから起動する。
+//! ブラウザー向けClientの通信・回帰検証用。本番のWeb UIは `desktop-ui` のWasm entryから起動する。
 //!
 //! 本番経路と混同しないよう、このcrateはテスト・検証用途に限定する。
 

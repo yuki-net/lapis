@@ -4,9 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lapis_desktop_client::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
-use lapis_editor_core::DocumentId;
-use lapis_workspace::WorkspaceError;
+use ::workspace::WorkspaceError;
+use desktop_client::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
+use editor_core::DocumentId;
 
 pub struct LocalWorkspaceStateRepository {
     path: PathBuf,

@@ -1,6 +1,6 @@
 use crate::{BackendHost, protected::protect};
-use lapis_client_api::*;
-use lapis_remote::{
+use client_api::*;
+use remote::{
     AuthConfig, AuthPolicy, CredentialHandle, CredentialId, CredentialLifetime, PairingLifetime,
     QuicConnection, QuicConnectionConfig, QuicServer, RemoteAuth, RemoteLimits,
     tls13_server_config,

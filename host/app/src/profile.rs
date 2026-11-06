@@ -1,6 +1,6 @@
 use crate::{BackendClient, local::Record, protected::protect};
-use lapis_client_api::*;
-use lapis_remote::QuicConnectionConfig;
+use client_api::*;
+use remote::QuicConnectionConfig;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{

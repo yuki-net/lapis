@@ -2,7 +2,7 @@
 
 use std::{error::Error, fmt, path::Path};
 
-use lapis_backend_state::StoredCredential;
+use backend_state::StoredCredential;
 use rusqlite::{Connection, params};
 
 /// SQLite の credential store。

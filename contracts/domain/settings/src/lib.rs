@@ -1,6 +1,6 @@
 //! ユーザー全体に適用される設定のモデルと保存契約。
 
-use lapis_localization::LocaleId;
+use localization::LocaleId;
 use serde::{Deserialize, Serialize};
 
 /// 構文配色の系統。明暗はUIテーマに追従する。

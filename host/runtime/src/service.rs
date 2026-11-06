@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use lapis_client_api::{
+use client_api::{
     EventEnvelope, RequestEnvelope, ResponseBody, ResponseEnvelope, SessionId, WorkspaceId,
 };
 
@@ -29,7 +29,7 @@ impl BackendService {
     pub fn worktree_path(
         &self,
         workspace_id: WorkspaceId,
-        worktree: lapis_editor_core::TaskId,
+        worktree: editor_core::TaskId,
     ) -> Result<std::path::PathBuf, BackendServiceError> {
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
@@ -50,9 +50,9 @@ impl BackendService {
         &self,
         source: WorkspaceId,
         destination: WorkspaceId,
-        document_id: lapis_client_api::DocumentId,
-        revision: lapis_client_api::Revision,
-        path: lapis_client_api::WorkspaceRelativePath,
+        document_id: client_api::DocumentId,
+        revision: client_api::Revision,
+        path: client_api::WorkspaceRelativePath,
     ) -> Result<(), BackendServiceError> {
         let (respond, receive) = mpsc::sync_channel(1);
         self.inner
@@ -74,7 +74,7 @@ impl BackendService {
     pub fn start(mut state: BackendState) -> Result<Self, BackendServiceError> {
         let (sender, receiver) = mpsc::sync_channel(64);
         let git_sender = sender.clone();
-        let git_publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync> =
+        let git_publish: Arc<dyn Fn(WorkspaceId, String, git::GitSnapshot) + Send + Sync> =
             Arc::new(move |workspace_id, repository_id, status| {
                 let _ = git_sender.send(Command::GitStatusChanged {
                     workspace_id,
@@ -141,7 +141,7 @@ impl BackendService {
         session: BackendSession,
         request: RequestEnvelope,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
-        if let lapis_client_api::RequestBody::WorkbenchPut(ref put) = request.body {
+        if let client_api::RequestBody::WorkbenchPut(ref put) = request.body {
             let persistence = self
                 .inner
                 .workbenches
@@ -153,7 +153,7 @@ impl BackendService {
                 return self.persist_workbench(session, request.clone(), put.clone(), persistence);
             }
         }
-        if let lapis_client_api::RequestBody::WorkspaceExecute(operation) = request.body {
+        if let client_api::RequestBody::WorkspaceExecute(operation) = request.body {
             return self.execute_workspace_operation(session, request.request_id, operation);
         }
         let (respond, receive) = mpsc::sync_channel(1);
@@ -172,10 +172,10 @@ impl BackendService {
         &self,
         session: BackendSession,
         request: RequestEnvelope,
-        put: lapis_client_api::WorkbenchPutRequest,
+        put: client_api::WorkbenchPutRequest,
         persistence: Arc<PersistedWorkbench>,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
-        use lapis_client_api::{RequestBody, WorkbenchGetRequest, WorkbenchPutResponse};
+        use client_api::{RequestBody, WorkbenchGetRequest, WorkbenchPutResponse};
         let _guard = persistence
             .gate
             .lock()
@@ -204,7 +204,7 @@ impl BackendService {
                 body: ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)),
             });
         }
-        let current: Option<lapis_workbench::ConversationViewState> =
+        let current: Option<workbench::ConversationViewState> =
             serde_json::from_value(snapshot.view.clone())
                 .map_err(|_| BackendServiceError::Unavailable)?;
         let view = match crate::workbench::parse_update_view(
@@ -258,18 +258,18 @@ impl BackendService {
     fn execute_workspace_operation(
         &self,
         session: BackendSession,
-        request_id: lapis_client_api::RequestId,
-        request: lapis_client_api::WorkspaceOperationRequest,
+        request_id: client_api::RequestId,
+        request: client_api::WorkspaceOperationRequest,
     ) -> Result<ResponseEnvelope, BackendServiceError> {
         let changed = request.operation.is_mutation();
         let worktrees_changed = matches!(
             request.operation,
-            lapis_client_api::WorkspaceOperation::CreateWorktree
-                | lapis_client_api::WorkspaceOperation::DiscardWorktree { .. }
-        ) || matches!(&request.operation, lapis_client_api::WorkspaceOperation::StartTask { input } if input.isolated);
+            client_api::WorkspaceOperation::CreateWorktree
+                | client_api::WorkspaceOperation::DiscardWorktree { .. }
+        ) || matches!(&request.operation, client_api::WorkspaceOperation::StartTask { input } if input.isolated);
         let workspace_id = session.workspace_id.clone();
         let removing = match &request.operation {
-            lapis_client_api::WorkspaceOperation::DiscardWorktree { worktree_id } => {
+            client_api::WorkspaceOperation::DiscardWorktree { worktree_id } => {
                 Some(worktree_id.clone())
             }
             _ => None,
@@ -352,8 +352,7 @@ impl BackendService {
     ) -> Result<ResponseEnvelope, BackendServiceError> {
         if matches!(
             request.body,
-            lapis_client_api::RequestBody::WorkspaceExecute(_)
-                | lapis_client_api::RequestBody::WorkbenchPut(_)
+            client_api::RequestBody::WorkspaceExecute(_) | client_api::RequestBody::WorkbenchPut(_)
         ) {
             return self.dispatch(session, request);
         }
@@ -419,13 +418,13 @@ enum Command {
     CommitWorkbench {
         workspace_id: WorkspaceId,
         expected: u64,
-        saved: lapis_workbench::VersionedViewState,
+        saved: workbench::VersionedViewState,
         respond: mpsc::SyncSender<Result<(), BackendStateError>>,
     },
     GitStatusChanged {
         workspace_id: WorkspaceId,
         repository_id: String,
-        status: lapis_git::GitSnapshot,
+        status: git::GitSnapshot,
     },
     ReserveWorktreeRemoval {
         root: std::path::PathBuf,
@@ -433,12 +432,12 @@ enum Command {
     },
     PrepareWorktreeLookup {
         workspace_id: WorkspaceId,
-        worktree: lapis_editor_core::TaskId,
+        worktree: editor_core::TaskId,
         respond: mpsc::SyncSender<Result<crate::state::PreparedWorktreeLookup, BackendStateError>>,
     },
     PrepareWorkspaceOperation {
         session: BackendSession,
-        request: lapis_client_api::WorkspaceOperationRequest,
+        request: client_api::WorkspaceOperationRequest,
         respond:
             mpsc::SyncSender<Result<crate::state::PreparedWorkspaceOperation, BackendStateError>>,
     },
@@ -446,8 +445,8 @@ enum Command {
         workspace_id: WorkspaceId,
         changed: bool,
         worktrees_changed: bool,
-        request_id: lapis_client_api::RequestId,
-        result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
+        request_id: client_api::RequestId,
+        result: Result<client_api::WorkspaceOperationResult, BackendStateError>,
         reserved: Option<std::path::PathBuf>,
         admitted: bool,
         respond: mpsc::SyncSender<ResponseEnvelope>,
@@ -455,9 +454,9 @@ enum Command {
     RelocateDocument {
         source: WorkspaceId,
         destination: WorkspaceId,
-        document_id: lapis_client_api::DocumentId,
-        revision: lapis_client_api::Revision,
-        path: lapis_client_api::WorkspaceRelativePath,
+        document_id: client_api::DocumentId,
+        revision: client_api::Revision,
+        path: client_api::WorkspaceRelativePath,
         respond: mpsc::SyncSender<Result<(), BackendStateError>>,
     },
     RegisterWorkspace {
@@ -501,7 +500,7 @@ impl BackendEventSink for ChannelEventSink {
 fn run_worker(
     mut state: BackendState,
     receiver: mpsc::Receiver<Command>,
-    git_publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync>,
+    git_publish: Arc<dyn Fn(WorkspaceId, String, git::GitSnapshot) + Send + Sync>,
 ) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
     loop {
@@ -680,7 +679,7 @@ fn publish_events(subscribers: &mut HashMap<SessionId, Subscriber>, events: Vec<
 pub enum BackendServiceError {
     ThreadSpawn(std::io::Error),
     State(BackendStateError),
-    Rejected(lapis_client_api::ProtocolError),
+    Rejected(client_api::ProtocolError),
     Connection(String),
     Unavailable,
 }

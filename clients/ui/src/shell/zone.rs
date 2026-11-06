@@ -395,13 +395,13 @@ impl Zone {
     }
 
     /// 遷移中の空Panelは永続状態から除く。閉鎖中の見た目は実行時状態のみ。
-    pub(super) fn capture(&self) -> lapis_desktop_client::ZoneViewState {
+    pub(super) fn capture(&self) -> desktop_client::ZoneViewState {
         let mut stable = self.clone();
         let closing = stable.closing.keys().cloned().collect::<Vec<_>>();
         for id in closing {
             stable.finish_empty_close(&id);
         }
-        lapis_desktop_client::ZoneViewState {
+        desktop_client::ZoneViewState {
             position: super::layout::zone_position_name(stable.position).to_owned(),
             open: stable.open,
             extent_ratio: stable.extent_ratio,
@@ -409,7 +409,7 @@ impl Zone {
             panels: stable
                 .panels
                 .iter()
-                .map(|(id, panel)| lapis_desktop_client::ZonePanelViewState {
+                .map(|(id, panel)| desktop_client::ZonePanelViewState {
                     id: id.as_str(),
                     tabs: panel
                         .tabs
@@ -431,7 +431,7 @@ impl Zone {
 
     /// 不正な配置は候補全体を拒否し、利用できないTabだけを取り除く。
     pub(super) fn restore<F>(
-        saved: &lapis_desktop_client::ZoneViewState,
+        saved: &desktop_client::ZoneViewState,
         parse_tab: &mut F,
     ) -> Option<Self>
     where

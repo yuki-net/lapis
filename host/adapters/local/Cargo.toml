@@ -1,5 +1,5 @@
 [package]
-name = "lapis-platform"
+name = "platform"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -9,17 +9,17 @@ license.workspace = true
 notify = "8.2.0"
 wezterm-term.workspace = true
 wezterm-surface.workspace = true
-lapis-backend-state = { path = "../../runtime" }
-lapis-document = { path = "../../../contracts/domain/document" }
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
-lapis-git = { path = "../../../contracts/domain/git" }
-lapis-lsp = { path = "../../../contracts/domain/lsp" }
-lapis-terminal = { path = "../../../contracts/domain/terminal" }
+backend-state = { path = "../../runtime" }
+document = { path = "../../../contracts/domain/document" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+git = { path = "../../../contracts/domain/git" }
+lsp = { path = "../../../contracts/domain/lsp" }
+terminal = { path = "../../../contracts/domain/terminal" }
 portable-pty.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
-lapis-task-runner = { path = "../agent" }
-lapis-workspace = { path = "../../../contracts/domain/workspace" }
-lapis-workbench = { path = "../../../contracts/domain/workbench" }
+task-runner = { path = "../agent" }
+workspace = { path = "../../../contracts/domain/workspace" }
+workbench = { path = "../../../contracts/domain/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

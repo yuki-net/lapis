@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use lapis_language::{LanguageId, LanguageRegistry};
-use lapis_workspace::FileEntryKind;
+use language::{LanguageId, LanguageRegistry};
+use workspace::FileEntryKind;
 
 use crate::components::FileIconId;
 

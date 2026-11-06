@@ -1,5 +1,5 @@
 //! IMEの置換対象と選択状態を計算する。文書への反映成功後にだけ状態を確定する。
-use lapis_document::{Document, DocumentError, DocumentErrorKind};
+use document::{Document, DocumentError, DocumentErrorKind};
 use std::ops::Range;
 
 pub(super) enum InputKind {

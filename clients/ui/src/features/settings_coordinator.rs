@@ -1,9 +1,9 @@
 use std::collections::VecDeque;
 
+use desktop_client::SettingsSession;
 use gpui::{App, AppContext, Context, Entity, Global};
-use lapis_desktop_client::SettingsSession;
-use lapis_localization::LocaleId;
-use lapis_settings::{GlobalSettings, SyntaxTheme};
+use localization::LocaleId;
+use settings::{GlobalSettings, SyntaxTheme};
 
 use crate::{client_adapter::ClientWorker, extension_ui::ThemeId, theme};
 
@@ -25,7 +25,7 @@ impl Change {
         }
     }
 
-    fn save(&self, session: &SettingsSession) -> Result<(), lapis_settings::SettingsError> {
+    fn save(&self, session: &SettingsSession) -> Result<(), settings::SettingsError> {
         match self {
             Self::Theme(id) => session.set_theme(id.clone()),
             Self::Syntax(id) => session.set_syntax_theme(*id),
@@ -209,7 +209,7 @@ impl SettingsCoordinator {
 mod tests {
     use super::*;
     use crate::time::Instant;
-    use lapis_settings::{GlobalSettingsRepository, SettingsError};
+    use settings::{GlobalSettingsRepository, SettingsError};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 

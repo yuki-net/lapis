@@ -21,8 +21,8 @@ pub(super) fn descriptor() -> FeatureDescriptor {
 }
 use crate::{client_adapter::ClientSnapshot, commands::UiCommand, theme};
 use gpui::{Context, Render, Window, div, prelude::*, px};
-use lapis_workspace::{FileEntry, FileEntryKind};
 use std::{collections::HashSet, path::PathBuf};
+use workspace::{FileEntry, FileEntryKind};
 
 pub(crate) struct FilesFeature {
     workspace_name: String,
@@ -30,7 +30,7 @@ pub(crate) struct FilesFeature {
     active_path: Option<PathBuf>,
     root: Option<PathBuf>,
     expanded_directories: HashSet<PathBuf>,
-    languages: lapis_language::LanguageRegistry,
+    languages: language::LanguageRegistry,
 }
 impl gpui::EventEmitter<UiCommand> for FilesFeature {}
 impl FilesFeature {
@@ -41,7 +41,7 @@ impl FilesFeature {
             active_path: None,
             root: None,
             expanded_directories: HashSet::new(),
-            languages: lapis_language::LanguageRegistry::bundled(),
+            languages: language::LanguageRegistry::bundled(),
         }
     }
     pub(crate) fn update(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {

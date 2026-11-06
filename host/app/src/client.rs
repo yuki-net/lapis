@@ -1,7 +1,7 @@
 use crate::BackendHost;
-use lapis_backend_state::{BackendEventReceiver, BackendServiceError, EmbeddedClient};
-use lapis_client_api::{RequestBody, ResponseBody, WorkspaceId, WorkspaceRelativePath};
-use lapis_remote::{QuicConnection, QuicConnectionConfig};
+use backend_state::{BackendEventReceiver, BackendServiceError, EmbeddedClient};
+use client_api::{RequestBody, ResponseBody, WorkspaceId, WorkspaceRelativePath};
+use remote::{QuicConnection, QuicConnectionConfig};
 use std::{
     path::{Component, Path, PathBuf},
     sync::Arc,
@@ -123,22 +123,22 @@ impl BackendClient {
             },
         })
     }
-    pub fn workspaces(&self) -> Arc<dyn lapis_workspace::WorkspaceRepository> {
+    pub fn workspaces(&self) -> Arc<dyn workspace::WorkspaceRepository> {
         Arc::new(crate::workspace::HostWorkspaces::new(self.clone()))
     }
-    pub fn documents(&self) -> Arc<dyn lapis_document::DocumentConnection> {
+    pub fn documents(&self) -> Arc<dyn document::DocumentConnection> {
         Arc::new(crate::document::HostDocuments::new(self.clone()))
     }
-    pub fn workbench(&self) -> Arc<dyn lapis_workbench::WorkbenchConnection> {
+    pub fn workbench(&self) -> Arc<dyn workbench::WorkbenchConnection> {
         Arc::new(crate::workbench::HostWorkbench::new(self.clone()))
     }
-    pub fn git(&self) -> Arc<dyn lapis_git::GitConnection> {
+    pub fn git(&self) -> Arc<dyn git::GitConnection> {
         Arc::new(crate::features::HostGit::new(self.clone()))
     }
-    pub fn tasks(&self) -> Arc<dyn lapis_task::TaskConnection> {
+    pub fn tasks(&self) -> Arc<dyn task::TaskConnection> {
         Arc::new(crate::features::HostTasks::new(self.clone()))
     }
-    pub fn terminals(&self) -> Arc<dyn lapis_terminal::TerminalBackend> {
+    pub fn terminals(&self) -> Arc<dyn terminal::TerminalBackend> {
         Arc::new(crate::terminal::HostTerminals::new(self.clone()))
     }
 
@@ -159,7 +159,7 @@ impl BackendClient {
     pub(crate) fn open_worktree(
         &self,
         workspace: WorkspaceId,
-        worktree: lapis_editor_core::TaskId,
+        worktree: editor_core::TaskId,
     ) -> Result<PathBuf, BackendServiceError> {
         let path = match &self.source {
             Source::Embedded(host) => host.service().worktree_path(workspace, worktree)?,
@@ -318,8 +318,8 @@ impl BackendClient {
         &self,
         source: WorkspaceId,
         destination: WorkspaceId,
-        document: lapis_client_api::DocumentId,
-        revision: lapis_client_api::Revision,
+        document: client_api::DocumentId,
+        revision: client_api::Revision,
         path: WorkspaceRelativePath,
     ) -> Result<(), BackendServiceError> {
         match &self.source {
@@ -330,7 +330,7 @@ impl BackendClient {
             Source::Local(_) => {
                 let client = self.connect_workspace(source)?;
                 match client.request(RequestBody::DocumentRelocate(
-                    lapis_client_api::DocumentRelocateRequest {
+                    client_api::DocumentRelocateRequest {
                         document_id: document,
                         destination_workspace: destination,
                         base_revision: revision,

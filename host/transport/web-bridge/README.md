@@ -3,7 +3,7 @@
 ブラウザーのWebSocketを、同じPC上のHostが受け付けるQUIC接続へ転送する独立実行ファイルです。認証やWorkspace操作の判断はHostが行います。
 
 ```powershell
-cargo run -p lapis-web-bridge -- --listen 127.0.0.1:8787 --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://localhost:5173
+cargo run -p web-bridge -- --listen 127.0.0.1:8787 --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://localhost:5173
 ```
 
 `--host` と `--certificate` は起動中Hostのアドレスと公開証明書です。証明書とサーバー名を検証し、検証失敗時に接続を許可しません。Hostへの接続は常にloopbackに限定し、指定したOriginと `lapis.v0` subprotocolだけを受け付けます。Webページ自体は配信しません。
@@ -21,7 +21,7 @@ Webの開発サーバーとBridgeのTCPポートをSSHで転送し、ブラウ�
 Bridgeをtailnetへ公開する場合は、明示的に `--allow-remote` を付け、ブラウザーが使うOriginを指定します。
 
 ```powershell
-cargo run -p lapis-web-bridge -- --listen 0.0.0.0:8787 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://100.64.0.1:5174
+cargo run -p web-bridge -- --listen 0.0.0.0:8787 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://100.64.0.1:5174
 ```
 
 Webの開発サーバーもtailnetで待ち受けます。

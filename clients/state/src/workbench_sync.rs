@@ -3,8 +3,8 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
 };
 
-use lapis_editor_core::WorkspaceId;
-use lapis_workbench::{
+use editor_core::WorkspaceId;
+use workbench::{
     ConversationViewState, VersionedViewState, WorkbenchConnection, WorkbenchReplica,
     WorkbenchUpdate, WorkbenchWritePlan,
 };
@@ -148,8 +148,8 @@ impl WorkbenchSync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_workbench::{WorkbenchSubscription, WorkbenchUpdate};
     use std::sync::Mutex;
+    use workbench::{WorkbenchSubscription, WorkbenchUpdate};
 
     #[test]
     fn watch_exposes_only_unseen_views() {

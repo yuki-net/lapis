@@ -16,8 +16,8 @@ mod workspace;
 mod workspace_registry;
 
 /// Hostが提供する操作だけをペアリングで許可する。
-pub fn supported_capabilities() -> lapis_client_api::CapabilitySet {
-    use lapis_client_api::{CapabilityId, CapabilitySet, capability::*};
+pub fn supported_capabilities() -> client_api::CapabilitySet {
+    use client_api::{CapabilityId, CapabilitySet, capability::*};
     CapabilitySet::try_new(
         [
             WORKSPACES,
@@ -43,14 +43,12 @@ pub fn supported_capabilities() -> lapis_client_api::CapabilitySet {
     .expect("bounded capabilities")
 }
 
-use lapis_backend_state::{
+use ::terminal::TerminalBackend;
+use backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };
-use lapis_client_api::{SessionId, WorkspaceId};
-use lapis_platform::{
-    LocalGitBackend, LocalTaskBackend, LocalTerminalBackend, LocalWorkspaceRepository,
-};
-use lapis_terminal::TerminalBackend;
+use client_api::{SessionId, WorkspaceId};
+use platform::{LocalGitBackend, LocalTaskBackend, LocalTerminalBackend, LocalWorkspaceRepository};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -79,10 +77,10 @@ fn workspace_id_for_root(root: &Path) -> WorkspaceId {
 }
 
 impl BackendHost {
-    pub fn workspaces(&self) -> Arc<dyn lapis_workspace::WorkspaceRepository> {
+    pub fn workspaces(&self) -> Arc<dyn ::workspace::WorkspaceRepository> {
         BackendClient::from(self.clone()).workspaces()
     }
-    pub fn documents(&self) -> Arc<dyn lapis_document::DocumentConnection> {
+    pub fn documents(&self) -> Arc<dyn ::document::DocumentConnection> {
         BackendClient::from(self.clone()).documents()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
@@ -169,9 +167,8 @@ impl BackendHost {
             let path = directory
                 .join("workbench")
                 .join(format!("{}.json", workspace_id.as_str()));
-            registration = registration.with_workbench_persistence(Arc::new(
-                lapis_platform::LocalWorkbenchStore::new(path),
-            ));
+            registration = registration
+                .with_workbench_persistence(Arc::new(platform::LocalWorkbenchStore::new(path)));
         }
         self.inner.service.register_workspace(registration)?;
         workspaces.insert(root.clone(), workspace_id.clone());
@@ -202,10 +199,10 @@ impl BackendHost {
         EmbeddedClient::connect(self.service(), session_id, workspace_id)
     }
 
-    pub fn git(&self) -> Arc<dyn lapis_git::GitConnection> {
+    pub fn git(&self) -> Arc<dyn git::GitConnection> {
         BackendClient::from(self.clone()).git()
     }
-    pub fn tasks(&self) -> Arc<dyn lapis_task::TaskConnection> {
+    pub fn tasks(&self) -> Arc<dyn task::TaskConnection> {
         BackendClient::from(self.clone()).tasks()
     }
     pub fn terminals(&self) -> Arc<dyn TerminalBackend> {

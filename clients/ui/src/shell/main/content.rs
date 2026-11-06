@@ -46,7 +46,7 @@ impl Shell {
 
     pub(super) fn render_document_content(
         &self,
-        document: &lapis_editor_core::DocumentId,
+        document: &editor_core::DocumentId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         if self.session.active_document_id() == Some(document) {

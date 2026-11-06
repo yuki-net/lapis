@@ -1,4 +1,4 @@
-use lapis_editor_core::DocumentId;
+use editor_core::DocumentId;
 use std::path::PathBuf;
 
 use crate::workbench::{ViewInstanceKey, ViewScope, WorkbenchMode};
@@ -38,7 +38,7 @@ pub(crate) enum UiCommand {
     ActivateDocument(DocumentId),
     CloseDocument(DocumentId),
     CloseTabs(Vec<crate::shell::PanelTab>),
-    SelectTask(lapis_editor_core::ConversationId),
+    SelectTask(editor_core::ConversationId),
     SetWorkbenchMode(WorkbenchMode),
     BindViewToSelectedTask(crate::workbench::ViewInstanceKey),
     SetViewBinding {

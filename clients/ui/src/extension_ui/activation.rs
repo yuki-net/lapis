@@ -1,4 +1,4 @@
-use lapis_language::LanguageId;
+use language::LanguageId;
 
 use super::{CommandId, ViewId, WorkspaceCapabilityId};
 

@@ -1,11 +1,11 @@
 use std::{path::Path, process::Command};
 
-use lapis_client_api::{
+use client_api::{
     RequestBody, ResponseBody, WorkspaceOperation, WorkspaceOperationRequest,
     WorkspaceOperationResult,
 };
-use lapis_editor_core::WorkspaceId;
-use lapis_host::BackendHost;
+use editor_core::WorkspaceId;
+use host::BackendHost;
 
 fn git(root: &Path, arguments: &[&str]) {
     let output = Command::new("git")
@@ -86,12 +86,10 @@ fn worktree_removal_preserves_detached_dirty_documents_and_running_terminals() {
     assert!(tree.exists());
     let reconnect = host.connect(&tree).unwrap();
     let response = reconnect
-        .request(RequestBody::SnapshotResync(
-            lapis_client_api::SnapshotRequest {
-                workspace_id: reconnect.workspace_id().clone(),
-                reason: lapis_client_api::SnapshotReason::Reconnect,
-            },
-        ))
+        .request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
+            workspace_id: reconnect.workspace_id().clone(),
+            reason: client_api::SnapshotReason::Reconnect,
+        }))
         .unwrap();
     let ResponseBody::SnapshotResync(snapshot) = response else {
         panic!("snapshot required")
@@ -104,7 +102,7 @@ fn worktree_removal_preserves_detached_dirty_documents_and_running_terminals() {
     assert!(matches!(
         reconnect
             .request(RequestBody::TerminalTerminate(
-                lapis_client_api::TerminalTerminateRequest {
+                client_api::TerminalTerminateRequest {
                     terminal_id: snapshot.snapshot.terminals[0].terminal_id.clone(),
                 }
             ))
@@ -195,8 +193,7 @@ fn desktop_and_wire_can_diff_tracked_files_after_their_parent_directory_is_delet
         .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
             workspace_id: workspace,
             operation: WorkspaceOperation::GitDiff {
-                path: lapis_client_api::WorkspaceRelativePath::parse("removed/nested/note.txt")
-                    .unwrap(),
+                path: client_api::WorkspaceRelativePath::parse("removed/nested/note.txt").unwrap(),
                 worktree: None,
             },
         }))
@@ -218,8 +215,8 @@ fn stage_over_the_wire_changes_only_the_selected_workspace_index() {
     let first_id = host.register_workspace(roots[0].path()).unwrap();
     let second_id = host.register_workspace(roots[1].path()).unwrap();
     let wire = host.connect(roots[0].path()).unwrap();
-    let request = lapis_git::GitActionRequest {
-        action: lapis_git::GitAction::Stage {
+    let request = git::GitActionRequest {
+        action: git::GitAction::Stage {
             path: "note.txt".into(),
         },
         expected_head: Some(String::new()),
@@ -234,7 +231,7 @@ fn stage_over_the_wire_changes_only_the_selected_workspace_index() {
         }))
         .unwrap();
     assert!(
-        matches!(denied, ResponseBody::Error(error) if error.code.as_str() == lapis_client_api::FORBIDDEN)
+        matches!(denied, ResponseBody::Error(error) if error.code.as_str() == client_api::FORBIDDEN)
     );
     let response = wire
         .request(RequestBody::WorkspaceExecute(WorkspaceOperationRequest {
@@ -332,8 +329,8 @@ fn repository_operations_are_scoped_to_the_selected_repository() {
     };
     let response = execute(WorkspaceOperation::RepositoryGitAction {
         repository_id: "path:frontend".into(),
-        request: lapis_git::GitActionRequest {
-            action: lapis_git::GitAction::Stage {
+        request: git::GitActionRequest {
+            action: git::GitAction::Stage {
                 path: "note.txt".into(),
             },
             expected_head: Some(String::new()),
@@ -520,7 +517,7 @@ fn external_git_changes_are_pushed_without_status_requests() {
         let event = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("Git event missing");
-        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body
+        if let client_api::EventBody::GitStatusChanged { repository, .. } = event.body
             && repository.status.revision > revision
             && repository
                 .status
@@ -536,7 +533,7 @@ fn external_git_changes_are_pushed_without_status_requests() {
         let event = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("stage event missing");
-        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body
+        if let client_api::EventBody::GitStatusChanged { repository, .. } = event.body
             && repository
                 .status
                 .files
@@ -553,7 +550,7 @@ fn external_git_changes_are_pushed_without_status_requests() {
         let event = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("branch event missing");
-        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body
+        if let client_api::EventBody::GitStatusChanged { repository, .. } = event.body
             && repository.status.branch == "topic"
             && repository.status.head != status.head
         {
@@ -562,12 +559,10 @@ fn external_git_changes_are_pushed_without_status_requests() {
     }
     let reconnect = host.connect(root.path()).unwrap();
     let response = reconnect
-        .request(RequestBody::SnapshotResync(
-            lapis_client_api::SnapshotRequest {
-                workspace_id: workspace,
-                reason: lapis_client_api::SnapshotReason::Reconnect,
-            },
-        ))
+        .request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
+            workspace_id: workspace,
+            reason: client_api::SnapshotReason::Reconnect,
+        }))
         .unwrap();
     let ResponseBody::SnapshotResync(response) = response else {
         panic!("snapshot required")
@@ -593,13 +588,13 @@ fn git_subscription_receives_updates_and_reconnects_to_snapshot() {
     let mut events = client.subscribe(&workspace).unwrap();
     assert!(matches!(
         events.recv_timeout(Duration::from_secs(2)).unwrap(),
-        Some(lapis_git::GitUpdate::Snapshot(_))
+        Some(git::GitUpdate::Snapshot(_))
     ));
     client.repository_status(&workspace, "root").unwrap();
     std::fs::write(root.path().join("file.txt"), "changed\n").unwrap();
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        if let Some(lapis_git::GitUpdate::Changed(status)) = events
+        if let Some(git::GitUpdate::Changed(status)) = events
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .unwrap()
             && status
@@ -614,7 +609,7 @@ fn git_subscription_receives_updates_and_reconnects_to_snapshot() {
     }
     drop(events);
     let mut reconnected = client.subscribe(&workspace).unwrap();
-    let Some(lapis_git::GitUpdate::Snapshot(snapshot)) =
+    let Some(git::GitUpdate::Snapshot(snapshot)) =
         reconnected.recv_timeout(Duration::from_secs(2)).unwrap()
     else {
         panic!("Git snapshot required")
@@ -649,7 +644,7 @@ fn repository_rescan_removes_status_from_reconnect_snapshot() {
     loop {
         if matches!(
             events.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(lapis_git::GitUpdate::Changed(_))
+            Some(git::GitUpdate::Changed(_))
         ) {
             break;
         }
@@ -661,7 +656,7 @@ fn repository_rescan_removes_status_from_reconnect_snapshot() {
     loop {
         if matches!(
             events.recv_timeout(Duration::from_secs(1)).unwrap(),
-            Some(lapis_git::GitUpdate::RepositoriesChanged)
+            Some(git::GitUpdate::RepositoriesChanged)
         ) {
             break;
         }
@@ -669,7 +664,7 @@ fn repository_rescan_removes_status_from_reconnect_snapshot() {
     }
     let mut reconnected = client.subscribe(&workspace).unwrap();
     assert!(
-        matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(lapis_git::GitUpdate::Snapshot(statuses)) if statuses.is_empty())
+        matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(git::GitUpdate::Snapshot(statuses)) if statuses.is_empty())
     );
 }
 
@@ -693,12 +688,12 @@ fn worktree_events_and_reconnect_snapshot_follow_creation_and_removal() {
     let mut events = client_b.subscribe(&workspace).unwrap();
     events.recv_timeout(Duration::from_secs(2)).unwrap();
     let tree = client_a.create_worktree(&workspace).unwrap();
-    let wait_for_change = |events: &mut Box<dyn lapis_git::GitSubscription>| {
+    let wait_for_change = |events: &mut Box<dyn git::GitSubscription>| {
         let deadline = Instant::now() + Duration::from_secs(8);
         loop {
             if matches!(
                 events.recv_timeout(Duration::from_secs(1)).unwrap(),
-                Some(lapis_git::GitUpdate::WorktreesChanged)
+                Some(git::GitUpdate::WorktreesChanged)
             ) {
                 break;
             }
@@ -718,7 +713,7 @@ fn worktree_events_and_reconnect_snapshot_follow_creation_and_removal() {
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(8);
     loop {
-        if matches!(events.recv_timeout(Duration::from_secs(1)).unwrap(), Some(lapis_git::GitUpdate::Changed(item)) if item.status.worktree_id == Some(tree.worktree_id.clone()))
+        if matches!(events.recv_timeout(Duration::from_secs(1)).unwrap(), Some(git::GitUpdate::Changed(item)) if item.status.worktree_id == Some(tree.worktree_id.clone()))
         {
             break;
         }
@@ -734,10 +729,10 @@ fn worktree_events_and_reconnect_snapshot_follow_creation_and_removal() {
             .unwrap()
             .iter()
             .all(|item| item.worktree_id != tree.worktree_id
-                || item.state == lapis_git::WorktreeState::Discarded)
+                || item.state == git::WorktreeState::Discarded)
     );
     let mut reconnected = client_b.subscribe(&workspace).unwrap();
     assert!(
-        matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(lapis_git::GitUpdate::Snapshot(statuses)) if statuses.iter().all(|item| item.status.worktree_id != Some(tree.worktree_id.clone())))
+        matches!(reconnected.recv_timeout(Duration::from_secs(2)).unwrap(), Some(git::GitUpdate::Snapshot(statuses)) if statuses.iter().all(|item| item.status.worktree_id != Some(tree.worktree_id.clone())))
     );
 }

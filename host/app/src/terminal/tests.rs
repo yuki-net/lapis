@@ -1,12 +1,12 @@
 use super::*;
 use crate::BackendHost;
-use lapis_backend_state::{EmbeddedClient, WorkspaceRegistration};
-use lapis_client_api::{SessionId, WorkspaceId};
-use lapis_platform::LocalWorkspaceRepository;
-use lapis_terminal::{
+use ::terminal::{
     TerminalBackend, TerminalCell, TerminalDelta, TerminalError, TerminalEvent, TerminalId,
     TerminalInput, TerminalRowUpdate, TerminalScreen, TerminalSize,
 };
+use backend_state::{EmbeddedClient, WorkspaceRegistration};
+use client_api::{SessionId, WorkspaceId};
+use platform::LocalWorkspaceRepository;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, AtomicUsize, Ordering},
@@ -126,7 +126,7 @@ impl Fixture {
         fixture
     }
 
-    fn snapshot(&self) -> lapis_client_api::TerminalSnapshot {
+    fn snapshot(&self) -> client_api::TerminalSnapshot {
         let ResponseBody::SnapshotResync(response) = self
             .observer
             .request(RequestBody::SnapshotResync(SnapshotRequest {
@@ -184,7 +184,7 @@ impl Fixture {
 }
 
 fn delta(revision: u64, size: TerminalSize, text: &str) -> TerminalDelta {
-    let mut row = lapis_terminal::TerminalRow::empty(size.columns);
+    let mut row = terminal::TerminalRow::empty(size.columns);
     if let Some(cell) = row.cells.first_mut() {
         *cell = TerminalCell {
             text: text.to_owned(),
@@ -450,7 +450,7 @@ fn a_busy_runtime_actor_does_not_block_poll_or_turn_disconnect_into_exit() {
     let (release_sender, release_receiver) = mpsc::sync_channel(1);
     *fixture.backend.blocked_input.lock().unwrap() = Some((entered_sender, release_receiver));
     let client = fixture.observer.clone();
-    let terminal_id = lapis_client_api::TerminalId::try_new(fixture.id.as_str()).unwrap();
+    let terminal_id = client_api::TerminalId::try_new(fixture.id.as_str()).unwrap();
     let request = thread::spawn(move || {
         client.request(RequestBody::TerminalInput(TerminalInputRequest {
             terminal_id,

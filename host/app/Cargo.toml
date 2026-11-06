@@ -1,22 +1,26 @@
 [package]
-name = "lapis-host"
+name = "host"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "lapis-host"
+path = "src/main.rs"
+
 [dependencies]
-lapis-workspace = { path = "../../contracts/domain/workspace" }
-lapis-workbench = { path = "../../contracts/domain/workbench" }
-lapis-document = { path = "../../contracts/domain/document" }
-lapis-git = { path = "../../contracts/domain/git" }
-lapis-task = { path = "../../contracts/domain/task" }
-lapis-editor-core = { path = "../../contracts/domain/editor-core" }
-lapis-backend-state = { path = "../runtime" }
-lapis-client-api = { path = "../../contracts/protocol" }
-lapis-platform = { path = "../adapters/local" }
-lapis-terminal = { path = "../../contracts/domain/terminal" }
-lapis-remote = { path = "../transport/remote" }
+workspace = { path = "../../contracts/domain/workspace" }
+workbench = { path = "../../contracts/domain/workbench" }
+document = { path = "../../contracts/domain/document" }
+git = { path = "../../contracts/domain/git" }
+task = { path = "../../contracts/domain/task" }
+editor-core = { path = "../../contracts/domain/editor-core" }
+backend-state = { path = "../runtime" }
+client-api = { path = "../../contracts/protocol" }
+platform = { path = "../adapters/local" }
+terminal = { path = "../../contracts/domain/terminal" }
+remote = { path = "../transport/remote" }
 tokio = { workspace = true, features = ["signal"] }
 rustls.workspace = true
 rcgen.workspace = true

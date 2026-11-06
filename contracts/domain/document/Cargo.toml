@@ -1,11 +1,11 @@
 [package]
-name = "lapis-document"
+name = "document"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-editor-core = { path = "../editor-core" }
-lapis-text = { path = "../text" }
+editor-core = { path = "../editor-core" }
+text = { path = "../text" }
 

@@ -19,7 +19,7 @@ pub struct WorkspaceSnapshot {
     pub documents: Vec<DocumentSnapshot>,
     pub terminals: Vec<TerminalSnapshot>,
     #[serde(default)]
-    pub git_repositories: Vec<lapis_git::GitRepositoryStatus>,
+    pub git_repositories: Vec<git::GitRepositoryStatus>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -2,17 +2,17 @@
 
 use std::rc::Rc;
 
-use futures_channel::mpsc;
-use futures_util::StreamExt;
-use lapis_client_api::{
+use client_api::{
     ClientKind, EventBody, EventEnvelope, RequestBody, WorkspaceConnectRequest, WorkspaceId,
 };
-use lapis_client_core::{
+use client_core::{
     AsyncHostConnection,
     workbench::{get, update},
 };
-use lapis_workbench::{ConversationViewState, WorkbenchReplica, WorkbenchWritePlan};
+use futures_channel::mpsc;
+use futures_util::StreamExt;
 use wasm_bindgen::prelude::*;
+use workbench::{ConversationViewState, WorkbenchReplica, WorkbenchWritePlan};
 
 use crate::connection::BrowserConnection;
 
@@ -47,8 +47,8 @@ impl WebSession {
     ) -> Result<WebSession, JsValue> {
         let workspace = WorkspaceId::try_new(workspace)
             .map_err(|_| JsValue::from_str("Workspace IDが不正です"))?;
-        let (connection, credential) = lapis_client_core::browser::connect_web_client(
-            lapis_client_core::browser::WebClientConnectOptions {
+        let (connection, credential) = client_core::browser::connect_web_client(
+            client_core::browser::WebClientConnectOptions {
                 url: &url,
                 workspace: workspace.clone(),
                 client_id: &client_id,

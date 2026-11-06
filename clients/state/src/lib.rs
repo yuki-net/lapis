@@ -9,26 +9,26 @@ use std::{
     thread,
 };
 
-pub use lapis_document::Encoding;
-use lapis_document::{
+pub use document::Encoding;
+use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, ExternalChange, Position, Revision,
 };
-use lapis_editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
-use lapis_git::GitError;
-use lapis_localization::LocaleId;
-use lapis_lsp::{
+use editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
+use git::GitError;
+use localization::LocaleId;
+use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
-use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
-use lapis_task::{TaskControl, TaskError, TaskMode};
-use lapis_terminal::{
+use serde::{Deserialize, Serialize};
+use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use task::{TaskControl, TaskError, TaskMode};
+use terminal::{
     TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSize,
     TerminalSnapshot, TerminalStatus,
 };
 #[cfg(test)]
-use lapis_terminal::{TerminalDelta, TerminalRow, TerminalRowUpdate, TerminalScreen};
-use lapis_workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
-use serde::{Deserialize, Serialize};
+use terminal::{TerminalDelta, TerminalRow, TerminalRowUpdate, TerminalScreen};
+use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 
 mod view_state;
 mod workbench_sync;
@@ -87,10 +87,7 @@ impl SettingsSession {
         Ok(())
     }
 
-    pub fn set_syntax_theme(
-        &self,
-        theme: lapis_settings::SyntaxTheme,
-    ) -> Result<(), SettingsError> {
+    pub fn set_syntax_theme(&self, theme: settings::SyntaxTheme) -> Result<(), SettingsError> {
         let _writer = self.writer.lock().expect("settings writer lock failed");
         let mut settings = self.settings();
         if settings.syntax_theme.as_ref() == Some(&theme) {
@@ -116,7 +113,7 @@ pub trait WorkspaceDialog: Send + Sync {
     fn choose_save_path(&self, suggested_name: &str) -> Option<PathBuf>;
 }
 
-pub use lapis_workspace::WorkspaceRepository;
+pub use workspace::WorkspaceRepository;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocumentAction {
@@ -130,7 +127,7 @@ pub enum DocumentCloseDisposition {
     DiscardChanges,
 }
 
-pub use lapis_workbench::{
+pub use workbench::{
     ConversationViewState, PanelLayoutViewState, SharedDocumentView, SharedWorkspaceView,
     ViewBindingState, ViewScopeState, WorkbenchLayoutState, WorkbenchModeState, WorkbenchViewState,
     ZONE_LAYOUT_VERSION, ZoneLayoutViewState, ZonePanelViewState, ZoneViewState,
@@ -150,12 +147,9 @@ mod conversation;
 pub use conversation::{
     ConversationRecord, ConversationRepository, ConversationSession, ConversationState,
 };
-pub use lapis_project::{Project, SourceRole, TaskEnvironment};
+pub use project::{Project, SourceRole, TaskEnvironment};
 
-fn apply_git_status(
-    current: &mut Option<lapis_git::GitSnapshot>,
-    incoming: lapis_git::GitSnapshot,
-) -> bool {
+fn apply_git_status(current: &mut Option<git::GitSnapshot>, incoming: git::GitSnapshot) -> bool {
     if current
         .as_ref()
         .is_some_and(|status| status.revision >= incoming.revision)
@@ -167,17 +161,17 @@ fn apply_git_status(
 }
 
 pub struct GitSession {
-    backend: Arc<dyn lapis_git::GitConnection>,
+    backend: Arc<dyn git::GitConnection>,
     workspace_id: Option<WorkspaceId>,
-    status: Option<lapis_git::GitSnapshot>,
-    repositories: Vec<lapis_git::GitRepositorySnapshot>,
-    repository_statuses: Vec<(lapis_git::GitRepositorySnapshot, lapis_git::GitSnapshot)>,
-    repository_errors: Vec<(lapis_git::GitRepositorySnapshot, GitError)>,
+    status: Option<git::GitSnapshot>,
+    repositories: Vec<git::GitRepositorySnapshot>,
+    repository_statuses: Vec<(git::GitRepositorySnapshot, git::GitSnapshot)>,
+    repository_errors: Vec<(git::GitRepositorySnapshot, GitError)>,
     last_refresh_error: Option<GitError>,
-    worktrees: Vec<lapis_git::WorktreeSnapshot>,
-    worktree_statuses: Vec<(TaskId, lapis_git::GitSnapshot)>,
+    worktrees: Vec<git::WorktreeSnapshot>,
+    worktree_statuses: Vec<(TaskId, git::GitSnapshot)>,
     worktree_refreshed: Option<std::time::Instant>,
-    selected_diff: Option<lapis_git::GitDiffSnapshot>,
+    selected_diff: Option<git::GitDiffSnapshot>,
     inspection: Option<GitDiffSelection>,
     action_output: String,
     stash_refs: Vec<(u32, String)>,
@@ -192,7 +186,7 @@ pub struct GitDiffSelection {
 }
 
 impl GitSession {
-    pub fn new(backend: Arc<dyn lapis_git::GitConnection>) -> Self {
+    pub fn new(backend: Arc<dyn git::GitConnection>) -> Self {
         Self {
             backend,
             workspace_id: None,
@@ -211,15 +205,13 @@ impl GitSession {
         }
     }
 
-    pub fn status(&self) -> Option<&lapis_git::GitSnapshot> {
+    pub fn status(&self) -> Option<&git::GitSnapshot> {
         self.status.as_ref()
     }
-    pub fn repository_statuses(
-        &self,
-    ) -> &[(lapis_git::GitRepositorySnapshot, lapis_git::GitSnapshot)] {
+    pub fn repository_statuses(&self) -> &[(git::GitRepositorySnapshot, git::GitSnapshot)] {
         &self.repository_statuses
     }
-    pub fn repository_errors(&self) -> &[(lapis_git::GitRepositorySnapshot, GitError)] {
+    pub fn repository_errors(&self) -> &[(git::GitRepositorySnapshot, GitError)] {
         &self.repository_errors
     }
     pub fn last_refresh_error(&self) -> Option<&GitError> {
@@ -231,13 +223,13 @@ impl GitSession {
         self.refresh(&workspace)?;
         Ok(())
     }
-    pub fn worktrees(&self) -> &[lapis_git::WorktreeSnapshot] {
+    pub fn worktrees(&self) -> &[git::WorktreeSnapshot] {
         &self.worktrees
     }
-    pub fn selected_diff(&self) -> Option<&lapis_git::GitDiffSnapshot> {
+    pub fn selected_diff(&self) -> Option<&git::GitDiffSnapshot> {
         self.selected_diff.as_ref()
     }
-    pub fn worktree_statuses(&self) -> &[(TaskId, lapis_git::GitSnapshot)] {
+    pub fn worktree_statuses(&self) -> &[(TaskId, git::GitSnapshot)] {
         &self.worktree_statuses
     }
 
@@ -247,7 +239,7 @@ impl GitSession {
         let mut statuses = Vec::new();
         for tree in worktrees
             .iter()
-            .filter(|tree| tree.state != lapis_git::WorktreeState::Discarded)
+            .filter(|tree| tree.state != git::WorktreeState::Discarded)
         {
             if let Some((_, status)) = self
                 .worktree_statuses
@@ -302,7 +294,7 @@ impl GitSession {
             let worktrees = self.backend.worktrees(workspace)?;
             let statuses = worktrees
                 .iter()
-                .filter(|worktree| worktree.state != lapis_git::WorktreeState::Discarded)
+                .filter(|worktree| worktree.state != git::WorktreeState::Discarded)
                 .filter_map(|worktree| {
                     self.backend
                         .status(workspace, Some(&worktree.worktree_id))
@@ -342,8 +334,8 @@ impl GitSession {
         Ok(changed)
     }
 
-    pub fn reconcile_git_update(&mut self, update: lapis_git::GitUpdate) -> bool {
-        let is_snapshot = matches!(&update, lapis_git::GitUpdate::Snapshot(_));
+    pub fn reconcile_git_update(&mut self, update: git::GitUpdate) -> bool {
+        let is_snapshot = matches!(&update, git::GitUpdate::Snapshot(_));
         let mut reconciliation_error = None;
         if is_snapshot {
             if let Err(error) = self.rescan_repositories() {
@@ -363,12 +355,12 @@ impl GitSession {
         changed
     }
 
-    pub fn apply_git_update(&mut self, update: lapis_git::GitUpdate) -> bool {
+    pub fn apply_git_update(&mut self, update: git::GitUpdate) -> bool {
         let statuses = match update {
-            lapis_git::GitUpdate::Snapshot(statuses) => statuses,
-            lapis_git::GitUpdate::Changed(status) => vec![status],
-            lapis_git::GitUpdate::RepositoriesChanged => return false,
-            lapis_git::GitUpdate::WorktreesChanged => return false,
+            git::GitUpdate::Snapshot(statuses) => statuses,
+            git::GitUpdate::Changed(status) => vec![status],
+            git::GitUpdate::RepositoriesChanged => return false,
+            git::GitUpdate::WorktreesChanged => return false,
         };
         let mut changed = false;
         for item in statuses {
@@ -419,10 +411,7 @@ impl GitSession {
 
     fn workspace(&self) -> Result<&WorkspaceId, GitError> {
         self.workspace_id.as_ref().ok_or_else(|| {
-            GitError::new(
-                lapis_git::GitErrorKind::NotRepository,
-                "Workspace がありません",
-            )
+            GitError::new(git::GitErrorKind::NotRepository, "Workspace がありません")
         })
     }
 
@@ -452,7 +441,7 @@ impl GitSession {
         Ok(())
     }
 
-    pub fn backend(&self) -> Arc<dyn lapis_git::GitConnection> {
+    pub fn backend(&self) -> Arc<dyn git::GitConnection> {
         self.backend.clone()
     }
 
@@ -481,7 +470,7 @@ impl GitSession {
     pub fn execute_repository_action(
         &mut self,
         repository_id: &str,
-        request: lapis_git::GitActionRequest,
+        request: git::GitActionRequest,
     ) -> Result<(), GitError> {
         let workspace = self.workspace()?.clone();
         let action = request.action.clone();
@@ -498,7 +487,7 @@ impl GitSession {
                 .iter()
                 .map(|stash| (stash.index, stash.oid.clone()))
                 .collect();
-            if let lapis_git::GitAction::Diff { path, staged } = action {
+            if let git::GitAction::Diff { path, staged } = action {
                 self.inspection = Some(GitDiffSelection {
                     worktree: None,
                     repository_id: Some(repository_id.to_owned()),
@@ -519,7 +508,7 @@ impl GitSession {
     pub fn execute_action(
         &mut self,
         worktree: Option<&TaskId>,
-        request: lapis_git::GitActionRequest,
+        request: git::GitActionRequest,
     ) -> Result<(), GitError> {
         let workspace = self.workspace()?.clone();
         let action = request.action.clone();
@@ -529,14 +518,14 @@ impl GitSession {
         }
         if let Ok(result) = &result {
             self.clear_inspection();
-            if matches!(action, lapis_git::GitAction::Stashes) {
+            if matches!(action, git::GitAction::Stashes) {
                 self.stash_refs = result
                     .stashes
                     .iter()
                     .map(|stash| (stash.index, stash.oid.clone()))
                     .collect();
             }
-            if let lapis_git::GitAction::Diff { path, staged } = action {
+            if let git::GitAction::Diff { path, staged } = action {
                 self.inspection = Some(GitDiffSelection {
                     worktree: worktree.cloned(),
                     repository_id: None,
@@ -590,7 +579,7 @@ impl TerminalSession {
                     TerminalStatus::Exited
                 },
                 revision: 0,
-                screen: lapis_terminal::TerminalScreen::empty(TerminalSize::new(
+                screen: terminal::TerminalScreen::empty(TerminalSize::new(
                     terminal.columns,
                     terminal.rows,
                 )),
@@ -617,7 +606,7 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
     }
 
     pub fn start_with_shell(
@@ -625,7 +614,7 @@ impl TerminalSession {
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
         let id = self.backend.start_with_shell(cwd, columns, rows, shell)?;
         if let Ok(snapshot) = self.backend.attach(cwd, &id) {
@@ -637,7 +626,7 @@ impl TerminalSession {
             cwd: cwd.to_owned(),
             status: TerminalStatus::Running,
             revision: 0,
-            screen: lapis_terminal::TerminalScreen::empty(TerminalSize::new(columns, rows)),
+            screen: terminal::TerminalScreen::empty(TerminalSize::new(columns, rows)),
         });
         Ok(id)
     }
@@ -1069,15 +1058,15 @@ impl WorkspaceSearchSession {
 }
 
 pub struct TaskSession {
-    backend: Arc<dyn lapis_task::TaskConnection>,
+    backend: Arc<dyn task::TaskConnection>,
     conversation: ConversationId,
     workspace_id: Option<WorkspaceId>,
-    records: Vec<lapis_task::TaskSnapshot>,
+    records: Vec<task::TaskSnapshot>,
     restore_warning: Option<String>,
 }
 
 impl TaskSession {
-    pub fn new(backend: Arc<dyn lapis_task::TaskConnection>) -> Self {
+    pub fn new(backend: Arc<dyn task::TaskConnection>) -> Self {
         Self {
             backend,
             conversation: ConversationId::new("conversation-local"),
@@ -1087,7 +1076,7 @@ impl TaskSession {
         }
     }
 
-    pub fn records(&self) -> &[lapis_task::TaskSnapshot] {
+    pub fn records(&self) -> &[task::TaskSnapshot] {
         &self.records
     }
     pub fn restore_warning(&self) -> Option<&str> {
@@ -1137,7 +1126,7 @@ impl TaskSession {
     ) -> Result<ExecutionId, TaskError> {
         let record = self.backend.start(
             &workspace,
-            lapis_task::TaskStart {
+            task::TaskStart {
                 prompt,
                 mode,
                 isolated,
@@ -1167,7 +1156,7 @@ impl TaskSession {
             .control(&record.execution.workspace_id, execution_id, &control)
     }
 
-    pub fn backend(&self) -> Arc<dyn lapis_task::TaskConnection> {
+    pub fn backend(&self) -> Arc<dyn task::TaskConnection> {
         self.backend.clone()
     }
 
@@ -1504,7 +1493,7 @@ impl EditorSession {
             .position_to_char(Position::new(
                 u32::try_from(line).map_err(|_| {
                     DocumentError::new(
-                        lapis_document::DocumentErrorKind::InvalidRange,
+                        document::DocumentErrorKind::InvalidRange,
                         "line index is too large",
                     )
                 })?,
@@ -1736,7 +1725,7 @@ impl EditorSession {
         let root = self
             .workspace_root()
             .ok_or_else(|| WorkspaceError::new("Workspace を開いてください"))?;
-        let timestamp = lapis_task::unix_time_ms();
+        let timestamp = task::unix_time_ms();
         self.repository
             .create_directory(root, &format!("new-folder-{timestamp}"))?;
         self.refresh_file_tree()
@@ -1875,11 +1864,7 @@ impl EditorSession {
     /// Close段階の失敗IDは応答不明を含む。再attach・再確認してから再試行する。
     pub fn close_documents(
         &mut self,
-        documents: &[(
-            DocumentId,
-            DocumentCloseDisposition,
-            lapis_document::Revision,
-        )],
+        documents: &[(DocumentId, DocumentCloseDisposition, document::Revision)],
     ) -> Result<DocumentCloseProgress, DocumentCloseFailure> {
         let mut progress = DocumentCloseProgress::default();
         for (index, decision) in documents.iter().enumerate() {
@@ -1940,11 +1925,7 @@ impl EditorSession {
     /// an error remain updated; this method does not save or discard changes.
     pub fn validate_document_closes(
         &mut self,
-        documents: &[(
-            DocumentId,
-            DocumentCloseDisposition,
-            lapis_document::Revision,
-        )],
+        documents: &[(DocumentId, DocumentCloseDisposition, document::Revision)],
     ) -> Result<(), DocumentError> {
         for (id, disposition, revision) in documents {
             if !self.documents.iter().any(|open| &open.id == id) {
@@ -2282,18 +2263,16 @@ mod tests {
     include!("git_tests.rs");
     use std::{collections::HashMap, sync::Mutex};
 
-    use lapis_document::{DocumentErrorKind, DocumentRepository, FileData, FileFingerprint};
-    use lapis_lsp::{DiagnosticSeverity, LspRange};
-    use lapis_task::{
-        ExecutionSnapshot, ExecutionStatus, Task, TaskSnapshot, TaskStart, unix_time_ms,
-    };
-    use lapis_workspace::FileEntryKind;
+    use document::{DocumentErrorKind, DocumentRepository, FileData, FileFingerprint};
+    use lsp::{DiagnosticSeverity, LspRange};
+    use task::{ExecutionSnapshot, ExecutionStatus, Task, TaskSnapshot, TaskStart, unix_time_ms};
+    use workspace::FileEntryKind;
 
     use super::*;
 
     #[test]
     fn stale_git_events_do_not_replace_newer_revision() {
-        let snapshot = |revision| lapis_git::GitSnapshot {
+        let snapshot = |revision| git::GitSnapshot {
             workspace_id: WorkspaceId::new("workspace"),
             worktree_id: None,
             revision,
@@ -2736,7 +2715,7 @@ mod tests {
         }
     }
 
-    impl lapis_task::TaskConnection for MemoryTaskBackend {
+    impl task::TaskConnection for MemoryTaskBackend {
         fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
             Ok(self
                 .records
@@ -2832,7 +2811,7 @@ mod tests {
         assert_eq!(settings.settings().theme, "lapis.dark");
         assert!(
             settings
-                .set_syntax_theme(lapis_settings::SyntaxTheme::Zed)
+                .set_syntax_theme(settings::SyntaxTheme::Zed)
                 .is_err()
         );
         assert_eq!(settings.settings().syntax_theme, None);

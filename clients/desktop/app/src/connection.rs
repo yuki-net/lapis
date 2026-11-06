@@ -1,4 +1,4 @@
-use lapis_host::BackendClient;
+use host::BackendClient;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -53,8 +53,7 @@ impl Startup {
             host_file
         };
         if let Some(path) = host_file {
-            let (backend, root, profile) =
-                lapis_host::open_host_file(&path, &directory.join("hosts"))?;
+            let (backend, root, profile) = host::open_host_file(&path, &directory.join("hosts"))?;
             eprintln!("Host接続profile: {}", profile.display());
             let connector_directory = directory.clone();
             let directory = directory
@@ -258,11 +257,11 @@ mod tests {
             let startup = Startup::open(&arguments).unwrap().unwrap();
             assert_eq!(startup.directory, *directory);
             assert_eq!(startup.connector_directory, *directory);
-            let settings = lapis_persistence::LocalGlobalSettingsRepository::new(
+            let settings = persistence::LocalGlobalSettingsRepository::new(
                 startup.directory.join("settings-v1.json"),
             );
             let settings =
-                lapis_desktop_client::SettingsSession::load(std::sync::Arc::new(settings)).unwrap();
+                desktop_client::SettingsSession::load(std::sync::Arc::new(settings)).unwrap();
             if directory == &first {
                 settings.set_theme("lapis.white".into()).unwrap();
             } else {

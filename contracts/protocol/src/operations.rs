@@ -1,8 +1,8 @@
 use crate::{WorkspaceId, WorkspaceRelativePath};
-use lapis_editor_core::{ExecutionId, TaskId};
-use lapis_git::{GitDiffSnapshot, GitSnapshot, WorktreeSnapshot};
-use lapis_task::{TaskControl, TaskSnapshot, TaskStart};
+use editor_core::{ExecutionId, TaskId};
+use git::{GitDiffSnapshot, GitSnapshot, WorktreeSnapshot};
 use serde::{Deserialize, Serialize};
+use task::{TaskControl, TaskSnapshot, TaskStart};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceOperationRequest {
@@ -24,11 +24,11 @@ pub enum WorkspaceOperation {
     },
     RepositoryGitAction {
         repository_id: String,
-        request: lapis_git::GitActionRequest,
+        request: git::GitActionRequest,
     },
     GitAction {
         worktree: Option<TaskId>,
-        request: lapis_git::GitActionRequest,
+        request: git::GitActionRequest,
     },
     GitStatus {
         worktree: Option<TaskId>,
@@ -102,12 +102,12 @@ impl WorkspaceOperation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum WorkspaceOperationResult {
-    GitRepositories(Vec<lapis_git::GitRepositorySnapshot>),
+    GitRepositories(Vec<git::GitRepositorySnapshot>),
     RepositoryGitStatus {
         repository_id: String,
         status: GitSnapshot,
     },
-    GitAction(lapis_git::GitActionResult),
+    GitAction(git::GitActionResult),
     GitStatus(GitSnapshot),
     GitDiff(GitDiffSnapshot),
     Worktrees(Vec<WorktreeSnapshot>),
@@ -121,10 +121,10 @@ pub enum WorkspaceOperationResult {
 mod tests {
     use super::*;
     use crate::{RequestBody, RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope};
-    use lapis_editor_core::{ConversationId, WorkspaceId as CoreWorkspaceId};
-    use lapis_git::{ChangeKind, GitFileSnapshot, WorktreeState};
-    use lapis_task::{ExecutionSnapshot, ExecutionStatus, Task, TaskMode};
+    use editor_core::{ConversationId, WorkspaceId as CoreWorkspaceId};
+    use git::{ChangeKind, GitFileSnapshot, WorktreeState};
     use serde_json::{Value, json};
+    use task::{ExecutionSnapshot, ExecutionStatus, Task, TaskMode};
 
     fn input() -> TaskStart {
         TaskStart {
@@ -197,8 +197,8 @@ mod tests {
             },
             WorkspaceOperation::RepositoryGitAction {
                 repository_id: "path:frontend".into(),
-                request: lapis_git::GitActionRequest {
-                    action: lapis_git::GitAction::History,
+                request: git::GitActionRequest {
+                    action: git::GitAction::History,
                     expected_head: None,
                 },
             },

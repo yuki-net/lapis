@@ -1,5 +1,5 @@
 [package]
-name = "lapis-text"
+name = "text"
 version.workspace = true
 edition.workspace = true
 description.workspace = true

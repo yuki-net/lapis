@@ -1,19 +1,19 @@
-use futures_util::StreamExt;
-use lapis_client_api::{
+use client_api::{
     AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
     ClientKind, ClientMessage, PairRequest, ProtocolRange, RequestBody, ResponseBody,
     ServerMessage, WorkspaceConnectRequest, WorkspaceId,
 };
+use futures_util::StreamExt;
 use wasm_bindgen::prelude::*;
 
 async fn wait_document_edit(
-    events: &mut futures_channel::mpsc::Receiver<lapis_client_api::EventEnvelope>,
-    document_id: &lapis_client_api::DocumentId,
-    expected_revision: lapis_client_api::Revision,
+    events: &mut futures_channel::mpsc::Receiver<client_api::EventEnvelope>,
+    document_id: &client_api::DocumentId,
+    expected_revision: client_api::Revision,
 ) -> Result<(), JsValue> {
     let wait = async {
         while let Some(event) = events.next().await {
-            if matches!(&event.body, lapis_client_api::EventBody::DocumentEdited { document_id: id, revision, .. } if id == document_id && *revision == expected_revision)
+            if matches!(&event.body, client_api::EventBody::DocumentEdited { document_id: id, revision, .. } if id == document_id && *revision == expected_revision)
             {
                 return Ok(());
             }
@@ -124,7 +124,7 @@ pub async fn bridge_smoke(
     let mut other_events = other
         .take_events()
         .ok_or_else(|| JsValue::from_str("other event stream unavailable"))?;
-    let body = lapis_client_core::AsyncHostConnection::request(
+    let body = client_core::AsyncHostConnection::request(
         &connection,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
             workspace_id: workspace.clone(),
@@ -135,7 +135,7 @@ pub async fn bridge_smoke(
     if !matches!(body, ResponseBody::WorkspaceConnect(_)) {
         return Err(JsValue::from_str("workspace connection rejected"));
     }
-    let body = lapis_client_core::AsyncHostConnection::request(
+    let body = client_core::AsyncHostConnection::request(
         &other,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
             workspace_id: workspace.clone(),
@@ -146,8 +146,8 @@ pub async fn bridge_smoke(
     if !matches!(body, ResponseBody::WorkspaceConnect(_)) {
         return Err(JsValue::from_str("other workspace connection rejected"));
     }
-    let mut first_sync = lapis_client_core::workbench::AsyncWorkbenchSync::new(&connection);
-    let mut second_sync = lapis_client_core::workbench::AsyncWorkbenchSync::new(&other);
+    let mut first_sync = client_core::workbench::AsyncWorkbenchSync::new(&connection);
+    let mut second_sync = client_core::workbench::AsyncWorkbenchSync::new(&other);
     first_sync
         .open(workspace.clone())
         .await
@@ -156,13 +156,13 @@ pub async fn bridge_smoke(
         .open(workspace.clone())
         .await
         .map_err(|e| JsValue::from_str(&e))?;
-    let view = lapis_workbench::ConversationViewState {
+    let view = workbench::ConversationViewState {
         show_panel_controls: false,
-        workspace: Some(lapis_workbench::SharedWorkspaceView {
-            workspace_id: lapis_editor_core::WorkspaceId::new(workspace.as_str()),
-            open_documents: vec![lapis_workbench::SharedDocumentView {
+        workspace: Some(workbench::SharedWorkspaceView {
+            workspace_id: editor_core::WorkspaceId::new(workspace.as_str()),
+            open_documents: vec![workbench::SharedDocumentView {
                 document_id: None,
-                path: Some(lapis_client_api::WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
+                path: Some(client_api::WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
                 cursor_char: 2,
                 selection_start: 1,
                 selection_end: 2,
@@ -170,14 +170,12 @@ pub async fn bridge_smoke(
                 scroll_y: 1.0,
                 draft_content: Some("未保存😀".into()),
             }],
-            active_path: Some(
-                lapis_client_api::WorkspaceRelativePath::parse("src/画面.rs").unwrap(),
-            ),
+            active_path: Some(client_api::WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
             active_document_id: None,
         }),
         ..Default::default()
     };
-    let lapis_workbench::WorkbenchUpdate::Updated(updated) = first_sync
+    let workbench::WorkbenchUpdate::Updated(updated) = first_sync
         .save(view.clone())
         .await
         .map_err(|e| JsValue::from_str(&e))?
@@ -189,7 +187,7 @@ pub async fn bridge_smoke(
         Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
     )
     .await;
-    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, lapis_client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
+    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
     {
         return Err(JsValue::from_str("workbench event missing"));
     }
@@ -198,16 +196,16 @@ pub async fn bridge_smoke(
         Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
     )
     .await;
-    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, lapis_client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
+    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
     {
         return Err(JsValue::from_str("other workbench event missing"));
     }
-    let next = lapis_workbench::ConversationViewState::default();
+    let next = workbench::ConversationViewState::default();
     let stale = second_sync
         .save(next.clone())
         .await
         .map_err(|e| JsValue::from_str(&e))?;
-    if !matches!(stale, lapis_workbench::WorkbenchUpdate::Conflict(ref current) if current.revision == updated.revision && current.view.as_ref() == Some(&view))
+    if !matches!(stale, workbench::WorkbenchUpdate::Conflict(ref current) if current.revision == updated.revision && current.view.as_ref() == Some(&view))
     {
         return Err(JsValue::from_str("stale write was not rejected"));
     }
@@ -220,7 +218,7 @@ pub async fn bridge_smoke(
     if remote.view.as_ref() != Some(&view) {
         return Err(JsValue::from_str("other client did not observe view"));
     }
-    let lapis_workbench::WorkbenchUpdate::Updated(updated) = second_sync
+    let workbench::WorkbenchUpdate::Updated(updated) = second_sync
         .save(next.clone())
         .await
         .map_err(|e| JsValue::from_str(&e))?
@@ -232,7 +230,7 @@ pub async fn bridge_smoke(
         Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
     )
     .await;
-    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, lapis_client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
+    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
     {
         return Err(JsValue::from_str("reverse workbench event missing"));
     }
@@ -246,9 +244,9 @@ pub async fn bridge_smoke(
     }
     drop(first_sync);
     drop(second_sync);
-    let created = lapis_client_core::AsyncHostConnection::request(
+    let created = client_core::AsyncHostConnection::request(
         &connection,
-        RequestBody::DocumentUntitled(lapis_client_api::DocumentUntitledRequest {
+        RequestBody::DocumentUntitled(client_api::DocumentUntitledRequest {
             workspace_id: workspace.clone(),
         }),
     )
@@ -259,9 +257,9 @@ pub async fn bridge_smoke(
     };
     let document_id = created.document.document_id;
     let original_revision = created.document.revision;
-    let attached = lapis_client_core::AsyncHostConnection::request(
+    let attached = client_core::AsyncHostConnection::request(
         &other,
-        RequestBody::DocumentInspect(lapis_client_api::DocumentInspectRequest {
+        RequestBody::DocumentInspect(client_api::DocumentInspectRequest {
             document_id: document_id.clone(),
         }),
     )
@@ -271,14 +269,14 @@ pub async fn bridge_smoke(
         return Err(JsValue::from_str("document attach failed"));
     }
     let edit = || {
-        lapis_client_api::DocumentTransaction::try_new(vec![
-            lapis_client_api::DocumentTextEdit::try_new(0, 0, "共有された未保存入力").unwrap(),
+        client_api::DocumentTransaction::try_new(vec![
+            client_api::DocumentTextEdit::try_new(0, 0, "共有された未保存入力").unwrap(),
         ])
         .unwrap()
     };
-    let edited = lapis_client_core::AsyncHostConnection::request(
+    let edited = client_core::AsyncHostConnection::request(
         &connection,
-        RequestBody::DocumentEdit(lapis_client_api::DocumentEditRequest {
+        RequestBody::DocumentEdit(client_api::DocumentEditRequest {
             document_id: document_id.clone(),
             base_revision: original_revision,
             transaction: edit(),
@@ -290,9 +288,9 @@ pub async fn bridge_smoke(
         return Err(JsValue::from_str("document edit failed"));
     };
     wait_document_edit(&mut other_events, &document_id, edited.revision).await?;
-    let stale = lapis_client_core::AsyncHostConnection::request(
+    let stale = client_core::AsyncHostConnection::request(
         &other,
-        RequestBody::DocumentEdit(lapis_client_api::DocumentEditRequest {
+        RequestBody::DocumentEdit(client_api::DocumentEditRequest {
             document_id: document_id.clone(),
             base_revision: original_revision,
             transaction: edit(),
@@ -300,18 +298,18 @@ pub async fn bridge_smoke(
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;
-    if !matches!(stale, ResponseBody::Error(ref error) if error.code.as_str() == lapis_client_api::REVISION_CONFLICT)
+    if !matches!(stale, ResponseBody::Error(ref error) if error.code.as_str() == client_api::REVISION_CONFLICT)
     {
         return Err(JsValue::from_str("stale document edit was not rejected"));
     }
     let end = "共有された未保存入力".chars().count() as u64;
-    let transaction = lapis_client_api::DocumentTransaction::try_new(vec![
-        lapis_client_api::DocumentTextEdit::try_new(end, end, "・続き").unwrap(),
+    let transaction = client_api::DocumentTransaction::try_new(vec![
+        client_api::DocumentTextEdit::try_new(end, end, "・続き").unwrap(),
     ])
     .unwrap();
-    let reverse = lapis_client_core::AsyncHostConnection::request(
+    let reverse = client_core::AsyncHostConnection::request(
         &other,
-        RequestBody::DocumentEdit(lapis_client_api::DocumentEditRequest {
+        RequestBody::DocumentEdit(client_api::DocumentEditRequest {
             document_id: document_id.clone(),
             base_revision: edited.revision,
             transaction,
@@ -323,14 +321,14 @@ pub async fn bridge_smoke(
         return Err(JsValue::from_str("reverse document edit failed"));
     };
     wait_document_edit(&mut events, &document_id, reverse.revision).await?;
-    let started = lapis_client_core::AsyncHostConnection::request(
+    let started = client_core::AsyncHostConnection::request(
         &connection,
-        RequestBody::TerminalStart(lapis_client_api::TerminalStartRequest {
+        RequestBody::TerminalStart(client_api::TerminalStartRequest {
             workspace_id: workspace.clone(),
             cwd: None,
             command: None,
             shell: Default::default(),
-            size: lapis_client_api::TerminalSize {
+            size: client_api::TerminalSize {
                 columns: 80,
                 rows: 24,
             },
@@ -354,7 +352,7 @@ pub async fn bridge_smoke(
     let (switched, _) = crate::connection::BrowserConnection::connect(&url, auth)
         .await
         .map_err(|e| JsValue::from_str(&e))?;
-    let connected = lapis_client_core::AsyncHostConnection::request(
+    let connected = client_core::AsyncHostConnection::request(
         &switched,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
             workspace_id: other_workspace.clone(),
@@ -365,9 +363,9 @@ pub async fn bridge_smoke(
     if !matches!(connected, ResponseBody::WorkspaceConnect(_)) {
         return Err(JsValue::from_str("other workspace connection failed"));
     }
-    let list = lapis_client_core::AsyncHostConnection::request(
+    let list = client_core::AsyncHostConnection::request(
         &switched,
-        RequestBody::WorkspaceList(lapis_client_api::WorkspaceListRequest::default()),
+        RequestBody::WorkspaceList(client_api::WorkspaceListRequest::default()),
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;
@@ -375,9 +373,9 @@ pub async fn bridge_smoke(
     {
         return Err(JsValue::from_str("user workspace list is incomplete"));
     }
-    let registered = lapis_client_core::AsyncHostConnection::request(
+    let registered = client_core::AsyncHostConnection::request(
         &switched,
-        RequestBody::HostRegister(lapis_client_api::HostRegisterRequest { root: other_root }),
+        RequestBody::HostRegister(client_api::HostRegisterRequest { root: other_root }),
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;
@@ -385,13 +383,13 @@ pub async fn bridge_smoke(
     {
         return Err(JsValue::from_str("workspace registration failed"));
     }
-    let forbidden = lapis_client_core::AsyncHostConnection::request(
+    let forbidden = client_core::AsyncHostConnection::request(
         &switched,
-        RequestBody::HostWorktree(lapis_editor_core::TaskId::new("not-authorized")),
+        RequestBody::HostWorktree(editor_core::TaskId::new("not-authorized")),
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;
-    if !matches!(forbidden, ResponseBody::Error(ref error) if error.code.as_str() == lapis_client_api::FORBIDDEN)
+    if !matches!(forbidden, ResponseBody::Error(ref error) if error.code.as_str() == client_api::FORBIDDEN)
     {
         return Err(JsValue::from_str("host management was not rejected"));
     }
@@ -406,7 +404,7 @@ pub async fn bridge_smoke(
     let (reconnected, _) = crate::connection::BrowserConnection::connect(&url, auth)
         .await
         .map_err(|e| JsValue::from_str(&e))?;
-    let connected = lapis_client_core::AsyncHostConnection::request(
+    let connected = client_core::AsyncHostConnection::request(
         &reconnected,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
             workspace_id: workspace.clone(),
@@ -417,11 +415,11 @@ pub async fn bridge_smoke(
     if !matches!(connected, ResponseBody::WorkspaceConnect(_)) {
         return Err(JsValue::from_str("workspace reconnect failed"));
     }
-    let snapshot = lapis_client_core::AsyncHostConnection::request(
+    let snapshot = client_core::AsyncHostConnection::request(
         &reconnected,
-        RequestBody::SnapshotResync(lapis_client_api::SnapshotRequest {
+        RequestBody::SnapshotResync(client_api::SnapshotRequest {
             workspace_id: workspace,
-            reason: lapis_client_api::SnapshotReason::Reconnect,
+            reason: client_api::SnapshotReason::Reconnect,
         }),
     )
     .await
@@ -440,15 +438,15 @@ pub async fn bridge_smoke(
     }
     if !snapshot.snapshot.terminals.iter().any(|terminal| {
         terminal.terminal_id == terminal_id
-            && terminal.status == lapis_client_api::TerminalStatus::Running
+            && terminal.status == client_api::TerminalStatus::Running
     }) {
         return Err(JsValue::from_str("terminal did not survive disconnect"));
     }
-    let input = lapis_client_core::AsyncHostConnection::request(
+    let input = client_core::AsyncHostConnection::request(
         &reconnected,
-        RequestBody::TerminalInput(lapis_client_api::TerminalInputRequest {
+        RequestBody::TerminalInput(client_api::TerminalInputRequest {
             terminal_id: terminal_id.clone(),
-            input: lapis_client_api::TerminalInput::Text("\r".into()),
+            input: client_api::TerminalInput::Text("\r".into()),
         }),
     )
     .await
@@ -456,9 +454,9 @@ pub async fn bridge_smoke(
     if !matches!(input, ResponseBody::TerminalInput(_)) {
         return Err(JsValue::from_str("terminal input after disconnect failed"));
     }
-    let terminated = lapis_client_core::AsyncHostConnection::request(
+    let terminated = client_core::AsyncHostConnection::request(
         &reconnected,
-        RequestBody::TerminalTerminate(lapis_client_api::TerminalTerminateRequest { terminal_id }),
+        RequestBody::TerminalTerminate(client_api::TerminalTerminateRequest { terminal_id }),
     )
     .await
     .map_err(|e| JsValue::from_str(&e))?;

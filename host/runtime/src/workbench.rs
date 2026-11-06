@@ -1,7 +1,7 @@
 //! Workspaceごとの共有表示状態のwire境界。
 
 use crate::BackendStateError;
-use lapis_workbench::{ConversationViewState, VersionedViewState};
+use ::workbench::{ConversationViewState, VersionedViewState};
 
 /// 画面配置に許す容量。未保存下書きは別枠で数える。
 const MAX_LAYOUT_BYTES: usize = 1024 * 1024;
@@ -83,7 +83,7 @@ fn validate_view_bytes(view: &ConversationViewState) -> Result<(), BackendStateE
 /// 旧Clientが知らないworkspaceを省略した場合は、Host側の値を引き継ぐ。
 pub(crate) fn parse_update_view(
     value: serde_json::Value,
-    current: Option<&lapis_workbench::SharedWorkspaceView>,
+    current: Option<&workbench::SharedWorkspaceView>,
 ) -> Result<ConversationViewState, BackendStateError> {
     let omitted = value
         .as_object()
@@ -98,7 +98,7 @@ pub(crate) fn parse_update_view(
 
 pub(crate) fn validate_workspace(
     view: &ConversationViewState,
-    workspace: &lapis_client_api::WorkspaceId,
+    workspace: &client_api::WorkspaceId,
 ) -> Result<(), BackendStateError> {
     if view
         .workspace
@@ -112,8 +112,8 @@ pub(crate) fn validate_workspace(
 
 pub(crate) fn snapshot(
     state: &VersionedViewState,
-) -> Result<lapis_client_api::WorkbenchSnapshot, BackendStateError> {
-    Ok(lapis_client_api::WorkbenchSnapshot {
+) -> Result<client_api::WorkbenchSnapshot, BackendStateError> {
+    Ok(client_api::WorkbenchSnapshot {
         revision: state.revision,
         view: serde_json::to_value(&state.view).map_err(|_| BackendStateError::InvalidWorkbench)?,
     })

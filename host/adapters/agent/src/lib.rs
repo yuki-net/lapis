@@ -16,7 +16,7 @@ use std::{
 
 use serde_json::{Value, json};
 
-pub use lapis_task::*;
+pub use task::*;
 
 #[derive(Clone, Debug)]
 pub enum RunnerUpdate {

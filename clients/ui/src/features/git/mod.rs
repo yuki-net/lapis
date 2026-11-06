@@ -9,7 +9,7 @@ mod state;
 mod view;
 
 use crate::theme;
-use lapis_git::ChangeKind;
+use git::ChangeKind;
 
 pub(crate) use branch_picker::BranchPicker;
 pub(crate) use changes::ChangesFeature;

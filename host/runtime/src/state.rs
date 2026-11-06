@@ -4,7 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lapis_client_api::{
+use client_api::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentEncoding,
     DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse,
     DocumentSnapshot, ErrorCode, EventBody, EventEnvelope, EventSequence, FORBIDDEN, FileTreeEntry,
@@ -15,9 +15,9 @@ use lapis_client_api::{
     TerminalTerminateRequest, UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse,
     WorkspaceId, WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
-use lapis_document::{Document, Encoding};
-use lapis_terminal::TerminalBackend;
-use lapis_text::TextEdit;
+use document::{Document, Encoding};
+use terminal::TerminalBackend;
+use text::TextEdit;
 
 use crate::{
     BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver,
@@ -55,10 +55,10 @@ pub struct WorkspaceRegistration {
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
     pub terminal: Option<Arc<dyn TerminalBackend>>,
-    pub git: Option<Arc<dyn lapis_git::GitBackend>>,
-    pub tasks: Option<Arc<dyn lapis_task::TaskBackend>>,
+    pub git: Option<Arc<dyn git::GitBackend>>,
+    pub tasks: Option<Arc<dyn task::TaskBackend>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
-    pub(crate) workbench_initial: lapis_workbench::VersionedViewState,
+    pub(crate) workbench_initial: workbench::VersionedViewState,
 }
 
 impl WorkspaceRegistration {
@@ -77,15 +77,15 @@ impl WorkspaceRegistration {
             git: None,
             tasks: None,
             workbench_persistence: None,
-            workbench_initial: lapis_workbench::VersionedViewState::default(),
+            workbench_initial: workbench::VersionedViewState::default(),
         }
     }
 
-    pub fn with_git(mut self, backend: Arc<dyn lapis_git::GitBackend>) -> Self {
+    pub fn with_git(mut self, backend: Arc<dyn git::GitBackend>) -> Self {
         self.git = Some(backend);
         self
     }
-    pub fn with_tasks(mut self, backend: Arc<dyn lapis_task::TaskBackend>) -> Self {
+    pub fn with_tasks(mut self, backend: Arc<dyn task::TaskBackend>) -> Self {
         self.tasks = Some(backend);
         self
     }
@@ -125,13 +125,13 @@ pub(crate) struct PublishedEvent {
 pub(crate) struct PreparedWorkspaceOperation {
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     root: PathBuf,
-    operation: lapis_client_api::WorkspaceOperation,
+    operation: client_api::WorkspaceOperation,
 }
 
 pub(crate) struct PreparedWorktreeLookup {
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     root: PathBuf,
-    worktree: lapis_editor_core::TaskId,
+    worktree: editor_core::TaskId,
 }
 
 impl PreparedWorktreeLookup {
@@ -141,7 +141,7 @@ impl PreparedWorktreeLookup {
             .lock()
             .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
             .worktree(&self.root, &self.worktree)?;
-        if tree.state == lapis_git::WorktreeState::Discarded {
+        if tree.state == git::WorktreeState::Discarded {
             return Err(BackendStateError::WorkspaceDenied);
         }
         Ok(tree.path)
@@ -149,9 +149,7 @@ impl PreparedWorktreeLookup {
 }
 
 impl PreparedWorkspaceOperation {
-    pub(crate) fn execute(
-        self,
-    ) -> Result<lapis_client_api::WorkspaceOperationResult, BackendStateError> {
+    pub(crate) fn execute(self) -> Result<client_api::WorkspaceOperationResult, BackendStateError> {
         self.operations
             .lock()
             .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
@@ -164,7 +162,7 @@ impl BackendState {
         &mut self,
         workspace_id: &WorkspaceId,
         expected: u64,
-        saved: lapis_workbench::VersionedViewState,
+        saved: workbench::VersionedViewState,
     ) -> Result<PublishedEvent, BackendStateError> {
         let workspace = self
             .workspaces
@@ -193,7 +191,7 @@ impl BackendState {
     }
     pub(crate) fn start_git_updates(
         &mut self,
-        publish: Arc<dyn Fn(WorkspaceId, String, lapis_git::GitSnapshot) + Send + Sync>,
+        publish: Arc<dyn Fn(WorkspaceId, String, git::GitSnapshot) + Send + Sync>,
     ) {
         for (id, workspace) in &mut self.workspaces {
             if workspace.git_driver_started {
@@ -214,7 +212,7 @@ impl BackendState {
         &mut self,
         workspace_id: WorkspaceId,
         repository_id: String,
-        status: lapis_git::GitSnapshot,
+        status: git::GitSnapshot,
     ) -> Result<Option<PublishedEvent>, BackendStateError> {
         let workspace = self
             .workspaces
@@ -238,7 +236,7 @@ impl BackendState {
         {
             return Ok(None);
         }
-        let repository = lapis_git::GitRepositoryStatus {
+        let repository = git::GitRepositoryStatus {
             repository_id: repository_id.clone(),
             status,
         };
@@ -304,7 +302,7 @@ impl BackendState {
     pub(crate) fn prepare_worktree_lookup(
         &self,
         workspace_id: &WorkspaceId,
-        worktree: lapis_editor_core::TaskId,
+        worktree: editor_core::TaskId,
     ) -> Result<PreparedWorktreeLookup, BackendStateError> {
         let workspace = self
             .workspaces
@@ -319,7 +317,7 @@ impl BackendState {
     pub(crate) fn prepare_workspace_operation(
         &mut self,
         session: &BackendSession,
-        request: lapis_client_api::WorkspaceOperationRequest,
+        request: client_api::WorkspaceOperationRequest,
     ) -> Result<PreparedWorkspaceOperation, BackendStateError> {
         self.require_workspace(session, &request.workspace_id)?;
         self.require_connected(session)?;
@@ -344,8 +342,8 @@ impl BackendState {
         workspace_id: WorkspaceId,
         changed: bool,
         worktrees_changed: bool,
-        request_id: lapis_client_api::RequestId,
-        result: Result<lapis_client_api::WorkspaceOperationResult, BackendStateError>,
+        request_id: client_api::RequestId,
+        result: Result<client_api::WorkspaceOperationResult, BackendStateError>,
     ) -> DispatchOutcome {
         let result = result.and_then(|result| {
             let mut events = Vec::new();
@@ -354,9 +352,9 @@ impl BackendState {
                     .workspaces
                     .get_mut(&workspace_id)
                     .ok_or(BackendStateError::WorkspaceNotFound)?;
-                if let lapis_client_api::WorkspaceOperationResult::Worktree(tree) = &result {
+                if let client_api::WorkspaceOperationResult::Worktree(tree) = &result {
                     let id = format!("worktree:{}", tree.worktree_id.as_str());
-                    if tree.state == lapis_git::WorktreeState::Discarded {
+                    if tree.state == git::WorktreeState::Discarded {
                         workspace.git_statuses.remove(&id);
                         workspace.removed_worktrees.insert(id);
                     } else {
@@ -367,9 +365,7 @@ impl BackendState {
                     workspace_id: workspace_id.clone(),
                 })?);
             }
-            if let lapis_client_api::WorkspaceOperationResult::GitRepositories(repositories) =
-                &result
-            {
+            if let client_api::WorkspaceOperationResult::GitRepositories(repositories) = &result {
                 let workspace = self
                     .workspaces
                     .get_mut(&workspace_id)
@@ -452,13 +448,13 @@ impl BackendState {
         let absolute = self.document_target(&destination, &path)?;
         let path = canonical_document_path(&target.resolver, &absolute)?;
         if target.documents_by_path.contains_key(&absolute) {
-            return Err(lapis_document::DocumentError::conflict(
+            return Err(document::DocumentError::conflict(
                 "保存先は開いている文書と重複しています",
             )
             .into());
         }
         if target.files.fingerprint(&absolute)?.is_some() {
-            return Err(lapis_document::DocumentError::conflict("保存先は既に存在します").into());
+            return Err(document::DocumentError::conflict("保存先は既に存在します").into());
         }
         let fingerprint =
             target
@@ -624,22 +620,22 @@ impl BackendState {
                             revision,
                         })?;
                         Ok((
-                            ResponseBody::WorkbenchPut(
-                                lapis_client_api::WorkbenchPutResponse::Updated(snapshot),
-                            ),
+                            ResponseBody::WorkbenchPut(client_api::WorkbenchPutResponse::Updated(
+                                snapshot,
+                            )),
                             vec![event],
                         ))
                     }
-                    Err(lapis_workbench::ViewUpdateError::Conflict { .. }) => {
+                    Err(workbench::ViewUpdateError::Conflict { .. }) => {
                         let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
                         Ok((
-                            ResponseBody::WorkbenchPut(
-                                lapis_client_api::WorkbenchPutResponse::Conflict(snapshot),
-                            ),
+                            ResponseBody::WorkbenchPut(client_api::WorkbenchPutResponse::Conflict(
+                                snapshot,
+                            )),
                             Vec::new(),
                         ))
                     }
-                    Err(lapis_workbench::ViewUpdateError::RevisionOverflow) => {
+                    Err(workbench::ViewUpdateError::RevisionOverflow) => {
                         Err(BackendStateError::CounterOverflow)
                     }
                 }
@@ -654,7 +650,7 @@ impl BackendState {
                     workspace_id: request.workspace_id,
                 })?;
                 Ok((
-                    ResponseBody::CreateDirectory(lapis_client_api::CreateDirectoryResponse {
+                    ResponseBody::CreateDirectory(client_api::CreateDirectoryResponse {
                         path: request.path,
                     }),
                     vec![event],
@@ -899,22 +895,18 @@ impl BackendState {
         let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
         if missing_root && resource.path.is_some() {
-            snapshot.external_change = lapis_client_api::DocumentExternalChange::Deleted;
+            snapshot.external_change = client_api::DocumentExternalChange::Deleted;
         } else if let Some(path) = &resource.path {
             let absolute = workspace.resolver.resolve_scoped_path(path)?;
             snapshot.external_change = match resource
                 .document
                 .external_change(workspace.files.fingerprint(&absolute)?.as_ref())
             {
-                lapis_document::ExternalChange::Unchanged => {
-                    lapis_client_api::DocumentExternalChange::Unchanged
+                document::ExternalChange::Unchanged => {
+                    client_api::DocumentExternalChange::Unchanged
                 }
-                lapis_document::ExternalChange::Modified => {
-                    lapis_client_api::DocumentExternalChange::Modified
-                }
-                lapis_document::ExternalChange::Deleted => {
-                    lapis_client_api::DocumentExternalChange::Deleted
-                }
+                document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
+                document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
             };
         }
         Ok((
@@ -926,7 +918,7 @@ impl BackendState {
     fn document_save_as(
         &mut self,
         session: &BackendSession,
-        request: lapis_client_api::DocumentSaveAsRequest,
+        request: client_api::DocumentSaveAsRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let absolute = self.document_target(&session.workspace_id, &request.path)?;
         let workspace = self.workspace_mut(session)?;
@@ -948,14 +940,14 @@ impl BackendState {
             return Ok((ResponseBody::DocumentSaveAs(snapshot), events));
         }
         if workspace.documents_by_path.contains_key(&absolute) {
-            return Err(lapis_document::DocumentError::conflict(
+            return Err(document::DocumentError::conflict(
                 "保存先は開いている文書と重複しています",
             )
             .into());
         }
         if workspace.files.fingerprint(&absolute)?.is_some() {
             return Err(BackendStateError::Document(
-                lapis_document::DocumentError::conflict("保存先は既に存在します"),
+                document::DocumentError::conflict("保存先は既に存在します"),
             ));
         }
         let resource = workspace
@@ -996,9 +988,7 @@ impl BackendState {
         require_revision(&document_id, base_revision, resource.revision())?;
         if resource.document.is_dirty() {
             return Err(BackendStateError::Document(
-                lapis_document::DocumentError::conflict(
-                    "未保存変更がある文書は再読み込みできません",
-                ),
+                document::DocumentError::conflict("未保存変更がある文書は再読み込みできません"),
             ));
         }
         let path = resource
@@ -1025,7 +1015,7 @@ impl BackendState {
     fn document_discard(
         &mut self,
         session: &BackendSession,
-        request: lapis_client_api::DocumentDiscardRequest,
+        request: client_api::DocumentDiscardRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
         let workspace_id = workspace.summary.workspace_id.clone();
@@ -1043,12 +1033,12 @@ impl BackendState {
         let saved = saved_path
             .map(|path| {
                 let absolute = workspace.resolver.resolve_existing(&path).map_err(|_| {
-                    lapis_document::DocumentError::conflict(
+                    document::DocumentError::conflict(
                         "保存済み内容を読み込めないため未保存変更を保持します",
                     )
                 })?;
                 workspace.files.read_file(&absolute).map_err(|_| {
-                    lapis_document::DocumentError::conflict(
+                    document::DocumentError::conflict(
                         "保存済み内容を読み込めないため未保存変更を保持します",
                     )
                 })
@@ -1069,7 +1059,7 @@ impl BackendState {
             document: snapshot.clone(),
         })?;
         Ok((
-            ResponseBody::DocumentDiscard(lapis_client_api::DocumentDiscardResponse {
+            ResponseBody::DocumentDiscard(client_api::DocumentDiscardResponse {
                 document: snapshot,
             }),
             vec![event],
@@ -1089,7 +1079,7 @@ impl BackendState {
         if self.workspaces.iter().any(|(owner, workspace)| {
             owner != workspace_id && workspace.documents_by_path.contains_key(&absolute)
         }) {
-            return Err(lapis_document::DocumentError::conflict(
+            return Err(document::DocumentError::conflict(
                 "別の Workspace が同じ Document を所有しています",
             )
             .into());
@@ -1160,14 +1150,14 @@ impl BackendState {
         let workspace = self.workspace_mut(session)?;
         let path = canonical_document_path(&workspace.resolver, &absolute)?;
         if workspace.documents_by_path.contains_key(&absolute) {
-            return Err(lapis_document::DocumentError::conflict(
+            return Err(document::DocumentError::conflict(
                 "document already exists in backend state",
             )
             .into());
         }
         if workspace.files.fingerprint(&absolute)?.is_some() {
             return Err(BackendStateError::Document(
-                lapis_document::DocumentError::conflict("document already exists on disk"),
+                document::DocumentError::conflict("document already exists on disk"),
             ));
         }
         let document = Document::draft(absolute.clone(), content, to_document_encoding(encoding));
@@ -1192,7 +1182,7 @@ impl BackendState {
     fn document_edit(
         &mut self,
         session: &BackendSession,
-        request: lapis_client_api::DocumentEditRequest,
+        request: client_api::DocumentEditRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
         let document = workspace.require_attached_document_mut(session, &request.document_id)?;
@@ -1509,7 +1499,7 @@ impl BackendState {
 }
 
 struct WorkspaceState {
-    workbench: lapis_workbench::VersionedViewState,
+    workbench: workbench::VersionedViewState,
     summary: WorkspaceSummary,
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
@@ -1518,7 +1508,7 @@ struct WorkspaceState {
     terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
-    git_statuses: HashMap<String, lapis_git::GitRepositoryStatus>,
+    git_statuses: HashMap<String, git::GitRepositoryStatus>,
     removed_worktrees: HashSet<String>,
     git_repositories: Option<HashSet<String>>,
     git_driver_started: bool,
@@ -1612,7 +1602,7 @@ impl DocumentResource {
             dirty: self.document.is_dirty(),
             can_undo: self.document.can_undo(),
             can_redo: self.document.can_redo(),
-            external_change: lapis_client_api::DocumentExternalChange::Unchanged,
+            external_change: client_api::DocumentExternalChange::Unchanged,
         })
     }
 }
@@ -1669,7 +1659,7 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         return error;
     }
     if let BackendStateError::Document(ref document) = error
-        && document.kind() == lapis_document::DocumentErrorKind::Conflict
+        && document.kind() == document::DocumentErrorKind::Conflict
     {
         return ProtocolError::new(ErrorCode::try_new("document_conflict").expect("valid code"));
     }

@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, fs, io::ErrorKind, path::PathBuf};
 
-use lapis_client_api::WorkspaceRelativePath;
+use client_api::WorkspaceRelativePath;
 
 #[derive(Clone, Debug)]
 pub struct WorkspacePathResolver {

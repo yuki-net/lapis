@@ -1,6 +1,6 @@
 use super::*;
-use lapis_editor_core::ProjectId;
-use lapis_git::GitConnection;
+use editor_core::ProjectId;
+use git::GitConnection;
 
 fn new_conversation_id() -> Result<ConversationId, WorkspaceError> {
     let mut bytes = [0_u8; 16];
@@ -779,8 +779,8 @@ impl ConversationSession {
                             || source.terminals.iter().any(|terminal| {
                                 !matches!(
                                     terminal.status,
-                                    lapis_terminal::TerminalStatus::Exited
-                                        | lapis_terminal::TerminalStatus::Failed
+                                    terminal::TerminalStatus::Exited
+                                        | terminal::TerminalStatus::Failed
                                 )
                             }))
                 })
@@ -880,7 +880,7 @@ impl ConversationSession {
                 if Self::validate_source(editor, &root)? == source_id {
                     return Ok(None);
                 }
-                Ok::<_, WorkspaceError>(Some(lapis_project::WorktreeBinding {
+                Ok::<_, WorkspaceError>(Some(project::WorktreeBinding {
                     id: id.clone(),
                     root,
                 }))

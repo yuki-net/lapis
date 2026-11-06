@@ -23,7 +23,7 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 
 ## 独立Hostの起動
 
-`cargo run -p lapis-host -- --workspace <既存フォルダ> --certificate <新規の公開証明書.der>`
+`cargo run -p host -- --workspace <既存フォルダ> --certificate <新規の公開証明書.der>`
 
 `--state-directory <directory>` を指定すると、共有Workbench表示状態をHostの再起動後も復元します。未指定の独立Hostではメモリー内だけに保持します。管理Hostは既存のHost状態ディレクトリを使用します。
 
@@ -37,4 +37,4 @@ Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立pro
 
 `lapis.exe`（Desktop Client）と `lapis-host.exe`（Host）は明確に分離されたbinaryです。Desktopは自身をHostとして起動せず、既定では同じ出力ディレクトリから `lapis-host.exe` を解決して起動します。`--local-host-executable <path>` を指定した場合はDesktopのComposition Rootがそのファイルを解決してLocal接続へ注入します。Hot Reload launcherはこの指定でdxの一時出力先とHostを分離します。
 
-実通信と別processの回帰検証は `cargo test -p lapis-host --test quic --test standalone --test managed_client` で実行します。Unixの開発・CI環境ではDPAPIの代わりにdirectory 0700・file 0600を使用します。
+実通信と別processの回帰検証は `cargo test -p host --test quic --test standalone --test managed_client` で実行します。Unixの開発・CI環境ではDPAPIの代わりにdirectory 0700・file 0600を使用します。

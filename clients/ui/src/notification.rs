@@ -71,7 +71,7 @@ impl Severity {
             Self::Warning => "notification.severity.warning",
             Self::Error => "notification.severity.error",
         };
-        locale.resolve(&lapis_localization::MessageId::new(key))
+        locale.resolve(&localization::MessageId::new(key))
     }
 }
 
@@ -193,7 +193,7 @@ impl Center {
 
     pub(crate) fn set_locale(
         &mut self,
-        locale: &lapis_localization::LocaleId,
+        locale: &localization::LocaleId,
         cx: &mut GpuiContext<Self>,
     ) {
         self.locale.set_active(locale);
@@ -212,10 +212,7 @@ impl Render for Center {
             .collect::<Vec<_>>();
         let execute = self.execute.clone();
         let empty = events.is_empty();
-        let resolve = |key: &str| {
-            self.locale
-                .resolve(&lapis_localization::MessageId::new(key))
-        };
+        let resolve = |key: &str| self.locale.resolve(&localization::MessageId::new(key));
         let empty_label = resolve("notification.empty");
         let unread = resolve("notification.unread");
         let mark_read = resolve("notification.mark-read");
@@ -495,7 +492,7 @@ mod tests {
     fn notification_labels_exist_in_both_locales_and_time_is_local() {
         let mut locale = crate::localization::Localizer::bundled();
         for locale_id in ["en-US", "ja-JP"] {
-            assert!(locale.set_active(&lapis_localization::LocaleId::new(locale_id)));
+            assert!(locale.set_active(&localization::LocaleId::new(locale_id)));
             for key in [
                 "notification.empty",
                 "notification.unread",
@@ -510,12 +507,9 @@ mod tests {
                 "notification.error.host-launch",
                 "notification.error.persistence",
             ] {
-                assert_ne!(
-                    locale.resolve(&lapis_localization::MessageId::new(key)),
-                    key
-                );
+                assert_ne!(locale.resolve(&localization::MessageId::new(key)), key);
             }
-            let empty = locale.resolve(&lapis_localization::MessageId::new("notification.empty"));
+            let empty = locale.resolve(&localization::MessageId::new("notification.empty"));
             assert_eq!(
                 empty,
                 if locale_id == "ja-JP" {

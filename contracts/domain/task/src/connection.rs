@@ -1,5 +1,5 @@
 use crate::{ExecutionStatus, Task, TaskControl, TaskError, TaskEventRecord, TaskMode};
-use lapis_editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
+use editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

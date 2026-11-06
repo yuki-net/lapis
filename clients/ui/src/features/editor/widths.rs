@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use lapis_document::Document;
+use document::Document;
 
 /// 色・フォントに依存しない既存の保守的な幅推定。描画時は最大値だけを読む。
 #[derive(Default)]
@@ -102,7 +102,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "手動性能測定: cargo test -p lapis-desktop-ui measure_editor -- --ignored --nocapture"]
+    #[ignore = "手動性能測定: cargo test -p desktop-ui measure_editor -- --ignored --nocapture"]
     fn measure_editor_widths() {
         use std::{hint::black_box, time::Instant};
         for count in [1_000, 10_000, 100_000] {

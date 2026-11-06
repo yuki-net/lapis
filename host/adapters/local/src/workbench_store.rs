@@ -1,12 +1,12 @@
 //! HostのWorkspaceごとの作業画面状態を原子的に保存する。
 
-use lapis_backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
-use lapis_workbench::{ConversationViewState, VersionedViewState, ViewUpdateError};
+use backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
 use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
+use workbench::{ConversationViewState, VersionedViewState, ViewUpdateError};
 
 /// 画面配置と未保存下書きを1つの状態として扱うため、Remoteのmessage上限と同じ16 MiBまで許す。
 const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
@@ -222,9 +222,9 @@ mod tests {
         let store = LocalWorkbenchStore::new(path.clone());
         let draft = "x".repeat(3 * 1024 * 1024);
         let view = ConversationViewState {
-            workspace: Some(lapis_workbench::SharedWorkspaceView {
-                workspace_id: lapis_editor_core::WorkspaceId::new("workspace-1"),
-                open_documents: vec![lapis_workbench::SharedDocumentView {
+            workspace: Some(workbench::SharedWorkspaceView {
+                workspace_id: editor_core::WorkspaceId::new("workspace-1"),
+                open_documents: vec![workbench::SharedDocumentView {
                     document_id: None,
                     path: None,
                     cursor_char: 0,
@@ -261,13 +261,10 @@ mod tests {
             panic!("initial save")
         };
         let mut large = ConversationViewState::default();
-        large
-            .workbench
-            .bindings
-            .push(lapis_workbench::ViewBindingState {
-                view: "x".repeat(MAX_FILE_BYTES as usize),
-                scope: lapis_workbench::ViewScopeState::SharedWorkbench,
-            });
+        large.workbench.bindings.push(workbench::ViewBindingState {
+            view: "x".repeat(MAX_FILE_BYTES as usize),
+            scope: workbench::ViewScopeState::SharedWorkbench,
+        });
         assert!(store.compare_and_save(saved.revision, large).is_err());
         assert_eq!(store.load().unwrap(), saved);
     }

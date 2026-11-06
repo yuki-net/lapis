@@ -1,6 +1,6 @@
-use lapis_client_api::*;
-use lapis_host::BackendHost;
-use lapis_remote::*;
+use client_api::*;
+use host::BackendHost;
+use remote::*;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use std::{
     net::SocketAddr,
@@ -42,7 +42,7 @@ impl Fixture {
                 PairingLifetime::new(300).unwrap(),
                 CredentialLifetime::new(3600).unwrap(),
             ),
-            AuthPolicy::new(lapis_host::supported_capabilities()),
+            AuthPolicy::new(host::supported_capabilities()),
         )));
         auth.lock().unwrap().enable();
         let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
@@ -56,7 +56,7 @@ impl Fixture {
             "127.0.0.1:0".parse().unwrap(),
             tls,
             auth.clone(),
-            Arc::new(lapis_host::HostRemoteHandler::new(host.clone())),
+            Arc::new(host::HostRemoteHandler::new(host.clone())),
             RemoteLimits::default(),
         )
         .await
@@ -107,7 +107,7 @@ impl Fixture {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd() {
-    use lapis_terminal::{TerminalShell, TerminalStatus as ModelStatus};
+    use terminal::{TerminalShell, TerminalStatus as ModelStatus};
     let fixture = Fixture::new().await;
     std::fs::create_dir(fixture._root.path().join("sub")).unwrap();
     std::fs::write(
@@ -119,8 +119,8 @@ async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd
     let second = fixture.config("port-terminal-second").await;
     tokio::task::spawn_blocking(move || {
         let virtual_root = std::env::temp_dir().join("lapis-virtual-terminal-test");
-        let first = lapis_host::BackendClient::remote(virtual_root.clone(), first).unwrap();
-        let second = lapis_host::BackendClient::remote(virtual_root.clone(), second).unwrap();
+        let first = host::BackendClient::remote(virtual_root.clone(), first).unwrap();
+        let second = host::BackendClient::remote(virtual_root.clone(), second).unwrap();
         let terminals = first.terminals();
         let shell = if cfg!(windows) {
             TerminalShell::Cmd
@@ -192,22 +192,22 @@ fn hello(id: &str) -> ClientHello {
         client_id: ClientId::try_new(id).unwrap(),
         client_name: id.to_owned(),
         client_kind: ClientKind::Desktop,
-        requested_capabilities: lapis_host::supported_capabilities(),
+        requested_capabilities: host::supported_capabilities(),
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn desktop_workbench_port_receives_remote_updates() {
-    use lapis_workbench::{ConversationViewState, WorkbenchUpdate};
+    use workbench::{ConversationViewState, WorkbenchUpdate};
     let fixture = Fixture::new().await;
     let first = fixture.config("workbench-port-first").await;
     let second = fixture.config("workbench-port-second").await;
     tokio::task::spawn_blocking(move || {
         let root = std::env::temp_dir().join("lapis-virtual-workbench-test");
-        let first = lapis_host::BackendClient::remote(root.clone(), first).unwrap();
-        let second = lapis_host::BackendClient::remote(root.clone(), second).unwrap();
+        let first = host::BackendClient::remote(root.clone(), first).unwrap();
+        let second = host::BackendClient::remote(root.clone(), second).unwrap();
         let workspace =
-            lapis_editor_core::WorkspaceId::new(first.register_workspace(&root).unwrap().as_str());
+            editor_core::WorkspaceId::new(first.register_workspace(&root).unwrap().as_str());
         let writer = first.workbench();
         let reader = second.workbench();
         let mut subscription = reader.subscribe(&workspace).unwrap();
@@ -496,7 +496,7 @@ async fn explicit_user_session_lists_and_connects_registered_workspaces_without_
         ResponseBody::HostRegister(_)
     ));
     assert!(matches!(
-        request(&mut first, 3, RequestBody::HostWorktree(lapis_editor_core::TaskId::new("untrusted"))).await,
+        request(&mut first, 3, RequestBody::HostWorktree(editor_core::TaskId::new("untrusted"))).await,
         ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
     ));
 }
@@ -521,27 +521,21 @@ async fn common_async_client_sends_requests_to_real_host() {
     assert!(matches!(result, ResponseBody::SnapshotResync(_)));
     let mut sync = async_workbench::AsyncWorkbenchSync::new(&connection);
     let initial = sync.open(fixture.workspace.clone()).await.unwrap();
-    let view = lapis_workbench::ConversationViewState {
+    let view = workbench::ConversationViewState {
         show_panel_controls: false,
         ..Default::default()
     };
     let updated = async_workbench::update(&connection, &fixture.workspace, initial.revision, &view)
         .await
         .unwrap();
-    assert!(matches!(
-        updated,
-        lapis_workbench::WorkbenchUpdate::Updated(_)
-    ));
-    let local = lapis_workbench::ConversationViewState::default();
+    assert!(matches!(updated, workbench::WorkbenchUpdate::Updated(_)));
+    let local = workbench::ConversationViewState::default();
     let conflict = sync.save(local.clone()).await.unwrap();
-    assert!(matches!(
-        conflict,
-        lapis_workbench::WorkbenchUpdate::Conflict(_)
-    ));
+    assert!(matches!(conflict, workbench::WorkbenchUpdate::Conflict(_)));
     assert_eq!(sync.pending(), Some(&local));
     assert!(matches!(
         sync.retry_local().await.unwrap(),
-        lapis_workbench::WorkbenchUpdate::Updated(_)
+        workbench::WorkbenchUpdate::Updated(_)
     ));
     assert!(sync.pending().is_none());
     let connection = connection.clone();
@@ -657,11 +651,9 @@ fn remote_desktop_ports_edit_and_save_without_accessing_client_filesystem() {
         let fixture = Fixture::new().await;
         std::fs::write(fixture._root.path().join("remote.ts"), "let value = 1;").unwrap();
         let namespace = fixture._root.path().join("nonexistent-client-namespace");
-        let backend = lapis_host::BackendClient::remote(
-            namespace.clone(),
-            fixture.config("desktop-port").await,
-        )
-        .unwrap();
+        let backend =
+            host::BackendClient::remote(namespace.clone(), fixture.config("desktop-port").await)
+                .unwrap();
         assert!(!namespace.exists());
         assert!(
             backend
@@ -784,7 +776,7 @@ fn normal_pairing_cannot_register_folders_or_transfer_documents() {
         let ResponseBody::Error(denied) = request(
             &mut client,
             4,
-            RequestBody::HostWorktree(lapis_editor_core::TaskId::new("unknown")),
+            RequestBody::HostWorktree(editor_core::TaskId::new("unknown")),
         )
         .await
         else {
@@ -807,7 +799,7 @@ fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_do
             .begin_pairing(fixture.workspace.clone())
             .unwrap();
         let path = state.path().join("invite.json");
-        let invitation = lapis_host::HostInvitation {
+        let invitation = host::HostInvitation {
             version: 1,
             address: fixture.address(),
             server_name: "localhost".to_owned(),
@@ -816,13 +808,13 @@ fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_do
             name: "RemoteProject".to_owned(),
             token: token.secret_bytes().to_vec(),
         };
-        lapis_host::write_invitation(&path, &invitation).unwrap();
-        assert!(lapis_host::write_invitation(&path, &invitation).is_err());
+        host::write_invitation(&path, &invitation).unwrap();
+        assert!(host::write_invitation(&path, &invitation).is_err());
         let profiles = state.path().join("profiles");
         let (backend, namespace, profile) = {
             let path = path.clone();
             let profiles = profiles.clone();
-            tokio::task::spawn_blocking(move || lapis_host::open_host_file(&path, &profiles))
+            tokio::task::spawn_blocking(move || host::open_host_file(&path, &profiles))
                 .await
                 .unwrap()
                 .unwrap()
@@ -838,7 +830,7 @@ fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_do
         let (restored, restored_namespace, _) = {
             let profile = profile.clone();
             let profiles = profiles.clone();
-            tokio::task::spawn_blocking(move || lapis_host::open_host_file(&profile, &profiles))
+            tokio::task::spawn_blocking(move || host::open_host_file(&profile, &profiles))
                 .await
                 .unwrap()
                 .unwrap()
@@ -856,7 +848,7 @@ fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_do
         let reused = {
             let path = path.clone();
             let profiles = profiles.clone();
-            tokio::task::spawn_blocking(move || lapis_host::open_host_file(&path, &profiles))
+            tokio::task::spawn_blocking(move || host::open_host_file(&path, &profiles))
                 .await
                 .unwrap()
         };
@@ -866,7 +858,7 @@ fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_do
         );
         assert!(std::fs::read(&profile).unwrap().as_slice() == before.as_slice());
         std::fs::write(&profile, b"corrupt data").unwrap();
-        assert!(lapis_host::open_host_file(&profile, &profiles).is_err());
+        assert!(host::open_host_file(&profile, &profiles).is_err());
     });
 }
 

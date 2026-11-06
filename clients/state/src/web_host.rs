@@ -15,9 +15,7 @@ use std::{
 use crate::{
     ConversationRecord, Project, WorkspaceDialog, WorkspaceSnapshot, WorkspaceStateRepository,
 };
-use futures_channel::mpsc;
-use futures_util::StreamExt;
-use lapis_client_api::{
+use client_api::{
     ClientKind, DocumentEditRequest, DocumentId as ApiDocumentId, DocumentInspectRequest,
     DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody,
     EventEnvelope, FileTreeKind, FileTreeRequest, RequestBody, ResponseBody,
@@ -27,32 +25,32 @@ use lapis_client_api::{
     WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceConnectRequest,
     WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
-use lapis_client_core::{
+use client_core::{
     AsyncHostConnection,
     browser::{BrowserConnection, WebClientConnectOptions, connect_web_client},
 };
-use lapis_document::{
+use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange,
     FileFingerprint, Revision,
 };
-use lapis_editor_core::{DocumentId, WorkspaceId};
-use lapis_git::{
-    GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot,
-};
-use lapis_lsp::{
+use editor_core::{DocumentId, WorkspaceId};
+use futures_channel::mpsc;
+use futures_util::StreamExt;
+use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
+use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
-use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
-use lapis_task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
-use lapis_terminal::{
+use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
+use terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
     TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot, TerminalStatus,
 };
-use lapis_workbench::{
+use workbench::{
     ConversationViewState, VersionedViewState, WorkbenchReplica, WorkbenchUpdate,
     WorkbenchWritePlan,
 };
-use lapis_workspace::{
+use workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
 };
@@ -127,9 +125,7 @@ fn cache_of(
     }
 }
 
-fn versioned_workbench(
-    snapshot: lapis_client_api::WorkbenchSnapshot,
-) -> Option<VersionedViewState> {
+fn versioned_workbench(snapshot: client_api::WorkbenchSnapshot) -> Option<VersionedViewState> {
     let state = VersionedViewState {
         revision: snapshot.revision,
         view: serde_json::from_value(snapshot.view).ok(),
@@ -178,7 +174,7 @@ enum Command {
         cwd: Option<PathBuf>,
         columns: u16,
         rows: u16,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
     },
     TerminalInput {
         local: TerminalId,
@@ -480,17 +476,17 @@ fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
 }
 
 fn document_from_snapshot(
-    snapshot: &lapis_client_api::DocumentSnapshot,
+    snapshot: &client_api::DocumentSnapshot,
     path: Option<PathBuf>,
 ) -> Document {
     Document::from_snapshot(
         path,
         snapshot.content.clone(),
         match snapshot.encoding {
-            lapis_client_api::DocumentEncoding::Utf8 => Encoding::Utf8,
-            lapis_client_api::DocumentEncoding::Utf8Bom => Encoding::Utf8Bom,
-            lapis_client_api::DocumentEncoding::Utf16Le => Encoding::Utf16Le,
-            lapis_client_api::DocumentEncoding::Utf16Be => Encoding::Utf16Be,
+            client_api::DocumentEncoding::Utf8 => Encoding::Utf8,
+            client_api::DocumentEncoding::Utf8Bom => Encoding::Utf8Bom,
+            client_api::DocumentEncoding::Utf16Le => Encoding::Utf16Le,
+            client_api::DocumentEncoding::Utf16Be => Encoding::Utf16Be,
         },
         Revision::new(snapshot.revision.value()),
         snapshot.dirty,
@@ -582,7 +578,7 @@ fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatus {
 
 fn model_terminal_snapshot(
     local: &TerminalId,
-    snapshot: &lapis_client_api::TerminalSnapshot,
+    snapshot: &client_api::TerminalSnapshot,
 ) -> TerminalSnapshot {
     TerminalSnapshot {
         id: local.clone(),
@@ -765,7 +761,7 @@ async fn handle(
             if let Some(host) = host {
                 let _ = request(
                     connection,
-                    RequestBody::DocumentDiscard(lapis_client_api::DocumentDiscardRequest {
+                    RequestBody::DocumentDiscard(client_api::DocumentDiscardRequest {
                         document_id: host,
                         base_revision: base,
                     }),
@@ -785,7 +781,7 @@ async fn handle(
             if let Some(host) = host {
                 let _ = request(
                     connection,
-                    RequestBody::DocumentClose(lapis_client_api::DocumentCloseRequest {
+                    RequestBody::DocumentClose(client_api::DocumentCloseRequest {
                         document_id: host,
                     }),
                 )
@@ -938,8 +934,7 @@ async fn write_workbench(
             WorkbenchWritePlan::Conflict(_) => return Err("Workbenchが競合しています".into()),
         }
     };
-    let encoded =
-        lapis_client_api::encode_workbench_view(&view).map_err(|error| error.to_string())?;
+    let encoded = client_api::encode_workbench_view(&view).map_err(|error| error.to_string())?;
     let body = request(
         connection,
         RequestBody::WorkbenchPut(WorkbenchPutRequest {
@@ -1323,7 +1318,7 @@ impl GlobalSettingsRepository for WebBackend {
 }
 
 fn workspace_from_shared(
-    shared: &lapis_workbench::SharedWorkspaceView,
+    shared: &workbench::SharedWorkspaceView,
     expected: &WorkspaceId,
     root: PathBuf,
 ) -> Result<crate::WorkspaceSnapshot, WorkspaceError> {
@@ -1362,7 +1357,7 @@ fn workspace_from_shared(
 fn shared_workspace(
     snapshot: &crate::WorkspaceSnapshot,
     workspace_id: WorkspaceId,
-) -> Result<lapis_workbench::SharedWorkspaceView, WorkspaceError> {
+) -> Result<workbench::SharedWorkspaceView, WorkspaceError> {
     // wasmにはOSのpath意味論が無いため、絶対path検証を通さず同じ変換だけを行う。
     let root = snapshot
         .root
@@ -1379,7 +1374,7 @@ fn shared_workspace(
         .open_documents
         .iter()
         .map(|view| {
-            Ok(lapis_workbench::SharedDocumentView {
+            Ok(workbench::SharedDocumentView {
                 document_id: view.document_id.clone(),
                 path: (!view.path.as_os_str().is_empty())
                     .then(|| relative(&view.path))
@@ -1396,7 +1391,7 @@ fn shared_workspace(
             })
         })
         .collect::<Result<Vec<_>, WorkspaceError>>()?;
-    Ok(lapis_workbench::SharedWorkspaceView {
+    Ok(workbench::SharedWorkspaceView {
         workspace_id,
         open_documents: documents,
         active_path: snapshot.active_path.as_deref().map(relative).transpose()?,
@@ -1405,7 +1400,7 @@ fn shared_workspace(
 }
 
 /// 接続時に取得したHostのWorkbenchから、UIへ復元するレイアウト。
-pub fn restore_view() -> Option<lapis_workbench::ConversationViewState> {
+pub fn restore_view() -> Option<workbench::ConversationViewState> {
     BACKEND.with(|backend| {
         let backend = backend.borrow();
         let state = backend.as_ref()?;
@@ -1415,7 +1410,7 @@ pub fn restore_view() -> Option<lapis_workbench::ConversationViewState> {
             .confirmed()
             .and_then(|versioned| versioned.view.as_ref())?
             .clone();
-        Some(lapis_workbench::ConversationViewState {
+        Some(workbench::ConversationViewState {
             workspace: None,
             ..view
         })
@@ -1453,7 +1448,7 @@ impl crate::ConversationRepository for WebBackend {
             }) else {
                 return Ok((Vec::new(), Vec::new(), None));
             };
-            let id = lapis_editor_core::ConversationId::new("web-conversation");
+            let id = editor_core::ConversationId::new("web-conversation");
             let record = ConversationRecord {
                 id: id.clone(),
                 title: "Web".to_owned(),
@@ -1481,7 +1476,7 @@ impl crate::ConversationRepository for WebBackend {
         _: &crate::ConversationState,
         _: &[Project],
         records: &[ConversationRecord],
-        active: &lapis_editor_core::ConversationId,
+        active: &editor_core::ConversationId,
     ) -> Result<(), WorkspaceError> {
         self.with(|state| {
             let record = records
@@ -1562,7 +1557,7 @@ impl TaskConnection for WebBackend {
     fn control(
         &self,
         _: &WorkspaceId,
-        _: &lapis_editor_core::ExecutionId,
+        _: &editor_core::ExecutionId,
         _: &TaskControl,
     ) -> Result<(), TaskError> {
         Err(TaskError::new(UNAVAILABLE))
@@ -1573,14 +1568,14 @@ impl GitConnection for WebBackend {
     fn status(
         &self,
         _: &WorkspaceId,
-        _: Option<&lapis_editor_core::TaskId>,
+        _: Option<&editor_core::TaskId>,
     ) -> Result<GitSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
     }
     fn diff(
         &self,
         _: &WorkspaceId,
-        _: Option<&lapis_editor_core::TaskId>,
+        _: Option<&editor_core::TaskId>,
         _: &str,
     ) -> Result<GitDiffSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
@@ -1594,7 +1589,7 @@ impl GitConnection for WebBackend {
     fn import_file(
         &self,
         _: &WorkspaceId,
-        _: &lapis_editor_core::TaskId,
+        _: &editor_core::TaskId,
         _: &str,
     ) -> Result<WorktreeSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
@@ -1602,7 +1597,7 @@ impl GitConnection for WebBackend {
     fn discard_worktree(
         &self,
         _: &WorkspaceId,
-        _: &lapis_editor_core::TaskId,
+        _: &editor_core::TaskId,
     ) -> Result<WorktreeSnapshot, GitError> {
         Err(GitError::new(GitErrorKind::Io, UNAVAILABLE))
     }
@@ -1644,7 +1639,7 @@ impl LanguageServerBackend for WebBackend {
 
 impl TerminalBackend for WebBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
     }
 
     fn start_with_shell(
@@ -1652,7 +1647,7 @@ impl TerminalBackend for WebBackend {
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();

@@ -4,7 +4,7 @@ use crate::{
     theme,
 };
 use gpui::{Context, Pixels, Render, ScrollHandle, Window, canvas, div, prelude::*, px};
-use lapis_terminal::{TerminalCell, TerminalColor, TerminalId, TerminalRow, TerminalShell};
+use terminal::{TerminalCell, TerminalColor, TerminalId, TerminalRow, TerminalShell};
 
 impl Render for TerminalFeature {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

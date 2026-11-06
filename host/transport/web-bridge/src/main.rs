@@ -133,7 +133,7 @@ async fn main() -> Result<(), Error> {
     axum::serve(
         listener,
         Router::new()
-            .route(lapis_wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
+            .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
             .with_state(bridge),
     )
     .with_graceful_shutdown(async {
@@ -153,7 +153,7 @@ fn client_config(certificate: Vec<u8>) -> Result<quinn::ClientConfig, Error> {
     .with_protocol_versions(&[&rustls::version::TLS13])?
     .with_root_certificates(roots)
     .with_no_client_auth();
-    tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+    tls.alpn_protocols = vec![wire::REMOTE_QUIC_PROTOCOL.to_vec()];
     tls.enable_early_data = false;
     Ok(quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(tls)?,
@@ -172,7 +172,7 @@ async fn upgrade(
     {
         return StatusCode::FORBIDDEN.into_response();
     }
-    let socket = socket.protocols([lapis_wire::REMOTE_WEBSOCKET_PROTOCOL]);
+    let socket = socket.protocols([wire::REMOTE_WEBSOCKET_PROTOCOL]);
     if socket.selected_protocol().is_none() {
         return StatusCode::BAD_REQUEST.into_response();
     }
@@ -312,7 +312,7 @@ mod tests {
         .with_no_client_auth()
         .with_single_cert(vec![certificate.clone()], key)
         .unwrap();
-        server_tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+        server_tls.alpn_protocols = vec![wire::REMOTE_QUIC_PROTOCOL.to_vec()];
         let server_config = quinn::ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(server_tls).unwrap(),
         ));
@@ -328,7 +328,7 @@ mod tests {
         .with_no_client_auth()
         .with_single_cert(vec![next_certificate.clone()], next_key)
         .unwrap();
-        next_tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+        next_tls.alpn_protocols = vec![wire::REMOTE_QUIC_PROTOCOL.to_vec()];
         let next_server = quinn::ServerConfig::with_crypto(Arc::new(
             quinn::crypto::rustls::QuicServerConfig::try_from(next_tls).unwrap(),
         ));
@@ -367,7 +367,7 @@ mod tests {
         .unwrap()
         .with_root_certificates(roots)
         .with_no_client_auth();
-        tls.alpn_protocols = vec![lapis_wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+        tls.alpn_protocols = vec![wire::REMOTE_QUIC_PROTOCOL.to_vec()];
         let mut endpoint = quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
         endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
             QuicClientConfig::try_from(tls).unwrap(),
@@ -386,7 +386,7 @@ mod tests {
             axum::serve(
                 listener,
                 Router::new()
-                    .route(lapis_wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
+                    .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
                     .with_state(bridge),
             )
             .await
@@ -398,7 +398,7 @@ mod tests {
             .insert("origin", "http://attacker.example".parse().unwrap());
         bad.headers_mut().insert(
             "sec-websocket-protocol",
-            lapis_wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
+            wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
         );
         assert!(tokio_tungstenite::connect_async(bad).await.is_err());
         let mut good = url.as_str().into_client_request().unwrap();
@@ -406,7 +406,7 @@ mod tests {
             .insert("origin", "http://localhost:5173".parse().unwrap());
         good.headers_mut().insert(
             "sec-websocket-protocol",
-            lapis_wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
+            wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
         );
         let (mut socket, _) = tokio_tungstenite::connect_async(good).await.unwrap();
         socket
@@ -428,7 +428,7 @@ mod tests {
             .insert("origin", "http://localhost:5173".parse().unwrap());
         good.headers_mut().insert(
             "sec-websocket-protocol",
-            lapis_wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
+            wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
         );
         let (mut socket, _) = tokio_tungstenite::connect_async(good).await.unwrap();
         socket

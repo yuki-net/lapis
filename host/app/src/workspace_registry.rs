@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lapis_client_api::WorkspaceId;
+use client_api::WorkspaceId;
 use serde::{Deserialize, Serialize};
 
 const MAX_RECORD_BYTES: u64 = 512 * 1024;

@@ -1,8 +1,8 @@
 //! ClientとHostが共有する作業画面の配置値。
 
-use lapis_editor_core::{ConversationId, DocumentId, WorkspaceId};
-use lapis_workspace::WorkspaceRelativePath;
+use editor_core::{ConversationId, DocumentId, WorkspaceId};
 use serde::{Deserialize, Serialize};
+use workspace::WorkspaceRelativePath;
 
 mod replica;
 pub use replica::{WorkbenchReplica, WorkbenchWritePlan};
@@ -15,17 +15,16 @@ pub enum WorkbenchUpdate {
 
 /// Client側からHostの作業状態を扱う境界。呼び出しはUIスレッド外で行う。
 pub trait WorkbenchConnection: Send + Sync {
-    fn get(&self, workspace: &lapis_editor_core::WorkspaceId)
-    -> Result<VersionedViewState, String>;
+    fn get(&self, workspace: &editor_core::WorkspaceId) -> Result<VersionedViewState, String>;
     fn update(
         &self,
-        workspace: &lapis_editor_core::WorkspaceId,
+        workspace: &editor_core::WorkspaceId,
         expected: u64,
         view: ConversationViewState,
     ) -> Result<WorkbenchUpdate, String>;
     fn subscribe(
         &self,
-        workspace: &lapis_editor_core::WorkspaceId,
+        workspace: &editor_core::WorkspaceId,
     ) -> Result<Box<dyn WorkbenchSubscription>, String>;
 }
 

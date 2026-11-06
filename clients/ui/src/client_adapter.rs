@@ -1,22 +1,22 @@
 use crate::timer::Timer;
 use std::{sync::mpsc, time::Duration};
 
-use gpui::Context;
-use lapis_desktop_client::{
+use desktop_client::{
     ConversationRecord, ConversationSession, ConversationViewState, DocumentTab, EditorSession,
     LspSession,
 };
-use lapis_document::DocumentCache;
-use lapis_editor_core::{ConversationId, DocumentId, WorkspaceId};
-use lapis_workspace::FileEntry;
+use document::DocumentCache;
+use editor_core::{ConversationId, DocumentId, WorkspaceId};
+use gpui::Context;
 use std::path::PathBuf;
+use workspace::FileEntry;
 
 pub(crate) struct DocumentClient {
     pub editor: EditorSession,
     pub conversation: ConversationSession,
     pub lsp: LspSession,
     pub edit_chain: EditChain,
-    pub git: std::sync::Arc<dyn lapis_git::GitConnection>,
+    pub git: std::sync::Arc<dyn git::GitConnection>,
     pub snapshot_sequence: u64,
     pub document_owners: std::collections::HashMap<DocumentId, u64>,
 }
@@ -34,19 +34,16 @@ pub(crate) struct ClientSnapshot {
     pub workspace_name: String,
     pub files: Vec<FileEntry>,
     pub conversations: Vec<ConversationRecord>,
-    pub projects: Vec<lapis_desktop_client::Project>,
+    pub projects: Vec<desktop_client::Project>,
     pub project_error: Option<String>,
     pub conversation: ConversationId,
     pub view: ConversationViewState,
     pub edit_epoch: EditEpoch,
-    pub workspace_view: lapis_desktop_client::WorkspaceSnapshot,
+    pub workspace_view: desktop_client::WorkspaceSnapshot,
 }
 
 pub(crate) struct DocumentCloseReport {
-    pub close: Result<
-        lapis_desktop_client::DocumentCloseProgress,
-        lapis_desktop_client::DocumentCloseFailure,
-    >,
+    pub close: Result<desktop_client::DocumentCloseProgress, desktop_client::DocumentCloseFailure>,
     pub persistence: Result<(), String>,
     pub snapshot: ClientSnapshot,
 }
@@ -70,7 +67,7 @@ impl DocumentClient {
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn restore_workbench(
         &mut self,
-        shared: lapis_desktop_client::SharedWorkspaceView,
+        shared: desktop_client::SharedWorkspaceView,
     ) -> Result<ClientSnapshot, String> {
         if self.editor.is_dirty() {
             return Err("未保存の変更があるためHostの状態を適用しません".into());
@@ -85,9 +82,8 @@ impl DocumentClient {
             .workspace_root()
             .map(ToOwned::to_owned)
             .ok_or("Workspaceがありません")?;
-        let snapshot =
-            lapis_desktop_client::WorkspaceSnapshot::from_shared(&shared, &workspace, root)
-                .map_err(|error| error.to_string())?;
+        let snapshot = desktop_client::WorkspaceSnapshot::from_shared(&shared, &workspace, root)
+            .map_err(|error| error.to_string())?;
         self.editor
             .restore_snapshot(snapshot)
             .map_err(|error| error.to_string())?;
@@ -99,8 +95,8 @@ impl DocumentClient {
         &mut self,
         decisions: &[(
             DocumentId,
-            lapis_desktop_client::DocumentCloseDisposition,
-            lapis_document::Revision,
+            desktop_client::DocumentCloseDisposition,
+            document::Revision,
         )],
         view: PersistedView,
     ) -> DocumentCloseReport {
@@ -161,9 +157,9 @@ impl DocumentClient {
 pub(crate) struct PersistedView {
     pub document: Option<(DocumentId, std::ops::Range<usize>, usize, f32, f32)>,
     pub layout: ConversationViewState,
-    pub execution: Option<lapis_editor_core::ExecutionId>,
-    pub terminals: Vec<lapis_terminal::TerminalSnapshot>,
-    pub terminal_owner: Option<lapis_editor_core::ConversationId>,
+    pub execution: Option<editor_core::ExecutionId>,
+    pub terminals: Vec<terminal::TerminalSnapshot>,
+    pub terminal_owner: Option<editor_core::ConversationId>,
     pub input: Option<String>,
 }
 

@@ -91,11 +91,9 @@ impl Shell {
 
     fn footer_encoding(&self) -> &'static str {
         match self.session.encoding() {
-            lapis_desktop_client::Encoding::Utf8 | lapis_desktop_client::Encoding::Utf8Bom => {
-                "UTF-8"
-            }
-            lapis_desktop_client::Encoding::Utf16Le => "UTF-16 LE",
-            lapis_desktop_client::Encoding::Utf16Be => "UTF-16 BE",
+            desktop_client::Encoding::Utf8 | desktop_client::Encoding::Utf8Bom => "UTF-8",
+            desktop_client::Encoding::Utf16Le => "UTF-16 LE",
+            desktop_client::Encoding::Utf16Be => "UTF-16 BE",
         }
     }
 }

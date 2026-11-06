@@ -1,9 +1,9 @@
 use crate::timer::Timer;
 use crate::{client_adapter::ClientWorker, commands::UiCommand};
+use desktop_client::WorkspaceSearchSession;
 use gpui::Context;
-use lapis_desktop_client::WorkspaceSearchSession;
-use lapis_workspace::SearchHit;
 use std::{path::PathBuf, time::Duration};
+use workspace::SearchHit;
 
 pub(crate) struct SearchFeature {
     worker: ClientWorker<WorkspaceSearchSession>,

@@ -1,4 +1,4 @@
-use lapis_git::{GitError, GitErrorKind, GitWatch};
+use git::{GitError, GitErrorKind, GitWatch};
 use notify::{EventKind, RecursiveMode, Watcher};
 use std::{
     path::Path,

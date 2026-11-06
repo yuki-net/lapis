@@ -2,8 +2,8 @@ use crate::{
     AuthenticateRequest, ClientMessage, CredentialHandle, PairRequest, QuicClient, RemoteLimits,
     ServerMessage,
 };
-use lapis_backend_state::{BackendEventReceiver, BackendServiceError};
-use lapis_client_api::*;
+use backend_state::{BackendEventReceiver, BackendServiceError};
+use client_api::*;
 use rustls::pki_types::CertificateDer;
 use std::{
     net::SocketAddr,
@@ -202,7 +202,7 @@ impl QuicConnection {
     }
 }
 
-impl lapis_client_core::AsyncHostConnection for QuicConnection {
+impl client_core::AsyncHostConnection for QuicConnection {
     async fn request(&self, body: RequestBody) -> Result<ResponseBody, String> {
         let (sender, receiver) = tokio::sync::oneshot::channel();
         self.inner
@@ -225,7 +225,7 @@ async fn run(
     mut commands: tokio::sync::mpsc::Receiver<Command>,
     started: mpsc::SyncSender<Result<(), BackendServiceError>>,
 ) {
-    let mut core = lapis_client_core::ClientCore::default();
+    let mut core = client_core::ClientCore::default();
     let mut subscribers = Vec::new();
     let mut socket = match restore(&config, &mut core, &mut subscribers).await {
         Ok(client) => Some(client),
@@ -312,7 +312,7 @@ async fn close(socket: &mut Option<QuicClient>) {
 
 async fn restore(
     config: &QuicConnectionConfig,
-    core: &mut lapis_client_core::ClientCore,
+    core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<QuicClient, BackendServiceError> {
     timeout(
@@ -325,7 +325,7 @@ async fn restore(
 
 async fn restore_inner(
     config: &QuicConnectionConfig,
-    core: &mut lapis_client_core::ClientCore,
+    core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<QuicClient, BackendServiceError> {
     let mut client = config
@@ -375,7 +375,7 @@ fn publish(subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>, event: EventE
 async fn exchange(
     client: &mut QuicClient,
     body: RequestBody,
-    core: &mut lapis_client_core::ClientCore,
+    core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<ResponseBody, BackendServiceError> {
     let (request, mut reply) = core

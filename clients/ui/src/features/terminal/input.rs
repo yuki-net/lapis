@@ -2,8 +2,8 @@ use super::TerminalFeature;
 use gpui::{
     Bounds, Context, EntityInputHandler, KeyDownEvent, Pixels, Point, UTF16Selection, Window,
 };
-use lapis_terminal::{TerminalInput, TerminalKey, TerminalKeyEvent, TerminalModifiers};
 use std::ops::Range;
+use terminal::{TerminalInput, TerminalKey, TerminalKeyEvent, TerminalModifiers};
 
 impl TerminalFeature {
     pub(super) fn key_down(

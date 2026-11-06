@@ -4,17 +4,17 @@ use crate::{
     components::ScrollState,
     theme,
 };
+use desktop_client::TaskSession;
+use editor_core::{ExecutionId, WorkspaceId};
 use gpui::Context;
-use lapis_desktop_client::TaskSession;
-use lapis_editor_core::{ExecutionId, WorkspaceId};
-use lapis_task::{ExecutionStatus, TaskControl, TaskMode, TaskSnapshot};
 use std::time::Duration;
+use task::{ExecutionStatus, TaskControl, TaskMode, TaskSnapshot};
 pub(crate) struct TasksFeature {
     worker: ClientWorker<TaskSession>,
     pub(super) records: Vec<TaskSnapshot>,
     pub(crate) selected_execution: Option<ExecutionId>,
     workspace: Option<WorkspaceId>,
-    conversation: Option<lapis_editor_core::ConversationId>,
+    conversation: Option<editor_core::ConversationId>,
     pub(super) selected_text: Option<String>,
     pending: usize,
     gate: ResponseGate,
@@ -61,7 +61,7 @@ impl TasksFeature {
             },
         }
     }
-    pub(crate) fn set_conversation(&mut self, conversation: lapis_editor_core::ConversationId) {
+    pub(crate) fn set_conversation(&mut self, conversation: editor_core::ConversationId) {
         if self.conversation.as_ref() != Some(&conversation) {
             self.gate.invalidate();
             self.selected_execution = None;
@@ -245,7 +245,7 @@ pub(super) fn task_status_color(status: ExecutionStatus, cx: &gpui::App) -> gpui
 
 fn records_for_conversation<'a>(
     records: &'a [TaskSnapshot],
-    conversation: Option<&lapis_editor_core::ConversationId>,
+    conversation: Option<&editor_core::ConversationId>,
 ) -> Vec<&'a TaskSnapshot> {
     records
         .iter()
@@ -268,8 +268,8 @@ fn select_visible_execution(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_editor_core::{ConversationId, TaskId};
-    use lapis_task::{ExecutionSnapshot, Task};
+    use editor_core::{ConversationId, TaskId};
+    use task::{ExecutionSnapshot, Task};
 
     fn session(conversation: &str, id: &str) -> TaskSnapshot {
         TaskSnapshot {

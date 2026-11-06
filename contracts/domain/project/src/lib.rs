@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use lapis_editor_core::{ProjectId, TaskId};
+use editor_core::{ProjectId, TaskId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

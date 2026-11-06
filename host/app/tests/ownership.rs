@@ -1,18 +1,18 @@
-use lapis_client_api::{
+use client_api::{
     DocumentEditRequest, DocumentOpenRequest, DocumentTextEdit, DocumentTransaction, EventBody,
     RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalStatus,
     TerminalTerminateRequest, WorkspaceRelativePath,
 };
-use lapis_host::BackendHost;
+use host::BackendHost;
 
 #[test]
 fn workbench_port_shares_updates_and_returns_conflicts() {
-    use lapis_workbench::{ConversationViewState, WorkbenchUpdate};
+    use workbench::{ConversationViewState, WorkbenchUpdate};
     let root = tempfile::tempdir().unwrap();
     let host = BackendHost::start().unwrap();
     let id = host.register_workspace(root.path()).unwrap();
-    let workspace = lapis_editor_core::WorkspaceId::new(id.as_str());
-    let client = lapis_host::BackendClient::from(host);
+    let workspace = editor_core::WorkspaceId::new(id.as_str());
+    let client = host::BackendClient::from(host);
     let first = client.workbench();
     let second = client.workbench();
     let mut subscription = second.subscribe(&workspace).unwrap();
@@ -50,7 +50,7 @@ fn workbench_port_shares_updates_and_returns_conflicts() {
 
 #[test]
 fn persisted_workbench_survives_host_restart() {
-    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     let root = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let saved = {
@@ -83,7 +83,7 @@ fn persisted_workbench_survives_host_restart() {
 
 #[test]
 fn legacy_workbench_without_registry_is_retained_when_workspace_is_opened() {
-    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     let root = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let (workspace, saved) = {
@@ -120,8 +120,8 @@ fn legacy_workbench_without_registry_is_retained_when_workspace_is_opened() {
 
 #[test]
 fn shared_workbench_documents_are_scoped_and_survive_restart() {
-    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
-    use lapis_workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
+    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
     let root = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let expected = {
@@ -130,7 +130,7 @@ fn shared_workbench_documents_are_scoped_and_survive_restart() {
         let id = client.workspace_id().clone();
         let mut view = ConversationViewState {
             workspace: Some(SharedWorkspaceView {
-                workspace_id: lapis_editor_core::WorkspaceId::new("other-workspace"),
+                workspace_id: editor_core::WorkspaceId::new("other-workspace"),
                 open_documents: vec![SharedDocumentView {
                     document_id: None,
                     path: Some(WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
@@ -156,8 +156,7 @@ fn shared_workbench_documents_are_scoped_and_survive_restart() {
                 .unwrap()
         };
         assert!(matches!(put(&view), ResponseBody::Error(_)));
-        view.workspace.as_mut().unwrap().workspace_id =
-            lapis_editor_core::WorkspaceId::new(id.as_str());
+        view.workspace.as_mut().unwrap().workspace_id = editor_core::WorkspaceId::new(id.as_str());
         let ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(saved)) = put(&view) else {
             panic!("valid shared state rejected")
         };
@@ -176,8 +175,8 @@ fn shared_workbench_documents_are_scoped_and_survive_restart() {
 
 #[test]
 fn large_unsaved_draft_survives_host_restart() {
-    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
-    use lapis_workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
+    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use workbench::{ConversationViewState, SharedDocumentView, SharedWorkspaceView};
     let root = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let draft = "x".repeat(3 * 1024 * 1024);
@@ -187,7 +186,7 @@ fn large_unsaved_draft_survives_host_restart() {
         let id = client.workspace_id().clone();
         let view = ConversationViewState {
             workspace: Some(SharedWorkspaceView {
-                workspace_id: lapis_editor_core::WorkspaceId::new(id.as_str()),
+                workspace_id: editor_core::WorkspaceId::new(id.as_str()),
                 open_documents: vec![SharedDocumentView {
                     document_id: None,
                     path: Some(WorkspaceRelativePath::parse("src/画面.rs").unwrap()),
@@ -227,7 +226,7 @@ fn large_unsaved_draft_survives_host_restart() {
 
 #[test]
 fn in_memory_workbench_rejects_another_workspaces_document_state() {
-    use lapis_client_api::WorkbenchPutRequest;
+    use client_api::WorkbenchPutRequest;
     let root = tempfile::tempdir().unwrap();
     let host = BackendHost::start().unwrap();
     let client = host.connect(root.path()).unwrap();
@@ -244,19 +243,17 @@ fn in_memory_workbench_rejects_another_workspaces_document_state() {
     })).unwrap();
     assert!(matches!(response, ResponseBody::Error(_)));
     let response = client
-        .request(RequestBody::WorkbenchGet(
-            lapis_client_api::WorkbenchGetRequest {
-                workspace_id: client.workspace_id().clone(),
-            },
-        ))
+        .request(RequestBody::WorkbenchGet(client_api::WorkbenchGetRequest {
+            workspace_id: client.workspace_id().clone(),
+        }))
         .unwrap();
     assert!(matches!(response, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 0));
 }
 
 #[test]
 fn legacy_layout_updates_preserve_shared_documents_until_explicitly_cleared() {
-    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
-    use lapis_workbench::{ConversationViewState, SharedWorkspaceView, WorkbenchUpdate};
+    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use workbench::{ConversationViewState, SharedWorkspaceView, WorkbenchUpdate};
     for persisted in [false, true] {
         let root = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
@@ -267,8 +264,8 @@ fn legacy_layout_updates_preserve_shared_documents_until_explicitly_cleared() {
         };
         let client = host.connect(root.path()).unwrap();
         let id = client.workspace_id().clone();
-        let model_id = lapis_editor_core::WorkspaceId::new(id.as_str());
-        let port = lapis_host::BackendClient::from(host).workbench();
+        let model_id = editor_core::WorkspaceId::new(id.as_str());
+        let port = host::BackendClient::from(host).workbench();
         let view = ConversationViewState {
             workspace: Some(SharedWorkspaceView {
                 workspace_id: model_id.clone(),
@@ -314,7 +311,7 @@ fn legacy_layout_updates_preserve_shared_documents_until_explicitly_cleared() {
 
 #[test]
 fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
-    use lapis_client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     use std::sync::{Arc, Barrier};
 
     let root = tempfile::tempdir().unwrap();
@@ -324,7 +321,7 @@ fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
     let second = host.connect(root.path()).unwrap();
     let workspace_id = first.workspace_id().clone();
     let barrier = Arc::new(Barrier::new(3));
-    let spawn = |client: lapis_backend_state::EmbeddedClient, label: &str| {
+    let spawn = |client: backend_state::EmbeddedClient, label: &str| {
         let barrier = barrier.clone();
         let workspace_id = workspace_id.clone();
         let label = label.to_owned();
@@ -371,9 +368,7 @@ fn concurrent_workbench_writers_cannot_silently_overwrite_each_other() {
 
 #[test]
 fn clients_share_workbench_updates_and_reject_stale_writes() {
-    use lapis_client_api::{
-        EventBody, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
-    };
+    use client_api::{EventBody, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
     use std::time::Duration;
 
     let root = tempfile::tempdir().unwrap();
@@ -444,7 +439,7 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
     let host = BackendHost::start().unwrap();
     let first = host.connect(root.path()).unwrap();
     let second = host.connect(root.path()).unwrap();
-    let open = |client: &lapis_backend_state::EmbeddedClient| {
+    let open = |client: &backend_state::EmbeddedClient| {
         let ResponseBody::DocumentOpen(response) = client
             .request(RequestBody::DocumentOpen(DocumentOpenRequest {
                 workspace_id: client.workspace_id().clone(),
@@ -485,7 +480,7 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
     let ResponseBody::Error(conflict) = second.request(request).unwrap() else {
         panic!("stale edit must fail")
     };
-    assert_eq!(conflict.code.as_str(), lapis_client_api::REVISION_CONFLICT);
+    assert_eq!(conflict.code.as_str(), client_api::REVISION_CONFLICT);
     let second_edit = RequestBody::DocumentEdit(DocumentEditRequest {
         document_id: original.document_id.clone(),
         base_revision: revision,

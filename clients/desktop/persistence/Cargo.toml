@@ -1,20 +1,20 @@
 [package]
-name = "lapis-persistence"
+name = "persistence"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-desktop-client = { path = "../../state" }
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
-lapis-settings = { path = "../../../contracts/domain/settings" }
-lapis-workspace = { path = "../../../contracts/domain/workspace" }
-lapis-workbench = { path = "../../../contracts/domain/workbench" }
+desktop-client = { path = "../../state" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+settings = { path = "../../../contracts/domain/settings" }
+workspace = { path = "../../../contracts/domain/workspace" }
+workbench = { path = "../../../contracts/domain/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
 [dev-dependencies]
-lapis-localization = { path = "../../../contracts/domain/localization" }
-lapis-terminal = { path = "../../../contracts/domain/terminal" }
+localization = { path = "../../../contracts/domain/localization" }
+terminal = { path = "../../../contracts/domain/terminal" }

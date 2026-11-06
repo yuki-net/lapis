@@ -1,21 +1,21 @@
-use lapis_backend_state::{
+use backend_state::{
     BackendService, BackendState, EmbeddedClient, WorkspaceEntry, WorkspaceFileBackend,
     WorkspaceRegistration,
 };
-use lapis_client_api::{
+use client_api::{
     RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceOperation as Operation,
     WorkspaceOperationRequest, WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
 };
-use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
-use lapis_editor_core::{ConversationId, ExecutionId, TaskId};
-use lapis_git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree, WorktreeState};
-use lapis_task::{
-    Execution, ExecutionStatus, Task, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord,
-    TaskSnapshot, TaskStart,
-};
+use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+use editor_core::{ConversationId, ExecutionId, TaskId};
+use git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree, WorktreeState};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+};
+use task::{
+    Execution, ExecutionStatus, Task, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord,
+    TaskSnapshot, TaskStart,
 };
 
 struct EmptyFiles;
@@ -36,8 +36,8 @@ impl DocumentRepository for EmptyFiles {
     }
 }
 impl WorkspaceFileBackend for EmptyFiles {
-    fn create_directory(&self, _: &std::path::Path) -> Result<(), lapis_document::DocumentError> {
-        Err(lapis_document::DocumentError::io("Unsupported"))
+    fn create_directory(&self, _: &std::path::Path) -> Result<(), document::DocumentError> {
+        Err(document::DocumentError::io("Unsupported"))
     }
     fn list_children(&self, _: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
         Ok(vec![])
@@ -74,7 +74,7 @@ struct FakeGit {
     status_root: Mutex<Option<PathBuf>>,
     fail_discovery: Mutex<bool>,
     unscoped_discovery: Mutex<bool>,
-    status_files: Mutex<Vec<lapis_git::ChangedFile>>,
+    status_files: Mutex<Vec<git::ChangedFile>>,
     blocked_status: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
     blocked_discard: Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
 }
@@ -87,7 +87,7 @@ impl Drop for FakeGitWatch {
         self.1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
-impl lapis_git::GitWatch for FakeGitWatch {
+impl git::GitWatch for FakeGitWatch {
     fn take_changed(&self) -> bool {
         self.0.swap(false, std::sync::atomic::Ordering::AcqRel)
     }
@@ -97,7 +97,7 @@ impl GitBackend for FakeGit {
         &self,
         path: &Path,
         notify: Arc<dyn Fn() + Send + Sync>,
-    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+    ) -> Result<Box<dyn git::GitWatch>, GitError> {
         self.notifications
             .lock()
             .unwrap()
@@ -107,18 +107,17 @@ impl GitBackend for FakeGit {
             .unwrap()
             .clone()
             .map(|watch| {
-                Box::new(FakeGitWatch(watch, self.watch_drops.clone()))
-                    as Box<dyn lapis_git::GitWatch>
+                Box::new(FakeGitWatch(watch, self.watch_drops.clone())) as Box<dyn git::GitWatch>
             })
-            .ok_or_else(|| GitError::new(lapis_git::GitErrorKind::Io, "watch unavailable"))
+            .ok_or_else(|| GitError::new(git::GitErrorKind::Io, "watch unavailable"))
     }
     fn execute(
         &self,
         repository: &Path,
-        _: lapis_git::GitActionRequest,
-    ) -> Result<lapis_git::GitActionResult, GitError> {
+        _: git::GitActionRequest,
+    ) -> Result<git::GitActionResult, GitError> {
         self.calls.lock().unwrap().push(repository.to_owned());
-        Ok(lapis_git::GitActionResult {
+        Ok(git::GitActionResult {
             diff: None,
             stashes: Vec::new(),
             output: "executed".into(),
@@ -174,10 +173,7 @@ impl GitBackend for FakeGit {
     }
     fn worktrees(&self, repository: &Path) -> Result<Vec<TaskWorktree>, GitError> {
         if *self.fail_discovery.lock().unwrap() {
-            return Err(GitError::new(
-                lapis_git::GitErrorKind::NotRepository,
-                "Git なし",
-            ));
+            return Err(GitError::new(git::GitErrorKind::NotRepository, "Git なし"));
         }
         Ok(self
             .trees
@@ -351,7 +347,7 @@ impl Fixture {
             Execution {
                 id: ExecutionId::new(format!("execution-{name}")),
                 task_id: TaskId::new(name),
-                workspace_id: lapis_editor_core::WorkspaceId::new("obsolete-id"),
+                workspace_id: editor_core::WorkspaceId::new("obsolete-id"),
                 workspace_root: self.root.path().canonicalize().unwrap(),
                 runner: "codex-app-server".into(),
                 mode: TaskMode::Default,
@@ -393,7 +389,7 @@ fn denied(response: ResponseBody) {
     let ResponseBody::Error(error) = response else {
         panic!("拒否されなかった: {response:?}")
     };
-    assert_eq!(error.code.as_str(), lapis_client_api::FORBIDDEN);
+    assert_eq!(error.code.as_str(), client_api::FORBIDDEN);
 }
 
 #[test]
@@ -402,8 +398,8 @@ fn git_actions_accept_deleted_parent_directories_without_relaxing_containment() 
     let client = fixture.client("deleted-path", "first");
     let stage = |path: &str| Operation::GitAction {
         worktree: None,
-        request: lapis_git::GitActionRequest {
-            action: lapis_git::GitAction::Stage { path: path.into() },
+        request: git::GitActionRequest {
+            action: git::GitAction::Stage { path: path.into() },
             expected_head: Some("abc".into()),
         },
     };
@@ -448,8 +444,8 @@ fn request_capabilities_separate_git_reads_writes_and_task_controls() {
         (
             Operation::GitAction {
                 worktree: None,
-                request: lapis_git::GitActionRequest {
-                    action: lapis_git::GitAction::History,
+                request: git::GitActionRequest {
+                    action: git::GitAction::History,
                     expected_head: None,
                 },
             },
@@ -458,8 +454,8 @@ fn request_capabilities_separate_git_reads_writes_and_task_controls() {
         (
             Operation::GitAction {
                 worktree: None,
-                request: lapis_git::GitActionRequest {
-                    action: lapis_git::GitAction::Stage {
+                request: git::GitActionRequest {
+                    action: git::GitAction::Stage {
                         path: "note.txt".into(),
                     },
                     expected_head: Some("abc".into()),
@@ -592,8 +588,8 @@ fn foreign_workspace_task_and_worktree_operations_are_denied_before_backend_call
     for operation in [
         Operation::GitAction {
             worktree: None,
-            request: lapis_git::GitActionRequest {
-                action: lapis_git::GitAction::History,
+            request: git::GitActionRequest {
+                action: git::GitAction::History,
                 expected_head: None,
             },
         },
@@ -614,8 +610,8 @@ fn foreign_workspace_task_and_worktree_operations_are_denied_before_backend_call
     for operation in [
         Operation::GitAction {
             worktree: Some(tree.clone()),
-            request: lapis_git::GitActionRequest {
-                action: lapis_git::GitAction::Stage {
+            request: git::GitActionRequest {
+                action: git::GitAction::Stage {
                     path: "note.txt".into(),
                 },
                 expected_head: Some("abc".into()),
@@ -894,10 +890,10 @@ fn git_snapshots_reject_absolute_backend_file_paths() {
         .status_files
         .lock()
         .unwrap()
-        .push(lapis_git::ChangedFile {
+        .push(git::ChangedFile {
             path: fixture.other.path().join("secret.txt"),
             old_path: None,
-            kind: lapis_git::ChangeKind::Modified,
+            kind: git::ChangeKind::Modified,
             staged: false,
         });
     denied(execute(&client, Operation::GitStatus { worktree: None }));
@@ -908,47 +904,44 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
     use std::sync::mpsc;
     use std::time::Duration;
     struct Terminal(mpsc::Sender<()>);
-    impl lapis_terminal::TerminalBackend for Terminal {
+    impl terminal::TerminalBackend for Terminal {
         fn start(
             &self,
             _: &Path,
             _: u16,
             _: u16,
-        ) -> Result<lapis_terminal::TerminalId, lapis_terminal::TerminalError> {
-            Ok(lapis_terminal::TerminalId::new("native"))
+        ) -> Result<terminal::TerminalId, terminal::TerminalError> {
+            Ok(terminal::TerminalId::new("native"))
         }
         fn input(
             &self,
-            _: &lapis_terminal::TerminalId,
-            _: &lapis_terminal::TerminalInput,
-        ) -> Result<(), lapis_terminal::TerminalError> {
+            _: &terminal::TerminalId,
+            _: &terminal::TerminalInput,
+        ) -> Result<(), terminal::TerminalError> {
             Ok(())
         }
         fn resize(
             &self,
-            _: &lapis_terminal::TerminalId,
+            _: &terminal::TerminalId,
             _: u16,
             _: u16,
-        ) -> Result<lapis_terminal::TerminalDelta, lapis_terminal::TerminalError> {
-            Ok(lapis_terminal::TerminalDelta {
+        ) -> Result<terminal::TerminalDelta, terminal::TerminalError> {
+            Ok(terminal::TerminalDelta {
                 revision: 1,
-                size: lapis_terminal::TerminalSize::new(80, 24),
+                size: terminal::TerminalSize::new(80, 24),
                 changed_rows: Vec::new(),
                 cursor: Default::default(),
                 modes: Default::default(),
                 scrollback: None,
             })
         }
-        fn terminate(
-            &self,
-            _: &lapis_terminal::TerminalId,
-        ) -> Result<(), lapis_terminal::TerminalError> {
+        fn terminate(&self, _: &terminal::TerminalId) -> Result<(), terminal::TerminalError> {
             Ok(())
         }
         fn poll(
             &self,
-            _: &lapis_terminal::TerminalId,
-        ) -> Result<Vec<lapis_terminal::TerminalEvent>, lapis_terminal::TerminalError> {
+            _: &terminal::TerminalId,
+        ) -> Result<Vec<terminal::TerminalEvent>, terminal::TerminalError> {
             let _ = self.0.send(());
             Ok(Vec::new())
         }
@@ -983,12 +976,12 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
     assert!(matches!(
         documents
             .request(RequestBody::TerminalStart(
-                lapis_client_api::TerminalStartRequest {
+                client_api::TerminalStartRequest {
                     workspace_id: documents.workspace_id().clone(),
                     cwd: None,
                     command: None,
                     shell: Default::default(),
-                    size: lapis_client_api::TerminalSize {
+                    size: client_api::TerminalSize {
                         columns: 80,
                         rows: 24
                     },
@@ -1008,7 +1001,7 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
     let document_thread = std::thread::spawn(move || {
         let document = documents
             .request(RequestBody::DocumentUntitled(
-                lapis_client_api::DocumentUntitledRequest {
+                client_api::DocumentUntitledRequest {
                     workspace_id: documents.workspace_id().clone(),
                 },
             ))
@@ -1073,7 +1066,7 @@ fn git_status_cache_refreshes_on_watch_changes_and_operations() {
     };
     assert!(matches!(
         events.recv_timeout(Duration::from_secs(3)).unwrap().body,
-        lapis_client_api::EventBody::GitStatusChanged { .. }
+        client_api::EventBody::GitStatusChanged { .. }
     ));
     fixture.git.calls.lock().unwrap().clear();
     let Outcome::GitStatus(cached) = status() else {
@@ -1081,10 +1074,10 @@ fn git_status_cache_refreshes_on_watch_changes_and_operations() {
     };
     assert_eq!(initial.revision, cached.revision);
     assert_eq!(fixture.git.calls.lock().unwrap().len(), 0);
-    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+    *fixture.git.status_files.lock().unwrap() = vec![git::ChangedFile {
         path: PathBuf::from("draft.txt"),
         old_path: None,
-        kind: lapis_git::ChangeKind::Modified,
+        kind: git::ChangeKind::Modified,
         staged: false,
     }];
     dirty.store(true, Ordering::Release);
@@ -1095,7 +1088,7 @@ fn git_status_cache_refreshes_on_watch_changes_and_operations() {
         .unwrap()
         .get(&fixture.root.path().canonicalize().unwrap())
         .unwrap()();
-    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } =
+    let client_api::EventBody::GitStatusChanged { repository, .. } =
         events.recv_timeout(Duration::from_secs(3)).unwrap().body
     else {
         panic!("status event required")
@@ -1106,8 +1099,8 @@ fn git_status_cache_refreshes_on_watch_changes_and_operations() {
     assert_eq!(fixture.git.calls.lock().unwrap().len(), 1);
     fixture.git.calls.lock().unwrap().clear();
     fixture.git.status_files.lock().unwrap()[0].staged = true;
-    let request = lapis_git::GitActionRequest {
-        action: lapis_git::GitAction::Stage {
+    let request = git::GitActionRequest {
+        action: git::GitAction::Stage {
             path: "draft.txt".into(),
         },
         expected_head: Some("abc".into()),
@@ -1123,7 +1116,7 @@ fn git_status_cache_refreshes_on_watch_changes_and_operations() {
         Outcome::GitAction(_)
     ));
     loop {
-        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } =
+        if let client_api::EventBody::GitStatusChanged { repository, .. } =
             events.recv_timeout(Duration::from_secs(3)).unwrap().body
             && repository.status.files[0].staged
         {
@@ -1153,7 +1146,7 @@ fn git_status_without_watcher_uses_bounded_fallback_cache() {
             .recv_timeout(std::time::Duration::from_secs(3))
             .unwrap()
             .body,
-        lapis_client_api::EventBody::GitStatusChanged { .. }
+        client_api::EventBody::GitStatusChanged { .. }
     ));
     fixture.git.calls.lock().unwrap().clear();
     for _ in 0..2 {
@@ -1188,7 +1181,7 @@ fn discarded_worktree_releases_watcher_and_is_not_rechecked() {
     ));
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } =
+        if let client_api::EventBody::GitStatusChanged { repository, .. } =
             events.recv_timeout(Duration::from_secs(1)).unwrap().body
             && repository.status.worktree_id == Some(tree.worktree_id.clone())
         {
@@ -1242,15 +1235,15 @@ fn git_events_debounce_and_refresh_only_the_changed_repository() {
     let mut initialized = std::collections::HashSet::new();
     while initialized.len() < 2 {
         let event = events.recv_timeout(Duration::from_secs(3)).unwrap();
-        if let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body {
+        if let client_api::EventBody::GitStatusChanged { repository, .. } = event.body {
             initialized.insert(repository.repository_id);
         }
     }
     fixture.git.calls.lock().unwrap().clear();
-    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+    *fixture.git.status_files.lock().unwrap() = vec![git::ChangedFile {
         path: PathBuf::from("changed"),
         old_path: None,
-        kind: lapis_git::ChangeKind::Modified,
+        kind: git::ChangeKind::Modified,
         staged: false,
     }];
     dirty.store(true, Ordering::Release);
@@ -1267,7 +1260,7 @@ fn git_events_debounce_and_refresh_only_the_changed_repository() {
         callback();
     }
     let event = events.recv_timeout(Duration::from_secs(3)).unwrap();
-    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = event.body else {
+    let client_api::EventBody::GitStatusChanged { repository, .. } = event.body else {
         panic!("Git event required");
     };
     assert_eq!(repository.repository_id, "path:frontend");
@@ -1288,17 +1281,17 @@ fn git_watch_unavailable_refreshes_in_host_fallback() {
         Outcome::GitStatus(_)
     ));
     let initial = events.recv_timeout(Duration::from_secs(3)).unwrap();
-    let lapis_client_api::EventBody::GitStatusChanged { repository, .. } = initial.body else {
+    let client_api::EventBody::GitStatusChanged { repository, .. } = initial.body else {
         panic!("initial Git event required")
     };
-    *fixture.git.status_files.lock().unwrap() = vec![lapis_git::ChangedFile {
+    *fixture.git.status_files.lock().unwrap() = vec![git::ChangedFile {
         path: PathBuf::from("later"),
         old_path: None,
-        kind: lapis_git::ChangeKind::Modified,
+        kind: git::ChangeKind::Modified,
         staged: false,
     }];
     let changed = events.recv_timeout(Duration::from_secs(18)).unwrap();
-    let lapis_client_api::EventBody::GitStatusChanged {
+    let client_api::EventBody::GitStatusChanged {
         repository: updated,
         ..
     } = changed.body

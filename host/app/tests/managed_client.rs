@@ -1,4 +1,4 @@
-use lapis_host::BackendClient;
+use host::BackendClient;
 use serde::Deserialize;
 use std::{
     fs,
@@ -161,7 +161,7 @@ fn desktop_ports_reuse_one_independent_host_and_preserve_unsaved_documents_acros
     assert!(moved.can_undo);
     // 接続pickerでLocal profileを選んだ別画面も、仮想rootから同じ資源へ接続する。
     let (remote, virtual_root, _) =
-        lapis_host::open_host_file(&state.path().join("local-v1.host"), state.path()).unwrap();
+        host::open_host_file(&state.path().join("local-v1.host"), state.path()).unwrap();
     remote.workspaces().list_tree(&virtual_root).unwrap();
     for _ in 0..16 {
         remote.documents().workspace(&virtual_root).unwrap();
@@ -220,7 +220,7 @@ fn managed_host_opens_verified_worktrees_and_shares_documents() {
     let workspace = documents.workspace(root.path()).unwrap();
     let git = client.git();
     assert!(
-        git.open_worktree(&workspace, &lapis_editor_core::TaskId::new("unknown"))
+        git.open_worktree(&workspace, &editor_core::TaskId::new("unknown"))
             .is_err()
     );
     let tree = git.create_worktree(&workspace).unwrap();

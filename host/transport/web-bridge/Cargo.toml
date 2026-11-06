@@ -1,14 +1,18 @@
 [package]
-name = "lapis-web-bridge"
+name = "web-bridge"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
+[[bin]]
+name = "lapis-web-bridge"
+path = "src/main.rs"
+
 [dependencies]
 axum.workspace = true
 futures-util.workspace = true
-lapis-wire = { path = "../../../contracts/wire" }
+wire = { path = "../../../contracts/wire" }
 quinn.workspace = true
 rustls.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "signal"] }

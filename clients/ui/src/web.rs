@@ -7,19 +7,19 @@ use std::{
     sync::Arc,
 };
 
-use lapis_desktop_client::{
+use desktop_client::{
     ConversationRepository, ConversationSession, EditorSession, GitSession, LspSession,
     SettingsSession, TaskSession, TerminalSession, WorkspaceDialog, WorkspaceRepository,
     WorkspaceSearchSession, WorkspaceStateRepository,
 };
-use lapis_document::DocumentConnection;
-use lapis_git::GitConnection;
-use lapis_lsp::LanguageServerBackend;
-use lapis_settings::GlobalSettingsRepository;
-use lapis_task::TaskConnection;
-use lapis_terminal::TerminalBackend;
-use lapis_workspace::WorkspaceSearchBackend;
+use document::DocumentConnection;
+use git::GitConnection;
+use lsp::LanguageServerBackend;
+use settings::GlobalSettingsRepository;
+use task::TaskConnection;
+use terminal::TerminalBackend;
 use wasm_bindgen::prelude::*;
+use workspace::WorkspaceSearchBackend;
 
 use crate::{DesktopServices, InitialView};
 
@@ -51,21 +51,20 @@ pub async fn start(
     if url.trim().is_empty() || workspace.trim().is_empty() {
         return start_without_host(backend_preference);
     }
-    let credential =
-        lapis_desktop_client::web_host::connect(lapis_desktop_client::web_host::HostConfig {
-            url,
-            workspace,
-            client_id,
-            token,
-            credential,
-        })
-        .await
-        .map_err(|error| JsValue::from_str(&error))?;
-    let backend = Arc::new(lapis_desktop_client::web_host::WebBackend);
+    let credential = desktop_client::web_host::connect(desktop_client::web_host::HostConfig {
+        url,
+        workspace,
+        client_id,
+        token,
+        credential,
+    })
+    .await
+    .map_err(|error| JsValue::from_str(&error))?;
+    let backend = Arc::new(desktop_client::web_host::WebBackend);
     launch(
         backend,
-        lapis_desktop_client::web_host::ROOT,
-        lapis_desktop_client::web_host::initial_path(),
+        desktop_client::web_host::ROOT,
+        desktop_client::web_host::initial_path(),
         backend_preference,
     )
     .map_err(|error| JsValue::from_str(&error))?;
@@ -135,7 +134,7 @@ where
         .open_workspace(PathBuf::from(root))
         .map_err(|error| error.to_string())?;
     let conversation = ConversationSession::new(backend.clone(), session.snapshot());
-    let restored = lapis_desktop_client::web_host::restore_snapshot(PathBuf::from(root));
+    let restored = desktop_client::web_host::restore_snapshot(PathBuf::from(root));
     if let Some(snapshot) = restored {
         session
             .restore_snapshot(snapshot)

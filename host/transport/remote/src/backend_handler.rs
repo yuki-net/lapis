@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use lapis_backend_state::{BackendEventSink, BackendService, BackendSession};
-use lapis_client_api::{
+use backend_state::{BackendEventSink, BackendService, BackendSession};
+use client_api::{
     ErrorCode, EventEnvelope, INTERNAL, ProtocolError, RequestBody, RequestEnvelope, ResponseBody,
     ResponseEnvelope, SessionId,
 };
@@ -37,17 +37,14 @@ impl RemoteRequestHandler for BackendRemoteHandler {
         let cleanup_backend = self.backend.clone();
         let request_id = request.request_id.clone();
         let can_list_user_workspaces = grant.capabilities().contains(
-            &lapis_client_api::CapabilityId::try_new(
-                lapis_client_api::capability::WORKSPACES_SWITCH,
-            )
-            .expect("valid capability"),
+            &client_api::CapabilityId::try_new(client_api::capability::WORKSPACES_SWITCH)
+                .expect("valid capability"),
         );
         let session = BackendSession::new(grant.session_id().clone(), grant.workspace_id().clone())
             .with_user_workspace_listing(can_list_user_workspaces);
         let opens_workspace = matches!(&request.body, RequestBody::WorkspaceConnect(_));
         let can_read_git = grant.capabilities().contains(
-            &lapis_client_api::CapabilityId::try_new("workspace.git.read")
-                .expect("valid capability"),
+            &client_api::CapabilityId::try_new("workspace.git.read").expect("valid capability"),
         );
         let pending_subscriptions = self.pending_subscriptions.clone();
         Box::pin(async move {
@@ -121,11 +118,11 @@ struct TokioEventSink {
 impl BackendEventSink for TokioEventSink {
     fn try_send(&self, mut event: EventEnvelope) -> bool {
         if !self.can_read_git
-            && let lapis_client_api::EventBody::GitStatusChanged { workspace_id, .. }
-            | lapis_client_api::EventBody::GitRepositoriesChanged { workspace_id }
-            | lapis_client_api::EventBody::GitWorktreesChanged { workspace_id } = &event.body
+            && let client_api::EventBody::GitStatusChanged { workspace_id, .. }
+            | client_api::EventBody::GitRepositoriesChanged { workspace_id }
+            | client_api::EventBody::GitWorktreesChanged { workspace_id } = &event.body
         {
-            event.body = lapis_client_api::EventBody::WorkspaceChanged {
+            event.body = client_api::EventBody::WorkspaceChanged {
                 workspace_id: workspace_id.clone(),
             };
         }
@@ -133,7 +130,7 @@ impl BackendEventSink for TokioEventSink {
     }
 }
 
-fn internal_error(request_id: lapis_client_api::RequestId) -> ResponseEnvelope {
+fn internal_error(request_id: client_api::RequestId) -> ResponseEnvelope {
     ResponseEnvelope {
         request_id,
         body: ResponseBody::Error(ProtocolError::new(
@@ -146,21 +143,21 @@ fn internal_error(request_id: lapis_client_api::RequestId) -> ResponseEnvelope {
 mod tests {
     use std::{path::Path, sync::Arc};
 
-    use lapis_backend_state::{
+    use backend_state::{
         BackendState, WorkspaceEntry, WorkspaceFileBackend, WorkspaceRegistration,
     };
-    use lapis_client_api::{
+    use client_api::{
         CapabilityId, WorkspaceOperation as Operation, WorkspaceOperationRequest,
         WorkspaceOperationResult as Outcome,
     };
-    use lapis_client_api::{
+    use client_api::{
         CapabilitySet, DocumentCreateRequest, DocumentEncoding, EventBody, RequestBody, RequestId,
         ResponseBody, SessionId, SnapshotReason, SnapshotRequest, WorkspaceConnectRequest,
         WorkspaceId, WorkspaceRelativePath,
     };
-    use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
-    use lapis_editor_core::{ConversationId, ExecutionId, TaskId};
-    use lapis_task::{
+    use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+    use editor_core::{ConversationId, ExecutionId, TaskId};
+    use task::{
         ExecutionStatus, TaskBackend, TaskControl, TaskError, TaskMode, TaskRecord, TaskStart,
     };
 
@@ -188,11 +185,8 @@ mod tests {
     }
 
     impl WorkspaceFileBackend for EmptyFiles {
-        fn create_directory(
-            &self,
-            _: &std::path::Path,
-        ) -> Result<(), lapis_document::DocumentError> {
-            Err(lapis_document::DocumentError::io("Unsupported"))
+        fn create_directory(&self, _: &std::path::Path) -> Result<(), document::DocumentError> {
+            Err(document::DocumentError::io("Unsupported"))
         }
         fn list_children(&self, _directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
             Ok(Vec::new())
@@ -422,7 +416,7 @@ mod tests {
         .with_tasks(tasks.clone())])
         .unwrap();
         let backend = BackendService::start(state).unwrap();
-        let embedded = lapis_backend_state::EmbeddedClient::connect(
+        let embedded = backend_state::EmbeddedClient::connect(
             backend.clone(),
             SessionId::try_new("embedded-1").unwrap(),
             workspace_id.clone(),
@@ -543,13 +537,13 @@ mod tests {
         };
         let workspace_id = WorkspaceId::try_new("workspace").unwrap();
         let event = EventEnvelope {
-            event_sequence: lapis_client_api::EventSequence::new(7),
+            event_sequence: client_api::EventSequence::new(7),
             body: EventBody::GitStatusChanged {
                 workspace_id: workspace_id.clone(),
-                repository: lapis_git::GitRepositoryStatus {
+                repository: git::GitRepositoryStatus {
                     repository_id: "path:private".into(),
-                    status: lapis_git::GitSnapshot {
-                        workspace_id: lapis_editor_core::WorkspaceId::new("workspace"),
+                    status: git::GitSnapshot {
+                        workspace_id: editor_core::WorkspaceId::new("workspace"),
                         worktree_id: None,
                         revision: 1,
                         branch: "secret".into(),

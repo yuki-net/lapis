@@ -25,14 +25,14 @@ pub use auth::{
 };
 pub use authorization::{AuthorizationError, SessionGrant};
 pub use backend_handler::BackendRemoteHandler;
+pub use backend_state::{PathSecurityError, WorkspacePathResolver};
+pub use client_core::{AsyncHostConnection, workbench as async_workbench};
 pub use clock::{Clock, SystemClock};
 pub use credential::{CredentialHandle, CredentialId, InvalidCredentialId};
 pub use handler::{
     RemoteEventReceiver, RemoteRequestHandler, RemoteResponseFuture, RemoteSubscriptionError,
     RemoteSubscriptionFuture,
 };
-pub use lapis_backend_state::{PathSecurityError, WorkspacePathResolver};
-pub use lapis_client_core::{AsyncHostConnection, workbench as async_workbench};
 pub use limits::{
     AuthenticationTimeout, IdleTimeout, LimitError, MaxConcurrentRequests, MaxFrameSize,
     MaxMessageSize, RemoteLimits, RequestTimeout,

@@ -1,8 +1,8 @@
 use std::{error::Error, fmt};
 
-use lapis_client_api::RevisionConflict;
-use lapis_document::DocumentError;
-use lapis_terminal::TerminalError;
+use client_api::RevisionConflict;
+use document::DocumentError;
+use terminal::TerminalError;
 
 use crate::PathSecurityError;
 

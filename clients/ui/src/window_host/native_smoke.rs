@@ -3,27 +3,25 @@ use super::*;
 
 struct SmokeFailConversation;
 
-type SmokeSavedConversation = Option<lapis_desktop_client::ConversationState>;
+type SmokeSavedConversation = Option<desktop_client::ConversationState>;
 
 struct SmokeRecordingConversation {
-    inner: std::sync::Arc<dyn lapis_desktop_client::ConversationRepository>,
+    inner: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     saved: std::sync::Arc<std::sync::Mutex<SmokeSavedConversation>>,
 }
 
-impl lapis_desktop_client::ConversationRepository for SmokeRecordingConversation {
-    fn load(
-        &self,
-    ) -> Result<lapis_desktop_client::ConversationState, lapis_workspace::WorkspaceError> {
+impl desktop_client::ConversationRepository for SmokeRecordingConversation {
+    fn load(&self) -> Result<desktop_client::ConversationState, workspace::WorkspaceError> {
         self.inner.load()
     }
 
     fn save(
         &self,
-        expected: &lapis_desktop_client::ConversationState,
-        projects: &[lapis_desktop_client::Project],
-        records: &[lapis_desktop_client::ConversationRecord],
-        active: &lapis_editor_core::ConversationId,
-    ) -> Result<(), lapis_workspace::WorkspaceError> {
+        expected: &desktop_client::ConversationState,
+        projects: &[desktop_client::Project],
+        records: &[desktop_client::ConversationRecord],
+        active: &editor_core::ConversationId,
+    ) -> Result<(), workspace::WorkspaceError> {
         self.inner.save(expected, projects, records, active)?;
         *self.saved.lock().unwrap() =
             Some((projects.to_vec(), records.to_vec(), Some(active.clone())));
@@ -31,21 +29,19 @@ impl lapis_desktop_client::ConversationRepository for SmokeRecordingConversation
     }
 }
 
-impl lapis_desktop_client::ConversationRepository for SmokeFailConversation {
-    fn load(
-        &self,
-    ) -> Result<lapis_desktop_client::ConversationState, lapis_workspace::WorkspaceError> {
+impl desktop_client::ConversationRepository for SmokeFailConversation {
+    fn load(&self) -> Result<desktop_client::ConversationState, workspace::WorkspaceError> {
         Ok(Default::default())
     }
 
     fn save(
         &self,
-        _: &lapis_desktop_client::ConversationState,
-        _: &[lapis_desktop_client::Project],
-        _: &[lapis_desktop_client::ConversationRecord],
-        _: &lapis_editor_core::ConversationId,
-    ) -> Result<(), lapis_workspace::WorkspaceError> {
-        Err(lapis_workspace::WorkspaceError::new(
+        _: &desktop_client::ConversationState,
+        _: &[desktop_client::Project],
+        _: &[desktop_client::ConversationRecord],
+        _: &editor_core::ConversationId,
+    ) -> Result<(), workspace::WorkspaceError> {
+        Err(workspace::WorkspaceError::new(
             "smoke view persistence failure",
         ))
     }
@@ -294,7 +290,7 @@ pub(crate) fn run_native_smoke(
                             .editor
                             .close_document(
                                 &recovered,
-                                lapis_desktop_client::DocumentCloseDisposition::DiscardChanges,
+                                desktop_client::DocumentCloseDisposition::DiscardChanges,
                             )
                             .map(|_| ())
                             .map_err(|e| e.to_string())
@@ -356,7 +352,7 @@ pub(crate) fn run_native_smoke(
             .update(cx, |root, _| {
                 let recorded = recorded.clone();
                 root.worker.request(move |client| {
-                    let recording = lapis_desktop_client::ConversationSession::new(
+                    let recording = desktop_client::ConversationSession::new(
                         std::sync::Arc::new(SmokeRecordingConversation {
                             inner: client.conversation.repository(),
                             saved: recorded.clone(),
@@ -428,7 +424,7 @@ pub(crate) fn run_native_smoke(
         let saved_conversation = this
             .update(cx, |root, _| {
                 root.worker.request(|client| {
-                    let failing = lapis_desktop_client::ConversationSession::new(
+                    let failing = desktop_client::ConversationSession::new(
                         std::sync::Arc::new(SmokeFailConversation),
                         client.editor.snapshot(),
                     );
@@ -1598,7 +1594,7 @@ async fn verify_workbench_routes(
             assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, b);
             assert_eq!(
                 root.persisted_view(cx).layout.workbench.mode,
-                lapis_desktop_client::WorkbenchModeState::Agent
+                desktop_client::WorkbenchModeState::Agent
             );
             root.shell.update(cx, |shell, cx| {
                 let main = shell
@@ -1689,7 +1685,7 @@ async fn verify_workbench_routes(
     root.update(cx, |root, cx| {
         assert_eq!(
             root.persisted_view(cx).layout.workbench.mode,
-            lapis_desktop_client::WorkbenchModeState::Ide
+            desktop_client::WorkbenchModeState::Ide
         );
         assert_eq!(root.editor.read(cx).document_id(), before.1);
         assert_eq!(root.group.read(cx).latest.as_ref().unwrap().conversation, a);

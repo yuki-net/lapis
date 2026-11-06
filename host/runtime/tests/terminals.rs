@@ -5,18 +5,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lapis_backend_state::{
+use backend_state::{
     BackendService, BackendSession, BackendState, WorkspaceEntry, WorkspaceFileBackend,
     WorkspaceRegistration,
 };
-use lapis_client_api::{
+use client_api::{
     EventBody, FORBIDDEN, INVALID_REQUEST, NOT_FOUND, RequestBody, RequestEnvelope, RequestId,
     ResponseBody, SessionId, SnapshotReason, SnapshotRequest, TerminalId, TerminalInputRequest,
     TerminalResizeRequest, TerminalSize, TerminalStartRequest, TerminalStatus,
     TerminalTerminateRequest, UNSUPPORTED, WorkspaceConnectRequest, WorkspaceId,
 };
-use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
-use lapis_terminal::{
+use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+use terminal::{
     TerminalBackend, TerminalCell, TerminalDelta, TerminalError, TerminalEvent,
     TerminalId as BackendTerminalId, TerminalInput, TerminalRowUpdate, TerminalScreen,
 };
@@ -44,8 +44,8 @@ impl DocumentRepository for EmptyFiles {
 }
 
 impl WorkspaceFileBackend for EmptyFiles {
-    fn create_directory(&self, _: &std::path::Path) -> Result<(), lapis_document::DocumentError> {
-        Err(lapis_document::DocumentError::io("Unsupported"))
+    fn create_directory(&self, _: &std::path::Path) -> Result<(), document::DocumentError> {
+        Err(document::DocumentError::io("Unsupported"))
     }
     fn list_children(&self, _directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
         Ok(Vec::new())
@@ -153,7 +153,7 @@ impl TerminalBackend for FakeTerminalBackend {
                     rows,
                     events: VecDeque::new(),
                     revision: 0,
-                    screen: TerminalScreen::empty(lapis_terminal::TerminalSize::new(columns, rows)),
+                    screen: TerminalScreen::empty(terminal::TerminalSize::new(columns, rows)),
                 },
             );
             Ok(BackendTerminalId::new(id))
@@ -189,8 +189,7 @@ impl TerminalBackend for FakeTerminalBackend {
             terminal.columns = columns;
             terminal.rows = rows;
             terminal.revision += 1;
-            terminal.screen =
-                TerminalScreen::empty(lapis_terminal::TerminalSize::new(columns, rows));
+            terminal.screen = TerminalScreen::empty(terminal::TerminalSize::new(columns, rows));
             state.calls.push(FakeCall::Resize {
                 id: id.as_str().to_owned(),
                 columns,
@@ -540,7 +539,7 @@ fn dispatch(
 }
 
 fn assert_terminal_status(
-    events: &lapis_backend_state::BackendEventReceiver,
+    events: &backend_state::BackendEventReceiver,
     terminal_id: &TerminalId,
     expected: TerminalStatus,
 ) {
@@ -556,7 +555,7 @@ fn assert_terminal_status(
 }
 
 fn assert_terminal_output(
-    events: &lapis_backend_state::BackendEventReceiver,
+    events: &backend_state::BackendEventReceiver,
     terminal_id: &TerminalId,
     expected: &str,
 ) {
@@ -574,8 +573,8 @@ fn assert_terminal_output(
 }
 
 fn wait_for_event(
-    events: &lapis_backend_state::BackendEventReceiver,
-    predicate: impl Fn(&lapis_client_api::EventEnvelope) -> bool,
+    events: &backend_state::BackendEventReceiver,
+    predicate: impl Fn(&client_api::EventEnvelope) -> bool,
 ) {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {

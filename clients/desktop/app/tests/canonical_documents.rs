@@ -1,4 +1,4 @@
-use lapis_host::BackendHost;
+use host::BackendHost;
 
 #[test]
 fn relative_file_requests_follow_the_current_root_and_reject_a_stale_source() {
@@ -11,7 +11,7 @@ fn relative_file_requests_follow_the_current_root_and_reject_a_stale_source() {
     let primary = primary.canonicalize().unwrap();
     let sub = sub.canonicalize().unwrap();
     let host = BackendHost::start().unwrap();
-    let mut editor = lapis_desktop_client::EditorSession::new_empty(
+    let mut editor = desktop_client::EditorSession::new_empty(
         host.workspaces(),
         Arc::new(NoDialog),
         Arc::new(ViewStore::default()),
@@ -38,9 +38,9 @@ fn relative_file_requests_follow_the_current_root_and_reject_a_stale_source() {
 fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("deleted.md");
-    let snapshot = lapis_desktop_client::WorkspaceSnapshot {
+    let snapshot = desktop_client::WorkspaceSnapshot {
         root: Some(root.path().to_owned()),
-        open_documents: vec![lapis_desktop_client::DocumentViewState {
+        open_documents: vec![desktop_client::DocumentViewState {
             path,
             draft_content: Some("unsaved workspace draft 😀".into()),
             ..Default::default()
@@ -51,7 +51,7 @@ fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     root.close().unwrap();
     let host = BackendHost::start().unwrap();
     let store = std::sync::Arc::new(ViewStore::default());
-    let mut editor = lapis_desktop_client::EditorSession::new_empty(
+    let mut editor = desktop_client::EditorSession::new_empty(
         host.workspaces(),
         std::sync::Arc::new(NoDialog),
         store.clone(),
@@ -64,7 +64,7 @@ fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     assert!(editor.is_dirty());
     assert!(editor.restore_warning().is_some());
     editor.update_active_view(0..0, 0, 0.0, 0.0);
-    let saved = lapis_desktop_client::WorkspaceStateRepository::load(&*store)
+    let saved = desktop_client::WorkspaceStateRepository::load(&*store)
         .unwrap()
         .unwrap();
     assert_eq!(saved.root, Some(retained_root));
@@ -78,7 +78,7 @@ fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
 
 #[test]
 fn restoring_an_older_draft_keeps_both_live_host_content_and_backup() {
-    use lapis_desktop_client::{EditorSession, WorkspaceStateRepository};
+    use desktop_client::{EditorSession, WorkspaceStateRepository};
     use std::sync::Arc;
     let root = tempfile::tempdir().unwrap();
     let host = BackendHost::start().unwrap();
@@ -125,7 +125,7 @@ fn restoring_an_older_draft_keeps_both_live_host_content_and_backup() {
 
 #[test]
 fn shared_workbench_document_view_restores_another_client_without_losing_edits() {
-    use lapis_desktop_client::{
+    use desktop_client::{
         ConversationViewState, EditorSession, WorkbenchSync, WorkbenchSyncResult,
     };
     use std::sync::Arc;
@@ -146,7 +146,7 @@ fn shared_workbench_document_view_restores_another_client_without_losing_edits()
     let id = first.active_document_id().unwrap().clone();
     let workspace = first.workspace_id().unwrap().clone();
     let portable = first.snapshot().to_shared(workspace.clone()).unwrap();
-    let connection = lapis_host::BackendClient::from(host.clone()).workbench();
+    let connection = host::BackendClient::from(host.clone()).workbench();
     let mut writer = WorkbenchSync::new(connection.clone());
     writer.open(workspace.clone()).unwrap();
     assert!(matches!(
@@ -166,12 +166,9 @@ fn shared_workbench_document_view_restores_another_client_without_losing_edits()
         .unwrap()
         .workspace
         .unwrap();
-    let local = lapis_desktop_client::WorkspaceSnapshot::from_shared(
-        &shared,
-        &workspace,
-        root.path().to_owned(),
-    )
-    .unwrap();
+    let local =
+        desktop_client::WorkspaceSnapshot::from_shared(&shared, &workspace, root.path().to_owned())
+            .unwrap();
     let mut second = make_editor();
     second.restore_snapshot(local).unwrap();
     assert_eq!(second.active_document_id(), Some(&id));
@@ -183,19 +180,16 @@ fn shared_workbench_document_view_restores_another_client_without_losing_edits()
 }
 
 #[derive(Default)]
-struct ViewStore(std::sync::Mutex<Option<lapis_desktop_client::WorkspaceSnapshot>>);
+struct ViewStore(std::sync::Mutex<Option<desktop_client::WorkspaceSnapshot>>);
 
-impl lapis_desktop_client::WorkspaceStateRepository for ViewStore {
-    fn load(
-        &self,
-    ) -> Result<Option<lapis_desktop_client::WorkspaceSnapshot>, lapis_workspace::WorkspaceError>
-    {
+impl desktop_client::WorkspaceStateRepository for ViewStore {
+    fn load(&self) -> Result<Option<desktop_client::WorkspaceSnapshot>, workspace::WorkspaceError> {
         Ok(self.0.lock().unwrap().clone())
     }
     fn save(
         &self,
-        snapshot: &lapis_desktop_client::WorkspaceSnapshot,
-    ) -> Result<(), lapis_workspace::WorkspaceError> {
+        snapshot: &desktop_client::WorkspaceSnapshot,
+    ) -> Result<(), workspace::WorkspaceError> {
         *self.0.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }
@@ -203,7 +197,7 @@ impl lapis_desktop_client::WorkspaceStateRepository for ViewStore {
 
 struct NoDialog;
 
-impl lapis_desktop_client::WorkspaceDialog for NoDialog {
+impl desktop_client::WorkspaceDialog for NoDialog {
     fn choose_workspace_path(&self) -> Option<std::path::PathBuf> {
         None
     }
@@ -214,7 +208,7 @@ impl lapis_desktop_client::WorkspaceDialog for NoDialog {
 
 #[test]
 fn group_close_refreshes_the_other_attachment_after_shared_save_or_discard() {
-    use lapis_desktop_client::{DocumentCloseDisposition as Close, EditorSession};
+    use desktop_client::{DocumentCloseDisposition as Close, EditorSession};
     for save in [true, false] {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("shared-close.md");
@@ -283,7 +277,7 @@ fn desktop_sessions_share_runtime_resources_across_close_restore_and_workspace_s
     let host = BackendHost::start().unwrap();
     let documents = host.documents();
     let make_editor = || {
-        lapis_desktop_client::EditorSession::new_empty(
+        desktop_client::EditorSession::new_empty(
             host.workspaces(),
             std::sync::Arc::new(NoDialog),
             std::sync::Arc::new(ViewStore::default()),
@@ -328,13 +322,12 @@ fn recovered_selection_survives_persistence_and_runtime_id_reallocation() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("original.txt");
     std::fs::write(&path, "saved").unwrap();
-    let store: std::sync::Arc<dyn lapis_desktop_client::WorkspaceStateRepository> =
-        std::sync::Arc::new(lapis_persistence::LocalWorkspaceStateRepository::new(
-            root.path().join("session.txt"),
-        ));
+    let store: std::sync::Arc<dyn desktop_client::WorkspaceStateRepository> = std::sync::Arc::new(
+        persistence::LocalWorkspaceStateRepository::new(root.path().join("session.txt")),
+    );
     let previous_id = {
         let host = BackendHost::start().unwrap();
-        let mut editor = lapis_desktop_client::EditorSession::new_empty(
+        let mut editor = desktop_client::EditorSession::new_empty(
             host.workspaces(),
             std::sync::Arc::new(NoDialog),
             store.clone(),
@@ -345,7 +338,7 @@ fn recovered_selection_survives_persistence_and_runtime_id_reallocation() {
         editor.active_document_id().unwrap().clone()
     };
     let host = BackendHost::start().unwrap();
-    let mut editor = lapis_desktop_client::EditorSession::new_empty(
+    let mut editor = desktop_client::EditorSession::new_empty(
         host.workspaces(),
         std::sync::Arc::new(NoDialog),
         store.clone(),

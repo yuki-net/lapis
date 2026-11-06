@@ -4,7 +4,7 @@ use std::sync::{
 };
 
 use crate::{BackendEventReceiver, BackendService, BackendServiceError, BackendSession};
-use lapis_client_api::{
+use client_api::{
     RequestBody, RequestEnvelope, RequestId, ResponseBody, SessionId, WorkspaceConnectRequest,
     WorkspaceId,
 };

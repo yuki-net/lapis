@@ -52,8 +52,8 @@ fn engine_tracks_alternate_screen_and_answers_terminal_queries() {
     assert!(!engine.screen().modes.alternate_screen);
 }
 
-use lapis_terminal::TerminalKeyEvent;
 use std::time::Duration;
+use terminal::TerminalKeyEvent;
 
 struct Capture(mpsc::Sender<Vec<u8>>);
 impl Write for Capture {
@@ -500,10 +500,7 @@ fn scrollback_grows_and_delta_appends() {
     );
 }
 
-fn assert_scrollback_roundtrip(
-    old: &[&str],
-    new: &[&str],
-) -> lapis_terminal::TerminalScrollbackDelta {
+fn assert_scrollback_roundtrip(old: &[&str], new: &[&str]) -> terminal::TerminalScrollbackDelta {
     let size = TerminalSize::new(40, 4);
     let rows = |texts: &[&str]| {
         texts

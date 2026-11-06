@@ -15,7 +15,7 @@ pub enum RequestBody {
     #[serde(rename = "workbench.put")]
     WorkbenchPut(crate::WorkbenchPutRequest),
     #[serde(rename = "host.worktree_path")]
-    HostWorktree(lapis_editor_core::TaskId),
+    HostWorktree(editor_core::TaskId),
     #[serde(rename = "host.register_workspace")]
     HostRegister(crate::HostRegisterRequest),
     #[serde(rename = "document.relocate")]

@@ -14,32 +14,32 @@ use std::{
     time::{Duration, Instant},
 };
 
-use lapis_backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
-use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
-use lapis_editor_core::ExecutionId;
-use lapis_git::{
+use backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
+use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+use editor_core::ExecutionId;
+use git::{
     ChangeKind, ChangedFile, FileDiff, GitBackend, GitError, GitErrorKind, RepositoryStatus,
     TaskWorktree, WorktreeState,
 };
-use lapis_lsp::{
+use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, DiagnosticSeverity, LanguageServerBackend,
     LspError, LspPosition, LspRange,
 };
-use lapis_task_runner::{
+use serde::{Deserialize, Serialize};
+use task_runner::{
     CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
     TaskEvent, TaskRecord, run_codex_app_server,
 };
 #[cfg(test)]
-use lapis_terminal::TerminalScreen;
-use lapis_terminal::{
+use terminal::TerminalScreen;
+use terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
     TerminalSize,
 };
-use lapis_workspace::WorkspaceRepository;
-use lapis_workspace::{
+use workspace::WorkspaceRepository;
+use workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend,
 };
-use serde::{Deserialize, Serialize};
 mod credential_store;
 mod git_action;
 mod git_watch;
@@ -156,7 +156,7 @@ fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminal
 
 impl TerminalBackend for LocalTerminalBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, lapis_terminal::TerminalShell::Default)
+        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
     }
 
     fn start_with_shell(
@@ -164,9 +164,9 @@ impl TerminalBackend for LocalTerminalBackend {
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
-        use lapis_terminal::TerminalShell;
+        use terminal::TerminalShell;
         let size = normalized_size(TerminalSize::new(columns, rows));
         let cwd = shell_directory(cwd, shell)?;
         let mut command = match shell {
@@ -323,10 +323,7 @@ impl TerminalBackend for LocalTerminalBackend {
     }
 }
 
-fn shell_directory(
-    cwd: &Path,
-    shell: lapis_terminal::TerminalShell,
-) -> Result<PathBuf, TerminalError> {
+fn shell_directory(cwd: &Path, shell: terminal::TerminalShell) -> Result<PathBuf, TerminalError> {
     #[cfg(windows)]
     if let Some(std::path::Component::Prefix(prefix)) = cwd.components().next() {
         use std::path::Prefix;
@@ -338,7 +335,7 @@ fn shell_directory(
                 return Ok(path);
             }
             Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _)
-                if shell == lapis_terminal::TerminalShell::Cmd =>
+                if shell == terminal::TerminalShell::Cmd =>
             {
                 return Err(TerminalError::new(
                     "cmdはUNC作業フォルダを使用できません。PowerShellを選択してください",
@@ -356,7 +353,7 @@ struct LspProcess {
     writer: std::process::ChildStdin,
     receiver: mpsc::Receiver<serde_json::Value>,
     next_request: u64,
-    revisions: HashMap<PathBuf, lapis_document::Revision>,
+    revisions: HashMap<PathBuf, document::Revision>,
     diagnostics: Vec<Diagnostic>,
     diagnostics_dirty: bool,
 }
@@ -460,7 +457,7 @@ impl LanguageServerBackend for LocalLspBackend {
         &self,
         path: &Path,
         text: &str,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<(), LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
@@ -481,7 +478,7 @@ impl LanguageServerBackend for LocalLspBackend {
         &self,
         path: &Path,
         text: &str,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<(), LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
@@ -535,7 +532,7 @@ impl LanguageServerBackend for LocalLspBackend {
         &self,
         path: &Path,
         position: LspPosition,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<Vec<CompletionItem>, LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
@@ -584,7 +581,7 @@ impl LanguageServerBackend for LocalLspBackend {
         &self,
         path: &Path,
         position: LspPosition,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<Option<DefinitionTarget>, LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
@@ -803,7 +800,7 @@ fn lsp_handle_incoming(process: &mut LspProcess, message: &serde_json::Value) {
 fn replace_diagnostics(
     process: &mut LspProcess,
     path: &Path,
-    revision: lapis_document::Revision,
+    revision: document::Revision,
     items: Option<&[serde_json::Value]>,
 ) {
     process
@@ -1526,7 +1523,7 @@ impl LocalGitBackend {
         Self::new(base.join("git-v1"), base.join("worktrees"))
     }
 
-    fn record_path(&self, task_id: &lapis_editor_core::TaskId) -> PathBuf {
+    fn record_path(&self, task_id: &editor_core::TaskId) -> PathBuf {
         self.state_root
             .join(format!("worktree-{}.json", task_id.as_str()))
     }
@@ -1542,7 +1539,7 @@ impl GitBackend for LocalGitBackend {
         &self,
         repository: &Path,
         notify: Arc<dyn Fn() + Send + Sync>,
-    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+    ) -> Result<Box<dyn git::GitWatch>, GitError> {
         Ok(Box::new(git_watch::LocalGitWatch::new(repository, notify)?))
     }
     fn discover_repositories(&self, workspace: &Path) -> Result<Vec<PathBuf>, GitError> {
@@ -1592,8 +1589,8 @@ impl GitBackend for LocalGitBackend {
     fn execute(
         &self,
         repository: &Path,
-        request: lapis_git::GitActionRequest,
-    ) -> Result<lapis_git::GitActionResult, GitError> {
+        request: git::GitActionRequest,
+    ) -> Result<git::GitActionResult, GitError> {
         let gate = git_repository_gate(repository)?;
         let _guard = gate
             .lock()
@@ -1746,7 +1743,7 @@ impl GitBackend for LocalGitBackend {
     fn create_worktree(
         &self,
         repository: &Path,
-        task_id: &lapis_editor_core::TaskId,
+        task_id: &editor_core::TaskId,
     ) -> Result<TaskWorktree, GitError> {
         let status = self.status(repository)?;
         let repository_key = format!("{:016x}", stable_path_hash(&status.root));
@@ -1833,7 +1830,7 @@ impl GitBackend for LocalGitBackend {
                     })
                     .cloned()
                     .unwrap_or_else(|| TaskWorktree {
-                        task_id: lapis_editor_core::TaskId::new(format!(
+                        task_id: editor_core::TaskId::new(format!(
                             "external-{:016x}",
                             stable_path_hash(&path)
                         )),
@@ -2053,7 +2050,7 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
         &self,
         repository: &Path,
         notify: Arc<dyn Fn() + Send + Sync>,
-    ) -> Result<Box<dyn lapis_git::GitWatch>, GitError> {
+    ) -> Result<Box<dyn git::GitWatch>, GitError> {
         if !self.gate.is_connected() {
             return Err(GitError::new(
                 GitErrorKind::Io,
@@ -2074,8 +2071,8 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
     fn execute(
         &self,
         repository: &Path,
-        request: lapis_git::GitActionRequest,
-    ) -> Result<lapis_git::GitActionResult, GitError> {
+        request: git::GitActionRequest,
+    ) -> Result<git::GitActionResult, GitError> {
         if !self.gate.is_connected() {
             return Err(GitError::new(
                 GitErrorKind::Io,
@@ -2107,7 +2104,7 @@ impl<T: GitBackend> GitBackend for LoopbackBackend<T> {
     fn create_worktree(
         &self,
         repository: &Path,
-        task_id: &lapis_editor_core::TaskId,
+        task_id: &editor_core::TaskId,
     ) -> Result<TaskWorktree, GitError> {
         if !self.gate.is_connected() {
             return Err(GitError::new(
@@ -2162,7 +2159,7 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
     ) -> Result<TerminalId, TerminalError> {
         if !self.gate.is_connected() {
             return Err(TerminalError::new("loopback workspace is disconnected"));
@@ -2215,7 +2212,7 @@ impl<T: LanguageServerBackend> LanguageServerBackend for LoopbackBackend<T> {
         &self,
         path: &Path,
         text: &str,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<(), LspError> {
         if !self.gate.is_connected() {
             return Err(LspError::new("loopback workspace is disconnected"));
@@ -2226,7 +2223,7 @@ impl<T: LanguageServerBackend> LanguageServerBackend for LoopbackBackend<T> {
         &self,
         path: &Path,
         text: &str,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<(), LspError> {
         if !self.gate.is_connected() {
             return Err(LspError::new("loopback workspace is disconnected"));
@@ -2243,7 +2240,7 @@ impl<T: LanguageServerBackend> LanguageServerBackend for LoopbackBackend<T> {
         &self,
         path: &Path,
         position: LspPosition,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<Vec<CompletionItem>, LspError> {
         if !self.gate.is_connected() {
             return Err(LspError::new("loopback workspace is disconnected"));
@@ -2254,7 +2251,7 @@ impl<T: LanguageServerBackend> LanguageServerBackend for LoopbackBackend<T> {
         &self,
         path: &Path,
         position: LspPosition,
-        revision: lapis_document::Revision,
+        revision: document::Revision,
     ) -> Result<Option<DefinitionTarget>, LspError> {
         if !self.gate.is_connected() {
             return Err(LspError::new("loopback workspace is disconnected"));
@@ -2444,7 +2441,7 @@ mod tests {
         let error = LocalWorkspaceRepository
             .list_children(directory.path())
             .unwrap_err();
-        assert_eq!(error.kind(), lapis_document::DocumentErrorKind::Io);
+        assert_eq!(error.kind(), document::DocumentErrorKind::Io);
     }
 
     #[test]
@@ -2454,7 +2451,7 @@ mod tests {
         fs::write(&file, b"not a directory").unwrap();
 
         let error = LocalWorkspaceRepository.list_children(&file).unwrap_err();
-        assert_eq!(error.kind(), lapis_document::DocumentErrorKind::Io);
+        assert_eq!(error.kind(), document::DocumentErrorKind::Io);
     }
 
     #[test]
@@ -2505,7 +2502,7 @@ mod tests {
             directory.path().join("worktrees"),
         );
         assert!(backend.status(&repository).unwrap().files.is_empty());
-        let task = lapis_editor_core::TaskId::new("task-git-1");
+        let task = editor_core::TaskId::new("task-git-1");
         let worktree = backend.create_worktree(&repository, &task).unwrap();
         fs::write(worktree.path.join("note.txt"), "base\nworktree\n").unwrap();
         let status = backend.status(&worktree.path).unwrap();
@@ -2520,7 +2517,7 @@ mod tests {
             "base\nworktree\n"
         );
 
-        let task2 = lapis_editor_core::TaskId::new("task-git-2");
+        let task2 = editor_core::TaskId::new("task-git-2");
         let worktree2 = backend.create_worktree(&repository, &task2).unwrap();
         fs::write(worktree2.path.join("note.txt"), "other\n").unwrap();
         let conflict = backend
@@ -2665,7 +2662,7 @@ mod tests {
             return;
         }
         backend
-            .did_open(&path, "fn broken( {\n", lapis_document::Revision::default())
+            .did_open(&path, "fn broken( {\n", document::Revision::default())
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(20);
         let mut diagnostics = Vec::new();
@@ -2698,7 +2695,7 @@ mod tests {
         );
         let backend = LocalLspBackend::default();
         backend.start(workspace.path()).unwrap();
-        let revision = lapis_document::Revision::default();
+        let revision = document::Revision::default();
         backend.did_open(&path, text, revision).unwrap();
         let _ = backend.diagnostics().unwrap();
 

@@ -1,19 +1,19 @@
 [package]
-name = "lapis-backend-state"
+name = "backend-state"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-git = { path = "../../contracts/domain/git" }
-lapis-task = { path = "../../contracts/domain/task" }
-lapis-editor-core = { path = "../../contracts/domain/editor-core" }
-lapis-client-api = { path = "../../contracts/protocol" }
-lapis-document = { path = "../../contracts/domain/document" }
-lapis-text = { path = "../../contracts/domain/text" }
-lapis-terminal = { path = "../../contracts/domain/terminal" }
-lapis-workbench = { path = "../../contracts/domain/workbench" }
+git = { path = "../../contracts/domain/git" }
+task = { path = "../../contracts/domain/task" }
+editor-core = { path = "../../contracts/domain/editor-core" }
+client-api = { path = "../../contracts/protocol" }
+document = { path = "../../contracts/domain/document" }
+text = { path = "../../contracts/domain/text" }
+terminal = { path = "../../contracts/domain/terminal" }
+workbench = { path = "../../contracts/domain/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 

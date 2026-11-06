@@ -1,6 +1,6 @@
-use lapis_host::BackendHost;
-use lapis_platform::CredentialStore;
-use lapis_remote::{
+use host::BackendHost;
+use platform::CredentialStore;
+use remote::{
     AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
     RemoteAuth, RemoteLimits, tls13_server_config,
 };
@@ -73,10 +73,7 @@ fn main() {
             .map_err(|error| -> Error { error.into() })
             .and_then(|root| {
                 let directory = arguments.get(3).ok_or("Hostの状態フォルダがありません")?;
-                lapis_host::run_managed_host(
-                    std::path::Path::new(root),
-                    std::path::Path::new(directory),
-                )
+                host::run_managed_host(std::path::Path::new(root), std::path::Path::new(directory))
             });
         if result.is_err() {
             std::process::exit(1);
@@ -92,7 +89,7 @@ fn main() {
             .ok_or("Task worker spec is required")
             .map_err(|message| -> Error { message.into() })
             .and_then(|path| {
-                lapis_platform::run_task_worker(std::path::Path::new(path)).map_err(Into::into)
+                platform::run_task_worker(std::path::Path::new(path)).map_err(Into::into)
             });
         if let Err(error) = result {
             eprintln!("Task worker: {error}");
@@ -131,7 +128,7 @@ fn run() -> Result<(), Error> {
             PairingLifetime::new(3600)?,
             CredentialLifetime::new(CREDENTIAL_LIFETIME_SECONDS)?,
         ),
-        AuthPolicy::new(lapis_host::supported_capabilities()),
+        AuthPolicy::new(host::supported_capabilities()),
     )));
     let mut credential_store = match &credentials_path {
         Some(path) => match CredentialStore::open(path) {
@@ -177,7 +174,7 @@ fn run() -> Result<(), Error> {
         })?;
     runtime.block_on(async {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
-            Arc::new(lapis_host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
+            Arc::new(host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
         // listenに失敗した起動が稼働中Hostの証明書を置き換えない。
         write_public_certificate(&options.certificate, certified.cert.der(), options.replace_certificate)?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
@@ -237,9 +234,9 @@ fn run() -> Result<(), Error> {
                         let path = parts.next().map(str::trim).filter(|path| !path.is_empty());
                         if let (Some(address), Some(path)) = (address, path) {
                             let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
-                            let invitation = lapis_host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                            let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
                                 workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: token.secret_bytes().to_vec() };
-                            match lapis_host::write_invitation(std::path::Path::new(path), &invitation) {
+                            match host::write_invitation(std::path::Path::new(path), &invitation) {
                                 Ok(()) => println!("招待を作成しました（1時間・一回限り）。安全な経路でClientへ渡してください。"),
                                 Err(_) => eprintln!("招待ファイルを作成できません。新規ファイルを指定してください。"),
                             }

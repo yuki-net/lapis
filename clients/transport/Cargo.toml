@@ -1,5 +1,5 @@
 [package]
-name = "lapis-client-core"
+name = "client-core"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -7,14 +7,14 @@ license.workspace = true
 
 [dependencies]
 futures-channel = "0.3"
-lapis-client-api = { path = "../../contracts/protocol" }
-lapis-workbench = { path = "../../contracts/domain/workbench" }
+client-api = { path = "../../contracts/protocol" }
+workbench = { path = "../../contracts/domain/workbench" }
 serde_json.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
-lapis-wire = { path = "../../contracts/wire" }
+wire = { path = "../../contracts/wire" }
 serde.workspace = true
 wasm-bindgen = "=0.2.129"
 web-sys = { version = "=0.3.106", features = ["WebSocket", "MessageEvent", "Event", "ErrorEvent"] }

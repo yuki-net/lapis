@@ -1,5 +1,5 @@
 //! Task・Execution の値と操作 port。プロセス実装には依存しない。
-use lapis_editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
+use editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 mod connection;
@@ -279,7 +279,7 @@ pub fn unix_time_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
+    use editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
     use std::path::PathBuf;
 
     #[test]

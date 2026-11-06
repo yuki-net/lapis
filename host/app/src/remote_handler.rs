@@ -1,7 +1,7 @@
 use crate::BackendHost;
-use lapis_backend_state::{BackendServiceError, BackendSession, BackendStateError};
-use lapis_client_api::*;
-use lapis_remote::{
+use backend_state::{BackendServiceError, BackendSession, BackendStateError};
+use client_api::*;
+use remote::{
     BackendRemoteHandler, RemoteRequestHandler, RemoteResponseFuture, RemoteSubscriptionFuture,
     SessionGrant,
 };
@@ -139,7 +139,7 @@ fn service_error(problem: BackendServiceError) -> ResponseBody {
             ResponseBody::Error(ProtocolError::revision_conflict(conflict))
         }
         BackendServiceError::State(BackendStateError::Document(problem))
-            if problem.kind() == lapis_document::DocumentErrorKind::Conflict =>
+            if problem.kind() == document::DocumentErrorKind::Conflict =>
         {
             error("document_conflict")
         }

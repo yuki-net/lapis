@@ -56,7 +56,7 @@ npm run dev -- --host 0.0.0.0 --port 5174
 ## 結合検証（Host / Bridge）
 
 ```powershell
-cargo build -p lapis-host -p lapis-web-bridge
-cargo build -p lapis-web --target wasm32-unknown-unknown --profile web --features bridge-smoke
+cargo build -p host -p web-bridge
+cargo build -p web --target wasm32-unknown-unknown --profile web --features bridge-smoke
 python clients/web/wasm/tests/bridge_smoke.py
 ```

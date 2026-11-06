@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lapis_document::Revision;
+use document::Revision;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

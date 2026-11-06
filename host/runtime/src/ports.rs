@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use lapis_document::{DocumentError, DocumentRepository};
+use document::{DocumentError, DocumentRepository};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkspaceEntry {

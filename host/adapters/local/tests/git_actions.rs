@@ -1,5 +1,5 @@
-use lapis_git::{ConflictSide, GitAction, GitActionRequest, GitBackend};
-use lapis_platform::LocalGitBackend;
+use git::{ConflictSide, GitAction, GitActionRequest, GitBackend};
+use platform::LocalGitBackend;
 use std::{path::Path, process::Command};
 
 fn git(root: &Path, args: &[&str]) -> String {

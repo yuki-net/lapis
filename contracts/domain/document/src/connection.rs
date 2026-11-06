@@ -1,5 +1,5 @@
 use crate::{Document, DocumentError, ExternalChange, Revision};
-use lapis_editor_core::DocumentId;
+use editor_core::DocumentId;
 use std::{
     ops::Range,
     path::{Path, PathBuf},
@@ -17,7 +17,7 @@ pub struct DocumentCache {
 
 pub trait DocumentConnection: Send + Sync {
     fn fork(&self) -> std::sync::Arc<dyn DocumentConnection>;
-    fn workspace(&self, root: &Path) -> Result<lapis_editor_core::WorkspaceId, DocumentError>;
+    fn workspace(&self, root: &Path) -> Result<editor_core::WorkspaceId, DocumentError>;
     fn create(&self, root: Option<&Path>) -> Result<DocumentCache, DocumentError>;
     fn open(&self, path: &Path) -> Result<DocumentCache, DocumentError>;
     fn attach(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError>;

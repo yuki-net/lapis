@@ -1,15 +1,15 @@
 use super::*;
-use lapis_desktop_client::{
+use desktop_client::{
     ConversationRepository, WorkspaceDialog, WorkspaceRepository, WorkspaceSnapshot,
     WorkspaceStateRepository,
 };
-use lapis_document::{Document, DocumentConnection, DocumentError, ExternalChange, Revision};
-use lapis_workspace::WorkspaceError;
+use document::{Document, DocumentConnection, DocumentError, ExternalChange, Revision};
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
     sync::{Arc, Mutex},
 };
+use workspace::WorkspaceError;
 
 #[derive(Default)]
 pub(crate) struct State {
@@ -24,7 +24,7 @@ pub(crate) struct State {
 
 #[test]
 fn terminal_persistence_rejects_other_task_and_pending_context_without_erasing_resources() {
-    use lapis_terminal::{TerminalId, TerminalSize, TerminalSnapshot, TerminalStatus};
+    use terminal::{TerminalId, TerminalSize, TerminalSnapshot, TerminalStatus};
     let fixture = Fixture::default();
     let mut client = fixture.client();
     let owner = client.conversation.active_id().clone();
@@ -205,13 +205,13 @@ impl WorkspaceStateRepository for Fixture {
     }
 }
 impl ConversationRepository for Fixture {
-    fn load(&self) -> Result<lapis_desktop_client::ConversationState, WorkspaceError> {
+    fn load(&self) -> Result<desktop_client::ConversationState, WorkspaceError> {
         Ok(Default::default())
     }
     fn save(
         &self,
-        _: &lapis_desktop_client::ConversationState,
-        _: &[lapis_desktop_client::Project],
+        _: &desktop_client::ConversationState,
+        _: &[desktop_client::Project],
         _: &[ConversationRecord],
         _: &ConversationId,
     ) -> Result<(), WorkspaceError> {
@@ -222,103 +222,79 @@ impl ConversationRepository for Fixture {
         }
     }
 }
-impl lapis_git::GitConnection for Fixture {
+impl git::GitConnection for Fixture {
     fn status(
         &self,
         _: &WorkspaceId,
-        _: Option<&lapis_editor_core::TaskId>,
-    ) -> Result<lapis_git::GitSnapshot, lapis_git::GitError> {
-        Err(lapis_git::GitError::new(
-            lapis_git::GitErrorKind::Io,
-            "git unavailable",
-        ))
+        _: Option<&editor_core::TaskId>,
+    ) -> Result<git::GitSnapshot, git::GitError> {
+        Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
     }
 
     fn diff(
         &self,
         _: &WorkspaceId,
-        _: Option<&lapis_editor_core::TaskId>,
+        _: Option<&editor_core::TaskId>,
         _: &str,
-    ) -> Result<lapis_git::GitDiffSnapshot, lapis_git::GitError> {
-        Err(lapis_git::GitError::new(
-            lapis_git::GitErrorKind::Io,
-            "git unavailable",
-        ))
+    ) -> Result<git::GitDiffSnapshot, git::GitError> {
+        Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
     }
 
-    fn worktrees(
-        &self,
-        _: &WorkspaceId,
-    ) -> Result<Vec<lapis_git::WorktreeSnapshot>, lapis_git::GitError> {
-        Err(lapis_git::GitError::new(
-            lapis_git::GitErrorKind::Io,
-            "git unavailable",
-        ))
+    fn worktrees(&self, _: &WorkspaceId) -> Result<Vec<git::WorktreeSnapshot>, git::GitError> {
+        Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
     }
 
-    fn create_worktree(
-        &self,
-        _: &WorkspaceId,
-    ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
-        Err(lapis_git::GitError::new(
-            lapis_git::GitErrorKind::Io,
-            "git unavailable",
-        ))
+    fn create_worktree(&self, _: &WorkspaceId) -> Result<git::WorktreeSnapshot, git::GitError> {
+        Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
     }
 
     fn import_file(
         &self,
         _: &WorkspaceId,
-        _: &lapis_editor_core::TaskId,
+        _: &editor_core::TaskId,
         _: &str,
-    ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
-        Err(lapis_git::GitError::new(
-            lapis_git::GitErrorKind::Io,
-            "git unavailable",
-        ))
+    ) -> Result<git::WorktreeSnapshot, git::GitError> {
+        Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
     }
 
     fn discard_worktree(
         &self,
         _: &WorkspaceId,
-        _: &lapis_editor_core::TaskId,
-    ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
-        Err(lapis_git::GitError::new(
-            lapis_git::GitErrorKind::Io,
-            "git unavailable",
-        ))
+        _: &editor_core::TaskId,
+    ) -> Result<git::WorktreeSnapshot, git::GitError> {
+        Err(git::GitError::new(git::GitErrorKind::Io, "git unavailable"))
     }
 }
-impl lapis_lsp::LanguageServerBackend for Fixture {
-    fn start(&self, _: &Path) -> Result<(), lapis_lsp::LspError> {
+impl lsp::LanguageServerBackend for Fixture {
+    fn start(&self, _: &Path) -> Result<(), lsp::LspError> {
         Ok(())
     }
-    fn did_open(&self, _: &Path, _: &str, _: Revision) -> Result<(), lapis_lsp::LspError> {
+    fn did_open(&self, _: &Path, _: &str, _: Revision) -> Result<(), lsp::LspError> {
         Ok(())
     }
-    fn did_change(&self, _: &Path, _: &str, _: Revision) -> Result<(), lapis_lsp::LspError> {
+    fn did_change(&self, _: &Path, _: &str, _: Revision) -> Result<(), lsp::LspError> {
         Ok(())
     }
-    fn diagnostics(&self) -> Result<Vec<lapis_lsp::Diagnostic>, lapis_lsp::LspError> {
+    fn diagnostics(&self) -> Result<Vec<lsp::Diagnostic>, lsp::LspError> {
         Ok(vec![])
     }
     fn completion(
         &self,
         _: &Path,
-        _: lapis_lsp::LspPosition,
+        _: lsp::LspPosition,
         _: Revision,
-    ) -> Result<Vec<lapis_lsp::CompletionItem>, lapis_lsp::LspError> {
+    ) -> Result<Vec<lsp::CompletionItem>, lsp::LspError> {
         Ok(vec![])
     }
     fn definition(
         &self,
         _: &Path,
-        _: lapis_lsp::LspPosition,
+        _: lsp::LspPosition,
         _: Revision,
-    ) -> Result<Option<lapis_lsp::DefinitionTarget>, lapis_lsp::LspError> {
+    ) -> Result<Option<lsp::DefinitionTarget>, lsp::LspError> {
         Ok(None)
     }
-    fn shutdown(&self) -> Result<(), lapis_lsp::LspError> {
+    fn shutdown(&self) -> Result<(), lsp::LspError> {
         Ok(())
     }
 }
@@ -327,7 +303,7 @@ pub(crate) fn plan(
     client: &DocumentClient,
 ) -> Vec<(
     DocumentId,
-    lapis_desktop_client::DocumentCloseDisposition,
+    desktop_client::DocumentCloseDisposition,
     Revision,
 )> {
     client
@@ -337,7 +313,7 @@ pub(crate) fn plan(
         .map(|cache| {
             (
                 cache.id,
-                lapis_desktop_client::DocumentCloseDisposition::PreserveChanges,
+                desktop_client::DocumentCloseDisposition::PreserveChanges,
                 cache.document.revision(),
             )
         })

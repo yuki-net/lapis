@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 
-use futures_channel::oneshot;
-use lapis_client_api::{
+use client_api::{
     ClientMessage, EventEnvelope, EventSequence, RequestBody, RequestEnvelope, RequestId,
     ResponseBody, ServerMessage,
 };
+use futures_channel::oneshot;
 
 pub mod workbench;
 
@@ -193,7 +193,7 @@ impl Drop for ClientCore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_client_api::{
+    use client_api::{
         EventBody, ResponseEnvelope, WorkspaceId, WorkspaceListRequest, WorkspaceListResponse,
     };
 
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn snapshot_watermark_is_installed_before_the_waiter_is_polled() {
-        use lapis_client_api::{
+        use client_api::{
             SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot, WorkspaceSummary,
         };
 
@@ -339,7 +339,7 @@ mod tests {
 
     #[test]
     fn snapshot_for_another_workspace_is_rejected_before_advancing_watermark() {
-        use lapis_client_api::{
+        use client_api::{
             SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot, WorkspaceSummary,
         };
         let mut client = ClientCore::default();

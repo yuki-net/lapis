@@ -1,15 +1,15 @@
-use lapis_desktop_client::{
+use desktop_client::{
     ConversationSession, EditorSession, SourceRole, TerminalSession, WorkspaceDialog,
 };
-use lapis_host::BackendHost;
-use lapis_persistence::{LocalConversationRepository, LocalWorkspaceStateRepository};
+use host::BackendHost;
+use persistence::{LocalConversationRepository, LocalWorkspaceStateRepository};
 use std::{path::PathBuf, sync::Arc};
 
 struct NoDialog;
 
 #[test]
 fn resolving_selected_task_keeps_dirty_editor_and_running_terminal_context() {
-    use lapis_desktop_client::{ConversationViewState, WorkbenchModeState, WorkbenchViewState};
+    use desktop_client::{ConversationViewState, WorkbenchModeState, WorkbenchViewState};
 
     let directory = tempfile::tempdir().unwrap();
     let primary = directory.path().join("a");
@@ -189,7 +189,7 @@ fn unchanged_window_adopts_latest_task_on_capture_and_switch_without_forking_or_
 
 #[test]
 fn concurrent_task_saves_preserve_both_drafts_and_allow_further_saves() {
-    use lapis_desktop_client::{
+    use desktop_client::{
         ConversationViewState, ViewBindingState, ViewScopeState, WorkbenchLayoutState,
     };
     let directory = tempfile::tempdir().unwrap();
@@ -369,8 +369,8 @@ fn independently_started_clients_keep_both_initial_tasks_when_saving() {
 
 #[test]
 fn existing_sequential_task_id_is_preserved_when_reopened() {
-    use lapis_desktop_client::ConversationRepository;
-    use lapis_editor_core::ConversationId;
+    use desktop_client::ConversationRepository;
+    use editor_core::ConversationId;
 
     let directory = tempfile::tempdir().unwrap();
     let repository = Arc::new(LocalConversationRepository::new(
@@ -391,7 +391,7 @@ fn existing_sequential_task_id_is_preserved_when_reopened() {
 
 #[test]
 fn concurrent_removal_does_not_persist_a_missing_active_task() {
-    use lapis_desktop_client::ConversationRepository;
+    use desktop_client::ConversationRepository;
 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
@@ -475,11 +475,9 @@ fn closing_workspace_uses_a_scratch_record_and_keeps_the_task_draft() {
 
 #[test]
 fn unused_worktree_can_be_removed_after_switching_back_and_catalog_save_must_succeed_first() {
-    use lapis_desktop_client::{
-        ConversationRecord, ConversationRepository, ConversationState, Project,
-    };
-    use lapis_editor_core::ConversationId;
-    use lapis_workspace::WorkspaceError;
+    use desktop_client::{ConversationRecord, ConversationRepository, ConversationState, Project};
+    use editor_core::ConversationId;
+    use workspace::WorkspaceError;
     struct Repository {
         inner: LocalConversationRepository,
         fail: std::sync::atomic::AtomicBool,

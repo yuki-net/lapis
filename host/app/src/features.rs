@@ -1,18 +1,16 @@
 use crate::BackendClient;
 use crate::client::Client;
-use lapis_client_api::{
+use client_api::{
     RequestBody, ResponseBody, WorkspaceOperation as Operation, WorkspaceOperationRequest,
     WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
 };
-use lapis_editor_core::{ExecutionId, TaskId, WorkspaceId};
-use lapis_git::{
-    GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot,
-};
-use lapis_task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
+use editor_core::{ExecutionId, TaskId, WorkspaceId};
+use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
+use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 
 struct Connections {
     host: BackendClient,
-    clients: std::sync::Mutex<std::collections::HashMap<lapis_client_api::WorkspaceId, Client>>,
+    clients: std::sync::Mutex<std::collections::HashMap<client_api::WorkspaceId, Client>>,
 }
 impl Connections {
     fn new(host: BackendClient) -> Self {
@@ -21,7 +19,7 @@ impl Connections {
             clients: Default::default(),
         }
     }
-    fn connect(&self, workspace: lapis_client_api::WorkspaceId) -> Result<Client, String> {
+    fn connect(&self, workspace: client_api::WorkspaceId) -> Result<Client, String> {
         let mut clients = self
             .clients
             .lock()
@@ -39,8 +37,8 @@ impl Connections {
 }
 
 fn client(host: &Connections, workspace: &WorkspaceId) -> Result<Client, String> {
-    let workspace = lapis_client_api::WorkspaceId::try_new(workspace.as_str())
-        .map_err(|error| error.to_string())?;
+    let workspace =
+        client_api::WorkspaceId::try_new(workspace.as_str()).map_err(|error| error.to_string())?;
     host.connect(workspace)
 }
 fn execute(
@@ -82,18 +80,18 @@ impl HostGit {
 }
 struct HostGitSubscription {
     _client: Client,
-    receiver: lapis_backend_state::BackendEventReceiver,
+    receiver: backend_state::BackendEventReceiver,
     watermark: u64,
-    initial: Option<Vec<lapis_git::GitRepositoryStatus>>,
+    initial: Option<Vec<git::GitRepositoryStatus>>,
 }
 
-impl lapis_git::GitSubscription for HostGitSubscription {
+impl git::GitSubscription for HostGitSubscription {
     fn recv_timeout(
         &mut self,
         timeout: std::time::Duration,
-    ) -> Result<Option<lapis_git::GitUpdate>, GitError> {
+    ) -> Result<Option<git::GitUpdate>, GitError> {
         if let Some(initial) = self.initial.take() {
-            return Ok(Some(lapis_git::GitUpdate::Snapshot(initial)));
+            return Ok(Some(git::GitUpdate::Snapshot(initial)));
         }
         let deadline = std::time::Instant::now() + timeout;
         loop {
@@ -116,16 +114,16 @@ impl lapis_git::GitSubscription for HostGitSubscription {
             }
             self.watermark = sequence;
             match event.body {
-                lapis_client_api::EventBody::GitStatusChanged { repository, .. } => {
-                    return Ok(Some(lapis_git::GitUpdate::Changed(repository)));
+                client_api::EventBody::GitStatusChanged { repository, .. } => {
+                    return Ok(Some(git::GitUpdate::Changed(repository)));
                 }
-                lapis_client_api::EventBody::GitRepositoriesChanged { .. } => {
-                    return Ok(Some(lapis_git::GitUpdate::RepositoriesChanged));
+                client_api::EventBody::GitRepositoriesChanged { .. } => {
+                    return Ok(Some(git::GitUpdate::RepositoriesChanged));
                 }
-                lapis_client_api::EventBody::GitWorktreesChanged { .. } => {
-                    return Ok(Some(lapis_git::GitUpdate::WorktreesChanged));
+                client_api::EventBody::GitWorktreesChanged { .. } => {
+                    return Ok(Some(git::GitUpdate::WorktreesChanged));
                 }
-                lapis_client_api::EventBody::SnapshotRequired { .. } => {
+                client_api::EventBody::SnapshotRequired { .. } => {
                     return Err(git_error("Git snapshot required"));
                 }
                 _ => {}
@@ -138,8 +136,8 @@ impl GitConnection for HostGit {
     fn subscribe(
         &self,
         workspace: &WorkspaceId,
-    ) -> Result<Box<dyn lapis_git::GitSubscription>, GitError> {
-        let id = lapis_client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
+    ) -> Result<Box<dyn git::GitSubscription>, GitError> {
+        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
         let client = self
             .host
             .host
@@ -147,12 +145,10 @@ impl GitConnection for HostGit {
             .map_err(git_error)?;
         let receiver = client.subscribe().map_err(git_error)?;
         let response = client
-            .request(RequestBody::SnapshotResync(
-                lapis_client_api::SnapshotRequest {
-                    workspace_id: id,
-                    reason: lapis_client_api::SnapshotReason::Reconnect,
-                },
-            ))
+            .request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
+                workspace_id: id,
+                reason: client_api::SnapshotReason::Reconnect,
+            }))
             .map_err(git_error)?;
         let ResponseBody::SnapshotResync(response) = response else {
             return Err(git_error("Git snapshot unavailable"));
@@ -167,7 +163,7 @@ impl GitConnection for HostGit {
     fn repositories(
         &self,
         workspace: &WorkspaceId,
-    ) -> Result<Vec<lapis_git::GitRepositorySnapshot>, GitError> {
+    ) -> Result<Vec<git::GitRepositorySnapshot>, GitError> {
         match execute(&self.host, workspace, Operation::GitRepositories).map_err(git_error)? {
             Outcome::GitRepositories(value) => Ok(value),
             _ => Err(git_error("Unexpected Git repositories")),
@@ -198,8 +194,8 @@ impl GitConnection for HostGit {
         &self,
         workspace: &WorkspaceId,
         repository_id: &str,
-        request: lapis_git::GitActionRequest,
-    ) -> Result<lapis_git::GitActionResult, GitError> {
+        request: git::GitActionRequest,
+    ) -> Result<git::GitActionResult, GitError> {
         match execute(
             &self.host,
             workspace,
@@ -220,7 +216,7 @@ impl GitConnection for HostGit {
         workspace: &WorkspaceId,
         worktree: &TaskId,
     ) -> Result<std::path::PathBuf, GitError> {
-        let id = lapis_client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
+        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
         self.host
             .host
             .open_worktree(id, worktree.clone())
@@ -230,8 +226,8 @@ impl GitConnection for HostGit {
         &self,
         workspace: &WorkspaceId,
         worktree: Option<&TaskId>,
-        request: lapis_git::GitActionRequest,
-    ) -> Result<lapis_git::GitActionResult, GitError> {
+        request: git::GitActionRequest,
+    ) -> Result<git::GitActionResult, GitError> {
         match execute(
             &self.host,
             workspace,

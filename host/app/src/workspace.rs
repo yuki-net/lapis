@@ -1,9 +1,7 @@
 use crate::BackendClient;
 use crate::client::Client;
-use lapis_client_api::{
-    FileTreeKind, FileTreeRequest, RequestBody, ResponseBody, WorkspaceRelativePath,
-};
-use lapis_workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceRepository};
+use ::workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceRepository};
+use client_api::{FileTreeKind, FileTreeRequest, RequestBody, ResponseBody, WorkspaceRelativePath};
 use std::path::Path;
 
 pub(super) struct HostWorkspaces {
@@ -64,7 +62,7 @@ impl WorkspaceRepository for HostWorkspaces {
         let path = WorkspaceRelativePath::parse(name).map_err(problem)?;
         let response = client
             .request(RequestBody::CreateDirectory(
-                lapis_client_api::CreateDirectoryRequest {
+                client_api::CreateDirectoryRequest {
                     workspace_id: client.workspace_id().clone(),
                     path,
                 },

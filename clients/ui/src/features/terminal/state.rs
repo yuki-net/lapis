@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use lapis_desktop_client::{RestoredTerminal, TerminalSession};
-use lapis_editor_core::ConversationId;
+use desktop_client::{RestoredTerminal, TerminalSession};
+use editor_core::ConversationId;
 #[cfg(test)]
-use lapis_terminal::TerminalStatus;
-use lapis_terminal::{TerminalError, TerminalInput};
+use terminal::TerminalStatus;
+use terminal::{TerminalError, TerminalInput};
 
 pub(crate) struct TerminalSessions {
     pub session: TerminalSession,
@@ -31,7 +31,7 @@ impl TerminalSessions {
         root: Option<PathBuf>,
         conversation: ConversationId,
         summaries: &[RestoredTerminal],
-    ) -> Vec<lapis_terminal::TerminalSnapshot> {
+    ) -> Vec<terminal::TerminalSnapshot> {
         let context = (root, conversation);
         if self.active_context == context {
             return self.session.terminals().to_vec();
@@ -66,7 +66,7 @@ impl TerminalSessions {
     fn action(
         &mut self,
         operation: impl FnOnce(&mut TerminalSession) -> Result<(), TerminalError>,
-    ) -> (Result<(), String>, Vec<lapis_terminal::TerminalSnapshot>) {
+    ) -> (Result<(), String>, Vec<terminal::TerminalSnapshot>) {
         let result = operation(&mut self.session).map_err(|error| error.to_string());
         (result, self.session.terminals().to_vec())
     }
@@ -115,18 +115,18 @@ impl TerminalRequests {
 
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
-    pub(super) terminals: Vec<lapis_terminal::TerminalSnapshot>,
-    pub(super) discovered: Vec<lapis_terminal::TerminalSnapshot>,
-    pub(super) selected: Option<lapis_terminal::TerminalId>,
-    selected_by_context: HashMap<(Option<PathBuf>, ConversationId), lapis_terminal::TerminalId>,
-    bound_resource: Option<lapis_terminal::TerminalId>,
+    pub(super) terminals: Vec<terminal::TerminalSnapshot>,
+    pub(super) discovered: Vec<terminal::TerminalSnapshot>,
+    pub(super) selected: Option<terminal::TerminalId>,
+    selected_by_context: HashMap<(Option<PathBuf>, ConversationId), terminal::TerminalId>,
+    bound_resource: Option<terminal::TerminalId>,
     pub(super) focus: gpui::FocusHandle,
     pub(super) marked: String,
     /// Terminal出力の表示状態。
     /// None = 未処理（output変更を検知していない）
     /// Some(None) = scroll pending（outputは変更済みだがscroll-followが未完了）
     /// Some(Some((id, revision))) = 完了（scroll-followが成功した）
-    pub(super) visible_output: Option<Option<(lapis_terminal::TerminalId, u64)>>,
+    pub(super) visible_output: Option<Option<(terminal::TerminalId, u64)>>,
     pub(super) root: Option<std::path::PathBuf>,
     conversation: ConversationId,
     requests: TerminalRequests,
@@ -135,7 +135,7 @@ pub(crate) struct TerminalFeature {
     pub(super) scroll: crate::components::ScrollState,
 }
 impl TerminalFeature {
-    pub(crate) fn summaries(&self) -> Vec<lapis_terminal::TerminalSnapshot> {
+    pub(crate) fn summaries(&self) -> Vec<terminal::TerminalSnapshot> {
         self.terminals.clone()
     }
     pub(crate) fn persistence_summaries(&self) -> Vec<RestoredTerminal> {
@@ -171,7 +171,7 @@ impl TerminalFeature {
     pub(crate) fn context_task(&self) -> &ConversationId {
         &self.conversation
     }
-    pub(crate) fn bind_resource(&mut self, resource: Option<lapis_terminal::TerminalId>) {
+    pub(crate) fn bind_resource(&mut self, resource: Option<terminal::TerminalId>) {
         self.bound_resource = resource;
     }
     pub(crate) fn new(
@@ -274,12 +274,12 @@ impl TerminalFeature {
         cx.notify();
     }
     pub(crate) fn start(&mut self, cx: &mut gpui::Context<Self>) {
-        self.start_shell(lapis_terminal::TerminalShell::Default, cx);
+        self.start_shell(terminal::TerminalShell::Default, cx);
     }
 
     pub(super) fn start_shell(
         &mut self,
-        shell: lapis_terminal::TerminalShell,
+        shell: terminal::TerminalShell,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(root) = self.root.clone() else {
@@ -326,7 +326,7 @@ impl TerminalFeature {
         self.send_input(TerminalInput::Paste(text), cx);
     }
 
-    pub(super) fn active_id(&self) -> Option<lapis_terminal::TerminalId> {
+    pub(super) fn active_id(&self) -> Option<terminal::TerminalId> {
         if let Some(id) = &self.bound_resource {
             return self
                 .terminals
@@ -341,7 +341,7 @@ impl TerminalFeature {
             .or_else(|| self.terminals.last().map(|terminal| terminal.id.clone()))
     }
 
-    pub(super) fn active_screen(&self) -> Option<&lapis_terminal::TerminalScreen> {
+    pub(super) fn active_screen(&self) -> Option<&terminal::TerminalScreen> {
         let active = self.active_id()?;
         self.terminals
             .iter()
@@ -382,7 +382,7 @@ impl TerminalFeature {
         }
     }
 
-    pub(super) fn attach(&mut self, id: lapis_terminal::TerminalId, cx: &mut gpui::Context<Self>) {
+    pub(super) fn attach(&mut self, id: terminal::TerminalId, cx: &mut gpui::Context<Self>) {
         let Some(root) = self.root.clone() else {
             return;
         };
@@ -553,23 +553,21 @@ mod tests {
                 )
             });
             entity.update(cx, |feature, _| {
-                feature
-                    .terminals
-                    .push(lapis_terminal::TerminalSnapshot::empty(
-                        lapis_terminal::TerminalId::new("terminal-a"),
-                        "workspace".into(),
-                        TerminalStatus::Running,
-                        TerminalSize::new(80, 24),
-                    ));
+                feature.terminals.push(terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("terminal-a"),
+                    "workspace".into(),
+                    TerminalStatus::Running,
+                    TerminalSize::new(80, 24),
+                ));
                 let before = feature.persistence_summaries();
                 feature.terminals[0].revision += 1;
                 feature.terminals[0]
                     .screen
                     .scrollback
-                    .extend((0..1024).map(|_| lapis_terminal::TerminalRow::empty(80)));
+                    .extend((0..1024).map(|_| terminal::TerminalRow::empty(80)));
                 assert_eq!(feature.persistence_summaries(), before);
                 feature.terminals[0].screen =
-                    lapis_terminal::TerminalScreen::empty(TerminalSize::new(120, 40));
+                    terminal::TerminalScreen::empty(TerminalSize::new(120, 40));
                 feature.terminals[0].status = TerminalStatus::Exited;
                 let after = feature.persistence_summaries();
                 assert_eq!(after[0].id, before[0].id);
@@ -597,15 +595,13 @@ mod tests {
                 )
             });
             entity.update(cx, |feature, _| {
-                feature
-                    .terminals
-                    .push(lapis_terminal::TerminalSnapshot::empty(
-                        lapis_terminal::TerminalId::new("first"),
-                        "workspace".into(),
-                        lapis_terminal::TerminalStatus::Running,
-                        lapis_terminal::TerminalSize::new(80, 24),
-                    ));
-                feature.bind_resource(Some(lapis_terminal::TerminalId::new("missing")));
+                feature.terminals.push(terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("first"),
+                    "workspace".into(),
+                    terminal::TerminalStatus::Running,
+                    terminal::TerminalSize::new(80, 24),
+                ));
+                feature.bind_resource(Some(terminal::TerminalId::new("missing")));
                 assert!(feature.active_id().is_none());
                 assert!(
                     feature
@@ -615,7 +611,7 @@ mod tests {
                         )
                         .is_none()
                 );
-                feature.bind_resource(Some(lapis_terminal::TerminalId::new("first")));
+                feature.bind_resource(Some(terminal::TerminalId::new("first")));
                 assert_eq!(feature.active_id().unwrap().as_str(), "first");
                 // 作成直後で保存一覧にまだないIDも、実際の接続先が確定していれば保存できる。
                 assert_eq!(
@@ -655,17 +651,17 @@ mod tests {
         });
     }
     use super::*;
-    use lapis_terminal::TerminalId;
-    use lapis_terminal::{
-        TerminalBackend, TerminalDelta, TerminalEvent, TerminalInput, TerminalRow,
-        TerminalRowUpdate, TerminalSize,
-    };
     use std::{
         path::Path,
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
         },
+    };
+    use terminal::TerminalId;
+    use terminal::{
+        TerminalBackend, TerminalDelta, TerminalEvent, TerminalInput, TerminalRow,
+        TerminalRowUpdate, TerminalSize,
     };
 
     fn model_row(columns: u16, text: &str) -> TerminalRow {
