@@ -117,6 +117,7 @@ pub fn open_host_file(
             &token,
         ))?;
         let key = profile_key(
+            "remote",
             invitation.address,
             &invitation.server_name,
             &invitation.workspace_id,
@@ -150,13 +151,14 @@ pub fn open_host_file(
 }
 
 fn profile_key(
+    auth: &str,
     address: SocketAddr,
     server_name: &str,
     workspace_id: &str,
     certificate: &[u8],
 ) -> Result<String, Error> {
     Ok(format!(
-        "remote-{:x}",
+        "{auth}-{:x}",
         Sha256::digest(serde_json::to_vec(&(
             address,
             server_name,
@@ -170,6 +172,9 @@ fn write_profile(directory: &Path, record: &Record) -> Result<PathBuf, Error> {
     let profile = directory.join(format!("{}.host", record.key));
     let plaintext = Zeroizing::new(serde_json::to_vec(record)?);
     let ciphertext = protect(&plaintext, record.key.as_bytes(), false)?;
+    if ciphertext.len() > 128 * 1024 {
+        return Err("Host情報の上限を超えています".into());
+    }
     let mut file = tempfile::NamedTempFile::new_in(directory)?;
     #[cfg(unix)]
     {
@@ -248,7 +253,7 @@ pub fn write_oidc_profile(
     if id_token.is_empty() {
         return Err("OIDC ID Tokenが空です".into());
     }
-    let key = profile_key(address, &server_name, &workspace_id, &certificate)?;
+    let key = profile_key("oidc", address, &server_name, &workspace_id, &certificate)?;
     let record = Record {
         version: 1,
         key,
@@ -293,6 +298,13 @@ mod tests {
         )
         .unwrap();
         assert!(path.is_file());
+        assert!(
+            path.file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("oidc-")
+        );
 
         let key = path.file_stem().unwrap().to_str().unwrap();
         let plaintext = protect(&fs::read(&path).unwrap(), key.as_bytes(), true).unwrap();
@@ -306,6 +318,71 @@ mod tests {
         let (_, restored_root, restored_path) = open_host_file(&path, &profiles).unwrap();
         assert_eq!(root, restored_root);
         assert_eq!(path, restored_path);
+    }
+
+    #[test]
+    fn oidc_profile_does_not_replace_a_credential_profile() {
+        let state = tempfile::tempdir().unwrap();
+        let profiles = state.path().join("profiles");
+        fs::create_dir_all(&profiles).unwrap();
+        let address = "127.0.0.1:1".parse().unwrap();
+        let certificate = vec![1, 2, 3];
+        let key =
+            profile_key("remote", address, "lapis-host", "workspace-1", &certificate).unwrap();
+        let credential = Record {
+            version: 1,
+            key,
+            pid: 0,
+            started_at: None,
+            managed_lease: false,
+            address,
+            server_name: "lapis-host".to_owned(),
+            label: "Remote".to_owned(),
+            certificate: certificate.clone(),
+            workspace: "workspace-1".to_owned(),
+            client: "desktop-1".to_owned(),
+            credential: Some("00000000000000000000000000000000".to_owned()),
+            secret: Some(vec![1; 32]),
+            id_token: None,
+        };
+        let credential_path = write_profile(&profiles, &credential).unwrap();
+        let (_, _, oidc_path) = write_oidc_profile(
+            &profiles,
+            OidcProfile {
+                address,
+                server_name: "lapis-host".to_owned(),
+                certificate,
+                workspace_id: "workspace-1".to_owned(),
+                name: "Remote".to_owned(),
+                client: "desktop-1".to_owned(),
+                id_token: "id-token".to_owned(),
+            },
+        )
+        .unwrap();
+        assert_ne!(credential_path, oidc_path);
+        assert!(credential_path.is_file());
+        assert!(oidc_path.is_file());
+    }
+
+    #[test]
+    fn oversized_oidc_profile_is_rejected() {
+        let state = tempfile::tempdir().unwrap();
+        let result = write_oidc_profile(
+            state.path(),
+            OidcProfile {
+                address: "127.0.0.1:1".parse().unwrap(),
+                server_name: "lapis-host".to_owned(),
+                certificate: Vec::new(),
+                workspace_id: "workspace-1".to_owned(),
+                name: "Remote".to_owned(),
+                client: "desktop-1".to_owned(),
+                id_token: "a".repeat(200 * 1024),
+            },
+        );
+        let Err(error) = result else {
+            panic!("oversized profile must be rejected");
+        };
+        assert!(error.to_string().contains("上限"));
     }
 
     #[test]

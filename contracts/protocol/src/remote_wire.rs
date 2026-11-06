@@ -125,6 +125,12 @@ impl OidcRequest {
     }
 }
 
+impl Drop for OidcRequest {
+    fn drop(&mut self) {
+        self.id_token.zeroize();
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ServerMessage {
