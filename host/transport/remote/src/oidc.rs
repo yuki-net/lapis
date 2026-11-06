@@ -48,6 +48,15 @@ impl OidcConfig {
         }
         Ok(config)
     }
+
+    /// RS256 だけを許可する既定設定。Host の環境変数から組み立てる用途を想定する。
+    pub fn new_rs256(
+        issuer: impl Into<String>,
+        audience: impl Into<String>,
+        clock_skew_seconds: u64,
+    ) -> Result<Self, OidcError> {
+        Self::new(issuer, audience, vec![Algorithm::RS256], clock_skew_seconds)
+    }
 }
 
 /// 検証済みの ID Token Claim。Host はこの値だけを Session の所有者判定に使う。
