@@ -1,6 +1,6 @@
 # Remote — internal constraints and design notes
 
-この文書はRemoteとLocal QUIC接続の信頼境界・接続寿命を定義します。操作手順は `backend/README.md`、実行時挙動と検証はコード・テストを正本とします。
+この文書はRemoteとLocal QUIC接続の信頼境界・接続寿命を定義します。操作手順は `host/README.md`、実行時挙動と検証はコード・テストを正本とします。
 
 ## 信頼境界
 

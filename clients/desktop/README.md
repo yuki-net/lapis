@@ -23,9 +23,9 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 ## ディレクトリの責務
 
 - `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
-- `client/` は Backend の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
+- `../state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
-- `ui/shell/` は Window・Panel・Tab・Layout、`ui/features/` は個別機能の表示・入力・描画を担当します。
+- `../ui/src/shell/` は Window・Panel・Tab・Layout、`../ui/src/features/` は個別機能の表示・入力・描画を担当します。
 - 左のProject / Taskで既存フォルダをProjectへ登録し、登録先からPrimaryを一つ、Subを任意で一つ選んで作業Taskを作成します。Git管理されていない既存ソースフォルダも選べます。
 - 作業Taskの選択・Primary/Sub・文書とPanelの復元参照はDesktopの保存状態です。既存のConversation IDを復元キーに再利用し、HostのAgent実行Task/Executionとは区別します。切替ではHostの文書・PTY・CLIを終了しません。Worktreeの作成・カスタマイズはGit操作として扱います。
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。
@@ -97,7 +97,7 @@ launcherはWindows x64用のHostを毎回ビルドし、`--local-host-executable
 
 既定の保存先を変更した環境でも、旧保存先にだけdraft・会話・設定がある場合は元の場所を継続使用します。新旧両方に状態がある場合は新しい保存先を使用し、旧保存先を標準エラーへ通知します。自動で混合・上書きせず、必要な保存先は `--state-directory` で選択できます。
 
-Remoteのファイル操作はHostのWorkspaceを使用し、Client上に同じsource folderを必要としません。接続先ごとに画面状態を保存します。Remote向けのLSPと検索は未接続です。招待の発行・期限・保護方法は [Backend](../../backend/README.md) を参照してください。
+Remoteのファイル操作はHostのWorkspaceを使用し、Client上に同じsource folderを必要としません。接続先ごとに画面状態を保存します。Remote向けのLSPと検索は未接続です。招待の発行・期限・保護方法は [Host](../../host/README.md) を参照してください。
 
 Remoteの「Open」「Save As」と未保存文書の保存は、Workspaceからの相対pathを入力します。保存先が競合すると変更を保持したまま拒否します。ファイルの通常保存はCtrl+S、名前を付けて保存はCtrl+Shift+Sです。
 

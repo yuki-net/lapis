@@ -85,12 +85,12 @@ def layer(manifest, root):
     for prefix, value in [
         ("contracts/domain/", "models"), ("contracts/wire/", "models"),
         ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
-        ("backend/application/", "application"), ("backend/runtime/", "runtime"),
-        ("backend/infrastructure/", "infrastructure"), ("backend/transport/", "transport"),
-        ("backend/host/", "host"), ("clients/ui/", "ui"),
+        ("host/application/", "application"), ("host/runtime/", "runtime"),
+        ("host/adapters/", "infrastructure"), ("host/transport/", "transport"),
+        ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),
         ("clients/desktop/persistence/", "desktop_persistence"),
-        ("clients/desktop/app/", "desktop_entry"), ("clients/", "client"), ("apps/", "client"),
+        ("clients/desktop/app/", "desktop_entry"), ("clients/", "client"),
     ]:
         if relative.startswith(prefix):
             return value

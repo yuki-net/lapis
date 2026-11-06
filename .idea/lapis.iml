@@ -26,16 +26,16 @@
       <sourceFolder url="file://$MODULE_DIR$/crates/settings/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/clients/desktop/app/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/clients/ui/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/app-services/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/document/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/editor-core/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/localization/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/project/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/settings/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/text/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/workspace/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/local/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/persistence/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/app-services/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/document/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/editor-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/localization/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/project/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/settings/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/text/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/workspace/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/local/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/persistence/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/core/app-services/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/core/document/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/core/editor-core/src" isTestSource="false" />
@@ -49,21 +49,21 @@
       <sourceFolder url="file://$MODULE_DIR$/features/lsp/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/features/task-runner/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/features/terminal/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/backend-state/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/backend-state/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/core/client-api/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/remote/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/backend-state/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/backend-state/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/host/core/client-api/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/remote/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/clients/desktop/app/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/clients/state/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/clients/desktop/persistence/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/host/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/host/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/infrastructure/local/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/infrastructure/local/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/infrastructure/task-runner/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/runtime/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/runtime/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/backend/transport/remote/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/app/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/app/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/host/adapters/local/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/adapters/local/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/host/adapters/agent/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/runtime/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/host/runtime/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/host/transport/remote/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/contracts/domain/document/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/contracts/domain/editor-core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/contracts/domain/git/src" isTestSource="false" />

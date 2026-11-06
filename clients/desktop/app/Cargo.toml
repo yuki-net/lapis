@@ -9,12 +9,12 @@ license.workspace = true
 hot-reload = ["lapis-desktop-ui/hot-reload"]
 
 [dependencies]
-lapis-host = { path = "../../../backend/host" }
+lapis-host = { path = "../../../host/app" }
 lapis-desktop-client = { path = "../../state" }
 lapis-desktop-ui = { path = "../../ui" }
-lapis-platform = { path = "../../../backend/infrastructure/local" }
+lapis-platform = { path = "../../../host/adapters/local" }
 lapis-persistence = { path = "../persistence" }
-lapis-remote = { path = "../../../backend/transport/remote" }
+lapis-remote = { path = "../../../host/transport/remote" }
 lapis-settings = { path = "../../../contracts/domain/settings" }
 lapis-task = { path = "../../../contracts/domain/task" }
 rfd.workspace = true

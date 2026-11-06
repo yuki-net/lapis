@@ -17,7 +17,7 @@ lapis-lsp = { path = "../../../contracts/domain/lsp" }
 lapis-terminal = { path = "../../../contracts/domain/terminal" }
 portable-pty.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
-lapis-task-runner = { path = "../task-runner" }
+lapis-task-runner = { path = "../agent" }
 lapis-workspace = { path = "../../../contracts/domain/workspace" }
 lapis-workbench = { path = "../../../contracts/domain/workbench" }
 serde.workspace = true
