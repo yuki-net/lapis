@@ -21,6 +21,7 @@ type Reply<T> = oneshot::Sender<Result<T, String>>;
 struct Shared {
     core: ClientCore,
     opened: Option<Reply<()>>,
+    auth_required: Option<Reply<()>>,
     authentication: Option<Reply<ServerMessage>>,
     events: mpsc::Sender<EventEnvelope>,
     authenticated: bool,
@@ -32,6 +33,9 @@ impl Shared {
         self.core.disconnect();
         self.authenticated = false;
         if let Some(reply) = self.opened.take() {
+            let _ = reply.send(Err(message.into()));
+        }
+        if let Some(reply) = self.auth_required.take() {
             let _ = reply.send(Err(message.into()));
         }
         if let Some(reply) = self.authentication.take() {
@@ -70,6 +74,23 @@ impl Drop for RequestGuard {
 impl BrowserConnection {
     /// ペアリングまたは保存済みcredentialで認証する。要求は認証後だけ受け付ける。
     pub async fn connect(url: &str, auth: ClientMessage) -> Result<(Self, ServerMessage), String> {
+        Self::connect_inner(url, None, auth).await
+    }
+
+    /// Helloで認証方式を問い合わせてから認証する。
+    pub async fn connect_with_hello(
+        url: &str,
+        hello: ClientHello,
+        auth: ClientMessage,
+    ) -> Result<(Self, ServerMessage), String> {
+        Self::connect_inner(url, Some(hello), auth).await
+    }
+
+    async fn connect_inner(
+        url: &str,
+        hello: Option<ClientHello>,
+        auth: ClientMessage,
+    ) -> Result<(Self, ServerMessage), String> {
         let pairing = match &auth {
             ClientMessage::Pair(_) => true,
             ClientMessage::Authenticate(_) => false,
@@ -78,11 +99,13 @@ impl BrowserConnection {
         let socket = WebSocket::new_with_str(url, lapis_wire::REMOTE_WEBSOCKET_PROTOCOL)
             .map_err(|_| "WebSocketを開始できません")?;
         let (opened, wait_open) = oneshot::channel();
+        let (auth_required, wait_auth_required) = oneshot::channel();
         let (authentication, wait_auth) = oneshot::channel();
         let (events_tx, events) = mpsc::channel(256);
         let shared = Rc::new(RefCell::new(Shared {
             core: ClientCore::default(),
             opened: Some(opened),
+            auth_required: hello.is_some().then_some(auth_required),
             authentication: Some(authentication),
             events: events_tx,
             authenticated: false,
@@ -133,6 +156,20 @@ impl BrowserConnection {
             _onerror: onerror,
         };
         wait(wait_open, 10_000, "WebSocketの開始がtimeoutしました").await?;
+        if let Some(hello) = hello {
+            let encoded = serde_json::to_string(&ClientMessage::Hello(hello))
+                .map_err(|_| "Helloを生成できません")?;
+            connection
+                .socket
+                .send_with_str(&encoded)
+                .map_err(|_| "Helloを送信できません")?;
+            wait(
+                wait_auth_required,
+                10_000,
+                "認証方式の取得がtimeoutしました",
+            )
+            .await?;
+        }
         let mut encoded = serde_json::to_string(&auth).map_err(|_| "認証要求を生成できません")?;
         let result = connection
             .socket
@@ -270,17 +307,24 @@ pub async fn connect_web_client(
             ClientMessage::Pair(request)
         }
     };
-    let (connection, response) = match BrowserConnection::connect(url, auth).await {
-        Ok(result) => result,
-        Err(_) if can_retry_pair => {
-            let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
-            let mut secret = decode_hex(token)?;
-            let request = PairRequest::new(hello, &secret);
-            secret.zeroize();
-            BrowserConnection::connect(url, ClientMessage::Pair(request)).await?
-        }
-        Err(error) => return Err(error),
-    };
+    let (connection, response) =
+        match BrowserConnection::connect_with_hello(url, hello.clone(), auth).await {
+            Ok(result) => result,
+            Err(_) if can_retry_pair => {
+                let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
+                let mut secret = decode_hex(token)?;
+                let retry_hello = hello.clone();
+                let request = PairRequest::new(hello, &secret);
+                secret.zeroize();
+                BrowserConnection::connect_with_hello(
+                    url,
+                    retry_hello,
+                    ClientMessage::Pair(request),
+                )
+                .await?
+            }
+            Err(error) => return Err(error),
+        };
     Ok((connection, credential_from_response(response)?))
 }
 
@@ -360,6 +404,17 @@ fn decode_hex(value: &str) -> Result<[u8; 32], String> {
 
 fn handle_message(shared: &mut Shared, message: ServerMessage) -> Result<(), String> {
     if !shared.authenticated {
+        if let ServerMessage::AuthRequired(required) = &message {
+            if required.methods.is_empty() {
+                return Err("認証方式が提示されませんでした".into());
+            }
+            let reply = shared
+                .auth_required
+                .take()
+                .ok_or("認証方式の提示が重複しました")?;
+            let _ = reply.send(Ok(()));
+            return Ok(());
+        }
         let hello = match &message {
             ServerMessage::Paired(response) if shared.pairing => &response.hello,
             ServerMessage::Authenticated(hello) if !shared.pairing => hello,
