@@ -48,7 +48,10 @@ use lapis_terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
     TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot, TerminalStatus,
 };
-use lapis_workbench::{ConversationViewState, VersionedViewState};
+use lapis_workbench::{
+    ConversationViewState, VersionedViewState, WorkbenchReplica, WorkbenchUpdate,
+    WorkbenchWritePlan,
+};
 use lapis_workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
@@ -87,8 +90,7 @@ struct Replica {
     documents: HashMap<DocumentId, DocumentState>,
     by_path: HashMap<PathBuf, DocumentId>,
     terminals: HashMap<String, TerminalState>,
-    workbench: Option<VersionedViewState>,
-    workbench_conflict: bool,
+    workbench: WorkbenchReplica,
     next: u64,
     next_terminal: u64,
     initial: Option<PathBuf>,
@@ -102,8 +104,7 @@ impl Replica {
             documents: HashMap::new(),
             by_path: HashMap::new(),
             terminals: HashMap::new(),
-            workbench: None,
-            workbench_conflict: false,
+            workbench: WorkbenchReplica::default(),
             next: 1,
             next_terminal: 1,
             initial: None,
@@ -124,6 +125,16 @@ fn cache_of(
         can_redo: document.can_redo(),
         external_change,
     }
+}
+
+fn versioned_workbench(
+    snapshot: lapis_client_api::WorkbenchSnapshot,
+) -> Option<VersionedViewState> {
+    let state = VersionedViewState {
+        revision: snapshot.revision,
+        view: serde_json::from_value(snapshot.view).ok(),
+    };
+    state.is_consistent().then_some(state)
 }
 
 struct DocumentState {
@@ -258,11 +269,9 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         }),
     )
     .await
+        && let Some(state) = versioned_workbench(snapshot)
     {
-        replica.borrow_mut().workbench = Some(VersionedViewState {
-            revision: snapshot.revision,
-            view: serde_json::from_value(snapshot.view).ok(),
-        });
+        let _ = replica.borrow_mut().workbench.open(state);
     }
     preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
@@ -342,7 +351,7 @@ async fn preload_workbench(
         let replica = replica.borrow();
         replica
             .workbench
-            .as_ref()
+            .confirmed()
             .and_then(|versioned| versioned.view.as_ref())
             .and_then(|view| view.workspace.as_ref())
             .map(|shared| {
@@ -551,11 +560,9 @@ async fn event_pump(
                 )
                 .await
                     && let Ok(mut replica) = replica.try_borrow_mut()
+                    && let Some(state) = versioned_workbench(snapshot)
                 {
-                    replica.workbench = Some(VersionedViewState {
-                        revision: snapshot.revision,
-                        view: serde_json::from_value(snapshot.view).ok(),
-                    });
+                    let _ = replica.workbench.refresh(state);
                 }
             }
             _ => {}
@@ -904,50 +911,40 @@ async fn handle(
             }
         }
         Command::SaveWorkbench { view } => {
-            let (workspace, expected, conflict) = {
-                let replica = replica.borrow();
-                (
-                    api_workspace(&replica.workspace),
-                    replica
-                        .workbench
-                        .as_ref()
-                        .map(|versioned| versioned.revision)
-                        .unwrap_or(0),
-                    replica.workbench_conflict,
-                )
+            let (workspace, plan) = {
+                let mut replica = replica.borrow_mut();
+                let workspace = api_workspace(&replica.workspace);
+                let plan = replica.workbench.stage(view)?;
+                (workspace, plan)
             };
-            if conflict {
+            let WorkbenchWritePlan::Update { revision, view } = plan else {
                 return Err("Workbenchが競合しています".into());
-            }
+            };
             let encoded = lapis_client_api::encode_workbench_view(&view)
                 .map_err(|error| error.to_string())?;
             let body = request(
                 connection,
                 RequestBody::WorkbenchPut(WorkbenchPutRequest {
                     workspace_id: workspace,
-                    expected_revision: expected,
+                    expected_revision: revision,
                     view: encoded,
                 }),
             )
             .await?;
-            match body {
+            let update = match body {
                 ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) => {
-                    let mut replica = replica.borrow_mut();
-                    replica.workbench = Some(VersionedViewState {
-                        revision: snapshot.revision,
-                        view: serde_json::from_value(snapshot.view).ok(),
-                    });
+                    WorkbenchUpdate::Updated(
+                        versioned_workbench(snapshot).ok_or("WorkbenchPut応答が不正です")?,
+                    )
                 }
                 ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)) => {
-                    let mut replica = replica.borrow_mut();
-                    replica.workbench = Some(VersionedViewState {
-                        revision: snapshot.revision,
-                        view: serde_json::from_value(snapshot.view).ok(),
-                    });
-                    replica.workbench_conflict = true;
+                    WorkbenchUpdate::Conflict(
+                        versioned_workbench(snapshot).ok_or("WorkbenchPut応答が不正です")?,
+                    )
                 }
                 _ => return Err("WorkbenchPut応答が不正です".into()),
-            }
+            };
+            replica.borrow_mut().workbench.finish(update)?;
         }
     }
     Ok(())
@@ -1399,7 +1396,7 @@ pub fn restore_view() -> Option<lapis_workbench::ConversationViewState> {
         let replica = state.replica.borrow();
         let view = replica
             .workbench
-            .as_ref()
+            .confirmed()
             .and_then(|versioned| versioned.view.as_ref())?
             .clone();
         Some(lapis_workbench::ConversationViewState {
@@ -1417,7 +1414,7 @@ pub fn restore_snapshot(root: PathBuf) -> Option<crate::WorkspaceSnapshot> {
         let replica = state.replica.borrow();
         let shared = replica
             .workbench
-            .as_ref()
+            .confirmed()
             .and_then(|versioned| versioned.view.as_ref())
             .and_then(|view| view.workspace.as_ref())?;
         workspace_from_shared(shared, &replica.workspace, root).ok()
@@ -1430,7 +1427,7 @@ impl crate::ConversationRepository for WebBackend {
             let replica = state.replica.borrow();
             let Some(view) = replica
                 .workbench
-                .as_ref()
+                .confirmed()
                 .and_then(|versioned| versioned.view.as_ref())
             else {
                 return Ok((Vec::new(), Vec::new(), None));
@@ -1477,7 +1474,7 @@ impl crate::ConversationRepository for WebBackend {
                 .or_else(|| records.first())
                 .ok_or_else(|| WorkspaceError::new("保存するConversationがありません"))?;
             let replica = state.replica.borrow();
-            if replica.workbench_conflict {
+            if replica.workbench.conflict().is_some() {
                 return Err(WorkspaceError::new("Workbenchが競合しています"));
             }
             let workspace = shared_workspace(&record.workspace, replica.workspace.clone())?;
