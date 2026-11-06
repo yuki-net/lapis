@@ -5,7 +5,6 @@
 
 use std::{
     cell::RefCell,
-    collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
@@ -16,13 +15,12 @@ use crate::{
     ConversationRecord, Project, WorkspaceDialog, WorkspaceSnapshot, WorkspaceStateRepository,
 };
 use client_api::{
-    ClientKind, DocumentEditRequest, DocumentId as ApiDocumentId, DocumentInspectRequest,
-    DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody,
-    EventEnvelope, FileTreeKind, FileTreeRequest, RequestBody, ResponseBody,
-    Revision as ApiRevision, SnapshotReason, SnapshotRequest, TerminalId as ApiTerminalId,
-    TerminalInputRequest, TerminalResizeRequest, TerminalSize, TerminalStartRequest,
-    TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkbenchGetRequest,
-    WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceConnectRequest,
+    ClientKind, DocumentEditRequest, DocumentInspectRequest, DocumentOpenRequest,
+    DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody, EventEnvelope,
+    FileTreeKind, FileTreeRequest, RequestBody, ResponseBody, Revision as ApiRevision,
+    SnapshotReason, SnapshotRequest, TerminalInputRequest, TerminalResizeRequest, TerminalSize,
+    TerminalStartRequest, TerminalStatus as WireTerminalStatus, TerminalTerminateRequest,
+    WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceConnectRequest,
     WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
 use client_core::{
@@ -44,15 +42,19 @@ use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 use terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-    TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot, TerminalStatus,
+    TerminalSnapshot,
 };
-use workbench::{
-    ConversationViewState, VersionedViewState, WorkbenchReplica, WorkbenchUpdate,
-    WorkbenchWritePlan,
-};
+use workbench::{ConversationViewState, WorkbenchUpdate, WorkbenchWritePlan};
 use workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
+};
+
+mod state;
+
+use state::{
+    DocumentState, Replica, TerminalState, cache_of, diff_chars, document_from_snapshot,
+    full_terminal_delta, local_id, model_terminal_snapshot, versioned_workbench,
 };
 
 pub const ROOT: &str = r"C:\Lapis Host";
@@ -80,74 +82,6 @@ struct BackendState {
     workspace: WorkspaceId,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
-}
-
-struct Replica {
-    workspace: WorkspaceId,
-    entries: Vec<FileEntry>,
-    documents: HashMap<DocumentId, DocumentState>,
-    by_path: HashMap<PathBuf, DocumentId>,
-    terminals: HashMap<String, TerminalState>,
-    workbench: WorkbenchReplica,
-    next: u64,
-    next_terminal: u64,
-    initial: Option<PathBuf>,
-}
-
-impl Replica {
-    fn new(workspace: WorkspaceId, entries: Vec<FileEntry>) -> Self {
-        Self {
-            workspace,
-            entries,
-            documents: HashMap::new(),
-            by_path: HashMap::new(),
-            terminals: HashMap::new(),
-            workbench: WorkbenchReplica::default(),
-            next: 1,
-            next_terminal: 1,
-            initial: None,
-        }
-    }
-}
-
-fn cache_of(
-    local: &DocumentId,
-    document: &Document,
-    external_change: ExternalChange,
-) -> DocumentCache {
-    DocumentCache {
-        reused: true,
-        id: local.clone(),
-        document: document.clone(),
-        can_undo: document.can_undo(),
-        can_redo: document.can_redo(),
-        external_change,
-    }
-}
-
-fn versioned_workbench(snapshot: client_api::WorkbenchSnapshot) -> Option<VersionedViewState> {
-    let state = VersionedViewState {
-        revision: snapshot.revision,
-        view: serde_json::from_value(snapshot.view).ok(),
-    };
-    state.is_consistent().then_some(state)
-}
-
-struct DocumentState {
-    host: Option<ApiDocumentId>,
-    path: Option<PathBuf>,
-    document: Document,
-    acked: String,
-    host_revision: ApiRevision,
-    loaded: bool,
-    external_change: ExternalChange,
-}
-
-struct TerminalState {
-    host: Option<ApiTerminalId>,
-    snapshot: Option<TerminalSnapshot>,
-    events: Vec<TerminalEvent>,
-    finished: bool,
 }
 
 enum Command {
@@ -465,32 +399,8 @@ async fn preload(
     Ok(())
 }
 
-fn local_id(replica: &mut Replica) -> DocumentId {
-    let id = DocumentId::new(format!("web-{}", replica.next));
-    replica.next += 1;
-    id
-}
-
 fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
     ApiWorkspaceId::try_new(id.as_str()).expect("workspace id is valid")
-}
-
-fn document_from_snapshot(
-    snapshot: &client_api::DocumentSnapshot,
-    path: Option<PathBuf>,
-) -> Document {
-    Document::from_snapshot(
-        path,
-        snapshot.content.clone(),
-        match snapshot.encoding {
-            client_api::DocumentEncoding::Utf8 => Encoding::Utf8,
-            client_api::DocumentEncoding::Utf8Bom => Encoding::Utf8Bom,
-            client_api::DocumentEncoding::Utf16Le => Encoding::Utf16Le,
-            client_api::DocumentEncoding::Utf16Be => Encoding::Utf16Be,
-        },
-        Revision::new(snapshot.revision.value()),
-        snapshot.dirty,
-    )
 }
 
 async fn pump(
@@ -564,56 +474,6 @@ async fn event_pump(
             }
             _ => {}
         }
-    }
-}
-
-fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatus {
-    match status {
-        WireTerminalStatus::Starting | WireTerminalStatus::Running => TerminalStatus::Running,
-        WireTerminalStatus::Exited | WireTerminalStatus::Terminated => TerminalStatus::Exited,
-        WireTerminalStatus::Failed => TerminalStatus::Failed,
-        WireTerminalStatus::Disconnected => TerminalStatus::Disconnected,
-    }
-}
-
-fn model_terminal_snapshot(
-    local: &TerminalId,
-    snapshot: &client_api::TerminalSnapshot,
-) -> TerminalSnapshot {
-    TerminalSnapshot {
-        id: local.clone(),
-        cwd: snapshot
-            .cwd
-            .as_ref()
-            .map(|path| Path::new(ROOT).join(path.as_str()))
-            .unwrap_or_default(),
-        status: model_terminal_status(snapshot.status),
-        revision: snapshot.revision,
-        screen: snapshot.screen.clone(),
-    }
-}
-
-fn full_terminal_delta(snapshot: &TerminalSnapshot) -> TerminalDelta {
-    TerminalDelta {
-        revision: snapshot.revision,
-        size: snapshot.screen.size,
-        changed_rows: snapshot
-            .screen
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(row, value)| TerminalRowUpdate {
-                row: row as u16,
-                value: value.clone(),
-            })
-            .collect(),
-        cursor: snapshot.screen.cursor,
-        modes: snapshot.screen.modes,
-        scrollback: Some(TerminalScrollbackDelta {
-            reset: true,
-            dropped: 0,
-            rows: snapshot.screen.scrollback.clone(),
-        }),
     }
 }
 
@@ -993,29 +853,6 @@ async fn refresh_document(
         state.external_change = ExternalChange::Modified;
     }
     Ok(())
-}
-
-fn diff_chars(previous: &str, next: &str) -> (u64, u64, String) {
-    let previous_chars: Vec<char> = previous.chars().collect();
-    let next_chars: Vec<char> = next.chars().collect();
-    let mut start = 0;
-    while start < previous_chars.len()
-        && start < next_chars.len()
-        && previous_chars[start] == next_chars[start]
-    {
-        start += 1;
-    }
-    let mut tail = 0;
-    while tail < previous_chars.len().saturating_sub(start)
-        && tail < next_chars.len().saturating_sub(start)
-        && previous_chars[previous_chars.len() - 1 - tail]
-            == next_chars[next_chars.len() - 1 - tail]
-    {
-        tail += 1;
-    }
-    let end = previous_chars.len() - tail;
-    let replacement: String = next_chars[start..next_chars.len() - tail].iter().collect();
-    (start as u64, end as u64, replacement)
 }
 
 /// 起動時に開くHost上のファイル。
