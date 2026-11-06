@@ -6,8 +6,8 @@ use std::{
 use crate::ClientCore;
 use client_api::{
     AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
-    ClientKind, ClientMessage, CredentialId, EventEnvelope, PairRequest, ProtocolRange,
-    RequestBody, ResponseBody, ServerMessage, WorkspaceId,
+    ClientKind, ClientMessage, CredentialId, EventEnvelope, OidcRequest, PairRequest,
+    ProtocolRange, RequestBody, ResponseBody, ServerMessage, WorkspaceId,
 };
 use futures_channel::{mpsc, oneshot};
 use futures_util::future::{Either, select};
@@ -93,7 +93,7 @@ impl BrowserConnection {
     ) -> Result<(Self, ServerMessage), String> {
         let pairing = match &auth {
             ClientMessage::Pair(_) => true,
-            ClientMessage::Authenticate(_) => false,
+            ClientMessage::Authenticate(_) | ClientMessage::Oidc(_) => false,
             _ => return Err("認証要求が必要です".into()),
         };
         let socket = WebSocket::new_with_str(url, wire::REMOTE_WEBSOCKET_PROTOCOL)
@@ -266,6 +266,7 @@ pub struct WebClientConnectOptions<'a> {
     pub client_kind: ClientKind,
     pub token: Option<&'a str>,
     pub credential: Option<&'a str>,
+    pub id_token: Option<&'a str>,
     pub capabilities: &'a [&'a str],
 }
 
@@ -284,27 +285,36 @@ pub async fn connect_web_client(
         client_kind,
         token,
         credential,
+        id_token,
         capabilities,
     } = options;
     let hello = client_hello(client_id, client_name, client_kind, capabilities)?;
-    let can_retry_pair = credential.is_some() && token.is_some();
-    let auth = match credential {
-        Some(credential) => {
-            let stored: StoredCredential = serde_json::from_str(credential)
-                .map_err(|_| "credentialの形式が不正です".to_owned())?;
-            let id =
-                CredentialId::parse(stored.id).map_err(|_| "credential IDが不正です".to_owned())?;
-            let mut secret = decode_hex(&stored.secret)?;
-            let request = AuthenticateRequest::new(hello.clone(), workspace, &id, &secret);
-            secret.zeroize();
-            ClientMessage::Authenticate(request)
-        }
-        None => {
-            let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
-            let mut secret = decode_hex(token)?;
-            let request = PairRequest::new(hello.clone(), &secret);
-            secret.zeroize();
-            ClientMessage::Pair(request)
+    let can_retry_pair = id_token.is_none() && credential.is_some() && token.is_some();
+    let auth = if let Some(id_token) = id_token {
+        ClientMessage::Oidc(OidcRequest::new(
+            hello.clone(),
+            workspace,
+            id_token.to_owned(),
+        ))
+    } else {
+        match credential {
+            Some(credential) => {
+                let stored: StoredCredential = serde_json::from_str(credential)
+                    .map_err(|_| "credentialの形式が不正です".to_owned())?;
+                let id = CredentialId::parse(stored.id)
+                    .map_err(|_| "credential IDが不正です".to_owned())?;
+                let mut secret = decode_hex(&stored.secret)?;
+                let request = AuthenticateRequest::new(hello.clone(), workspace, &id, &secret);
+                secret.zeroize();
+                ClientMessage::Authenticate(request)
+            }
+            None => {
+                let token = token.ok_or_else(|| "pairing tokenが必要です".to_owned())?;
+                let mut secret = decode_hex(token)?;
+                let request = PairRequest::new(hello.clone(), &secret);
+                secret.zeroize();
+                ClientMessage::Pair(request)
+            }
         }
     };
     let (connection, response) =

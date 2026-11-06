@@ -72,6 +72,7 @@ async function launch(
   url: string | null,
   workspace: string | null,
   token: string | null,
+  idToken: string | null,
 ) {
   const clientId = localStorage.getItem(STORAGE.clientId) ?? createClientId();
   localStorage.setItem(STORAGE.clientId, clientId);
@@ -83,7 +84,7 @@ async function launch(
   }
 
   await init();
-  const fresh = await start(backend, url, workspace, token, credential, clientId);
+  const fresh = await start(backend, url, workspace, token, credential, idToken, clientId);
   if (fresh !== undefined && fresh !== null && credentialKey !== "") {
     localStorage.setItem(credentialKey, fresh);
   }
@@ -103,11 +104,49 @@ async function launch(
 }
 
 async function connect(url: string, workspace: string, token: string, backend: string) {
-  await launch(backend, url, workspace, token === "" ? null : token);
+  const storageKey = oidcStorageKey(url);
+  const idToken = storageKey === null ? null : sessionStorage.getItem(storageKey);
+  try {
+    await launch(backend, url, workspace, token === "" ? null : token, idToken);
+  } catch (error) {
+    if (storageKey === null || idToken === null) {
+      throw error;
+    }
+    sessionStorage.removeItem(storageKey);
+    if (token === "" && !hasCredential(url, workspace)) {
+      throw error;
+    }
+    await launch(backend, url, workspace, token === "" ? null : token, null);
+  }
 }
 
 async function launchDemo(backend: string) {
-  await launch(backend, null, null, null);
+  await launch(backend, null, null, null, null);
+}
+
+function bridgeOrigin(hostUrl: string): string | null {
+  try {
+    const url = new URL(hostUrl);
+    if (url.protocol === "ws:") {
+      url.protocol = "http:";
+    } else if (url.protocol === "wss:") {
+      url.protocol = "https:";
+    } else if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return null;
+    }
+    return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+function oidcStorageKey(hostUrl: string): string | null {
+  const origin = bridgeOrigin(hostUrl);
+  return origin === null ? null : `lapis.oidc.${origin}`;
+}
+
+function hasCredential(url: string, workspace: string): boolean {
+  return localStorage.getItem(`${url}|${workspace}`) !== null;
 }
 
 function showLogin(defaultUrl: string, defaultWorkspace: string) {
@@ -116,7 +155,7 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
   root!.innerHTML = `
     <form class="login" id="login">
       <h1>Lapis Web</h1>
-      <p class="login-lead">Host に接続します。初回は pairing token が必要です。</p>
+      <p class="login-lead">Host に接続します。pairing token か OIDC ログインが必要です。</p>
       <label>
         <span>Host URL</span>
         <input name="url" type="url" required autocomplete="url"
@@ -134,6 +173,7 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
         <input name="token" type="password" autocomplete="off" placeholder="64桁の16進数" />
       </label>
       <button type="submit">接続</button>
+      <button type="button" class="secondary" id="oidc-login">OIDC でログイン</button>
       <p class="login-error" id="login-error" hidden></p>
       <a class="login-demo" href="?demo=1">Host なしのデモを開く</a>
     </form>
@@ -143,22 +183,94 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
   if (form === null) {
     return;
   }
+
+  const read = () => {
+    const data = new FormData(form);
+    return {
+      url: String(data.get("url") ?? "").trim(),
+      workspace: String(data.get("workspace") ?? "").trim(),
+      token: String(data.get("token") ?? "").trim(),
+    };
+  };
+  const backend = () => new URLSearchParams(location.search).get("backend") ?? "auto";
+
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const data = new FormData(form);
-    const url = String(data.get("url") ?? "").trim();
-    const workspace = String(data.get("workspace") ?? "").trim();
-    const token = String(data.get("token") ?? "").trim();
+    const { url, workspace, token } = read();
     if (url === "" || workspace === "") {
       showLoginError("Host URL と Workspace ID を入力してください");
       return;
     }
     setLoginBusy(true);
-    const backend = new URLSearchParams(location.search).get("backend") ?? "auto";
-    void connect(url, workspace, token, backend).catch((error) => {
+    void connect(url, workspace, token, backend()).catch((error) => {
       setLoginBusy(false);
       showLoginError(error);
     });
+  });
+
+  form.querySelector<HTMLButtonElement>("#oidc-login")?.addEventListener("click", () => {
+    const { url, workspace, token } = read();
+    if (url === "" || workspace === "") {
+      showLoginError("Host URL と Workspace ID を入力してください");
+      return;
+    }
+    const origin = bridgeOrigin(url);
+    if (origin === null) {
+      showLoginError("Host URL が不正です");
+      return;
+    }
+    const popup = window.open(
+      `${origin}/auth/oidc/start`,
+      "lapis-oidc",
+      "popup,width=520,height=680",
+    );
+    if (popup === null) {
+      showLoginError("ポップアップがブロックされました。ブラウザーの設定を確認してください");
+      return;
+    }
+    setLoginBusy(true);
+
+    let settled = false;
+    let closedTimer = 0;
+    const cleanup = () => {
+      window.removeEventListener("message", onMessage);
+      window.clearInterval(closedTimer);
+    };
+    function onMessage(event: MessageEvent) {
+      if (event.origin !== origin || event.source !== popup) {
+        return;
+      }
+      const data = event.data as { type?: unknown; idToken?: unknown } | null;
+      if (
+        data === null ||
+        typeof data !== "object" ||
+        data.type !== "lapis.oidc" ||
+        typeof data.idToken !== "string" ||
+        data.idToken === ""
+      ) {
+        return;
+      }
+      const storageKey = oidcStorageKey(url);
+      if (storageKey === null) {
+        return;
+      }
+      sessionStorage.setItem(storageKey, data.idToken);
+      settled = true;
+      cleanup();
+      void connect(url, workspace, token, backend()).catch((error) => {
+        setLoginBusy(false);
+        showLoginError(error);
+      });
+    }
+    closedTimer = window.setInterval(() => {
+      if (popup.closed && !settled) {
+        settled = true;
+        cleanup();
+        setLoginBusy(false);
+        showLoginError("ログインがキャンセルされました");
+      }
+    }, 500);
+    window.addEventListener("message", onMessage);
   });
 }
 
@@ -166,12 +278,27 @@ async function boot() {
   try {
     const params = new URLSearchParams(location.search);
     const backend = params.get("backend") ?? "auto";
-    const url = params.get("url") ?? localStorage.getItem(STORAGE.url) ?? "";
-    const workspace = params.get("workspace") ?? localStorage.getItem(STORAGE.workspace) ?? "";
-    const token = params.get("token") ?? "";
+    const url = (params.get("url") ?? localStorage.getItem(STORAGE.url) ?? "").trim();
+    const workspace = (
+      params.get("workspace") ??
+      localStorage.getItem(STORAGE.workspace) ??
+      ""
+    ).trim();
+    const token = (params.get("token") ?? "").trim();
+    const idTokenKey = oidcStorageKey(url);
+    const hasIdToken = idTokenKey !== null && sessionStorage.getItem(idTokenKey) !== null;
 
-    if (url !== "" && workspace !== "") {
-      await connect(url, workspace, token, backend);
+    if (
+      url !== "" &&
+      workspace !== "" &&
+      (token !== "" || hasIdToken || hasCredential(url, workspace))
+    ) {
+      try {
+        await connect(url, workspace, token, backend);
+      } catch (error) {
+        showLogin(url, workspace);
+        showLoginError(error);
+      }
       return;
     }
     if (params.get("demo") === "1") {

@@ -42,6 +42,7 @@ pub async fn start(
     workspace: Option<String>,
     token: Option<String>,
     credential: Option<String>,
+    id_token: Option<String>,
     client_id: String,
 ) -> Result<Option<String>, JsValue> {
     console_error_panic_hook::set_once();
@@ -57,6 +58,7 @@ pub async fn start(
         client_id,
         token,
         credential,
+        id_token,
     })
     .await
     .map_err(|error| JsValue::from_str(&error))?;
