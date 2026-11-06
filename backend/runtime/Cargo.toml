@@ -14,6 +14,7 @@ lapis-document = { path = "../../shared/models/document" }
 lapis-text = { path = "../../shared/models/text" }
 lapis-terminal = { path = "../../shared/models/terminal" }
 lapis-workbench = { path = "../../shared/models/workbench" }
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

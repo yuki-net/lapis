@@ -3,7 +3,6 @@ use std::{collections::HashMap, error::Error, fmt, marker::PhantomData};
 use lapis_client_api::{
     CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId,
 };
-use serde::{Deserialize, Serialize};
 
 use crate::{
     authorization::{AuthorizationError, SessionGrant},
@@ -176,16 +175,7 @@ enum PairingScope {
     Owner,
 }
 
-/// 永続化するcredential。secretそのものは保存せず、digestだけを保持する。
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct StoredCredential {
-    pub id: String,
-    pub client_id: String,
-    pub workspace_id: String,
-    pub capabilities: Vec<String>,
-    pub digest: String,
-    pub expires_at: u64,
-}
+pub use lapis_backend_state::StoredCredential;
 
 impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn export_credentials(&self) -> Vec<StoredCredential> {

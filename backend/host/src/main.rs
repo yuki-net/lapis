@@ -1,13 +1,14 @@
 use lapis_host::BackendHost;
+use lapis_platform::CredentialStore;
 use lapis_remote::{
     AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
-    RemoteAuth, RemoteLimits, StoredCredential, tls13_server_config,
+    RemoteAuth, RemoteLimits, tls13_server_config,
 };
 use rustls::pki_types::PrivateKeyDer;
 use std::{
     io::{BufRead, Write},
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -18,7 +19,7 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 /// 実質無期限。Hostの再起動後も同じURLで接続できるようにする。
 const CREDENTIAL_LIFETIME_SECONDS: u64 = 100 * 365 * 24 * 60 * 60;
 const CREDENTIAL_SAVE_INTERVAL: Duration = Duration::from_secs(5);
-const CREDENTIAL_FILE: &str = "credentials.json";
+const CREDENTIAL_DB: &str = "credentials.sqlite3";
 
 struct Options {
     workspace: PathBuf,
@@ -115,7 +116,7 @@ fn run() -> Result<(), Error> {
         Some(directory) => BackendHost::start_with_state_directory(directory)?,
         None => BackendHost::start()?,
     };
-    let credentials_path = state_directory.map(|directory| directory.join(CREDENTIAL_FILE));
+    let credentials_path = state_directory.map(|directory| directory.join(CREDENTIAL_DB));
     let workspace = host.register_workspace(&options.workspace)?;
     // 秘密鍵はHostのメモリ内だけに保持する。
     let certified =
@@ -132,21 +133,30 @@ fn run() -> Result<(), Error> {
         ),
         AuthPolicy::new(lapis_host::supported_capabilities()),
     )));
-    if let Some(path) = &credentials_path
-        && let Ok(bytes) = std::fs::read(path)
-    {
-        match serde_json::from_slice::<Vec<StoredCredential>>(&bytes) {
-            Ok(records) => {
-                let loaded = {
-                    let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
-                    auth.import_credentials(records);
-                    auth.export_credentials().len()
-                };
-                println!("Loaded {loaded} credential(s) from {}", path.display());
+    let mut credential_store = match &credentials_path {
+        Some(path) => match CredentialStore::open(path) {
+            Ok(store) => match store.load() {
+                Ok(records) => {
+                    let loaded = {
+                        let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
+                        auth.import_credentials(records);
+                        auth.export_credentials().len()
+                    };
+                    println!("Loaded {loaded} credential(s) from {}", path.display());
+                    Some(store)
+                }
+                Err(error) => {
+                    eprintln!("Ignoring invalid credential database: {error}");
+                    None
+                }
+            },
+            Err(error) => {
+                eprintln!("Credential database unavailable: {error}");
+                None
             }
-            Err(error) => eprintln!("Ignoring invalid credential file: {error}"),
-        }
-    }
+        },
+        None => None,
+    };
     auth.lock()
         .map_err(|_| "authentication unavailable")?
         .enable();
@@ -181,9 +191,11 @@ fn run() -> Result<(), Error> {
             tokio::select! {
                 signal = tokio::signal::ctrl_c() => { signal?; break; }
                 _ = credential_save.tick() => {
-                    if let Some(path) = &credentials_path {
-                        save_credentials(path, &auth, &mut saved_credentials)?;
-                    }
+                    save_credentials(
+                        credential_store.as_mut(),
+                        &auth,
+                        &mut saved_credentials,
+                    )?;
                 }
                 line = input.recv(), if input_open => {
                     let Some(line) = line else { input_open = false; continue };
@@ -242,36 +254,34 @@ fn run() -> Result<(), Error> {
                 }
             }
         }
-        if let Some(path) = &credentials_path {
-            save_credentials(path, &auth, &mut saved_credentials)?;
-        }
+        save_credentials(
+            credential_store.as_mut(),
+            &auth,
+            &mut saved_credentials,
+        )?;
         server.shutdown().await;
         Ok::<_, Error>(())
     })
 }
 
 fn save_credentials(
-    path: &Path,
+    store: Option<&mut CredentialStore>,
     auth: &Mutex<RemoteAuth>,
     last_saved: &mut Option<Vec<u8>>,
 ) -> Result<(), Error> {
-    let records = auth
+    let Some(store) = store else {
+        return Ok(());
+    };
+    let mut records = auth
         .lock()
         .map_err(|_| "authentication unavailable")?
         .export_credentials();
+    records.sort_by(|left, right| left.id.cmp(&right.id));
     let bytes = serde_json::to_vec(&records)?;
     if last_saved.as_deref() == Some(bytes.as_slice()) {
         return Ok(());
     }
-    let parent = path
-        .parent()
-        .filter(|parent| !parent.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    std::fs::create_dir_all(parent)?;
-    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(&bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary.persist(path)?;
+    store.replace_all(&records)?;
     *last_saved = Some(bytes);
     Ok(())
 }
