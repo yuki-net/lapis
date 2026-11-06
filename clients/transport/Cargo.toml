@@ -10,6 +10,7 @@ futures-channel = "0.3"
 client-api = { path = "../../contracts/protocol" }
 workbench = { path = "../../contracts/domain/workbench" }
 serde_json.workspace = true
+sha2.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 futures-util = "0.3"

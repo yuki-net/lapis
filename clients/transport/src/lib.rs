@@ -8,6 +8,7 @@ use client_api::{
 };
 use futures_channel::oneshot;
 
+pub mod pkce;
 pub mod workbench;
 
 #[cfg(target_arch = "wasm32")]
