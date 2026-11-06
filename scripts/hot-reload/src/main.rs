@@ -42,7 +42,7 @@ fn main() {
             "--profile",
             "hot-reload",
             "--package",
-            "lapis-host",
+            "host",
             "--bin",
             "lapis-host",
         ])

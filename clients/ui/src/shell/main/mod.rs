@@ -25,8 +25,8 @@ use gpui::{
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
     Window, div, point, prelude::*, px, relative,
 };
-use lapis_workspace::FileEntryKind;
 use std::{cell::RefCell, collections::HashMap, time::Duration};
+use workspace::FileEntryKind;
 
 mod actions;
 mod command_palette;
@@ -67,7 +67,7 @@ pub(crate) struct Shell {
     feature_registry: FeatureRegistry,
     notification_center: gpui::Entity<crate::notification::Center>,
     locale: Localizer,
-    languages: lapis_language::LanguageRegistry,
+    languages: language::LanguageRegistry,
     scroll_states: ShellScrollStates,
     status: String,
 }
@@ -82,17 +82,17 @@ struct DropPreview {
 
 #[derive(Default)]
 pub(crate) struct ShellPresentation {
-    pub(crate) documents: Vec<lapis_desktop_client::DocumentTab>,
+    pub(crate) documents: Vec<desktop_client::DocumentTab>,
     pub(crate) root: Option<std::path::PathBuf>,
     pub(crate) workspace_name: String,
-    pub(crate) active: Option<lapis_editor_core::DocumentId>,
+    pub(crate) active: Option<editor_core::DocumentId>,
     pub(crate) cursor: (usize, usize),
     pub(crate) line_ending: &'static str,
-    pub(crate) encoding: lapis_desktop_client::Encoding,
+    pub(crate) encoding: desktop_client::Encoding,
     pub(crate) recent_workspaces: Vec<std::path::PathBuf>,
 }
 impl ShellPresentation {
-    fn tabs(&self) -> Vec<lapis_desktop_client::DocumentTab> {
+    fn tabs(&self) -> Vec<desktop_client::DocumentTab> {
         self.documents.clone()
     }
     fn workspace_root(&self) -> Option<&std::path::Path> {
@@ -101,7 +101,7 @@ impl ShellPresentation {
     fn workspace_name(&self) -> &str {
         &self.workspace_name
     }
-    fn active_document_id(&self) -> Option<&lapis_editor_core::DocumentId> {
+    fn active_document_id(&self) -> Option<&editor_core::DocumentId> {
         self.active.as_ref()
     }
     fn active_path(&self) -> Option<&std::path::Path> {
@@ -117,7 +117,7 @@ impl ShellPresentation {
             .map(|tab| tab.display_name.clone())
             .unwrap_or_else(|| "Untitled".into())
     }
-    fn encoding(&self) -> lapis_desktop_client::Encoding {
+    fn encoding(&self) -> desktop_client::Encoding {
         self.encoding
     }
 }
@@ -240,7 +240,7 @@ impl Shell {
             feature_registry,
             notification_center: center,
             locale: Localizer::bundled(),
-            languages: lapis_language::LanguageRegistry::bundled(),
+            languages: language::LanguageRegistry::bundled(),
             scroll_states: ShellScrollStates::default(),
             status: String::new(),
         }
@@ -267,8 +267,7 @@ impl Shell {
         cx.notify();
     }
     pub(crate) fn t(&self, key: &str) -> String {
-        self.locale
-            .resolve(&lapis_localization::MessageId::new(key))
+        self.locale.resolve(&localization::MessageId::new(key))
     }
     fn refresh_feature_activation(&mut self, cx: &mut Context<Self>) {
         self.synchronize_view_instances(cx);
@@ -292,12 +291,12 @@ impl Shell {
         })
     }
 
-    pub(crate) fn view_state(&self) -> lapis_desktop_client::ConversationViewState {
+    pub(crate) fn view_state(&self) -> desktop_client::ConversationViewState {
         crate::features::conversation::capture_view_state(&self.shell)
     }
     pub(crate) fn restore_view(
         &mut self,
-        view: lapis_desktop_client::ConversationViewState,
+        view: desktop_client::ConversationViewState,
         cx: &mut Context<Self>,
     ) {
         crate::features::conversation::apply_view_state(
@@ -324,7 +323,7 @@ impl Shell {
 
     pub(crate) fn restore_workbench_view(
         &mut self,
-        view: lapis_desktop_client::ConversationViewState,
+        view: desktop_client::ConversationViewState,
         retained: &std::collections::HashSet<crate::extension_ui::ViewInstanceId>,
         cx: &mut Context<Self>,
     ) {
@@ -369,11 +368,7 @@ impl Shell {
         self.status = status;
         cx.notify();
     }
-    pub(crate) fn set_locale(
-        &mut self,
-        locale: lapis_localization::LocaleId,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn set_locale(&mut self, locale: localization::LocaleId, cx: &mut Context<Self>) {
         let _ = self.locale.set_active(&locale);
         self.notification_center
             .update(cx, |center, cx| center.set_locale(&locale, cx));
@@ -381,7 +376,7 @@ impl Shell {
     }
     pub(crate) fn request_document_close(
         &mut self,
-        id: lapis_editor_core::DocumentId,
+        id: editor_core::DocumentId,
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {

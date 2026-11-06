@@ -43,12 +43,12 @@ class CheckTests(unittest.TestCase):
                         self.assertIn("--workspace", command)
                         self.assertEqual(command.count("--exclude"), 2)
                         self.assertIn("lapis", command)
-                        self.assertIn("lapis-desktop-ui", command)
+                        self.assertIn("desktop-ui", command)
                     else:
                         self.assertNotIn("--exclude", command)
                         self.assertIn("lapis", command)
                         if stage != "build":
-                            self.assertIn("lapis-desktop-ui", command)
+                            self.assertIn("desktop-ui", command)
                     if stage == "lint":
                         self.assertEqual(command[-3:], ["--", "-D", "warnings"])
 

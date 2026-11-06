@@ -1,5 +1,5 @@
-use lapis_client_api::*;
-use lapis_remote::*;
+use client_api::*;
+use remote::*;
 use std::{
     io::{BufRead, BufReader, Write},
     process::{Child, Command, Stdio},
@@ -20,7 +20,7 @@ fn hello() -> ClientHello {
         client_id: ClientId::try_new("standalone-test").unwrap(),
         client_name: "Test".to_owned(),
         client_kind: ClientKind::Desktop,
-        requested_capabilities: lapis_host::supported_capabilities(),
+        requested_capabilities: host::supported_capabilities(),
     }
 }
 

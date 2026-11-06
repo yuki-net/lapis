@@ -5,10 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub use lapis_text::{Position, TextRange};
+pub use text::{Position, TextRange};
 mod connection;
 pub use connection::{DocumentCache, DocumentConnection};
-use lapis_text::{TextBuffer, TextEdit, TextError};
+use text::{TextBuffer, TextEdit, TextError};
 
 /// Document内で単調増加する変更世代。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

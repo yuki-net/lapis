@@ -1,7 +1,7 @@
 use crate::time::Instant;
 use std::time::Duration;
 
-use lapis_desktop_client::DocumentTab;
+use desktop_client::DocumentTab;
 
 use crate::extension_ui::{FeatureRegistry, ZonePosition};
 
@@ -160,7 +160,7 @@ pub(crate) struct ShellState {
     pub tool_picker_query: String,
     pub tool_picker_selected: usize,
     /// 最後にEditorの正本としたactive document。snapshot更新でToolタブを奪わないために使う。
-    active_document: Option<lapis_editor_core::DocumentId>,
+    active_document: Option<editor_core::DocumentId>,
     pub workspace_menu_open: bool,
     pub settings_menu_open: bool,
     pub header_menu_open: bool,
@@ -489,11 +489,11 @@ mod tests {
 
     fn test_document(id: &str, active: bool) -> DocumentTab {
         DocumentTab {
-            id: lapis_editor_core::DocumentId::new(id),
+            id: editor_core::DocumentId::new(id),
             display_name: id.to_owned(),
             path: None,
             dirty: false,
-            external_change: lapis_document::ExternalChange::Unchanged,
+            external_change: document::ExternalChange::Unchanged,
             encoding: Default::default(),
             active,
         }

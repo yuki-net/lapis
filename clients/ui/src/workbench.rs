@@ -1,8 +1,8 @@
-use lapis_desktop_client::{
+use desktop_client::{
     ConversationViewState, ViewBindingState, ViewScopeState, WorkbenchLayoutState,
     WorkbenchModeState, WorkbenchViewState,
 };
-use lapis_editor_core::ConversationId;
+use editor_core::ConversationId;
 use std::collections::BTreeMap;
 
 /// Task選択が表示Layoutへ与えるポリシーです。Resourceの所有権は変更しません。
@@ -344,15 +344,15 @@ mod tests {
             extension_ui::ZonePosition,
             shell::{PanelDrop, PanelEdge, PanelTab, ShellState},
         };
-        use lapis_desktop_client::DocumentTab;
+        use desktop_client::DocumentTab;
 
         fn fixture(name: &str, direction: PanelEdge) -> (ConversationViewState, DocumentTab) {
             let document = DocumentTab {
-                id: lapis_editor_core::DocumentId::new(name),
+                id: editor_core::DocumentId::new(name),
                 display_name: name.into(),
                 path: None,
                 dirty: true,
-                external_change: lapis_document::ExternalChange::Unchanged,
+                external_change: document::ExternalChange::Unchanged,
                 encoding: Default::default(),
                 active: true,
             };
@@ -756,7 +756,7 @@ mod tests {
         let owned = PanelTab::tool_instance("tool", "owned");
         let shared = PanelTab::tool_instance("tool", "shared");
         let follow = PanelTab::tool_instance("tool", "follow");
-        let fixed = PanelTab::Document(lapis_editor_core::DocumentId::new("resource-a"));
+        let fixed = PanelTab::Document(editor_core::DocumentId::new("resource-a"));
         for tab in [&owned, &shared, &follow, &fixed] {
             shell
                 .layout

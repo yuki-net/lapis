@@ -1,7 +1,7 @@
 use crate::{components::action_button, theme};
+use desktop_client::{ConversationRecord, Project, SourceRole};
+use editor_core::{ConversationId, ProjectId};
 use gpui::{Context, Render, Window, div, prelude::*};
-use lapis_desktop_client::{ConversationRecord, Project, SourceRole};
-use lapis_editor_core::{ConversationId, ProjectId};
 use std::path::PathBuf;
 
 #[derive(Clone)]

@@ -1,10 +1,10 @@
+use desktop_client::{
+    ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
+    TerminalSession, WorkspaceSearchSession,
+};
 use gpui::{
     App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, actions,
     size,
-};
-use lapis_desktop_client::{
-    ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
-    TerminalSession, WorkspaceSearchSession,
 };
 
 use crate::root::DesktopRoot;
@@ -71,7 +71,7 @@ pub struct DesktopServices {
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
-    pub(crate) workbench_watch: Option<lapis_desktop_client::WorkbenchWatch>,
+    pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
 }
 
 impl DesktopServices {
@@ -103,11 +103,11 @@ impl DesktopServices {
         self.connect_host = Some(std::sync::Arc::new(connector));
         self
     }
-    pub fn with_workbench_watch(mut self, watch: lapis_desktop_client::WorkbenchWatch) -> Self {
+    pub fn with_workbench_watch(mut self, watch: desktop_client::WorkbenchWatch) -> Self {
         self.workbench_watch = Some(watch);
         self
     }
-    pub fn workbench_watch(&self) -> Option<&lapis_desktop_client::WorkbenchWatch> {
+    pub fn workbench_watch(&self) -> Option<&desktop_client::WorkbenchWatch> {
         self.workbench_watch.as_ref()
     }
 }
@@ -222,16 +222,16 @@ pub fn run_web(
 #[derive(Clone)]
 pub(crate) struct WindowFactory {
     connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
-    repository: std::sync::Arc<dyn lapis_workspace::WorkspaceRepository>,
-    dialog: std::sync::Arc<dyn lapis_desktop_client::WorkspaceDialog>,
-    state: std::sync::Arc<dyn lapis_desktop_client::WorkspaceStateRepository>,
-    documents: std::sync::Arc<dyn lapis_document::DocumentConnection>,
-    task: std::sync::Arc<dyn lapis_task::TaskConnection>,
-    git: std::sync::Arc<dyn lapis_git::GitConnection>,
-    lsp: std::sync::Arc<dyn lapis_lsp::LanguageServerBackend>,
-    terminal: std::sync::Arc<dyn lapis_terminal::TerminalBackend>,
-    search: std::sync::Arc<dyn lapis_workspace::WorkspaceSearchBackend>,
-    conversation: std::sync::Arc<dyn lapis_desktop_client::ConversationRepository>,
+    repository: std::sync::Arc<dyn workspace::WorkspaceRepository>,
+    dialog: std::sync::Arc<dyn desktop_client::WorkspaceDialog>,
+    state: std::sync::Arc<dyn desktop_client::WorkspaceStateRepository>,
+    documents: std::sync::Arc<dyn document::DocumentConnection>,
+    task: std::sync::Arc<dyn task::TaskConnection>,
+    git: std::sync::Arc<dyn git::GitConnection>,
+    lsp: std::sync::Arc<dyn lsp::LanguageServerBackend>,
+    terminal: std::sync::Arc<dyn terminal::TerminalBackend>,
+    search: std::sync::Arc<dyn workspace::WorkspaceSearchBackend>,
+    conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
 }
 impl WindowFactory {
@@ -290,9 +290,7 @@ pub(crate) fn open_desktop_window(
         tracing::error!(target: "lapis::app", "Windowを開けませんでした: {error}");
         let mut locale = crate::localization::Localizer::bundled();
         locale.set_active(&locale_id);
-        let title = locale.resolve(&lapis_localization::MessageId::new(
-            "notification.error.window",
-        ));
+        let title = locale.resolve(&localization::MessageId::new("notification.error.window"));
         crate::notification::publish_error(cx, "window.creation_failed", &title, error.to_string());
     }
 }

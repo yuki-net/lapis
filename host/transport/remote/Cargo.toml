@@ -1,5 +1,5 @@
 [package]
-name = "lapis-remote"
+name = "remote"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
@@ -8,10 +8,10 @@ license.workspace = true
 [dependencies]
 axum.workspace = true
 axum-server.workspace = true
-lapis-backend-state = { path = "../../runtime" }
-lapis-client-api = { path = "../../../contracts/protocol" }
-lapis-client-core = { path = "../../../clients/transport" }
-lapis-wire = { path = "../../../contracts/wire" }
+backend-state = { path = "../../runtime" }
+client-api = { path = "../../../contracts/protocol" }
+client-core = { path = "../../../clients/transport" }
+wire = { path = "../../../contracts/wire" }
 getrandom.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
@@ -26,8 +26,8 @@ tokio.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-lapis-git = { path = "../../../contracts/domain/git" }
-lapis-document = { path = "../../../contracts/domain/document" }
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
-lapis-task = { path = "../../../contracts/domain/task" }
+git = { path = "../../../contracts/domain/git" }
+document = { path = "../../../contracts/domain/document" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+task = { path = "../../../contracts/domain/task" }
 tempfile.workspace = true

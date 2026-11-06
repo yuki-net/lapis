@@ -6,20 +6,20 @@ description.workspace = true
 license.workspace = true
 
 [features]
-hot-reload = ["lapis-desktop-ui/hot-reload"]
+hot-reload = ["desktop-ui/hot-reload"]
 
 [dependencies]
-lapis-host = { path = "../../../host/app" }
-lapis-desktop-client = { path = "../../state" }
-lapis-desktop-ui = { path = "../../ui" }
-lapis-platform = { path = "../../../host/adapters/local" }
-lapis-persistence = { path = "../persistence" }
-lapis-remote = { path = "../../../host/transport/remote" }
-lapis-settings = { path = "../../../contracts/domain/settings" }
-lapis-task = { path = "../../../contracts/domain/task" }
+host = { path = "../../../host/app" }
+desktop-client = { path = "../../state" }
+desktop-ui = { path = "../../ui" }
+platform = { path = "../../../host/adapters/local" }
+persistence = { path = "../persistence" }
+remote = { path = "../../../host/transport/remote" }
+settings = { path = "../../../contracts/domain/settings" }
+task = { path = "../../../contracts/domain/task" }
 rfd.workspace = true
 
 [dev-dependencies]
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
-lapis-workspace = { path = "../../../contracts/domain/workspace" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+workspace = { path = "../../../contracts/domain/workspace" }
 tempfile.workspace = true

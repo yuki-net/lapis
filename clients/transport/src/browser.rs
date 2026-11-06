@@ -4,14 +4,14 @@ use std::{
 };
 
 use crate::ClientCore;
-use futures_channel::{mpsc, oneshot};
-use futures_util::future::{Either, select};
-use gloo_timers::future::TimeoutFuture;
-use lapis_client_api::{
+use client_api::{
     AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
     ClientKind, ClientMessage, CredentialId, EventEnvelope, PairRequest, ProtocolRange,
     RequestBody, ResponseBody, ServerMessage, WorkspaceId,
 };
+use futures_channel::{mpsc, oneshot};
+use futures_util::future::{Either, select};
+use gloo_timers::future::TimeoutFuture;
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{Event, MessageEvent, WebSocket};
 use zeroize::Zeroize;
@@ -96,7 +96,7 @@ impl BrowserConnection {
             ClientMessage::Authenticate(_) => false,
             _ => return Err("認証要求が必要です".into()),
         };
-        let socket = WebSocket::new_with_str(url, lapis_wire::REMOTE_WEBSOCKET_PROTOCOL)
+        let socket = WebSocket::new_with_str(url, wire::REMOTE_WEBSOCKET_PROTOCOL)
             .map_err(|_| "WebSocketを開始できません")?;
         let (opened, wait_open) = oneshot::channel();
         let (auth_required, wait_auth_required) = oneshot::channel();

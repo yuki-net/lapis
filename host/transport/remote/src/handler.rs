@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
-use lapis_client_api::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
+use client_api::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
 
 use crate::SessionGrant;
 

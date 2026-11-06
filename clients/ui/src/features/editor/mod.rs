@@ -15,8 +15,8 @@ use crate::{
     features::id,
     theme,
 };
-use lapis_document::{Document, DocumentError};
-use lapis_editor_core::DocumentId;
+use document::{Document, DocumentError};
+use editor_core::DocumentId;
 mod actions;
 mod canvas;
 mod input;
@@ -642,7 +642,7 @@ impl Editor {
     }
 
     fn line_start_char(&self, line: usize) -> Result<usize, DocumentError> {
-        self.session.position_to_char(lapis_document::Position {
+        self.session.position_to_char(document::Position {
             line: line as u32,
             utf16_column: 0,
         })

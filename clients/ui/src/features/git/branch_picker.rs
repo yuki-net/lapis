@@ -6,12 +6,12 @@ use crate::{
     },
     theme,
 };
+use editor_core::WorkspaceId;
+use git::GitAction;
 use gpui::{
     Context, Entity, FocusHandle, Focusable, KeyDownEvent, Render, Subscription, Window, div,
     prelude::*, px,
 };
-use lapis_editor_core::WorkspaceId;
-use lapis_git::GitAction;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Clone, Debug, PartialEq, Eq)]

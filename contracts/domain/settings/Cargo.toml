@@ -1,12 +1,12 @@
 [package]
-name = "lapis-settings"
+name = "settings"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-localization = { path = "../localization" }
+localization = { path = "../localization" }
 serde.workspace = true
 
 [dev-dependencies]

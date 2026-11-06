@@ -1,5 +1,5 @@
 use crate::extension_ui::ViewId;
-use lapis_editor_core::DocumentId;
+use editor_core::DocumentId;
 
 pub(crate) use crate::extension_ui::ViewInstanceId;
 

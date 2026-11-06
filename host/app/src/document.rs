@@ -1,10 +1,10 @@
 use crate::BackendClient;
 use crate::client::Client;
-use lapis_client_api as wire;
-use lapis_document::{
+use ::document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
 };
-use lapis_editor_core::DocumentId;
+use client_api as wire;
+use editor_core::DocumentId;
 use std::{
     collections::HashMap,
     ops::Range,
@@ -146,10 +146,10 @@ impl DocumentConnection for HostDocuments {
     fn fork(&self) -> std::sync::Arc<dyn DocumentConnection> {
         std::sync::Arc::new(Self::new(self.host.clone()))
     }
-    fn workspace(&self, root: &Path) -> Result<lapis_editor_core::WorkspaceId, DocumentError> {
+    fn workspace(&self, root: &Path) -> Result<editor_core::WorkspaceId, DocumentError> {
         self.host
             .register_workspace(root)
-            .map(|id| lapis_editor_core::WorkspaceId::new(id.as_str()))
+            .map(|id| editor_core::WorkspaceId::new(id.as_str()))
             .map_err(|error| DocumentError::io(error.to_string()))
     }
     fn create(&self, root: Option<&Path>) -> Result<DocumentCache, DocumentError> {
@@ -317,13 +317,13 @@ impl DocumentConnection for HostDocuments {
                         relative(&destination_root, &path)?,
                     )
                     .map_err(|error| match error {
-                        lapis_backend_state::BackendServiceError::State(
-                            lapis_backend_state::BackendStateError::Document(error),
+                        backend_state::BackendServiceError::State(
+                            backend_state::BackendStateError::Document(error),
                         ) => error,
-                        lapis_backend_state::BackendServiceError::State(
-                            lapis_backend_state::BackendStateError::RevisionConflict(_),
+                        backend_state::BackendServiceError::State(
+                            backend_state::BackendStateError::RevisionConflict(_),
                         ) => DocumentError::conflict("Document revision が競合しています"),
-                        lapis_backend_state::BackendServiceError::Rejected(problem)
+                        backend_state::BackendServiceError::Rejected(problem)
                             if problem.revision_conflict.is_some()
                                 || problem.code.as_str() == "document_conflict" =>
                         {

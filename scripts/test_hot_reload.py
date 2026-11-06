@@ -34,7 +34,7 @@ fn main() {
     if env::current_exe().unwrap().file_stem().unwrap() == "cargo-fixture" {
         fs::write("cargo-called", "yes").unwrap();
         assert_eq!(args, ["build", "--locked", "--target-dir", "target", "--target",
-            "x86_64-pc-windows-msvc", "--profile", "hot-reload", "--package", "lapis-host",
+            "x86_64-pc-windows-msvc", "--profile", "hot-reload", "--package", "host",
             "--bin", "lapis-host"]);
         if env::var("LAPIS_TEST_SCENARIO").unwrap() == "build-failure" { process::exit(23); }
         let host = Path::new("target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe");

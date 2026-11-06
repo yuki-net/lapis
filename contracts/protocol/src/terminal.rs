@@ -2,8 +2,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{TerminalId, WorkspaceId, WorkspaceRelativePath};
 
-pub use lapis_terminal::TerminalShell;
-pub use lapis_terminal::{
+pub use ::terminal::TerminalShell;
+pub use ::terminal::{
     TerminalCell, TerminalColor, TerminalCursor, TerminalDelta, TerminalInput, TerminalKey,
     TerminalKeyEvent, TerminalModes, TerminalModifiers, TerminalRevision, TerminalRow,
     TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta, TerminalSize,

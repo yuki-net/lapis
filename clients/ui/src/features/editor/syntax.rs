@@ -7,7 +7,7 @@ use std::{
     },
 };
 
-use lapis_document::Document;
+use document::Document;
 use syntect::{
     easy::ScopeRangeIterator,
     parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet},
@@ -43,7 +43,7 @@ pub(super) fn rebase(
     let last =
         (before.char_to_position(edited.end).ok()?.line as usize + 1).min(before.len_lines() - 1);
     let start_char = before
-        .position_to_char(lapis_document::Position::new(first as u32, 0))
+        .position_to_char(document::Position::new(first as u32, 0))
         .ok()?;
     let base = before.char_to_byte(start_char).ok()?;
     let cut = before.char_to_byte(edited.start).ok()? - base
@@ -278,7 +278,7 @@ impl SyntaxCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_document::{Encoding, Revision};
+    use document::{Encoding, Revision};
 
     fn doc(path: &str, text: &str) -> Document {
         Document::from_snapshot(

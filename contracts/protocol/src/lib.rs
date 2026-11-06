@@ -22,6 +22,7 @@ mod workspace;
 
 pub mod capability;
 
+pub use ::workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCapabilities};
 pub use connection::ConnectionState;
 pub use credential_id::{CredentialId, InvalidCredentialId};
@@ -49,7 +50,6 @@ pub use handshake::{ClientHello, ClientKind, ServerHello};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };
-pub use lapis_workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
 pub use remote_wire::{
     AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest,

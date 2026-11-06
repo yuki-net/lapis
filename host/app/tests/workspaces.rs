@@ -1,6 +1,6 @@
-use lapis_client_api::{FileTreeRequest, RequestBody, ResponseBody};
-use lapis_host::BackendHost;
-use lapis_workspace::FileEntryKind;
+use client_api::{FileTreeRequest, RequestBody, ResponseBody};
+use host::BackendHost;
+use workspace::FileEntryKind;
 
 #[test]
 fn desktop_and_wire_directory_creation_share_runtime_scope_and_tree_updates() {
@@ -18,11 +18,11 @@ fn desktop_and_wire_directory_creation_share_runtime_scope_and_tree_updates() {
             .recv_timeout(std::time::Duration::from_secs(2))
             .is_ok()
     );
-    let path = lapis_client_api::WorkspaceRelativePath::parse("wire-folder").unwrap();
+    let path = client_api::WorkspaceRelativePath::parse("wire-folder").unwrap();
     assert!(matches!(
         client
             .request(RequestBody::CreateDirectory(
-                lapis_client_api::CreateDirectoryRequest {
+                client_api::CreateDirectoryRequest {
                     workspace_id: client.workspace_id().clone(),
                     path: path.clone(),
                 }
@@ -40,7 +40,7 @@ fn desktop_and_wire_directory_creation_share_runtime_scope_and_tree_updates() {
     assert!(matches!(
         client
             .request(RequestBody::CreateDirectory(
-                lapis_client_api::CreateDirectoryRequest {
+                client_api::CreateDirectoryRequest {
                     workspace_id: other,
                     path,
                 }
@@ -93,8 +93,8 @@ fn desktop_tree_uses_the_same_workspace_and_file_contract_as_wire_clients() {
 }
 #[test]
 fn persistent_host_restores_registered_workspaces_and_retains_missing_records() {
-    use lapis_backend_state::BackendSession;
-    use lapis_client_api::{
+    use backend_state::BackendSession;
+    use client_api::{
         RequestBody, RequestEnvelope, RequestId, ResponseBody, SessionId, WorkspaceListRequest,
     };
     let base = tempfile::tempdir().unwrap();
@@ -104,8 +104,7 @@ fn persistent_host_restores_registered_workspaces_and_retains_missing_records() 
     std::fs::create_dir(&first_root).unwrap();
     std::fs::create_dir(&second_root).unwrap();
     let (first, second) = {
-        let host =
-            lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let host = host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
         (
             host.register_workspace(&first_root).unwrap(),
             host.register_workspace(&second_root).unwrap(),
@@ -116,7 +115,7 @@ fn persistent_host_restores_registered_workspaces_and_retains_missing_records() 
         .join("workspaces")
         .join(format!("{}.json", second.as_str()));
     let original_record = std::fs::read(&record).unwrap();
-    let list = |host: &lapis_host::BackendHost| {
+    let list = |host: &host::BackendHost| {
         let session =
             BackendSession::new(SessionId::try_new("registry-test").unwrap(), first.clone())
                 .with_user_workspace_listing(true);
@@ -139,23 +138,20 @@ fn persistent_host_restores_registered_workspaces_and_retains_missing_records() 
             .collect::<Vec<_>>()
     };
     {
-        let host =
-            lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let host = host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
         let listed = list(&host);
         assert!(listed.contains(&first));
         assert!(listed.contains(&second));
     }
     std::fs::remove_dir(&second_root).unwrap();
     {
-        let host =
-            lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+        let host = host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
         let listed = list(&host);
         assert!(listed.contains(&first));
         assert!(!listed.contains(&second));
         assert_eq!(std::fs::read(&record).unwrap(), original_record);
     }
     std::fs::create_dir(&second_root).unwrap();
-    let host =
-        lapis_host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let host = host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
     assert!(list(&host).contains(&second));
 }

@@ -1,11 +1,11 @@
 [package]
-name = "lapis-task"
+name = "task"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-editor-core = { path = "../editor-core" }
+editor-core = { path = "../editor-core" }
 serde.workspace = true
 serde_json.workspace = true

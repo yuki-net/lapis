@@ -7,18 +7,18 @@ use std::{
     time::Duration,
 };
 
-use lapis_backend_state::{
+use backend_state::{
     BackendService, BackendSession, BackendState, WorkspaceEntry, WorkspaceEntryKind,
     WorkspaceFileBackend, WorkspaceRegistration,
 };
-use lapis_client_api::{
+use client_api::{
     DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest, DocumentEncoding,
     DocumentHistoryRequest, DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit,
     DocumentTransaction, EventBody, FileTreeRequest, REVISION_CONFLICT, RequestBody,
     RequestEnvelope, RequestId, ResponseBody, Revision, SessionId, SnapshotReason, SnapshotRequest,
     WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId, WorkspaceRelativePath,
 };
-use lapis_document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 
 #[derive(Default)]
 struct TestFiles;
@@ -56,8 +56,8 @@ impl DocumentRepository for TestFiles {
 }
 
 impl WorkspaceFileBackend for TestFiles {
-    fn create_directory(&self, _: &std::path::Path) -> Result<(), lapis_document::DocumentError> {
-        Err(lapis_document::DocumentError::io("Unsupported"))
+    fn create_directory(&self, _: &std::path::Path) -> Result<(), document::DocumentError> {
+        Err(document::DocumentError::io("Unsupported"))
     }
     fn list_children(&self, directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError> {
         let mut entries = fs::read_dir(directory)
@@ -610,9 +610,9 @@ fn fingerprint(path: &Path, bytes: &[u8]) -> Result<FileFingerprint, DocumentErr
 
 #[test]
 fn workbench_save_finishes_after_client_disconnect_without_blocking_other_requests() {
-    use lapis_backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
-    use lapis_workbench::{ConversationViewState, VersionedViewState};
+    use backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
     use std::sync::{Mutex, mpsc};
+    use workbench::{ConversationViewState, VersionedViewState};
 
     struct BlockingStore {
         entered: mpsc::SyncSender<()>,
@@ -668,7 +668,7 @@ fn workbench_save_finishes_after_client_disconnect_without_blocking_other_reques
             &writer_service,
             &writer_session,
             3,
-            RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+            RequestBody::WorkbenchPut(client_api::WorkbenchPutRequest {
                 workspace_id: writer_workspace,
                 expected_revision: 0,
                 view: serde_json::json!({"show_panel_controls": false}),
@@ -681,7 +681,7 @@ fn workbench_save_finishes_after_client_disconnect_without_blocking_other_reques
         &service,
         &reader,
         4,
-        RequestBody::WorkbenchGet(lapis_client_api::WorkbenchGetRequest {
+        RequestBody::WorkbenchGet(client_api::WorkbenchGetRequest {
             workspace_id: workspace_id.clone(),
         }),
     );
@@ -689,13 +689,13 @@ fn workbench_save_finishes_after_client_disconnect_without_blocking_other_reques
     release.send(()).unwrap();
     assert!(matches!(
         pending.join().unwrap(),
-        ResponseBody::WorkbenchPut(lapis_client_api::WorkbenchPutResponse::Updated(_))
+        ResponseBody::WorkbenchPut(client_api::WorkbenchPutResponse::Updated(_))
     ));
     let after = dispatch(
         &service,
         &reader,
         5,
-        RequestBody::WorkbenchGet(lapis_client_api::WorkbenchGetRequest { workspace_id }),
+        RequestBody::WorkbenchGet(client_api::WorkbenchGetRequest { workspace_id }),
     );
     assert!(
         matches!(after, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 1 && snapshot.view["show_panel_controls"] == false)
@@ -704,8 +704,8 @@ fn workbench_save_finishes_after_client_disconnect_without_blocking_other_reques
 
 #[test]
 fn failed_workbench_save_does_not_advance_the_host_state() {
-    use lapis_backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
-    use lapis_workbench::{ConversationViewState, VersionedViewState};
+    use backend_state::{WorkbenchPersistence, WorkbenchStoreResult};
+    use workbench::{ConversationViewState, VersionedViewState};
     struct FailingStore;
     impl WorkbenchPersistence for FailingStore {
         fn load(&self) -> std::io::Result<VersionedViewState> {
@@ -740,7 +740,7 @@ fn failed_workbench_save_does_not_advance_the_host_state() {
         session.clone(),
         RequestEnvelope {
             request_id: RequestId::try_new("write-failure").unwrap(),
-            body: RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+            body: RequestBody::WorkbenchPut(client_api::WorkbenchPutRequest {
                 workspace_id: workspace.clone(),
                 expected_revision: 0,
                 view: serde_json::json!({"show_panel_controls": false}),
@@ -753,7 +753,7 @@ fn failed_workbench_save_does_not_advance_the_host_state() {
         &service,
         &session,
         2,
-        RequestBody::WorkbenchGet(lapis_client_api::WorkbenchGetRequest {
+        RequestBody::WorkbenchGet(client_api::WorkbenchGetRequest {
             workspace_id: workspace,
         }),
     );

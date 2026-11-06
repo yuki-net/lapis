@@ -17,7 +17,7 @@ pub struct WorkbenchPutRequest {
 
 /// 新Clientはworkspaceを明示し、旧Clientが省略した場合と区別する。
 pub fn encode_workbench_view(
-    view: &lapis_workbench::ConversationViewState,
+    view: &workbench::ConversationViewState,
 ) -> Result<serde_json::Value, serde_json::Error> {
     let mut value = serde_json::to_value(view)?;
     if view.workspace.is_none() {
@@ -48,8 +48,7 @@ mod tests {
 
     #[test]
     fn new_client_explicitly_encodes_workspace_clear() {
-        let encoded =
-            encode_workbench_view(&lapis_workbench::ConversationViewState::default()).unwrap();
+        let encoded = encode_workbench_view(&workbench::ConversationViewState::default()).unwrap();
         assert_eq!(encoded.get("workspace"), Some(&serde_json::Value::Null));
     }
 }

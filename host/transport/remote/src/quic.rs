@@ -21,7 +21,7 @@ use crate::{
     socket::RemoteSocket,
 };
 
-pub const QUIC_PROTOCOL: &[u8] = lapis_wire::REMOTE_QUIC_PROTOCOL;
+pub const QUIC_PROTOCOL: &[u8] = wire::REMOTE_QUIC_PROTOCOL;
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 /// 呼出元のTokio runtime上で動作する。接続終了はHostの終了を意味しない。
@@ -230,7 +230,7 @@ mod tests {
         fn handle(
             &self,
             _: SessionGrant,
-            _: lapis_client_api::RequestEnvelope,
+            _: client_api::RequestEnvelope,
         ) -> RemoteResponseFuture<'_> {
             Box::pin(async { panic!("invalid frames must not reach the runtime") })
         }

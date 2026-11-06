@@ -1,9 +1,9 @@
 use crate::client_adapter::{ClientWorker, DocumentClient, ResponseGate};
 use crate::timer::Timer;
+use document::Revision;
+use editor_core::DocumentId;
 use gpui::Context;
-use lapis_document::Revision;
-use lapis_editor_core::DocumentId;
-use lapis_lsp::{DefinitionTarget, Diagnostic, LspPosition};
+use lsp::{DefinitionTarget, Diagnostic, LspPosition};
 use std::time::Duration;
 
 pub(crate) enum ProblemsEvent {
@@ -202,7 +202,7 @@ impl ProblemsFeature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_lsp::{DiagnosticSeverity, LspRange};
+    use lsp::{DiagnosticSeverity, LspRange};
 
     fn target(name: &str, revision: u64) -> Option<(DocumentId, Revision)> {
         Some((DocumentId::new(name), Revision::new(revision)))

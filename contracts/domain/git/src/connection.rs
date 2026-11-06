@@ -1,5 +1,5 @@
 use crate::{ChangeKind, GitError, WorktreeState};
-use lapis_editor_core::{TaskId, WorkspaceId};
+use editor_core::{TaskId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

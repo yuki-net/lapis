@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use lapis_client_api::{CapabilityId, CapabilitySet, RequestBody, SessionId, WorkspaceId};
+use client_api::{CapabilityId, CapabilitySet, RequestBody, SessionId, WorkspaceId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionGrant {
@@ -59,12 +59,12 @@ impl SessionGrant {
             && self
                 .capabilities
                 .iter()
-                .any(|value| value.as_str() == lapis_client_api::capability::HOST_MANAGE);
+                .any(|value| value.as_str() == client_api::capability::HOST_MANAGE);
         if !owner_registration {
             self.require_capability(&capability)?;
         }
         if matches!(request, RequestBody::WorkbenchPut(_)) {
-            let read = CapabilityId::try_new(lapis_client_api::capability::WORKSPACE_SYNC)
+            let read = CapabilityId::try_new(client_api::capability::WORKSPACE_SYNC)
                 .expect("built-in capability must be valid");
             self.require_capability(&read)?;
         }
@@ -103,7 +103,7 @@ impl Error for AuthorizationError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_client_api::capability;
+    use client_api::capability;
 
     #[test]
     fn workspace_registration_is_separate_from_other_host_management() {
@@ -120,10 +120,10 @@ mod tests {
                 .unwrap(),
             )
         };
-        let register = RequestBody::HostRegister(lapis_client_api::HostRegisterRequest {
+        let register = RequestBody::HostRegister(client_api::HostRegisterRequest {
             root: "absolute".into(),
         });
-        let worktree = RequestBody::HostWorktree(lapis_editor_core::TaskId::new("task-1"));
+        let worktree = RequestBody::HostWorktree(editor_core::TaskId::new("task-1"));
         let user = make_grant(&[capability::WORKSPACES_REGISTER]);
         assert!(user.require_request(&register).is_ok());
         assert!(user.require_request(&worktree).is_err());
@@ -142,7 +142,7 @@ mod tests {
             CapabilitySet::try_new([CapabilityId::try_new(capability::WORKBENCH_WRITE).unwrap()])
                 .unwrap(),
         );
-        let request = RequestBody::WorkbenchPut(lapis_client_api::WorkbenchPutRequest {
+        let request = RequestBody::WorkbenchPut(client_api::WorkbenchPutRequest {
             workspace_id: workspace,
             expected_revision: 0,
             view: serde_json::json!({}),
@@ -159,14 +159,14 @@ mod tests {
     fn isolated_task_start_requires_both_task_start_and_git_write() {
         let workspace = WorkspaceId::try_new("workspace-1").unwrap();
         let request = |isolated| {
-            RequestBody::WorkspaceExecute(lapis_client_api::WorkspaceOperationRequest {
+            RequestBody::WorkspaceExecute(client_api::WorkspaceOperationRequest {
                 workspace_id: workspace.clone(),
-                operation: lapis_client_api::WorkspaceOperation::StartTask {
-                    input: lapis_task::TaskStart {
+                operation: client_api::WorkspaceOperation::StartTask {
+                    input: task::TaskStart {
                         prompt: "テスト".into(),
-                        mode: lapis_task::TaskMode::Default,
+                        mode: task::TaskMode::Default,
                         isolated,
-                        conversation_id: lapis_editor_core::ConversationId::new("conversation-1"),
+                        conversation_id: editor_core::ConversationId::new("conversation-1"),
                     },
                 },
             })
@@ -239,26 +239,25 @@ mod tests {
             Err(AuthorizationError::CapabilityDenied(_))
         ));
 
-        let file_tree = RequestBody::FileTree(lapis_client_api::FileTreeRequest {
+        let file_tree = RequestBody::FileTree(client_api::FileTreeRequest {
             workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
             path: None,
         });
-        let terminal_start = RequestBody::TerminalStart(lapis_client_api::TerminalStartRequest {
+        let terminal_start = RequestBody::TerminalStart(client_api::TerminalStartRequest {
             workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
             cwd: None,
             command: None,
             shell: Default::default(),
-            size: lapis_client_api::TerminalSize {
+            size: client_api::TerminalSize {
                 columns: 80,
                 rows: 24,
             },
         });
         assert_eq!(grant.require_request(&file_tree), Ok(()));
-        let create_directory =
-            RequestBody::CreateDirectory(lapis_client_api::CreateDirectoryRequest {
-                workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
-                path: lapis_client_api::WorkspaceRelativePath::parse("new-folder").unwrap(),
-            });
+        let create_directory = RequestBody::CreateDirectory(client_api::CreateDirectoryRequest {
+            workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
+            path: client_api::WorkspaceRelativePath::parse("new-folder").unwrap(),
+        });
         assert!(matches!(
             grant.require_request(&create_directory),
             Err(AuthorizationError::CapabilityDenied(_))
@@ -266,10 +265,9 @@ mod tests {
         let write_grant = SessionGrant::from_authenticated(
             SessionId::try_new("writer").unwrap(),
             WorkspaceId::try_new("workspace-1").unwrap(),
-            CapabilitySet::try_new([CapabilityId::try_new(
-                lapis_client_api::capability::FILES_WRITE,
-            )
-            .unwrap()])
+            CapabilitySet::try_new([
+                CapabilityId::try_new(client_api::capability::FILES_WRITE).unwrap()
+            ])
             .unwrap(),
         );
         assert_eq!(write_grant.require_request(&create_directory), Ok(()));

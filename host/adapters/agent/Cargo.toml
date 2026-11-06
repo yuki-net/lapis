@@ -1,12 +1,12 @@
 [package]
-name = "lapis-task-runner"
+name = "task-runner"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-task = { path = "../../../contracts/domain/task" }
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
+task = { path = "../../../contracts/domain/task" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
 serde.workspace = true
 serde_json.workspace = true

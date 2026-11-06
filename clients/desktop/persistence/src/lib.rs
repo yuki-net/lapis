@@ -6,16 +6,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use lapis_desktop_client::{
+use ::workspace::WorkspaceError;
+use desktop_client::{
     ConversationRecord, ConversationRepository, ConversationState, ConversationViewState, Project,
     WorkbenchSync, WorkbenchWatch, ZoneLayoutViewState,
 };
-use lapis_editor_core::{ConversationId, WorkspaceId};
-use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
-use lapis_workbench::WorkbenchConnection;
-use lapis_workspace::WorkspaceError;
+use editor_core::{ConversationId, WorkspaceId};
 use serde::{Deserialize, Serialize};
+use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use std::sync::{Arc, Mutex};
+use workbench::WorkbenchConnection;
 
 mod workspace;
 pub use workspace::LocalWorkspaceStateRepository;
@@ -122,7 +122,7 @@ fn discard_invalid_layout(view: &mut serde_json::Map<String, serde_json::Value>)
     if let Some(layout) = view.get("layout")
         && !layout.is_null()
         && !serde_json::from_value::<ZoneLayoutViewState>(layout.clone())
-            .is_ok_and(|layout| layout.version == lapis_desktop_client::ZONE_LAYOUT_VERSION)
+            .is_ok_and(|layout| layout.version == desktop_client::ZONE_LAYOUT_VERSION)
     {
         view.remove("layout");
     }
@@ -332,14 +332,14 @@ fn atomic_json_write(path: &Path, value: &impl Serialize) -> Result<(), Workspac
 
 #[cfg(test)]
 mod tests {
-    use lapis_desktop_client::{
+    use desktop_client::{
         ConversationViewState, DocumentViewState, RestoredTerminal, WorkspaceSnapshot,
     };
-    use lapis_editor_core::ExecutionId;
-    use lapis_localization::LocaleId;
-    use lapis_settings::GlobalSettingsRepository;
-    use lapis_terminal::TerminalStatus;
-    use lapis_workbench::VersionedViewState;
+    use editor_core::ExecutionId;
+    use localization::LocaleId;
+    use settings::GlobalSettingsRepository;
+    use terminal::TerminalStatus;
+    use workbench::VersionedViewState;
 
     use super::*;
 
@@ -351,7 +351,7 @@ mod tests {
             version: 1,
             locale: LocaleId::new("ja-JP"),
             theme: "lapis.white".to_owned(),
-            syntax_theme: Some(lapis_settings::SyntaxTheme::Zed),
+            syntax_theme: Some(settings::SyntaxTheme::Zed),
         };
 
         repository.save(&settings).unwrap();
@@ -361,8 +361,8 @@ mod tests {
 
     #[test]
     fn syntax_family_survives_ui_changes_and_restart() {
-        use lapis_desktop_client::SettingsSession;
-        use lapis_settings::SyntaxTheme;
+        use desktop_client::SettingsSession;
+        use settings::SyntaxTheme;
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings-v1.json");
         fs::write(
@@ -443,8 +443,8 @@ mod tests {
         assert_eq!(restored, (Vec::new(), records, Some(active)));
 
         let mut with_layout = restored.1.clone();
-        with_layout[0].view.layout = Some(lapis_desktop_client::ZoneLayoutViewState {
-            version: lapis_desktop_client::ZONE_LAYOUT_VERSION,
+        with_layout[0].view.layout = Some(desktop_client::ZoneLayoutViewState {
+            version: desktop_client::ZONE_LAYOUT_VERSION,
             zones: Vec::new(),
             bottom_span_left: false,
             bottom_span_right: false,
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(recovered.1[0].workspace, restored.1[0].workspace);
         assert_eq!(
             recovered.1[0].view.workbench.mode,
-            lapis_desktop_client::WorkbenchModeState::Agent
+            desktop_client::WorkbenchModeState::Agent
         );
         assert!(
             recovered.1[0]
@@ -556,7 +556,7 @@ mod tests {
 
     struct SharedWorkbench(Mutex<VersionedViewState>);
 
-    impl lapis_workbench::WorkbenchConnection for SharedWorkbench {
+    impl workbench::WorkbenchConnection for SharedWorkbench {
         fn get(&self, _: &WorkspaceId) -> Result<VersionedViewState, String> {
             Ok(self.0.lock().unwrap().clone())
         }
@@ -566,12 +566,12 @@ mod tests {
             _: &WorkspaceId,
             expected: u64,
             view: ConversationViewState,
-        ) -> Result<lapis_workbench::WorkbenchUpdate, String> {
+        ) -> Result<workbench::WorkbenchUpdate, String> {
             let mut state = self.0.lock().unwrap();
             match state.update(expected, view) {
-                Ok(_) => Ok(lapis_workbench::WorkbenchUpdate::Updated(state.clone())),
-                Err(lapis_workbench::ViewUpdateError::Conflict { .. }) => {
-                    Ok(lapis_workbench::WorkbenchUpdate::Conflict(state.clone()))
+                Ok(_) => Ok(workbench::WorkbenchUpdate::Updated(state.clone())),
+                Err(workbench::ViewUpdateError::Conflict { .. }) => {
+                    Ok(workbench::WorkbenchUpdate::Conflict(state.clone()))
                 }
                 Err(_) => Err("overflow".into()),
             }
@@ -580,7 +580,7 @@ mod tests {
         fn subscribe(
             &self,
             _: &WorkspaceId,
-        ) -> Result<Box<dyn lapis_workbench::WorkbenchSubscription>, String> {
+        ) -> Result<Box<dyn workbench::WorkbenchSubscription>, String> {
             Err("unsupported".into())
         }
     }
@@ -615,7 +615,7 @@ mod tests {
             selected_execution: None,
             terminals: Vec::new(),
             environment: None,
-            source_role: lapis_desktop_client::SourceRole::Primary,
+            source_role: desktop_client::SourceRole::Primary,
             other_workspace: None,
             other_terminals: Vec::new(),
             other_execution: None,

@@ -1,6 +1,6 @@
-use lapis_client_api::{DocumentDiscardRequest, EventBody, RequestBody, ResponseBody};
-use lapis_document::{DocumentErrorKind, ExternalChange};
-use lapis_host::BackendHost;
+use client_api::{DocumentDiscardRequest, EventBody, RequestBody, ResponseBody};
+use document::{DocumentErrorKind, ExternalChange};
+use host::BackendHost;
 use std::time::Duration;
 
 #[test]
@@ -50,8 +50,8 @@ fn stale_or_unattached_discard_never_drops_another_clients_changes() {
         .unwrap();
     let outsider = host.connect(root.path()).unwrap();
     let request = DocumentDiscardRequest {
-        document_id: lapis_client_api::DocumentId::try_new(original.id.as_str()).unwrap(),
-        base_revision: lapis_client_api::Revision::new(changed.document.revision().number()),
+        document_id: client_api::DocumentId::try_new(original.id.as_str()).unwrap(),
+        base_revision: client_api::Revision::new(changed.document.revision().number()),
     };
     assert!(matches!(
         outsider
@@ -134,10 +134,10 @@ fn untitled_and_never_saved_named_documents_discard_to_empty_without_reserving_a
     assert!(discarded.document.revision() > dirty.document.revision());
     let client = host.connect(root.path()).unwrap();
     let create = || {
-        RequestBody::DocumentCreate(lapis_client_api::DocumentCreateRequest {
+        RequestBody::DocumentCreate(client_api::DocumentCreateRequest {
             workspace_id: client.workspace_id().clone(),
-            path: lapis_client_api::WorkspaceRelativePath::parse("new.md").unwrap(),
-            encoding: lapis_client_api::DocumentEncoding::Utf8,
+            path: client_api::WorkspaceRelativePath::parse("new.md").unwrap(),
+            encoding: client_api::DocumentEncoding::Utf8,
             content: "never saved".to_owned(),
         })
     };
@@ -145,7 +145,7 @@ fn untitled_and_never_saved_named_documents_discard_to_empty_without_reserving_a
         panic!("create failed")
     };
     let named = documents
-        .attach(&lapis_editor_core::DocumentId::new(
+        .attach(&editor_core::DocumentId::new(
             created.document.document_id.as_str(),
         ))
         .unwrap();

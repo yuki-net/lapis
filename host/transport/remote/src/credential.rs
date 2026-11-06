@@ -1,11 +1,11 @@
 use std::fmt;
 
-use lapis_client_api::{ClientId, WorkspaceId};
+use client_api::{ClientId, WorkspaceId};
 use zeroize::Zeroize;
 
 use crate::{random::RandomSource, secret::SECRET_BYTES};
 
-pub use lapis_client_api::{CredentialId, InvalidCredentialId};
+pub use client_api::{CredentialId, InvalidCredentialId};
 
 pub(crate) fn generate_id(
     random: &mut impl RandomSource,
@@ -60,7 +60,7 @@ impl fmt::Debug for CredentialHandle {
 pub(crate) struct CredentialRecord {
     pub(crate) client_id: ClientId,
     pub(crate) workspace_id: WorkspaceId,
-    pub(crate) capabilities: lapis_client_api::CapabilitySet,
+    pub(crate) capabilities: client_api::CapabilitySet,
     pub(crate) digest: [u8; SECRET_BYTES],
     pub(crate) expires_at: u64,
 }

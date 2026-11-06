@@ -9,12 +9,12 @@ use gpui::{Context, Render, Window, div, prelude::*, px};
 pub(crate) struct SettingsFeature {
     coordinator: gpui::Entity<SettingsCoordinator>,
     _subscription: gpui::Subscription,
-    values: lapis_settings::GlobalSettings,
+    values: settings::GlobalSettings,
     root: Option<std::path::PathBuf>,
     locale: Localizer,
     message: String,
 }
-impl gpui::EventEmitter<lapis_settings::GlobalSettings> for SettingsFeature {}
+impl gpui::EventEmitter<settings::GlobalSettings> for SettingsFeature {}
 
 impl SettingsFeature {
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
@@ -50,8 +50,7 @@ impl SettingsFeature {
         }
     }
     fn t(&self, key: &str) -> String {
-        self.locale
-            .resolve(&lapis_localization::MessageId::new(key))
+        self.locale.resolve(&localization::MessageId::new(key))
     }
     pub(crate) fn select_theme(&mut self, theme_id: ThemeId, cx: &mut Context<Self>) {
         if theme::available(cx).iter().any(|(id, _)| id == &theme_id) {
@@ -61,17 +60,13 @@ impl SettingsFeature {
         }
     }
 
-    pub(crate) fn select_locale(
-        &mut self,
-        locale: lapis_localization::LocaleId,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn select_locale(&mut self, locale: localization::LocaleId, cx: &mut Context<Self>) {
         self.coordinator.update(cx, |coordinator, cx| {
             coordinator.change(Change::Locale(locale), cx)
         });
     }
 
-    fn select_syntax_theme(&mut self, id: lapis_settings::SyntaxTheme, cx: &mut Context<Self>) {
+    fn select_syntax_theme(&mut self, id: settings::SyntaxTheme, cx: &mut Context<Self>) {
         self.coordinator.update(cx, |coordinator, cx| {
             coordinator.change(Change::Syntax(id), cx)
         });
@@ -295,7 +290,7 @@ impl SettingsFeature {
             .text_color(theme::colors(cx).text_primary)
             .child(format!("{} {}", if is_selected { "✓" } else { "" }, label))
             .on_click(cx.listener(move |this, _, _, cx| {
-                this.select_locale(lapis_localization::LocaleId::new(locale_code), cx);
+                this.select_locale(localization::LocaleId::new(locale_code), cx);
             }))
     }
 }
@@ -314,7 +309,7 @@ impl Render for SettingsFeature {
 mod tests {
     use super::*;
     use gpui::AppContext;
-    use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError, SyntaxTheme};
+    use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError, SyntaxTheme};
     use std::sync::Arc;
 
     struct MemorySettings;
@@ -348,8 +343,7 @@ mod tests {
     ) {
         let (first, second) = cx.update(|cx| {
             theme::init(&ThemeId::new("lapis.dark"), None, cx);
-            let settings =
-                lapis_desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
             SettingsCoordinator::init(settings, cx);
             (cx.new(SettingsFeature::new), cx.new(SettingsFeature::new))
         });
@@ -373,8 +367,7 @@ mod tests {
     fn two_features_observe_shared_theme_syntax_and_locale(cx: &mut gpui::TestAppContext) {
         let (first, second) = cx.update(|cx| {
             theme::init(&ThemeId::new("lapis.dark"), None, cx);
-            let settings =
-                lapis_desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
             SettingsCoordinator::init(settings, cx);
             (cx.new(SettingsFeature::new), cx.new(SettingsFeature::new))
         });
@@ -387,7 +380,7 @@ mod tests {
                 feature.select_syntax_theme(SyntaxTheme::Zed, cx)
             });
             first.update(cx, |feature, cx| {
-                feature.select_locale(lapis_localization::LocaleId::new("ja-JP"), cx)
+                feature.select_locale(localization::LocaleId::new("ja-JP"), cx)
             });
         });
         wait_for_settings(cx);

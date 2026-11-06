@@ -1,6 +1,6 @@
 use std::{sync::mpsc, time::Duration};
 
-use lapis_client_api::EventEnvelope;
+use client_api::EventEnvelope;
 
 pub trait BackendEventSink: Send + Sync + 'static {
     /// falseは購読を継続できず、Snapshot再同期が必要であることを表す。

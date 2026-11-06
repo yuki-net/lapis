@@ -2,7 +2,7 @@ use gpui::{AnyView, App};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
-use lapis_language::LanguageId;
+use language::LanguageId;
 
 use super::{
     ActivationCondition, ActivationEvent, CommandId, FeatureId, UiContribution, UiSlot, ViewId,

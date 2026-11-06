@@ -1,6 +1,6 @@
 use super::*;
 use crate::client_adapter::{ClientWorker, DocumentClient, PersistedView};
-use lapis_desktop_client::{DocumentAction, DocumentCloseDisposition};
+use desktop_client::{DocumentAction, DocumentCloseDisposition};
 
 type ClosedGroup = (
     Entity<WindowGroup>,
@@ -10,11 +10,7 @@ type ClosedGroup = (
     Vec<PanelTab>,
 );
 
-type Decision = (
-    DocumentId,
-    DocumentCloseDisposition,
-    lapis_document::Revision,
-);
+type Decision = (DocumentId, DocumentCloseDisposition, document::Revision);
 
 struct CloseRequest {
     group: Entity<WindowGroup>,

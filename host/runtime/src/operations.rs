@@ -1,15 +1,11 @@
 use crate::BackendStateError;
-use lapis_client_api::{
+use client_api::{
     WorkspaceOperation as Operation, WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
 };
-use lapis_editor_core::{ExecutionId, TaskId, WorkspaceId};
-use lapis_git::{
+use editor_core::{ExecutionId, TaskId, WorkspaceId};
+use git::{
     GitBackend, GitDiffSnapshot, GitFileSnapshot, GitSnapshot, RepositoryStatus, TaskWorktree,
     WorktreeSnapshot,
-};
-use lapis_task::{
-    Execution, ExecutionSnapshot, ExecutionStatus, Task, TaskBackend, TaskRecord, TaskSnapshot,
-    TaskStart, unix_time_ms,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -20,6 +16,10 @@ use std::{
         mpsc,
     },
     time::{Duration, Instant},
+};
+use task::{
+    Execution, ExecutionSnapshot, ExecutionStatus, Task, TaskBackend, TaskRecord, TaskSnapshot,
+    TaskStart, unix_time_ms,
 };
 
 static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
@@ -34,7 +34,7 @@ pub(crate) struct WorkspaceOperations {
 }
 
 struct CachedRepository {
-    watch: Option<Box<dyn lapis_git::GitWatch>>,
+    watch: Option<Box<dyn git::GitWatch>>,
     status: RepositoryStatus,
     revision: u64,
     refreshed: Instant,
@@ -47,7 +47,7 @@ impl WorkspaceOperations {
     pub fn new(
         git: Option<Arc<dyn GitBackend>>,
         tasks: Option<Arc<dyn TaskBackend>>,
-        workspace_id: &lapis_client_api::WorkspaceId,
+        workspace_id: &client_api::WorkspaceId,
     ) -> Self {
         Self {
             git,
@@ -328,7 +328,7 @@ impl WorkspaceOperations {
     fn git_action(
         &mut self,
         directory: &Path,
-        request: lapis_git::GitActionRequest,
+        request: git::GitActionRequest,
     ) -> Result<Outcome, BackendStateError> {
         self.require_repository(directory)?;
         if let Some(path) = request.action.path() {
@@ -549,7 +549,7 @@ impl WorkspaceOperations {
                         return Err(BackendStateError::WorkspaceDenied);
                     }
                     discovered.insert(directory);
-                    repositories.push(lapis_git::GitRepositorySnapshot {
+                    repositories.push(git::GitRepositorySnapshot {
                         id: path
                             .as_ref()
                             .map_or_else(|| "root".to_owned(), |path| format!("path:{path}")),
@@ -672,17 +672,17 @@ impl WorkspaceOperations {
 trait SafeOperationFailure {
     fn message(&self) -> &'static str;
 }
-impl SafeOperationFailure for lapis_git::GitError {
+impl SafeOperationFailure for git::GitError {
     fn message(&self) -> &'static str {
         match self.kind() {
-            lapis_git::GitErrorKind::NotRepository => "Git repository not found",
-            lapis_git::GitErrorKind::Conflict => "Git operation conflicts with current state",
-            lapis_git::GitErrorKind::InvalidOutput => "Git returned invalid output",
-            lapis_git::GitErrorKind::Io => "Git command failed",
+            git::GitErrorKind::NotRepository => "Git repository not found",
+            git::GitErrorKind::Conflict => "Git operation conflicts with current state",
+            git::GitErrorKind::InvalidOutput => "Git returned invalid output",
+            git::GitErrorKind::Io => "Git command failed",
         }
     }
 }
-impl SafeOperationFailure for lapis_task::TaskError {
+impl SafeOperationFailure for task::TaskError {
     fn message(&self) -> &'static str {
         "Task execution or persistence failed"
     }
@@ -724,29 +724,26 @@ mod tests {
     #[test]
     fn operation_failure_messages_are_fixed_and_distinguishable() {
         for (kind, expected) in [
-            (lapis_git::GitErrorKind::Io, "Git command failed"),
+            (git::GitErrorKind::Io, "Git command failed"),
+            (git::GitErrorKind::NotRepository, "Git repository not found"),
             (
-                lapis_git::GitErrorKind::NotRepository,
-                "Git repository not found",
-            ),
-            (
-                lapis_git::GitErrorKind::Conflict,
+                git::GitErrorKind::Conflict,
                 "Git operation conflicts with current state",
             ),
             (
-                lapis_git::GitErrorKind::InvalidOutput,
+                git::GitErrorKind::InvalidOutput,
                 "Git returned invalid output",
             ),
         ] {
             let BackendStateError::Operation(message) =
-                problem(lapis_git::GitError::new(kind, "/private/path secret"))
+                problem(git::GitError::new(kind, "/private/path secret"))
             else {
                 panic!("Expected safe operation failure");
             };
             assert_eq!(message, expected);
         }
         let BackendStateError::Operation(message) =
-            problem(lapis_task::TaskError::new("/private/path secret"))
+            problem(task::TaskError::new("/private/path secret"))
         else {
             panic!("Expected safe task failure");
         };

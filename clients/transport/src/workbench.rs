@@ -1,10 +1,10 @@
 //! DesktopとWebで共有するWorkbenchの非同期操作。
 
-use lapis_client_api::{
+use client_api::{
     RequestBody, ResponseBody, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
     WorkbenchSnapshot, WorkspaceId,
 };
-use lapis_workbench::{
+use workbench::{
     ConversationViewState, VersionedViewState, WorkbenchReplica, WorkbenchUpdate,
     WorkbenchWritePlan,
 };
@@ -135,7 +135,7 @@ pub async fn update(
     expected: u64,
     view: &ConversationViewState,
 ) -> Result<WorkbenchUpdate, String> {
-    let view = lapis_client_api::encode_workbench_view(view).map_err(|error| error.to_string())?;
+    let view = client_api::encode_workbench_view(view).map_err(|error| error.to_string())?;
     match connection
         .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
             workspace_id: workspace.clone(),

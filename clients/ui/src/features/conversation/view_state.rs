@@ -2,7 +2,7 @@ use crate::{
     extension_ui::{FeatureRegistry, ViewId, ZonePosition},
     shell::{DockLayout, PanelTab, ShellState},
 };
-use lapis_desktop_client::{ConversationViewState, DocumentTab};
+use desktop_client::{ConversationViewState, DocumentTab};
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {
@@ -44,8 +44,7 @@ pub(crate) fn apply_view_state(
 
 fn deserialize_panel_tab(value: &str) -> Option<PanelTab> {
     if let Some(id) = value.strip_prefix("document:") {
-        return (!id.is_empty())
-            .then(|| PanelTab::Document(lapis_editor_core::DocumentId::new(id)));
+        return (!id.is_empty()).then(|| PanelTab::Document(editor_core::DocumentId::new(id)));
     }
     let (view, instance) = value.strip_prefix("tool:")?.split_once(':')?;
     if view.is_empty() || instance.is_empty() {
@@ -60,17 +59,17 @@ fn deserialize_panel_tab(value: &str) -> Option<PanelTab> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_desktop_client::ZoneLayoutViewState;
+    use desktop_client::ZoneLayoutViewState;
 
     #[test]
     fn broken_layout_keeps_dirty_documents_in_the_default_zone() {
         let mut shell = ShellState::default();
         let document = DocumentTab {
-            id: lapis_editor_core::DocumentId::new("unsaved"),
+            id: editor_core::DocumentId::new("unsaved"),
             display_name: "Untitled".into(),
             path: None,
             dirty: true,
-            external_change: lapis_document::ExternalChange::Unchanged,
+            external_change: document::ExternalChange::Unchanged,
             encoding: Default::default(),
             active: true,
         };

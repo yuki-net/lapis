@@ -4,8 +4,8 @@ use crate::{
     components::{action_button, panel_empty_state},
     theme,
 };
+use git::{ChangeKind, ConflictSide, GitAction};
 use gpui::{Context, Render, Window, div, prelude::*, px};
-use lapis_git::{ChangeKind, ConflictSide, GitAction};
 
 impl Render for GitFeature {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

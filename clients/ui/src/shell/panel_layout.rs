@@ -237,16 +237,14 @@ impl PanelLayout {
             }
         }
     }
-    pub(super) fn capture(&self) -> lapis_desktop_client::PanelLayoutViewState {
+    pub(super) fn capture(&self) -> desktop_client::PanelLayoutViewState {
         match self {
-            Self::Panel(id) => {
-                lapis_desktop_client::PanelLayoutViewState::Panel { id: id.as_str() }
-            }
+            Self::Panel(id) => desktop_client::PanelLayoutViewState::Panel { id: id.as_str() },
             Self::Arrangement {
                 axis,
                 children,
                 weights,
-            } => lapis_desktop_client::PanelLayoutViewState::Arrangement {
+            } => desktop_client::PanelLayoutViewState::Arrangement {
                 direction: match axis {
                     Axis::Horizontal => "horizontal",
                     Axis::Vertical => "vertical",
@@ -258,12 +256,12 @@ impl PanelLayout {
         }
     }
 
-    pub(super) fn restore(saved: &lapis_desktop_client::PanelLayoutViewState) -> Option<Self> {
+    pub(super) fn restore(saved: &desktop_client::PanelLayoutViewState) -> Option<Self> {
         match saved {
-            lapis_desktop_client::PanelLayoutViewState::Panel { id } => {
+            desktop_client::PanelLayoutViewState::Panel { id } => {
                 Some(Self::Panel(PanelId::parse(id)?))
             }
-            lapis_desktop_client::PanelLayoutViewState::Arrangement {
+            desktop_client::PanelLayoutViewState::Arrangement {
                 direction,
                 children,
                 weights,

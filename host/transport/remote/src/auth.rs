@@ -1,8 +1,6 @@
 use std::{collections::HashMap, error::Error, fmt, marker::PhantomData};
 
-use lapis_client_api::{
-    CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId,
-};
+use client_api::{CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId};
 
 use crate::{
     authorization::{AuthorizationError, SessionGrant},
@@ -175,7 +173,7 @@ enum PairingScope {
     Owner,
 }
 
-pub use lapis_backend_state::StoredCredential;
+pub use backend_state::StoredCredential;
 
 impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn export_credentials(&self) -> Vec<StoredCredential> {
@@ -397,8 +395,8 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
                         !capability.as_str().starts_with("host.")
                             && !matches!(
                                 capability.as_str(),
-                                lapis_client_api::capability::WORKSPACES_SWITCH
-                                    | lapis_client_api::capability::WORKSPACES_REGISTER
+                                client_api::capability::WORKSPACES_SWITCH
+                                    | client_api::capability::WORKSPACES_REGISTER
                             )
                     }
                     PairingScope::User => !capability.as_str().starts_with("host."),
@@ -458,8 +456,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         let may_switch = record.capabilities.iter().any(|capability| {
             matches!(
                 capability.as_str(),
-                lapis_client_api::capability::HOST_MANAGE
-                    | lapis_client_api::capability::WORKSPACES_SWITCH
+                client_api::capability::HOST_MANAGE | client_api::capability::WORKSPACES_SWITCH
             )
         });
         if &record.client_id != client_id || (!may_switch && &record.workspace_id != workspace_id) {
@@ -567,7 +564,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_client_api::{CapabilityId, capability};
+    use client_api::{CapabilityId, capability};
 
     #[derive(Clone, Debug)]
     struct TestClock(u64);
@@ -748,7 +745,7 @@ mod tests {
         assert!(matches!(
             auth.authorize_request(
                 &grant,
-                &RequestBody::WorkspaceConnect(lapis_client_api::WorkspaceConnectRequest {
+                &RequestBody::WorkspaceConnect(client_api::WorkspaceConnectRequest {
                     workspace_id: ids().1
                 })
             ),
@@ -830,16 +827,16 @@ mod tests {
             grant.require_capability(&terminal),
             Err(crate::AuthorizationError::CapabilityDenied(_))
         ));
-        let files_request = RequestBody::FileTree(lapis_client_api::FileTreeRequest {
+        let files_request = RequestBody::FileTree(client_api::FileTreeRequest {
             workspace_id: workspace.clone(),
             path: None,
         });
-        let terminal_request = RequestBody::TerminalStart(lapis_client_api::TerminalStartRequest {
+        let terminal_request = RequestBody::TerminalStart(client_api::TerminalStartRequest {
             workspace_id: workspace.clone(),
             cwd: None,
             command: None,
             shell: Default::default(),
-            size: lapis_client_api::TerminalSize {
+            size: client_api::TerminalSize {
                 columns: 80,
                 rows: 24,
             },
@@ -849,7 +846,7 @@ mod tests {
             auth.authorize_request(&grant, &terminal_request),
             Err(AccessError::Authorization(_))
         ));
-        let other_workspace_request = RequestBody::FileTree(lapis_client_api::FileTreeRequest {
+        let other_workspace_request = RequestBody::FileTree(client_api::FileTreeRequest {
             workspace_id: WorkspaceId::try_new("workspace-2").unwrap(),
             path: None,
         });

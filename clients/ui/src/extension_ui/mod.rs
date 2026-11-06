@@ -12,5 +12,5 @@ pub use ids::{
     CommandId, FeatureId, IconId, IconThemeId, KeymapId, ThemeId, ViewId, ViewInstanceId,
     WorkspaceCapabilityId,
 };
-pub use lapis_localization::{LocaleId, MessageId};
+pub use localization::{LocaleId, MessageId};
 pub use registry::{FeatureDescriptor, FeatureKind, FeatureRegistry, FeatureState};

@@ -1,15 +1,15 @@
 use crate::client_adapter::{ClientWorker, ResponseGate};
 use crate::timer::Timer;
+use desktop_client::GitSession;
+use editor_core::{TaskId, WorkspaceId};
+use git::{GitAction, GitActionRequest, GitDiffSnapshot, GitSnapshot};
 use gpui::{Context, PromptButton, PromptLevel, Window};
-use lapis_desktop_client::GitSession;
-use lapis_editor_core::{TaskId, WorkspaceId};
-use lapis_git::{GitAction, GitActionRequest, GitDiffSnapshot, GitSnapshot};
 use std::time::Duration;
 
 fn merge_repository_statuses(
-    mut base: Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)>,
-    updates: impl IntoIterator<Item = (lapis_git::GitRepositorySnapshot, GitSnapshot)>,
-) -> Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)> {
+    mut base: Vec<(git::GitRepositorySnapshot, GitSnapshot)>,
+    updates: impl IntoIterator<Item = (git::GitRepositorySnapshot, GitSnapshot)>,
+) -> Vec<(git::GitRepositorySnapshot, GitSnapshot)> {
     for (repository, incoming) in updates {
         if let Some((_, current)) = base
             .iter_mut()
@@ -31,14 +31,14 @@ mod event_order_tests {
     struct Backend {
         entered: mpsc::Sender<()>,
         release: Mutex<mpsc::Receiver<()>>,
-        trees: Mutex<Vec<lapis_git::WorktreeSnapshot>>,
+        trees: Mutex<Vec<git::WorktreeSnapshot>>,
     }
-    impl lapis_git::GitConnection for Backend {
+    impl git::GitConnection for Backend {
         fn repositories(
             &self,
             _: &WorkspaceId,
-        ) -> Result<Vec<lapis_git::GitRepositorySnapshot>, lapis_git::GitError> {
-            Ok(vec![lapis_git::GitRepositorySnapshot {
+        ) -> Result<Vec<git::GitRepositorySnapshot>, git::GitError> {
+            Ok(vec![git::GitRepositorySnapshot {
                 id: "root".into(),
                 path: None,
             }])
@@ -47,14 +47,14 @@ mod event_order_tests {
             &self,
             workspace: &WorkspaceId,
             _: &str,
-        ) -> Result<GitSnapshot, lapis_git::GitError> {
+        ) -> Result<GitSnapshot, git::GitError> {
             self.status(workspace, None)
         }
         fn status(
             &self,
             workspace: &WorkspaceId,
             worktree: Option<&TaskId>,
-        ) -> Result<GitSnapshot, lapis_git::GitError> {
+        ) -> Result<GitSnapshot, git::GitError> {
             Ok(GitSnapshot {
                 workspace_id: workspace.clone(),
                 worktree_id: worktree.cloned(),
@@ -64,10 +64,7 @@ mod event_order_tests {
                 files: vec![],
             })
         }
-        fn worktrees(
-            &self,
-            _: &WorkspaceId,
-        ) -> Result<Vec<lapis_git::WorktreeSnapshot>, lapis_git::GitError> {
+        fn worktrees(&self, _: &WorkspaceId) -> Result<Vec<git::WorktreeSnapshot>, git::GitError> {
             Ok(self.trees.lock().unwrap().clone())
         }
         fn execute(
@@ -75,26 +72,20 @@ mod event_order_tests {
             _: &WorkspaceId,
             _: Option<&TaskId>,
             _: GitActionRequest,
-        ) -> Result<lapis_git::GitActionResult, lapis_git::GitError> {
+        ) -> Result<git::GitActionResult, git::GitError> {
             self.entered.send(()).unwrap();
             self.release.lock().unwrap().recv().unwrap();
-            Err(lapis_git::GitError::new(
-                lapis_git::GitErrorKind::Io,
-                "mutation failed",
-            ))
+            Err(git::GitError::new(git::GitErrorKind::Io, "mutation failed"))
         }
         fn diff(
             &self,
             _: &WorkspaceId,
             _: Option<&TaskId>,
             _: &str,
-        ) -> Result<GitDiffSnapshot, lapis_git::GitError> {
+        ) -> Result<GitDiffSnapshot, git::GitError> {
             unreachable!()
         }
-        fn create_worktree(
-            &self,
-            _: &WorkspaceId,
-        ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+        fn create_worktree(&self, _: &WorkspaceId) -> Result<git::WorktreeSnapshot, git::GitError> {
             unreachable!()
         }
         fn import_file(
@@ -102,14 +93,14 @@ mod event_order_tests {
             _: &WorkspaceId,
             _: &TaskId,
             _: &str,
-        ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+        ) -> Result<git::WorktreeSnapshot, git::GitError> {
             unreachable!()
         }
         fn discard_worktree(
             &self,
             _: &WorkspaceId,
             _: &TaskId,
-        ) -> Result<lapis_git::WorktreeSnapshot, lapis_git::GitError> {
+        ) -> Result<git::WorktreeSnapshot, git::GitError> {
             unreachable!()
         }
     }
@@ -117,7 +108,7 @@ mod event_order_tests {
     #[test]
     fn repository_merge_preserves_membership_and_newest_revision() {
         let workspace = WorkspaceId::new("workspace");
-        let repository = |id: &str| lapis_git::GitRepositorySnapshot {
+        let repository = |id: &str| git::GitRepositorySnapshot {
             id: id.into(),
             path: Some(id.into()),
         };
@@ -184,19 +175,17 @@ mod event_order_tests {
         wait.recv_timeout(Duration::from_secs(3)).unwrap();
         feature.update(cx, |git, cx| {
             git.submit(
-                GitOperation::ApplyUpdate(lapis_git::GitUpdate::Changed(
-                    lapis_git::GitRepositoryStatus {
-                        repository_id: "root".into(),
-                        status: GitSnapshot {
-                            workspace_id: workspace.clone(),
-                            worktree_id: None,
-                            revision: 2,
-                            branch: "main".into(),
-                            head: "abc".into(),
-                            files: vec![],
-                        },
+                GitOperation::ApplyUpdate(git::GitUpdate::Changed(git::GitRepositoryStatus {
+                    repository_id: "root".into(),
+                    status: GitSnapshot {
+                        workspace_id: workspace.clone(),
+                        worktree_id: None,
+                        revision: 2,
+                        branch: "main".into(),
+                        head: "abc".into(),
+                        files: vec![],
                     },
-                )),
+                })),
                 cx,
             );
         });
@@ -233,17 +222,13 @@ mod event_order_tests {
         let id = TaskId::new("worktree");
         let mut session = GitSession::new(backend.clone());
         session.refresh(&workspace).unwrap();
-        backend
-            .trees
-            .lock()
-            .unwrap()
-            .push(lapis_git::WorktreeSnapshot {
-                workspace_id: workspace,
-                worktree_id: id.clone(),
-                base_commit: "abc".into(),
-                state: lapis_git::WorktreeState::Active,
-                conflict: None,
-            });
+        backend.trees.lock().unwrap().push(git::WorktreeSnapshot {
+            workspace_id: workspace,
+            worktree_id: id.clone(),
+            base_commit: "abc".into(),
+            state: git::WorktreeState::Active,
+            conflict: None,
+        });
         session.refresh_worktrees().unwrap();
         assert_eq!(session.worktree_statuses()[0].0, id);
         backend.trees.lock().unwrap().clear();
@@ -255,12 +240,12 @@ mod event_order_tests {
 #[derive(Default)]
 pub(super) struct Snapshot {
     pub status: Option<GitSnapshot>,
-    pub repositories: Vec<(lapis_git::GitRepositorySnapshot, GitSnapshot)>,
-    pub repository_errors: Vec<(lapis_git::GitRepositorySnapshot, String)>,
+    pub repositories: Vec<(git::GitRepositorySnapshot, GitSnapshot)>,
+    pub repository_errors: Vec<(git::GitRepositorySnapshot, String)>,
     pub last_refresh_error: Option<String>,
     pub worktree_statuses: Vec<(TaskId, GitSnapshot)>,
     pub selected_diff: Option<GitDiffSnapshot>,
-    pub inspection: Option<lapis_desktop_client::GitDiffSelection>,
+    pub inspection: Option<desktop_client::GitDiffSelection>,
     pub output: String,
     pub stash_refs: Vec<(u32, String)>,
 }
@@ -273,7 +258,7 @@ pub(super) enum GitOperation {
     RescanRepositories,
     Clear,
     CreateWorktree,
-    ApplyUpdate(lapis_git::GitUpdate),
+    ApplyUpdate(git::GitUpdate),
     RefreshWorktrees,
     RefreshRepositories,
 }
@@ -334,7 +319,7 @@ pub(crate) enum GitEvent {
 }
 pub(crate) struct GitFeature {
     worker: ClientWorker<GitSession>,
-    backend: std::sync::Arc<dyn lapis_git::GitConnection>,
+    backend: std::sync::Arc<dyn git::GitConnection>,
     subscription_generation: u64,
     worktree_refresh_generation: u64,
     repository_refresh_generation: u64,
@@ -502,11 +487,11 @@ impl GitFeature {
                                 return false;
                             }
                             if let Some(update) = update {
-                                if matches!(update, lapis_git::GitUpdate::RepositoriesChanged) {
+                                if matches!(update, git::GitUpdate::RepositoriesChanged) {
                                     return git
                                         .submit_update(GitOperation::RefreshRepositories, cx);
                                 }
-                                if matches!(update, lapis_git::GitUpdate::WorktreesChanged) {
+                                if matches!(update, git::GitUpdate::WorktreesChanged) {
                                     return git.submit_update(GitOperation::RefreshWorktrees, cx);
                                 }
                                 return git.submit_update(GitOperation::ApplyUpdate(update), cx);
@@ -550,14 +535,13 @@ impl GitFeature {
         let is_refresh = matches!(&operation, GitOperation::Refresh);
         let is_worktree_refresh = matches!(
             &operation,
-            GitOperation::RefreshWorktrees
-                | GitOperation::ApplyUpdate(lapis_git::GitUpdate::Snapshot(_))
+            GitOperation::RefreshWorktrees | GitOperation::ApplyUpdate(git::GitUpdate::Snapshot(_))
         );
         let is_repository_refresh = matches!(
             &operation,
             GitOperation::RefreshRepositories
                 | GitOperation::RescanRepositories
-                | GitOperation::ApplyUpdate(lapis_git::GitUpdate::Snapshot(_))
+                | GitOperation::ApplyUpdate(git::GitUpdate::Snapshot(_))
         );
         let is_event = matches!(
             &operation,

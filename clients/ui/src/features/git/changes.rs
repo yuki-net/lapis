@@ -4,22 +4,22 @@ use crate::{
     components::{action_button, panel_empty_state},
     theme,
 };
+use git::GitAction;
 use gpui::{Context, Entity, Render, Subscription, Window, div, prelude::*, px};
-use lapis_git::GitAction;
 use std::collections::{BTreeMap, HashSet};
 
 #[derive(Default)]
 struct FileTree {
     children: BTreeMap<String, FileTree>,
-    files: Vec<lapis_git::GitFileSnapshot>,
+    files: Vec<git::GitFileSnapshot>,
 }
 
 enum FileRow {
     Directory(String, usize),
-    File(lapis_git::GitFileSnapshot, usize),
+    File(git::GitFileSnapshot, usize),
 }
 
-fn file_rows(files: Vec<lapis_git::GitFileSnapshot>, tree: bool) -> Vec<FileRow> {
+fn file_rows(files: Vec<git::GitFileSnapshot>, tree: bool) -> Vec<FileRow> {
     if !tree {
         return files
             .into_iter()
@@ -95,8 +95,7 @@ impl Render for ChangesFeature {
                                     && !file.staged
                                     && !matches!(
                                         file.kind,
-                                        lapis_git::ChangeKind::Untracked
-                                            | lapis_git::ChangeKind::Conflicted
+                                        git::ChangeKind::Untracked | git::ChangeKind::Conflicted
                                     )
                             })
                         })
@@ -243,7 +242,7 @@ impl Render for ChangesFeature {
                                     .text_color(change_color(file.kind, cx))
                                     .child(format!(
                                         "{} {} {}",
-                                        if file.kind == lapis_git::ChangeKind::Conflicted {
+                                        if file.kind == git::ChangeKind::Conflicted {
                                             "CONFLICT"
                                         } else if staged {
                                             "INDEX"
@@ -368,7 +367,7 @@ impl Render for ChangesFeature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_git::{ChangeKind, GitFileSnapshot};
+    use git::{ChangeKind, GitFileSnapshot};
     #[test]
     fn tree_compacts_single_child_directories_and_preserves_files() {
         let file = |path: &str| GitFileSnapshot {

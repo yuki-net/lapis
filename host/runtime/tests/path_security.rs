@@ -1,7 +1,7 @@
 use std::fs;
 
-use lapis_backend_state::{PathSecurityError, WorkspacePathResolver};
-use lapis_client_api::WorkspaceRelativePath;
+use backend_state::{PathSecurityError, WorkspacePathResolver};
+use client_api::WorkspaceRelativePath;
 
 #[test]
 fn existing_and_new_paths_remain_inside_workspace() {

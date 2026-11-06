@@ -1,5 +1,5 @@
 [package]
-name = "lapis-language"
+name = "language"
 version.workspace = true
 edition.workspace = true
 description.workspace = true

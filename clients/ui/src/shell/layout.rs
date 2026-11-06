@@ -657,9 +657,9 @@ impl DockLayout {
         }) && self.zones.len() == POSITIONS.len()
     }
 
-    pub(crate) fn capture(&self) -> lapis_desktop_client::ZoneLayoutViewState {
-        lapis_desktop_client::ZoneLayoutViewState {
-            version: lapis_desktop_client::ZONE_LAYOUT_VERSION,
+    pub(crate) fn capture(&self) -> desktop_client::ZoneLayoutViewState {
+        desktop_client::ZoneLayoutViewState {
+            version: desktop_client::ZONE_LAYOUT_VERSION,
             bottom_span_left: self.bottom_span_left,
             bottom_span_right: self.bottom_span_right,
             zones: POSITIONS
@@ -670,13 +670,13 @@ impl DockLayout {
     }
 
     pub(crate) fn restore<F>(
-        saved: &lapis_desktop_client::ZoneLayoutViewState,
+        saved: &desktop_client::ZoneLayoutViewState,
         mut parse_tab: F,
     ) -> Option<Self>
     where
         F: FnMut(&str) -> Option<PanelTab>,
     {
-        if saved.version != lapis_desktop_client::ZONE_LAYOUT_VERSION {
+        if saved.version != desktop_client::ZONE_LAYOUT_VERSION {
             return None;
         }
         let mut zones = BTreeMap::new();

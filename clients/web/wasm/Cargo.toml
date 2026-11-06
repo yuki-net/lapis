@@ -1,5 +1,5 @@
 [package]
-name = "lapis-web"
+name = "web"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,11 +16,11 @@ futures-channel = "0.3"
 futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
-lapis-client-api = { path = "../../../contracts/protocol" }
-lapis-client-core = { path = "../../transport" }
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
-lapis-wire = { path = "../../../contracts/wire" }
-lapis-workbench = { path = "../../../contracts/domain/workbench" }
+client-api = { path = "../../../contracts/protocol" }
+client-core = { path = "../../transport" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+wire = { path = "../../../contracts/wire" }
+workbench = { path = "../../../contracts/domain/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 wasm-bindgen = "=0.2.129"

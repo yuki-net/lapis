@@ -121,7 +121,7 @@ impl FilesFeature {
             .filter(|(_, entry)| self.file_entry_visible(entry))
     }
 
-    fn file_entry_visible(&self, entry: &lapis_workspace::FileEntry) -> bool {
+    fn file_entry_visible(&self, entry: &workspace::FileEntry) -> bool {
         if entry.depth == 0 {
             return true;
         }

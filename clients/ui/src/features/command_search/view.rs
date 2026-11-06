@@ -190,7 +190,7 @@ impl QuickSearch {
     pub(crate) fn open_universal(
         &mut self,
         provider: CommandSearchProvider,
-        locale: &lapis_localization::LocaleId,
+        locale: &localization::LocaleId,
         cx: &mut Context<Self>,
     ) {
         self.universal = true;
@@ -202,8 +202,7 @@ impl QuickSearch {
 
     /// 現在のロケールでメッセージを解決する。
     fn t(&self, key: &str) -> String {
-        self.locale
-            .resolve(&lapis_localization::MessageId::new(key))
+        self.locale.resolve(&localization::MessageId::new(key))
     }
 
     /// カテゴリを切り替え、結果と選択位置を更新する。
@@ -1026,18 +1025,14 @@ mod tests {
         cx.update(|cx| {
             search.update(cx, |search, cx| {
                 let provider = CommandSearchProvider::new(vec![search_item("command.first")]);
-                search.open_universal(
-                    provider.clone(),
-                    &lapis_localization::LocaleId::new("en-US"),
-                    cx,
-                );
+                search.open_universal(provider.clone(), &localization::LocaleId::new("en-US"), cx);
                 assert_eq!(search.matches.len(), 1);
                 search.select_category(SearchCategory::Files, cx);
                 assert!(search.matches.is_empty());
                 search.select_category(SearchCategory::Actions, cx);
                 assert_eq!(search.matches.len(), 1);
                 search.select_category(SearchCategory::Text, cx);
-                search.open_universal(provider, &lapis_localization::LocaleId::new("en-US"), cx);
+                search.open_universal(provider, &localization::LocaleId::new("en-US"), cx);
                 assert_eq!(search.category, SearchCategory::All);
                 assert_eq!(search.matches.len(), 1);
             });

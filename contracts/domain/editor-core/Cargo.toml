@@ -1,5 +1,5 @@
 [package]
-name = "lapis-editor-core"
+name = "editor-core"
 version.workspace = true
 edition.workspace = true
 description.workspace = true

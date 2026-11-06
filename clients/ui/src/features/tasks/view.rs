@@ -4,7 +4,7 @@ use crate::{
     theme,
 };
 use gpui::{Context, Render, Window, div, prelude::*, px};
-use lapis_task::{ExecutionStatus, TaskControl, TaskMode};
+use task::{ExecutionStatus, TaskControl, TaskMode};
 
 impl TasksFeature {
     pub(super) fn render_assistant_content(&self, cx: &mut Context<Self>) -> gpui::Div {

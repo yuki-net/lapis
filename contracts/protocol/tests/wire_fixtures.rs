@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use lapis_client_api::{
+use client_api::{
     AuthenticateRequest, CURRENT_PROTOCOL, ClientHello, ClientId, ClientKind, ClientMessage,
     CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence, INVALID_REQUEST,
     PairedResponse, ProtocolError, ProtocolRange, RequestBody, RequestEnvelope, RequestId,

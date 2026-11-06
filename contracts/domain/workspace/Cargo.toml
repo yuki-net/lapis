@@ -1,12 +1,12 @@
 [package]
-name = "lapis-workspace"
+name = "workspace"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-editor-core = { path = "../editor-core" }
+editor-core = { path = "../editor-core" }
 serde.workspace = true
 
 [dev-dependencies]

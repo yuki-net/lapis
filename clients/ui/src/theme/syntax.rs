@@ -1,5 +1,5 @@
 //! 構文スコープの色だけを解決する。原典・ライセンスはassets/syntax-themes/NOTICE.md。
-use lapis_settings::SyntaxTheme;
+use settings::SyntaxTheme;
 use std::sync::LazyLock;
 use syntect::{highlighting::ScopeSelectors, parsing::Scope};
 

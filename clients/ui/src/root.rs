@@ -23,15 +23,15 @@ use crate::{
     shell::main::{Shell, ShellPresentation},
     workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
 };
+use desktop_client::EditorSession;
 use gpui::{
     AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
 };
-use lapis_desktop_client::EditorSession;
 use std::collections::HashMap;
 
 enum PathRequest {
     Open(std::path::PathBuf),
-    Save(std::path::PathBuf, lapis_editor_core::DocumentId),
+    Save(std::path::PathBuf, editor_core::DocumentId),
     CloseSave(std::sync::mpsc::Sender<Result<String, String>>),
 }
 
@@ -46,29 +46,25 @@ enum TaskContextResolution {
 impl TaskContextResolution {
     fn confirmed_task(
         self,
-        task: Option<&lapis_editor_core::ConversationId>,
-    ) -> Option<&lapis_editor_core::ConversationId> {
+        task: Option<&editor_core::ConversationId>,
+    ) -> Option<&editor_core::ConversationId> {
         (self == Self::Ready).then_some(task).flatten()
     }
 }
 
 type PersistSignature = (
-    Vec<(
-        lapis_editor_core::DocumentId,
-        lapis_document::Revision,
-        bool,
-    )>,
+    Vec<(editor_core::DocumentId, document::Revision, bool)>,
     Option<(
-        lapis_editor_core::DocumentId,
+        editor_core::DocumentId,
         std::ops::Range<usize>,
         usize,
         f32,
         f32,
     )>,
-    lapis_desktop_client::ConversationViewState,
-    Option<lapis_editor_core::ExecutionId>,
-    Option<lapis_editor_core::ConversationId>,
-    Vec<lapis_desktop_client::RestoredTerminal>,
+    desktop_client::ConversationViewState,
+    Option<editor_core::ExecutionId>,
+    Option<editor_core::ConversationId>,
+    Vec<desktop_client::RestoredTerminal>,
 );
 
 pub(crate) struct DesktopRoot {
@@ -83,11 +79,8 @@ pub(crate) struct DesktopRoot {
     search: Entity<SearchFeature>,
     conversation: Entity<ConversationFeature>,
     preview: Entity<PreviewFeature>,
-    preview_revision: Option<(lapis_editor_core::DocumentId, lapis_document::Revision)>,
-    line_ending_cache: Option<(
-        (lapis_editor_core::DocumentId, lapis_document::Revision),
-        &'static str,
-    )>,
+    preview_revision: Option<(editor_core::DocumentId, document::Revision)>,
+    line_ending_cache: Option<((editor_core::DocumentId, document::Revision), &'static str)>,
     settings: Entity<SettingsFeature>,
     quick_search: Entity<QuickSearch>,
     universal_search: Entity<QuickSearch>,
@@ -106,10 +99,7 @@ pub(crate) struct DesktopRoot {
     workbench: WorkbenchState,
     task_context_gate: crate::client_adapter::ResponseGate,
     task_context_resolution: TaskContextResolution,
-    task_context: Option<(
-        lapis_editor_core::ConversationId,
-        Option<std::path::PathBuf>,
-    )>,
+    task_context: Option<(editor_core::ConversationId, Option<std::path::PathBuf>)>,
 }
 
 impl DesktopRoot {
@@ -250,7 +240,7 @@ impl DesktopRoot {
                 );
             }
             #[cfg(target_family = "wasm")]
-            if let Some(view) = lapis_desktop_client::web_host::restore_view() {
+            if let Some(view) = desktop_client::web_host::restore_view() {
                 shell.restore_view(view, cx);
             }
         });
@@ -280,7 +270,7 @@ impl DesktopRoot {
             cx.observe(&group, |root, _, cx| root.synchronize_group(cx)),
             cx.subscribe(
                 &settings,
-                |root, _, values: &lapis_settings::GlobalSettings, cx| {
+                |root, _, values: &settings::GlobalSettings, cx| {
                     root.shell
                         .update(cx, |shell, cx| shell.set_locale(values.locale.clone(), cx));
                     root.group.update(cx, |group, cx| {
@@ -401,7 +391,7 @@ impl DesktopRoot {
                     root.problems.update(cx, |problems, cx| {
                         problems.request(
                             *definition,
-                            lapis_lsp::LspPosition {
+                            lsp::LspPosition {
                                 line: line.saturating_sub(1) as u32,
                                 utf16_column: column.saturating_sub(1) as u32,
                             },
@@ -502,7 +492,7 @@ impl DesktopRoot {
                     let Some(shared) = view.workspace.clone() else {
                         continue;
                     };
-                    let layout = lapis_desktop_client::ConversationViewState {
+                    let layout = desktop_client::ConversationViewState {
                         workspace: None,
                         ..view
                     };
@@ -653,7 +643,7 @@ impl DesktopRoot {
         let terminal_scope = self.workbench.view_scope(&terminal_key);
         let resource = match terminal_scope {
             Some(ViewScope::Resource(resource)) => {
-                Some(lapis_terminal::TerminalId::new(resource.clone()))
+                Some(terminal::TerminalId::new(resource.clone()))
             }
             _ => None,
         };
@@ -734,7 +724,7 @@ impl DesktopRoot {
     fn sync_task_context(
         &mut self,
         snapshot: &ClientSnapshot,
-        selected: &lapis_editor_core::ConversationId,
+        selected: &editor_core::ConversationId,
         cx: &mut Context<Self>,
     ) {
         let record = snapshot
@@ -875,7 +865,7 @@ impl DesktopRoot {
     }
 
     /// 左のTask一覧、Command、ショートカットが共有するTask選択APIです。
-    fn select_task(&mut self, id: lapis_editor_core::ConversationId, cx: &mut Context<Self>) {
+    fn select_task(&mut self, id: editor_core::ConversationId, cx: &mut Context<Self>) {
         if self.group.read(cx).closing || self.group.read(cx).synchronization_required {
             self.set_status(
                 "終了・再同期処理の完了後にTaskを選択してください".into(),
@@ -1066,7 +1056,7 @@ impl DesktopRoot {
 
     fn restore_workbench_layout(
         &mut self,
-        view: lapis_desktop_client::ConversationViewState,
+        view: desktop_client::ConversationViewState,
         cx: &mut Context<Self>,
     ) {
         let retained = self.workbench.retained_views();
@@ -1138,7 +1128,7 @@ impl DesktopRoot {
         cx.notify();
     }
 
-    fn execution_for_persistence(&self, cx: &gpui::App) -> Option<lapis_editor_core::ExecutionId> {
+    fn execution_for_persistence(&self, cx: &gpui::App) -> Option<editor_core::ExecutionId> {
         execution_for_context(
             self.task_context_resolution
                 .confirmed_task(self.task_context.as_ref().map(|(task, _)| task)),
@@ -1156,7 +1146,7 @@ impl DesktopRoot {
     fn terminal_owner_for_persistence(
         &self,
         cx: &gpui::App,
-    ) -> Option<lapis_editor_core::ConversationId> {
+    ) -> Option<editor_core::ConversationId> {
         let terminal = self.terminal.read(cx);
         let record = self
             .conversation
@@ -1773,16 +1763,16 @@ impl Render for DesktopRoot {
 }
 
 struct TerminalContextTarget<'a> {
-    task: lapis_editor_core::ConversationId,
-    record: Option<&'a lapis_desktop_client::ConversationRecord>,
+    task: editor_core::ConversationId,
+    record: Option<&'a desktop_client::ConversationRecord>,
 }
 
 /// Resourceの所有元が未確定なら、既存コンテキストへフォールバックしない。
 fn terminal_context_target<'a>(
     scope: Option<&ViewScope>,
-    selected: &lapis_editor_core::ConversationId,
-    current: &lapis_editor_core::ConversationId,
-    records: &'a [lapis_desktop_client::ConversationRecord],
+    selected: &editor_core::ConversationId,
+    current: &editor_core::ConversationId,
+    records: &'a [desktop_client::ConversationRecord],
 ) -> Option<TerminalContextTarget<'a>> {
     if let Some(ViewScope::Resource(resource)) = scope {
         return records
@@ -1816,11 +1806,11 @@ fn terminal_context_target<'a>(
 
 /// 表示中の選択を保存できるのは、そのViewが保存先Taskを参照している場合だけ。
 fn execution_for_context(
-    view_task: Option<&lapis_editor_core::ConversationId>,
-    context_task: Option<&lapis_editor_core::ConversationId>,
-    view_selection: Option<lapis_editor_core::ExecutionId>,
-    saved_selection: Option<lapis_editor_core::ExecutionId>,
-) -> Option<lapis_editor_core::ExecutionId> {
+    view_task: Option<&editor_core::ConversationId>,
+    context_task: Option<&editor_core::ConversationId>,
+    view_selection: Option<editor_core::ExecutionId>,
+    saved_selection: Option<editor_core::ExecutionId>,
+) -> Option<editor_core::ExecutionId> {
     if view_task.is_some() && view_task == context_task {
         view_selection
     } else {
@@ -1831,8 +1821,8 @@ fn execution_for_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_desktop_client::ConversationViewState;
-    use lapis_editor_core::{ConversationId, ExecutionId};
+    use desktop_client::ConversationViewState;
+    use editor_core::{ConversationId, ExecutionId};
 
     #[test]
     fn unresolved_task_context_preserves_execution_until_the_view_is_confirmed() {
@@ -1872,19 +1862,19 @@ mod tests {
 
     #[test]
     fn missing_terminal_resource_owner_never_falls_back_to_current_task_record() {
-        use lapis_desktop_client::{ConversationRecord, RestoredTerminal};
+        use desktop_client::{ConversationRecord, RestoredTerminal};
         let a = ConversationId::new("task-a");
         let b = ConversationId::new("task-b");
         let record = |task: ConversationId, resource: &str| ConversationRecord {
             title: task.as_str().into(),
             id: task,
-            workspace: lapis_desktop_client::WorkspaceSnapshot::default(),
+            workspace: desktop_client::WorkspaceSnapshot::default(),
             view: Default::default(),
             selected_execution: None,
             terminals: vec![RestoredTerminal {
-                id: Some(lapis_terminal::TerminalId::new(resource)),
+                id: Some(terminal::TerminalId::new(resource)),
                 cwd: "workspace".into(),
-                status: lapis_terminal::TerminalStatus::Running,
+                status: terminal::TerminalStatus::Running,
                 columns: 80,
                 rows: 24,
             }],

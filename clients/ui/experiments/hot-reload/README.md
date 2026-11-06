@@ -28,7 +28,7 @@ jmp qword ptr [rip+0]
 
 ## Lapis側の統合
 
-`lapis-desktop-ui/hot-reload` は Debug ビルドだけで有効にできる開発用featureです。Subsecondの通知は foreground executor へ渡し、既存Windowへ `refresh_windows()` を要求します。Window、DesktopRoot、Shell、Feature、Backendの正規状態は再生成しません。
+`desktop-ui/hot-reload` は Debug ビルドだけで有効にできる開発用featureです。Subsecondの通知は foreground executor へ渡し、既存Windowへ `refresh_windows()` を要求します。Window、DesktopRoot、Shell、Feature、Backendの正規状態は再生成しません。
 
 ### ホットパッチ境界
 

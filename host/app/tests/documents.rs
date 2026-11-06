@@ -1,9 +1,9 @@
-use lapis_client_api::{
+use client_api::{
     DocumentEditRequest, DocumentHistoryRequest, DocumentInspectRequest, DocumentSaveRequest,
     DocumentTextEdit, DocumentTransaction, RequestBody, ResponseBody, Revision as WireRevision,
 };
-use lapis_document::{DocumentErrorKind, ExternalChange};
-use lapis_host::BackendHost;
+use document::{DocumentErrorKind, ExternalChange};
+use host::BackendHost;
 
 #[test]
 fn dirty_document_can_reconnect_after_the_entire_workspace_directory_is_deleted() {
@@ -94,12 +94,10 @@ fn overlapping_workspace_grants_cannot_create_a_second_document_owner() {
         .unwrap();
     let nested = host.connect(&child).unwrap();
     let response = nested
-        .request(RequestBody::DocumentOpen(
-            lapis_client_api::DocumentOpenRequest {
-                workspace_id: nested.workspace_id().clone(),
-                path: lapis_client_api::WorkspaceRelativePath::parse("shared.md").unwrap(),
-            },
-        ))
+        .request(RequestBody::DocumentOpen(client_api::DocumentOpenRequest {
+            workspace_id: nested.workspace_id().clone(),
+            path: client_api::WorkspaceRelativePath::parse("shared.md").unwrap(),
+        }))
         .unwrap();
     let ResponseBody::Error(error) = response else {
         panic!("overlapping scope created a duplicate Document")
@@ -141,7 +139,7 @@ fn desktop_port_and_wire_share_identity_edits_history_and_saved_state() {
     let client = host.connect(root.path()).unwrap();
     let desktop = host.documents();
     let first = desktop.open(&path).unwrap();
-    let id = lapis_client_api::DocumentId::try_new(first.id.as_str()).unwrap();
+    let id = client_api::DocumentId::try_new(first.id.as_str()).unwrap();
     let inspect = || match client
         .request(RequestBody::DocumentInspect(DocumentInspectRequest {
             document_id: id.clone(),
@@ -373,12 +371,10 @@ fn same_workspace_path_aliases_reuse_one_canonical_document() {
     let host = BackendHost::start().unwrap();
     let client = host.connect(root.path()).unwrap();
     let open = |path: &str| match client
-        .request(RequestBody::DocumentOpen(
-            lapis_client_api::DocumentOpenRequest {
-                workspace_id: client.workspace_id().clone(),
-                path: lapis_client_api::WorkspaceRelativePath::parse(path).unwrap(),
-            },
-        ))
+        .request(RequestBody::DocumentOpen(client_api::DocumentOpenRequest {
+            workspace_id: client.workspace_id().clone(),
+            path: client_api::WorkspaceRelativePath::parse(path).unwrap(),
+        }))
         .unwrap()
     {
         ResponseBody::DocumentOpen(response) => response.document,

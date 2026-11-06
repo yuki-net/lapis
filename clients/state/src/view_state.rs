@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use lapis_editor_core::{DocumentId, WorkspaceId};
-use lapis_workbench::{SharedDocumentView, SharedWorkspaceView};
-use lapis_workspace::WorkspaceError;
+use editor_core::{DocumentId, WorkspaceId};
 use serde::{Deserialize, Serialize};
+use workbench::{SharedDocumentView, SharedWorkspaceView};
+use workspace::WorkspaceError;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct DocumentViewState {
@@ -38,10 +38,14 @@ impl WorkspaceSnapshot {
             .as_ref()
             .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
         validate_root(root)?;
-        let relative = |path: &std::path::Path| -> Result<lapis_workspace::WorkspaceRelativePath, WorkspaceError> {
-            let path = path.strip_prefix(root).map_err(|_| WorkspaceError::new("Workspace外のpathは共有できません"))?;
-            lapis_workspace::WorkspaceRelativePath::from_path(path).map_err(|error| WorkspaceError::new(error.to_string()))
-        };
+        let relative =
+            |path: &std::path::Path| -> Result<workspace::WorkspaceRelativePath, WorkspaceError> {
+                let path = path
+                    .strip_prefix(root)
+                    .map_err(|_| WorkspaceError::new("Workspace外のpathは共有できません"))?;
+                workspace::WorkspaceRelativePath::from_path(path)
+                    .map_err(|error| WorkspaceError::new(error.to_string()))
+            };
         let documents = self
             .open_documents
             .iter()

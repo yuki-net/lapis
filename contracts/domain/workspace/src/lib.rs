@@ -5,7 +5,7 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
-use lapis_editor_core::{ProjectId, WorkspaceId};
+use editor_core::{ProjectId, WorkspaceId};
 
 mod path;
 pub use path::{InvalidWorkspacePath, WorkspaceRelativePath};

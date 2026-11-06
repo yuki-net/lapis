@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, mpsc},
 };
 
-use lapis_terminal::{
+use terminal::{
     MAX_SCROLLBACK_LINES, TerminalCell, TerminalColor, TerminalCursor, TerminalDelta,
     TerminalError, TerminalInput, TerminalKey, TerminalModes, TerminalModifiers, TerminalRevision,
     TerminalRow, TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta, TerminalSize,

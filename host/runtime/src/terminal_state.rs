@@ -4,11 +4,11 @@ use std::{
     sync::Arc,
 };
 
-use lapis_client_api::{
+use client_api::{
     EventBody, SessionId, SnapshotReason, TerminalId, TerminalInput, TerminalSize,
     TerminalSnapshot, TerminalStartRequest, TerminalStatus, WorkspaceId, WorkspaceRelativePath,
 };
-use lapis_terminal::{
+use terminal::{
     TerminalBackend, TerminalDelta, TerminalEvent, TerminalId as BackendTerminalId, TerminalScreen,
     TerminalStatus as BackendTerminalStatus,
 };
@@ -293,9 +293,9 @@ impl TerminalResource {
 
     fn apply_delta(&mut self, delta: &TerminalDelta) -> Result<(), BackendStateError> {
         if delta.revision != self.revision.saturating_add(1) {
-            return Err(BackendStateError::Terminal(
-                lapis_terminal::TerminalError::new("Terminal revision is not contiguous"),
-            ));
+            return Err(BackendStateError::Terminal(terminal::TerminalError::new(
+                "Terminal revision is not contiguous",
+            )));
         }
         self.screen.apply_delta(delta)?;
         self.size = delta.size;
@@ -350,14 +350,14 @@ fn map_backend_status(status: BackendTerminalStatus) -> TerminalStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_terminal::{
-        TerminalCell, TerminalError, TerminalEvent, TerminalInput, TerminalKey, TerminalKeyEvent,
-        TerminalModifiers, TerminalRow, TerminalRowUpdate, TerminalShell,
-        TerminalSnapshot as SourceSnapshot, TerminalStatus as SourceStatus,
-    };
     use std::sync::{
         Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use terminal::{
+        TerminalCell, TerminalError, TerminalEvent, TerminalInput, TerminalKey, TerminalKeyEvent,
+        TerminalModifiers, TerminalRow, TerminalRowUpdate, TerminalShell,
+        TerminalSnapshot as SourceSnapshot, TerminalStatus as SourceStatus,
     };
 
     #[derive(Default)]

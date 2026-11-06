@@ -168,7 +168,7 @@ mod tests {
     fn document_can_target_an_empty_zone_without_a_panel_id() {
         let mut group = GroupLayout::new();
         let child = group.add_window();
-        let tab = PanelTab::Document(lapis_editor_core::DocumentId::new("doc"));
+        let tab = PanelTab::Document(editor_core::DocumentId::new("doc"));
         group.register_tab(tab.clone(), ROOT_HOST);
         assert!(group.move_tab_to(
             ROOT_HOST,

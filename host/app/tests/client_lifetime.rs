@@ -1,6 +1,6 @@
-use lapis_client_api::*;
-use lapis_host::{BackendClient, BackendHost};
-use lapis_remote::*;
+use client_api::*;
+use host::{BackendClient, BackendHost};
+use remote::*;
 use std::sync::{Arc, Mutex};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -13,7 +13,7 @@ async fn short_lived_clients_release_connections_and_feature_ports_keep_working(
             PairingLifetime::new(300).unwrap(),
             CredentialLifetime::new(3600).unwrap(),
         ),
-        AuthPolicy::new(lapis_host::supported_capabilities()),
+        AuthPolicy::new(host::supported_capabilities()),
     )));
     auth.lock().unwrap().enable();
     let token = auth
@@ -46,7 +46,7 @@ async fn short_lived_clients_release_connections_and_feature_ports_keep_working(
             client_id: ClientId::try_new("lifetime-test").unwrap(),
             client_name: "test".to_owned(),
             client_kind: ClientKind::Desktop,
-            requested_capabilities: lapis_host::supported_capabilities(),
+            requested_capabilities: host::supported_capabilities(),
         },
         workspace.clone(),
         token.secret_bytes(),
@@ -60,7 +60,7 @@ async fn short_lived_clients_release_connections_and_feature_ports_keep_working(
         )
         .unwrap();
         let tasks = client.tasks();
-        let model_workspace = lapis_editor_core::WorkspaceId::new(workspace.as_str());
+        let model_workspace = editor_core::WorkspaceId::new(workspace.as_str());
         for _ in 0..160 {
             let connection = QuicConnection::connect(config.clone()).unwrap();
             assert!(matches!(

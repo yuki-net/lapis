@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use lapis_client_api::{
+use client_api::{
     CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, INTERNAL, INVALID_REQUEST, PROTOCOL_ERROR,
     ProtocolError, ProtocolRange, RATE_LIMITED, RequestEnvelope, RequestId, ResponseBody,
     ResponseEnvelope, ServerHello, UNAUTHORIZED,
@@ -252,8 +252,8 @@ impl ConnectionSession {
 }
 
 fn negotiate(
-    hello: &lapis_client_api::ClientHello,
-) -> Result<lapis_client_api::ProtocolVersion, lapis_client_api::VersionMismatch> {
+    hello: &client_api::ClientHello,
+) -> Result<client_api::ProtocolVersion, client_api::VersionMismatch> {
     ProtocolRange::exact(CURRENT_PROTOCOL).negotiate(hello.protocol)
 }
 
@@ -264,7 +264,7 @@ fn protocol_rejected() -> SessionReply {
     }
 }
 
-fn server_hello(protocol: lapis_client_api::ProtocolVersion, grant: &SessionGrant) -> ServerHello {
+fn server_hello(protocol: client_api::ProtocolVersion, grant: &SessionGrant) -> ServerHello {
     ServerHello {
         protocol,
         session_id: grant.session_id().clone(),
@@ -304,7 +304,7 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use lapis_client_api::{
+    use client_api::{
         CapabilityId, CapabilitySet, ClientHello, ClientId, ClientKind, ProtocolRange, RequestBody,
         RequestId, ResponseBody, WorkspaceId, WorkspaceListRequest, WorkspaceListResponse,
         capability,

@@ -2,7 +2,7 @@
 
 use std::{fmt, path::PathBuf};
 
-use lapis_editor_core::TaskId;
+use editor_core::TaskId;
 use serde::{Deserialize, Serialize};
 
 mod action;

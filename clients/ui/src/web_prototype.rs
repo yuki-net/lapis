@@ -10,24 +10,22 @@ use std::{
     },
 };
 
-use lapis_desktop_client::{
+use desktop_client::{
     ConversationRecord, ConversationRepository, ConversationState, WorkspaceDialog,
     WorkspaceSnapshot, WorkspaceStateRepository,
 };
-use lapis_document::{
+use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, FileData, FileFingerprint, Revision,
 };
-use lapis_editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
-use lapis_git::{
-    GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot,
-};
-use lapis_lsp::{
+use editor_core::{ConversationId, DocumentId, ExecutionId, TaskId, WorkspaceId};
+use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
+use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
-use lapis_settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
-use lapis_task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
-use lapis_terminal::{TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId};
-use lapis_workspace::{
+use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
+use terminal::{TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId};
+use workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
 };
@@ -369,7 +367,7 @@ impl ConversationRepository for PrototypeBackend {
     fn save(
         &self,
         _: &ConversationState,
-        projects: &[lapis_desktop_client::Project],
+        projects: &[desktop_client::Project],
         records: &[ConversationRecord],
         active: &ConversationId,
     ) -> Result<(), WorkspaceError> {
@@ -494,11 +492,7 @@ impl TerminalBackend for PrototypeBackend {
     fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
         Err(TerminalError::new(UNAVAILABLE))
     }
-    fn input(
-        &self,
-        _: &TerminalId,
-        _: &lapis_terminal::TerminalInput,
-    ) -> Result<(), TerminalError> {
+    fn input(&self, _: &TerminalId, _: &terminal::TerminalInput) -> Result<(), TerminalError> {
         Err(TerminalError::new(UNAVAILABLE))
     }
     fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<TerminalDelta, TerminalError> {
@@ -515,7 +509,7 @@ impl TerminalBackend for PrototypeBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lapis_document::ExternalChange;
+    use document::ExternalChange;
 
     #[test]
     fn sample_files_are_listed_and_searchable() {

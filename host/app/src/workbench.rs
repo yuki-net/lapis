@@ -1,19 +1,19 @@
 use std::{collections::HashMap, sync::Mutex};
 
-use lapis_client_api::{
-    RequestBody, ResponseBody, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
-};
-use lapis_editor_core::WorkspaceId;
-use lapis_workbench::{
+use ::workbench::{
     ConversationViewState, VersionedViewState, WorkbenchConnection, WorkbenchSubscription,
     WorkbenchUpdate,
 };
+use client_api::{
+    RequestBody, ResponseBody, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
+};
+use editor_core::WorkspaceId;
 
 use crate::{BackendClient, client::Client};
 
 pub(crate) struct HostWorkbench {
     host: BackendClient,
-    clients: Mutex<HashMap<lapis_client_api::WorkspaceId, Client>>,
+    clients: Mutex<HashMap<client_api::WorkspaceId, Client>>,
 }
 
 impl HostWorkbench {
@@ -25,8 +25,7 @@ impl HostWorkbench {
     }
 
     fn client(&self, workspace: &WorkspaceId) -> Result<Client, String> {
-        let id = lapis_client_api::WorkspaceId::try_new(workspace.as_str())
-            .map_err(|e| e.to_string())?;
+        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(|e| e.to_string())?;
         let mut clients = self
             .clients
             .lock()
@@ -43,7 +42,7 @@ impl HostWorkbench {
     }
 }
 
-fn decode(snapshot: lapis_client_api::WorkbenchSnapshot) -> Result<VersionedViewState, String> {
+fn decode(snapshot: client_api::WorkbenchSnapshot) -> Result<VersionedViewState, String> {
     Ok(VersionedViewState {
         revision: snapshot.revision,
         view: serde_json::from_value(snapshot.view).map_err(|e| e.to_string())?,
@@ -72,7 +71,7 @@ impl WorkbenchConnection for HostWorkbench {
         view: ConversationViewState,
     ) -> Result<WorkbenchUpdate, String> {
         let client = self.client(workspace)?;
-        let view = lapis_client_api::encode_workbench_view(&view).map_err(|e| e.to_string())?;
+        let view = client_api::encode_workbench_view(&view).map_err(|e| e.to_string())?;
         match client
             .request(RequestBody::WorkbenchPut(WorkbenchPutRequest {
                 workspace_id: client.workspace_id().clone(),
@@ -93,8 +92,7 @@ impl WorkbenchConnection for HostWorkbench {
     }
 
     fn subscribe(&self, workspace: &WorkspaceId) -> Result<Box<dyn WorkbenchSubscription>, String> {
-        let id = lapis_client_api::WorkspaceId::try_new(workspace.as_str())
-            .map_err(|e| e.to_string())?;
+        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(|e| e.to_string())?;
         let client = self.host.connect_workspace(id).map_err(|e| e.to_string())?;
         let receiver = client.subscribe().map_err(|e| e.to_string())?;
         Ok(Box::new(HostWorkbenchSubscription {
@@ -107,7 +105,7 @@ impl WorkbenchConnection for HostWorkbench {
 
 struct HostWorkbenchSubscription {
     _client: Client,
-    receiver: lapis_backend_state::BackendEventReceiver,
+    receiver: backend_state::BackendEventReceiver,
     watermark: Option<u64>,
 }
 
@@ -136,10 +134,10 @@ impl WorkbenchSubscription for HostWorkbenchSubscription {
             }
             self.watermark = Some(sequence);
             match event.body {
-                lapis_client_api::EventBody::WorkbenchChanged { revision, .. } => {
+                client_api::EventBody::WorkbenchChanged { revision, .. } => {
                     return Ok(Some(revision));
                 }
-                lapis_client_api::EventBody::SnapshotRequired { .. } => {
+                client_api::EventBody::SnapshotRequired { .. } => {
                     return Err("Workbench状態の再取得が必要です".to_owned());
                 }
                 _ => {}
