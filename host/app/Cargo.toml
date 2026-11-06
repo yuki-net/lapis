@@ -14,7 +14,7 @@ lapis-task = { path = "../../contracts/domain/task" }
 lapis-editor-core = { path = "../../contracts/domain/editor-core" }
 lapis-backend-state = { path = "../runtime" }
 lapis-client-api = { path = "../../contracts/protocol" }
-lapis-platform = { path = "../infrastructure/local" }
+lapis-platform = { path = "../adapters/local" }
 lapis-terminal = { path = "../../contracts/domain/terminal" }
 lapis-remote = { path = "../transport/remote" }
 tokio = { workspace = true, features = ["signal"] }

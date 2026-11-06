@@ -48,15 +48,15 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
 
     def test_host_internal_path_runs_only_host(self):
-        self.assertEqual(jobs_for_paths(["backend/host/src/main.rs"]), {"host"})
-        self.assertEqual(jobs_for_paths(["backend/host/src/terminal.rs"]), {"host"})
+        self.assertEqual(jobs_for_paths(["host/app/src/main.rs"]), {"host"})
+        self.assertEqual(jobs_for_paths(["host/app/src/terminal.rs"]), {"host"})
 
     def test_host_public_boundary_runs_desktop(self):
         for path in (
-            "backend/host/Cargo.toml",
-            "backend/host/src/lib.rs",
-            "backend/host/src/client.rs",
-            "backend/host/src/profile.rs",
+            "host/app/Cargo.toml",
+            "host/app/src/lib.rs",
+            "host/app/src/client.rs",
+            "host/app/src/profile.rs",
         ):
             self.assertEqual(jobs_for_paths([path]), {"host", "desktop"})
 
@@ -68,7 +68,7 @@ class TestPathRouting(unittest.TestCase):
 
     def test_backend_transport_runs_rust_surfaces(self):
         expected = {"rust_core", "host", "desktop"}
-        self.assertEqual(jobs_for_paths(["backend/transport/remote/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["host/transport/remote/src/lib.rs"]), expected)
 
     def test_rust_core_path_runs_rust_core(self):
         jobs = jobs_for_paths(["contracts/domain/workspace/src/lib.rs"])
@@ -98,7 +98,7 @@ class TestPathRouting(unittest.TestCase):
 
     def test_infrastructure_runs_rust_core_and_host(self):
         """infrastructureはRust CoreとHostの両方に影響する。"""
-        jobs = jobs_for_paths(["backend/infrastructure/local/src/lib.rs"])
+        jobs = jobs_for_paths(["host/adapters/local/src/lib.rs"])
         self.assertIn("rust_core", jobs)
         self.assertIn("host", jobs)
 
@@ -115,7 +115,7 @@ class TestPathRouting(unittest.TestCase):
         """複数のpathが異なるjobを要求する場合、合体される。"""
         jobs = jobs_for_paths([
             "clients/desktop/app/src/main.rs",
-            "backend/host/src/main.rs",
+            "host/app/src/main.rs",
         ])
         self.assertIn("desktop", jobs)
         self.assertIn("host", jobs)
@@ -134,7 +134,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
 
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
-        for route, path in (("desktop", "clients/desktop/app/src/main.rs"), ("host", "backend/host/src/main.rs")):
+        for route, path in (("desktop", "clients/desktop/app/src/main.rs"), ("host", "host/app/src/main.rs")):
             selected = list(jobs_for_paths([path]))
             needs = {"path_filter": {"result": "success"}}
             needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})

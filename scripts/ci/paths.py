@@ -24,14 +24,15 @@ PATH_RULES = [
     
     # Host関連
     # Desktopが直接利用する公開境界は両surfaceを検証する。
-    (["backend/host/Cargo.toml", "backend/host/src/lib.rs", "backend/host/src/client.rs", "backend/host/src/profile.rs"], {"host", "desktop"}),
-    (["backend/host/"], {"host"}),
+    (["host/app/Cargo.toml", "host/app/src/lib.rs", "host/app/src/client.rs", "host/app/src/profile.rs"], {"host", "desktop"}),
+    (["host/app/"], {"host"}),
     
     # Backend共通（Host以外）
-    (["backend/runtime/"], {"rust_core", "host", "desktop"}),
-    (["backend/infrastructure/"], {"rust_core", "host", "desktop"}),
-    (["backend/transport/"], {"rust_core", "host", "desktop"}),
-    (["backend/application/"], {"rust_core", "host", "desktop"}),
+    (["host/runtime/"], {"rust_core", "host", "desktop"}),
+    (["host/adapters/"], {"rust_core", "host", "desktop"}),
+    (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
+    (["host/transport/"], {"rust_core", "host", "desktop"}),
+    (["host/application/"], {"rust_core", "host", "desktop"}),
     
     # Contracts / Client transport
     (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),

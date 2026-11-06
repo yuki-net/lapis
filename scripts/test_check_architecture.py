@@ -55,7 +55,7 @@ class ArchitectureTests(unittest.TestCase):
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
             package("model", "contracts/domain/example"),
-            package("runtime", "backend/runtime", ["model"]),
+            package("runtime", "host/runtime", ["model"]),
             package("ui", "clients/ui", ["model"]),
         ]}
 
@@ -82,7 +82,7 @@ class ArchitectureTests(unittest.TestCase):
         self.assertTrue(check(self.metadata, {}))
 
     def test_backend_platform_dependency_fails(self):
-        for path in ("backend/runtime", "backend/host"):
+        for path in ("host/runtime", "host/app"):
             for dependency in ("gpui", "rfd"):
                 with self.subTest(path=path, dependency=dependency):
                     metadata = copy.deepcopy(self.metadata)
@@ -95,15 +95,15 @@ class ArchitectureTests(unittest.TestCase):
     def test_regular_client_cannot_depend_on_backend_implementation(self):
         self.metadata["workspace_members"].extend(["cli", "infra"])
         self.metadata["packages"].extend([
-            package("cli", "apps/cli", ["infra"]),
-            package("infra", "backend/infrastructure/local"),
+            package("cli", "clients/cli", ["infra"]),
+            package("infra", "host/adapters/local"),
         ])
         self.assertIn("cli -> infra", "\n".join(check(self.metadata, {})))
 
     def test_regular_client_can_depend_on_protocol(self):
         self.metadata["workspace_members"].extend(["cli", "protocol"])
         self.metadata["packages"].extend([
-            package("cli", "apps/cli", ["protocol"]),
+            package("cli", "clients/cli", ["protocol"]),
             package("protocol", "contracts/protocol"),
         ])
         self.assertEqual(check(self.metadata, {}), [])
@@ -112,13 +112,13 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["workspace_members"].extend(["desktop", "infra"])
         self.metadata["packages"].extend([
             package("desktop", "clients/desktop/app", ["ui", "runtime", "infra"]),
-            package("infra", "backend/infrastructure/local"),
+            package("infra", "host/adapters/local"),
         ])
         self.assertEqual(check(self.metadata, {}), [])
 
     def test_desktop_ui_cannot_depend_on_infrastructure(self):
         self.metadata["workspace_members"].append("infra")
-        self.metadata["packages"].append(package("infra", "backend/infrastructure/local"))
+        self.metadata["packages"].append(package("infra", "host/adapters/local"))
         self.metadata["packages"][2]["dependencies"].append({"name": "infra"})
         self.assertIn("ui -> infra", "\n".join(check(self.metadata, {})))
 
@@ -126,8 +126,8 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["workspace_members"].extend(["desktop", "cli", "host"])
         self.metadata["packages"].extend([
             package("desktop", "clients/desktop/app", ["host"]),
-            package("cli", "apps/cli"),
-            package("host", "backend/host", ["runtime"]),
+            package("cli", "clients/cli"),
+            package("host", "host/app", ["runtime"]),
         ])
         self.assertEqual(check(self.metadata, {}), [])
         for client in ("ui", "cli"):
@@ -145,7 +145,7 @@ class ArchitectureTests(unittest.TestCase):
             package("desktop", "clients/desktop/app", ["ui", "adapter", "store"]),
             package("adapter", "clients/state", ["model"]),
             package("store", "clients/desktop/persistence", ["adapter", "model"]),
-            package("infra", "backend/infrastructure/local", ["runtime"]),
+            package("infra", "host/adapters/local", ["runtime"]),
         ])
         self.metadata["packages"][2]["dependencies"].append({"name": "adapter"})
         self.assertEqual(check(self.metadata, {}), [])
@@ -243,7 +243,7 @@ class ArchitectureTests(unittest.TestCase):
                 metadata = copy.deepcopy(self.metadata)
                 metadata["workspace_members"].append("host")
                 metadata["packages"].append(
-                    package("host", "backend/host", [dependency])
+                    package("host", "host/app", [dependency])
                 )
                 self.assertIn(
                     f"host -> {dependency}: Client 固有依存",
