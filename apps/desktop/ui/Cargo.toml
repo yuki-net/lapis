@@ -49,6 +49,7 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 gloo-timers = { version = "0.3", features = ["futures"] }
 wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "=0.4.79"
+web-sys = { version = "=0.3.106", features = ["Location", "Window"] }
 console_error_panic_hook = "0.1"
 lapis-client-api = { path = "../../../shared/protocol" }
 

@@ -46,12 +46,10 @@ pub async fn start(
 ) -> Result<Option<String>, JsValue> {
     console_error_panic_hook::set_once();
     let (Some(url), Some(workspace)) = (url, workspace) else {
-        start_prototype(backend_preference).map_err(|error| JsValue::from_str(&error))?;
-        return Ok(None);
+        return start_without_host(backend_preference);
     };
     if url.trim().is_empty() || workspace.trim().is_empty() {
-        start_prototype(backend_preference).map_err(|error| JsValue::from_str(&error))?;
-        return Ok(None);
+        return start_without_host(backend_preference);
     }
     let credential =
         lapis_desktop_client::web_host::connect(lapis_desktop_client::web_host::HostConfig {
@@ -72,6 +70,27 @@ pub async fn start(
     )
     .map_err(|error| JsValue::from_str(&error))?;
     Ok(credential)
+}
+
+fn start_without_host(backend_preference: &str) -> Result<Option<String>, JsValue> {
+    if !demo_requested() {
+        return Err(JsValue::from_str(
+            "Host URL と Workspace ID を指定してください。デモは ?demo=1 で起動できます。",
+        ));
+    }
+    start_prototype(backend_preference).map_err(|error| JsValue::from_str(&error))?;
+    Ok(None)
+}
+
+fn demo_requested() -> bool {
+    web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .is_some_and(|search| {
+            search
+                .trim_start_matches('?')
+                .split('&')
+                .any(|param| param == "demo=1")
+        })
 }
 
 fn start_prototype(backend_preference: &str) -> Result<(), String> {
