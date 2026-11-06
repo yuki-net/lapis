@@ -2,14 +2,24 @@
 
 use std::sync::Arc;
 
+use client_api::OidcClientConfig;
 use remote::{OidcConfig, OidcVerifier};
 
 const ISSUER: &str = "LAPIS_OIDC_ISSUER";
 const AUDIENCE: &str = "LAPIS_OIDC_AUDIENCE";
+const CLIENT_ID: &str = "LAPIS_OIDC_CLIENT_ID";
+const SCOPES: &str = "LAPIS_OIDC_SCOPES";
 const JWKS_FILE: &str = "LAPIS_OIDC_JWKS_FILE";
 const JWKS_URI: &str = "LAPIS_OIDC_JWKS_URI";
 const CLOCK_SKEW: &str = "LAPIS_OIDC_CLOCK_SKEW_SECONDS";
 const DEFAULT_CLOCK_SKEW: u64 = 60;
+const DEFAULT_SCOPES: &str = "openid profile";
+
+/// Host が検証に使う設定と、ネイティブ Client へ提示する公開設定。
+pub struct HostOidc {
+    pub verifier: Arc<OidcVerifier>,
+    pub client: OidcClientConfig,
+}
 
 #[derive(Debug, PartialEq, Eq)]
 enum JwksSource {
@@ -21,18 +31,20 @@ enum JwksSource {
 struct Settings {
     issuer: String,
     audience: String,
+    client_id: String,
+    scopes: Vec<String>,
     jwks: JwksSource,
     clock_skew_seconds: u64,
 }
 
-/// OIDC が設定されていれば検証器を作る。未設定なら None を返す。
-pub fn verifier_from_env() -> Result<Option<Arc<OidcVerifier>>, String> {
+/// OIDC が設定されていれば検証器とクライアント設定を作る。未設定なら None を返す。
+pub fn from_env() -> Result<Option<HostOidc>, String> {
     let Some(settings) = settings(|name| std::env::var(name).ok())? else {
         return Ok(None);
     };
     let config = OidcConfig::new_rs256(
-        settings.issuer,
-        settings.audience,
+        settings.issuer.clone(),
+        settings.audience.clone(),
         settings.clock_skew_seconds,
     )
     .map_err(|error| error.to_string())?;
@@ -51,7 +63,15 @@ pub fn verifier_from_env() -> Result<Option<Arc<OidcVerifier>>, String> {
             verifier
         }
     };
-    Ok(Some(Arc::new(verifier)))
+    let client = OidcClientConfig {
+        issuer: settings.issuer,
+        client_id: settings.client_id,
+        scopes: settings.scopes,
+    };
+    Ok(Some(HostOidc {
+        verifier: Arc::new(verifier),
+        client,
+    }))
 }
 
 fn settings(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Settings>, String> {
@@ -65,6 +85,21 @@ fn settings(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Settings>,
     let (Some(issuer), Some(audience)) = (issuer, audience) else {
         return Err(format!("{ISSUER} と {AUDIENCE} は必須です"));
     };
+    if !issuer.starts_with("https://") || issuer.len() == "https://".len() {
+        return Err(format!("{ISSUER} は https:// で指定してください"));
+    }
+    let client_id = lookup(CLIENT_ID).unwrap_or_else(|| audience.clone());
+    if client_id.trim().is_empty() {
+        return Err(format!("{CLIENT_ID} が空です"));
+    }
+    let scopes = lookup(SCOPES)
+        .unwrap_or_else(|| DEFAULT_SCOPES.to_owned())
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if scopes.is_empty() {
+        return Err(format!("{SCOPES} が空です"));
+    }
     let jwks = match (jwks_file, jwks_uri) {
         (Some(path), None) => JwksSource::File(path),
         (None, Some(uri)) => {
@@ -93,6 +128,8 @@ fn settings(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Settings>,
     Ok(Some(Settings {
         issuer,
         audience,
+        client_id,
+        scopes,
         jwks,
         clock_skew_seconds,
     }))
@@ -144,8 +181,54 @@ mod tests {
         .unwrap();
         assert_eq!(settings.issuer, "https://idp.example");
         assert_eq!(settings.audience, "lapis");
+        assert_eq!(settings.client_id, "lapis");
+        assert_eq!(
+            settings.scopes,
+            vec!["openid".to_owned(), "profile".to_owned()]
+        );
         assert_eq!(settings.jwks, JwksSource::File("jwks.json".to_owned()));
         assert_eq!(settings.clock_skew_seconds, DEFAULT_CLOCK_SKEW);
+    }
+
+    #[test]
+    fn explicit_client_and_scopes_are_used() {
+        let settings = settings(lookup(&[
+            (ISSUER, "https://idp.example"),
+            (AUDIENCE, "lapis"),
+            (CLIENT_ID, "lapis-desktop"),
+            (SCOPES, "openid email"),
+            (JWKS_FILE, "jwks.json"),
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(settings.client_id, "lapis-desktop");
+        assert_eq!(
+            settings.scopes,
+            vec!["openid".to_owned(), "email".to_owned()]
+        );
+    }
+
+    #[test]
+    fn http_issuer_is_rejected() {
+        let error = settings(lookup(&[
+            (ISSUER, "http://idp.example"),
+            (AUDIENCE, "lapis"),
+            (JWKS_FILE, "jwks.json"),
+        ]))
+        .unwrap_err();
+        assert!(error.contains("https://"));
+    }
+
+    #[test]
+    fn empty_scopes_are_rejected() {
+        let error = settings(lookup(&[
+            (ISSUER, "https://idp.example"),
+            (AUDIENCE, "lapis"),
+            (SCOPES, "   "),
+            (JWKS_FILE, "jwks.json"),
+        ]))
+        .unwrap_err();
+        assert!(error.contains(SCOPES));
     }
 
     #[test]

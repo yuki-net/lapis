@@ -6,15 +6,17 @@
 use std::path::Path;
 
 use client_api::{
-    AuthenticateRequest, CURRENT_PROTOCOL, ClientHello, ClientId, ClientKind, ClientMessage,
-    CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence, INVALID_REQUEST, OidcRequest,
-    PairedResponse, ProtocolError, ProtocolRange, RequestBody, RequestEnvelope, RequestId,
-    ServerHello, ServerMessage, SessionId, WorkspaceId, WorkspaceListRequest,
+    AuthMethod, AuthRequired, AuthenticateRequest, CURRENT_PROTOCOL, ClientHello, ClientId,
+    ClientKind, ClientMessage, CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence,
+    INVALID_REQUEST, OidcClientConfig, OidcRequest, PairedResponse, ProtocolError, ProtocolRange,
+    RequestBody, RequestEnvelope, RequestId, ServerHello, ServerMessage, SessionId, WorkspaceId,
+    WorkspaceListRequest,
 };
 
 const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
 const AUTHENTICATE: &str = r#"{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"#;
 const OIDC: &str = r#"{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"#;
+const AUTH_REQUIRED: &str = r#"{"type":"auth.required","payload":{"methods":["token","oidc"],"oidc":{"issuer":"https://idp.example","client_id":"lapis","scopes":["openid","profile"]}}}"#;
 const REQUEST_ENVELOPE: &str = r#"{"request_id":"request-1","type":"workspace.list","payload":{}}"#;
 const EVENT_ENVELOPE: &str =
     r#"{"event_sequence":7,"type":"workspace.changed","payload":{"workspace_id":"workspace-1"}}"#;
@@ -62,6 +64,38 @@ fn oidc_message_matches_mobile_fixture() {
     );
     let json = serde_json::to_string(&ClientMessage::Oidc(request)).unwrap();
     assert_eq!(json, OIDC);
+}
+
+#[test]
+fn auth_required_matches_mobile_fixture() {
+    let message = ServerMessage::AuthRequired(AuthRequired {
+        methods: vec![AuthMethod::Token, AuthMethod::Oidc],
+        oidc: Some(OidcClientConfig {
+            issuer: "https://idp.example".to_owned(),
+            client_id: "lapis".to_owned(),
+            scopes: vec!["openid".to_owned(), "profile".to_owned()],
+        }),
+    });
+    let json = serde_json::to_string(&message).unwrap();
+    assert_eq!(json, AUTH_REQUIRED);
+    let decoded: ServerMessage = serde_json::from_str(&json).unwrap();
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), AUTH_REQUIRED);
+}
+
+#[test]
+fn auth_required_without_oidc_is_backward_compatible() {
+    let message: ServerMessage =
+        serde_json::from_str(r#"{"type":"auth.required","payload":{"methods":["token"]}}"#)
+            .unwrap();
+    let ServerMessage::AuthRequired(required) = message else {
+        panic!("expected auth.required");
+    };
+    assert_eq!(required.methods, vec![AuthMethod::Token]);
+    assert_eq!(required.oidc, None);
+    assert_eq!(
+        serde_json::to_string(&ServerMessage::AuthRequired(required)).unwrap(),
+        r#"{"type":"auth.required","payload":{"methods":["token"]}}"#
+    );
 }
 
 #[test]

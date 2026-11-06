@@ -43,9 +43,13 @@ Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立pro
 
 次の環境変数がすべて設定された場合だけ、Host は `AuthRequired.methods` に `Oidc` を追加します。
 
-- `LAPIS_OIDC_ISSUER`
+- `LAPIS_OIDC_ISSUER`（HTTPS）
 - `LAPIS_OIDC_AUDIENCE`
+- `LAPIS_OIDC_CLIENT_ID`（任意、既定は audience）
+- `LAPIS_OIDC_SCOPES`（任意、既定 `openid profile`）
 - `LAPIS_OIDC_JWKS_FILE` または `LAPIS_OIDC_JWKS_URI`（どちらか一方）
 - `LAPIS_OIDC_CLOCK_SKEW_SECONDS`（任意、既定60秒）
+
+`LAPIS_OIDC_ISSUER` と `LAPIS_OIDC_CLIENT_ID`、`LAPIS_OIDC_SCOPES` は `AuthRequired.oidc` としてネイティブ Client へ提示します。ネイティブ Client は issuer の OIDC discovery で endpoint を解決します。
 
 `LAPIS_OIDC_JWKS_FILE` は起動時に読み込みます。`LAPIS_OIDC_JWKS_URI` は `https://` の URI を指定し、リダイレクト先も HTTPS に限定されます。起動時に取得し、以後5分ごとに更新します。初回取得に失敗した場合、独立 Host は起動しません。起動後の定期更新に失敗した場合は既存の鍵を保持します。HTTP はテスト専用です。設定の詳細は [認証とセッション](../docs/specs/auth.md) を参照してください。

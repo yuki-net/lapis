@@ -26,6 +26,7 @@ Host・Web・Desktop・Mobile の実装者が、認証方式の追加・変更�
 ### OIDC 方式
 
 - Client は Authorization Code + PKCE で IdP から ID Token を取得する。
+- Host は `AuthRequired.oidc` に `issuer`、`client_id`、`scopes` を提示する。ネイティブ Client は issuer の OIDC discovery で Authorization / Token Endpoint を解決する。
 - Web は Host（Web bridge）の `/auth/oidc/start` を開き、`/auth/oidc/callback` から `postMessage` で ID Token を受け取る。Token は URL に載せない。
 - Web bridge は confidential client として `client_secret` を任意で使える。Public client の場合は PKCE だけで交換する。
 - Client は `ClientMessage::Oidc(OidcRequest)` に ID Token と Workspace を入れて送る。
@@ -53,6 +54,8 @@ Host の認証設定は次の値を持つ。
 
 - `issuer`
 - `audience`
+- `client_id`（任意。既定は `audience`）
+- `scopes`（任意。既定は `openid profile`）
 - `jwks_uri`
 - `allowed_algorithms`
 - `subject_allowlist`（任意）
