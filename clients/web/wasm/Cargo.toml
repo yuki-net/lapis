@@ -17,7 +17,7 @@ futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
 lapis-client-api = { path = "../../../contracts/protocol" }
-lapis-client-core = { path = "../../../clients/transport" }
+lapis-client-core = { path = "../../transport" }
 lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
 lapis-wire = { path = "../../../contracts/wire" }
 lapis-workbench = { path = "../../../contracts/domain/workbench" }

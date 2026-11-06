@@ -4,7 +4,7 @@
 
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
-| `apps/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
+| `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
@@ -129,7 +129,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。
 許可行列は `scripts/check_architecture.py` が実行上の正本。models は models のみ、protocol は models、application は models、runtime は application/models/protocol、infrastructure は application/runtime/models、transport は runtime/protocol/models へ依存できる。各層内の依存も許可する。
-Host と Desktop の `apps/desktop/app/` は Composition Root として具体実装を組み立てる。通常の Client (`apps/cli/` 等) は models/protocol への依存に限定し、Backend の実装に直接依存させない。Desktop UI は `apps/desktop/client/` と models/protocol のみへ依存できる。client は models/protocol、Desktop 表示状態を保存する persistence は client/models のみへ依存できる。Backend からこれらの Client 実装への依存は dev-dependency も禁止する。
+Desktop の Composition Root は `clients/desktop/app/` として具体実装を組み立てる。通常の Client (`clients/cli/` 等) は models/protocol への依存に限定し、Backend の実装に直接依存させない。Desktop UI は `clients/state/` と models/protocol のみへ依存できる。`clients/state/` は models/protocol、Desktop 表示状態を保存する persistence は state/models のみへ依存できる。Backend からこれらの Client 実装への依存は dev-dependency も禁止する。
 Backend と共通契約から GPUI/native dialog への依存は禁止。
 
 既存違反は `scripts/architecture-exceptions.json` の完全一致した crate 対と理由に限定する。未使用例外も失敗するため、削除した違反を再導入する余地を残さない。新規違反を「移行中」として追加しない。

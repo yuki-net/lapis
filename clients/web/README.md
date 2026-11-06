@@ -2,7 +2,7 @@
 
 Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示します。ページの HTML は GPUI を起動するための最小限のシェルだけです。
 
-`apps/desktop/ui` が GPUI の起動と Wasm エントリを持ち、`apps/web` はその Wasm を読み込んで配信します。Host へ接続した場合は、ファイルの読み込み・編集・保存を Host 経由で行います。
+`clients/ui` が GPUI の起動と Wasm エントリを持ち、`clients/web` はその Wasm を読み込んで配信します。Host へ接続した場合は、ファイルの読み込み・編集・保存を Host 経由で行います。
 
 ## Host へ接続する
 
@@ -35,7 +35,7 @@ URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を
 ## 開発
 
 ```powershell
-cd apps/web
+cd clients/web
 npm ci
 npm run dev
 ```
@@ -47,7 +47,7 @@ WebGPU が使えない環境では `?backend=webgl` を付けてください。
 ## Tailscaleで開く
 
 ```powershell
-cd apps/web
+cd clients/web
 npm run dev -- --host 0.0.0.0 --port 5174
 ```
 
@@ -58,5 +58,5 @@ npm run dev -- --host 0.0.0.0 --port 5174
 ```powershell
 cargo build -p lapis-host -p lapis-web-bridge
 cargo build -p lapis-web --target wasm32-unknown-unknown --profile web --features bridge-smoke
-python apps/web/wasm/tests/bridge_smoke.py
+python clients/web/wasm/tests/bridge_smoke.py
 ```

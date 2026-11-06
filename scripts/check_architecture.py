@@ -35,7 +35,7 @@ def strip_rust_comments(text):
 
 def check_desktop_layout(root=ROOT):
     errors = []
-    source = root / "apps/desktop"
+    source = root / "clients"
     for path in source.rglob("*.rs"):
         text = path.read_text(encoding="utf-8")
         identifiers = set(rust_identifiers(text))
@@ -52,7 +52,7 @@ def check_desktop_layout(root=ROOT):
         if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
         if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()
-                or path.as_posix().endswith("/desktop/client/src/lib.rs")):
+                or path.as_posix().endswith("/state/src/lib.rs")):
             for name in ("main-panel", "left-panel", "right-panel", "bottom-panel"):
                 if re.search(rf'"{name}"', code_text):
                     errors.append(f"{path.relative_to(root)}: 旧Zone保存識別子 {name}")
@@ -87,10 +87,10 @@ def layer(manifest, root):
         ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
         ("backend/application/", "application"), ("backend/runtime/", "runtime"),
         ("backend/infrastructure/", "infrastructure"), ("backend/transport/", "transport"),
-        ("backend/host/", "host"), ("apps/desktop/ui/", "ui"),
-        ("apps/desktop/client/", "desktop_client"),
-        ("apps/desktop/persistence/", "desktop_persistence"),
-        ("apps/desktop/app/", "desktop_entry"), ("apps/", "client"),
+        ("backend/host/", "host"), ("clients/ui/", "ui"),
+        ("clients/state/", "desktop_client"),
+        ("clients/desktop/persistence/", "desktop_persistence"),
+        ("clients/desktop/app/", "desktop_entry"), ("clients/", "client"), ("apps/", "client"),
     ]:
         if relative.startswith(prefix):
             return value

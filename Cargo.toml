@@ -1,9 +1,11 @@
 [workspace]
 members = [
-    "apps/desktop/*",
+    "clients/desktop/*",
+    "clients/state",
+    "clients/ui",
     "clients/transport",
     "apps/web-bridge",
-    "apps/web/wasm",
+    "clients/web/wasm",
     "backend/runtime",
     "backend/host",
     "backend/infrastructure/*",

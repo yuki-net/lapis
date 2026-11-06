@@ -1,6 +1,6 @@
 # Desktop UI ホットリロード検証
 
-このディレクトリは、Windows の Subsecond クラッシュを再現し、修正後の Desktop UI 統合を追試するための検証資料です。製品の正本は `apps/desktop/ui/src/` とテストです。
+このディレクトリは、Windows の Subsecond クラッシュを再現し、修正後の Desktop UI 統合を追試するための検証資料です。製品の正本は `clients/ui/src/` とテストです。
 
 旧PoC [PR #33](https://github.com/yuki-net/lapis/pull/33) の `evidence.txt` で報告された「パッチ適用後のstack overflow」を再現条件の基準にしています。
 
@@ -74,7 +74,7 @@ stockのDioxus CLI 0.7.10にはWindows x64スタブのRAX破壊が残ってい�
 
 ```powershell
 git clone --branch v0.7.10 https://github.com/DioxusLabs/dioxus.git target/dioxus-cli-0710
-Copy-Item apps/desktop/ui/experiments/hot-reload/dioxus-cli-windows-x64.patch `
+Copy-Item clients/ui/experiments/hot-reload/dioxus-cli-windows-x64.patch `
   target/dioxus-cli-0710/lapis.patch
 git -C target/dioxus-cli-0710 apply --ignore-whitespace lapis.patch
 cargo install --path target/dioxus-cli-0710/packages/cli --locked `
@@ -89,7 +89,7 @@ upstream Dioxus が PR #5967 をマージし、修正版CLIが利用可能にな
 
 ```powershell
 $dx = (Resolve-Path target/dx-fixed0710/bin/dx.exe).Path
-Push-Location apps/desktop/ui/experiments/hot-reload/minimal
+Push-Location clients/ui/experiments/hot-reload/minimal
 & $dx serve --platform windows --hot-patch --interactive false --open false --package lapis-subsecond-probe
 Pop-Location
 ```

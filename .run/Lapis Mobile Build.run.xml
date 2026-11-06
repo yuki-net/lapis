@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Lapis Mobile Build" type="GradleRunConfiguration" factoryName="Gradle">
     <ExternalSystemSettings>
-      <option name="externalProjectPath" value="$PROJECT_DIR$/apps/mobile" />
+      <option name="externalProjectPath" value="$PROJECT_DIR$/clients/mobile" />
       <option name="externalSystemIdString" value="GRADLE" />
       <option name="scriptParameters" value="" />
       <option name="taskNames">

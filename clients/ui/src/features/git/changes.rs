@@ -378,13 +378,10 @@ mod tests {
             staged: false,
         };
         let rows = file_rows(
-            vec![
-                file("apps/desktop/ui/main.rs"),
-                file("apps/desktop/ui/lib.rs"),
-            ],
+            vec![file("clients/ui/main.rs"), file("clients/ui/lib.rs")],
             true,
         );
-        assert!(matches!(&rows[0], FileRow::Directory(name, 0) if name == "apps/desktop/ui"));
+        assert!(matches!(&rows[0], FileRow::Directory(name, 0) if name == "clients/ui"));
         assert_eq!(
             rows.iter()
                 .filter(|row| matches!(row, FileRow::File(_, 1)))

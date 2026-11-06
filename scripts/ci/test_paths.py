@@ -19,7 +19,7 @@ class TestPathRouting(unittest.TestCase):
     """path routingロジックのテスト。"""
 
     def test_client_persistence_and_locales_select_rust_core(self):
-        for path in ("apps/desktop/client/src/lib.rs", "apps/desktop/persistence/src/lib.rs"):
+        for path in ("clients/state/src/lib.rs", "clients/desktop/persistence/src/lib.rs"):
             self.assertEqual(jobs_for_paths([path]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
 
@@ -45,7 +45,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertRegex(rust_core, r"(?m)^\s+components:\s+[^\n]*\brust-src\b")
 
     def test_desktop_path_runs_desktop(self):
-        self.assertIn("desktop", jobs_for_paths(["apps/desktop/app/src/main.rs"]))
+        self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
 
     def test_host_internal_path_runs_only_host(self):
         self.assertEqual(jobs_for_paths(["backend/host/src/main.rs"]), {"host"})
@@ -75,10 +75,10 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("rust_core", jobs)
 
     def test_mobile_path_runs_mobile(self):
-        self.assertIn("mobile", jobs_for_paths(["apps/mobile/sharedUi/src/main.kt"]))
+        self.assertIn("mobile", jobs_for_paths(["clients/mobile/sharedUi/src/main.kt"]))
 
     def test_web_path_runs_web(self):
-        self.assertIn("web", jobs_for_paths(["apps/web/package.json"]))
+        self.assertIn("web", jobs_for_paths(["clients/web/package.json"]))
 
     def test_cargo_toml_runs_all_rust(self):
         jobs = jobs_for_paths(["Cargo.toml"])
@@ -114,7 +114,7 @@ class TestPathRouting(unittest.TestCase):
     def test_multiple_paths_combine_jobs(self):
         """複数のpathが異なるjobを要求する場合、合体される。"""
         jobs = jobs_for_paths([
-            "apps/desktop/app/src/main.rs",
+            "clients/desktop/app/src/main.rs",
             "backend/host/src/main.rs",
         ])
         self.assertIn("desktop", jobs)
@@ -134,7 +134,7 @@ class TestPathRouting(unittest.TestCase):
         self.assertNotIn("dev_windows", jobs_for_paths(["scripts/other.py"]))
 
     def test_gate_checks_mapped_jobs_and_expected_skips(self):
-        for route, path in (("desktop", "apps/desktop/app/src/main.rs"), ("host", "backend/host/src/main.rs")):
+        for route, path in (("desktop", "clients/desktop/app/src/main.rs"), ("host", "backend/host/src/main.rs")):
             selected = list(jobs_for_paths([path]))
             needs = {"path_filter": {"result": "success"}}
             needs.update({job: {"result": "success" if name in selected else "skipped"} for name, job in JOB_IDS.items()})
