@@ -1,6 +1,6 @@
 pub use lapis_client_api::{
-    AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
-    ServerMessage,
+    AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, InvalidSecretHex,
+    PairRequest, PairedResponse, ServerMessage,
 };
 pub use lapis_wire::{REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL};
 

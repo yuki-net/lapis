@@ -52,8 +52,8 @@ pub use ids::{
 pub use lapis_workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
 pub use remote_wire::{
-    AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest, PairedResponse,
-    ServerMessage,
+    AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest,
+    PairedResponse, ServerMessage,
 };
 pub use request::RequestBody;
 pub use response::ResponseBody;

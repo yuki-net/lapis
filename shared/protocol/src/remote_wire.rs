@@ -11,9 +11,25 @@ use crate::{CredentialId, InvalidCredentialId};
 
 const SECRET_BYTES: usize = 32;
 
+/// Host が提示する認証方式。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthMethod {
+    Token,
+    Oidc,
+}
+
+/// 接続直後に Host が返す認証方式の一覧。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthRequired {
+    pub methods: Vec<AuthMethod>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ClientMessage {
+    #[serde(rename = "hello")]
+    Hello(ClientHello),
     #[serde(rename = "auth.pair")]
     Pair(PairRequest),
     #[serde(rename = "auth.authenticate")]
@@ -76,6 +92,8 @@ impl AuthenticateRequest {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 pub enum ServerMessage {
+    #[serde(rename = "auth.required")]
+    AuthRequired(AuthRequired),
     #[serde(rename = "auth.paired")]
     Paired(PairedResponse),
     #[serde(rename = "auth.authenticated")]

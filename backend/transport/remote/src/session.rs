@@ -14,8 +14,8 @@ use crate::{
     AccessError, AuthError, CredentialHandle, PairingToken, RemoteAuth, RemoteRequestHandler,
     SessionGrant,
     wire::{
-        AuthenticateRequest, ClientMessage, PairRequest, PairedResponse, ServerMessage,
-        protocol_error,
+        AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, PairRequest,
+        PairedResponse, ServerMessage, protocol_error,
     },
 };
 
@@ -28,6 +28,7 @@ pub(crate) struct SessionReply {
 
 pub(crate) struct ConnectionSession {
     grant: Option<SessionGrant>,
+    hello: Option<ClientHello>,
     request_ids: HashSet<RequestId>,
 }
 
@@ -37,6 +38,7 @@ impl ConnectionSession {
     pub(crate) fn new() -> Self {
         Self {
             grant: None,
+            hello: None,
             request_ids: HashSet::new(),
         }
     }
@@ -57,6 +59,7 @@ impl ConnectionSession {
         request_timeout: Duration,
     ) -> SessionReply {
         match (self.grant.is_some(), message) {
+            (false, ClientMessage::Hello(hello)) => self.hello(hello),
             (false, ClientMessage::Pair(request)) => self.pair(request, auth),
             (false, ClientMessage::Authenticate(request)) => self.authenticate(request, auth),
             (false, ClientMessage::Request(_)) => SessionReply {
@@ -67,10 +70,26 @@ impl ConnectionSession {
                 self.handle_request(request, auth, handler, request_timeout)
                     .await
             }
-            (true, ClientMessage::Pair(_) | ClientMessage::Authenticate(_)) => SessionReply {
+            (
+                true,
+                ClientMessage::Hello(_) | ClientMessage::Pair(_) | ClientMessage::Authenticate(_),
+            ) => SessionReply {
                 message: protocol_error(PROTOCOL_ERROR),
                 close: true,
             },
+        }
+    }
+
+    fn hello(&mut self, hello: ClientHello) -> SessionReply {
+        if negotiate(&hello).is_err() {
+            return protocol_rejected();
+        }
+        self.hello = Some(hello);
+        SessionReply {
+            message: ServerMessage::AuthRequired(AuthRequired {
+                methods: vec![AuthMethod::Token],
+            }),
+            close: false,
         }
     }
 
@@ -88,7 +107,16 @@ impl ConnectionSession {
         }
     }
 
+    fn hello_matches(&self, hello: &ClientHello) -> bool {
+        self.hello
+            .as_ref()
+            .is_none_or(|expected| expected.client_id == hello.client_id)
+    }
+
     fn pair(&mut self, mut request: PairRequest, auth: &SharedRemoteAuth) -> SessionReply {
+        if !self.hello_matches(&request.hello) {
+            return protocol_rejected();
+        }
         let protocol = match negotiate(&request.hello) {
             Ok(protocol) => protocol,
             Err(_) => return protocol_rejected(),
@@ -114,6 +142,7 @@ impl ConnectionSession {
         };
         let hello = server_hello(protocol, &grant);
         let response = PairedResponse::new(hello, credential.id(), credential.secret_bytes());
+        self.hello = None;
         self.grant = Some(grant);
         SessionReply {
             message: ServerMessage::Paired(response),
@@ -126,6 +155,9 @@ impl ConnectionSession {
         mut request: AuthenticateRequest,
         auth: &SharedRemoteAuth,
     ) -> SessionReply {
+        if !self.hello_matches(&request.hello) {
+            return protocol_rejected();
+        }
         let protocol = match negotiate(&request.hello) {
             Ok(protocol) => protocol,
             Err(_) => return protocol_rejected(),
@@ -149,6 +181,7 @@ impl ConnectionSession {
             Err(_) => return authentication_rejected(),
         };
         let hello = server_hello(protocol, &grant);
+        self.hello = None;
         self.grant = Some(grant);
         SessionReply {
             message: ServerMessage::Authenticated(hello),
@@ -357,6 +390,63 @@ mod tests {
 
             assert!(reply.close);
             assert!(matches!(reply.message, ServerMessage::Error(_)));
+        });
+    }
+
+    #[test]
+    fn hello_requests_supported_authentication_methods() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut session = ConnectionSession::new();
+            let reply = session
+                .receive(
+                    ClientMessage::Hello(hello()),
+                    &auth(),
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+
+            assert!(!reply.close);
+            let ServerMessage::AuthRequired(required) = reply.message else {
+                panic!("expected auth.required");
+            };
+            assert_eq!(required.methods, vec![AuthMethod::Token]);
+        });
+    }
+
+    #[test]
+    fn hello_then_pair_authenticates() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let auth = auth();
+            let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+            let token = auth.lock().unwrap().begin_pairing(workspace).unwrap();
+            let mut session = ConnectionSession::new();
+            session
+                .receive(
+                    ClientMessage::Hello(hello()),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+            let paired = session
+                .receive(
+                    ClientMessage::Pair(PairRequest::new(hello(), token.secret_bytes())),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+
+            assert!(matches!(paired.message, ServerMessage::Paired(_)));
         });
     }
 
