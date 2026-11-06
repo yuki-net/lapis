@@ -48,4 +48,4 @@ Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立pro
 - `LAPIS_OIDC_JWKS_FILE` または `LAPIS_OIDC_JWKS_URI`（どちらか一方）
 - `LAPIS_OIDC_CLOCK_SKEW_SECONDS`（任意、既定60秒）
 
-`LAPIS_OIDC_JWKS_FILE` は起動時に読み込みます。`LAPIS_OIDC_JWKS_URI` は起動時に取得し、以後5分ごとに更新します。取得に失敗した場合は既存の鍵を保持します。設定の詳細は [認証とセッション](../docs/specs/auth.md) を参照してください。
+`LAPIS_OIDC_JWKS_FILE` は起動時に読み込みます。`LAPIS_OIDC_JWKS_URI` は `https://` の URI を指定し、リダイレクト先も HTTPS に限定されます。起動時に取得し、以後5分ごとに更新します。初回取得に失敗した場合、独立 Host は起動しません。起動後の定期更新に失敗した場合は既存の鍵を保持します。HTTP はテスト専用です。設定の詳細は [認証とセッション](../docs/specs/auth.md) を参照してください。

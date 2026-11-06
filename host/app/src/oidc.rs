@@ -45,7 +45,9 @@ pub fn verifier_from_env() -> Result<Option<Arc<OidcVerifier>>, String> {
         JwksSource::Uri(uri) => {
             let verifier =
                 OidcVerifier::from_remote(config, uri).map_err(|error| error.to_string())?;
-            verifier.start_refresh();
+            verifier
+                .start_refresh()
+                .map_err(|error| error.to_string())?;
             verifier
         }
     };
@@ -65,7 +67,12 @@ fn settings(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Settings>,
     };
     let jwks = match (jwks_file, jwks_uri) {
         (Some(path), None) => JwksSource::File(path),
-        (None, Some(uri)) => JwksSource::Uri(uri),
+        (None, Some(uri)) => {
+            if !uri.starts_with("https://") {
+                return Err(format!("{JWKS_URI} は https:// で指定してください"));
+            }
+            JwksSource::Uri(uri)
+        }
         (Some(_), Some(_)) => {
             return Err(format!(
                 "{JWKS_FILE} と {JWKS_URI} はどちらか一方だけ指定してください"
@@ -154,6 +161,17 @@ mod tests {
             settings.jwks,
             JwksSource::Uri("https://idp.example/jwks".to_owned())
         );
+    }
+
+    #[test]
+    fn http_jwks_uri_is_rejected() {
+        let error = settings(lookup(&[
+            (ISSUER, "https://idp.example"),
+            (AUDIENCE, "lapis"),
+            (JWKS_URI, "http://idp.example/jwks"),
+        ]))
+        .unwrap_err();
+        assert!(error.contains("https://"));
     }
 
     #[test]
