@@ -6,7 +6,7 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 
 ## Host へ接続する
 
-URL と Workspace ID をクエリか localStorage に渡します。初回は pairing token、以降は保存済み credential で接続します。
+URL と Workspace ID をクエリか localStorage に渡します。OIDC を使う場合はログインフォームから IdP で認証します。OIDC を使わない場合は、初回は pairing token、以降は保存済み credential で接続します。
 
 ```text
 http://127.0.0.1:5174/?url=ws://127.0.0.1:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN

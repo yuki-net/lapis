@@ -104,15 +104,14 @@ async function launch(
 }
 
 async function connect(url: string, workspace: string, token: string, backend: string) {
-  const storageKey = oidcStorageKey(url);
-  const idToken = storageKey === null ? null : sessionStorage.getItem(storageKey);
+  const idToken = readOidcToken(url);
   try {
     await launch(backend, url, workspace, token === "" ? null : token, idToken);
   } catch (error) {
-    if (storageKey === null || idToken === null) {
+    if (idToken === null) {
       throw error;
     }
-    sessionStorage.removeItem(storageKey);
+    clearOidcToken(url);
     if (token === "" && !hasCredential(url, workspace)) {
       throw error;
     }
@@ -145,8 +144,49 @@ function oidcStorageKey(hostUrl: string): string | null {
   return origin === null ? null : `lapis.oidc.${origin}`;
 }
 
+function readOidcToken(hostUrl: string): string | null {
+  const key = oidcStorageKey(hostUrl);
+  if (key === null) {
+    return null;
+  }
+  try {
+    return sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeOidcToken(hostUrl: string, token: string): boolean {
+  const key = oidcStorageKey(hostUrl);
+  if (key === null) {
+    return false;
+  }
+  try {
+    sessionStorage.setItem(key, token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function clearOidcToken(hostUrl: string) {
+  const key = oidcStorageKey(hostUrl);
+  if (key === null) {
+    return;
+  }
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // 保存領域へアクセスできない場合は、次の接続でも未認証として扱われる。
+  }
+}
+
 function hasCredential(url: string, workspace: string): boolean {
-  return localStorage.getItem(`${url}|${workspace}`) !== null;
+  try {
+    return localStorage.getItem(`${url}|${workspace}`) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function showLogin(defaultUrl: string, defaultWorkspace: string) {
@@ -250,13 +290,18 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
       ) {
         return;
       }
-      const storageKey = oidcStorageKey(url);
-      if (storageKey === null) {
-        return;
-      }
-      sessionStorage.setItem(storageKey, data.idToken);
       settled = true;
       cleanup();
+      if (!writeOidcToken(url, data.idToken)) {
+        setLoginBusy(false);
+        showLoginError("ID Token を保存できません。ブラウザーの保存領域を確認してください");
+        try {
+          popup?.close();
+        } catch {
+          // 既に閉じている場合は何もしない。
+        }
+        return;
+      }
       void connect(url, workspace, token, backend()).catch((error) => {
         setLoginBusy(false);
         showLoginError(error);
@@ -285,8 +330,7 @@ async function boot() {
       ""
     ).trim();
     const token = (params.get("token") ?? "").trim();
-    const idTokenKey = oidcStorageKey(url);
-    const hasIdToken = idTokenKey !== null && sessionStorage.getItem(idTokenKey) !== null;
+    const hasIdToken = readOidcToken(url) !== null;
 
     if (
       url !== "" &&

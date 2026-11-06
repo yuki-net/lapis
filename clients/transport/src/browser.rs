@@ -270,8 +270,9 @@ pub struct WebClientConnectOptions<'a> {
     pub capabilities: &'a [&'a str],
 }
 
-/// WebSocket経由でHostへ接続し、pairing/credential認証を完了する。
+/// WebSocket経由でHostへ接続し、OIDC / credential / pairing のいずれかで認証を完了する。
 ///
+/// OIDC Token が指定された場合は他の方式へ暗黙にフォールバックしない。
 /// `credential` が失敗し `token` もある場合はpairingへフォールバックする。
 /// 返り値の `Some` はpairing直後のcredential JSON。
 pub async fn connect_web_client(
