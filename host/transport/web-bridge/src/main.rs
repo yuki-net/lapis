@@ -143,6 +143,7 @@ async fn main() -> Result<(), Error> {
         Router::new()
             .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
             .route("/auth/oidc/start", get(oidc::start))
+            .route("/auth/oidc/callback", get(oidc::callback))
             .with_state(bridge),
     )
     .with_graceful_shutdown(async {

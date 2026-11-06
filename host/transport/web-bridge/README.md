@@ -36,11 +36,15 @@ npm run dev -- --host 0.0.0.0 --port 5174
 
 ## OIDC ログイン
 
-次の環境変数がすべて設定された場合、`GET /auth/oidc/start` が有効になります。
+次の環境変数が設定された場合、`GET /auth/oidc/start` と `GET /auth/oidc/callback` が有効になります。
 
 - `LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT`（HTTPS）
+- `LAPIS_WEB_OIDC_TOKEN_ENDPOINT`（HTTPS）
 - `LAPIS_WEB_OIDC_CLIENT_ID`
-- `LAPIS_WEB_OIDC_REDIRECT_URI`（HTTPS）
+- `LAPIS_WEB_OIDC_CLIENT_SECRET`（任意。設定時は HTTP Basic で送信）
+- `LAPIS_WEB_OIDC_REDIRECT_URI`（HTTPS、`/auth/oidc/callback` を指定）
 - `LAPIS_WEB_OIDC_SCOPES`（任意、既定 `openid profile`）
 
-`/auth/oidc/start` は PKCE の verifier / state を生成して IdP へリダイレクトします。state は Bridge のメモリーに5分間保持します。callback と token 交換は未実装です。
+`/auth/oidc/start` は PKCE の verifier / state を生成して IdP へリダイレクトします。state は Bridge のメモリーに5分間保持し、callback で一度だけ消費します。`/auth/oidc/callback` は code を token endpoint で ID Token と交換し、opener へ `{ type: "lapis.oidc", idToken }` を `postMessage` してウィンドウを閉じます。Token は URL・ログ・Cookie に載せません。
+
+Web 側はこの URL をポップアップで開き、`postMessage` の送信元が Bridge の Origin と一致することを確認してください。callback の失敗は 400（state/code 不正）または 502（token endpoint 失敗）になります。
