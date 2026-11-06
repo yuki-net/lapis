@@ -1,11 +1,14 @@
-use std::{collections::HashMap, error::Error, fmt, marker::PhantomData};
+use std::{collections::HashMap, error::Error, fmt, marker::PhantomData, sync::Arc};
 
-use client_api::{CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId};
+use client_api::{
+    AuthMethod, CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId,
+};
 
 use crate::{
     authorization::{AuthorizationError, SessionGrant},
     clock::{Clock, SystemClock},
     credential::{CredentialHandle, CredentialId, CredentialRecord},
+    oidc::OidcVerifier,
     pairing::{PairingToken, secret_from_token},
     random::{OsRandom, RandomError, RandomSource},
     secret::{SECRET_BYTES, constant_time_digest_matches, digest},
@@ -109,6 +112,7 @@ pub enum AuthError {
     CredentialExpired,
     CapacityReached,
     Random(RandomError),
+    OidcUnavailable,
 }
 
 impl fmt::Display for AuthError {
@@ -123,6 +127,7 @@ impl fmt::Display for AuthError {
             Self::CredentialExpired => formatter.write_str("credential has expired"),
             Self::CapacityReached => formatter.write_str("authentication capacity reached"),
             Self::Random(_) => formatter.write_str("authentication secret generation failed"),
+            Self::OidcUnavailable => formatter.write_str("OIDC token is invalid or unavailable"),
         }
     }
 }
@@ -263,16 +268,30 @@ fn hex_decode(value: &str) -> Option<[u8; SECRET_BYTES]> {
     Some(output)
 }
 
+/// Session の所有者。Token credential と OIDC subject を混在させる。
+enum SessionOwner {
+    Credential(CredentialId),
+    Oidc(OidcSession),
+}
+
+struct OidcSession {
+    subject: String,
+    workspace_id: WorkspaceId,
+    capabilities: CapabilitySet,
+    expires_at: u64,
+}
+
 /// Pairing、credential、session grantのライフサイクルを所有する認証サービス。
 pub struct RemoteAuth<C = SystemClock, R = OsRandom> {
     clock: C,
     random: R,
     config: AuthConfig,
     policy: AuthPolicy,
+    oidc: Option<Arc<OidcVerifier>>,
     enabled: bool,
     pairings: HashMap<[u8; SECRET_BYTES], PendingPairing>,
     credentials: HashMap<CredentialId, CredentialRecord>,
-    sessions: HashMap<SessionId, CredentialId>,
+    sessions: HashMap<SessionId, SessionOwner>,
     _marker: PhantomData<fn() -> SessionGrant>,
 }
 
@@ -289,11 +308,26 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             random,
             config,
             policy,
+            oidc: None,
             enabled: false,
             pairings: HashMap::new(),
             credentials: HashMap::new(),
             sessions: HashMap::new(),
             _marker: PhantomData,
+        }
+    }
+
+    /// OIDC を有効化する。Token 方式は引き続き利用できる。
+    pub fn enable_oidc(&mut self, verifier: Arc<OidcVerifier>) {
+        self.oidc = Some(verifier);
+    }
+
+    /// 現在の接続で提示する認証方式。
+    pub fn methods(&self) -> Vec<AuthMethod> {
+        if self.oidc.is_some() {
+            vec![AuthMethod::Token, AuthMethod::Oidc]
+        } else {
+            vec![AuthMethod::Token]
         }
     }
 
@@ -474,15 +508,65 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             granted_workspace,
             granted_capabilities,
         );
-        self.sessions.insert(session_id, credential.id().clone());
+        self.sessions.insert(
+            session_id,
+            SessionOwner::Credential(credential.id().clone()),
+        );
+        Ok(grant)
+    }
+
+    /// OIDC ID Token を検証し、Host の Session を発行する。
+    pub fn authenticate_oidc(
+        &mut self,
+        id_token: &str,
+        _client_id: &ClientId,
+        workspace_id: &WorkspaceId,
+        requested_capabilities: &CapabilitySet,
+    ) -> Result<SessionGrant, AuthError> {
+        self.require_enabled()?;
+        let verifier = self.oidc.as_ref().ok_or(AuthError::OidcUnavailable)?;
+        let claims = verifier
+            .verify(id_token)
+            .map_err(|_| AuthError::OidcUnavailable)?;
+        let now = self.clock.now_unix_seconds();
+        if claims.expires_at <= now {
+            return Err(AuthError::OidcUnavailable);
+        }
+        let granted = requested_capabilities.intersection(self.policy.allowed_capabilities());
+        let capabilities = CapabilitySet::try_new(
+            granted
+                .iter()
+                .filter(|capability| !capability.as_str().starts_with("host."))
+                .cloned(),
+        )
+        .expect("intersection cannot exceed capability limit");
+        let expires_at = claims
+            .expires_at
+            .min(self.expiry(self.config.credential_lifetime.seconds()));
+        let session_id = self.generate_session_id()?;
+        let grant = SessionGrant::from_authenticated(
+            session_id.clone(),
+            workspace_id.clone(),
+            capabilities.clone(),
+        );
+        self.sessions.insert(
+            session_id,
+            SessionOwner::Oidc(OidcSession {
+                subject: claims.subject,
+                workspace_id: workspace_id.clone(),
+                capabilities,
+                expires_at,
+            }),
+        );
         Ok(grant)
     }
 
     pub fn revoke(&mut self, credential_id: &CredentialId) -> bool {
         let removed = self.credentials.remove(credential_id).is_some();
         if removed {
-            self.sessions
-                .retain(|_, session_credential| session_credential != credential_id);
+            self.sessions.retain(
+                |_, owner| !matches!(owner, SessionOwner::Credential(id) if id == credential_id),
+            );
         }
         removed
     }
@@ -522,16 +606,31 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
 
     pub(crate) fn require_active_session(&self, grant: &SessionGrant) -> Result<(), AuthError> {
         self.require_enabled()?;
-        let credential_id = self
+        let owner = self
             .sessions
             .get(grant.session_id())
             .ok_or(AuthError::CredentialUnavailable)?;
-        let record = self
-            .credentials
-            .get(credential_id)
-            .ok_or(AuthError::CredentialUnavailable)?;
-        if self.clock.now_unix_seconds() >= record.expires_at {
-            return Err(AuthError::CredentialExpired);
+        match owner {
+            SessionOwner::Credential(credential_id) => {
+                let record = self
+                    .credentials
+                    .get(credential_id)
+                    .ok_or(AuthError::CredentialUnavailable)?;
+                if self.clock.now_unix_seconds() >= record.expires_at {
+                    return Err(AuthError::CredentialExpired);
+                }
+            }
+            SessionOwner::Oidc(session) => {
+                if self.clock.now_unix_seconds() >= session.expires_at {
+                    return Err(AuthError::CredentialExpired);
+                }
+                if &session.workspace_id != grant.workspace_id()
+                    || &session.capabilities != grant.capabilities()
+                {
+                    return Err(AuthError::CredentialBindingMismatch);
+                }
+                let _ = &session.subject;
+            }
         }
         Ok(())
     }
@@ -540,8 +639,10 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         let now = self.clock.now_unix_seconds();
         self.credentials
             .retain(|_, credential| credential.expires_at > now);
-        self.sessions
-            .retain(|_, credential_id| self.credentials.contains_key(credential_id));
+        self.sessions.retain(|_, owner| match owner {
+            SessionOwner::Credential(credential_id) => self.credentials.contains_key(credential_id),
+            SessionOwner::Oidc(session) => session.expires_at > now,
+        });
     }
 
     fn generate_session_id(&mut self) -> Result<SessionId, AuthError> {

@@ -31,6 +31,16 @@ class ProtocolSerializationTest {
     }
 
     @Test
+    fun oidcMessageMatchesRustFixture() {
+        val json =
+            """{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"""
+
+        val message = lapisJson.decodeFromString<ClientMessage>(json)
+
+        assertEquals(json, lapisJson.encodeToString(message))
+    }
+
+    @Test
     fun requestEnvelopeMatchesRustFixture() {
         val json = """{"request_id":"request-1","type":"workspace.list","payload":{}}"""
 

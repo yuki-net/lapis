@@ -34,6 +34,8 @@ pub enum ClientMessage {
     Pair(PairRequest),
     #[serde(rename = "auth.authenticate")]
     Authenticate(AuthenticateRequest),
+    #[serde(rename = "auth.oidc")]
+    Oidc(OidcRequest),
     #[serde(rename = "request")]
     Request(RequestEnvelope),
 }
@@ -86,6 +88,28 @@ impl AuthenticateRequest {
 
     pub fn take_secret(&mut self) -> Result<[u8; SECRET_BYTES], InvalidSecretHex> {
         self.secret.take_bytes()
+    }
+}
+
+/// OIDC Provider が発行した ID Token を Host へ提示する。
+#[derive(Serialize, Deserialize)]
+pub struct OidcRequest {
+    pub hello: ClientHello,
+    pub workspace_id: WorkspaceId,
+    id_token: String,
+}
+
+impl OidcRequest {
+    pub fn new(hello: ClientHello, workspace_id: WorkspaceId, id_token: String) -> Self {
+        Self {
+            hello,
+            workspace_id,
+            id_token,
+        }
+    }
+
+    pub fn id_token(&self) -> &str {
+        &self.id_token
     }
 }
 

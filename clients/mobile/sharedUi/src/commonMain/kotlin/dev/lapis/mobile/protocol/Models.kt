@@ -75,6 +75,13 @@ data class AuthenticateRequest(
 )
 
 @Serializable
+data class OidcRequest(
+    val hello: ClientHello,
+    @SerialName("workspace_id") val workspaceId: String,
+    @SerialName("id_token") val idToken: String,
+)
+
+@Serializable
 data class ProtocolError(
     val code: String,
     val detail: String? = null,
@@ -113,6 +120,10 @@ sealed interface ClientMessage {
     @Serializable
     @SerialName("auth.authenticate")
     data class Authenticate(val payload: AuthenticateRequest) : ClientMessage
+
+    @Serializable
+    @SerialName("auth.oidc")
+    data class Oidc(val payload: OidcRequest) : ClientMessage
 
     @Serializable
     @SerialName("request")

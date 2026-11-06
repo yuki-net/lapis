@@ -148,6 +148,9 @@ impl fmt::Display for OidcError {
 
 impl Error for OidcError {}
 
+#[cfg(test)]
+pub(crate) use tests::{test_token, test_verifier};
+
 #[derive(Deserialize)]
 struct Claims {
     sub: String,
@@ -210,6 +213,20 @@ QpNdCy1VwA1iKz1CyJaSeQ==
 
     fn verifier() -> OidcVerifier {
         OidcVerifier::from_jwks_json(config(), TEST_JWKS).unwrap()
+    }
+
+    pub(crate) fn test_verifier() -> OidcVerifier {
+        verifier()
+    }
+
+    pub(crate) fn test_token(subject: &str, expires_at: u64) -> String {
+        let claims = json!({
+            "sub": subject,
+            "iss": "https://idp.example",
+            "aud": "lapis",
+            "exp": expires_at,
+        });
+        token(claims)
     }
 
     fn token(claims: serde_json::Value) -> String {
