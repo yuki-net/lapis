@@ -130,10 +130,10 @@ fn run() -> Result<(), Error> {
         ),
         AuthPolicy::new(host::supported_capabilities()),
     )));
-    if let Some(verifier) = host::oidc_verifier_from_env()? {
+    if let Some(oidc) = host::oidc_from_env()? {
         auth.lock()
             .map_err(|_| "authentication unavailable")?
-            .enable_oidc(verifier);
+            .enable_oidc(oidc.verifier, oidc.client);
     }
     let mut credential_store = match &credentials_path {
         Some(path) => match CredentialStore::open(path) {

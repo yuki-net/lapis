@@ -89,12 +89,15 @@ impl ConnectionSession {
             return protocol_rejected();
         }
         self.hello = Some(hello);
-        let methods = auth
+        let required = auth
             .lock()
-            .map(|auth| auth.methods())
-            .unwrap_or_else(|_| vec![AuthMethod::Token]);
+            .map(|auth| auth.auth_required())
+            .unwrap_or(AuthRequired {
+                methods: vec![AuthMethod::Token],
+                oidc: None,
+            });
         SessionReply {
-            message: ServerMessage::AuthRequired(AuthRequired { methods }),
+            message: ServerMessage::AuthRequired(required),
             close: false,
         }
     }
@@ -339,6 +342,7 @@ fn error_response(request: &RequestEnvelope, code: &str) -> ResponseEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use client_api::OidcClientConfig;
     use std::time::Duration;
 
     use client_api::{
@@ -620,11 +624,19 @@ mod tests {
         });
     }
 
+    fn oidc_client() -> OidcClientConfig {
+        OidcClientConfig {
+            issuer: "https://idp.example".to_owned(),
+            client_id: "lapis".to_owned(),
+            scopes: vec!["openid".to_owned(), "profile".to_owned()],
+        }
+    }
+
     fn oidc_auth() -> SharedRemoteAuth {
         let auth = auth();
         auth.lock()
             .unwrap()
-            .enable_oidc(Arc::new(crate::oidc::test_verifier()));
+            .enable_oidc(Arc::new(crate::oidc::test_verifier()), oidc_client());
         auth
     }
 
@@ -648,6 +660,7 @@ mod tests {
                 panic!("expected auth required");
             };
             assert_eq!(required.methods, vec![AuthMethod::Token, AuthMethod::Oidc]);
+            assert_eq!(required.oidc, Some(oidc_client()));
         });
     }
 

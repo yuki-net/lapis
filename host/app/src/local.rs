@@ -427,8 +427,8 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
         AuthPolicy::new(owner_capabilities.clone()),
     );
     auth.enable();
-    match crate::oidc_verifier_from_env() {
-        Ok(Some(verifier)) => auth.enable_oidc(verifier),
+    match crate::oidc_from_env() {
+        Ok(Some(oidc)) => auth.enable_oidc(oidc.verifier, oidc.client),
         Ok(None) => {}
         Err(error) => {
             eprintln!("OIDC設定エラー: {error}");

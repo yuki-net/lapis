@@ -1,7 +1,8 @@
 use std::{collections::HashMap, error::Error, fmt, marker::PhantomData, sync::Arc};
 
 use client_api::{
-    AuthMethod, CapabilityId, CapabilitySet, ClientId, RequestBody, SessionId, WorkspaceId,
+    AuthMethod, AuthRequired, CapabilityId, CapabilitySet, ClientId, OidcClientConfig, RequestBody,
+    SessionId, WorkspaceId,
 };
 
 use crate::{
@@ -288,6 +289,7 @@ pub struct RemoteAuth<C = SystemClock, R = OsRandom> {
     config: AuthConfig,
     policy: AuthPolicy,
     oidc: Option<Arc<OidcVerifier>>,
+    oidc_client: Option<OidcClientConfig>,
     enabled: bool,
     pairings: HashMap<[u8; SECRET_BYTES], PendingPairing>,
     credentials: HashMap<CredentialId, CredentialRecord>,
@@ -309,6 +311,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             config,
             policy,
             oidc: None,
+            oidc_client: None,
             enabled: false,
             pairings: HashMap::new(),
             credentials: HashMap::new(),
@@ -318,8 +321,9 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     }
 
     /// OIDC を有効化する。Token 方式は引き続き利用できる。
-    pub fn enable_oidc(&mut self, verifier: Arc<OidcVerifier>) {
+    pub fn enable_oidc(&mut self, verifier: Arc<OidcVerifier>, client: OidcClientConfig) {
         self.oidc = Some(verifier);
+        self.oidc_client = Some(client);
     }
 
     /// 現在の接続で提示する認証方式。
@@ -328,6 +332,14 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             vec![AuthMethod::Token, AuthMethod::Oidc]
         } else {
             vec![AuthMethod::Token]
+        }
+    }
+
+    /// 接続直後に Client へ返す認証要件。
+    pub fn auth_required(&self) -> AuthRequired {
+        AuthRequired {
+            methods: self.methods(),
+            oidc: self.oidc_client.clone(),
         }
     }
 

@@ -41,6 +41,27 @@ class ProtocolSerializationTest {
     }
 
     @Test
+    fun authRequiredMatchesRustFixture() {
+        val json =
+            """{"type":"auth.required","payload":{"methods":["token","oidc"],"oidc":{"issuer":"https://idp.example","client_id":"lapis","scopes":["openid","profile"]}}}"""
+
+        val message = lapisJson.decodeFromString<ServerMessage>(json)
+        val encoded = lapisJson.encodeToString<ServerMessage>(message)
+
+        val required = message as ServerMessage.AuthRequired
+        assertEquals(listOf(AuthMethod.Token, AuthMethod.Oidc), required.payload.methods)
+        assertEquals(
+            OidcClientConfig(
+                issuer = "https://idp.example",
+                clientId = "lapis",
+                scopes = listOf("openid", "profile"),
+            ),
+            required.payload.oidc,
+        )
+        assertEquals(json, encoded)
+    }
+
+    @Test
     fun requestEnvelopeMatchesRustFixture() {
         val json = """{"request_id":"request-1","type":"workspace.list","payload":{}}"""
 

@@ -20,6 +20,25 @@ enum class ClientKind {
 }
 
 @Serializable
+enum class AuthMethod {
+    @SerialName("token") Token,
+    @SerialName("oidc") Oidc,
+}
+
+@Serializable
+data class OidcClientConfig(
+    val issuer: String,
+    @SerialName("client_id") val clientId: String,
+    val scopes: List<String> = emptyList(),
+)
+
+@Serializable
+data class AuthRequired(
+    val methods: List<AuthMethod>,
+    val oidc: OidcClientConfig? = null,
+)
+
+@Serializable
 data class ProtocolVersion(val major: Int, val minor: Int)
 
 /// Rust `ProtocolRange` と同じ wire 形式。`min`/`max` ではなく範囲を直接持つ。
@@ -132,6 +151,10 @@ sealed interface ClientMessage {
 
 @Serializable
 sealed interface ServerMessage {
+    @Serializable
+    @SerialName("auth.required")
+    data class AuthRequired(val payload: dev.lapis.mobile.protocol.AuthRequired) : ServerMessage
+
     @Serializable
     @SerialName("auth.paired")
     data class Paired(val payload: PairedResponse) : ServerMessage

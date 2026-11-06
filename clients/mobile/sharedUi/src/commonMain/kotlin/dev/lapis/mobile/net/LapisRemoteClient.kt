@@ -32,6 +32,9 @@ class LapisRemoteClient(
     private val _status = MutableStateFlow<ConnectionStatus>(ConnectionStatus.Disconnected)
     val status: StateFlow<ConnectionStatus> = _status.asStateFlow()
 
+    private val _authRequired = MutableStateFlow<AuthRequired?>(null)
+    val authRequired: StateFlow<AuthRequired?> = _authRequired.asStateFlow()
+
     private val _events = MutableSharedFlow<EventEnvelope>(extraBufferCapacity = 64)
     val events: SharedFlow<EventEnvelope> = _events.asSharedFlow()
 
@@ -49,6 +52,7 @@ class LapisRemoteClient(
         clientKind: ClientKind = ClientKind.Android,
     ) {
         _status.value = ConnectionStatus.Connecting
+        _authRequired.value = null
         try {
             client.webSocket(host = host, port = port, path = "/remote") {
                 session = this
@@ -85,6 +89,9 @@ class LapisRemoteClient(
 
     private suspend fun handleServerMessage(message: ServerMessage) {
         when (message) {
+            is ServerMessage.AuthRequired -> {
+                _authRequired.value = message.payload
+            }
             is ServerMessage.Authenticated -> {
                 _status.value = ConnectionStatus.Authenticated(message.payload)
             }
