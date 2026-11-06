@@ -195,6 +195,7 @@ enum Command {
     SaveWorkbench {
         view: ConversationViewState,
     },
+    RetryWorkbenchLocal,
 }
 
 /// Host接続の設定。ページのクエリかlocalStorageから渡される。
@@ -911,42 +912,57 @@ async fn handle(
             }
         }
         Command::SaveWorkbench { view } => {
-            let (workspace, plan) = {
-                let mut replica = replica.borrow_mut();
-                let workspace = api_workspace(&replica.workspace);
-                let plan = replica.workbench.stage(view)?;
-                (workspace, plan)
-            };
-            let WorkbenchWritePlan::Update { revision, view } = plan else {
-                return Err("Workbenchが競合しています".into());
-            };
-            let encoded = lapis_client_api::encode_workbench_view(&view)
-                .map_err(|error| error.to_string())?;
-            let body = request(
-                connection,
-                RequestBody::WorkbenchPut(WorkbenchPutRequest {
-                    workspace_id: workspace,
-                    expected_revision: revision,
-                    view: encoded,
-                }),
-            )
-            .await?;
-            let update = match body {
-                ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) => {
-                    WorkbenchUpdate::Updated(
-                        versioned_workbench(snapshot).ok_or("WorkbenchPut応答が不正です")?,
-                    )
-                }
-                ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)) => {
-                    WorkbenchUpdate::Conflict(
-                        versioned_workbench(snapshot).ok_or("WorkbenchPut応答が不正です")?,
-                    )
-                }
-                _ => return Err("WorkbenchPut応答が不正です".into()),
-            };
-            replica.borrow_mut().workbench.finish(update)?;
+            let plan = replica.borrow_mut().workbench.stage(view)?;
+            write_workbench(connection, replica, plan).await?;
+        }
+        Command::RetryWorkbenchLocal => {
+            let pending = replica.borrow_mut().workbench.prepare_retry()?;
+            let plan = replica.borrow_mut().workbench.stage(pending)?;
+            write_workbench(connection, replica, plan).await?;
         }
     }
+    Ok(())
+}
+
+/// 確定済みrevisionを基準にWorkbenchを書き込み、応答で競合状態を更新する。
+async fn write_workbench(
+    connection: &BrowserConnection,
+    replica: &Rc<RefCell<Replica>>,
+    plan: WorkbenchWritePlan,
+) -> Result<(), String> {
+    let (workspace, revision, view) = {
+        let replica = replica.borrow();
+        let workspace = api_workspace(&replica.workspace);
+        match plan {
+            WorkbenchWritePlan::Update { revision, view } => (workspace, revision, view),
+            WorkbenchWritePlan::Conflict(_) => return Err("Workbenchが競合しています".into()),
+        }
+    };
+    let encoded =
+        lapis_client_api::encode_workbench_view(&view).map_err(|error| error.to_string())?;
+    let body = request(
+        connection,
+        RequestBody::WorkbenchPut(WorkbenchPutRequest {
+            workspace_id: workspace,
+            expected_revision: revision,
+            view: encoded,
+        }),
+    )
+    .await?;
+    let update = match body {
+        ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)) => {
+            WorkbenchUpdate::Updated(
+                versioned_workbench(snapshot).ok_or("WorkbenchPut応答が不正です")?,
+            )
+        }
+        ResponseBody::WorkbenchPut(WorkbenchPutResponse::Conflict(snapshot)) => {
+            WorkbenchUpdate::Conflict(
+                versioned_workbench(snapshot).ok_or("WorkbenchPut応答が不正です")?,
+            )
+        }
+        _ => return Err("WorkbenchPut応答が不正です".into()),
+    };
+    replica.borrow_mut().workbench.finish(update)?;
     Ok(())
 }
 
@@ -1474,8 +1490,13 @@ impl crate::ConversationRepository for WebBackend {
                 .or_else(|| records.first())
                 .ok_or_else(|| WorkspaceError::new("保存するConversationがありません"))?;
             let replica = state.replica.borrow();
+            if replica.workbench.confirmed().is_none() {
+                return Err(WorkspaceError::new("Workbenchが初期化されていません"));
+            }
             if replica.workbench.conflict().is_some() {
-                return Err(WorkspaceError::new("Workbenchが競合しています"));
+                return Err(WorkspaceError::new(
+                    "Workbenchが競合しています。Hostの状態を採用するか、ローカルの変更を再送してください",
+                ));
             }
             let workspace = shared_workspace(&record.workspace, replica.workspace.clone())?;
             let view = ConversationViewState {
@@ -1488,6 +1509,33 @@ impl crate::ConversationRepository for WebBackend {
                 .commands
                 .unbounded_send(Command::SaveWorkbench { view });
             Ok(())
+        })
+        .map_err(WorkspaceError::new)?
+    }
+
+    fn accept_workbench_remote(&self) -> Result<Option<ConversationViewState>, WorkspaceError> {
+        self.with(|state| {
+            let state = state
+                .replica
+                .borrow_mut()
+                .workbench
+                .accept_remote()
+                .map_err(WorkspaceError::new)?;
+            let mut view = state
+                .view
+                .ok_or_else(|| WorkspaceError::new("HostのWorkbench状態が不正です"))?;
+            view.workspace = None;
+            Ok(Some(view))
+        })
+        .map_err(WorkspaceError::new)?
+    }
+
+    fn retry_workbench_local(&self) -> Result<(), WorkspaceError> {
+        self.with(|state| {
+            state
+                .commands
+                .unbounded_send(Command::RetryWorkbenchLocal)
+                .map_err(|_| WorkspaceError::new("Hostのコマンドを送信できません"))
         })
         .map_err(WorkspaceError::new)?
     }

@@ -287,6 +287,27 @@ impl ConversationRepository for HostConversationRepository {
         }
         Ok(())
     }
+
+    fn accept_workbench_remote(&self) -> Result<Option<ConversationViewState>, WorkspaceError> {
+        let mut sync = self
+            .sync
+            .lock()
+            .map_err(|_| WorkspaceError::new("Workbench同期のlockに失敗しました"))?;
+        let state = sync.accept_remote().map_err(WorkspaceError::new)?;
+        Ok(state.view.map(|mut view| {
+            view.workspace = None;
+            view
+        }))
+    }
+
+    fn retry_workbench_local(&self) -> Result<(), WorkspaceError> {
+        let mut sync = self
+            .sync
+            .lock()
+            .map_err(|_| WorkspaceError::new("Workbench同期のlockに失敗しました"))?;
+        sync.retry_local().map_err(WorkspaceError::new)?;
+        Ok(())
+    }
 }
 
 fn atomic_json_write(path: &Path, value: &impl Serialize) -> Result<(), WorkspaceError> {

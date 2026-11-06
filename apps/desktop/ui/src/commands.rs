@@ -45,5 +45,7 @@ pub(crate) enum UiCommand {
         view: ViewInstanceKey,
         scope: ViewScope,
     },
+    AcceptRemoteWorkbench,
+    RetryLocalWorkbench,
     QuickSearch,
 }
