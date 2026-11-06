@@ -7,13 +7,14 @@ use std::path::Path;
 
 use client_api::{
     AuthenticateRequest, CURRENT_PROTOCOL, ClientHello, ClientId, ClientKind, ClientMessage,
-    CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence, INVALID_REQUEST,
+    CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence, INVALID_REQUEST, OidcRequest,
     PairedResponse, ProtocolError, ProtocolRange, RequestBody, RequestEnvelope, RequestId,
     ServerHello, ServerMessage, SessionId, WorkspaceId, WorkspaceListRequest,
 };
 
 const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
 const AUTHENTICATE: &str = r#"{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"#;
+const OIDC: &str = r#"{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":5,"maximum_minor":5},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"#;
 const REQUEST_ENVELOPE: &str = r#"{"request_id":"request-1","type":"workspace.list","payload":{}}"#;
 const EVENT_ENVELOPE: &str =
     r#"{"event_sequence":7,"type":"workspace.changed","payload":{"workspace_id":"workspace-1"}}"#;
@@ -50,6 +51,17 @@ fn authenticate_message_matches_mobile_fixture() {
     );
     let json = serde_json::to_string(&ClientMessage::Authenticate(request)).unwrap();
     assert_eq!(json, AUTHENTICATE);
+}
+
+#[test]
+fn oidc_message_matches_mobile_fixture() {
+    let request = OidcRequest::new(
+        hello(),
+        WorkspaceId::try_new("workspace-1").unwrap(),
+        "test-token".to_owned(),
+    );
+    let json = serde_json::to_string(&ClientMessage::Oidc(request)).unwrap();
+    assert_eq!(json, OIDC);
 }
 
 #[test]
@@ -104,6 +116,7 @@ fn mobile_fixtures_are_in_sync() {
     for fixture in [
         CLIENT_HELLO,
         AUTHENTICATE,
+        OIDC,
         REQUEST_ENVELOPE,
         EVENT_ENVELOPE,
         PROTOCOL_ERROR,

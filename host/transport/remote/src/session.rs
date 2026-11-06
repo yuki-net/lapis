@@ -14,8 +14,8 @@ use crate::{
     AccessError, AuthError, CredentialHandle, PairingToken, RemoteAuth, RemoteRequestHandler,
     SessionGrant,
     wire::{
-        AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, PairRequest,
-        PairedResponse, ServerMessage, protocol_error,
+        AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, OidcRequest,
+        PairRequest, PairedResponse, ServerMessage, protocol_error,
     },
 };
 
@@ -59,9 +59,10 @@ impl ConnectionSession {
         request_timeout: Duration,
     ) -> SessionReply {
         match (self.grant.is_some(), message) {
-            (false, ClientMessage::Hello(hello)) => self.hello(hello),
+            (false, ClientMessage::Hello(hello)) => self.hello(hello, auth),
             (false, ClientMessage::Pair(request)) => self.pair(request, auth),
             (false, ClientMessage::Authenticate(request)) => self.authenticate(request, auth),
+            (false, ClientMessage::Oidc(request)) => self.oidc(request, auth),
             (false, ClientMessage::Request(_)) => SessionReply {
                 message: protocol_error(UNAUTHORIZED),
                 close: true,
@@ -72,7 +73,10 @@ impl ConnectionSession {
             }
             (
                 true,
-                ClientMessage::Hello(_) | ClientMessage::Pair(_) | ClientMessage::Authenticate(_),
+                ClientMessage::Hello(_)
+                | ClientMessage::Pair(_)
+                | ClientMessage::Authenticate(_)
+                | ClientMessage::Oidc(_),
             ) => SessionReply {
                 message: protocol_error(PROTOCOL_ERROR),
                 close: true,
@@ -80,15 +84,17 @@ impl ConnectionSession {
         }
     }
 
-    fn hello(&mut self, hello: ClientHello) -> SessionReply {
+    fn hello(&mut self, hello: ClientHello, auth: &SharedRemoteAuth) -> SessionReply {
         if negotiate(&hello).is_err() {
             return protocol_rejected();
         }
         self.hello = Some(hello);
+        let methods = auth
+            .lock()
+            .map(|auth| auth.methods())
+            .unwrap_or_else(|_| vec![AuthMethod::Token]);
         SessionReply {
-            message: ServerMessage::AuthRequired(AuthRequired {
-                methods: vec![AuthMethod::Token],
-            }),
+            message: ServerMessage::AuthRequired(AuthRequired { methods }),
             close: false,
         }
     }
@@ -176,6 +182,37 @@ impl ConnectionSession {
             .map_err(|_| AuthError::CredentialUnavailable)
             .and_then(|mut auth| {
                 auth.authenticate(&credential, &request.hello.client_id, &request.workspace_id)
+            }) {
+            Ok(grant) => grant,
+            Err(_) => return authentication_rejected(),
+        };
+        let hello = server_hello(protocol, &grant);
+        self.hello = None;
+        self.grant = Some(grant);
+        SessionReply {
+            message: ServerMessage::Authenticated(hello),
+            close: false,
+        }
+    }
+
+    fn oidc(&mut self, request: OidcRequest, auth: &SharedRemoteAuth) -> SessionReply {
+        if !self.hello_matches(&request.hello) {
+            return protocol_rejected();
+        }
+        let protocol = match negotiate(&request.hello) {
+            Ok(protocol) => protocol,
+            Err(_) => return protocol_rejected(),
+        };
+        let grant = match auth
+            .lock()
+            .map_err(|_| AuthError::OidcUnavailable)
+            .and_then(|mut auth| {
+                auth.authenticate_oidc(
+                    request.id_token(),
+                    &request.hello.client_id,
+                    &request.workspace_id,
+                    &request.hello.requested_capabilities,
+                )
             }) {
             Ok(grant) => grant,
             Err(_) => return authentication_rejected(),
@@ -580,6 +617,104 @@ mod tests {
             assert!(error.retryable);
             assert!(!reply.close);
             session.disconnect(&auth, &PendingHandler);
+        });
+    }
+
+    fn oidc_auth() -> SharedRemoteAuth {
+        let auth = auth();
+        auth.lock()
+            .unwrap()
+            .enable_oidc(Arc::new(crate::oidc::test_verifier()));
+        auth
+    }
+
+    #[test]
+    fn hello_advertises_oidc_when_enabled() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut session = ConnectionSession::new();
+            let reply = session
+                .receive(
+                    ClientMessage::Hello(hello()),
+                    &oidc_auth(),
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+            let ServerMessage::AuthRequired(required) = reply.message else {
+                panic!("expected auth required");
+            };
+            assert_eq!(required.methods, vec![AuthMethod::Token, AuthMethod::Oidc]);
+        });
+    }
+
+    #[test]
+    fn oidc_authentication_creates_session() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let auth = oidc_auth();
+            let token =
+                crate::oidc::test_token("alice", jsonwebtoken::get_current_timestamp() + 300);
+            let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+            let mut session = ConnectionSession::new();
+            session
+                .receive(
+                    ClientMessage::Hello(hello()),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+            let reply = session
+                .receive(
+                    ClientMessage::Oidc(OidcRequest::new(hello(), workspace, token)),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert!(matches!(reply.message, ServerMessage::Authenticated(_)));
+            assert!(session.is_authenticated());
+        });
+    }
+
+    #[test]
+    fn expired_oidc_token_is_rejected() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let auth = oidc_auth();
+            let token =
+                crate::oidc::test_token("alice", jsonwebtoken::get_current_timestamp() - 120);
+            let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+            let mut session = ConnectionSession::new();
+            session
+                .receive(
+                    ClientMessage::Hello(hello()),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+            let reply = session
+                .receive(
+                    ClientMessage::Oidc(OidcRequest::new(hello(), workspace, token)),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+            assert!(matches!(reply.message, ServerMessage::Error(_)));
+            assert!(reply.close);
+            assert!(!session.is_authenticated());
         });
     }
 

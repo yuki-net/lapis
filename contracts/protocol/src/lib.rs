@@ -52,8 +52,8 @@ pub use ids::{
 };
 pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
 pub use remote_wire::{
-    AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, InvalidSecretHex, PairRequest,
-    PairedResponse, ServerMessage,
+    AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, InvalidSecretHex, OidcRequest,
+    PairRequest, PairedResponse, ServerMessage,
 };
 pub use request::RequestBody;
 pub use response::ResponseBody;

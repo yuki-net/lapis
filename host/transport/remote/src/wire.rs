@@ -1,7 +1,7 @@
 pub use ::wire::{REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL};
 pub use client_api::{
     AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, InvalidSecretHex,
-    PairRequest, PairedResponse, ServerMessage,
+    OidcRequest, PairRequest, PairedResponse, ServerMessage,
 };
 
 pub(crate) fn protocol_error(code: &str) -> ServerMessage {
