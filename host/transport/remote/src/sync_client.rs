@@ -12,8 +12,16 @@ use std::{
     time::Duration,
 };
 use tokio::time::timeout;
+use zeroize::Zeroizing;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
+
+/// Hostへ提示する認証材料。
+#[derive(Clone)]
+pub enum QuicAuth {
+    Credential(Arc<CredentialHandle>),
+    Oidc(Arc<Zeroizing<String>>),
+}
 
 #[derive(Clone)]
 pub struct QuicConnectionConfig {
@@ -22,7 +30,7 @@ pub struct QuicConnectionConfig {
     pub certificate: CertificateDer<'static>,
     pub hello: ClientHello,
     pub workspace_id: WorkspaceId,
-    pub credential: Arc<CredentialHandle>,
+    pub auth: QuicAuth,
 }
 
 impl QuicConnectionConfig {
@@ -62,8 +70,41 @@ impl QuicConnectionConfig {
             certificate,
             hello,
             workspace_id,
-            credential,
+            auth: QuicAuth::Credential(credential),
         })
+    }
+
+    /// 保存済みの OIDC ID Token で再接続する設定を作る。
+    pub fn oidc(
+        address: SocketAddr,
+        server_name: String,
+        certificate: CertificateDer<'static>,
+        hello: ClientHello,
+        workspace_id: WorkspaceId,
+        id_token: String,
+    ) -> Self {
+        Self {
+            address,
+            server_name,
+            certificate,
+            hello,
+            workspace_id,
+            auth: QuicAuth::Oidc(Arc::new(Zeroizing::new(id_token))),
+        }
+    }
+
+    pub fn credential(&self) -> Option<&Arc<CredentialHandle>> {
+        match &self.auth {
+            QuicAuth::Credential(credential) => Some(credential),
+            QuicAuth::Oidc(_) => None,
+        }
+    }
+
+    pub fn id_token(&self) -> Option<&str> {
+        match &self.auth {
+            QuicAuth::Credential(_) => None,
+            QuicAuth::Oidc(id_token) => Some(id_token.as_str()),
+        }
     }
 
     async fn authenticate(&self) -> Result<QuicClient, Error> {
@@ -74,14 +115,22 @@ impl QuicConnectionConfig {
             RemoteLimits::default(),
         )
         .await?;
-        client
-            .send(&ClientMessage::Authenticate(AuthenticateRequest::new(
+        let message = match &self.auth {
+            QuicAuth::Credential(credential) => {
+                ClientMessage::Authenticate(AuthenticateRequest::new(
+                    self.hello.clone(),
+                    self.workspace_id.clone(),
+                    credential.id(),
+                    credential.secret_bytes(),
+                ))
+            }
+            QuicAuth::Oidc(id_token) => ClientMessage::Oidc(OidcRequest::new(
                 self.hello.clone(),
                 self.workspace_id.clone(),
-                self.credential.id(),
-                self.credential.secret_bytes(),
-            )))
-            .await?;
+                id_token.to_string(),
+            )),
+        };
+        client.send(&message).await?;
         let message = timeout(Duration::from_secs(10), client.recv()).await??;
         match message {
             ServerMessage::Authenticated(hello) if hello.protocol == CURRENT_PROTOCOL => Ok(client),
@@ -413,6 +462,35 @@ async fn exchange(
 #[cfg(test)]
 mod tests {
     use super::RequestReply;
+    use super::*;
+    use crate::{
+        AuthConfig, AuthPolicy, CredentialLifetime, PairingLifetime, QuicServer, RemoteAuth,
+        RemoteRequestHandler, RemoteResponseFuture, SessionGrant, tls13_server_config,
+    };
+    use rustls::pki_types::PrivateKeyDer;
+    use std::sync::Mutex;
+
+    struct NoRequests;
+
+    impl RemoteRequestHandler for NoRequests {
+        fn handle(
+            &self,
+            _: SessionGrant,
+            _: client_api::RequestEnvelope,
+        ) -> RemoteResponseFuture<'_> {
+            Box::pin(async { panic!("authentication must not dispatch requests") })
+        }
+    }
+
+    fn hello() -> ClientHello {
+        ClientHello {
+            protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
+            client_id: ClientId::try_new("desktop-oidc-test").unwrap(),
+            client_name: "Desktop".to_owned(),
+            client_kind: ClientKind::Desktop,
+            requested_capabilities: Default::default(),
+        }
+    }
 
     #[test]
     fn cancelled_async_request_is_detected_before_dispatch() {
@@ -421,5 +499,59 @@ mod tests {
         assert!(!reply.is_cancelled());
         drop(receiver);
         assert!(reply.is_cancelled());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn oidc_connection_authenticates_with_a_stored_id_token() {
+        let auth = Arc::new(Mutex::new(RemoteAuth::system(
+            AuthConfig::new(
+                PairingLifetime::new(10).unwrap(),
+                CredentialLifetime::new(20).unwrap(),
+            ),
+            AuthPolicy::new(Default::default()),
+        )));
+        {
+            let mut auth = auth.lock().unwrap();
+            auth.enable();
+            auth.enable_oidc(
+                Arc::new(crate::oidc::test_verifier()),
+                client_api::OidcClientConfig {
+                    issuer: "https://idp.example".to_owned(),
+                    client_id: "lapis".to_owned(),
+                    scopes: vec!["openid".to_owned()],
+                },
+            );
+        }
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let certificate = certified.cert.der().clone();
+        let tls = tls13_server_config(
+            vec![certificate.clone()],
+            PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into()),
+        )
+        .unwrap();
+        let server = QuicServer::bind(
+            "127.0.0.1:0".parse().unwrap(),
+            tls,
+            auth,
+            Arc::new(NoRequests),
+            RemoteLimits::default(),
+        )
+        .await
+        .unwrap();
+        let address = server.listening_address().unwrap();
+        let id_token =
+            crate::oidc::test_token("alice", jsonwebtoken::get_current_timestamp() + 300);
+        let config = QuicConnectionConfig::oidc(
+            address,
+            "localhost".to_owned(),
+            certificate,
+            hello(),
+            WorkspaceId::try_new("workspace-1").unwrap(),
+            id_token.clone(),
+        );
+        assert_eq!(config.id_token(), Some(id_token.as_str()));
+        let client = config.authenticate().await.unwrap();
+        drop(client);
+        server.shutdown().await;
     }
 }

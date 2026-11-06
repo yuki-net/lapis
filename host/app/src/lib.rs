@@ -8,7 +8,9 @@ pub use remote_handler::HostRemoteHandler;
 mod protected;
 pub use local::run_managed_host;
 pub use oidc::{HostOidc, from_env as oidc_from_env};
-pub use profile::{HostInvitation, open_host_file, write_invitation};
+pub use profile::{
+    HostInvitation, OidcProfile, open_host_file, write_invitation, write_oidc_profile,
+};
 mod document;
 pub use client::BackendClient;
 mod features;

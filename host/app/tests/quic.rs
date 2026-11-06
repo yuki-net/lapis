@@ -27,10 +27,10 @@ impl Fixture {
             certificate: self.cert.clone(),
             hello: hello(id),
             workspace_id: self.workspace.clone(),
-            credential: Arc::new(CredentialHandle::from_parts(
+            auth: QuicAuth::Credential(Arc::new(CredentialHandle::from_parts(
                 paired.credential_id().unwrap(),
                 &mut paired.take_secret().unwrap(),
-            )),
+            ))),
         }
     }
     async fn new() -> Self {
