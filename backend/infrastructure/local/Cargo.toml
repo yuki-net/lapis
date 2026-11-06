@@ -10,16 +10,16 @@ notify = "8.2.0"
 wezterm-term.workspace = true
 wezterm-surface.workspace = true
 lapis-backend-state = { path = "../../runtime" }
-lapis-document = { path = "../../../shared/models/document" }
-lapis-editor-core = { path = "../../../shared/models/editor-core" }
-lapis-git = { path = "../../../shared/models/git" }
-lapis-lsp = { path = "../../../shared/models/lsp" }
-lapis-terminal = { path = "../../../shared/models/terminal" }
+lapis-document = { path = "../../../contracts/domain/document" }
+lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
+lapis-git = { path = "../../../contracts/domain/git" }
+lapis-lsp = { path = "../../../contracts/domain/lsp" }
+lapis-terminal = { path = "../../../contracts/domain/terminal" }
 portable-pty.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 lapis-task-runner = { path = "../task-runner" }
-lapis-workspace = { path = "../../../shared/models/workspace" }
-lapis-workbench = { path = "../../../shared/models/workbench" }
+lapis-workspace = { path = "../../../contracts/domain/workspace" }
+lapis-workbench = { path = "../../../contracts/domain/workbench" }
 serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

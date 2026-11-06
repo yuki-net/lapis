@@ -83,7 +83,8 @@ ALLOWED = {
 def layer(manifest, root):
     relative = Path(manifest).resolve().relative_to(root.resolve()).as_posix()
     for prefix, value in [
-        ("shared/models/", "models"), ("shared/protocol/", "protocol"), ("shared/client/", "client_core"),
+        ("contracts/domain/", "models"), ("contracts/wire/", "models"),
+        ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
         ("backend/application/", "application"), ("backend/runtime/", "runtime"),
         ("backend/infrastructure/", "infrastructure"), ("backend/transport/", "transport"),
         ("backend/host/", "host"), ("apps/desktop/ui/", "ui"),
