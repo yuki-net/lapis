@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    env::VarError,
     error::Error,
     fmt,
     sync::Mutex,
@@ -19,6 +20,7 @@ use crate::Bridge;
 
 const DEFAULT_SCOPES: &str = "openid profile";
 const DEFAULT_PENDING_TTL: Duration = Duration::from_secs(300);
+const MAX_PENDING: usize = 256;
 
 /// Web bridge が IdP へリダイレクトするための設定。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,13 +33,24 @@ pub struct OidcConfig {
 
 impl OidcConfig {
     pub fn from_env() -> Result<Option<Self>, OidcError> {
-        Self::from_values(|name| std::env::var(name).ok())
+        Self::from_lookup(|name| match std::env::var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(VarError::NotPresent) => Ok(None),
+            Err(VarError::NotUnicode(_)) => Err(OidcError::InvalidEnv(name.to_owned())),
+        })
     }
 
+    #[cfg(test)]
     fn from_values(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Self>, OidcError> {
-        let authorization_endpoint = lookup("LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT");
-        let client_id = lookup("LAPIS_WEB_OIDC_CLIENT_ID");
-        let redirect_uri = lookup("LAPIS_WEB_OIDC_REDIRECT_URI");
+        Self::from_lookup(|name| Ok(lookup(name)))
+    }
+
+    fn from_lookup(
+        lookup: impl Fn(&str) -> Result<Option<String>, OidcError>,
+    ) -> Result<Option<Self>, OidcError> {
+        let authorization_endpoint = lookup("LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT")?;
+        let client_id = lookup("LAPIS_WEB_OIDC_CLIENT_ID")?;
+        let redirect_uri = lookup("LAPIS_WEB_OIDC_REDIRECT_URI")?;
         if authorization_endpoint.is_none() && client_id.is_none() && redirect_uri.is_none() {
             return Ok(None);
         }
@@ -45,13 +58,12 @@ impl OidcConfig {
             authorization_endpoint.ok_or(OidcError::Missing("authorization endpoint"))?;
         let client_id = client_id.ok_or(OidcError::Missing("client id"))?;
         let redirect_uri = redirect_uri.ok_or(OidcError::Missing("redirect uri"))?;
-        if !authorization_endpoint.starts_with("https://") {
-            return Err(OidcError::InsecureEndpoint);
+        if client_id.trim().is_empty() {
+            return Err(OidcError::Missing("client id"));
         }
-        if !redirect_uri.starts_with("https://") {
-            return Err(OidcError::InsecureEndpoint);
-        }
-        let scopes = lookup("LAPIS_WEB_OIDC_SCOPES")
+        validate_https_url("authorization endpoint", &authorization_endpoint)?;
+        validate_https_url("redirect uri", &redirect_uri)?;
+        let scopes = lookup("LAPIS_WEB_OIDC_SCOPES")?
             .unwrap_or_else(|| DEFAULT_SCOPES.to_owned())
             .split_whitespace()
             .map(str::to_owned)
@@ -66,6 +78,23 @@ impl OidcConfig {
             scopes,
         }))
     }
+}
+
+fn validate_https_url(name: &'static str, value: &str) -> Result<(), OidcError> {
+    if value.chars().any(char::is_control) {
+        return Err(OidcError::InvalidUrl(name));
+    }
+    let url = url::Url::parse(value).map_err(|_| OidcError::InvalidUrl(name))?;
+    if url.scheme() != "https" {
+        return Err(OidcError::InsecureEndpoint);
+    }
+    if url.host_str().is_none() {
+        return Err(OidcError::InvalidUrl(name));
+    }
+    if url.fragment().is_some() {
+        return Err(OidcError::FragmentNotAllowed(name));
+    }
+    Ok(())
 }
 
 /// 進行中の Authorization Code を state で管理する。
@@ -106,15 +135,10 @@ impl OidcBroker {
         let mut pending = self.pending.lock().map_err(|_| OidcError::State)?;
         let now = Instant::now();
         pending.retain(|_, value| value.expires_at > now);
-        pending.insert(
-            pkce.state().to_owned(),
-            Pending {
-                verifier: pkce.verifier().to_owned(),
-                expires_at: now + self.pending_ttl,
-            },
-        );
-        drop(pending);
-        authorization_url(
+        if pending.len() >= MAX_PENDING {
+            return Err(OidcError::TooManyPending);
+        }
+        let url = authorization_url(
             &self.config.authorization_endpoint,
             &self.config.client_id,
             &self.config.redirect_uri,
@@ -126,7 +150,15 @@ impl OidcBroker {
                 .collect::<Vec<_>>(),
             &pkce,
         )
-        .map_err(|_| OidcError::Pkce)
+        .map_err(|_| OidcError::Pkce)?;
+        pending.insert(
+            pkce.state().to_owned(),
+            Pending {
+                verifier: pkce.verifier().to_owned(),
+                expires_at: now + self.pending_ttl,
+            },
+        );
+        Ok(url)
     }
 }
 
@@ -134,9 +166,13 @@ impl OidcBroker {
 pub enum OidcError {
     Missing(&'static str),
     InsecureEndpoint,
+    InvalidEnv(String),
+    InvalidUrl(&'static str),
+    FragmentNotAllowed(&'static str),
     Random,
     Pkce,
     State,
+    TooManyPending,
 }
 
 impl fmt::Display for OidcError {
@@ -144,9 +180,17 @@ impl fmt::Display for OidcError {
         match self {
             Self::Missing(field) => write!(formatter, "OIDC {field} is not configured"),
             Self::InsecureEndpoint => formatter.write_str("OIDC endpoints must use HTTPS"),
+            Self::InvalidEnv(name) => {
+                write!(formatter, "OIDC environment variable {name} is invalid")
+            }
+            Self::InvalidUrl(field) => write!(formatter, "OIDC {field} is not a valid URL"),
+            Self::FragmentNotAllowed(field) => {
+                write!(formatter, "OIDC {field} must not contain a fragment")
+            }
             Self::Random => formatter.write_str("OIDC random generation failed"),
             Self::Pkce => formatter.write_str("OIDC PKCE generation failed"),
             Self::State => formatter.write_str("OIDC state is unavailable"),
+            Self::TooManyPending => formatter.write_str("OIDC pending login limit reached"),
         }
     }
 }
@@ -215,6 +259,75 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(matches!(error, OidcError::InsecureEndpoint));
+    }
+
+    #[test]
+    fn empty_client_id_is_rejected() {
+        let error = OidcConfig::from_values(lookup(&[
+            (
+                "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
+                "https://idp.example/authorize",
+            ),
+            ("LAPIS_WEB_OIDC_CLIENT_ID", "  "),
+            (
+                "LAPIS_WEB_OIDC_REDIRECT_URI",
+                "https://host.example/callback",
+            ),
+        ]))
+        .unwrap_err();
+        assert!(matches!(error, OidcError::Missing("client id")));
+    }
+
+    #[test]
+    fn fragment_endpoint_is_rejected() {
+        let error = OidcConfig::from_values(lookup(&[
+            (
+                "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
+                "https://idp.example/authorize#fragment",
+            ),
+            ("LAPIS_WEB_OIDC_CLIENT_ID", "lapis-web"),
+            (
+                "LAPIS_WEB_OIDC_REDIRECT_URI",
+                "https://host.example/callback",
+            ),
+        ]))
+        .unwrap_err();
+        assert!(matches!(error, OidcError::FragmentNotAllowed(_)));
+    }
+
+    #[test]
+    fn newline_endpoint_is_rejected() {
+        let error = OidcConfig::from_values(lookup(&[
+            (
+                "LAPIS_WEB_OIDC_AUTHORIZATION_ENDPOINT",
+                "https://idp.example/authorize\n",
+            ),
+            ("LAPIS_WEB_OIDC_CLIENT_ID", "lapis-web"),
+            (
+                "LAPIS_WEB_OIDC_REDIRECT_URI",
+                "https://host.example/callback",
+            ),
+        ]))
+        .unwrap_err();
+        assert!(matches!(error, OidcError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn pending_limit_is_enforced() {
+        let broker = OidcBroker::new(config());
+        {
+            let mut pending = broker.pending.lock().unwrap();
+            for index in 0..MAX_PENDING {
+                pending.insert(
+                    format!("state-{index}"),
+                    Pending {
+                        verifier: "a".repeat(43),
+                        expires_at: Instant::now() + Duration::from_secs(60),
+                    },
+                );
+            }
+        }
+        assert!(matches!(broker.start(), Err(OidcError::TooManyPending)));
     }
 
     #[test]

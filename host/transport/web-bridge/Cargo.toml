@@ -19,8 +19,10 @@ quinn.workspace = true
 rustls.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "signal"] }
 tokio-util.workspace = true
+url = "2"
 
 [dev-dependencies]
 rcgen.workspace = true
 tempfile.workspace = true
 tokio-tungstenite = "0.29"
+
