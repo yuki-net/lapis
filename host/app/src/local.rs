@@ -427,6 +427,9 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
         AuthPolicy::new(owner_capabilities.clone()),
     );
     auth.enable();
+    if let Some(verifier) = crate::oidc_verifier_from_env()? {
+        auth.enable_oidc(verifier);
+    }
     let mut random = [0u8; 16];
     getrandom::fill(&mut random)?;
     let client = format!(

@@ -38,3 +38,14 @@ Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立pro
 `lapis.exe`（Desktop Client）と `lapis-host.exe`（Host）は明確に分離されたbinaryです。Desktopは自身をHostとして起動せず、既定では同じ出力ディレクトリから `lapis-host.exe` を解決して起動します。`--local-host-executable <path>` を指定した場合はDesktopのComposition Rootがそのファイルを解決してLocal接続へ注入します。Hot Reload launcherはこの指定でdxの一時出力先とHostを分離します。
 
 実通信と別processの回帰検証は `cargo test -p host --test quic --test standalone --test managed_client` で実行します。Unixの開発・CI環境ではDPAPIの代わりにdirectory 0700・file 0600を使用します。
+
+## OIDC
+
+次の環境変数がすべて設定された場合だけ、Host は `AuthRequired.methods` に `Oidc` を追加します。
+
+- `LAPIS_OIDC_ISSUER`
+- `LAPIS_OIDC_AUDIENCE`
+- `LAPIS_OIDC_JWKS_FILE`
+- `LAPIS_OIDC_CLOCK_SKEW_SECONDS`（任意、既定60秒）
+
+JWKS は Host 起動時にファイルから読み込みます。JWKS の HTTP 取得と cache は未実装です。設定の詳細は [認証とセッション](../docs/specs/auth.md) を参照してください。

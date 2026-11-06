@@ -1,11 +1,13 @@
 //! 実行資源を組み立て、接続とは独立して Runtime を所有する Host。
 mod client;
 mod local;
+mod oidc;
 mod profile;
 mod remote_handler;
 pub use remote_handler::HostRemoteHandler;
 mod protected;
 pub use local::run_managed_host;
+pub use oidc::verifier_from_env as oidc_verifier_from_env;
 pub use profile::{HostInvitation, open_host_file, write_invitation};
 mod document;
 pub use client::BackendClient;
