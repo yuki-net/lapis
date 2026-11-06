@@ -5,7 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Rust `shared/protocol/tests/wire_fixtures.rs` と同じ JSON を検証する。
+ * Rust `contracts/protocol/tests/wire_fixtures.rs` と同じ JSON を検証する。
  * wire 形式の正本は Rust 側の fixture。
  */
 class ProtocolSerializationTest {

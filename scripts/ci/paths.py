@@ -32,9 +32,11 @@ PATH_RULES = [
     (["backend/transport/"], {"rust_core", "host", "desktop"}),
     (["backend/application/"], {"rust_core", "host", "desktop"}),
     
-    # Shared
-    (["shared/models/"], {"rust_core", "host", "desktop"}),
-    (["shared/protocol/"], {"rust_core", "host", "desktop"}),
+    # Contracts / Client transport
+    (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
+    (["contracts/protocol/"], {"rust_core", "host", "desktop", "web"}),
+    (["contracts/wire/"], {"rust_core", "host", "desktop", "web"}),
+    (["clients/transport/"], {"rust_core", "host", "desktop", "web"}),
     
     # Mobile
     (["apps/mobile/"], {"mobile"}),

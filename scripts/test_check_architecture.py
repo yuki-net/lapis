@@ -54,7 +54,7 @@ class ArchitectureTests(unittest.TestCase):
 
     def setUp(self):
         self.metadata = {"workspace_members": ["model", "runtime", "ui"], "packages": [
-            package("model", "shared/models/example"),
+            package("model", "contracts/domain/example"),
             package("runtime", "backend/runtime", ["model"]),
             package("ui", "apps/desktop/ui", ["model"]),
         ]}
@@ -104,7 +104,7 @@ class ArchitectureTests(unittest.TestCase):
         self.metadata["workspace_members"].extend(["cli", "protocol"])
         self.metadata["packages"].extend([
             package("cli", "apps/cli", ["protocol"]),
-            package("protocol", "shared/protocol"),
+            package("protocol", "contracts/protocol"),
         ])
         self.assertEqual(check(self.metadata, {}), [])
 

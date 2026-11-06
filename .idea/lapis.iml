@@ -64,19 +64,19 @@
       <sourceFolder url="file://$MODULE_DIR$/backend/runtime/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/runtime/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/backend/transport/remote/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/document/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/editor-core/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/git/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/language/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/localization/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/lsp/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/project/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/settings/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/task/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/terminal/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/text/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/models/workspace/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/shared/protocol/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/document/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/editor-core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/git/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/language/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/localization/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/lsp/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/project/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/settings/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/task/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/terminal/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/text/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/domain/workspace/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/contracts/protocol/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

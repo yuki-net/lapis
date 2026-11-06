@@ -60,13 +60,18 @@ class TestPathRouting(unittest.TestCase):
         ):
             self.assertEqual(jobs_for_paths([path]), {"host", "desktop"})
 
-    def test_protocol_and_transport_keep_cross_surface_ci(self):
+    def test_protocol_and_client_transport_keep_cross_surface_ci(self):
+        expected = {"rust_core", "host", "desktop", "web"}
+        self.assertEqual(jobs_for_paths(["contracts/protocol/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["clients/transport/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["contracts/wire/src/lib.rs"]), expected)
+
+    def test_backend_transport_runs_rust_surfaces(self):
         expected = {"rust_core", "host", "desktop"}
-        self.assertEqual(jobs_for_paths(["shared/protocol/src/lib.rs"]), expected)
         self.assertEqual(jobs_for_paths(["backend/transport/remote/src/lib.rs"]), expected)
 
     def test_rust_core_path_runs_rust_core(self):
-        jobs = jobs_for_paths(["shared/models/workspace/src/lib.rs"])
+        jobs = jobs_for_paths(["contracts/domain/workspace/src/lib.rs"])
         self.assertIn("rust_core", jobs)
 
     def test_mobile_path_runs_mobile(self):

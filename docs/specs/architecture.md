@@ -5,9 +5,10 @@
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
 | `apps/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
-| `shared/models/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
-| `shared/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
-| `shared/client/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
+| `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
+| `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
+| `contracts/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
+| `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `backend/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `backend/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
 | `backend/infrastructure/` | FS、Git CLI、PTY、LSP、runner、永続化 | 画面の判断 |
