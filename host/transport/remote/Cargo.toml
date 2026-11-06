@@ -15,6 +15,7 @@ wire = { path = "../../../contracts/wire" }
 getrandom.workspace = true
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 rcgen.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 rustls.workspace = true
 quinn.workspace = true
 tokio-util.workspace = true
@@ -32,5 +33,6 @@ document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 task = { path = "../../../contracts/domain/task" }
 tempfile.workspace = true
+
 
 
