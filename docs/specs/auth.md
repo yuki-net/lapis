@@ -25,9 +25,9 @@ Host・Web・Desktop・Mobile の実装者が、認証方式の追加・変更�
 
 ### OIDC 方式
 
-> 現行の Host は OIDC の認証要求を受け付けず、`AuthRequired.methods` には `Token` だけを返す。この節は実装予定の契約であり、実装が入るまで Client は OIDC を選択しない。
-
 - Client は Authorization Code + PKCE で IdP から ID Token を取得する。
+- Web は Host（Web bridge）の `/auth/oidc/start` を開き、`/auth/oidc/callback` から `postMessage` で ID Token を受け取る。Token は URL に載せない。
+- Web bridge は confidential client として `client_secret` を任意で使える。Public client の場合は PKCE だけで交換する。
 - Client は `ClientMessage::Oidc(OidcRequest)` に ID Token と Workspace を入れて送る。
 - Host は Token をローカルで検証し、成功時に `ServerMessage::Authenticated(ServerHello)` を返す。
 - OIDC Session は credential secret を発行しない。Session ID は bearer secret として扱わない。
