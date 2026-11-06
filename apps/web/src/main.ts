@@ -26,6 +26,15 @@ function createClientId(): string {
   return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join("-");
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
 function fail(error: unknown) {
   root!.hidden = false;
   root!.classList.add("error");
@@ -33,45 +42,143 @@ function fail(error: unknown) {
   document.body.dataset.lapis = "error";
 }
 
+function showLoginError(error: unknown) {
+  const element = document.querySelector<HTMLElement>("#login-error");
+  if (element === null) {
+    return;
+  }
+  element.hidden = false;
+  element.textContent = `接続できません: ${String(error)}`;
+}
+
+function setLoginBusy(busy: boolean) {
+  const form = document.querySelector<HTMLFormElement>("#login");
+  if (form === null) {
+    return;
+  }
+  for (const element of form.elements) {
+    if (element instanceof HTMLInputElement || element instanceof HTMLButtonElement) {
+      element.disabled = busy;
+    }
+  }
+  const button = form.querySelector<HTMLButtonElement>("button[type=submit]");
+  if (button !== null) {
+    button.textContent = busy ? "接続中…" : "接続";
+  }
+}
+
+async function launch(
+  backend: string,
+  url: string | null,
+  workspace: string | null,
+  token: string | null,
+) {
+  const clientId = localStorage.getItem(STORAGE.clientId) ?? createClientId();
+  localStorage.setItem(STORAGE.clientId, clientId);
+  const credentialKey = url !== null && workspace !== null ? `${url}|${workspace}` : "";
+  const credential = credentialKey === "" ? null : localStorage.getItem(credentialKey);
+  if (url !== null && workspace !== null) {
+    localStorage.setItem(STORAGE.url, url);
+    localStorage.setItem(STORAGE.workspace, workspace);
+  }
+
+  await init();
+  const fresh = await start(backend, url, workspace, token, credential, clientId);
+  if (fresh !== undefined && fresh !== null && credentialKey !== "") {
+    localStorage.setItem(credentialKey, fresh);
+  }
+
+  const deadline = performance.now() + 20_000;
+  while (!is_ready()) {
+    if (document.body.dataset.lapis === "error") {
+      return;
+    }
+    if (performance.now() > deadline) {
+      throw new Error("描画の初期化がtimeoutしました");
+    }
+    await new Promise(requestAnimationFrame);
+  }
+  root!.hidden = true;
+  document.body.dataset.lapis = "ready";
+}
+
+async function connect(url: string, workspace: string, token: string, backend: string) {
+  await launch(backend, url, workspace, token === "" ? null : token);
+}
+
+async function launchDemo(backend: string) {
+  await launch(backend, null, null, null);
+}
+
+function showLogin(defaultUrl: string, defaultWorkspace: string) {
+  root!.classList.remove("error");
+  root!.hidden = false;
+  root!.innerHTML = `
+    <form class="login" id="login">
+      <h1>Lapis Web</h1>
+      <p class="login-lead">Host に接続します。初回は pairing token が必要です。</p>
+      <label>
+        <span>Host URL</span>
+        <input name="url" type="url" required autocomplete="url"
+          placeholder="ws://127.0.0.1:8787/remote"
+          value="${escapeHtml(defaultUrl)}" />
+      </label>
+      <label>
+        <span>Workspace ID</span>
+        <input name="workspace" type="text" required autocomplete="off"
+          placeholder="workspace-..."
+          value="${escapeHtml(defaultWorkspace)}" />
+      </label>
+      <label>
+        <span>Pairing token <small>（初回のみ）</small></span>
+        <input name="token" type="password" autocomplete="off" placeholder="64桁の16進数" />
+      </label>
+      <button type="submit">接続</button>
+      <p class="login-error" id="login-error" hidden></p>
+      <a class="login-demo" href="?demo=1">Host なしのデモを開く</a>
+    </form>
+  `;
+
+  const form = document.querySelector<HTMLFormElement>("#login");
+  if (form === null) {
+    return;
+  }
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const url = String(data.get("url") ?? "").trim();
+    const workspace = String(data.get("workspace") ?? "").trim();
+    const token = String(data.get("token") ?? "").trim();
+    if (url === "" || workspace === "") {
+      showLoginError("Host URL と Workspace ID を入力してください");
+      return;
+    }
+    setLoginBusy(true);
+    const backend = new URLSearchParams(location.search).get("backend") ?? "auto";
+    void connect(url, workspace, token, backend).catch((error) => {
+      setLoginBusy(false);
+      showLoginError(error);
+    });
+  });
+}
+
 async function boot() {
   try {
     const params = new URLSearchParams(location.search);
+    const backend = params.get("backend") ?? "auto";
     const url = params.get("url") ?? localStorage.getItem(STORAGE.url) ?? "";
-    const workspace =
-      params.get("workspace") ?? localStorage.getItem(STORAGE.workspace) ?? "";
+    const workspace = params.get("workspace") ?? localStorage.getItem(STORAGE.workspace) ?? "";
     const token = params.get("token") ?? "";
-    const clientId = localStorage.getItem(STORAGE.clientId) ?? createClientId();
-    localStorage.setItem(STORAGE.clientId, clientId);
-    const credentialKey = url !== "" && workspace !== "" ? `${url}|${workspace}` : "";
-    const credential = credentialKey === "" ? null : localStorage.getItem(credentialKey);
+
     if (url !== "" && workspace !== "") {
-      localStorage.setItem(STORAGE.url, url);
-      localStorage.setItem(STORAGE.workspace, workspace);
+      await connect(url, workspace, token, backend);
+      return;
     }
-    await init();
-    const fresh = await start(
-      params.get("backend") ?? "auto",
-      url === "" ? null : url,
-      workspace === "" ? null : workspace,
-      token === "" ? null : token,
-      credential,
-      clientId,
-    );
-    if (fresh !== undefined && fresh !== null && credentialKey !== "") {
-      localStorage.setItem(credentialKey, fresh);
+    if (params.get("demo") === "1") {
+      await launchDemo(backend);
+      return;
     }
-    const deadline = performance.now() + 20_000;
-    while (!is_ready()) {
-      if (document.body.dataset.lapis === "error") {
-        return;
-      }
-      if (performance.now() > deadline) {
-        throw new Error("描画の初期化がtimeoutしました");
-      }
-      await new Promise(requestAnimationFrame);
-    }
-    root!.hidden = true;
-    document.body.dataset.lapis = "ready";
+    showLogin(url, workspace);
   } catch (error) {
     fail(error);
   }
