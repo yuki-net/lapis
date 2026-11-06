@@ -1,9 +1,22 @@
 //! OIDC ID Token の検証。Host は Resource Server として JWKS の公開鍵だけを使う。
 
-use std::{error::Error, fmt};
+use std::{
+    error::Error,
+    fmt,
+    io::Read,
+    sync::{
+        Arc, RwLock,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use serde::Deserialize;
+
+const JWKS_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
+const JWKS_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_JWKS_BYTES: usize = 1024 * 1024;
 
 /// Host が信頼する OIDC Provider の設定。
 #[derive(Clone, Debug)]
@@ -73,7 +86,10 @@ pub struct OidcClaims {
 #[derive(Debug)]
 pub struct OidcVerifier {
     config: OidcConfig,
-    jwks: JwkSet,
+    keys: Arc<RwLock<JwkSet>>,
+    jwks_uri: Option<String>,
+    refresh_interval: Duration,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl OidcVerifier {
@@ -81,7 +97,13 @@ impl OidcVerifier {
         if jwks.keys.is_empty() {
             return Err(OidcError::InvalidConfig("JWKS is empty"));
         }
-        Ok(Self { config, jwks })
+        Ok(Self {
+            config,
+            keys: Arc::new(RwLock::new(jwks)),
+            jwks_uri: None,
+            refresh_interval: JWKS_REFRESH_INTERVAL,
+            shutdown: Arc::new(AtomicBool::new(false)),
+        })
     }
 
     pub fn from_jwks_json(config: OidcConfig, jwks_json: &str) -> Result<Self, OidcError> {
@@ -89,17 +111,105 @@ impl OidcVerifier {
         Self::new(config, jwks)
     }
 
+    /// HTTPS の JWKS URI から初回取得する。失敗した場合は Host を起動しない。
+    pub fn from_remote(config: OidcConfig, jwks_uri: impl Into<String>) -> Result<Self, OidcError> {
+        Self::from_remote_inner(config, jwks_uri.into(), false)
+    }
+
+    #[cfg(test)]
+    fn from_remote_http(
+        config: OidcConfig,
+        jwks_uri: impl Into<String>,
+    ) -> Result<Self, OidcError> {
+        Self::from_remote_inner(config, jwks_uri.into(), true)
+    }
+
+    fn from_remote_inner(
+        config: OidcConfig,
+        jwks_uri: String,
+        allow_http: bool,
+    ) -> Result<Self, OidcError> {
+        if !allow_http && !jwks_uri.starts_with("https://") {
+            return Err(OidcError::InsecureUri);
+        }
+        let jwks = fetch_jwks(&jwks_uri)?;
+        Ok(Self {
+            config,
+            keys: Arc::new(RwLock::new(jwks)),
+            jwks_uri: Some(jwks_uri),
+            refresh_interval: JWKS_REFRESH_INTERVAL,
+            shutdown: Arc::new(AtomicBool::new(false)),
+        })
+    }
+
     pub fn config(&self) -> &OidcConfig {
         &self.config
     }
 
+    /// JWKS を再取得する。失敗時は既存の鍵を保持する。
+    pub fn refresh(&self) -> Result<(), OidcError> {
+        let Some(uri) = self.jwks_uri.as_ref() else {
+            return Ok(());
+        };
+        let next = fetch_jwks(uri)?;
+        *self.keys.write().map_err(|_| OidcError::InvalidJwks)? = next;
+        Ok(())
+    }
+
+    /// 定期的に JWKS を更新する background thread を開始する。
+    pub fn start_refresh(&self) -> Result<(), OidcError> {
+        let Some(uri) = self.jwks_uri.clone() else {
+            return Ok(());
+        };
+        let keys = self.keys.clone();
+        let shutdown = self.shutdown.clone();
+        let interval = self.refresh_interval;
+        std::thread::Builder::new()
+            .name("lapis-oidc-jwks".to_owned())
+            .spawn(move || {
+                while !shutdown.load(Ordering::Acquire) {
+                    let mut waited = Duration::ZERO;
+                    while waited < interval && !shutdown.load(Ordering::Acquire) {
+                        std::thread::sleep(Duration::from_secs(1));
+                        waited += Duration::from_secs(1);
+                    }
+                    if shutdown.load(Ordering::Acquire) {
+                        break;
+                    }
+                    match fetch_jwks(&uri) {
+                        Ok(next) => {
+                            if let Ok(mut keys) = keys.write() {
+                                *keys = next;
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("OIDC JWKS の更新に失敗しました: {error}");
+                        }
+                    }
+                }
+            })
+            .map(|_| ())
+            .map_err(|_| OidcError::RefreshUnavailable)
+    }
+
     /// 署名・issuer・audience・exp・nbf を検証し、Session に使う Claim を返す。
     pub fn verify(&self, token: &str) -> Result<OidcClaims, OidcError> {
+        match self.verify_once(token) {
+            Err(OidcError::UnknownKey) if self.jwks_uri.is_some() => {
+                self.refresh()?;
+                self.verify_once(token)
+            }
+            result => result,
+        }
+    }
+
+    fn verify_once(&self, token: &str) -> Result<OidcClaims, OidcError> {
         let header = decode_header(token).map_err(|_| OidcError::MalformedToken)?;
         if !self.config.allowed_algorithms.contains(&header.alg) {
             return Err(OidcError::UnsupportedAlgorithm);
         }
-        let key = self.decoding_key(header.kid.as_deref())?;
+        let keys = self.keys.read().map_err(|_| OidcError::InvalidJwks)?;
+        let key = self.decoding_key(header.kid.as_deref(), &keys)?;
         let mut validation = Validation::new(header.alg);
         validation.set_issuer(&[&self.config.issuer]);
         validation.set_audience(&[&self.config.audience]);
@@ -120,14 +230,51 @@ impl OidcVerifier {
         })
     }
 
-    fn decoding_key(&self, kid: Option<&str>) -> Result<DecodingKey, OidcError> {
+    fn decoding_key(&self, kid: Option<&str>, keys: &JwkSet) -> Result<DecodingKey, OidcError> {
         let jwk = match kid {
-            Some(kid) => self.jwks.find(kid).ok_or(OidcError::UnknownKey)?,
-            None if self.jwks.keys.len() == 1 => &self.jwks.keys[0],
+            Some(kid) => keys.find(kid).ok_or(OidcError::UnknownKey)?,
+            None if keys.keys.len() == 1 => &keys.keys[0],
             None => return Err(OidcError::UnknownKey),
         };
         DecodingKey::from_jwk(jwk).map_err(|_| OidcError::InvalidKey)
     }
+}
+
+impl Drop for OidcVerifier {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+    }
+}
+
+fn fetch_jwks(uri: &str) -> Result<JwkSet, OidcError> {
+    let redirects = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.url().scheme() != "https" {
+            attempt.error("HTTPS redirect required")
+        } else {
+            attempt.follow()
+        }
+    });
+    let client = reqwest::blocking::Client::builder()
+        .timeout(JWKS_TIMEOUT)
+        .redirect(redirects)
+        .build()
+        .map_err(|_| OidcError::RemoteUnavailable)?;
+    let response = client
+        .get(uri)
+        .send()
+        .map_err(|_| OidcError::RemoteUnavailable)?;
+    if !response.status().is_success() {
+        return Err(OidcError::RemoteUnavailable);
+    }
+    let mut body = Vec::new();
+    response
+        .take((MAX_JWKS_BYTES + 1) as u64)
+        .read_to_end(&mut body)
+        .map_err(|_| OidcError::RemoteUnavailable)?;
+    if body.len() > MAX_JWKS_BYTES {
+        return Err(OidcError::JwksTooLarge);
+    }
+    serde_json::from_slice(&body).map_err(|_| OidcError::InvalidJwks)
 }
 
 #[derive(Debug)]
@@ -139,6 +286,10 @@ pub enum OidcError {
     MalformedToken,
     UnsupportedAlgorithm,
     InvalidClaims,
+    RemoteUnavailable,
+    InsecureUri,
+    JwksTooLarge,
+    RefreshUnavailable,
 }
 
 impl fmt::Display for OidcError {
@@ -151,6 +302,10 @@ impl fmt::Display for OidcError {
             Self::MalformedToken => "token header is invalid",
             Self::UnsupportedAlgorithm => "token algorithm is not allowed",
             Self::InvalidClaims => "token claims are invalid",
+            Self::RemoteUnavailable => "JWKS is unavailable",
+            Self::InsecureUri => "JWKS URI must use HTTPS",
+            Self::JwksTooLarge => "JWKS response is too large",
+            Self::RefreshUnavailable => "JWKS refresh thread is unavailable",
         })
     }
 }
@@ -246,6 +401,40 @@ QpNdCy1VwA1iKz1CyJaSeQ==
         };
         let key = EncodingKey::from_rsa_pem(TEST_PEM.as_bytes()).unwrap();
         encode(&header, &claims, &key).unwrap()
+    }
+
+    #[test]
+    fn remote_jwks_is_fetched() {
+        use std::{
+            io::{Read, Write},
+            net::TcpListener,
+        };
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                TEST_JWKS.len(),
+                TEST_JWKS
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let verifier =
+            OidcVerifier::from_remote_http(config(), format!("http://{address}/jwks")).unwrap();
+        server.join().unwrap();
+
+        let now = get_current_timestamp();
+        let claims = json!({
+            "sub": "alice",
+            "iss": "https://idp.example",
+            "aud": "lapis",
+            "exp": now + 300,
+        });
+        assert!(verifier.verify(&token(claims)).is_ok());
     }
 
     #[test]
