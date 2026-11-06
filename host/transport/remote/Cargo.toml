@@ -13,6 +13,7 @@ client-api = { path = "../../../contracts/protocol" }
 client-core = { path = "../../../clients/transport" }
 wire = { path = "../../../contracts/wire" }
 getrandom.workspace = true
+jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 rcgen.workspace = true
 rustls.workspace = true
 quinn.workspace = true
@@ -31,3 +32,5 @@ document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 task = { path = "../../../contracts/domain/task" }
 tempfile.workspace = true
+
+
