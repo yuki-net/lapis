@@ -16,17 +16,17 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 getrandom.workspace = true
 web-time = "1.1"
 serde.workspace = true
-lapis-desktop-client = { path = "../client" }
-lapis-document = { path = "../../../contracts/domain/document" }
-lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
-lapis-git = { path = "../../../contracts/domain/git" }
-lapis-language = { path = "../../../contracts/domain/language" }
-lapis-localization = { path = "../../../contracts/domain/localization" }
-lapis-lsp = { path = "../../../contracts/domain/lsp" }
-lapis-settings = { path = "../../../contracts/domain/settings" }
-lapis-task = { path = "../../../contracts/domain/task" }
-lapis-terminal = { path = "../../../contracts/domain/terminal" }
-lapis-workspace = { path = "../../../contracts/domain/workspace" }
+lapis-desktop-client = { path = "../state" }
+lapis-document = { path = "../../contracts/domain/document" }
+lapis-editor-core = { path = "../../contracts/domain/editor-core" }
+lapis-git = { path = "../../contracts/domain/git" }
+lapis-language = { path = "../../contracts/domain/language" }
+lapis-localization = { path = "../../contracts/domain/localization" }
+lapis-lsp = { path = "../../contracts/domain/lsp" }
+lapis-settings = { path = "../../contracts/domain/settings" }
+lapis-task = { path = "../../contracts/domain/task" }
+lapis-terminal = { path = "../../contracts/domain/terminal" }
+lapis-workspace = { path = "../../contracts/domain/workspace" }
 serde_json.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
 async-channel = { version = "2", optional = true }
@@ -51,7 +51,7 @@ wasm-bindgen = "=0.2.129"
 wasm-bindgen-futures = "=0.4.79"
 web-sys = { version = "=0.3.106", features = ["Location", "Window"] }
 console_error_panic_hook = "0.1"
-lapis-client-api = { path = "../../../contracts/protocol" }
+lapis-client-api = { path = "../../contracts/protocol" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 raw-window-handle = "0.6"

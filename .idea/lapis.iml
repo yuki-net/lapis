@@ -24,8 +24,8 @@
       <sourceFolder url="file://$MODULE_DIR$/vendor/gpui/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/crates/localization/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/crates/settings/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/app/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/ui/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/clients/desktop/app/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/clients/ui/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/core/app-services/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/core/document/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/core/editor-core/src" isTestSource="false" />
@@ -53,9 +53,9 @@
       <sourceFolder url="file://$MODULE_DIR$/backend/core/backend-state/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/backend/core/client-api/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/remote/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/app/tests" isTestSource="true" />
-      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/client/src" isTestSource="false" />
-      <sourceFolder url="file://$MODULE_DIR$/apps/desktop/persistence/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/clients/desktop/app/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/clients/state/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/clients/desktop/persistence/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/host/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/backend/host/tests" isTestSource="true" />
       <sourceFolder url="file://$MODULE_DIR$/backend/infrastructure/local/src" isTestSource="false" />

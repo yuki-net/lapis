@@ -1,10 +1,10 @@
 /target/
-/apps/mobile/.gradle/
-/apps/mobile/**/build/
-/apps/mobile/local.properties
-/apps/web/dist/
-/apps/web/node_modules/
-/apps/web/src/generated/
+/clients/mobile/.gradle/
+/clients/mobile/**/build/
+/clients/mobile/local.properties
+/clients/web/dist/
+/clients/web/node_modules/
+/clients/web/src/generated/
 *.tsbuildinfo
 *.log
 .idea/libraries

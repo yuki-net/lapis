@@ -6,7 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-lapis-desktop-client = { path = "../client" }
+lapis-desktop-client = { path = "../../state" }
 lapis-editor-core = { path = "../../../contracts/domain/editor-core" }
 lapis-settings = { path = "../../../contracts/domain/settings" }
 lapis-workspace = { path = "../../../contracts/domain/workspace" }

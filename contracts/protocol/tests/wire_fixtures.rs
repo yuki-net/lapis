@@ -21,7 +21,7 @@ const PROTOCOL_ERROR: &str =
     r#"{"type":"error","payload":{"code":"invalid_request","retryable":false}}"#;
 const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":5},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#;
 
-const MOBILE_TEST_PATH: &str = "../../apps/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
+const MOBILE_TEST_PATH: &str = "../../clients/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
 
 fn hello() -> ClientHello {
     ClientHello {

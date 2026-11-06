@@ -9,7 +9,7 @@ fn main() {
     let dx = root.join("target/dx-fixed0710/bin/dx.exe");
     if !dx.is_file() {
         eprintln!(
-            "修正版 dx がありません。apps/desktop/ui/experiments/hot-reload/README.md の手順で準備してください。"
+            "修正版 dx がありません。clients/ui/experiments/hot-reload/README.md の手順で準備してください。"
         );
         std::process::exit(1);
     }

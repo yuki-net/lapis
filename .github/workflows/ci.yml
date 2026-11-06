@@ -235,7 +235,7 @@ jobs:
       contains(needs.path_filter.outputs.jobs, 'mobile')
     defaults:
       run:
-        working-directory: apps/mobile
+        working-directory: clients/mobile
 
     steps:
       - name: Check out repository
@@ -270,7 +270,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: apps/web
+        working-directory: clients/web
 
     steps:
       - name: Check out repository
@@ -281,7 +281,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
-          cache-dependency-path: apps/web/package-lock.json
+          cache-dependency-path: clients/web/package-lock.json
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master

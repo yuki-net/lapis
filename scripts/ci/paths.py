@@ -16,8 +16,9 @@ PATH_RULES = [
     (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/", "scripts/hot-reload/", "scripts/test_hot_reload.py", ".run/"], {"repository", "dev_windows"}),
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
-    (["apps/desktop/client/", "apps/desktop/persistence/"], {"desktop", "rust_core"}),
-    (["apps/desktop/"], {"desktop"}),
+    (["clients/state/", "clients/desktop/persistence/"], {"desktop", "rust_core"}),
+    (["clients/desktop/"], {"desktop"}),
+    (["clients/ui/"], {"desktop"}),
     (["vendor/gpui/"], {"desktop"}),
     (["patches/gpui-"], {"desktop"}),
     
@@ -39,10 +40,10 @@ PATH_RULES = [
     (["clients/transport/"], {"rust_core", "host", "desktop", "web"}),
     
     # Mobile
-    (["apps/mobile/"], {"mobile"}),
+    (["clients/mobile/"], {"mobile"}),
     
     # Web
-    (["apps/web/"], {"web"}),
+    (["clients/web/"], {"web"}),
     
     # CI・scripts
     (["scripts/"], {"repository"}),

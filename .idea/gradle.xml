@@ -5,13 +5,13 @@
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
         <option name="testRunner" value="CHOOSE_PER_TEST" />
-        <option name="externalProjectPath" value="$PROJECT_DIR$/apps/mobile" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$/clients/mobile" />
         <option name="gradleJvm" value="#JAVA_HOME" />
         <option name="modules">
           <set>
-            <option value="$PROJECT_DIR$/apps/mobile" />
-            <option value="$PROJECT_DIR$/apps/mobile/androidApp" />
-            <option value="$PROJECT_DIR$/apps/mobile/sharedUi" />
+            <option value="$PROJECT_DIR$/clients/mobile" />
+            <option value="$PROJECT_DIR$/clients/mobile/androidApp" />
+            <option value="$PROJECT_DIR$/clients/mobile/sharedUi" />
           </set>
         </option>
       </GradleProjectSettings>
