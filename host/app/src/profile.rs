@@ -116,18 +116,18 @@ pub fn open_host_file(
             WorkspaceId::try_new(&invitation.workspace_id)?,
             &token,
         ))?;
-        let key = format!(
-            "remote-{:x}",
-            Sha256::digest(serde_json::to_vec(&(
-                invitation.address,
-                &invitation.server_name,
-                &invitation.workspace_id,
-                &invitation.certificate
-            ))?)
-        );
+        let key = profile_key(
+            invitation.address,
+            &invitation.server_name,
+            &invitation.workspace_id,
+            &invitation.certificate,
+        )?;
+        let credential = config
+            .credential()
+            .ok_or("ペアリング結果にcredentialがありません")?;
         let record = Record {
             version: 1,
-            key: key.clone(),
+            key,
             pid: 0,
             started_at: None,
             managed_lease: false,
@@ -137,24 +137,53 @@ pub fn open_host_file(
             certificate: config.certificate.to_vec(),
             workspace: config.workspace_id.as_str().to_owned(),
             client,
-            credential: config.credential.id().as_str().to_owned(),
-            secret: config.credential.secret_bytes().to_vec(),
+            credential: Some(credential.id().as_str().to_owned()),
+            secret: Some(credential.secret_bytes().to_vec()),
+            id_token: None,
         };
-        let profile = directory.join(format!("{key}.host"));
-        let plaintext = Zeroizing::new(serde_json::to_vec(&record)?);
-        let ciphertext = protect(&plaintext, key.as_bytes(), false)?;
-        let mut file = tempfile::NamedTempFile::new_in(directory)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            file.as_file()
-                .set_permissions(fs::Permissions::from_mode(0o600))?;
-        }
-        file.write_all(&ciphertext)?;
-        file.as_file().sync_all()?;
-        file.persist(&profile)?;
+        let profile = write_profile(directory, &record)?;
         (record, profile)
     };
+    let root = remote_root(directory, &record)?;
+    let backend = BackendClient::remote(root.clone(), record.config()?)?;
+    Ok((backend, root, profile))
+}
+
+fn profile_key(
+    address: SocketAddr,
+    server_name: &str,
+    workspace_id: &str,
+    certificate: &[u8],
+) -> Result<String, Error> {
+    Ok(format!(
+        "remote-{:x}",
+        Sha256::digest(serde_json::to_vec(&(
+            address,
+            server_name,
+            workspace_id,
+            certificate
+        ))?)
+    ))
+}
+
+fn write_profile(directory: &Path, record: &Record) -> Result<PathBuf, Error> {
+    let profile = directory.join(format!("{}.host", record.key));
+    let plaintext = Zeroizing::new(serde_json::to_vec(record)?);
+    let ciphertext = protect(&plaintext, record.key.as_bytes(), false)?;
+    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    file.write_all(&ciphertext)?;
+    file.as_file().sync_all()?;
+    file.persist(&profile)?;
+    Ok(profile)
+}
+
+fn remote_root(directory: &Path, record: &Record) -> Result<PathBuf, Error> {
     let label = record
         .label
         .chars()
@@ -173,11 +202,130 @@ pub fn open_host_file(
         label
     };
     let root = directory.join("remote").join(&record.key).join(label);
-    let root = if root.is_absolute() {
-        root
+    if root.is_absolute() {
+        Ok(root)
     } else {
-        std::env::current_dir()?.join(root)
+        Ok(std::env::current_dir()?.join(root))
+    }
+}
+
+/// OIDC で保存する接続プロファイル。
+pub struct OidcProfile {
+    pub address: SocketAddr,
+    pub server_name: String,
+    pub certificate: Vec<u8>,
+    pub workspace_id: String,
+    pub name: String,
+    pub client: String,
+    pub id_token: String,
+}
+
+/// OIDC で認証したプロファイルを保護して保存し、Remote接続を作る。
+pub fn write_oidc_profile(
+    directory: &Path,
+    profile: OidcProfile,
+) -> Result<(BackendClient, PathBuf, PathBuf), Error> {
+    fs::create_dir_all(directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
+    }
+    let OidcProfile {
+        address,
+        server_name,
+        certificate,
+        workspace_id,
+        name,
+        client,
+        id_token,
+    } = profile;
+    if certificate.len() > 64 * 1024 || server_name.len() > 253 {
+        return Err("Host情報が不正です".into());
+    }
+    ClientId::try_new(&client)?;
+    WorkspaceId::try_new(&workspace_id)?;
+    if id_token.is_empty() {
+        return Err("OIDC ID Tokenが空です".into());
+    }
+    let key = profile_key(address, &server_name, &workspace_id, &certificate)?;
+    let record = Record {
+        version: 1,
+        key,
+        pid: 0,
+        started_at: None,
+        managed_lease: false,
+        address,
+        server_name,
+        label: name,
+        certificate,
+        workspace: workspace_id,
+        client,
+        credential: None,
+        secret: None,
+        id_token: Some(id_token),
     };
+    let profile = write_profile(directory, &record)?;
+    let root = remote_root(directory, &record)?;
     let backend = BackendClient::remote(root.clone(), record.config()?)?;
     Ok((backend, root, profile))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn oidc_profile_is_protected_and_reloads_with_the_id_token() {
+        let state = tempfile::tempdir().unwrap();
+        let profiles = state.path().join("profiles");
+        let (_, root, path) = write_oidc_profile(
+            &profiles,
+            OidcProfile {
+                address: "127.0.0.1:1".parse().unwrap(),
+                server_name: "lapis-host".to_owned(),
+                certificate: vec![1, 2, 3],
+                workspace_id: "workspace-1".to_owned(),
+                name: "Remote".to_owned(),
+                client: "desktop-1".to_owned(),
+                id_token: "id-token".to_owned(),
+            },
+        )
+        .unwrap();
+        assert!(path.is_file());
+
+        let key = path.file_stem().unwrap().to_str().unwrap();
+        let plaintext = protect(&fs::read(&path).unwrap(), key.as_bytes(), true).unwrap();
+        let record: Record = serde_json::from_slice(&plaintext).unwrap();
+        assert_eq!(record.id_token.as_deref(), Some("id-token"));
+        assert!(record.credential.is_none());
+        assert!(record.secret.is_none());
+        #[cfg(windows)]
+        assert_ne!(fs::read(&path).unwrap().first(), Some(&b'{'));
+
+        let (_, restored_root, restored_path) = open_host_file(&path, &profiles).unwrap();
+        assert_eq!(root, restored_root);
+        assert_eq!(path, restored_path);
+    }
+
+    #[test]
+    fn empty_oidc_token_is_rejected() {
+        let state = tempfile::tempdir().unwrap();
+        let result = write_oidc_profile(
+            state.path(),
+            OidcProfile {
+                address: "127.0.0.1:1".parse().unwrap(),
+                server_name: "lapis-host".to_owned(),
+                certificate: Vec::new(),
+                workspace_id: "workspace-1".to_owned(),
+                name: "Remote".to_owned(),
+                client: "desktop-1".to_owned(),
+                id_token: String::new(),
+            },
+        );
+        let Err(error) = result else {
+            panic!("empty ID Token must be rejected");
+        };
+        assert!(error.to_string().contains("ID Token"));
+    }
 }

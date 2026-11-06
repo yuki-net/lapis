@@ -2,7 +2,7 @@ use crate::{BackendHost, protected::protect};
 use client_api::*;
 use remote::{
     AuthConfig, AuthPolicy, CredentialHandle, CredentialId, CredentialLifetime, PairingLifetime,
-    QuicConnection, QuicConnectionConfig, QuicServer, RemoteAuth, RemoteLimits,
+    QuicAuth, QuicConnection, QuicConnectionConfig, QuicServer, RemoteAuth, RemoteLimits,
     tls13_server_config,
 };
 use serde::{Deserialize, Serialize};
@@ -34,31 +34,49 @@ pub(super) struct Record {
     pub(super) certificate: Vec<u8>,
     pub(super) workspace: String,
     pub(super) client: String,
-    pub(super) credential: String,
-    pub(super) secret: Vec<u8>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) credential: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) secret: Option<Vec<u8>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) id_token: Option<String>,
 }
 impl Drop for Record {
     fn drop(&mut self) {
-        self.secret.zeroize();
+        if let Some(secret) = &mut self.secret {
+            secret.zeroize();
+        }
+        if let Some(id_token) = &mut self.id_token {
+            id_token.zeroize();
+        }
     }
 }
 impl Record {
     pub(super) fn config(&self) -> Result<QuicConnectionConfig, Error> {
-        if self.version != 1 || self.secret.len() != 32 {
+        if self.version != 1 {
             return Err("Local Host情報が不正です".into());
         }
-        let mut secret = [0; 32];
-        secret.copy_from_slice(&self.secret);
+        let auth = match (&self.id_token, &self.credential, &self.secret) {
+            (Some(id_token), None, None) if !id_token.is_empty() => {
+                QuicAuth::Oidc(Arc::new(Zeroizing::new(id_token.clone())))
+            }
+            (None, Some(credential), Some(secret)) if secret.len() == 32 => {
+                let mut secret_bytes = [0; 32];
+                secret_bytes.copy_from_slice(secret);
+                QuicAuth::Credential(Arc::new(CredentialHandle::from_parts(
+                    CredentialId::parse(credential)?,
+                    &mut secret_bytes,
+                )))
+            }
+            _ => return Err("Host情報の認証方式が不正です".into()),
+        };
         Ok(QuicConnectionConfig {
             address: self.address,
             server_name: self.server_name.clone(),
             certificate: self.certificate.clone().into(),
             hello: hello(&self.client)?,
             workspace_id: WorkspaceId::try_new(&self.workspace)?,
-            credential: Arc::new(CredentialHandle::from_parts(
-                CredentialId::parse(&self.credential)?,
-                &mut secret,
-            )),
+            auth,
         })
     }
 }
@@ -479,8 +497,9 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
                 certificate: certified.cert.der().to_vec(),
                 workspace: workspace.as_str().to_owned(),
                 client,
-                credential: credential.id().as_str().to_owned(),
-                secret: credential.secret_bytes().to_vec(),
+                credential: Some(credential.id().as_str().to_owned()),
+                secret: Some(credential.secret_bytes().to_vec()),
+                id_token: None,
             };
             serde_json::to_writer(io::stdout().lock(), &record)?;
             println!();
@@ -531,8 +550,9 @@ mod tests {
             certificate: Vec::new(),
             workspace: "test".to_owned(),
             client: "test".to_owned(),
-            credential: "00000000000000000000000000000000".to_owned(),
-            secret: vec![0; 32],
+            credential: Some("00000000000000000000000000000000".to_owned()),
+            secret: Some(vec![0; 32]),
+            id_token: None,
         }
     }
 
