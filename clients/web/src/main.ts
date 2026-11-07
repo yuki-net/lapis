@@ -249,7 +249,7 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
   });
 
   form.querySelector<HTMLButtonElement>("#oidc-login")?.addEventListener("click", () => {
-    const { url, workspace } = read();
+    const { url, workspace, token } = read();
     if (url === "") {
       showLoginError("Host URL を入力してください");
       return;
