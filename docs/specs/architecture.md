@@ -28,6 +28,13 @@
 2. 外部環境に触れる具体実装は infrastructure。認証や wire は transport。
 3. 実際の所有・寿命の境界がなければモジュールで分割する。空 crate や転送だけの層を作らない。
 
+### `contracts/domain` の集約方針
+
+- ID は `contracts/domain/editor-core` に集約する（`ProjectId` / `WorkspaceId` / `ConversationId` / `DocumentId` / `TaskId` / `ExecutionId`）。複数機能が同じ ID を参照するため、機能別 crate へ分散させない。
+- 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `terminal` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
+- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `GlobalSettingsRepository`）は、実装ではなく利用側の domain crate に置く。実装は `host/adapters/*` と `host/extensions/*` が持つ。
+- 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
+
 ### `host/application` を独立させない
 
 - 操作の判断は `host/runtime`（`state` / `operations` / `state/*`）が持ち、`runtime` を application とみなす。`host/application` は作らない。
