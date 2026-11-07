@@ -88,6 +88,7 @@ def layer(manifest, root):
         ("host/application/", "application"), ("host/runtime/", "runtime"),
         ("host/workbench/", "runtime"),
         ("host/terminal/", "runtime"),
+        ("host/documents/", "runtime"),
         ("host/adapters/", "infrastructure"), ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),
