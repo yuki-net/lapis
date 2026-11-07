@@ -25,7 +25,9 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 どちらも token の扱いが違うだけで、指す Host は同じです。Host を正常終了すると自分が書いたファイルを削除します。
 
-`Run Desktop` は `--host target/dev-desktop/desktop.json` で起動し、招待が無ければ最大15秒待ちます。一度ペアリングすると `<state>/hosts/` に profile が残り、同じ Host へは profile で再接続するため、2回目以降は token を使いません。
+`Run Desktop` は `--host target/dev-desktop/desktop.json` で起動し、招待が無ければ最大15秒待ちます。一度ペアリングすると `<state>/hosts/` に profile が残り、同じ Host へは profile で再接続するため、2回目以降は使用済みの token を使いません。
+
+`--state-directory` を指定した Host は秘密鍵と証明書を `<state>/identity` に保存して再利用するため、Host を再起動しても Desktop の profile と Web の credential は無効になりません。
 
 Desktop の接続先は `--host`、環境変数 `LAPIS_HOST_FILE`、ローカル Host の自動起動の順に解決します。どれも無ければ従来どおり自分で Local Host を起動するため、製品の通常起動と Run で経路は分かれません。
 
@@ -61,7 +63,7 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 | process | 役割 | 待受 |
 | --- | --- | --- |
-| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。`Run Host` は `4749` を固定で使う |
+| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。既定 `4749` |
 | bridge（`lapis-web-bridge`） | ブラウザーの WebSocket を Host の QUIC へ転送し、OIDC の token 交換を行う | TCP `4748` |
 | ページ配信（vite） | Wasm UI を配る | TCP `4747` |
 

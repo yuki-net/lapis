@@ -127,14 +127,22 @@ pub fn open_host_file(
         let existing = directory.join(format!("{key}.host"));
         // tokenは1回限り。同じHostへ接続済みなら保存済みprofileを再利用する。
         if existing.is_file() {
-            eprintln!(
-                "保存済みのHost接続profileを使います: {}",
-                existing.display()
-            );
-            let record = read_profile(&existing)?;
-            let root = remote_root(directory, &record)?;
-            let backend = BackendClient::remote(root.clone(), record.config()?)?;
-            return Ok((backend, root, existing));
+            // 保存済みprofileで繋げない場合は、新しい招待でのペアリングへ進む。
+            let reused = read_profile(&existing).and_then(|record| {
+                let root = remote_root(directory, &record)?;
+                let backend = BackendClient::remote(root.clone(), record.config()?)?;
+                Ok((backend, root))
+            });
+            match reused {
+                Ok((backend, root)) => {
+                    eprintln!(
+                        "保存済みのHost接続profileを使います: {}",
+                        existing.display()
+                    );
+                    return Ok((backend, root, existing));
+                }
+                Err(error) => eprintln!("保存済みのHost接続profileを使えません: {error}"),
+            }
         }
         let mut random = [0u8; 16];
         getrandom::fill(&mut random)?;

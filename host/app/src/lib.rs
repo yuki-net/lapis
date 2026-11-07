@@ -5,6 +5,8 @@ mod oidc;
 mod profile;
 mod remote_handler;
 pub use remote_handler::HostRemoteHandler;
+mod identity;
+pub use identity::HostIdentity;
 mod protected;
 pub use local::run_managed_host;
 pub use oidc::{HostOidc, configured as oidc_configured, from_env as oidc_from_env};

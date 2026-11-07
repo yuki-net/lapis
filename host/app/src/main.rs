@@ -4,7 +4,6 @@ use remote::{
     AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
     RemoteAuth, RemoteLimits, tls13_server_config,
 };
-use rustls::pki_types::PrivateKeyDer;
 use std::{
     io::{BufRead, Write},
     net::SocketAddr,
@@ -36,7 +35,7 @@ impl Options {
         let mut arguments = arguments;
         let mut workspace = None;
         let mut certificate = None;
-        let mut listen = "127.0.0.1:0".parse()?;
+        let mut listen = "127.0.0.1:4749".parse()?;
         let mut state_directory = None;
         let mut connection_info = None;
         let mut invitation = None;
@@ -117,20 +116,15 @@ fn main() {
 fn run() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
     let state_directory = options.state_directory.clone();
+    // 証明書と秘密鍵は state directory に保存し、再起動しても同じ身元で待ち受ける。
+    let identity = host::HostIdentity::load_or_create(state_directory.as_deref())?;
     let host = match options.state_directory {
         Some(directory) => BackendHost::start_with_state_directory(directory)?,
         None => BackendHost::start()?,
     };
     let credentials_path = state_directory.map(|directory| directory.join(CREDENTIAL_DB));
     let workspace = host.register_workspace(&options.workspace)?;
-    // 秘密鍵はHostのメモリ内だけに保持する。
-    let certified =
-        rcgen::generate_simple_self_signed(vec!["localhost".to_owned(), "lapis-host".to_owned()])?;
-    let key = Zeroizing::new(certified.signing_key.serialize_der());
-    let tls = tls13_server_config(
-        vec![certified.cert.der().clone()],
-        PrivateKeyDer::Pkcs8(key.to_vec().into()),
-    )?;
+    let tls = tls13_server_config(vec![identity.certificate.clone()], identity.key.clone_key())?;
     let auth = Arc::new(Mutex::new(RemoteAuth::system(
         AuthConfig::new(
             PairingLifetime::new(3600)?,
@@ -199,7 +193,7 @@ fn run() -> Result<(), Error> {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
             Arc::new(host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
         // listenに失敗した起動が稼働中Hostの証明書を置き換えない。
-        write_public_certificate(&options.certificate, certified.cert.der(), options.replace_certificate)?;
+        write_public_certificate(&options.certificate, identity.certificate.as_ref(), options.replace_certificate)?;
         let address = server.listening_address()?;
         if let Some(path) = &options.connection_info {
             let connection = wire::HostConnection {
@@ -207,7 +201,7 @@ fn run() -> Result<(), Error> {
                 address,
                 server_name: "lapis-host".to_owned(),
                 workspace_id: workspace.as_str().to_owned(),
-                certificate: certified.cert.der().to_vec(),
+                certificate: identity.certificate.as_ref().to_vec(),
             };
             write_connection_info(path, &connection)?;
         }
@@ -222,7 +216,7 @@ fn run() -> Result<(), Error> {
                 version: 1,
                 address,
                 server_name: "lapis-host".to_owned(),
-                certificate: certified.cert.der().to_vec(),
+                certificate: identity.certificate.as_ref().to_vec(),
                 workspace_id: workspace.as_str().to_owned(),
                 name: options
                     .workspace
@@ -291,7 +285,7 @@ fn run() -> Result<(), Error> {
                         let path = parts.next().map(str::trim).filter(|path| !path.is_empty());
                         if let (Some(address), Some(path)) = (address, path) {
                             let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
-                            let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                            let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: identity.certificate.as_ref().to_vec(),
                                 workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: token.secret_bytes().to_vec() };
                             match host::write_invitation(std::path::Path::new(path), &invitation) {
                                 Ok(()) => println!("招待を作成しました（1時間・一回限り）。安全な経路でClientへ渡してください。"),
@@ -306,7 +300,7 @@ fn run() -> Result<(), Error> {
                             if !host::oidc_configured() {
                                 eprintln!("OIDC設定がありません（LAPIS_OIDC_* を設定してください）");
                             } else {
-                                let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                                let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: identity.certificate.as_ref().to_vec(),
                                     workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: Vec::new() };
                                 match host::write_invitation(std::path::Path::new(path), &invitation) {
                                     Ok(()) => println!("OIDC招待を作成しました。IdPアカウントでログインできます。"),

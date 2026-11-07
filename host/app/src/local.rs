@@ -426,11 +426,8 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     let root = root.canonicalize()?;
     let host = BackendHost::start_with_state_directory(directory.to_owned())?;
     let workspace = host.register_workspace(&root)?;
-    let certified = rcgen::generate_simple_self_signed(vec!["lapis-host".to_owned()])?;
-    let tls = tls13_server_config(
-        vec![certified.cert.der().clone()],
-        rustls::pki_types::PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into()),
-    )?;
+    let identity = crate::identity::HostIdentity::load_or_create(Some(directory))?;
+    let tls = tls13_server_config(vec![identity.certificate.clone()], identity.key.clone_key())?;
     let owner_capabilities =
         CapabilitySet::try_new(crate::supported_capabilities().iter().cloned().chain(
             std::iter::once(CapabilityId::try_new(capability::HOST_MANAGE)?),
@@ -497,7 +494,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned(),
-                certificate: certified.cert.der().to_vec(),
+                certificate: identity.certificate.as_ref().to_vec(),
                 workspace: workspace.as_str().to_owned(),
                 client,
                 credential: Some(credential.id().as_str().to_owned()),
