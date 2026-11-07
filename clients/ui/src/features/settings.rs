@@ -158,38 +158,38 @@ impl SettingsFeature {
                                     theme::available(cx).into_iter().map(|(id, name)| {
                                         let is_selected = active_theme == id;
                                         let theme_id = id.clone();
-                                        div()
-                                            .id(gpui::SharedString::from(format!(
+                                        crate::components::hover_row(
+                                            gpui::SharedString::from(format!(
                                                 "setting-theme-{}",
                                                 id.as_str()
-                                            )))
-                                            .px_3()
-                                            .py_2()
-                                            .rounded(px(6.0))
-                                            .border_1()
-                                            .border_color(if is_selected {
-                                                theme::colors(cx).text_accent
-                                            } else {
-                                                theme::colors(cx).border_default
-                                            })
-                                            .bg(if is_selected {
-                                                theme::colors(cx).button_background_selected
-                                            } else {
-                                                theme::colors(cx).background_tertiary
-                                            })
-                                            .hover(|style| {
-                                                style.bg(theme::colors(cx).button_background_hover)
-                                            })
-                                            .text_size(px(12.0))
-                                            .text_color(theme::colors(cx).text_primary)
-                                            .child(format!(
-                                                "{} {}",
-                                                if is_selected { "✓" } else { "" },
-                                                name
-                                            ))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                            )),
+                                            cx,
+                                        )
+                                        .px_3()
+                                        .py_2()
+                                        .border_1()
+                                        .border_color(if is_selected {
+                                            theme::colors(cx).text_accent
+                                        } else {
+                                            theme::colors(cx).border_default
+                                        })
+                                        .bg(if is_selected {
+                                            theme::colors(cx).button_background_selected
+                                        } else {
+                                            theme::colors(cx).background_tertiary
+                                        })
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_primary)
+                                        .child(format!(
+                                            "{} {}",
+                                            if is_selected { "✓" } else { "" },
+                                            name
+                                        ))
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
                                                 this.select_theme(theme_id.clone(), cx);
-                                            }))
+                                            }),
+                                        )
                                     }),
                                 )),
                         )

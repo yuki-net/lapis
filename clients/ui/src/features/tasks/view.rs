@@ -15,17 +15,14 @@ impl TasksFeature {
             let selected = self.selected_execution.as_ref() == Some(&execution_id);
             let status = record.execution.status;
             task_list = task_list.child(
-                div()
-                    .id(("task", task_index))
+                crate::components::hover_row(("task", task_index), cx)
                     .min_h(px(42.0))
                     .p_2()
-                    .rounded(px(6.0))
                     .bg(if selected {
                         theme::colors(cx).button_background_selected
                     } else {
                         theme::colors(cx).background_tertiary
                     })
-                    .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                     .flex()
                     .flex_col()
                     .gap_1()
