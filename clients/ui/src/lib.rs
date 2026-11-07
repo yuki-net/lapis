@@ -4,6 +4,7 @@ extern crate gpui_preview as gpui;
 mod client_adapter;
 mod client_worker;
 mod commands;
+mod desktop;
 #[cfg(all(debug_assertions, not(target_family = "wasm")))]
 mod devtools;
 pub mod extension_ui;
@@ -20,11 +21,9 @@ mod shell;
 mod timer;
 #[cfg(target_family = "wasm")]
 mod web;
-#[cfg(target_family = "wasm")]
-mod web_prototype;
-mod window_host;
 mod workbench;
 
+pub(crate) use desktop::window_host;
 pub(crate) use kit::components;
 pub use kit::{theme, tokens};
 

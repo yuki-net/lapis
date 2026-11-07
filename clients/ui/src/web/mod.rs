@@ -1,5 +1,7 @@
 //! ブラウザーでDesktop UIを起動する境界。
 
+mod prototype;
+
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
@@ -95,11 +97,11 @@ fn demo_requested() -> bool {
 }
 
 fn start_prototype(backend_preference: &str) -> Result<(), String> {
-    let backend = Arc::new(crate::web_prototype::PrototypeBackend::new());
+    let backend = Arc::new(crate::web::prototype::PrototypeBackend::new());
     launch(
         backend,
-        crate::web_prototype::ROOT,
-        Some(PathBuf::from(crate::web_prototype::ROOT).join("README.md")),
+        crate::web::prototype::ROOT,
+        Some(PathBuf::from(crate::web::prototype::ROOT).join("README.md")),
         backend_preference,
     )
 }
@@ -159,8 +161,8 @@ where
         services,
         InitialView::default(),
         vec![
-            Cow::<'static, [u8]>::Borrowed(include_bytes!("../assets/IBMPlexSans-Regular.ttf")),
-            Cow::<'static, [u8]>::Borrowed(include_bytes!("../assets/IBMPlexSans-SemiBold.ttf")),
+            Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-Regular.ttf")),
+            Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-SemiBold.ttf")),
         ],
         backend_preference,
         || READY.with(|ready| ready.set(true)),
