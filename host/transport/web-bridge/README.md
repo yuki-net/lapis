@@ -3,12 +3,22 @@
 ブラウザーのWebSocketを、同じPC上のHostが受け付けるQUIC接続へ転送する独立実行ファイルです。認証やWorkspace操作の判断はHostが行います。
 
 ```powershell
-cargo run -p web-bridge -- --listen 127.0.0.1:8787 --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://localhost:4747
+cargo run -p web-bridge -- --connection-info target/dev-web/connection.json
+```
+
+待受とOriginの既定は `127.0.0.1:4748` と `http://127.0.0.1:4747` です。優先順はCLI引数、環境変数、既定値で、`LAPIS_WEB_BRIDGE_LISTEN` / `LAPIS_WEB_BRIDGE_ORIGIN` でも指定できます。開発時の起動手順は [開発時の起動](../../../docs/dev.md) を参照してください。
+
+`--connection-info` は、Hostが `--connection-info` で書き出した接続情報ファイルのパスです。中身は待受アドレス・サーバー名・Workspace ID・公開証明書だけで、tokenや秘密鍵は含みません。Bridgeは起動時に最大15秒待ってファイルの出現を待ち、読めたらブラウザーで開くURL（`http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=<ID>`）を標準エラーへ `open ...` の形で1行出します。Hostより先にBridgeを起動して構いません。
+
+接続先を明示する場合は `--host` / `--server-name` / `--certificate` を指定します。`--connection-info` との併用はエラーです。
+
+```powershell
+cargo run -p web-bridge -- --listen 127.0.0.1:4748 --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://127.0.0.1:4747
 ```
 
 `--host` と `--certificate` は起動中Hostのアドレスと公開証明書です。証明書とサーバー名を検証し、検証失敗時に接続を許可しません。Hostへの接続は常にloopbackに限定し、指定したOriginと `lapis.v0` subprotocolだけを受け付けます。Webページ自体は配信しません。
 
-Hostを固定ポートで起動し、再起動時に `--replace-certificate` を指定すると、公開証明書を同じパスへ更新できます。Bridgeは新しい接続ごとに証明書を読み直すため、Bridge自体の再起動は不要です。証明書ファイルはHostとBridgeを実行するユーザーが管理し、他のユーザーが変更できない場所に置いてください。Host再起動後のClient認証は別途やり直す必要があります。
+Hostを固定ポートで起動し、再起動時に `--replace-certificate` を指定すると、公開証明書を同じパスへ更新できます。Bridgeは新しい接続ごとに証明書を読み直すため、Bridge自体の再起動は不要です。`--connection-info` を使う場合も同じで、Hostが再起動してアドレスや証明書が変われば次の接続から追従します。接続情報を読めない場合はその接続だけ失敗し、Bridgeは停止しません。証明書ファイルはHostとBridgeを実行するユーザーが管理し、他のユーザーが変更できない場所に置いてください。Host再起動後のClient認証は別途やり直す必要があります。
 
 ## 別PCから開く
 
@@ -21,7 +31,7 @@ Webの開発サーバーとBridgeのTCPポートをSSHで転送し、ブラウ�
 Bridgeをtailnetへ公開する場合は、明示的に `--allow-remote` を付け、ブラウザーが使うOriginを指定します。
 
 ```powershell
-cargo run -p web-bridge -- --listen 0.0.0.0:8787 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://100.64.0.1:4747
+cargo run -p web-bridge -- --listen 0.0.0.0:4748 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://100.64.0.1:4747
 ```
 
 Webの開発サーバーもtailnetで待ち受けます。
@@ -30,7 +40,7 @@ Webの開発サーバーもtailnetで待ち受けます。
 npm run dev -- --host 0.0.0.0 --port 4747
 ```
 
-ページは `http://TAILSCALE_IP:4747/?url=ws://TAILSCALE_IP:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN` を開きます。
+ページは `http://TAILSCALE_IP:4747/?url=ws://TAILSCALE_IP:4748/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN` を開きます。
 
 `--allow-remote` を付けると、tailnet内の端末からページとBridgeへ到達できます。Origin検証は認証ではないため、Hostへの接続に必要なcredentialやpairing tokenとは別に、Tailscale ACLで到達端末を制限してください。Windowsファイアウォールで該当ポートの受信許可も必要です。
 

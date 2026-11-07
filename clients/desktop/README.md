@@ -43,20 +43,13 @@ Host が OIDC を設定している場合、Host の `invite-oidc` で作成し�
 
 ## 開発コマンド
 
-Desktopを変更・確認する開発者向け。以下は対象のworktreeルートで実行します。
+起動手順・ポート・保存先・Hot Reload の起動方法は [開発時の起動](../../docs/dev.md) を参照してください。
 
-| 操作 | コマンド |
-| --- | --- |
-| ビルドして起動 | `cargo dev` |
-| ビルドのみ | `cargo dev-build` |
-| ファイルを開いて起動 | `cargo dev --open-file README.md` |
-| DesktopのCIと同じ検証 | `python scripts/check.py desktop` |
-| BackendのCIと同じ検証 | `python scripts/check.py backend` |
-| 特定の検証のみ | `python scripts/check.py desktop test` |
-
-初回起動前とHost変更後は `cargo dev-build` でDesktopとHostの両方をビルドしてください。`cargo dev` はDesktopだけをビルドするため、Host binaryを自動更新しません。Lapis内で作成したworktreeのTerminalからも、そのworktreeルートで同じコマンドを実行できます。単体の回帰テストは通常の `cargo test -p <package> <filter>` で実行します。Mobile / Webの既存コマンドは変更しません。
+`.run` は `Lapis`（Desktop）・`Lapis Hot Reload`・`Lapis Web` の3つです。`cargo dev` は Desktop と Host の両方をビルドするため、2段階ビルドはありません。Lapis 内で作成した worktree の Terminal からも、その worktree ルートで同じコマンドを実行できます。単体の回帰テストは `cargo test -p <package> <filter>` で実行します。
 
 WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用できます。Run用のビルド先は `target/dev-build/` に分け、実行中の通常開発用binaryと競合しないようにします。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したHostを終了し、既存Hostへの接続や別Runには影響しません。通常のDesktop終了後はHostが残ります。sessionごとのDesktop設定は別々で、次のRunへ自動引き継ぎしません。残ったsessionのLocal Hostは、Desktopを終了後、ログの `Desktop session:` に表示された名前を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。`--local-host-directory <directory>` を指定してそのRunがHostを起動した場合は、同じdirectoryを `-Session <session名> -LocalHostDirectory <directory>` に指定します。Hostを停止するとDocument・Terminalの実行状態は失われます。
+
+Web をブラウザーから使う手順は [開発時の起動](../../docs/dev.md) を参照してください。
 
 `cargo dev` は `target/debug/` のbinaryを使い、開発用の設定・会話・復元状態・Host接続情報を `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 
@@ -68,37 +61,13 @@ WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用
 
 ## Hot Reload（Windows 開発用）
 
-WindowsのDebug開発時に、Rust/GPUIのUIコードを変更してもLapisを終了せずに既存Windowへ描画変更を反映できます。Releaseには一切含めません。
-
-| 操作 | コマンド |
-| --- | --- |
-| 通常起動（Hot Reloadなし） | `cargo dev` |
-| Hot Reload起動 | 修正版 `dx serve`（下記参照） |
-
-IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` は修正版dx経由のHot Reload起動です。
-
-Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
-
-launcherはWindows x64用のHostを毎回ビルドし、`--local-host-executable` でDesktopへ渡します。dxのapp出力先にHostをコピーする必要はありません。通常起動では引き続きDesktopと同じ出力先のHostを使用します。
-
-### 概要
+起動方法・制約は [開発時の起動](../../docs/dev.md) を参照してください。ここでは実装側の前提だけを書きます。
 
 - GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。
-- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は `ui/experiments/hot-reload/evidence.txt` を参照してください。
+- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は [evidence.txt](../ui/experiments/hot-reload/evidence.txt) を参照してください。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
-- devserverへの接続は起動時の1回だけです。自動再接続には対応していません。
-- 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
-- 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
-
-### 接続
-
-接続先はDioxus CLIが設定する環境変数から取得します。初回接続に失敗した場合や接続が切れた場合は、devserverとLapisを手動で再起動してください。自動再接続が必要な場合はDioxus upstreamの改善を含む別課題として扱います。
-
-### 制限
-
-- Windows x64でのみ検証済み。他のプラットフォームでの動作は未確認です。
-- 修正版`dx` CLIが必要です（Dioxus PR #5967がマージされるまで）。
-- ReleaseビルドにはHot Reloadランタイムを含めません。
+- 接続先はDioxus CLIが設定する環境変数から取得し、接続は起動時の1回だけです。
+- 実装の詳細は [ui/experiments/hot-reload/README.md](../ui/experiments/hot-reload/README.md) を参照してください。
 
 ## Host接続
 

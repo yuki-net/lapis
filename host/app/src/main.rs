@@ -26,6 +26,7 @@ struct Options {
     certificate: PathBuf,
     listen: SocketAddr,
     state_directory: Option<PathBuf>,
+    connection_info: Option<PathBuf>,
     replace_certificate: bool,
 }
 
@@ -36,6 +37,7 @@ impl Options {
         let mut certificate = None;
         let mut listen = "127.0.0.1:0".parse()?;
         let mut state_directory = None;
+        let mut connection_info = None;
         let mut replace_certificate = false;
         while let Some(argument) = arguments.next() {
             if argument == "--replace-certificate" {
@@ -48,6 +50,7 @@ impl Options {
                 Some("--certificate") => certificate = Some(PathBuf::from(value)),
                 Some("--listen") => listen = value.to_str().ok_or("invalid address")?.parse()?,
                 Some("--state-directory") => state_directory = Some(PathBuf::from(value)),
+                Some("--connection-info") => connection_info = Some(PathBuf::from(value)),
                 _ => return Err("unknown option".into()),
             }
         }
@@ -56,6 +59,7 @@ impl Options {
             certificate: certificate.ok_or("--certificate is required")?,
             listen,
             state_directory,
+            connection_info,
             replace_certificate,
         })
     }
@@ -100,7 +104,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>]"
+            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>] [--connection-info <file>]"
         );
         std::process::exit(1);
     }
@@ -192,7 +196,18 @@ fn run() -> Result<(), Error> {
             Arc::new(host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
         // listenに失敗した起動が稼働中Hostの証明書を置き換えない。
         write_public_certificate(&options.certificate, certified.cert.der(), options.replace_certificate)?;
-        println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
+        let address = server.listening_address()?;
+        if let Some(path) = &options.connection_info {
+            let connection = wire::HostConnection {
+                version: wire::HOST_CONNECTION_VERSION,
+                address,
+                server_name: "lapis-host".to_owned(),
+                workspace_id: workspace.as_str().to_owned(),
+                certificate: certified.cert.der().to_vec(),
+            };
+            write_connection_info(path, &connection)?;
+        }
+        println!("address={address} server_name=lapis-host workspace={}", workspace.as_str());
         println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
         let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
@@ -329,6 +344,9 @@ fn run() -> Result<(), Error> {
             &mut saved_credentials,
         )?;
         server.shutdown().await;
+        if let Some(path) = &options.connection_info {
+            remove_connection_info(path, address);
+        }
         Ok::<_, Error>(())
     })
 }
@@ -365,6 +383,30 @@ fn save_credentials(
 fn auto_approve_oidc_devices() -> bool {
     std::env::var("LAPIS_AUTO_APPROVE_OIDC_DEVICES")
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn write_connection_info(
+    path: &std::path::Path,
+    connection: &wire::HostConnection,
+) -> Result<(), Error> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    wire::write_connection(path, connection)?;
+    Ok(())
+}
+
+/// 自分が書いた接続情報だけを消す。後から起動したHostの情報を残す。
+fn remove_connection_info(path: &std::path::Path, address: SocketAddr) {
+    let owned = wire::read_connection(path).is_ok_and(|connection| connection.address == address);
+    if !owned {
+        return;
+    }
+    if let Err(error) = std::fs::remove_file(path) {
+        eprintln!("接続情報を削除できません ({}): {error}", path.display());
+    }
 }
 
 fn write_public_certificate(
@@ -414,6 +456,7 @@ mod tests {
         assert!(options.listen.ip().is_loopback());
         assert_eq!(options.workspace, PathBuf::from("repo"));
         assert!(options.state_directory.is_none());
+        assert!(options.connection_info.is_none());
         let options = Options::parse(
             [
                 "--workspace",
@@ -422,11 +465,44 @@ mod tests {
                 "host.der",
                 "--state-directory",
                 "state",
+                "--connection-info",
+                "dev/connection.json",
             ]
             .map(Into::into)
             .into_iter(),
         )
         .unwrap();
         assert_eq!(options.state_directory, Some(PathBuf::from("state")));
+        assert_eq!(
+            options.connection_info,
+            Some(PathBuf::from("dev/connection.json"))
+        );
+    }
+
+    #[test]
+    fn connection_info_is_only_removed_by_its_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dev").join("connection.json");
+        let connection = wire::HostConnection {
+            version: wire::HOST_CONNECTION_VERSION,
+            address: "127.0.0.1:1".parse().unwrap(),
+            server_name: "lapis-host".to_owned(),
+            workspace_id: "workspace-1".to_owned(),
+            certificate: vec![1, 2, 3],
+        };
+        write_connection_info(&path, &connection).unwrap();
+        assert!(path.is_file());
+
+        // 後から起動したHostの接続情報は、先のHostの終了では消さない。
+        let other = wire::HostConnection {
+            address: "127.0.0.1:2".parse().unwrap(),
+            ..connection.clone()
+        };
+        write_connection_info(&path, &other).unwrap();
+        remove_connection_info(&path, connection.address);
+        assert!(path.is_file());
+
+        remove_connection_info(&path, other.address);
+        assert!(!path.exists());
     }
 }

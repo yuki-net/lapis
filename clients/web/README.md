@@ -9,7 +9,7 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 URL と Workspace ID をクエリか localStorage に渡します。OIDC を使う場合はログインフォームから IdP で認証します。OIDC を使わない場合は、初回は pairing token、以降は保存済み credential で接続します。
 
 ```text
-http://127.0.0.1:4747/?url=ws://127.0.0.1:8787/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
+http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
 ```
 
 Host なしのデモ:
@@ -19,6 +19,8 @@ http://127.0.0.1:4747/?demo=1
 ```
 
 URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
+
+起動手順・ポート・ログインの詳細は [開発時の起動](../../docs/dev.md) を参照してください。ログインフォームの Host URL には **bridge** の WebSocket（`ws://127.0.0.1:4748/remote`）を入力します。Host の QUIC アドレスではありません。
 
 - 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
@@ -40,7 +42,7 @@ npm ci
 npm run dev
 ```
 
-開発サーバーは `4747`（47 の繰り返しで覚えやすい）で待ち受けます。`strictPort` を有効にしているため、使用中なら別ポートへずれずに起動が失敗します。一時的に変えたいときは `npm run dev -- --port 4748` のように上書きしてください（`6000` などブラウザーが接続を拒否するポートは避けてください）。
+開発サーバーは `4747` で待ち受けます。Host と bridge も含めた起動手順・ポートの決め方は [開発時の起動](../../docs/dev.md) を参照してください。
 
 `npm run dev` と `npm run build` は先に `wasm-bindgen` で Wasm を生成します。Node.js 24 と `wasm-bindgen-cli` 0.2.129 が必要です。
 

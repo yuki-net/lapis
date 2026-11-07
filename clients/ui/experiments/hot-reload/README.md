@@ -47,20 +47,15 @@ GPUI Entity / AnyView dispatch (HotFn境界)
 
 ### 起動方法
 
-1. **通常起動**（Hot Reloadなし）: `cargo dev` または `.run/Lapis.run.xml`
-2. **Hot Reload起動**: `.run/Lapis Hot Reload.run.xml` または以下のコマンドで起動します。
+起動手順は [開発時の起動](../../../../docs/dev.md) を参照してください。`.run/Lapis Hot Reload` または `cargo dev-hot-reload` が、Desktop と同じ launcher（`scripts/dev-session`）の `--hot-reload` を起動します。
 
-IDEとCLIはいずれも `scripts/hot-reload` のlauncherを起動します。launcherは修正版 `target/dx-fixed0710/bin/dx.exe` の存在確認と同一worktreeの排他ロック取得後、Windows x64向けにHostをビルドしてからdxを起動します。Hostのビルドに失敗した場合はdxを起動しません。修正版dxがない場合は以下の手順で準備してください。`cargo dev-hot-reload` 単独では接続先を設定しません。
+launcher は修正版 `target/dx-fixed0710/bin/dx.exe` の存在確認と同一 worktree の排他ロック（`target/hot-reload.lock`）を取得した後、Windows x64 向けに Host をビルドしてから dx を起動します。Host のビルドに失敗した場合は dx を起動しません。修正版 dx がない場合は下記の手順で準備してください。
 
-Hostは `target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe` に置き、Desktopの `--local-host-executable` に渡します。dxは起動時にapp出力先を削除するため、そこへHostを手動コピーする必要はありません。パスはworktreeルートからの相対指定なので、空白を含むworktreeでもdxの引数分割に影響されません。dxはdevserverとDesktopを起動し、接続先の環境変数をDesktopへ渡します。Hostは通常どおりWorkspaceを開くときに起動し、Desktop終了後も存続します。Hostのソース変更を反映するには、利用中の作業を終了してHostとlauncherを再起動してください。
+Host は `target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe` に置き、session へ複製して Desktop の `--local-host-executable` に渡します。dx は起動時に app 出力先を削除するため、そこへ Host を手動コピーする必要はありません。パスは worktree ルートからの相対指定なので、空白を含む worktree でも dx の引数分割に影響されません。
 
-launcherは `hot-reload` Cargo profileを使用します。これは `dev` を継承してLTOを無効化し、workspace replayのコンパイル時間を短縮します。通常のDebugとReleaseには適用されず、初回起動時は専用profileのビルドが必要です。
+launcher は `hot-reload` Cargo profile を使用します。これは `dev` を継承して LTO を無効化し、workspace replay のコンパイル時間を短縮します。通常の Debug と Release には適用されず、初回起動時は専用 profile のビルドが必要です。
 
-RustRoverのStopでlauncherを強制終了すると、dxが残ってロックだけ解放される場合があります。この場合は残ったdevserverを終了してから再起動してください。強制終了後の重複起動防止は未対応です。
-
-```powershell
-cargo run --manifest-path scripts/hot-reload/Cargo.toml --target-dir target
-```
+launcher は Windows の Job Object で Run が起動した process をまとめて管理するため、IDE の Stop で dx も終了します。強制終了した場合だけ dx が残ることがあり、その場合は残った devserver を終了してから再起動してください。
 
 ### Windows x64 patchが必要な理由
 

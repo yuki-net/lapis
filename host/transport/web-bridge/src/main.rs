@@ -20,21 +20,94 @@ mod oidc;
 
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
+/// 接続情報の出現を待つ上限。Hostの起動を待てる程度にし、無いまま固まらない。
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
+const CONNECTION_POLL: Duration = Duration::from_millis(100);
+/// 開発時に `.run` から引数を消せるよう、待受とOriginに既定値を持たせる。
+const DEFAULT_LISTEN: &str = "127.0.0.1:4748";
+const DEFAULT_ORIGIN: &str = "http://127.0.0.1:4747";
+const LISTEN_ENV: &str = "LAPIS_WEB_BRIDGE_LISTEN";
+const ORIGIN_ENV: &str = "LAPIS_WEB_BRIDGE_ORIGIN";
 type Error = Box<dyn std::error::Error + Send + Sync>;
 
 struct Options {
     listen: SocketAddr,
+    target: Target,
+    origin: String,
+}
+
+/// Hostへの接続先の決め方。
+#[derive(Clone)]
+enum Target {
+    /// 既知のアドレス・サーバー名・公開証明書を使う。
+    Explicit {
+        host: SocketAddr,
+        server_name: String,
+        certificate: PathBuf,
+    },
+    /// Hostが書き出した接続情報を接続のたびに読み直す。
+    Connection { path: PathBuf },
+}
+
+struct Resolved {
     host: SocketAddr,
     server_name: String,
-    certificate: PathBuf,
-    origin: String,
+    certificate: Vec<u8>,
+    /// 接続情報から読んだ場合だけ分かる。
+    workspace_id: Option<String>,
+}
+
+impl Target {
+    fn resolve(&self) -> Result<Resolved, String> {
+        match self {
+            Self::Explicit {
+                host,
+                server_name,
+                certificate,
+            } => Ok(Resolved {
+                host: *host,
+                server_name: server_name.clone(),
+                certificate: std::fs::read(certificate).map_err(|error| {
+                    format!(
+                        "証明書を読み込めません ({}): {error}",
+                        certificate.display()
+                    )
+                })?,
+                workspace_id: None,
+            }),
+            Self::Connection { path } => {
+                let connection = wire::read_connection(path)?;
+                if !connection.address.ip().is_loopback() {
+                    return Err(format!(
+                        "接続情報のHostがloopbackではありません ({})",
+                        path.display()
+                    ));
+                }
+                Ok(Resolved {
+                    host: connection.address,
+                    server_name: connection.server_name,
+                    certificate: connection.certificate,
+                    workspace_id: Some(connection.workspace_id),
+                })
+            }
+        }
+    }
 }
 
 impl Options {
     fn parse(args: impl Iterator<Item = std::ffi::OsString>) -> Result<Self, Error> {
+        Self::parse_with(args, |name| std::env::var(name).ok())
+    }
+
+    /// 優先順はCLI引数、環境変数、既定値。テストから環境変数を差し替えるため分離する。
+    fn parse_with(
+        args: impl Iterator<Item = std::ffi::OsString>,
+        setting: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, Error> {
         let mut args = args;
         let (mut listen, mut host, mut server_name, mut certificate, mut origin) =
             (None, None, None, None, None);
+        let mut connection_info = None;
         let mut allow_remote = false;
         while let Some(flag) = args.next() {
             if flag.to_str() == Some("--allow-remote") {
@@ -44,12 +117,7 @@ impl Options {
             let value = args.next().ok_or("option requires a value")?;
             match flag.to_str() {
                 Some("--listen") => {
-                    listen = Some(
-                        value
-                            .to_str()
-                            .ok_or("invalid listen")?
-                            .parse::<SocketAddr>()?,
-                    )
+                    listen = Some(value.into_string().map_err(|_| "invalid listen")?)
                 }
                 Some("--host") => {
                     host = Some(
@@ -63,21 +131,43 @@ impl Options {
                     server_name = Some(value.into_string().map_err(|_| "invalid server name")?)
                 }
                 Some("--certificate") => certificate = Some(PathBuf::from(value)),
+                Some("--connection-info") => connection_info = Some(PathBuf::from(value)),
                 Some("--origin") => {
                     origin = Some(value.into_string().map_err(|_| "invalid origin")?)
                 }
                 _ => return Err("unknown option".into()),
             }
         }
-        let listen = listen.ok_or("--listen is required")?;
-        let host = host.ok_or("--host is required")?;
-        if !host.ip().is_loopback() {
-            return Err("host must use a loopback address".into());
-        }
+        let listen = listen
+            .or_else(|| setting(LISTEN_ENV))
+            .unwrap_or_else(|| DEFAULT_LISTEN.to_owned())
+            .parse::<SocketAddr>()
+            .map_err(|error| format!("invalid listen address: {error}"))?;
         if !listen.ip().is_loopback() && !allow_remote {
             return Err("non-loopback listen requires --allow-remote".into());
         }
-        let origin: String = origin.ok_or("--origin is required")?;
+        let target = match connection_info {
+            Some(path) => {
+                if host.is_some() || server_name.is_some() || certificate.is_some() {
+                    return Err("--connection-info cannot be combined with --host, --server-name, or --certificate".into());
+                }
+                Target::Connection { path }
+            }
+            None => {
+                let host = host.ok_or("--host is required")?;
+                if !host.ip().is_loopback() {
+                    return Err("host must use a loopback address".into());
+                }
+                Target::Explicit {
+                    host,
+                    server_name: server_name.ok_or("--server-name is required")?,
+                    certificate: certificate.ok_or("--certificate is required")?,
+                }
+            }
+        };
+        let origin = origin
+            .or_else(|| setting(ORIGIN_ENV))
+            .unwrap_or_else(|| DEFAULT_ORIGIN.to_owned());
         let authority = origin
             .strip_prefix("http://")
             .or_else(|| origin.strip_prefix("https://"))
@@ -92,9 +182,7 @@ impl Options {
         }
         Ok(Self {
             listen,
-            host,
-            server_name: server_name.ok_or("--server-name is required")?,
-            certificate: certificate.ok_or("--certificate is required")?,
+            target,
             origin,
         })
     }
@@ -103,9 +191,7 @@ impl Options {
 #[derive(Clone)]
 struct Bridge {
     endpoint: quinn::Endpoint,
-    certificate: PathBuf,
-    host: SocketAddr,
-    server_name: String,
+    target: Target,
     origin: String,
     slots: Arc<Semaphore>,
     oidc: Option<Arc<oidc::OidcBroker>>,
@@ -118,26 +204,42 @@ async fn main() -> Result<(), Error> {
     if oidc.is_some() {
         eprintln!("web-bridge OIDC login enabled");
     }
-    let _ = client_config(std::fs::read(&options.certificate)?)?;
+    let resolved = match &options.target {
+        Target::Connection { path } => wait_for_connection(path).await?,
+        Target::Explicit { .. } => options.target.resolve()?,
+    };
+    let Resolved {
+        host,
+        certificate,
+        workspace_id,
+        ..
+    } = resolved;
     let endpoint = quinn::Endpoint::client(
-        if options.host.is_ipv4() {
+        if host.is_ipv4() {
             "127.0.0.1:0"
         } else {
             "[::1]:0"
         }
         .parse()?,
     )?;
+    // 起動時に証明書を検証しておく。壊れていればここで止まる。
+    let _ = client_config(certificate)?;
+    let listener = tokio::net::TcpListener::bind(options.listen).await?;
+    let listen = listener.local_addr()?;
+    let open = workspace_id
+        .as_deref()
+        .map(|workspace| open_url(&options.origin, listen, workspace));
     let bridge = Bridge {
         endpoint,
-        certificate: options.certificate,
-        host: options.host,
-        server_name: options.server_name,
+        target: options.target,
         origin: options.origin,
         slots: Arc::new(Semaphore::new(128)),
         oidc: oidc.map(Arc::new),
     };
-    let listener = tokio::net::TcpListener::bind(options.listen).await?;
-    eprintln!("web-bridge listening on {}", listener.local_addr()?);
+    eprintln!("web-bridge listening on {listen}");
+    if let Some(open) = open {
+        eprintln!("open {open}");
+    }
     axum::serve(
         listener,
         Router::new()
@@ -168,6 +270,42 @@ fn client_config(certificate: Vec<u8>) -> Result<quinn::ClientConfig, Error> {
     Ok(quinn::ClientConfig::new(Arc::new(
         QuicClientConfig::try_from(tls)?,
     )))
+}
+
+/// Hostが接続情報を書き出すまで待つ。Hostより先に起動しても繋がるようにする。
+async fn wait_for_connection(path: &std::path::Path) -> Result<Resolved, Error> {
+    let target = Target::Connection {
+        path: path.to_path_buf(),
+    };
+    let deadline = tokio::time::Instant::now() + CONNECTION_TIMEOUT;
+    let mut waiting = false;
+    loop {
+        match target.resolve() {
+            Ok(resolved) => return Ok(resolved),
+            Err(error) => {
+                if !waiting {
+                    eprintln!("web-bridge waiting for connection info ({error})");
+                    waiting = true;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!(
+                        "接続情報を{}秒待っても読めません: {error}",
+                        CONNECTION_TIMEOUT.as_secs()
+                    )
+                    .into());
+                }
+                tokio::time::sleep(CONNECTION_POLL).await;
+            }
+        }
+    }
+}
+
+/// ブラウザーで開くURL。Host URLにはbridgeの待受アドレスを渡す。
+fn open_url(origin: &str, listen: SocketAddr, workspace: &str) -> String {
+    format!(
+        "{origin}/?url=ws://{listen}{}&workspace={workspace}",
+        wire::REMOTE_WEBSOCKET_PATH
+    )
 }
 
 async fn upgrade(
@@ -201,13 +339,17 @@ async fn upgrade(
 }
 
 async fn forward(socket: WebSocket, bridge: Bridge) -> Result<(), Error> {
-    let certificate = tokio::fs::read(&bridge.certificate).await?;
+    // 接続のたびに読み直し、Hostの再起動でアドレスや証明書が変わっても追従する。
+    let Resolved {
+        host,
+        server_name,
+        certificate,
+        ..
+    } = bridge.target.resolve()?;
     let config = client_config(certificate)?;
     let connection = tokio::time::timeout(
         Duration::from_secs(10),
-        bridge
-            .endpoint
-            .connect_with(config, bridge.host, &bridge.server_name)?,
+        bridge.endpoint.connect_with(config, host, &server_name)?,
     )
     .await??;
     let (send, recv) =
@@ -306,6 +448,139 @@ mod tests {
             ])
             .is_err()
         );
+        // 接続情報と明示指定は併用できない。
+        assert!(
+            parse(&[
+                "--listen",
+                "127.0.0.1:8080",
+                "--origin",
+                "http://localhost:5173",
+                "--connection-info",
+                "connection.json",
+            ])
+            .is_err()
+        );
+        // 接続情報だけを指定すればHostの値は不要。
+        let connection = Options::parse(
+            [
+                "--listen",
+                "127.0.0.1:8080",
+                "--origin",
+                "http://localhost:5173",
+                "--connection-info",
+                "connection.json",
+            ]
+            .map(std::ffi::OsString::from)
+            .into_iter(),
+        )
+        .unwrap();
+        assert!(matches!(connection.target, Target::Connection { .. }));
+    }
+
+    #[test]
+    fn defaults_and_environment_order_decide_listen_and_origin() {
+        let parse = |args: &[&str], environment: &[(&str, &str)]| {
+            Options::parse_with(
+                args.iter().map(|value| std::ffi::OsString::from(*value)),
+                |name| {
+                    environment
+                        .iter()
+                        .find(|(key, _)| *key == name)
+                        .map(|(_, value)| (*value).to_owned())
+                },
+            )
+        };
+        let host = [
+            "--host",
+            "127.0.0.1:5000",
+            "--server-name",
+            "localhost",
+            "--certificate",
+            "cert.der",
+        ];
+        // 引数を省いても既定値で起動できる。
+        let defaults = parse(&host, &[]).unwrap();
+        assert_eq!(defaults.listen, "127.0.0.1:4748".parse().unwrap());
+        assert_eq!(defaults.origin, "http://127.0.0.1:4747");
+        // 環境変数は既定値より優先する。
+        let environment = parse(
+            &host,
+            &[
+                (LISTEN_ENV, "127.0.0.1:5001"),
+                (ORIGIN_ENV, "http://127.0.0.1:5002"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(environment.listen, "127.0.0.1:5001".parse().unwrap());
+        assert_eq!(environment.origin, "http://127.0.0.1:5002");
+        // CLI引数は環境変数より優先する。
+        let cli = parse(
+            &[
+                "--listen",
+                "127.0.0.1:5003",
+                "--origin",
+                "http://127.0.0.1:5004",
+                "--host",
+                "127.0.0.1:5000",
+                "--server-name",
+                "localhost",
+                "--certificate",
+                "cert.der",
+            ],
+            &[
+                (LISTEN_ENV, "127.0.0.1:5001"),
+                (ORIGIN_ENV, "http://127.0.0.1:5002"),
+            ],
+        )
+        .unwrap();
+        assert_eq!(cli.listen, "127.0.0.1:5003".parse().unwrap());
+        assert_eq!(cli.origin, "http://127.0.0.1:5004");
+        // 環境変数でもループバック以外は --allow-remote が要る。
+        assert!(parse(&host, &[(LISTEN_ENV, "0.0.0.0:5001")]).is_err());
+        // 環境変数の不正値は既定へ落とさずエラーにする。
+        assert!(parse(&host, &[(ORIGIN_ENV, "localhost:4747")]).is_err());
+        assert!(parse(&host, &[(LISTEN_ENV, "not-an-address")]).is_err());
+    }
+
+    #[test]
+    fn open_url_points_at_the_bridge() {
+        assert_eq!(
+            open_url(
+                "http://127.0.0.1:4747",
+                "127.0.0.1:4748".parse().unwrap(),
+                "workspace-1"
+            ),
+            "http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=workspace-1"
+        );
+    }
+
+    #[tokio::test]
+    async fn waits_for_connection_info_to_appear() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("connection.json");
+        let writer = tokio::spawn({
+            let path = path.clone();
+            async move {
+                tokio::time::sleep(Duration::from_millis(300)).await;
+                wire::write_connection(
+                    &path,
+                    &wire::HostConnection {
+                        version: wire::HOST_CONNECTION_VERSION,
+                        address: "127.0.0.1:5000".parse().unwrap(),
+                        server_name: "lapis-host".into(),
+                        workspace_id: "workspace-1".into(),
+                        certificate: vec![1, 2, 3],
+                    },
+                )
+                .unwrap();
+            }
+        });
+
+        let resolved = wait_for_connection(&path).await.unwrap();
+        assert_eq!(resolved.host, "127.0.0.1:5000".parse().unwrap());
+        assert_eq!(resolved.server_name, "lapis-host");
+        assert_eq!(resolved.workspace_id.as_deref(), Some("workspace-1"));
+        writer.await.unwrap();
     }
 
     #[tokio::test]
@@ -384,9 +659,11 @@ mod tests {
         )));
         let bridge = Bridge {
             endpoint,
-            certificate: certificate_path.clone(),
-            host: host_address,
-            server_name: "localhost".into(),
+            target: Target::Explicit {
+                host: host_address,
+                server_name: "localhost".into(),
+                certificate: certificate_path.clone(),
+            },
             origin: "http://localhost:5173".into(),
             slots: Arc::new(Semaphore::new(2)),
             oidc: None,
@@ -452,6 +729,95 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(message.into_text().unwrap(), "second");
+        drop(socket);
+        host_task.await.unwrap();
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn forwards_messages_using_connection_info() {
+        let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let certificate = certified.cert.der().clone();
+        let key =
+            rustls::pki_types::PrivateKeyDer::Pkcs8(certified.signing_key.serialize_der().into());
+        let mut server_tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(vec![certificate.clone()], key)
+        .unwrap();
+        server_tls.alpn_protocols = vec![wire::REMOTE_QUIC_PROTOCOL.to_vec()];
+        let server_config = quinn::ServerConfig::with_crypto(Arc::new(
+            quinn::crypto::rustls::QuicServerConfig::try_from(server_tls).unwrap(),
+        ));
+        let host = quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).unwrap();
+        let host_address = host.local_addr().unwrap();
+        let host_task = tokio::spawn(async move {
+            let connection = host.accept().await.unwrap().await.unwrap();
+            let (send, recv) = connection.accept_bi().await.unwrap();
+            let mut reader = LengthDelimitedCodec::builder().new_read(recv);
+            let mut writer = LengthDelimitedCodec::builder().new_write(send);
+            let message = reader.next().await.unwrap().unwrap();
+            writer.send(message.freeze()).await.unwrap();
+            // ブリッジが閉じるまで接続を維持し、エコーが届く前にQUICを閉じない。
+            let _ = tokio::time::timeout(Duration::from_secs(10), connection.closed()).await;
+        });
+        let directory = tempfile::tempdir().unwrap();
+        let connection_info = directory.path().join("connection.json");
+        wire::write_connection(
+            &connection_info,
+            &wire::HostConnection {
+                version: wire::HOST_CONNECTION_VERSION,
+                address: host_address,
+                server_name: "localhost".into(),
+                workspace_id: "workspace-1".into(),
+                certificate: certificate.to_vec(),
+            },
+        )
+        .unwrap();
+        let bridge = Bridge {
+            endpoint: quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap(),
+            target: Target::Connection {
+                path: connection_info,
+            },
+            origin: "http://localhost:5173".into(),
+            slots: Arc::new(Semaphore::new(1)),
+            oidc: None,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
+                    .with_state(bridge),
+            )
+            .await
+            .unwrap();
+        });
+        let url = format!("ws://{address}/remote");
+        let mut request = url.as_str().into_client_request().unwrap();
+        request
+            .headers_mut()
+            .insert("origin", "http://localhost:5173".parse().unwrap());
+        request.headers_mut().insert(
+            "sec-websocket-protocol",
+            wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
+        );
+        let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        socket
+            .send(ClientMessage::Text("hello".into()))
+            .await
+            .unwrap();
+        let message = tokio::time::timeout(Duration::from_secs(5), socket.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(message.into_text().unwrap(), "hello");
         drop(socket);
         host_task.await.unwrap();
         task.abort();

@@ -1,12 +1,8 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Lapis Web" type="js.build_tools.npm" factoryName="npm">
-    <package-json value="$PROJECT_DIR$/clients/web/package.json" />
-    <command value="run" />
-    <scripts>
-      <script value="dev" />
-    </scripts>
-    <node-interpreter value="project" />
-    <envs />
+  <configuration default="false" name="Lapis Web" type="CompoundRunConfigurationType" factoryName="Compound">
+    <toRun name="Lapis Web Host" type="CargoCommandRunConfiguration" />
+    <toRun name="Lapis Web Bridge" type="CargoCommandRunConfiguration" />
+    <toRun name="Lapis Web Page" type="js.build_tools.npm" />
     <method v="2" />
   </configuration>
 </component>

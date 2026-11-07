@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Lapis Hot Reload" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --manifest-path scripts/hot-reload/Cargo.toml --target-dir target" />
+    <option name="command" value="run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --hot-reload" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
     <option name="emulateTerminal" value="false" />
