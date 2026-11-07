@@ -10,7 +10,6 @@ mod path;
 mod ports;
 mod service;
 mod state;
-mod terminal_state;
 
 pub use client::EmbeddedClient;
 pub use credential::StoredCredential;
