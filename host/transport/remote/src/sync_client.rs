@@ -108,9 +108,11 @@ impl QuicConnectionConfig {
     }
 
     /// 指定された認証材料で Host に接続し、検証済みの ServerHello を返す。
-    /// 接続は検証後に破棄する。
+    /// 接続は close packet を送ってから破棄する。
     pub async fn verify(&self) -> Result<ServerHello, Error> {
-        self.authenticate().await.map(|(_, hello)| hello)
+        let (client, hello) = self.authenticate().await?;
+        client.shutdown().await;
+        Ok(hello)
     }
 
     async fn authenticate(&self) -> Result<(QuicClient, ServerHello), Error> {

@@ -209,8 +209,11 @@ fn wait_for_callback(
     loop {
         match listener.accept() {
             Ok((mut stream, _)) => {
-                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-                let target = match read_request_target(&stream) {
+                // listener の non-blocking 設定を accept 後に引き継がない。
+                stream.set_nonblocking(false)?;
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                stream.set_read_timeout(Some(remaining.min(Duration::from_secs(5))))?;
+                let target = match read_request_target(&stream, deadline) {
                     Ok(target) => target,
                     Err(_) => {
                         let _ = respond(&mut stream, "400 Bad Request", ERROR_HTML);
@@ -242,10 +245,11 @@ fn wait_for_callback(
     }
 }
 
-fn read_request_target(stream: &TcpStream) -> std::io::Result<String> {
+fn read_request_target(stream: &TcpStream, deadline: Instant) -> std::io::Result<String> {
     let mut reader = stream.try_clone()?;
-    let request_line = read_until_newline(&mut reader, 8192)?;
-    let line = std::str::from_utf8(&request_line)
+    let head = read_http_head(&mut reader, 8192, deadline)?;
+    let request_line = head.split(|byte| *byte == b'\n').next().unwrap_or_default();
+    let line = std::str::from_utf8(request_line)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid request"))?;
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or("");
@@ -253,37 +257,42 @@ fn read_request_target(stream: &TcpStream) -> std::io::Result<String> {
         .next()
         .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "missing target"))?
         .to_owned();
-    // 応答前にヘッダーを読み切り、未読データによる RST を避ける。
-    let mut headers = 0;
-    loop {
-        let line = read_until_newline(&mut reader, 8192)?;
-        if line.is_empty() || line == b"\r\n" || line == b"\n" {
-            break;
-        }
-        headers += line.len();
-        if headers >= 8192 {
-            break;
-        }
-    }
     if method != "GET" {
         return Ok("/invalid-method".to_owned());
     }
     Ok(target)
 }
 
-fn read_until_newline(reader: &mut impl Read, max: usize) -> std::io::Result<Vec<u8>> {
-    let mut line = Vec::new();
-    let mut byte = [0u8; 1];
+/// HTTP のヘッダー終端まで読み切る。読み取りは絶対 deadline で打ち切る。
+fn read_http_head(
+    reader: &mut impl Read,
+    max: usize,
+    deadline: Instant,
+) -> std::io::Result<Vec<u8>> {
+    let mut head = Vec::new();
+    let mut chunk = [0u8; 256];
     loop {
-        if reader.read(&mut byte)? == 0 {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "callback timed out",
+            ));
+        }
+        let read = reader.read(&mut chunk)?;
+        if read == 0 {
             break;
         }
-        line.push(byte[0]);
-        if byte[0] == b'\n' || line.len() >= max {
+        head.extend_from_slice(&chunk[..read]);
+        if head.windows(4).any(|window| window == b"\r\n\r\n")
+            || head.windows(2).any(|window| window == b"\n\n")
+        {
+            break;
+        }
+        if head.len() >= max {
             break;
         }
     }
-    Ok(line)
+    Ok(head)
 }
 
 fn parse_callback(target: &str, expected_path: &str, expected_state: &str) -> Callback {
@@ -445,6 +454,49 @@ mod tests {
         let code =
             wait_for_callback(listener, "/auth/callback", "s1", Duration::from_secs(2)).unwrap();
         assert_eq!(code, "abc");
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn callback_accepts_request_sent_after_the_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            // accept 直後はまだ要求が無い状態を作る。
+            std::thread::sleep(Duration::from_millis(250));
+            stream
+                .write_all(
+                    b"GET /auth/callback?code=abc&state=s1 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+                )
+                .unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            assert!(response.starts_with("HTTP/1.1 200"));
+        });
+        let code =
+            wait_for_callback(listener, "/auth/callback", "s1", Duration::from_secs(5)).unwrap();
+        assert_eq!(code, "abc");
+        client.join().unwrap();
+    }
+
+    #[test]
+    fn slow_request_body_does_not_exceed_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let client = std::thread::spawn(move || {
+            let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+            // 改行を送らずに接続を占有し続ける。
+            std::thread::sleep(Duration::from_millis(600));
+            let _ = stream.write_all(b"GET /auth/callback?code=abc");
+        });
+        let started = Instant::now();
+        let result =
+            wait_for_callback(listener, "/auth/callback", "s1", Duration::from_millis(300));
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(5));
         client.join().unwrap();
     }
 
