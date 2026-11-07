@@ -871,17 +871,14 @@ impl Render for QuickSearch {
                         )
                         .children(rows.into_iter().map(|(index, item)| {
                             let command_label = item.command.as_str().to_owned();
-                            div()
-                                .id(("quick-search-result", index))
+                            crate::components::hover_row(("quick-search-result", index), cx)
                                 .px_2()
                                 .py_2()
-                                .rounded(px(6.0))
                                 .bg(if index == self.selected_index {
                                     theme::colors(cx).button_background_selected
                                 } else {
                                     theme::colors(cx).background_secondary
                                 })
-                                .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                                 .cursor_pointer()
                                 .flex()
                                 .items_center()
