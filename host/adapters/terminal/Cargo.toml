@@ -1,0 +1,12 @@
+[package]
+name = "local-terminal"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+terminal = { path = "../../../contracts/domain/terminal" }
+portable-pty.workspace = true
+wezterm-term.workspace = true
+wezterm-surface.workspace = true

@@ -7,15 +7,13 @@ license.workspace = true
 
 [dependencies]
 notify = "8.2.0"
-wezterm-term.workspace = true
-wezterm-surface.workspace = true
 backend-state = { path = "../../runtime" }
 document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
+local-terminal = { path = "../terminal" }
 lsp = { path = "../../../contracts/domain/lsp" }
 terminal = { path = "../../../contracts/domain/terminal" }
-portable-pty.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../contracts/domain/workspace" }
