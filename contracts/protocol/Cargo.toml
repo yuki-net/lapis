@@ -9,6 +9,7 @@ license.workspace = true
 git = { path = "../domain/git" }
 task = { path = "../domain/task" }
 editor-core = { path = "../domain/editor-core" }
+document = { path = "../domain/document" }
 terminal = { path = "../domain/terminal" }
 workspace = { path = "../domain/workspace" }
 workbench = { path = "../domain/workbench" }

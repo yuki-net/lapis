@@ -1187,6 +1187,7 @@ dependencies = [
 name = "client-api"
 version = "0.1.0"
 dependencies = [
+ "document",
  "editor-core",
  "git",
  "serde",

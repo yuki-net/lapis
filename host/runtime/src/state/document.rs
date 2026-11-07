@@ -310,7 +310,7 @@ impl BackendState {
                 ::document::DocumentError::conflict("document already exists on disk"),
             ));
         }
-        let document = Document::draft(absolute.clone(), content, to_document_encoding(encoding));
+        let document = Document::draft(absolute.clone(), content, encoding.into());
         let mut resource = DocumentResource::new(document_id.clone(), path.clone(), document);
         resource
             .attached_sessions
