@@ -259,6 +259,7 @@ class LapisRemoteClient(
         currentKey: String,
     ) {
         if (subject == null) {
+            _storageError.value = "Host が OIDC subject を返しません"
             return
         }
         val error = runCatching {
