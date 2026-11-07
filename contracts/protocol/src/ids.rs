@@ -6,6 +6,7 @@ macro_rules! resource_id {
     ($name:ident, $description:literal) => {
         #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
         #[serde(transparent)]
+        /// 生成された resource ID。空・128 byte 超は拒否する。
         pub struct $name(String);
 
         impl $name {
@@ -62,6 +63,7 @@ macro_rules! resource_id {
 const MAX_RESOURCE_ID_BYTES: usize = 128;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// resource ID が空、または長すぎる。
 pub struct InvalidResourceId;
 
 impl fmt::Display for InvalidResourceId {

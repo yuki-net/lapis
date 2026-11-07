@@ -9,6 +9,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
+/// Host から Client への応答。tag は method 名。
 pub enum ResponseBody {
     #[serde(rename = "workbench.get")]
     WorkbenchGet(crate::WorkbenchSnapshot),
