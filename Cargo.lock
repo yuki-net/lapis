@@ -1189,7 +1189,7 @@ version = "0.1.0"
 dependencies = [
  "document",
  "editor-core",
- "git",
+ "git-contract",
  "serde",
  "serde_json",
  "task",
@@ -2818,6 +2818,13 @@ version = "0.1.0"
 dependencies = [
  "editor-core",
  "serde",
+]
+
+[[package]]
+name = "git-contract"
+version = "0.1.0"
+dependencies = [
+ "git",
 ]
 
 [[package]]

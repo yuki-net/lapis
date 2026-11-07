@@ -17,6 +17,7 @@ members = [
     "contracts/domain/*",
     "contracts/transport/*",
     "contracts/protocol",
+    "extensions/*/*",
 ]
 exclude = ["vendor/gpui"]
 resolver = "3"
