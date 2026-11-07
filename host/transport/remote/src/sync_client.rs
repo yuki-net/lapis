@@ -517,7 +517,8 @@ mod tests {
             AuthConfig::new(
                 PairingLifetime::new(10).unwrap(),
                 CredentialLifetime::new(20).unwrap(),
-            ),
+            )
+            .with_auto_approve_oidc_devices(true),
             AuthPolicy::new(Default::default()),
         )));
         {

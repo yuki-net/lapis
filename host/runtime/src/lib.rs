@@ -2,6 +2,7 @@
 
 mod client;
 mod credential;
+mod device;
 mod error;
 mod events;
 mod operations;
@@ -14,6 +15,7 @@ mod workbench;
 
 pub use client::EmbeddedClient;
 pub use credential::StoredCredential;
+pub use device::{DeviceStatus, StoredDevice};
 pub use error::BackendStateError;
 pub use events::{BackendEventReceiver, BackendEventSink};
 pub use path::{PathSecurityError, WorkspacePathResolver};

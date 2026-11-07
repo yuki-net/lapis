@@ -127,7 +127,8 @@ fn run() -> Result<(), Error> {
         AuthConfig::new(
             PairingLifetime::new(3600)?,
             CredentialLifetime::new(CREDENTIAL_LIFETIME_SECONDS)?,
-        ),
+        )
+        .with_auto_approve_oidc_devices(auto_approve_oidc_devices()),
         AuthPolicy::new(host::supported_capabilities()),
     )));
     if let Some(oidc) = host::oidc_from_env()? {
@@ -137,21 +138,30 @@ fn run() -> Result<(), Error> {
     }
     let mut credential_store = match &credentials_path {
         Some(path) => match CredentialStore::open(path) {
-            Ok(store) => match store.load() {
-                Ok(records) => {
-                    let loaded = {
-                        let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
-                        auth.import_credentials(records);
-                        auth.export_credentials().len()
-                    };
-                    println!("Loaded {loaded} credential(s) from {}", path.display());
-                    Some(store)
+            Ok(store) => {
+                let credentials = store.load();
+                let devices = store.load_devices();
+                match (credentials, devices) {
+                    (Ok(records), Ok(devices)) => {
+                        let (loaded_credentials, loaded_devices) = {
+                            let mut auth = auth.lock().map_err(|_| "authentication unavailable")?;
+                            auth.import_credentials(records);
+                            let loaded_devices = devices.len();
+                            auth.import_devices(devices);
+                            (auth.export_credentials().len(), loaded_devices)
+                        };
+                        println!(
+                            "Loaded {loaded_credentials} credential(s) and {loaded_devices} device(s) from {}",
+                            path.display()
+                        );
+                        Some(store)
+                    }
+                    (Err(error), _) | (_, Err(error)) => {
+                        eprintln!("Ignoring invalid auth database: {error}");
+                        None
+                    }
                 }
-                Err(error) => {
-                    eprintln!("Ignoring invalid credential database: {error}");
-                    None
-                }
-            },
+            }
             Err(error) => {
                 eprintln!("Credential database unavailable: {error}");
                 None
@@ -183,7 +193,7 @@ fn run() -> Result<(), Error> {
         // listenに失敗した起動が稼働中Hostの証明書を置き換えない。
         write_public_certificate(&options.certificate, certified.cert.der(), options.replace_certificate)?;
         println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
-        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / revoke <credential-id> / quit");
+        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
         let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
         credential_save.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -267,6 +277,47 @@ fn run() -> Result<(), Error> {
                             Ok(id) => println!("revoked={}", auth.lock().map_err(|_| "authentication unavailable")?.revoke(&id)),
                             Err(_) => eprintln!("Invalid credential ID"),
                         }
+                    } else if line == "devices" {
+                        let auth = auth.lock().map_err(|_| "authentication unavailable")?;
+                        let devices = auth.devices();
+                        if devices.is_empty() {
+                            println!("No devices");
+                        } else {
+                            for device in devices {
+                                println!(
+                                    "{} status={:?} client={} name={} kind={}",
+                                    device.id,
+                                    device.status,
+                                    device.client_id,
+                                    device.name,
+                                    device.kind
+                                );
+                            }
+                        }
+                    } else if let Some(id) = line.strip_prefix("approve ") {
+                        let id = id.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: approve <device-id>");
+                        } else {
+                            println!(
+                                "approved={}",
+                                auth.lock()
+                                    .map_err(|_| "authentication unavailable")?
+                                    .approve_device(id)
+                            );
+                        }
+                    } else if let Some(id) = line.strip_prefix("revoke-device ") {
+                        let id = id.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: revoke-device <device-id>");
+                        } else {
+                            println!(
+                                "revoked={}",
+                                auth.lock()
+                                    .map_err(|_| "authentication unavailable")?
+                                    .revoke_device(id)
+                            );
+                        }
                     } else { eprintln!("Unknown command"); }
                     std::io::stdout().flush()?;
                 }
@@ -285,23 +336,35 @@ fn run() -> Result<(), Error> {
 fn save_credentials(
     store: Option<&mut CredentialStore>,
     auth: &Mutex<RemoteAuth>,
-    last_saved: &mut Option<Vec<u8>>,
+    last_saved: &mut Option<(Vec<u8>, Vec<u8>)>,
 ) -> Result<(), Error> {
     let Some(store) = store else {
         return Ok(());
     };
-    let mut records = auth
-        .lock()
-        .map_err(|_| "authentication unavailable")?
-        .export_credentials();
-    records.sort_by(|left, right| left.id.cmp(&right.id));
-    let bytes = serde_json::to_vec(&records)?;
-    if last_saved.as_deref() == Some(bytes.as_slice()) {
+    let (mut credentials, mut devices) = {
+        let auth = auth.lock().map_err(|_| "authentication unavailable")?;
+        (auth.export_credentials(), auth.export_devices())
+    };
+    credentials.sort_by(|left, right| left.id.cmp(&right.id));
+    devices.sort_by(|left, right| left.id.cmp(&right.id));
+    let credential_bytes = serde_json::to_vec(&credentials)?;
+    let device_bytes = serde_json::to_vec(&devices)?;
+    if last_saved
+        .as_ref()
+        .is_some_and(|(saved_credentials, saved_devices)| {
+            saved_credentials == &credential_bytes && saved_devices == &device_bytes
+        })
+    {
         return Ok(());
     }
-    store.replace_all(&records)?;
-    *last_saved = Some(bytes);
+    store.replace_auth(&credentials, &devices)?;
+    *last_saved = Some((credential_bytes, device_bytes));
     Ok(())
+}
+
+fn auto_approve_oidc_devices() -> bool {
+    std::env::var("LAPIS_AUTO_APPROVE_OIDC_DEVICES")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 fn write_public_certificate(

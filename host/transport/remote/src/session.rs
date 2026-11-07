@@ -141,7 +141,7 @@ impl ConnectionSession {
             .and_then(|mut auth| {
                 auth.complete_pairing_and_authenticate(
                     &token,
-                    &request.hello.client_id,
+                    &request.hello,
                     &request.hello.requested_capabilities,
                 )
             });
@@ -212,7 +212,7 @@ impl ConnectionSession {
             .and_then(|mut auth| {
                 auth.authenticate_oidc(
                     request.id_token(),
-                    &request.hello.client_id,
+                    &request.hello,
                     &request.workspace_id,
                     &request.hello.requested_capabilities,
                 )
@@ -391,7 +391,8 @@ mod tests {
         let config = AuthConfig::new(
             PairingLifetime::new(Duration::from_secs(30).as_secs()).unwrap(),
             CredentialLifetime::new(Duration::from_secs(300).as_secs()).unwrap(),
-        );
+        )
+        .with_auto_approve_oidc_devices(true);
         let mut auth = RemoteAuth::system(
             config,
             AuthPolicy::new(CapabilitySet::try_new([capability]).unwrap()),
