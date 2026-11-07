@@ -1,8 +1,10 @@
 use std::{collections::HashMap, error::Error, fmt, marker::PhantomData, sync::Arc};
 
+use backend_state::DeviceStatus;
+pub use backend_state::{StoredCredential, StoredDevice};
 use client_api::{
-    AuthMethod, AuthRequired, CapabilityId, CapabilitySet, ClientId, OidcClientConfig, RequestBody,
-    SessionId, WorkspaceId,
+    AuthMethod, AuthRequired, CapabilityId, CapabilitySet, ClientHello, ClientId, OidcClientConfig,
+    RequestBody, SessionId, WorkspaceId,
 };
 
 use crate::{
@@ -17,6 +19,7 @@ use crate::{
 
 const MAX_PENDING_PAIRINGS: usize = 8;
 const MAX_CREDENTIALS: usize = 64;
+const MAX_DEVICES: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PairingLifetime(u64);
@@ -61,6 +64,7 @@ impl NonZeroSeconds {
 pub struct AuthConfig {
     pub pairing_lifetime: PairingLifetime,
     pub credential_lifetime: CredentialLifetime,
+    auto_approve_oidc_devices: bool,
 }
 
 impl AuthConfig {
@@ -68,7 +72,18 @@ impl AuthConfig {
         Self {
             pairing_lifetime,
             credential_lifetime,
+            auto_approve_oidc_devices: false,
         }
+    }
+
+    /// OIDC の新規 Device を Host 所有者の承認なしで許可する。
+    pub fn with_auto_approve_oidc_devices(mut self, value: bool) -> Self {
+        self.auto_approve_oidc_devices = value;
+        self
+    }
+
+    pub fn auto_approve_oidc_devices(self) -> bool {
+        self.auto_approve_oidc_devices
     }
 }
 
@@ -114,6 +129,8 @@ pub enum AuthError {
     CapacityReached,
     Random(RandomError),
     OidcUnavailable,
+    DeviceApprovalRequired,
+    DeviceRevoked,
 }
 
 impl fmt::Display for AuthError {
@@ -129,6 +146,8 @@ impl fmt::Display for AuthError {
             Self::CapacityReached => formatter.write_str("authentication capacity reached"),
             Self::Random(_) => formatter.write_str("authentication secret generation failed"),
             Self::OidcUnavailable => formatter.write_str("OIDC token is invalid or unavailable"),
+            Self::DeviceApprovalRequired => formatter.write_str("device approval is required"),
+            Self::DeviceRevoked => formatter.write_str("device has been revoked"),
         }
     }
 }
@@ -178,8 +197,6 @@ enum PairingScope {
     User,
     Owner,
 }
-
-pub use backend_state::StoredCredential;
 
 impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn export_credentials(&self) -> Vec<StoredCredential> {
@@ -241,6 +258,138 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             );
         }
     }
+
+    /// 保存済み device を返す。承認 UI と永続化で使う。
+    pub fn devices(&self) -> Vec<StoredDevice> {
+        let mut devices = self.devices.values().cloned().collect::<Vec<_>>();
+        devices.sort_by(|left, right| left.id.cmp(&right.id));
+        devices
+    }
+
+    /// 保存済み device をすべて返す。
+    pub fn export_devices(&self) -> Vec<StoredDevice> {
+        self.devices()
+    }
+
+    /// 永続化された device を読み込む。
+    pub fn import_devices(&mut self, devices: Vec<StoredDevice>) {
+        for device in devices {
+            if device.id.is_empty() || device.client_id.is_empty() {
+                continue;
+            }
+            self.devices.insert(device.client_id.clone(), device);
+        }
+    }
+
+    /// 承認待ちの device を許可する。
+    pub fn approve_device(&mut self, device_id: &str) -> bool {
+        let now = self.clock.now_unix_seconds();
+        let Some(device) = self
+            .devices
+            .values_mut()
+            .find(|device| device.id == device_id)
+        else {
+            return false;
+        };
+        device.status = DeviceStatus::Approved;
+        device.approved_at = Some(now);
+        device.revoked_at = None;
+        true
+    }
+
+    /// device を失効させ、その Client の credential と OIDC Session を破棄する。
+    pub fn revoke_device(&mut self, device_id: &str) -> bool {
+        let now = self.clock.now_unix_seconds();
+        let Some(client_id) = self
+            .devices
+            .values()
+            .find(|device| device.id == device_id)
+            .map(|device| device.client_id.clone())
+        else {
+            return false;
+        };
+        if let Some(device) = self.devices.get_mut(&client_id) {
+            device.status = DeviceStatus::Revoked;
+            device.revoked_at = Some(now);
+        }
+        self.credentials
+            .retain(|_, record| record.client_id.as_str() != client_id);
+        self.sessions.retain(|_, owner| match owner {
+            SessionOwner::Credential(_) => true,
+            SessionOwner::Oidc(session) => session.client_id != client_id,
+        });
+        true
+    }
+
+    /// 明示的な pairing token で接続した Client を承認済み device として登録する。
+    pub fn ensure_token_device(&mut self, hello: &ClientHello) -> Result<(), AuthError> {
+        self.ensure_device(
+            &hello.client_id,
+            &hello.client_name,
+            &kind_label(hello.client_kind),
+            true,
+        )
+    }
+
+    fn ensure_device(
+        &mut self,
+        client_id: &ClientId,
+        name: &str,
+        kind: &str,
+        auto_approve: bool,
+    ) -> Result<(), AuthError> {
+        let now = self.clock.now_unix_seconds();
+        if let Some(device) = self.devices.get_mut(client_id.as_str()) {
+            device.last_seen_at = now;
+            return match device.status {
+                DeviceStatus::Approved => Ok(()),
+                DeviceStatus::Pending => Err(AuthError::DeviceApprovalRequired),
+                DeviceStatus::Revoked => Err(AuthError::DeviceRevoked),
+            };
+        }
+        if self.devices.len() >= MAX_DEVICES {
+            return Err(AuthError::CapacityReached);
+        }
+        let status = if auto_approve {
+            DeviceStatus::Approved
+        } else {
+            DeviceStatus::Pending
+        };
+        let id = self.generate_device_id()?;
+        let device = StoredDevice {
+            id: id.clone(),
+            client_id: client_id.as_str().to_owned(),
+            name: name.to_owned(),
+            kind: kind.to_owned(),
+            status,
+            created_at: now,
+            last_seen_at: now,
+            approved_at: (status == DeviceStatus::Approved).then_some(now),
+            revoked_at: None,
+        };
+        self.devices.insert(device.client_id.clone(), device);
+        if status == DeviceStatus::Pending {
+            eprintln!("New device pending approval: {id} ({name})");
+            Err(AuthError::DeviceApprovalRequired)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn generate_device_id(&mut self) -> Result<String, AuthError> {
+        for _ in 0..4 {
+            let id = crate::credential::generate_id(&mut self.random).map_err(AuthError::Random)?;
+            let id = format!("device-{}", id.as_str());
+            if !self.devices.values().any(|device| device.id == id) {
+                return Ok(id);
+            }
+        }
+        Err(AuthError::Random(RandomError))
+    }
+}
+
+fn kind_label(kind: client_api::ClientKind) -> String {
+    format!("{kind:?}").to_lowercase()
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -277,6 +426,7 @@ enum SessionOwner {
 
 struct OidcSession {
     subject: String,
+    client_id: String,
     workspace_id: WorkspaceId,
     capabilities: CapabilitySet,
     expires_at: u64,
@@ -293,6 +443,7 @@ pub struct RemoteAuth<C = SystemClock, R = OsRandom> {
     enabled: bool,
     pairings: HashMap<[u8; SECRET_BYTES], PendingPairing>,
     credentials: HashMap<CredentialId, CredentialRecord>,
+    devices: HashMap<String, StoredDevice>,
     sessions: HashMap<SessionId, SessionOwner>,
     _marker: PhantomData<fn() -> SessionGrant>,
 }
@@ -315,6 +466,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             enabled: false,
             pairings: HashMap::new(),
             credentials: HashMap::new(),
+            devices: HashMap::new(),
             sessions: HashMap::new(),
             _marker: PhantomData,
         }
@@ -466,17 +618,18 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn complete_pairing_and_authenticate(
         &mut self,
         token: &PairingToken,
-        client_id: &ClientId,
+        hello: &ClientHello,
         requested_capabilities: &CapabilitySet,
     ) -> Result<(CredentialHandle, SessionGrant), AuthError> {
-        let credential = self.complete_pairing(token, client_id, requested_capabilities)?;
+        let credential = self.complete_pairing(token, &hello.client_id, requested_capabilities)?;
+        self.ensure_token_device(hello)?;
         let workspace_id = self
             .credentials
             .get(credential.id())
             .ok_or(AuthError::CredentialUnavailable)?
             .workspace_id
             .clone();
-        match self.authenticate(&credential, client_id, &workspace_id) {
+        match self.authenticate(&credential, &hello.client_id, &workspace_id) {
             Ok(grant) => Ok((credential, grant)),
             Err(error) => {
                 self.revoke(credential.id());
@@ -512,8 +665,10 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         if now >= record.expires_at {
             return Err(AuthError::CredentialExpired);
         }
+        let record_client_id = record.client_id.clone();
         let granted_workspace = workspace_id.clone();
         let granted_capabilities = record.capabilities.clone();
+        self.ensure_device(&record_client_id, record_client_id.as_str(), "token", true)?;
         let session_id = self.generate_session_id()?;
         let grant = SessionGrant::from_authenticated(
             session_id.clone(),
@@ -531,19 +686,28 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn authenticate_oidc(
         &mut self,
         id_token: &str,
-        _client_id: &ClientId,
+        hello: &ClientHello,
         workspace_id: &WorkspaceId,
         requested_capabilities: &CapabilitySet,
     ) -> Result<(SessionGrant, String), AuthError> {
         self.require_enabled()?;
-        let verifier = self.oidc.as_ref().ok_or(AuthError::OidcUnavailable)?;
-        let claims = verifier
-            .verify(id_token)
-            .map_err(|_| AuthError::OidcUnavailable)?;
+        let claims = {
+            let verifier = self.oidc.as_ref().ok_or(AuthError::OidcUnavailable)?;
+            verifier
+                .verify(id_token)
+                .map_err(|_| AuthError::OidcUnavailable)?
+        };
         let now = self.clock.now_unix_seconds();
         if claims.expires_at <= now {
             return Err(AuthError::OidcUnavailable);
         }
+        let auto_approve = self.config.auto_approve_oidc_devices;
+        self.ensure_device(
+            &hello.client_id,
+            &hello.client_name,
+            &kind_label(hello.client_kind),
+            auto_approve,
+        )?;
         let subject = claims.subject;
         let granted = requested_capabilities.intersection(self.policy.allowed_capabilities());
         let capabilities = CapabilitySet::try_new(
@@ -566,6 +730,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             session_id,
             SessionOwner::Oidc(OidcSession {
                 subject: subject.clone(),
+                client_id: hello.client_id.as_str().to_owned(),
                 workspace_id: workspace_id.clone(),
                 capabilities,
                 expires_at,
@@ -678,7 +843,17 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use client_api::{CapabilityId, capability};
+    use client_api::{CURRENT_PROTOCOL, CapabilityId, ClientKind, ProtocolRange, capability};
+
+    fn hello(client_id: &str) -> ClientHello {
+        ClientHello {
+            protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
+            client_id: ClientId::try_new(client_id).unwrap(),
+            client_name: "Web".to_owned(),
+            client_kind: ClientKind::Desktop,
+            requested_capabilities: CapabilitySet::default(),
+        }
+    }
 
     #[derive(Clone, Debug)]
     struct TestClock(u64);
@@ -1041,5 +1216,101 @@ mod tests {
             auth.begin_pairing(workspace),
             Err(AuthError::CapacityReached)
         ));
+    }
+
+    #[test]
+    fn oidc_device_requires_approval_and_revocation_blocks_reconnect() {
+        let mut auth = setup();
+        auth.enable();
+        auth.enable_oidc(
+            std::sync::Arc::new(crate::oidc::test_verifier()),
+            OidcClientConfig {
+                issuer: "https://idp.example".to_owned(),
+                client_id: "lapis".to_owned(),
+                scopes: vec!["openid".to_owned()],
+            },
+        );
+        let hello = hello("web-1");
+        let (_, workspace) = ids();
+        let token = crate::oidc::test_token("alice", jsonwebtoken::get_current_timestamp() + 300);
+
+        assert!(matches!(
+            auth.authenticate_oidc(&token, &hello, &workspace, &CapabilitySet::default()),
+            Err(AuthError::DeviceApprovalRequired)
+        ));
+        let device = auth
+            .devices()
+            .into_iter()
+            .find(|device| device.client_id == "web-1")
+            .unwrap();
+        assert_eq!(device.status, DeviceStatus::Pending);
+
+        assert!(auth.approve_device(&device.id));
+        assert!(
+            auth.authenticate_oidc(&token, &hello, &workspace, &CapabilitySet::default())
+                .is_ok()
+        );
+
+        assert!(auth.revoke_device(&device.id));
+        assert!(matches!(
+            auth.authenticate_oidc(&token, &hello, &workspace, &CapabilitySet::default()),
+            Err(AuthError::DeviceRevoked)
+        ));
+        assert!(!auth.approve_device("missing"));
+        assert!(!auth.revoke_device("missing"));
+    }
+
+    #[test]
+    fn token_authentication_registers_an_approved_device() {
+        let mut auth = setup();
+        auth.enable();
+        let (client, workspace) = ids();
+        let token = auth.begin_pairing(workspace.clone()).unwrap();
+        let credential = auth
+            .complete_pairing(&token, &client, &CapabilitySet::default())
+            .unwrap();
+
+        auth.authenticate(&credential, &client, &workspace).unwrap();
+
+        let device = auth
+            .devices()
+            .into_iter()
+            .find(|device| device.client_id == client.as_str())
+            .unwrap();
+        assert_eq!(device.status, DeviceStatus::Approved);
+        assert!(device.approved_at.is_some());
+    }
+
+    #[test]
+    fn devices_survive_restart_and_pending_remains_pending() {
+        let mut auth = setup();
+        auth.enable();
+        auth.enable_oidc(
+            std::sync::Arc::new(crate::oidc::test_verifier()),
+            OidcClientConfig {
+                issuer: "https://idp.example".to_owned(),
+                client_id: "lapis".to_owned(),
+                scopes: vec!["openid".to_owned()],
+            },
+        );
+        let hello = hello("web-2");
+        let (_, workspace) = ids();
+        let token = crate::oidc::test_token("alice", jsonwebtoken::get_current_timestamp() + 300);
+        assert!(
+            auth.authenticate_oidc(&token, &hello, &workspace, &CapabilitySet::default())
+                .is_err()
+        );
+
+        let exported = auth.export_devices();
+        let mut restarted = setup();
+        restarted.enable();
+        restarted.import_devices(exported);
+
+        let device = restarted
+            .devices()
+            .into_iter()
+            .find(|device| device.client_id == "web-2")
+            .unwrap();
+        assert_eq!(device.status, DeviceStatus::Pending);
     }
 }

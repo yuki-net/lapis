@@ -441,7 +441,10 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
             // Local所有者の鍵はOSユーザーとこのHostの寿命に紐付く。
             // Remoteへ配布する招待・credentialの期限とは分ける。
             CredentialLifetime::new(u64::MAX)?,
-        ),
+        )
+        // managed Host は OS ユーザーが所有するローカル実行環境なので、
+        // 初回の OIDC Device を所有者承認なしで許可する。
+        .with_auto_approve_oidc_devices(true),
         AuthPolicy::new(owner_capabilities.clone()),
     );
     auth.enable();
