@@ -33,10 +33,9 @@ use terminal::{
 };
 use workspace::WorkspaceRepository;
 use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
-mod credential_store;
 mod git_action;
 mod git_watch;
-pub use credential_store::{CredentialStore, CredentialStoreError};
+pub use local_credentials::{CredentialStore, CredentialStoreError};
 pub use local_terminal::LocalTerminalBackend;
 pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::{LocalWorkspaceRepository, LocalWorkspaceSearchBackend};
