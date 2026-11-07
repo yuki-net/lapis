@@ -101,6 +101,15 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Compact では Panel 配置を永続化しない。Wide に戻したときは既定配置から始め、Wide で保存した配置だけを復元する。
 - Viewport 幅・入力方式の参照は Shell と `kit` の共通 wrapper に限定し、Feature からは直接参照しない。`scripts/check_architecture.py` が Feature 配下の `viewport_size` / `user_agent` 参照を拒否する。
 
+## UI の target 分割
+
+- `clients/ui` は単一 crate（`desktop-ui`）のまま、target 別の責務を内側のモジュールで分ける。Dashboard の Layout は Shell が所有し、Desktop / Web は起動と window 生成だけを持つ。
+- `kit` は tokens / theme / components / `LayoutProfile` / `InteractionPolicy` を持ち、Desktop と Web の両方から使う。kit は Host や Client の状態を所有しない。
+- `desktop` はネイティブ window の起動（`run`）、window options、`window_host`（Window と Feature の所有）を持つ。Web ではビルドしない。
+- `web` はブラウザーの起動（`run_web`）、wasm 用の backend 組み立て、prototype backend を持つ。ネイティブではビルドしない。
+- 両 target が共有する `DesktopServices` / `InitialView` / `WindowFactory` / `open_desktop_window` は crate ルートの `app` に置く。target 固有のコードを `app` へ戻さない。
+- 共通 UI 部品は `kit::components` の wrapper（popup / menu / scroll / row / surface など）を経由して使い、Feature が同じ見た目を個別に組み立てない。
+
 ## Desktop の共通Tab操作
 
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
