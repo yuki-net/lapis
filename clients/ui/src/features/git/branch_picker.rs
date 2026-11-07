@@ -519,7 +519,7 @@ impl BranchPicker {
             .debug_selector("branch-menu-panel")
             .header(div().m_2().child(self.input.clone()))
             .min_width(px(320.))
-            .max_height(px(450.).min((window.viewport_size().height - px(56.)).max(px(80.))))
+            .max_height_in_viewport(window)
     }
 }
 
