@@ -13,7 +13,7 @@ members = [
     "host/adapters/*",
     "host/transport/*",
     "contracts/domain/*",
-    "contracts/wire",
+    "contracts/transport/*",
     "contracts/protocol",
 ]
 exclude = ["vendor/gpui"]
