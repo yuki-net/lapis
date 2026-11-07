@@ -17,7 +17,7 @@ use client_api::{
     UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId,
     WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
-use document_state::{DocumentRegistry, DocumentResource, to_document_encoding};
+use document_state::{DocumentRegistry, DocumentResource};
 use text::TextEdit;
 
 use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver};

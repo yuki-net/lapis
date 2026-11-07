@@ -13,6 +13,28 @@ pub enum DocumentEncoding {
     Utf16Be,
 }
 
+impl From<::document::Encoding> for DocumentEncoding {
+    fn from(encoding: ::document::Encoding) -> Self {
+        match encoding {
+            ::document::Encoding::Utf8 => Self::Utf8,
+            ::document::Encoding::Utf8Bom => Self::Utf8Bom,
+            ::document::Encoding::Utf16Le => Self::Utf16Le,
+            ::document::Encoding::Utf16Be => Self::Utf16Be,
+        }
+    }
+}
+
+impl From<DocumentEncoding> for ::document::Encoding {
+    fn from(encoding: DocumentEncoding) -> Self {
+        match encoding {
+            DocumentEncoding::Utf8 => Self::Utf8,
+            DocumentEncoding::Utf8Bom => Self::Utf8Bom,
+            DocumentEncoding::Utf16Le => Self::Utf16Le,
+            DocumentEncoding::Utf16Be => Self::Utf16Be,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DocumentSnapshot {
     pub document_id: DocumentId,
@@ -298,5 +320,18 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    #[test]
+    fn document_encoding_round_trips_through_domain_encoding() {
+        for encoding in [
+            DocumentEncoding::Utf8,
+            DocumentEncoding::Utf8Bom,
+            DocumentEncoding::Utf16Le,
+            DocumentEncoding::Utf16Be,
+        ] {
+            let domain: ::document::Encoding = encoding.into();
+            assert_eq!(DocumentEncoding::from(domain), encoding);
+        }
     }
 }

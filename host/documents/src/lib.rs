@@ -8,10 +8,9 @@ use std::{
 };
 
 use client_api::{
-    DocumentEncoding, DocumentId, DocumentSnapshot, Revision, SessionId, WorkspaceId,
-    WorkspaceRelativePath,
+    DocumentId, DocumentSnapshot, Revision, SessionId, WorkspaceId, WorkspaceRelativePath,
 };
-use document::{Document, Encoding};
+use document::Document;
 
 /// Document 資源の参照・attach で発生するエラー。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,30 +132,12 @@ impl DocumentResource {
             workspace_id: workspace_id.clone(),
             path: self.path.clone(),
             content: self.document.content_for_save(),
-            encoding: from_document_encoding(self.document.encoding()),
+            encoding: self.document.encoding().into(),
             revision: self.revision(),
             dirty: self.document.is_dirty(),
             can_undo: self.document.can_undo(),
             can_redo: self.document.can_redo(),
             external_change: client_api::DocumentExternalChange::Unchanged,
         }
-    }
-}
-
-pub fn to_document_encoding(encoding: DocumentEncoding) -> Encoding {
-    match encoding {
-        DocumentEncoding::Utf8 => Encoding::Utf8,
-        DocumentEncoding::Utf8Bom => Encoding::Utf8Bom,
-        DocumentEncoding::Utf16Le => Encoding::Utf16Le,
-        DocumentEncoding::Utf16Be => Encoding::Utf16Be,
-    }
-}
-
-pub fn from_document_encoding(encoding: Encoding) -> DocumentEncoding {
-    match encoding {
-        Encoding::Utf8 => DocumentEncoding::Utf8,
-        Encoding::Utf8Bom => DocumentEncoding::Utf8Bom,
-        Encoding::Utf16Le => DocumentEncoding::Utf16Le,
-        Encoding::Utf16Be => DocumentEncoding::Utf16Be,
     }
 }
