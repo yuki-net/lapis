@@ -24,6 +24,7 @@ use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, Workspa
 use terminal_state::TerminalRegistry;
 
 mod document;
+mod git;
 mod terminal;
 mod workspace;
 
@@ -58,7 +59,7 @@ pub struct WorkspaceRegistration {
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
     pub terminal: Option<Arc<dyn TerminalBackend>>,
-    pub git: Option<Arc<dyn git::GitBackend>>,
+    pub git: Option<Arc<dyn ::git::GitBackend>>,
     pub tasks: Option<Arc<dyn task::TaskBackend>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
     pub(crate) workbench_initial: workbench::VersionedViewState,
@@ -84,7 +85,7 @@ impl WorkspaceRegistration {
         }
     }
 
-    pub fn with_git(mut self, backend: Arc<dyn git::GitBackend>) -> Self {
+    pub fn with_git(mut self, backend: Arc<dyn ::git::GitBackend>) -> Self {
         self.git = Some(backend);
         self
     }
@@ -144,7 +145,7 @@ impl PreparedWorktreeLookup {
             .lock()
             .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
             .worktree(&self.root, &self.worktree)?;
-        if tree.state == git::WorktreeState::Discarded {
+        if tree.state == ::git::WorktreeState::Discarded {
             return Err(BackendStateError::WorkspaceDenied);
         }
         Ok(tree.path)
@@ -192,66 +193,6 @@ impl BackendState {
             revision: expected + 1,
         })
     }
-    pub(crate) fn start_git_updates(
-        &mut self,
-        publish: Arc<dyn Fn(WorkspaceId, String, git::GitSnapshot) + Send + Sync>,
-    ) {
-        for (id, workspace) in &mut self.workspaces {
-            if workspace.git_driver_started {
-                continue;
-            }
-            workspace.git_driver_started = true;
-            let id = id.clone();
-            let publish = publish.clone();
-            crate::operations::WorkspaceOperations::start_git_updates(
-                &workspace.operations,
-                workspace.resolver.root().to_owned(),
-                Arc::new(move |repository, status| publish(id.clone(), repository, status)),
-            );
-        }
-    }
-
-    pub(crate) fn publish_git_status(
-        &mut self,
-        workspace_id: WorkspaceId,
-        repository_id: String,
-        status: git::GitSnapshot,
-    ) -> Result<Option<PublishedEvent>, BackendStateError> {
-        let workspace = self
-            .workspaces
-            .get_mut(&workspace_id)
-            .ok_or(BackendStateError::WorkspaceNotFound)?;
-        if workspace.removed_worktrees.contains(&repository_id) {
-            return Ok(None);
-        }
-        if !repository_id.starts_with("worktree:")
-            && workspace
-                .git_repositories
-                .as_ref()
-                .is_some_and(|known| !known.contains(&repository_id))
-        {
-            return Ok(None);
-        }
-        if workspace
-            .git_statuses
-            .get(&repository_id)
-            .is_some_and(|current| current.status.revision >= status.revision)
-        {
-            return Ok(None);
-        }
-        let repository = git::GitRepositoryStatus {
-            repository_id: repository_id.clone(),
-            status,
-        };
-        workspace
-            .git_statuses
-            .insert(repository_id, repository.clone());
-        Ok(Some(workspace.publish(EventBody::GitStatusChanged {
-            workspace_id,
-            repository,
-        })?))
-    }
-
     pub(crate) fn reserve_worktree_removal(
         &mut self,
         root: PathBuf,
@@ -350,47 +291,7 @@ impl BackendState {
     ) -> DispatchOutcome {
         let result = result.and_then(|result| {
             let mut events = Vec::new();
-            if worktrees_changed {
-                let workspace = self
-                    .workspaces
-                    .get_mut(&workspace_id)
-                    .ok_or(BackendStateError::WorkspaceNotFound)?;
-                if let client_api::WorkspaceOperationResult::Worktree(tree) = &result {
-                    let id = format!("worktree:{}", tree.worktree_id.as_str());
-                    if tree.state == git::WorktreeState::Discarded {
-                        workspace.git_statuses.remove(&id);
-                        workspace.removed_worktrees.insert(id);
-                    } else {
-                        workspace.removed_worktrees.remove(&id);
-                    }
-                }
-                events.push(workspace.publish(EventBody::GitWorktreesChanged {
-                    workspace_id: workspace_id.clone(),
-                })?);
-            }
-            if let client_api::WorkspaceOperationResult::GitRepositories(repositories) = &result {
-                let workspace = self
-                    .workspaces
-                    .get_mut(&workspace_id)
-                    .ok_or(BackendStateError::WorkspaceNotFound)?;
-                let known: HashSet<String> = repositories
-                    .iter()
-                    .map(|repository| repository.id.clone())
-                    .collect();
-                let list_changed = workspace
-                    .git_repositories
-                    .as_ref()
-                    .is_some_and(|previous| previous != &known);
-                workspace
-                    .git_statuses
-                    .retain(|id, _| id.starts_with("worktree:") || known.contains(id));
-                workspace.git_repositories = Some(known);
-                if list_changed {
-                    events.push(workspace.publish(EventBody::GitRepositoriesChanged {
-                        workspace_id: workspace_id.clone(),
-                    })?);
-                }
-            }
+            self.apply_git_updates(&workspace_id, &result, worktrees_changed, &mut events)?;
             if changed {
                 events.push(
                     self.workspaces
@@ -865,7 +766,7 @@ struct WorkspaceState {
     terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
-    git_statuses: HashMap<String, git::GitRepositoryStatus>,
+    git_statuses: HashMap<String, ::git::GitRepositoryStatus>,
     removed_worktrees: HashSet<String>,
     git_repositories: Option<HashSet<String>>,
     git_driver_started: bool,
