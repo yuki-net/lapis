@@ -11,7 +11,7 @@ document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
 local-credentials = { path = "../credentials" }
-local-git = { path = "../git" }
+local-git = { path = "../../extensions/git" }
 local-lsp = { path = "../lsp" }
 local-tasks = { path = "../tasks" }
 local-terminal = { path = "../terminal" }
