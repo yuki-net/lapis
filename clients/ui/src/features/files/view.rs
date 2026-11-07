@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    components::{FileIcon, Icon, IconName},
+    components::{FileIcon, Icon, IconName, selectable_row},
     tokens,
 };
 
@@ -46,32 +46,16 @@ impl FilesFeature {
             let directory_path = entry.relative_path.clone();
             let file_path = path.clone();
 
-            let row_bg = if is_selected_file {
-                theme::colors(cx).button_background_selected
-            } else {
-                gpui::rgba(0x00000000)
-            };
-
-            let row = div()
-                .id(("workspace-entry", index))
+            let row = selectable_row(("workspace-entry", index), is_selected_file, cx)
                 .h(px(27.0))
                 .flex_shrink_0()
                 .pl(px(6.0 + entry.depth as f32 * 16.0))
                 .pr(tokens::spacing::XS)
-                .rounded(tokens::radius::CONTROL)
-                .bg(row_bg)
                 .flex()
                 .items_center()
                 .gap(tokens::spacing::XS)
                 .text_size(tokens::typography::FONT_SM)
                 .text_color(theme::colors(cx).text_primary)
-                .hover(|style| {
-                    if !is_selected_file {
-                        style.bg(theme::colors(cx).button_background_hover)
-                    } else {
-                        style
-                    }
-                })
                 .child(
                     div()
                         .size(px(16.0))

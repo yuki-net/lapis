@@ -1,5 +1,8 @@
 use super::state::SearchFeature;
-use crate::{commands::UiCommand, components::panel_empty_state, theme};
+use crate::{
+    commands::UiCommand,
+    components::{hover_row, panel_empty_state},
+};
 use gpui::{Context, Render, Window, div, prelude::*, px};
 impl Render for SearchFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -21,11 +24,9 @@ impl Render for SearchFeature {
         for (index, hit) in self.hits.iter().take(500).enumerate() {
             let path = self.root.as_ref().map(|root| root.join(&hit.path));
             content = content.child(
-                div()
-                    .id(("search-hit", index))
-                    .p_2()
+                hover_row(("search-hit", index), cx)
                     .rounded(px(5.0))
-                    .hover(|style| style.bg(theme::colors(cx).button_background_hover))
+                    .p_2()
                     .on_click(cx.listener(move |_, _, _, cx| {
                         if let Some(path) = &path {
                             cx.emit(UiCommand::OpenPath(path.clone()));
