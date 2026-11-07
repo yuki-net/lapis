@@ -2,13 +2,25 @@ use super::*;
 use crate::shell::panel_layout::Axis;
 use crate::shell::state::PanelResize;
 
+/// Compact 幅では Panel の resize を無効化する。Shell は pointer 種別を保持しないため Mouse 固定。
+fn panel_resize_enabled(viewport: gpui::Size<Pixels>) -> bool {
+    use crate::kit::layout_profile::{InputKind, InteractionPolicy, LayoutProfile};
+
+    let profile = LayoutProfile::resolve(None, f32::from(viewport.width));
+    InteractionPolicy::for_profile(profile, InputKind::Mouse).panel_resize
+}
+
 impl Shell {
     pub(super) fn start_panel_resize(
         &mut self,
         boundary: crate::shell::dock_geometry::PanelBoundary,
         start: Point<Pixels>,
+        viewport: gpui::Size<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        if !panel_resize_enabled(viewport) {
+            return;
+        }
         self.shell.panel_resize = Some(PanelResize {
             boundary,
             previous: start,
@@ -23,6 +35,9 @@ impl Shell {
         viewport: gpui::Size<Pixels>,
         cx: &mut Context<Self>,
     ) {
+        if !panel_resize_enabled(viewport) {
+            return;
+        }
         let gap = f32::from(tokens::spacing::GAP);
         let bottom = self.shell.layout.zone(ZonePosition::Bottom);
         let geometry = self.dock_geometry.borrow();
@@ -193,5 +208,16 @@ impl Shell {
             self.shell.resize_mode = None;
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compact_width_disables_panel_resize() {
+        assert!(!panel_resize_enabled(gpui::size(px(900.0), px(800.0))));
+        assert!(panel_resize_enabled(gpui::size(px(1200.0), px(800.0))));
     }
 }
