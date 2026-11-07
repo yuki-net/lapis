@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
+/// Document の版。編集・保存のたびに進む。
 pub struct Revision(u64);
 
 impl Revision {
@@ -27,6 +28,7 @@ macro_rules! sequence {
             Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
         )]
         #[serde(transparent)]
+        /// 接続ごとの event 連番。取りこぼし検出に使う。
         pub struct $name(u64);
 
         impl $name {

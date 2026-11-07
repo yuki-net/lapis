@@ -24,6 +24,7 @@ const MAX_CAPABILITIES: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
+/// Host が許可する操作の識別子。
 pub struct CapabilityId(String);
 
 impl CapabilityId {
@@ -50,6 +51,7 @@ impl<'de> Deserialize<'de> for CapabilityId {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// capability ID が空、または長すぎる。
 pub struct InvalidCapabilityId;
 
 impl fmt::Display for InvalidCapabilityId {
@@ -62,6 +64,7 @@ impl Error for InvalidCapabilityId {}
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
+/// 順序を持たない capability の集合。
 pub struct CapabilitySet(BTreeSet<CapabilityId>);
 
 impl CapabilitySet {
@@ -99,6 +102,7 @@ impl<'de> Deserialize<'de> for CapabilitySet {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// capability の数が上限を超えている。
 pub struct TooManyCapabilities;
 
 impl fmt::Display for TooManyCapabilities {

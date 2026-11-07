@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use task::{TaskControl, TaskSnapshot, TaskStart};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workspace 操作の要求。
 pub struct WorkspaceOperationRequest {
     pub workspace_id: WorkspaceId,
     pub operation: WorkspaceOperation,
@@ -17,6 +18,7 @@ pub struct WorkspaceOperationRequest {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+/// Workspace に対する Git / Task 操作。
 pub enum WorkspaceOperation {
     GitRepositories,
     RepositoryGitStatus {
@@ -101,6 +103,7 @@ impl WorkspaceOperation {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
+/// Workspace 操作の結果。
 pub enum WorkspaceOperationResult {
     GitRepositories(Vec<crate::git::GitRepositorySnapshot>),
     RepositoryGitStatus {

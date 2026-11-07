@@ -4,6 +4,7 @@ use crate::{DocumentSnapshot, EventSequence, TerminalSnapshot, WorkspaceId, Work
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// snapshot を要求する理由。
 pub enum SnapshotReason {
     Initial,
     Reconnect,
@@ -12,6 +13,7 @@ pub enum SnapshotReason {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workspace の全状態と event watermark。
 pub struct WorkspaceSnapshot {
     /// この値以下のeventをすべて反映済みであることを示す。
     pub event_watermark: EventSequence,
@@ -23,12 +25,14 @@ pub struct WorkspaceSnapshot {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workspace snapshot を要求する。
 pub struct SnapshotRequest {
     pub workspace_id: WorkspaceId,
     pub reason: SnapshotReason,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 要求された Workspace snapshot。
 pub struct SnapshotResponse {
     pub snapshot: WorkspaceSnapshot,
 }

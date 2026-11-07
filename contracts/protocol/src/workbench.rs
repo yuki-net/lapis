@@ -9,6 +9,7 @@ pub struct WorkbenchGetRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workbench 表示状態を期待 revision 付きで更新する。
 pub struct WorkbenchPutRequest {
     pub workspace_id: WorkspaceId,
     pub expected_revision: u64,
@@ -30,6 +31,7 @@ pub fn encode_workbench_view(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workbench 表示状態とその revision。
 pub struct WorkbenchSnapshot {
     pub revision: u64,
     pub view: serde_json::Value,
@@ -37,6 +39,7 @@ pub struct WorkbenchSnapshot {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", content = "snapshot", rename_all = "snake_case")]
+/// Workbench 更新の結果。競合時は最新 snapshot を返す。
 pub enum WorkbenchPutResponse {
     Updated(WorkbenchSnapshot),
     Conflict(WorkbenchSnapshot),

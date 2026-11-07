@@ -15,6 +15,7 @@ pub const INTERNAL: &str = "internal";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
+/// 安定した機械可読の error code。未知の code も保持する。
 pub struct ErrorCode(String);
 
 impl ErrorCode {
@@ -45,6 +46,7 @@ impl<'de> Deserialize<'de> for ErrorCode {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// error code が空、または長すぎる。
 pub struct InvalidErrorCode;
 
 impl std::fmt::Display for InvalidErrorCode {
@@ -56,6 +58,7 @@ impl std::fmt::Display for InvalidErrorCode {
 impl std::error::Error for InvalidErrorCode {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 編集要求の base revision が現在値と一致しない。
 pub struct RevisionConflict {
     pub document_id: DocumentId,
     pub expected: Revision,
@@ -63,6 +66,7 @@ pub struct RevisionConflict {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Request 失敗の共通表現。
 pub struct ProtocolError {
     pub code: ErrorCode,
     /// Transportログへそのまま出してよいとは限らない診断情報。

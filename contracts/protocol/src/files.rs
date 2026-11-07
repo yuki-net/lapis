@@ -4,6 +4,7 @@ use crate::{WorkspaceId, WorkspaceRelativePath};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Workspace 内の entry 種別。
 pub enum FileTreeKind {
     File,
     Directory,
@@ -11,6 +12,7 @@ pub enum FileTreeKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workspace の1階層に含まれる entry。
 pub struct FileTreeEntry {
     pub name: String,
     pub path: WorkspaceRelativePath,
@@ -18,6 +20,7 @@ pub struct FileTreeEntry {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workspace の directory 直下一覧を要求する。
 pub struct FileTreeRequest {
     pub workspace_id: WorkspaceId,
     /// NoneはWorkspace root、Someはそのdirectory直下を表す。
@@ -26,6 +29,7 @@ pub struct FileTreeRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// directory 直下一覧の応答。
 pub struct FileTreeResponse {
     pub workspace_id: WorkspaceId,
     /// Requestと同じ対象directory。Workspace rootはNone。
@@ -35,12 +39,14 @@ pub struct FileTreeResponse {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Workspace 内に directory を作る。
 pub struct CreateDirectoryRequest {
     pub workspace_id: WorkspaceId,
     pub path: WorkspaceRelativePath,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 作成した directory の path。
 pub struct CreateDirectoryResponse {
     pub path: WorkspaceRelativePath,
 }
