@@ -7,6 +7,7 @@ use std::{
     time::Duration,
 };
 
+use client_api::git;
 use client_api::{
     EventEnvelope, RequestEnvelope, ResponseBody, ResponseEnvelope, SessionId, WorkspaceId,
 };

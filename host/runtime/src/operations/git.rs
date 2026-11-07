@@ -255,7 +255,7 @@ impl WorkspaceOperations {
     pub(super) fn git_action(
         &mut self,
         directory: &Path,
-        request: ::git::GitActionRequest,
+        request: client_api::git::GitActionRequest,
     ) -> Result<Outcome, BackendStateError> {
         self.require_repository(directory)?;
         if let Some(path) = request.action.path() {
