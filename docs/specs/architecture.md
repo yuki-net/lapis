@@ -28,6 +28,23 @@
 2. 外部環境に触れる具体実装は infrastructure。認証や wire は transport。
 3. 実際の所有・寿命の境界がなければモジュールで分割する。空 crate や転送だけの層を作らない。
 
+### `host/application` を独立させない
+
+- 操作の判断は `host/runtime`（`state` / `operations` / `state/*`）が持ち、`runtime` を application とみなす。`host/application` は作らない。
+- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/workbench` / `host/terminal` / `host/documents` / `host/workspaces` として既に切り出している。
+- 将来、外部 I/O を伴わない純粋な判断が増え、`runtime` から独立した寿命を持つ場合だけ再検討する。
+
+### Runtime を分割しない
+
+- `host/runtime` は Workspace / Session / Event / revision を1つの正本として持ち続ける。Document・Terminal・Workbench は状態と request 処理を `host/*` と `state/*` に分けたが、正規状態の所有者は Runtime のままとする。
+- 理由: request の直列化、event 連番、revision 比較が同一の正本に依存しており、プロセス内で分割すると整合性の担保が通信境界へ移る。
+
+### `host/gateway` を作らない
+
+- Web は Host と同一プロセスに同梱せず、Client が Host へ直接接続する現行構成を維持する。`host/gateway` は作らない。
+- 理由: gateway が必要になるのは複数 Host の集約やブラウザーからの認証終端を分離する場合であり、現時点の Web は `web-bridge` と Remote transport で要件を満たしている。
+- 複数 Host の集約や TLS 終端の分離が必要になった時点で、`host/gateway` の新設を別途判断する。
+
 ## Runtime と接続の契約
 
 - Local Host実行ファイルの選択はDesktopのComposition Rootが行う。既定はDesktopと同じ出力先とし、`--local-host-executable` の明示指定はLocal接続へ注入する。開発launcherがビルドを準備し、UIやBackendに開発ツールの出力先探索を持ち込まない。
