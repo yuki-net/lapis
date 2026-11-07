@@ -74,7 +74,9 @@ impl PairRequest {
 #[derive(Serialize, Deserialize)]
 pub struct AuthenticateRequest {
     pub hello: ClientHello,
-    pub workspace_id: WorkspaceId,
+    /// 未指定の場合は Host が最初の Workspace を選ぶ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<WorkspaceId>,
     credential_id: String,
     secret: SecretHex,
 }
@@ -88,7 +90,20 @@ impl AuthenticateRequest {
     ) -> Self {
         Self {
             hello,
-            workspace_id,
+            workspace_id: Some(workspace_id),
+            credential_id: credential_id.as_str().to_owned(),
+            secret: SecretHex::encode(secret),
+        }
+    }
+
+    pub fn new_auto(
+        hello: ClientHello,
+        credential_id: &CredentialId,
+        secret: &[u8; SECRET_BYTES],
+    ) -> Self {
+        Self {
+            hello,
+            workspace_id: None,
             credential_id: credential_id.as_str().to_owned(),
             secret: SecretHex::encode(secret),
         }
@@ -107,7 +122,9 @@ impl AuthenticateRequest {
 #[derive(Serialize, Deserialize)]
 pub struct OidcRequest {
     pub hello: ClientHello,
-    pub workspace_id: WorkspaceId,
+    /// 未指定の場合は Host が最初の Workspace を選ぶ。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<WorkspaceId>,
     id_token: String,
 }
 
@@ -115,7 +132,15 @@ impl OidcRequest {
     pub fn new(hello: ClientHello, workspace_id: WorkspaceId, id_token: String) -> Self {
         Self {
             hello,
-            workspace_id,
+            workspace_id: Some(workspace_id),
+            id_token,
+        }
+    }
+
+    pub fn new_auto(hello: ClientHello, id_token: String) -> Self {
+        Self {
+            hello,
+            workspace_id: None,
             id_token,
         }
     }

@@ -644,6 +644,24 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         client_id: &ClientId,
         workspace_id: &WorkspaceId,
     ) -> Result<SessionGrant, AuthError> {
+        self.authenticate_inner(credential, client_id, Some(workspace_id))
+    }
+
+    /// Workspace を指定せず、credential に結び付いた Workspace で Session を発行する。
+    pub fn authenticate_auto(
+        &mut self,
+        credential: &CredentialHandle,
+        client_id: &ClientId,
+    ) -> Result<SessionGrant, AuthError> {
+        self.authenticate_inner(credential, client_id, None)
+    }
+
+    fn authenticate_inner(
+        &mut self,
+        credential: &CredentialHandle,
+        client_id: &ClientId,
+        workspace_id: Option<&WorkspaceId>,
+    ) -> Result<SessionGrant, AuthError> {
         self.require_enabled()?;
         let record = self
             .credentials
@@ -658,7 +676,13 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
                 client_api::capability::HOST_MANAGE | client_api::capability::WORKSPACES_SWITCH
             )
         });
-        if &record.client_id != client_id || (!may_switch && &record.workspace_id != workspace_id) {
+        if &record.client_id != client_id {
+            return Err(AuthError::CredentialBindingMismatch);
+        }
+        if let Some(workspace_id) = workspace_id
+            && !may_switch
+            && &record.workspace_id != workspace_id
+        {
             return Err(AuthError::CredentialBindingMismatch);
         }
         let now = self.clock.now_unix_seconds();
@@ -666,7 +690,9 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             return Err(AuthError::CredentialExpired);
         }
         let record_client_id = record.client_id.clone();
-        let granted_workspace = workspace_id.clone();
+        let granted_workspace = workspace_id
+            .cloned()
+            .unwrap_or_else(|| record.workspace_id.clone());
         let granted_capabilities = record.capabilities.clone();
         self.ensure_device(&record_client_id, record_client_id.as_str(), "token", true)?;
         let session_id = self.generate_session_id()?;

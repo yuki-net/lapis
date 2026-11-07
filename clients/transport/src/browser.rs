@@ -260,7 +260,7 @@ pub struct StoredCredential {
 /// WebSocket経由のClient接続設定。
 pub struct WebClientConnectOptions<'a> {
     pub url: &'a str,
-    pub workspace: WorkspaceId,
+    pub workspace: Option<WorkspaceId>,
     pub client_id: &'a str,
     pub client_name: &'a str,
     pub client_kind: ClientKind,
@@ -277,7 +277,7 @@ pub struct WebClientConnectOptions<'a> {
 /// 返り値の `Some` はpairing直後のcredential JSON。
 pub async fn connect_web_client(
     options: WebClientConnectOptions<'_>,
-) -> Result<(BrowserConnection, Option<String>), String> {
+) -> Result<(BrowserConnection, Option<String>, Option<WorkspaceId>), String> {
     let WebClientConnectOptions {
         url,
         workspace,
@@ -292,11 +292,14 @@ pub async fn connect_web_client(
     let hello = client_hello(client_id, client_name, client_kind, capabilities)?;
     let can_retry_pair = id_token.is_none() && credential.is_some() && token.is_some();
     let auth = if let Some(id_token) = id_token {
-        ClientMessage::Oidc(OidcRequest::new(
-            hello.clone(),
-            workspace,
-            id_token.to_owned(),
-        ))
+        match workspace.clone() {
+            Some(workspace) => ClientMessage::Oidc(OidcRequest::new(
+                hello.clone(),
+                workspace,
+                id_token.to_owned(),
+            )),
+            None => ClientMessage::Oidc(OidcRequest::new_auto(hello.clone(), id_token.to_owned())),
+        }
     } else {
         match credential {
             Some(credential) => {
@@ -305,7 +308,12 @@ pub async fn connect_web_client(
                 let id = CredentialId::parse(stored.id)
                     .map_err(|_| "credential IDが不正です".to_owned())?;
                 let mut secret = decode_hex(&stored.secret)?;
-                let request = AuthenticateRequest::new(hello.clone(), workspace, &id, &secret);
+                let request = match workspace.clone() {
+                    Some(workspace) => {
+                        AuthenticateRequest::new(hello.clone(), workspace, &id, &secret)
+                    }
+                    None => AuthenticateRequest::new_auto(hello.clone(), &id, &secret),
+                };
                 secret.zeroize();
                 ClientMessage::Authenticate(request)
             }
@@ -336,7 +344,8 @@ pub async fn connect_web_client(
             }
             Err(error) => return Err(error),
         };
-    Ok((connection, credential_from_response(response)?))
+    let (credential, selected_workspace) = credential_from_response(response)?;
+    Ok((connection, credential, selected_workspace))
 }
 
 fn client_hello(
@@ -361,9 +370,12 @@ fn client_hello(
     })
 }
 
-fn credential_from_response(response: ServerMessage) -> Result<Option<String>, String> {
+fn credential_from_response(
+    response: ServerMessage,
+) -> Result<(Option<String>, Option<WorkspaceId>), String> {
     match response {
         ServerMessage::Paired(mut paired) => {
+            let workspace_id = paired.hello.workspace_id.clone();
             let id = paired
                 .credential_id()
                 .map_err(|_| "credential IDが不正です".to_owned())?;
@@ -374,12 +386,15 @@ fn credential_from_response(response: ServerMessage) -> Result<Option<String>, S
                 id: id.as_str().to_owned(),
                 secret: encode_hex(&secret),
             };
-            Ok(Some(
-                serde_json::to_string(&stored)
-                    .map_err(|_| "credentialを保存できません".to_owned())?,
+            Ok((
+                Some(
+                    serde_json::to_string(&stored)
+                        .map_err(|_| "credentialを保存できません".to_owned())?,
+                ),
+                workspace_id,
             ))
         }
-        ServerMessage::Authenticated(_) => Ok(None),
+        ServerMessage::Authenticated(hello) => Ok((None, hello.workspace_id)),
         _ => Err("認証応答が不正です".to_owned()),
     }
 }

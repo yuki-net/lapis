@@ -47,10 +47,10 @@ impl WebSession {
     ) -> Result<WebSession, JsValue> {
         let workspace = WorkspaceId::try_new(workspace)
             .map_err(|_| JsValue::from_str("Workspace IDが不正です"))?;
-        let (connection, credential) = client_core::browser::connect_web_client(
+        let (connection, credential, _) = client_core::browser::connect_web_client(
             client_core::browser::WebClientConnectOptions {
                 url: &url,
-                workspace: workspace.clone(),
+                workspace: Some(workspace.clone()),
                 client_id: &client_id,
                 client_name: "lapis-web-test",
                 client_kind: ClientKind::Desktop,
