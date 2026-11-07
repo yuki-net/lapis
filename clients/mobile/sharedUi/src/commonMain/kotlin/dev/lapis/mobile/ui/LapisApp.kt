@@ -25,8 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.runtime.rememberCoroutineScope
 import dev.lapis.mobile.net.ConnectionStatus
 import dev.lapis.mobile.net.LapisRemoteClient
+import kotlinx.coroutines.launch
 
 private val LapisBackground = Color(0xFF111318)
 private val LapisSurface = Color(0xFF191C22)
@@ -46,6 +48,7 @@ enum class MobileScreen {
 fun LapisApp(remoteClient: LapisRemoteClient = remember { LapisRemoteClient() }) {
     var currentScreen by remember { mutableStateOf(MobileScreen.Connection) }
     val connectionStatus by remoteClient.status.collectAsState()
+    val scope = rememberCoroutineScope()
 
     MaterialTheme {
         Surface(color = LapisBackground) {
@@ -74,7 +77,14 @@ fun LapisApp(remoteClient: LapisRemoteClient = remember { LapisRemoteClient() })
                         .padding(16.dp),
                 ) {
                     when (currentScreen) {
-                        MobileScreen.Connection -> ConnectionScreen(connectionStatus)
+                        MobileScreen.Connection -> ConnectionScreen(
+                            connectionStatus,
+                            onOidcLogin = { host, port, workspace ->
+                                scope.launch {
+                                    remoteClient.connectWithOidc(host, port, workspace)
+                                }
+                            },
+                        )
                         MobileScreen.Files -> FilesScreen()
                         MobileScreen.Editor -> EditorScreen()
                         MobileScreen.Terminal -> TerminalScreen()
@@ -87,7 +97,10 @@ fun LapisApp(remoteClient: LapisRemoteClient = remember { LapisRemoteClient() })
 }
 
 @Composable
-fun ConnectionScreen(status: ConnectionStatus) {
+fun ConnectionScreen(
+    status: ConnectionStatus,
+    onOidcLogin: (host: String, port: Int, workspaceId: String) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -126,6 +139,17 @@ fun ConnectionScreen(status: ConnectionStatus) {
             modifier = Modifier.align(Alignment.End),
         ) {
             Text("Connect")
+        }
+        Button(
+            onClick = {
+                val parsedPort = port.toIntOrNull()
+                if (parsedPort != null) {
+                    onOidcLogin(host, parsedPort, workspaceId)
+                }
+            },
+            modifier = Modifier.align(Alignment.End),
+        ) {
+            Text("OIDC でログイン")
         }
     }
 }

@@ -1,5 +1,8 @@
 package dev.lapis.mobile.net
 
+import dev.lapis.mobile.auth.OidcClient
+import dev.lapis.mobile.auth.SecureTokenStore
+import dev.lapis.mobile.auth.createSecureTokenStore
 import dev.lapis.mobile.protocol.*
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
@@ -40,6 +43,13 @@ class LapisRemoteClient(
 
     private val pendingRequests = mutableMapOf<String, CompletableDeferred<ResponseEnvelope>>()
     private var nextRequestId = 1L
+    private val oidcClient = OidcClient()
+    private val tokenStore: SecureTokenStore by lazy { createSecureTokenStore() }
+
+    /** OIDC callback URL を進行中のログインへ渡す。 */
+    fun handleOidcCallback(url: String) {
+        oidcClient.handleCallback(url)
+    }
 
     suspend fun connectAndAuthenticate(
         host: String,
@@ -58,12 +68,7 @@ class LapisRemoteClient(
                 session = this
                 val authMsg = ClientMessage.Authenticate(
                     AuthenticateRequest(
-                        hello = ClientHello(
-                            protocol = ProtocolRange.EXACT_V0,
-                            clientId = clientId,
-                            clientName = clientName,
-                            clientKind = clientKind,
-                        ),
+                        hello = hello(clientId, clientName, clientKind),
                         workspaceId = workspaceId,
                         credentialId = credentialId,
                         secret = secret,
@@ -86,6 +91,91 @@ class LapisRemoteClient(
             session = null
         }
     }
+
+    /**
+     * OIDC でログインし、ID Token を secure storage に保存する。
+     * Host の `AuthRequired.oidc` が必須。
+     */
+    suspend fun connectWithOidc(
+        host: String,
+        port: Int,
+        workspaceId: String,
+        clientId: String = "mobile-kmp",
+        clientName: String = "Lapis Mobile",
+        clientKind: ClientKind = ClientKind.Android,
+    ) {
+        _status.value = ConnectionStatus.Connecting
+        _authRequired.value = null
+        try {
+            client.webSocket(host = host, port = port, path = "/remote") {
+                session = this
+                val helloMessage = hello(clientId, clientName, clientKind)
+                send(
+                    Frame.Text(
+                        lapisJson.encodeToString<ClientMessage>(ClientMessage.Hello(helloMessage))
+                    )
+                )
+                val first = (incoming.receive() as? Frame.Text)
+                    ?.readText()
+                    ?: error("Host が認証方式を返しません")
+                val required = lapisJson.decodeFromString<ServerMessage>(first) as? ServerMessage.AuthRequired
+                    ?: error("Host が認証方式を返しません")
+                _authRequired.value = required.payload
+                val oidc = required.payload.oidc
+                    ?: error("Host が OIDC ログインを提示していません")
+                val idToken = oidcClient.login(oidc)
+                send(
+                    Frame.Text(
+                        lapisJson.encodeToString<ClientMessage>(
+                            ClientMessage.Oidc(
+                                OidcRequest(
+                                    hello = helloMessage,
+                                    workspaceId = workspaceId,
+                                    idToken = idToken,
+                                )
+                            )
+                        )
+                    )
+                )
+                for (frame in incoming) {
+                    if (frame is Frame.Text) {
+                        val serverMsg = lapisJson.decodeFromString<ServerMessage>(frame.readText())
+                        if (serverMsg is ServerMessage.Authenticated) {
+                            serverMsg.payload.subject?.let { subject ->
+                                runCatching {
+                                    tokenStore.save(oidcTokenKey(host, port, subject), idToken)
+                                    tokenStore.save(oidcCurrentKey(host, port), idToken)
+                                }
+                            }
+                        }
+                        handleServerMessage(serverMsg)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            _status.value = ConnectionStatus.Error(e.message ?: "OIDC connection error")
+        } finally {
+            _status.value = ConnectionStatus.Disconnected
+            session = null
+        }
+    }
+
+    private fun hello(
+        clientId: String,
+        clientName: String,
+        clientKind: ClientKind,
+    ) = ClientHello(
+        protocol = CURRENT_PROTOCOL,
+        clientId = clientId,
+        clientName = clientName,
+        clientKind = clientKind,
+    )
+
+    private fun oidcTokenKey(host: String, port: Int, subject: String): String =
+        "oidc|$host|$port|$subject"
+
+    private fun oidcCurrentKey(host: String, port: Int): String =
+        "oidc-current|$host|$port"
 
     private suspend fun handleServerMessage(message: ServerMessage) {
         when (message) {
