@@ -25,7 +25,7 @@ impl HostWorkbench {
     }
 
     fn client(&self, workspace: &WorkspaceId) -> Result<Client, String> {
-        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(|e| e.to_string())?;
+        let id = client_api::WorkspaceId::try_from(workspace).map_err(|e| e.to_string())?;
         let mut clients = self
             .clients
             .lock()
@@ -92,7 +92,7 @@ impl WorkbenchConnection for HostWorkbench {
     }
 
     fn subscribe(&self, workspace: &WorkspaceId) -> Result<Box<dyn WorkbenchSubscription>, String> {
-        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(|e| e.to_string())?;
+        let id = client_api::WorkspaceId::try_from(workspace).map_err(|e| e.to_string())?;
         let client = self.host.connect_workspace(id).map_err(|e| e.to_string())?;
         let receiver = client.subscribe().map_err(|e| e.to_string())?;
         Ok(Box::new(HostWorkbenchSubscription {

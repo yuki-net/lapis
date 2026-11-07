@@ -50,7 +50,7 @@ fn stale_or_unattached_discard_never_drops_another_clients_changes() {
         .unwrap();
     let outsider = host.connect(root.path()).unwrap();
     let request = DocumentDiscardRequest {
-        document_id: client_api::DocumentId::try_new(original.id.as_str()).unwrap(),
+        document_id: client_api::DocumentId::try_from(&original.id).unwrap(),
         base_revision: client_api::Revision::new(changed.document.revision().number()),
     };
     assert!(matches!(

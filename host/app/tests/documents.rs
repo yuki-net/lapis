@@ -139,7 +139,7 @@ fn desktop_port_and_wire_share_identity_edits_history_and_saved_state() {
     let client = host.connect(root.path()).unwrap();
     let desktop = host.documents();
     let first = desktop.open(&path).unwrap();
-    let id = client_api::DocumentId::try_new(first.id.as_str()).unwrap();
+    let id = client_api::DocumentId::try_from(&first.id).unwrap();
     let inspect = || match client
         .request(RequestBody::DocumentInspect(DocumentInspectRequest {
             document_id: id.clone(),
