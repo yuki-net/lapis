@@ -1,12 +1,14 @@
 use crate::{
     extension_ui::{FeatureRegistry, ViewId, ZonePosition},
+    kit::layout_profile::LayoutProfile,
     shell::{DockLayout, PanelTab, ShellState},
 };
 use desktop_client::{ConversationViewState, DocumentTab};
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {
-        layout: Some(shell.layout.capture()),
+        // Compact では幅に依存した Panel 配置を保存しない。
+        layout: (shell.layout_profile.get() == LayoutProfile::Wide).then(|| shell.layout.capture()),
         show_panel_controls: shell.show_panel_controls,
         workbench: Default::default(),
         workspace: None,
@@ -100,5 +102,16 @@ mod tests {
         );
         assert!(document.dirty);
         assert!(shell.layout.valid());
+    }
+
+    #[test]
+    fn compact_layout_is_not_persisted() {
+        let shell = ShellState::default();
+
+        shell.layout_profile.set(LayoutProfile::Compact);
+        assert!(capture_view_state(&shell).layout.is_none());
+
+        shell.layout_profile.set(LayoutProfile::Wide);
+        assert!(capture_view_state(&shell).layout.is_some());
     }
 }

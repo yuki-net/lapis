@@ -9,6 +9,12 @@ impl Shell {
             window.request_animation_frame();
         }
         let viewport = window.viewport_size();
+        self.shell
+            .layout_profile
+            .set(crate::kit::layout_profile::LayoutProfile::resolve(
+                Some(self.shell.layout_profile.get()),
+                f32::from(viewport.width),
+            ));
         let geometry = crate::shell::dock_geometry::DockGeometry::calculate(
             &self.shell.layout,
             (f32::from(viewport.width), f32::from(viewport.height)),

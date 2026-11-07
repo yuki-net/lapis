@@ -169,6 +169,8 @@ pub(crate) struct ShellState {
     pub resize_start_pos: Option<gpui::Point<gpui::Pixels>>,
     pub resize_mode: Option<ResizeMode>,
     pub(super) panel_resize: Option<PanelResize>,
+    /// 直近の viewport 幅から決めたレイアウト。Compact では Panel 配置を保存しない。
+    pub(crate) layout_profile: std::cell::Cell<crate::kit::layout_profile::LayoutProfile>,
 }
 
 impl Default for ShellState {
@@ -194,6 +196,7 @@ impl Default for ShellState {
             resize_start_pos: None,
             resize_mode: None,
             panel_resize: None,
+            layout_profile: std::cell::Cell::new(crate::kit::layout_profile::LayoutProfile::Wide),
         }
     }
 }
