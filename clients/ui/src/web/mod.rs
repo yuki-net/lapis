@@ -1,6 +1,12 @@
 //! ブラウザーでDesktop UIを起動する境界。
 
+#[cfg(target_family = "wasm")]
 mod prototype;
+#[cfg(target_family = "wasm")]
+mod startup;
+
+#[cfg(target_family = "wasm")]
+pub use startup::run_web;
 
 use std::{
     borrow::Cow,
