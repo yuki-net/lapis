@@ -20,8 +20,8 @@ mod oidc;
 
 const MAX_MESSAGE: usize = 16 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
-/// 接続情報の出現を待つ上限。Hostの起動を待てる程度にし、無いまま固まらない。
-const CONNECTION_TIMEOUT: Duration = Duration::from_secs(15);
+/// 接続情報を待つ間、待機中であることを知らせる間隔。
+const CONNECTION_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const CONNECTION_POLL: Duration = Duration::from_millis(100);
 /// 開発時に `.run` から引数を消せるよう、待受とOriginに既定値を持たせる。
 const DEFAULT_LISTEN: &str = "127.0.0.1:4748";
@@ -273,26 +273,20 @@ fn client_config(certificate: Vec<u8>) -> Result<quinn::ClientConfig, Error> {
 }
 
 /// Hostが接続情報を書き出すまで待つ。Hostより先に起動しても繋がるようにする。
+/// 上限を設けるとHostの初回ビルドに間に合わず起動できなくなるため、読めるまで待ち続ける。
 async fn wait_for_connection(path: &std::path::Path) -> Result<Resolved, Error> {
     let target = Target::Connection {
         path: path.to_path_buf(),
     };
-    let deadline = tokio::time::Instant::now() + CONNECTION_TIMEOUT;
-    let mut waiting = false;
+    let mut next_log = tokio::time::Instant::now();
     loop {
         match target.resolve() {
             Ok(resolved) => return Ok(resolved),
             Err(error) => {
-                if !waiting {
+                let now = tokio::time::Instant::now();
+                if now >= next_log {
                     eprintln!("web-bridge waiting for connection info ({error})");
-                    waiting = true;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    return Err(format!(
-                        "接続情報を{}秒待っても読めません: {error}",
-                        CONNECTION_TIMEOUT.as_secs()
-                    )
-                    .into());
+                    next_log = now + CONNECTION_LOG_INTERVAL;
                 }
                 tokio::time::sleep(CONNECTION_POLL).await;
             }

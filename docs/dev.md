@@ -23,7 +23,7 @@ CLI では `cargo dev` / `cargo dev-hot-reload` が同じ launcher（`scripts/de
 | Hot Reload で起動 | `cargo dev-hot-reload` または `Lapis Hot Reload` |
 | Host だけ起動 | `Lapis Host` |
 
-`cargo dev` も `Lapis` も Desktop と Host の両方をビルドします。2段階ビルドはありません。
+`cargo dev` も `Lapis` も Desktop と Host の両方をビルドします。2段階ビルドはありません。`Lapis Web Host` は Desktop を起動しないため Host だけをビルドし、Desktop のビルドが壊れていても Web 用 Host は起動できます。
 
 `Lapis` は Windows の Job Object で Run が起動した process をまとめて管理し、Stop で Desktop と Local Host の両方を終了します。Desktop を閉じただけでは Local Host は残るため、残した場合はログの `Desktop session:` の名前を使って `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止します。
 
@@ -47,7 +47,7 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 初回だけ `cd clients\web` で `npm ci` を実行します。`npm run dev` は起動時に Wasm をビルドするため、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129、Node.js 24 が必要です。
 
-起動順は問いません。Host は待受を始めた後に接続情報を `target/dev-web/connection.json` へ書き出し、bridge は起動時に最大15秒それを待ち、接続のたびに読み直します。Host を正常終了すると、自分が書いた接続情報だけが削除されます。
+起動順は問いません。Host は待受を始めた後に接続情報を `target/dev-web/connection.json` へ書き出し、bridge は起動時にそれが現れるまで待ち（10 秒ごとに待機中を表示）、接続のたびに読み直します。Host の初回ビルドに時間がかかっても bridge は終了しません。Host を正常終了すると、自分が書いた接続情報だけが削除されます。
 
 ### ログイン
 

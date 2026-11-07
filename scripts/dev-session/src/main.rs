@@ -17,10 +17,13 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     if arguments.first().is_some_and(|arg| arg == "--hot-reload") {
         return hot_reload(root, &arguments[1..]);
     }
+    // `--host-only` は Desktop を起動しないため、Host だけをビルドする。
+    // Desktop のビルド失敗で Web 用 Host が起動できなくなるのを避ける。
+    let host_only = arguments.first().is_some_and(|arg| arg == "--host-only");
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let build = Command::new(cargo)
         .current_dir(root)
-        .arg("ide-build")
+        .arg(if host_only { "host-build" } else { "ide-build" })
         .status()?;
     if !build.success() {
         return Ok(build.code().unwrap_or(1));
@@ -31,9 +34,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let session = create_session(&root.join("target/dev-sessions"))?;
     let bin = session.join("bin");
     fs::create_dir(&bin)?;
-    let desktop = copy_binary(root, &bin, "lapis")?;
     copy_binary(root, &bin, "lapis-host")?;
-    let host_only = arguments.first().is_some_and(|arg| arg == "--host-only");
     let status = if host_only {
         let mut host = Command::new(bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX)));
         host.current_dir(root)
@@ -48,6 +49,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         );
         host.status()?
     } else {
+        let desktop = copy_binary(root, &bin, "lapis")?;
         let hosts = session.join("hosts");
         fs::create_dir(&hosts)?;
         eprintln!(
@@ -81,6 +83,14 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
     }
     #[cfg(windows)]
     {
+        // dx は --args= を空白で分割するため、空白を含む利用者引数は渡せない。
+        if arguments
+            .iter()
+            .any(|argument| argument.to_string_lossy().chars().any(char::is_whitespace))
+        {
+            eprintln!("Hot Reload の引数に空白は使用できません。");
+            return Ok(1);
+        }
         let dx = root.join("target/dx-fixed0710/bin/dx.exe");
         if !dx.is_file() {
             eprintln!("修正版 dx がありません。docs/dev.md の Hot Reload 準備を参照してください。");

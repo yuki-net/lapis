@@ -25,7 +25,7 @@ class DevSessionProcessTests(unittest.TestCase):
             for name in ("Cargo.toml", "Cargo.lock"):
                 shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
             (root / ".cargo").mkdir()
-            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\nhost-build = "version"\n', encoding="utf-8")
             build_dir = root / "target" / "dev-build" / "debug"
             build_dir.mkdir(parents=True)
             source = root / "fixture.rs"
@@ -65,7 +65,7 @@ class DevSessionProcessTests(unittest.TestCase):
             for filename in ("Cargo.toml", "Cargo.lock"):
                 shutil.copyfile(ROOT / "scripts" / "dev-session" / filename, launcher / filename)
             (root / ".cargo").mkdir()
-            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\nhost-build = "version"\n', encoding="utf-8")
             binary_dir = root / "target" / "dev-build" / "debug"
             binary_dir.mkdir(parents=True)
             source = root / "fixture.rs"
@@ -385,6 +385,17 @@ fn main() {
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.root / "dx-called").exists())
 
+    def test_argument_with_whitespace_is_rejected_before_building(self):
+        # dx は --args= を空白で分割するため、空白入りの引数は渡す前に拒否する。
+        result = subprocess.run(
+            [str(self.launcher), "--hot-reload", "C:\\my dir"], cwd=self.root.parent,
+            env=self.env, capture_output=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn("空白", result.stderr.decode("utf-8", errors="replace"))
+        self.assertFalse((self.root / "cargo-called").exists())
+        self.assertFalse((self.root / "dx-called").exists())
+
     def test_second_launcher_cannot_rebuild_host_while_first_is_running(self):
         self.env["LAPIS_TEST_SCENARIO"] = "hold"
         first = subprocess.Popen(
@@ -405,6 +416,54 @@ fn main() {
             (self.root / "release-dx").touch()
             first.communicate(timeout=20)
         self.assertEqual(first.returncode, 17)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows専用launcher")
+class HostOnlyBuildTests(unittest.TestCase):
+    """`--host-only` が Desktop をビルドせず、Host だけをビルドすることを検証する。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="lapis host only ")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        launcher = cls.root / "scripts" / "dev-session"
+        launcher.mkdir(parents=True)
+        shutil.copytree(ROOT / "scripts" / "dev-session" / "src", launcher / "src")
+        for name in ("Cargo.toml", "Cargo.lock"):
+            shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
+        # ide-build だけを失敗させ、--host-only が Desktop をビルドしないことを示す。
+        (cls.root / ".cargo").mkdir()
+        (cls.root / ".cargo" / "config.toml").write_text(
+            '[alias]\nide-build = "no-such-command-for-ide-build"\nhost-build = "version"\n',
+            encoding="utf-8",
+        )
+        binary_dir = cls.root / "target" / "dev-build" / "debug"
+        binary_dir.mkdir(parents=True)
+        source = cls.root / "fixture.rs"
+        source.write_text("fn main() {}\n", encoding="utf-8")
+        for name in ("lapis.exe", "lapis-host.exe"):
+            subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
+        subprocess.run([
+            "cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"),
+            "--target-dir", str(cls.root / "launcher-target"), "--quiet",
+        ], cwd=cls.root, check=True, capture_output=True)
+        cls.launcher = cls.root / "launcher-target" / "debug" / "lapis-dev-session.exe"
+
+    def test_host_only_builds_without_desktop(self):
+        result = subprocess.run(
+            [str(self.launcher), "--host-only"], cwd=self.root,
+            capture_output=True, timeout=30,
+        )
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertIn("Host session:", stderr)
+
+    def test_default_build_keeps_building_desktop(self):
+        result = subprocess.run(
+            [str(self.launcher)], cwd=self.root, capture_output=True, timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":
