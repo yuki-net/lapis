@@ -2,7 +2,7 @@ use crate::BackendClient;
 use crate::client::Client;
 use client_api::{
     RequestBody, ResponseBody, WorkspaceOperation as Operation, WorkspaceOperationRequest,
-    WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
+    WorkspaceOperationResponse as Outcome, WorkspaceRelativePath,
 };
 use editor_core::{ExecutionId, TaskId, WorkspaceId};
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};

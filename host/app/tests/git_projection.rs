@@ -2,7 +2,7 @@ use std::{path::Path, process::Command};
 
 use client_api::{
     RequestBody, ResponseBody, WorkspaceOperation, WorkspaceOperationRequest,
-    WorkspaceOperationResult,
+    WorkspaceOperationResponse,
 };
 use editor_core::WorkspaceId;
 use host::BackendHost;
@@ -148,7 +148,7 @@ fn desktop_and_wire_project_the_same_real_git_status_without_host_paths() {
         .unwrap();
     assert_eq!(
         response,
-        ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitStatus(snapshot))
+        ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::GitStatus(snapshot))
     );
 }
 
@@ -200,7 +200,7 @@ fn desktop_and_wire_can_diff_tracked_files_after_their_parent_directory_is_delet
         .unwrap();
     assert_eq!(
         response,
-        ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitDiff(snapshot))
+        ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::GitDiff(snapshot))
     );
 }
 
@@ -244,7 +244,7 @@ fn stage_over_the_wire_changes_only_the_selected_workspace_index() {
         .unwrap();
     assert!(matches!(
         response,
-        ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitAction(_))
+        ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::GitAction(_))
     ));
     let connection = host.git();
     let first = connection
@@ -283,7 +283,7 @@ fn repository_discovery_projects_workspace_relative_paths() {
             operation: WorkspaceOperation::GitRepositories,
         }))
         .unwrap();
-    let ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitRepositories(repositories)) =
+    let ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::GitRepositories(repositories)) =
         response
     else {
         panic!("repository list required");
@@ -338,13 +338,13 @@ fn repository_operations_are_scoped_to_the_selected_repository() {
     });
     assert!(matches!(
         response,
-        ResponseBody::WorkspaceExecute(WorkspaceOperationResult::GitAction(_))
+        ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::GitAction(_))
     ));
     for (name, staged) in [("frontend", true), ("backend", false)] {
         let response = execute(WorkspaceOperation::RepositoryGitStatus {
             repository_id: format!("path:{name}"),
         });
-        let ResponseBody::WorkspaceExecute(WorkspaceOperationResult::RepositoryGitStatus {
+        let ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::RepositoryGitStatus {
             status,
             ..
         }) = response
@@ -503,7 +503,7 @@ fn external_git_changes_are_pushed_without_status_requests() {
             },
         }))
         .unwrap();
-    let ResponseBody::WorkspaceExecute(WorkspaceOperationResult::RepositoryGitStatus {
+    let ResponseBody::WorkspaceExecute(WorkspaceOperationResponse::RepositoryGitStatus {
         status,
         ..
     }) = response

@@ -51,7 +51,7 @@ pub use handshake::{ClientHello, ClientKind, ServerHello};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };
-pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResult};
+pub use operations::{WorkspaceOperation, WorkspaceOperationRequest, WorkspaceOperationResponse};
 pub use remote_wire::{
     AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, InvalidSecretHex,
     OidcClientConfig, OidcRequest, PairRequest, PairedResponse, ServerMessage,

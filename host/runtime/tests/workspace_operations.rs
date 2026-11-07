@@ -8,7 +8,7 @@ use client_api::git::{
 };
 use client_api::{
     RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceOperation as Operation,
-    WorkspaceOperationRequest, WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
+    WorkspaceOperationRequest, WorkspaceOperationResponse as Outcome, WorkspaceRelativePath,
 };
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use editor_core::{ConversationId, ExecutionId, TaskId};

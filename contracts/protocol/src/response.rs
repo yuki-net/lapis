@@ -34,7 +34,7 @@ pub enum ResponseBody {
     #[serde(rename = "document.discard")]
     DocumentDiscard(crate::DocumentDiscardResponse),
     #[serde(rename = "workspace.execute")]
-    WorkspaceExecute(crate::WorkspaceOperationResult),
+    WorkspaceExecute(crate::WorkspaceOperationResponse),
     #[serde(rename = "workspace.list")]
     WorkspaceList(WorkspaceListResponse),
     #[serde(rename = "workspace.connect")]
