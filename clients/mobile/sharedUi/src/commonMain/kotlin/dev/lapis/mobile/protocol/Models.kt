@@ -56,6 +56,9 @@ data class ProtocolRange(
     }
 }
 
+/** Rust `CURRENT_PROTOCOL` と揃える。 */
+val CURRENT_PROTOCOL = ProtocolRange(0, 5, 5)
+
 @Serializable
 data class ClientHello(
     val protocol: ProtocolRange,
@@ -133,6 +136,10 @@ data class EventEnvelope(
 
 @Serializable
 sealed interface ClientMessage {
+    @Serializable
+    @SerialName("hello")
+    data class Hello(val payload: ClientHello) : ClientMessage
+
     @Serializable
     @SerialName("auth.pair")
     data class Pair(val payload: PairRequest) : ClientMessage
