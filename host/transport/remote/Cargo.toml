@@ -28,7 +28,7 @@ tokio.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-git = { path = "../../../contracts/domain/git" }
+git = { package = "git-contract", path = "../../../extensions/git/contract" }
 document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 task = { path = "../../../contracts/domain/task" }

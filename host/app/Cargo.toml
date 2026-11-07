@@ -13,7 +13,7 @@ path = "src/main.rs"
 workspace = { path = "../../contracts/domain/workspace" }
 workbench = { path = "../../contracts/domain/workbench" }
 document = { path = "../../contracts/domain/document" }
-git = { path = "../../contracts/domain/git" }
+git = { package = "git-contract", path = "../../extensions/git/contract" }
 task = { path = "../../contracts/domain/task" }
 editor-core = { path = "../../contracts/domain/editor-core" }
 backend-state = { path = "../runtime" }
