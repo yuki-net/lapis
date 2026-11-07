@@ -36,11 +36,10 @@ use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSear
 mod credential_store;
 mod git_action;
 mod git_watch;
-mod workbench_store;
 pub use credential_store::{CredentialStore, CredentialStoreError};
 pub use local_terminal::LocalTerminalBackend;
+pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::{LocalWorkspaceRepository, LocalWorkspaceSearchBackend};
-pub use workbench_store::LocalWorkbenchStore;
 
 #[derive(Clone, Default)]
 pub struct ConnectionGate(Arc<AtomicBool>);

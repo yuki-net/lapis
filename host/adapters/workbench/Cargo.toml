@@ -1,0 +1,15 @@
+[package]
+name = "local-workbench"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+backend-state = { path = "../../runtime" }
+serde_json.workspace = true
+tempfile.workspace = true
+workbench = { path = "../../../contracts/domain/workbench" }
+
+[dev-dependencies]
+editor-core = { path = "../../../contracts/domain/editor-core" }
