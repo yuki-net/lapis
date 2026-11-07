@@ -11,6 +11,7 @@
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
+| `host/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
 | `host/adapters/` | FS、Git CLI、PTY、LSP、runner、永続化 | 画面の判断 |
 | `host/transport/` | 認証・wire・接続と共通 Runtime への配送 | 独立した Workspace/Document 正本 |
 | `host/app/` | Runtime と具体実装の組み立て、開始・終了 | UI |

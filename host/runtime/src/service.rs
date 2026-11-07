@@ -207,7 +207,7 @@ impl BackendService {
         let current: Option<workbench::ConversationViewState> =
             serde_json::from_value(snapshot.view.clone())
                 .map_err(|_| BackendServiceError::Unavailable)?;
-        let view = match crate::workbench::parse_update_view(
+        let view = match workbench_state::parse_update_view(
             put.view,
             current.as_ref().and_then(|view| view.workspace.as_ref()),
         ) {
@@ -215,14 +215,14 @@ impl BackendService {
             Err(error) => {
                 return Ok(ResponseEnvelope {
                     request_id: request.request_id,
-                    body: ResponseBody::Error(crate::state::protocol_error(error)),
+                    body: ResponseBody::Error(crate::state::protocol_error(error.into())),
                 });
             }
         };
-        if let Err(error) = crate::workbench::validate_workspace(&view, &put.workspace_id) {
+        if let Err(error) = workbench_state::validate_workspace(&view, &put.workspace_id) {
             return Ok(ResponseEnvelope {
                 request_id: request.request_id,
-                body: ResponseBody::Error(crate::state::protocol_error(error)),
+                body: ResponseBody::Error(crate::state::protocol_error(error.into())),
             });
         }
         let saved = match persistence
@@ -248,7 +248,8 @@ impl BackendService {
             .recv()
             .map_err(|_| BackendServiceError::Unavailable)?
             .map_err(BackendServiceError::State)?;
-        let snapshot = crate::workbench::snapshot(&saved).map_err(BackendServiceError::State)?;
+        let snapshot = workbench_state::snapshot(&saved)
+            .map_err(|error| BackendServiceError::State(error.into()))?;
         Ok(ResponseEnvelope {
             request_id: request.request_id,
             body: ResponseBody::WorkbenchPut(WorkbenchPutResponse::Updated(snapshot)),
