@@ -588,7 +588,7 @@ impl BackendState {
                 self.require_connected(session)?;
                 let workspace = self.workspace_mut(session)?;
                 Ok((
-                    ResponseBody::WorkbenchGet(crate::workbench::snapshot(&workspace.workbench)?),
+                    ResponseBody::WorkbenchGet(workbench_state::snapshot(&workspace.workbench)?),
                     Vec::new(),
                 ))
             }
@@ -602,8 +602,8 @@ impl BackendState {
                     .as_ref()
                     .and_then(|view| view.workspace.as_ref())
                     .cloned();
-                let view = crate::workbench::parse_update_view(request.view, current.as_ref())?;
-                crate::workbench::validate_workspace(&view, &request.workspace_id)?;
+                let view = workbench_state::parse_update_view(request.view, current.as_ref())?;
+                workbench_state::validate_workspace(&view, &request.workspace_id)?;
                 let workspace = self.workspace_mut(session)?;
                 if workspace.workbench.revision == request.expected_revision {
                     workspace
@@ -614,7 +614,7 @@ impl BackendState {
                 }
                 match workspace.workbench.update(request.expected_revision, view) {
                     Ok(revision) => {
-                        let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
+                        let snapshot = workbench_state::snapshot(&workspace.workbench)?;
                         let event = workspace.publish(EventBody::WorkbenchChanged {
                             workspace_id: request.workspace_id,
                             revision,
@@ -627,7 +627,7 @@ impl BackendState {
                         ))
                     }
                     Err(workbench::ViewUpdateError::Conflict { .. }) => {
-                        let snapshot = crate::workbench::snapshot(&workspace.workbench)?;
+                        let snapshot = workbench_state::snapshot(&workspace.workbench)?;
                         Ok((
                             ResponseBody::WorkbenchPut(client_api::WorkbenchPutResponse::Conflict(
                                 snapshot,
@@ -1520,7 +1520,7 @@ impl WorkspaceState {
             return Err(BackendStateError::InvalidWorkbench);
         }
         if let Some(view) = &registration.workbench_initial.view {
-            crate::workbench::validate_workspace(view, &registration.workspace_id)?;
+            workbench_state::validate_workspace(view, &registration.workspace_id)?;
         }
         Ok(Self {
             workbench: registration.workbench_initial,

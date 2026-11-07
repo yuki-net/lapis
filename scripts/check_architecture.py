@@ -86,6 +86,7 @@ def layer(manifest, root):
         ("contracts/domain/", "models"), ("contracts/wire/", "models"),
         ("contracts/protocol/", "protocol"), ("clients/transport/", "client_core"),
         ("host/application/", "application"), ("host/runtime/", "runtime"),
+        ("host/workbench/", "runtime"),
         ("host/adapters/", "infrastructure"), ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),

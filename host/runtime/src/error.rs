@@ -83,3 +83,9 @@ impl From<TerminalError> for BackendStateError {
         Self::Terminal(error)
     }
 }
+
+impl From<workbench_state::WorkbenchStateError> for BackendStateError {
+    fn from(_: workbench_state::WorkbenchStateError) -> Self {
+        Self::InvalidWorkbench
+    }
+}

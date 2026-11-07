@@ -726,6 +726,7 @@ dependencies = [
  "terminal",
  "text",
  "workbench",
+ "workbench-state",
 ]
 
 [[package]]
@@ -10407,6 +10408,15 @@ dependencies = [
  "serde",
  "serde_json",
  "workspace",
+]
+
+[[package]]
+name = "workbench-state"
+version = "0.1.0"
+dependencies = [
+ "client-api",
+ "serde_json",
+ "workbench",
 ]
 
 [[package]]

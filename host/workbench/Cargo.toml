@@ -1,0 +1,11 @@
+[package]
+name = "workbench-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+client-api = { path = "../../contracts/protocol" }
+workbench = { path = "../../contracts/domain/workbench" }
+serde_json.workspace = true

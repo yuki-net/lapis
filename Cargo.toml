@@ -6,6 +6,7 @@ members = [
     "clients/transport",
     "clients/web/wasm",
     "host/runtime",
+    "host/workbench",
     "host/app",
     "host/adapters/*",
     "host/transport/*",
