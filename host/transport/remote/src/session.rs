@@ -206,7 +206,7 @@ impl ConnectionSession {
             Ok(protocol) => protocol,
             Err(_) => return protocol_rejected(),
         };
-        let grant = match auth
+        let (grant, subject) = match auth
             .lock()
             .map_err(|_| AuthError::OidcUnavailable)
             .and_then(|mut auth| {
@@ -217,10 +217,11 @@ impl ConnectionSession {
                     &request.hello.requested_capabilities,
                 )
             }) {
-            Ok(grant) => grant,
+            Ok(result) => result,
             Err(_) => return authentication_rejected(),
         };
-        let hello = server_hello(protocol, &grant);
+        let mut hello = server_hello(protocol, &grant);
+        hello.subject = Some(subject);
         self.hello = None;
         self.grant = Some(grant);
         SessionReply {
@@ -309,6 +310,7 @@ fn server_hello(protocol: client_api::ProtocolVersion, grant: &SessionGrant) -> 
         protocol,
         session_id: grant.session_id().clone(),
         granted_capabilities: grant.capabilities().clone(),
+        subject: None,
     }
 }
 

@@ -37,6 +37,13 @@ struct Settings {
     clock_skew_seconds: u64,
 }
 
+/// OIDC の必須設定が環境変数に存在するか。JWKS の取得は行わない。
+pub fn configured() -> bool {
+    std::env::var(ISSUER).is_ok()
+        && std::env::var(AUDIENCE).is_ok()
+        && std::env::var(JWKS_FILE).is_ok() != std::env::var(JWKS_URI).is_ok()
+}
+
 /// OIDC が設定されていれば検証器とクライアント設定を作る。未設定なら None を返す。
 pub fn from_env() -> Result<Option<HostOidc>, String> {
     let Some(settings) = settings(|name| std::env::var(name).ok())? else {
@@ -87,6 +94,11 @@ fn settings(lookup: impl Fn(&str) -> Option<String>) -> Result<Option<Settings>,
     };
     if !issuer.starts_with("https://") || issuer.len() == "https://".len() {
         return Err(format!("{ISSUER} は https:// で指定してください"));
+    }
+    if issuer.contains(['?', '#']) || issuer.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "{ISSUER} に query / fragment / 空白は指定できません"
+        ));
     }
     let client_id = lookup(CLIENT_ID).unwrap_or_else(|| audience.clone());
     if client_id.trim().is_empty() {
@@ -217,6 +229,23 @@ mod tests {
         ]))
         .unwrap_err();
         assert!(error.contains("https://"));
+    }
+
+    #[test]
+    fn issuer_with_query_or_fragment_is_rejected() {
+        for issuer in [
+            "https://idp.example?x=1",
+            "https://idp.example#fragment",
+            "https://idp.example/path with space",
+        ] {
+            let error = settings(lookup(&[
+                (ISSUER, issuer),
+                (AUDIENCE, "lapis"),
+                (JWKS_FILE, "jwks.json"),
+            ]))
+            .unwrap_err();
+            assert!(error.contains("query"));
+        }
     }
 
     #[test]

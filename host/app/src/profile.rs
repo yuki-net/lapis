@@ -79,13 +79,9 @@ pub fn open_host_file(
         }
         (record, path.to_owned())
     } else {
-        let invitation: HostInvitation = serde_json::from_slice(&bytes)?;
-        if invitation.version != 1
-            || invitation.token.len() != 32
-            || invitation.certificate.len() > 64 * 1024
-            || invitation.server_name.len() > 253
-        {
-            return Err("Host招待が不正です".into());
+        let invitation = parse_invitation(&bytes)?;
+        if invitation.token.is_empty() {
+            return Err("OIDC招待はDesktopのOIDCログインで処理してください".into());
         }
         let mut random = [0u8; 16];
         getrandom::fill(&mut random)?;
@@ -149,6 +145,30 @@ pub fn open_host_file(
     let root = remote_root(directory, &record)?;
     let backend = BackendClient::remote(root.clone(), record.config()?)?;
     Ok((backend, root, profile))
+}
+
+/// 招待ファイルを読み込み、検証する。Token が空なら OIDC 招待。
+pub fn read_invitation(path: &Path) -> Result<HostInvitation, Error> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    fs::File::open(path)?
+        .take(128 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 128 * 1024 {
+        return Err("Host情報の上限を超えています".into());
+    }
+    parse_invitation(&bytes)
+}
+
+fn parse_invitation(bytes: &[u8]) -> Result<HostInvitation, Error> {
+    let invitation: HostInvitation = serde_json::from_slice(bytes)?;
+    if invitation.version != 1
+        || !matches!(invitation.token.len(), 0 | 32)
+        || invitation.certificate.len() > 64 * 1024
+        || invitation.server_name.len() > 253
+    {
+        return Err("Host招待が不正です".into());
+    }
+    Ok(invitation)
 }
 
 fn profile_key(
@@ -462,6 +482,30 @@ mod tests {
             panic!("oversized profile must be rejected");
         };
         assert!(error.to_string().contains("上限"));
+    }
+
+    #[test]
+    fn oidc_invitation_without_token_is_readable_but_not_pairing_input() {
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("oidc.json");
+        let invitation = HostInvitation {
+            version: 1,
+            address: "127.0.0.1:1".parse().unwrap(),
+            server_name: "lapis-host".to_owned(),
+            certificate: vec![1, 2, 3],
+            workspace_id: "workspace-1".to_owned(),
+            name: "Remote".to_owned(),
+            token: Vec::new(),
+        };
+        write_invitation(&path, &invitation).unwrap();
+        let read = read_invitation(&path).unwrap();
+        assert!(read.token.is_empty());
+
+        let result = open_host_file(&path, &state.path().join("profiles"));
+        let Err(error) = result else {
+            panic!("OIDC invitation must not be paired");
+        };
+        assert!(error.to_string().contains("OIDC"));
     }
 
     #[test]

@@ -134,10 +134,28 @@ fn paired_response_matches_mobile_fixture() {
         protocol: CURRENT_PROTOCOL,
         session_id: SessionId::try_new("session-1").unwrap(),
         granted_capabilities: Default::default(),
+        subject: None,
     };
     let response = PairedResponse::new(server_hello, &credential, &[0xcd; 32]);
     let json = serde_json::to_string(&ServerMessage::Paired(response)).unwrap();
     assert_eq!(json, PAIRED_RESPONSE);
+}
+
+#[test]
+fn server_hello_subject_is_optional() {
+    let subject = ServerHello {
+        protocol: CURRENT_PROTOCOL,
+        session_id: SessionId::try_new("session-1").unwrap(),
+        granted_capabilities: Default::default(),
+        subject: Some("alice".to_owned()),
+    };
+    let json = serde_json::to_string(&subject).unwrap();
+    assert!(json.contains("\"subject\":\"alice\""));
+    let without = ServerHello {
+        subject: None,
+        ..subject
+    };
+    assert!(!serde_json::to_string(&without).unwrap().contains("subject"));
 }
 
 /// Kotlin 側の fixture が Rust の正本と同期していることを確認する。

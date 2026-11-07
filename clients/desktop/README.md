@@ -32,6 +32,15 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。
 
+## OIDC ログイン
+
+Host が OIDC を設定している場合、Host の `invite-oidc` で作成した招待を `lapis --host <招待.json>` で開くと、システムブラウザーで IdP にログインします。Host は `AuthRequired.oidc` で issuer / client_id / scopes を提示し、Desktop は issuer の discovery で endpoint を解決します。
+
+- loopback redirect URI の既定は `http://127.0.0.1:53682/auth/callback`。`LAPIS_DESKTOP_OIDC_REDIRECT_URI` で変更できます。
+- IdP には `LAPIS_OIDC_CLIENT_ID` の public client と redirect URI を登録してください。
+- ID Token は Host が検証し、Desktop は検証済み `sub` ごとに DPAPI 保護プロファイルへ保存します。
+- Token を URL・ログ・Cookie へ出しません。
+
 ## 開発コマンド
 
 Desktopを変更・確認する開発者向け。以下は対象のworktreeルートで実行します。

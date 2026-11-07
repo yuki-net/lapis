@@ -24,6 +24,9 @@ pub struct ServerHello {
     pub protocol: ProtocolVersion,
     pub session_id: SessionId,
     pub granted_capabilities: CapabilitySet,
+    /// OIDC で認証した場合の検証済み `sub`。Token 方式では省略する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 
 #[cfg(test)]

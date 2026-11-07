@@ -10,6 +10,7 @@ hot-reload = ["desktop-ui/hot-reload"]
 
 [dependencies]
 host = { path = "../../../host/app" }
+client-api = { path = "../../../contracts/protocol" }
 desktop-client = { path = "../../state" }
 desktop-ui = { path = "../../ui" }
 platform = { path = "../../../host/adapters/local" }
@@ -17,6 +18,7 @@ persistence = { path = "../persistence" }
 remote = { path = "../../../host/transport/remote" }
 settings = { path = "../../../contracts/domain/settings" }
 task = { path = "../../../contracts/domain/task" }
+getrandom.workspace = true
 rfd.workspace = true
 
 [dev-dependencies]

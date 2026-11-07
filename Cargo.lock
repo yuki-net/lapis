@@ -4433,9 +4433,11 @@ version = "0.1.0"
 name = "lapis"
 version = "0.1.0"
 dependencies = [
+ "client-api",
  "desktop-client",
  "desktop-ui",
  "editor-core",
+ "getrandom 0.3.4",
  "host",
  "persistence",
  "platform",

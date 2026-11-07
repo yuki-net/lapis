@@ -70,6 +70,7 @@ data class ServerHello(
     val protocol: ProtocolVersion,
     @SerialName("session_id") val sessionId: String,
     @SerialName("granted_capabilities") val grantedCapabilities: List<String> = emptyList(),
+    val subject: String? = null,
 )
 
 @Serializable

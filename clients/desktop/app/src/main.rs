@@ -27,13 +27,14 @@ fn main() {
         return;
     }
     let Some(startup) = connection::Startup::open(&arguments).unwrap_or_else(|error| {
+        let error = connection_hint(&error);
         if arguments
             .iter()
             .any(|argument| argument == "--connect-host")
         {
             rfd::MessageDialog::new()
                 .set_title("Hostに接続できません")
-                .set_description(error.to_string())
+                .set_description(&error)
                 .set_level(rfd::MessageLevel::Error)
                 .show();
         }
@@ -216,6 +217,16 @@ fn main() {
     desktop_ui::run(session, desktop_services, initial_view);
 }
 
+fn connection_hint(error: &dyn std::fmt::Display) -> String {
+    let error = error.to_string();
+    // OIDC の Token が期限切れの場合は、招待を開き直して再ログインする。
+    if error.contains("認証が拒否") || error.contains("UNAUTHORIZED") {
+        format!("{error}（OIDC の場合は Host の招待ファイルを開き直して再ログインしてください）")
+    } else {
+        error
+    }
+}
+
 fn option_index(arguments: &[std::ffi::OsString], name: &str) -> Option<usize> {
     arguments.iter().rposition(|value| value == name)
 }
@@ -343,9 +354,18 @@ fn run_task_smoke(arguments: &[std::ffi::OsString]) {
 
 #[cfg(test)]
 mod tests {
-    use super::{option_index, same_workspace};
+    use super::{connection_hint, option_index, same_workspace};
     use std::ffi::OsString;
     use std::path::Path;
+
+    #[test]
+    fn connection_hint_mentions_relogin_for_auth_rejection() {
+        assert!(
+            connection_hint(&"Hostの認証が拒否されました")
+                .contains("招待ファイルを開き直して再ログイン")
+        );
+        assert_eq!(connection_hint(&"別のエラー"), "別のエラー");
+    }
 
     #[test]
     fn repeated_workspace_options_use_the_last_value() {
