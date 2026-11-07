@@ -84,6 +84,19 @@ impl From<TerminalError> for BackendStateError {
     }
 }
 
+impl From<terminal_state::TerminalStateError> for BackendStateError {
+    fn from(error: terminal_state::TerminalStateError) -> Self {
+        match error {
+            terminal_state::TerminalStateError::Unsupported => Self::Unsupported,
+            terminal_state::TerminalStateError::NotFound => Self::TerminalNotFound,
+            terminal_state::TerminalStateError::NotAttached => Self::TerminalNotAttached,
+            terminal_state::TerminalStateError::NotRunning => Self::TerminalNotRunning,
+            terminal_state::TerminalStateError::InvalidSize => Self::InvalidTerminalSize,
+            terminal_state::TerminalStateError::Backend(error) => Self::Terminal(error),
+        }
+    }
+}
+
 impl From<workbench_state::WorkbenchStateError> for BackendStateError {
     fn from(_: workbench_state::WorkbenchStateError) -> Self {
         Self::InvalidWorkbench

@@ -15,6 +15,7 @@ text = { path = "../../contracts/domain/text" }
 terminal = { path = "../../contracts/domain/terminal" }
 workbench = { path = "../../contracts/domain/workbench" }
 workbench-state = { path = "../workbench" }
+terminal-state = { path = "../terminal" }
 serde.workspace = true
 serde_json.workspace = true
 

@@ -1,5 +1,7 @@
 use std::{
     collections::{BTreeMap, HashSet},
+    error::Error,
+    fmt,
     path::Path,
     sync::Arc,
 };
@@ -13,15 +15,52 @@ use terminal::{
     TerminalStatus as BackendTerminalStatus,
 };
 
-use crate::BackendStateError;
+/// Terminal 状態の操作で発生するエラー。
+#[derive(Debug)]
+pub enum TerminalStateError {
+    Unsupported,
+    NotFound,
+    NotAttached,
+    NotRunning,
+    InvalidSize,
+    Backend(terminal::TerminalError),
+}
 
-pub(crate) struct TerminalRegistry {
+impl fmt::Display for TerminalStateError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported => formatter.write_str("request is not implemented by this service"),
+            Self::NotFound => formatter.write_str("terminal was not found"),
+            Self::NotAttached => formatter.write_str("terminal is not attached to session"),
+            Self::NotRunning => formatter.write_str("terminal is not running"),
+            Self::InvalidSize => formatter.write_str("terminal size must be greater than zero"),
+            Self::Backend(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for TerminalStateError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Backend(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<terminal::TerminalError> for TerminalStateError {
+    fn from(error: terminal::TerminalError) -> Self {
+        Self::Backend(error)
+    }
+}
+
+pub struct TerminalRegistry {
     backend: Option<Arc<dyn TerminalBackend>>,
     resources: BTreeMap<TerminalId, TerminalResource>,
 }
 
 impl TerminalRegistry {
-    pub(crate) fn active_in(&self, root: &Path) -> bool {
+    pub fn active_in(&self, root: &Path) -> bool {
         self.resources.values().any(|resource| {
             resource.cwd_path.starts_with(root)
                 && !matches!(
@@ -31,27 +70,27 @@ impl TerminalRegistry {
         })
     }
 
-    pub(crate) fn new(backend: Option<Arc<dyn TerminalBackend>>) -> Self {
+    pub fn new(backend: Option<Arc<dyn TerminalBackend>>) -> Self {
         Self {
             backend,
             resources: BTreeMap::new(),
         }
     }
 
-    pub(crate) fn start(
+    pub fn start(
         &mut self,
         terminal_id: TerminalId,
         session_id: &SessionId,
         workspace_id: &WorkspaceId,
         cwd: &Path,
         request: &TerminalStartRequest,
-    ) -> Result<(TerminalSnapshot, EventBody), BackendStateError> {
+    ) -> Result<(TerminalSnapshot, EventBody), TerminalStateError> {
         let size = request.size;
         require_size(size)?;
         let backend = self
             .backend
             .as_ref()
-            .ok_or(BackendStateError::Unsupported)?;
+            .ok_or(TerminalStateError::Unsupported)?;
         let backend_id = backend.start_with_shell(cwd, size.columns, size.rows, request.shell)?;
         let mut resource =
             TerminalResource::new(terminal_id.clone(), backend_id, workspace_id.clone(), size);
@@ -69,35 +108,35 @@ impl TerminalRegistry {
         ))
     }
 
-    pub(crate) fn input(
+    pub fn input(
         &mut self,
         session_id: &SessionId,
         workspace_id: &WorkspaceId,
         terminal_id: &TerminalId,
         input: &TerminalInput,
-    ) -> Result<TerminalSnapshot, BackendStateError> {
+    ) -> Result<TerminalSnapshot, TerminalStateError> {
         let backend = self
             .backend
             .as_ref()
-            .ok_or(BackendStateError::Unsupported)?;
+            .ok_or(TerminalStateError::Unsupported)?;
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
         backend.input(&resource.backend_id, input)?;
         Ok(resource.snapshot(workspace_id))
     }
 
-    pub(crate) fn resize(
+    pub fn resize(
         &mut self,
         session_id: &SessionId,
         workspace_id: &WorkspaceId,
         terminal_id: &TerminalId,
         size: TerminalSize,
-    ) -> Result<(TerminalSnapshot, EventBody), BackendStateError> {
+    ) -> Result<(TerminalSnapshot, EventBody), TerminalStateError> {
         require_size(size)?;
         let backend = self
             .backend
             .as_ref()
-            .ok_or(BackendStateError::Unsupported)?;
+            .ok_or(TerminalStateError::Unsupported)?;
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
         let delta = backend.resize(&resource.backend_id, size.columns, size.rows)?;
@@ -112,16 +151,16 @@ impl TerminalRegistry {
         ))
     }
 
-    pub(crate) fn terminate(
+    pub fn terminate(
         &mut self,
         session_id: &SessionId,
         workspace_id: &WorkspaceId,
         terminal_id: &TerminalId,
-    ) -> Result<(TerminalSnapshot, Option<EventBody>), BackendStateError> {
+    ) -> Result<(TerminalSnapshot, Option<EventBody>), TerminalStateError> {
         let backend = self
             .backend
             .as_ref()
-            .ok_or(BackendStateError::Unsupported)?;
+            .ok_or(TerminalStateError::Unsupported)?;
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         if resource.status != TerminalStatus::Running {
             return Ok((resource.snapshot(workspace_id), None));
@@ -137,7 +176,7 @@ impl TerminalRegistry {
         ))
     }
 
-    pub(crate) fn poll(&mut self) -> Result<Vec<EventBody>, BackendStateError> {
+    pub fn poll(&mut self) -> Result<Vec<EventBody>, TerminalStateError> {
         let Some(backend) = self.backend.as_ref() else {
             return Ok(Vec::new());
         };
@@ -212,7 +251,7 @@ impl TerminalRegistry {
         Ok(published)
     }
 
-    pub(crate) fn snapshots_for_session(
+    pub fn snapshots_for_session(
         &mut self,
         session_id: &SessionId,
         workspace_id: &WorkspaceId,
@@ -226,7 +265,7 @@ impl TerminalRegistry {
             .collect()
     }
 
-    pub(crate) fn detach(&mut self, session_id: &SessionId) {
+    pub fn detach(&mut self, session_id: &SessionId) {
         for resource in self.resources.values_mut() {
             resource.attached_sessions.remove(session_id);
         }
@@ -283,17 +322,17 @@ impl TerminalResource {
         }
     }
 
-    fn require_running(&self) -> Result<(), BackendStateError> {
+    fn require_running(&self) -> Result<(), TerminalStateError> {
         if self.status == TerminalStatus::Running {
             Ok(())
         } else {
-            Err(BackendStateError::TerminalNotRunning)
+            Err(TerminalStateError::NotRunning)
         }
     }
 
-    fn apply_delta(&mut self, delta: &TerminalDelta) -> Result<(), BackendStateError> {
+    fn apply_delta(&mut self, delta: &TerminalDelta) -> Result<(), TerminalStateError> {
         if delta.revision != self.revision.saturating_add(1) {
-            return Err(BackendStateError::Terminal(terminal::TerminalError::new(
+            return Err(TerminalStateError::Backend(terminal::TerminalError::new(
                 "Terminal revision is not contiguous",
             )));
         }
@@ -319,20 +358,20 @@ fn require_attached_mut<'a>(
     resources: &'a mut BTreeMap<TerminalId, TerminalResource>,
     session_id: &SessionId,
     terminal_id: &TerminalId,
-) -> Result<&'a mut TerminalResource, BackendStateError> {
+) -> Result<&'a mut TerminalResource, TerminalStateError> {
     let resource = resources
         .get_mut(terminal_id)
-        .ok_or(BackendStateError::TerminalNotFound)?;
+        .ok_or(TerminalStateError::NotFound)?;
     if resource.attached_sessions.contains(session_id) {
         Ok(resource)
     } else {
-        Err(BackendStateError::TerminalNotAttached)
+        Err(TerminalStateError::NotAttached)
     }
 }
 
-fn require_size(size: TerminalSize) -> Result<(), BackendStateError> {
+fn require_size(size: TerminalSize) -> Result<(), TerminalStateError> {
     if size.columns == 0 || size.rows == 0 || size.columns > 512 || size.rows > 256 {
-        Err(BackendStateError::InvalidTerminalSize)
+        Err(TerminalStateError::InvalidSize)
     } else {
         Ok(())
     }

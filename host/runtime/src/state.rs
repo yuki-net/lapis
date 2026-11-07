@@ -19,10 +19,8 @@ use document::{Document, Encoding};
 use terminal::TerminalBackend;
 use text::TextEdit;
 
-use crate::{
-    BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver,
-    terminal_state::TerminalRegistry,
-};
+use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver};
+use terminal_state::TerminalRegistry;
 
 const MAX_RETAINED_EVENTS: usize = 1024;
 

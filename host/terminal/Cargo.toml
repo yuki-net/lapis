@@ -1,0 +1,10 @@
+[package]
+name = "terminal-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+client-api = { path = "../../contracts/protocol" }
+terminal = { path = "../../contracts/domain/terminal" }

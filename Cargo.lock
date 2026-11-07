@@ -724,6 +724,7 @@ dependencies = [
  "task",
  "tempfile",
  "terminal",
+ "terminal-state",
  "text",
  "workbench",
  "workbench-state",
@@ -8190,6 +8191,14 @@ dependencies = [
  "editor-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "terminal-state"
+version = "0.1.0"
+dependencies = [
+ "client-api",
+ "terminal",
 ]
 
 [[package]]
