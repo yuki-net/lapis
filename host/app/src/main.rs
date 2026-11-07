@@ -27,6 +27,7 @@ struct Options {
     listen: SocketAddr,
     state_directory: Option<PathBuf>,
     connection_info: Option<PathBuf>,
+    invitation: Option<PathBuf>,
     replace_certificate: bool,
 }
 
@@ -38,6 +39,7 @@ impl Options {
         let mut listen = "127.0.0.1:0".parse()?;
         let mut state_directory = None;
         let mut connection_info = None;
+        let mut invitation = None;
         let mut replace_certificate = false;
         while let Some(argument) = arguments.next() {
             if argument == "--replace-certificate" {
@@ -51,6 +53,7 @@ impl Options {
                 Some("--listen") => listen = value.to_str().ok_or("invalid address")?.parse()?,
                 Some("--state-directory") => state_directory = Some(PathBuf::from(value)),
                 Some("--connection-info") => connection_info = Some(PathBuf::from(value)),
+                Some("--invitation") => invitation = Some(PathBuf::from(value)),
                 _ => return Err("unknown option".into()),
             }
         }
@@ -60,6 +63,7 @@ impl Options {
             listen,
             state_directory,
             connection_info,
+            invitation,
             replace_certificate,
         })
     }
@@ -104,7 +108,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>] [--connection-info <file>]"
+            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>] [--connection-info <file>] [--invitation <file>]"
         );
         std::process::exit(1);
     }
@@ -208,6 +212,29 @@ fn run() -> Result<(), Error> {
             write_connection_info(path, &connection)?;
         }
         println!("address={address} server_name=lapis-host workspace={}", workspace.as_str());
+        // Desktop用の招待は1回限りのtokenを含むため、起動のたびに作り直す。
+        if let Some(path) = &options.invitation {
+            let token = auth
+                .lock()
+                .map_err(|_| "authentication unavailable")?
+                .begin_pairing(workspace.clone())?;
+            let invitation = host::HostInvitation {
+                version: 1,
+                address,
+                server_name: "lapis-host".to_owned(),
+                certificate: certified.cert.der().to_vec(),
+                workspace_id: workspace.as_str().to_owned(),
+                name: options
+                    .workspace
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                token: token.secret_bytes().to_vec(),
+            };
+            host::write_invitation_replacing(path, &invitation)?;
+            println!("invitation={}", path.display());
+        }
         println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
         let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
@@ -346,6 +373,10 @@ fn run() -> Result<(), Error> {
         server.shutdown().await;
         if let Some(path) = &options.connection_info {
             remove_connection_info(path, address);
+        }
+        // 期限切れのtokenを残すと次回の接続先と誤認するため、正常終了で消す。
+        if let Some(path) = &options.invitation {
+            let _ = std::fs::remove_file(path);
         }
         Ok::<_, Error>(())
     })

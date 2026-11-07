@@ -51,7 +51,12 @@ impl Startup {
         } else {
             std::env::current_dir()?.join(directory)
         };
-        let host_file = option(arguments, "--host")?.map(PathBuf::from);
+        // 接続先は CLI、環境変数の順に解決する。どちらも無ければローカルHostを起動する。
+        let host_file = option(arguments, "--host")?.map(PathBuf::from).or_else(|| {
+            std::env::var_os("LAPIS_HOST_FILE")
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        });
         let host_file = if arguments.iter().any(|value| value == "--connect-host") {
             let chosen = rfd::FileDialog::new()
                 .set_title("Hostの招待または接続profileを開く")

@@ -29,6 +29,8 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 
 `--connection-info <file>` を指定すると、待受を開始した後に待受アドレス・server_name・Workspace ID・公開証明書を1つのJSONへ書き出します。書くのは `--certificate` が成功した後だけなので、待受に失敗した起動が稼働中Hostの情報を壊しません。tokenや秘密鍵は含めず、既存ファイルは上書きします。正常終了（`quit` / Ctrl+C）時は、書いたアドレスが自分の待受アドレスと一致する場合に限りこのファイルを削除します。Clientやbridgeへ接続先を自動で渡したい場合に使います。未指定の場合はファイルを作りません。
 
+`--invitation <file>` を指定すると、`--connection-info` と同じタイミングで Desktop 用の招待を書き出します。`invite` と同じ形式で、待受アドレス・server_name・Workspace ID・公開証明書に加えて1時間・1回限りの token を含みます。起動のたびに token を作り直して上書きするため、毎回同じパスを指定できます。token を含むため他の利用者が読めない場所へ置き、正常終了（`quit` / Ctrl+C）時は削除します。Desktop は `--host <file>` または環境変数 `LAPIS_HOST_FILE` でこの招待を開きます。
+
 既定ではloopbackの空きUDP portでQUICを受け付けます。別端末から接続する場合は `--listen <ip:port>` を明示します。表示されたaddress・server_name・Workspace IDと、信頼できる経路で渡した公開証明書をClientで使用します。既存の証明書ファイルは上書きしません。
 
 Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の招待.json>` を実行すると、公開証明書・Workspace・1時間で一回限りの招待をファイルにまとめます。信頼できる経路でClientごとに渡してください。`pair` はWorkspace限定の招待token、`pair-user` はWorkspaceの一覧・切替・登録を許可するユーザー用tokenをconsoleへ表示する低水準の操作です。ユーザー用tokenにはその他のHost管理権限はありません。Host所有者は `register <directory>` で別のWorkspaceを登録できます。`devices` は接続済みDeviceの一覧、`approve <device-id>` は承認待ちDeviceの許可、`revoke-device <device-id>` はDeviceとそのcredential / OIDC Sessionの失効、`revoke <credential-id>` は資格情報の失効、`quit` またはCtrl+CはHost自体を終了します。Client切断や標準入力のEOFではHostを終了しません。

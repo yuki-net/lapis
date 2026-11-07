@@ -45,6 +45,48 @@ pub fn write_invitation(path: &Path, invitation: &HostInvitation) -> Result<(), 
     Ok(())
 }
 
+/// 同じパスへ書き直す招待。起動ごとに作り直す1回限りのtokenを置き換える。
+pub fn write_invitation_replacing(path: &Path, invitation: &HostInvitation) -> Result<(), Error> {
+    let directory = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    fs::create_dir_all(&directory)?;
+    let mut file = tempfile::NamedTempFile::new_in(&directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.as_file()
+            .set_permissions(fs::Permissions::from_mode(0o600))?;
+    }
+    serde_json::to_writer(file.as_file_mut(), invitation)?;
+    file.as_file_mut().flush()?;
+    file.as_file().sync_all()?;
+    file.persist(path)?;
+    Ok(())
+}
+
+/// 保護済みprofileを読む。パス名を鍵にしているため、別名へ複製すると読めない。
+fn read_profile(path: &Path) -> Result<Record, Error> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    fs::File::open(path)?
+        .take(128 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 128 * 1024 {
+        return Err("Host情報の上限を超えています".into());
+    }
+    let key = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or("Host profile名が不正です")?;
+    let plaintext = protect(&bytes, key.as_bytes(), true)?;
+    let record: Record = serde_json::from_slice(&plaintext)?;
+    if record.key != key {
+        return Err("Host profileが一致しません".into());
+    }
+    Ok(record)
+}
+
 /// 招待からの初回接続、または保護済みprofileからの再接続を行う。
 /// 戻り値は接続port、Client内の仮想root、次回起動で使うprofileの保存先。
 pub fn open_host_file(
@@ -68,20 +110,31 @@ pub fn open_host_file(
         .extension()
         .is_some_and(|extension| extension == "host")
     {
-        let key = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .ok_or("Host profile名が不正です")?;
-        let plaintext = protect(&bytes, key.as_bytes(), true)?;
-        let record: Record = serde_json::from_slice(&plaintext)?;
-        if record.key != key {
-            return Err("Host profileが一致しません".into());
-        }
-        (record, path.to_owned())
+        (read_profile(path)?, path.to_owned())
     } else {
         let invitation = parse_invitation(&bytes)?;
         if invitation.token.is_empty() {
             return Err("OIDC招待はDesktopのOIDCログインで処理してください".into());
+        }
+        let key = profile_key(
+            "remote",
+            invitation.address,
+            &invitation.server_name,
+            &invitation.workspace_id,
+            &invitation.certificate,
+            None,
+        )?;
+        let existing = directory.join(format!("{key}.host"));
+        // tokenは1回限り。同じHostへ接続済みなら保存済みprofileを再利用する。
+        if existing.is_file() {
+            eprintln!(
+                "保存済みのHost接続profileを使います: {}",
+                existing.display()
+            );
+            let record = read_profile(&existing)?;
+            let root = remote_root(directory, &record)?;
+            let backend = BackendClient::remote(root.clone(), record.config()?)?;
+            return Ok((backend, root, existing));
         }
         let mut random = [0u8; 16];
         getrandom::fill(&mut random)?;

@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Run Web" type="CompoundRunConfigurationType" factoryName="Compound">
+    <toRun name="Run Web Bridge" type="CargoCommandRunConfiguration" />
+    <toRun name="Run Web Page" type="js.build_tools.npm" />
+    <method v="2" />
+  </configuration>
+</component>

@@ -6,26 +6,46 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 | 押すもの | 起動するもの |
 | --- | --- |
-| `Lapis` | Desktop ＋ 自動起動の Local Host |
-| `Lapis Hot Reload` | 修正版 `dx` ＋ Local Host |
-| `Lapis Web` | Host ＋ bridge（`4748`）＋ ページ配信（`4747`） |
+| `Run Host` | Host だけ。Desktop と Web の両方がここへ繋がる |
+| `Run Desktop` | Desktop だけ。Host の招待を待って接続する |
+| `Run Web` | bridge（TCP `4748`）＋ ページ配信（TCP `4747`）。Host は起動しない |
 
-`.run` の `Lapis Web Host` / `Lapis Web Bridge` / `Lapis Web Page` は `Lapis Web` の構成要素です。単体で動きを調べたいときだけ押します。
+3つは独立していて、起動順は問いません。`Run Host` を1つ立ち上げれば、Desktop と Web が同じ Host に同時に繋がります。
 
-CLI では `cargo dev` / `cargo dev-hot-reload` が同じ launcher（`scripts/dev-session`）を通ります。Run から起動した場合は `target/dev-sessions/<session>/` に binary と状態を分離し、CLI からは `target/dev-state` を明示して状態を永続化します。
+`.run` のその他は、`Run Web` の部品（`Run Web Bridge` / `Run Web Page`）、`Run Hot Reload`、`Build Web`、`Run Android`、`Build Android` です。部品は単体で動きを調べたいときだけ押します。
+
+## Host と Desktop の接続
+
+`Run Host` は待受を始めた後に2つのファイルを書きます。
+
+| ファイル | 中身 | 読む側 |
+| --- | --- | --- |
+| `target/dev-web/connection.json` | 待受アドレス・サーバー名・Workspace ID・公開証明書 | bridge |
+| `target/dev-desktop/desktop.json` | 上記に加えて1時間・1回限りの token | Desktop |
+
+どちらも token の扱いが違うだけで、指す Host は同じです。Host を正常終了すると自分が書いたファイルを削除します。
+
+`Run Desktop` は `--host target/dev-desktop/desktop.json` で起動し、招待が無ければ最大15秒待ちます。一度ペアリングすると `<state>/hosts/` に profile が残り、同じ Host へは profile で再接続するため、2回目以降は token を使いません。
+
+Desktop の接続先は `--host`、環境変数 `LAPIS_HOST_FILE`、ローカル Host の自動起動の順に解決します。どれも無ければ従来どおり自分で Local Host を起動するため、製品の通常起動と Run で経路は分かれません。
 
 ## Desktop
 
-| 操作 | コマンド |
+| 操作 | 手段 |
 | --- | --- |
-| ビルドして起動 | `cargo dev` |
+| ローカル Host を自動起動して起動 | `cargo dev` |
+| `Run Host` に繋いで起動 | `Run Desktop`、または `LAPIS_HOST_FILE` を設定して `cargo dev` |
 | ファイルを開いて起動 | `cargo dev --open-file README.md` |
-| Hot Reload で起動 | `cargo dev-hot-reload` または `Lapis Hot Reload` |
-| Host だけ起動 | `Lapis Host` |
+| Hot Reload で起動 | `Run Hot Reload` または `cargo dev-hot-reload` |
 
-`cargo dev` も `Lapis` も Desktop と Host の両方をビルドします。2段階ビルドはありません。`Lapis Web Host` は Desktop を起動しないため Host だけをビルドし、Desktop のビルドが壊れていても Web 用 Host は起動できます。
+```powershell
+# Run Host に繋ぎたいとき（Run Desktop と同じ動き）
+$env:LAPIS_HOST_FILE = "target/dev-desktop/desktop.json"; cargo dev
+```
 
-`Lapis` は Windows の Job Object で Run が起動した process をまとめて管理し、Stop で Desktop と Local Host の両方を終了します。Desktop を閉じただけでは Local Host は残るため、残した場合はログの `Desktop session:` の名前を使って `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止します。
+`cargo dev` も `Run Desktop` も Desktop と Host の両方をビルドします。2段階ビルドはありません。`Run Web Host` だけは Desktop を起動しないため Host だけをビルドし、Desktop のビルドが壊れていても Web 用 Host は起動できます。
+
+Run は Windows の Job Object で、その Run が起動した process をまとめて管理します。Stop は Run が起動した process だけを終了し、他の Run や既存の Host には影響しません。`cargo dev` や製品の通常起動では Desktop を閉じても Local Host は残るため、残した場合はログの `Desktop session:` の名前を使って `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止します。
 
 Hot Reload は次を守ります。
 
@@ -41,7 +61,7 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 | process | 役割 | 待受 |
 | --- | --- | --- |
-| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。既定は空きポートの自動割当 |
+| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。`Run Host` は `4749` を固定で使う |
 | bridge（`lapis-web-bridge`） | ブラウザーの WebSocket を Host の QUIC へ転送し、OIDC の token 交換を行う | TCP `4748` |
 | ページ配信（vite） | Wasm UI を配る | TCP `4747` |
 
@@ -51,8 +71,8 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 ### ログイン
 
-1. `Lapis Web` を押し、コンソールで `pair-user` を打って token を控えます。
-2. bridge のログに出る `open http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=<ID>` を開きます。
+1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます。
+2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=<ID>` が出ます。その URL を開きます。
 3. Host URL は bridge の `ws://127.0.0.1:4748/remote`、Workspace ID は接続情報の `workspace_id` か Host ログの `workspace=`、pairing token は手順1の値です。
 4. 一度接続すると credential がブラウザーの `localStorage` に保存され、次回は token 欄が空でも接続できます。
 
@@ -64,9 +84,11 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 | --- | --- | --- |
 | ページ | `4747` 固定 | ブラウザーで開く URL。`strictPort` で衝突時は明示的に失敗する |
 | bridge | `4748` 固定 | ログインフォームに入力する URL |
-| Host | 自動割当 | ブラウザーから直接叩かない。実値は接続情報とログに出る |
+| Host | `4749` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
 
 bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4748`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。
+
+`4749` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
 
 ## Web の UI だけを素早く確認する
 

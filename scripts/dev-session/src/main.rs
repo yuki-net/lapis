@@ -4,8 +4,13 @@ use std::{
     fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+/// Host の起動を待てる程度にし、無いまま固まらない。
+const HOST_FILE_TIMEOUT: Duration = Duration::from_secs(15);
+const HOST_FILE_POLL: Duration = Duration::from_millis(100);
 
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -52,6 +57,8 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         let desktop = copy_binary(root, &bin, "lapis")?;
         let hosts = session.join("hosts");
         fs::create_dir(&hosts)?;
+        // Host を別の Run で起動する場合は、招待が現れるまで待ってから接続する。
+        wait_for_host_file(root, &arguments)?;
         eprintln!(
             "Desktop session: {}",
             session.file_name().unwrap().to_string_lossy()
@@ -203,6 +210,42 @@ fn relative(root: &Path, path: &Path) -> Result<String, Box<dyn std::error::Erro
         .strip_prefix(root)
         .map_err(|_| "path is outside the worktree")?;
     Ok(path.to_string_lossy().into_owned())
+}
+
+/// `--host` か LAPIS_HOST_FILE が指す招待・profile の出現を待つ。
+/// Host を先に起動しなくても繋げるよう、待機は launcher 側に閉じる。
+fn wait_for_host_file(
+    root: &Path,
+    arguments: &[OsString],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut path = None;
+    let mut values = arguments.iter();
+    while let Some(argument) = values.next() {
+        if argument == "--host" {
+            path = values.next().map(PathBuf::from);
+        }
+    }
+    let path = match path.or_else(|| env::var_os("LAPIS_HOST_FILE").map(PathBuf::from)) {
+        Some(path) if !path.as_os_str().is_empty() => path,
+        _ => return Ok(()),
+    };
+    let path = if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    };
+    if path.exists() {
+        return Ok(());
+    }
+    eprintln!("Host の接続情報を待っています: {}", path.display());
+    let deadline = Instant::now() + HOST_FILE_TIMEOUT;
+    while !path.exists() {
+        if Instant::now() >= deadline {
+            return Err(format!("Host の接続情報が現れません: {}", path.display()).into());
+        }
+        thread::sleep(HOST_FILE_POLL);
+    }
+    Ok(())
 }
 
 fn create_session(parent: &Path) -> io::Result<PathBuf> {

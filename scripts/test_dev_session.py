@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -416,6 +417,76 @@ fn main() {
             (self.root / "release-dx").touch()
             first.communicate(timeout=20)
         self.assertEqual(first.returncode, 17)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows専用launcher")
+class HostFileWaitTests(unittest.TestCase):
+    """Hostを別のRunで起動しても、Desktopの起動が招待の出現を待つことを検証する。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="lapis host file wait ")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        launcher = cls.root / "scripts" / "dev-session"
+        launcher.mkdir(parents=True)
+        shutil.copytree(ROOT / "scripts" / "dev-session" / "src", launcher / "src")
+        for name in ("Cargo.toml", "Cargo.lock"):
+            shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
+        (cls.root / ".cargo").mkdir()
+        (cls.root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+        binary_dir = cls.root / "target" / "dev-build" / "debug"
+        binary_dir.mkdir(parents=True)
+        source = cls.root / "fixture.rs"
+        source.write_text(r'''
+use std::{env, fs};
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let host = args.iter().position(|arg| arg == "--host").map(|index| args[index + 1].clone());
+    fs::write("desktop-started", host.unwrap_or_default()).unwrap();
+}
+''', encoding="utf-8")
+        for name in ("lapis.exe", "lapis-host.exe"):
+            subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
+        subprocess.run([
+            "cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"),
+            "--target-dir", str(cls.root / "launcher-target"), "--quiet",
+        ], cwd=cls.root, check=True, capture_output=True)
+        cls.launcher = cls.root / "launcher-target" / "debug" / "lapis-dev-session.exe"
+
+    def setUp(self):
+        self.hosts = self.root / "dev"
+        self.hosts.mkdir(exist_ok=True)
+        for path in self.hosts.iterdir():
+            path.unlink()
+        (self.root / "desktop-started").unlink(missing_ok=True)
+        self.env = dict(os.environ)
+        self.env.pop("LAPIS_HOST_FILE", None)
+
+    def test_desktop_starts_after_host_file_appears(self):
+        threading.Timer(1.0, (self.hosts / "desktop.json").write_text, args=("{}",)).start()
+        started = time.monotonic()
+        result = subprocess.run(
+            [str(self.launcher), "--host", "dev/desktop.json"], cwd=self.root,
+            env=self.env, capture_output=True, timeout=30,
+        )
+        waited = time.monotonic() - started
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertIn("Host の接続情報を待っています", stderr)
+        self.assertGreater(waited, 0.8)
+        self.assertEqual((self.root / "desktop-started").read_text(), "dev/desktop.json")
+
+    def test_existing_host_file_starts_without_waiting(self):
+        (self.hosts / "desktop.host").write_text("{}")
+        result = subprocess.run(
+            [str(self.launcher), "--host", "dev/desktop.host"], cwd=self.root,
+            env=self.env, capture_output=True, timeout=30,
+        )
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertNotIn("Host の接続情報を待っています", stderr)
+        self.assertEqual((self.root / "desktop-started").read_text(), "dev/desktop.host")
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows専用launcher")
