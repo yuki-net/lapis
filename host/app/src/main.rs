@@ -246,6 +246,22 @@ fn run() -> Result<(), Error> {
                                 Err(_) => eprintln!("招待ファイルを作成できません。新規ファイルを指定してください。"),
                             }
                         } else { eprintln!("Usage: invite <address:port> <new-file.json>"); }
+                    } else if let Some(input) = line.strip_prefix("invite-oidc ") {
+                        let mut parts = input.splitn(2, char::is_whitespace);
+                        let address = parts.next().and_then(|value| value.parse().ok());
+                        let path = parts.next().map(str::trim).filter(|path| !path.is_empty());
+                        if let (Some(address), Some(path)) = (address, path) {
+                            if !host::oidc_configured() {
+                                eprintln!("OIDC設定がありません（LAPIS_OIDC_* を設定してください）");
+                            } else {
+                                let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                                    workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: Vec::new() };
+                                match host::write_invitation(std::path::Path::new(path), &invitation) {
+                                    Ok(()) => println!("OIDC招待を作成しました。IdPアカウントでログインできます。"),
+                                    Err(_) => eprintln!("招待ファイルを作成できません。新規ファイルを指定してください。"),
+                                }
+                            }
+                        } else { eprintln!("Usage: invite-oidc <address:port> <new-file.json>"); }
                     } else if let Some(id) = line.strip_prefix("revoke ") {
                         match CredentialId::parse(id.to_owned()) {
                             Ok(id) => println!("revoked={}", auth.lock().map_err(|_| "authentication unavailable")?.revoke(&id)),

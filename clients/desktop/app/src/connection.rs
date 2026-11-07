@@ -1,9 +1,22 @@
+use client_api::{CURRENT_PROTOCOL, ClientHello, ClientId, ClientKind, ProtocolRange, WorkspaceId};
 use host::BackendClient;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
 };
 type Error = Box<dyn std::error::Error + Send + Sync>;
+
+fn create_oidc_client_id() -> Result<String, Error> {
+    let mut random = [0u8; 16];
+    getrandom::fill(&mut random)?;
+    Ok(format!(
+        "desktop-{}",
+        random
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+}
 
 pub(super) fn open_picker(directory: PathBuf) -> Result<(), String> {
     let mut command =
@@ -53,6 +66,53 @@ impl Startup {
             host_file
         };
         if let Some(path) = host_file {
+            if path.extension().is_none_or(|extension| extension != "host") {
+                let invitation = host::read_invitation(&path)?;
+                if invitation.token.is_empty() {
+                    let client = create_oidc_client_id()?;
+                    let hello = ClientHello {
+                        protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
+                        client_id: ClientId::try_new(&client)?,
+                        client_name: "Desktop".to_owned(),
+                        client_kind: ClientKind::Desktop,
+                        requested_capabilities: host::supported_capabilities(),
+                    };
+                    let redirect_uri = std::env::var("LAPIS_DESKTOP_OIDC_REDIRECT_URI")
+                        .unwrap_or_else(|_| "http://127.0.0.1:53682/auth/callback".to_owned());
+                    let session = remote::login_desktop_oidc(remote::DesktopOidcLogin {
+                        address: invitation.address,
+                        server_name: invitation.server_name.clone(),
+                        certificate: invitation.certificate.clone().into(),
+                        hello,
+                        workspace_id: WorkspaceId::try_new(&invitation.workspace_id)?,
+                        redirect_uri,
+                    })?;
+                    let (backend, root, profile) = host::write_oidc_profile(
+                        &directory.join("hosts"),
+                        host::OidcProfile {
+                            address: invitation.address,
+                            server_name: invitation.server_name.clone(),
+                            certificate: invitation.certificate.clone(),
+                            workspace_id: invitation.workspace_id.clone(),
+                            name: invitation.name.clone(),
+                            client,
+                            account: session.subject,
+                            id_token: session.id_token.to_string(),
+                        },
+                    )?;
+                    eprintln!("OIDCでHostに接続しました: {}", profile.display());
+                    let connector_directory = directory.clone();
+                    let directory = directory
+                        .join("views")
+                        .join(profile.file_stem().ok_or("Host profile名が不正です")?);
+                    return Ok(Some(Self {
+                        backend,
+                        root: Some(root),
+                        directory,
+                        connector_directory,
+                    }));
+                }
+            }
             let (backend, root, profile) = host::open_host_file(&path, &directory.join("hosts"))?;
             eprintln!("Host接続profile: {}", profile.display());
             let connector_directory = directory.clone();

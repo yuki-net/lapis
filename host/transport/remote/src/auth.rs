@@ -534,7 +534,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         _client_id: &ClientId,
         workspace_id: &WorkspaceId,
         requested_capabilities: &CapabilitySet,
-    ) -> Result<SessionGrant, AuthError> {
+    ) -> Result<(SessionGrant, String), AuthError> {
         self.require_enabled()?;
         let verifier = self.oidc.as_ref().ok_or(AuthError::OidcUnavailable)?;
         let claims = verifier
@@ -544,6 +544,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         if claims.expires_at <= now {
             return Err(AuthError::OidcUnavailable);
         }
+        let subject = claims.subject;
         let granted = requested_capabilities.intersection(self.policy.allowed_capabilities());
         let capabilities = CapabilitySet::try_new(
             granted
@@ -564,13 +565,13 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         self.sessions.insert(
             session_id,
             SessionOwner::Oidc(OidcSession {
-                subject: claims.subject,
+                subject: subject.clone(),
                 workspace_id: workspace_id.clone(),
                 capabilities,
                 expires_at,
             }),
         );
-        Ok(grant)
+        Ok((grant, subject))
     }
 
     pub fn revoke(&mut self, credential_id: &CredentialId) -> bool {

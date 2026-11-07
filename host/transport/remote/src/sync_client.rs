@@ -107,7 +107,13 @@ impl QuicConnectionConfig {
         }
     }
 
-    async fn authenticate(&self) -> Result<QuicClient, Error> {
+    /// 指定された認証材料で Host に接続し、検証済みの ServerHello を返す。
+    /// 接続は検証後に破棄する。
+    pub async fn verify(&self) -> Result<ServerHello, Error> {
+        self.authenticate().await.map(|(_, hello)| hello)
+    }
+
+    async fn authenticate(&self) -> Result<(QuicClient, ServerHello), Error> {
         let mut client = QuicClient::connect(
             self.address,
             &self.server_name,
@@ -133,7 +139,9 @@ impl QuicConnectionConfig {
         client.send(&message).await?;
         let message = timeout(Duration::from_secs(10), client.recv()).await??;
         match message {
-            ServerMessage::Authenticated(hello) if hello.protocol == CURRENT_PROTOCOL => Ok(client),
+            ServerMessage::Authenticated(hello) if hello.protocol == CURRENT_PROTOCOL => {
+                Ok((client, hello))
+            }
             _ => Err("Hostの認証が拒否されました".into()),
         }
     }
@@ -377,7 +385,7 @@ async fn restore_inner(
     core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
 ) -> Result<QuicClient, BackendServiceError> {
-    let mut client = config
+    let (mut client, _) = config
         .authenticate()
         .await
         .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
@@ -550,7 +558,8 @@ mod tests {
             id_token.clone(),
         );
         assert_eq!(config.id_token(), Some(id_token.as_str()));
-        let client = config.authenticate().await.unwrap();
+        let (client, hello) = config.authenticate().await.unwrap();
+        assert_eq!(hello.subject.as_deref(), Some("alice"));
         drop(client);
         server.shutdown().await;
     }

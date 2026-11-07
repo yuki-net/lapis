@@ -5,6 +5,7 @@ mod authorization;
 mod backend_handler;
 mod clock;
 mod credential;
+mod desktop_oidc;
 mod handler;
 mod limits;
 mod oidc;
@@ -30,6 +31,7 @@ pub use backend_state::{PathSecurityError, WorkspacePathResolver};
 pub use client_core::{AsyncHostConnection, workbench as async_workbench};
 pub use clock::{Clock, SystemClock};
 pub use credential::{CredentialHandle, CredentialId, InvalidCredentialId};
+pub use desktop_oidc::{DesktopOidcLogin, DesktopOidcSession, login_desktop_oidc};
 pub use handler::{
     RemoteEventReceiver, RemoteRequestHandler, RemoteResponseFuture, RemoteSubscriptionError,
     RemoteSubscriptionFuture,
