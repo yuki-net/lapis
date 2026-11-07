@@ -194,6 +194,15 @@ impl BackendHost {
         self.connect_workspace(workspace_id)
     }
 
+    /// 接続先 Workspace を指定しなかった Client に提示する既定 Workspace。
+    pub fn default_workspace(&self) -> Option<WorkspaceId> {
+        let workspaces = self.inner.workspaces.lock().ok()?;
+        workspaces
+            .values()
+            .min_by(|left, right| left.as_str().cmp(right.as_str()))
+            .cloned()
+    }
+
     pub(crate) fn connect_workspace(
         &self,
         workspace_id: WorkspaceId,

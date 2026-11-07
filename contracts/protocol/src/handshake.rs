@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CapabilitySet, ClientId, ProtocolRange, ProtocolVersion, SessionId};
+use crate::{CapabilitySet, ClientId, ProtocolRange, ProtocolVersion, SessionId, WorkspaceId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -27,6 +27,9 @@ pub struct ServerHello {
     /// OIDC で認証した場合の検証済み `sub`。Token 方式では省略する。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// Host が選択した Workspace。Client が Workspace を指定しなかった場合に使う。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<WorkspaceId>,
 }
 
 #[cfg(test)]

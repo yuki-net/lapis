@@ -135,6 +135,7 @@ fn paired_response_matches_mobile_fixture() {
         session_id: SessionId::try_new("session-1").unwrap(),
         granted_capabilities: Default::default(),
         subject: None,
+        workspace_id: None,
     };
     let response = PairedResponse::new(server_hello, &credential, &[0xcd; 32]);
     let json = serde_json::to_string(&ServerMessage::Paired(response)).unwrap();
@@ -148,6 +149,7 @@ fn server_hello_subject_is_optional() {
         session_id: SessionId::try_new("session-1").unwrap(),
         granted_capabilities: Default::default(),
         subject: Some("alice".to_owned()),
+        workspace_id: None,
     };
     let json = serde_json::to_string(&subject).unwrap();
     assert!(json.contains("\"subject\":\"alice\""));

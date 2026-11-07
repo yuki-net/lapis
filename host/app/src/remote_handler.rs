@@ -121,6 +121,9 @@ impl RemoteRequestHandler for HostRemoteHandler {
             }
         })
     }
+    fn default_workspace(&self) -> Option<WorkspaceId> {
+        self.host.default_workspace()
+    }
     fn subscribe(&self, grant: SessionGrant) -> RemoteSubscriptionFuture<'_> {
         self.inner.subscribe(grant)
     }

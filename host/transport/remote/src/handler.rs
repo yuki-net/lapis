@@ -1,6 +1,6 @@
 use std::{error::Error, fmt, future::Future, pin::Pin};
 
-use client_api::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
+use client_api::{EventEnvelope, RequestEnvelope, ResponseEnvelope, WorkspaceId};
 
 use crate::SessionGrant;
 
@@ -43,6 +43,11 @@ impl Error for RemoteSubscriptionError {}
 /// 実装側はDocumentやTerminalなどのresource所有権をSession/Workspaceへ結び付けて検証する。
 pub trait RemoteRequestHandler: Send + Sync + 'static {
     fn handle(&self, session: SessionGrant, request: RequestEnvelope) -> RemoteResponseFuture<'_>;
+
+    /// Client が Workspace を指定しなかった場合に使う既定 Workspace。
+    fn default_workspace(&self) -> Option<WorkspaceId> {
+        None
+    }
 
     fn subscribe(&self, _session: SessionGrant) -> RemoteSubscriptionFuture<'_> {
         Box::pin(async { Ok(None) })
