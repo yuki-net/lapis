@@ -26,7 +26,7 @@ private fun requireApplicationContext(): Context =
 actual fun secureRandomBytes(size: Int): ByteArray =
     ByteArray(size).also { SecureRandom().nextBytes(it) }
 
-actual fun openBrowser(url: String) {
+actual suspend fun openBrowser(url: String) {
     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     requireApplicationContext().startActivity(intent)

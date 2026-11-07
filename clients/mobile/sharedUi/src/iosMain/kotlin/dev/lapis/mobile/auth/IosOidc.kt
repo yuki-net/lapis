@@ -3,10 +3,13 @@ package dev.lapis.mobile.auth
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.usePinned
+import kotlinx.coroutines.suspendCancellableCoroutine
 import platform.Foundation.NSURL
 import platform.Security.SecRandomCopyBytes
 import platform.Security.kSecRandomDefault
 import platform.UIKit.UIApplication
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 @OptIn(ExperimentalForeignApi::class)
 actual fun secureRandomBytes(size: Int): ByteArray {
@@ -20,11 +23,23 @@ actual fun secureRandomBytes(size: Int): ByteArray {
 }
 
 @OptIn(ExperimentalForeignApi::class)
-actual fun openBrowser(url: String) {
+actual suspend fun openBrowser(url: String) {
     require(url.startsWith("https://")) { "OIDC URL は HTTPS で指定してください" }
     val target = NSURL.URLWithString(url) ?: error("OIDC URL が不正です")
-    check(UIApplication.sharedApplication.openURL(target)) {
-        "ブラウザーを開けませんでした"
+    suspendCancellableCoroutine { continuation ->
+        UIApplication.sharedApplication.openURL(
+            target,
+            options = emptyMap<Any?, Any?>(),
+            completionHandler = { success ->
+                if (success) {
+                    continuation.resume(Unit)
+                } else {
+                    continuation.resumeWithException(
+                        IllegalStateException("ブラウザーを開けませんでした")
+                    )
+                }
+            },
+        )
     }
 }
 
