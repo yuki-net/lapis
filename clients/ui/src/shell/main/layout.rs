@@ -209,8 +209,13 @@ impl Shell {
             .hover(|style| style.bg(theme::colors(cx).button_background_selected))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, event: &MouseDownEvent, _, cx| {
-                    this.start_panel_resize(boundary.clone(), event.position, cx);
+                cx.listener(move |this, event: &MouseDownEvent, window, cx| {
+                    this.start_panel_resize(
+                        boundary.clone(),
+                        event.position,
+                        window.viewport_size(),
+                        cx,
+                    );
                 }),
             );
         match axis {
