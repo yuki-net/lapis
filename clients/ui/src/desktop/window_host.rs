@@ -577,7 +577,7 @@ impl DesktopRoot {
         let group = self.group.clone();
         let root = cx.entity().downgrade();
         let worker = self.worker.clone();
-        let options = crate::app::window_options(cx);
+        let options = crate::desktop::window_options(cx);
         let result = cx.open_window(options, move |window, cx| {
             cx.new(|cx| WindowHost::new(group, id, root, worker, window, cx))
         });

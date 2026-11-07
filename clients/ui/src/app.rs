@@ -2,10 +2,9 @@ use desktop_client::{
     ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
     TerminalSession, WorkspaceSearchSession,
 };
-use gpui::{
-    App, AppContext, Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, actions,
-    size,
-};
+#[cfg(target_family = "wasm")]
+use gpui::Application;
+use gpui::{App, AppContext, actions};
 
 use crate::root::DesktopRoot;
 
@@ -124,7 +123,7 @@ pub struct InitialView {
 
 /// Release ビルドでも tracing のエラーを stderr に出力する。
 #[cfg(all(not(debug_assertions), not(target_family = "wasm")))]
-fn init_release_tracing() {
+pub(crate) fn init_release_tracing() {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -133,46 +132,6 @@ fn init_release_tracing() {
         .with_writer(std::io::stderr)
         .with_filter(tracing_subscriber::filter::LevelFilter::INFO);
     let _ = tracing_subscriber::registry().with(stderr_layer).try_init();
-}
-
-/// Runs the desktop event loop with an initial root window and quits after the last window closes.
-#[cfg(not(target_family = "wasm"))]
-pub fn run(session: EditorSession, services: DesktopServices, initial_view: InitialView) {
-    // 診断ログの tracing subscriber を初期化（Debug は Console 用 store も含む）
-    #[cfg(debug_assertions)]
-    let _ = crate::devtools::console::init_subscriber();
-    // Release でも保存失敗などのエラーを stderr に残す
-    #[cfg(not(debug_assertions))]
-    init_release_tracing();
-
-    Application::new()
-        .with_assets(crate::components::IconAssets)
-        .run(move |cx: &mut App| {
-            let settings = services.settings.settings();
-            crate::theme::init(
-                &crate::extension_ui::ThemeId::new(settings.theme),
-                settings.syntax_theme,
-                cx,
-            );
-            crate::features::settings_coordinator::SettingsCoordinator::init(
-                services.settings.clone(),
-                cx,
-            );
-            #[cfg(all(feature = "hot-reload", debug_assertions))]
-            crate::hot_reload::init(cx);
-            crate::keymap::gpui::bind_keys(cx);
-            #[cfg(debug_assertions)]
-            crate::devtools::init(cx);
-            open_desktop_window(session, services, initial_view, cx);
-            cx.on_window_closed(|cx| {
-                if cx.windows().is_empty() {
-                    let coordinator =
-                        crate::features::settings_coordinator::SettingsCoordinator::shared(cx);
-                    coordinator.update(cx, |coordinator, cx| coordinator.quit_after_pending(cx));
-                }
-            })
-            .detach();
-        });
 }
 
 #[cfg(target_family = "wasm")]
@@ -283,7 +242,7 @@ pub(crate) fn open_desktop_window(
     cx: &mut App,
 ) {
     let locale_id = services.settings.settings().locale.clone();
-    let result = cx.open_window(window_options(cx), move |window, cx| {
+    let result = cx.open_window(crate::desktop::window_options(cx), move |window, cx| {
         cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx))
     });
     if let Err(error) = result {
@@ -292,26 +251,5 @@ pub(crate) fn open_desktop_window(
         locale.set_active(&locale_id);
         let title = locale.resolve(&localization::MessageId::new("notification.error.window"));
         crate::notification::publish_error(cx, "window.creation_failed", &title, error.to_string());
-    }
-}
-
-/// Returns centered 1440 by 900 logical-pixel bounds with a transparent Lapis title bar.
-pub(crate) fn window_options(cx: &App) -> WindowOptions {
-    let bounds = Bounds::centered(
-        None,
-        size(
-            crate::tokens::size::DEFAULT_WINDOW_WIDTH,
-            crate::tokens::size::DEFAULT_WINDOW_HEIGHT,
-        ),
-        cx,
-    );
-    WindowOptions {
-        window_bounds: Some(WindowBounds::Windowed(bounds)),
-        titlebar: Some(TitlebarOptions {
-            title: Some("Lapis".into()),
-            appears_transparent: true,
-            ..Default::default()
-        }),
-        ..Default::default()
     }
 }
