@@ -3829,6 +3829,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "windows-sys 0.61.2",
+ "wire",
  "workbench",
  "workspace",
  "zeroize",
@@ -10402,6 +10403,11 @@ dependencies = [
 [[package]]
 name = "wire"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "wit-bindgen"

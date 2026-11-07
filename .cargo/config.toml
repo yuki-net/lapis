@@ -1,7 +1,8 @@
 [alias]
 # worktreeルートで実行する。製品起動と同じ実装に保存先だけを渡す。
-dev = "run --locked --target-dir target -p lapis --bin lapis -- --state-directory target/dev-state --workspace ."
-dev-build = "build --locked --target-dir target -p lapis -p host --bins"
+dev = "run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --state-directory target/dev-state --local-host-directory target/dev-state/hosts"
 ide-build = "build --locked --target-dir target/dev-build -p lapis -p host --bins"
+# Web 用 Host のみ。Desktop のビルド失敗に巻き込まれないようにする。
+host-build = "build --locked --target-dir target/dev-build -p host --bins"
 # Hot Reload 付き開発起動。Windows x64 で Subsecond devserver を使用する。
-dev-hot-reload = "run --locked --target-dir target -p lapis --bin lapis --features hot-reload -- --state-directory target/dev-state --workspace ."
+dev-hot-reload = "run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --hot-reload --state-directory target/dev-state"

@@ -1,11 +1,13 @@
 """WindowsのCargo停止と開発sessionのprocess分離を実processで検証する。"""
 
 import ctypes
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -24,7 +26,7 @@ class DevSessionProcessTests(unittest.TestCase):
             for name in ("Cargo.toml", "Cargo.lock"):
                 shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
             (root / ".cargo").mkdir()
-            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\nhost-build = "version"\n', encoding="utf-8")
             build_dir = root / "target" / "dev-build" / "debug"
             build_dir.mkdir(parents=True)
             source = root / "fixture.rs"
@@ -64,7 +66,7 @@ class DevSessionProcessTests(unittest.TestCase):
             for filename in ("Cargo.toml", "Cargo.lock"):
                 shutil.copyfile(ROOT / "scripts" / "dev-session" / filename, launcher / filename)
             (root / ".cargo").mkdir()
-            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+            (root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\nhost-build = "version"\n', encoding="utf-8")
             binary_dir = root / "target" / "dev-build" / "debug"
             binary_dir.mkdir(parents=True)
             source = root / "fixture.rs"
@@ -283,6 +285,256 @@ fn main() {
                 if remote.poll() is None:
                     remote.terminate()
                     remote.wait(timeout=10)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows専用launcher")
+class HotReloadTests(unittest.TestCase):
+    """Hot Reload launcherがHostを先にビルドし、dxの出力削除に依存しないことを検証する。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="lapis hot reload ")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        launcher = cls.root / "scripts" / "dev-session"
+        launcher.mkdir(parents=True)
+        shutil.copytree(ROOT / "scripts" / "dev-session" / "src", launcher / "src")
+        for name in ("Cargo.toml", "Cargo.lock"):
+            shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
+        subprocess.run([
+            "cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"),
+            "--target-dir", str(cls.root / "launcher-target"),
+        ], check=True, capture_output=True)
+        cls.launcher = cls.root / "launcher-target/debug/lapis-dev-session.exe"
+        source = cls.root / "fixture.rs"
+        source.write_text(r'''
+use std::{env, fs, path::Path, process, thread, time::Duration};
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if env::current_exe().unwrap().file_stem().unwrap() == "cargo-fixture" {
+        fs::write("cargo-called", "yes").unwrap();
+        assert_eq!(args, ["build", "--locked", "--target-dir", "target", "--target",
+            "x86_64-pc-windows-msvc", "--profile", "hot-reload", "--package", "host",
+            "--bin", "lapis-host"]);
+        if env::var("LAPIS_TEST_SCENARIO").unwrap() == "build-failure" { process::exit(23); }
+        let host = Path::new("target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe");
+        fs::create_dir_all(host.parent().unwrap()).unwrap();
+        fs::write(host, "fresh-host").unwrap();
+        return;
+    }
+    assert_eq!(&args[..5], ["serve", "--platform", "windows", "--target", "x86_64-pc-windows-msvc"]);
+    // dx 0.7.10と同様に、app出力を削除してから起動引数を解釈する。
+    let app = Path::new("target/dx/lapis/debug/windows/app");
+    fs::create_dir_all(app).unwrap();
+    fs::write(app.join("lapis-host.exe"), "stale-copy").unwrap();
+    fs::remove_dir_all(app).unwrap();
+    let app_args = args.iter().find_map(|arg| arg.strip_prefix("--args=")).unwrap();
+    // dxは空白で引数を分割するため、launcherが渡すパスはworktreeルートからの相対でなければならない。
+    let app_args: Vec<_> = app_args.split_whitespace().collect();
+    let index = app_args.iter().position(|arg| *arg == "--local-host-executable").unwrap();
+    assert_eq!(fs::read_to_string(app_args[index + 1]).unwrap(), "fresh-host");
+    fs::write("dx-called", "yes").unwrap();
+    if env::var("LAPIS_TEST_SCENARIO").unwrap() == "hold" {
+        while !Path::new("release-dx").exists() { thread::sleep(Duration::from_millis(10)); }
+    }
+    process::exit(17);
+}
+''', encoding="utf-8")
+        cls.cargo = cls.root / "cargo-fixture.exe"
+        subprocess.run(["rustc", str(source), "-o", str(cls.cargo)], check=True, capture_output=True)
+        cls.dx = cls.root / "target/dx-fixed0710/bin/dx.exe"
+        cls.dx.parent.mkdir(parents=True)
+
+    def setUp(self):
+        shutil.copyfile(self.cargo, self.dx)
+        for name in ("cargo-called", "dx-called", "release-dx"):
+            (self.root / name).unlink(missing_ok=True)
+        self.env = dict(os.environ, CARGO=str(self.cargo), LAPIS_TEST_SCENARIO="success")
+
+    def run_launcher(self):
+        # 起動元cwdが異なってもlauncherがworktreeルートを使う。
+        return subprocess.run(
+            [str(self.launcher), "--hot-reload"], cwd=self.root.parent, env=self.env,
+            capture_output=True, timeout=20,
+        )
+
+    def test_clean_and_repeated_launch_build_host_before_dx_clears_app_output(self):
+        host = self.root / "target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe"
+        host.unlink(missing_ok=True)
+        for _ in range(2):
+            result = self.run_launcher()
+            self.assertEqual(result.returncode, 17, result.stderr.decode(errors="replace"))
+            self.assertTrue((self.root / "dx-called").exists())
+            self.assertEqual(host.read_text(), "fresh-host")
+            host.write_text("old-host")
+
+    def test_host_build_failure_does_not_launch_dx_or_use_stale_host(self):
+        self.env["LAPIS_TEST_SCENARIO"] = "build-failure"
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 23, result.stderr.decode(errors="replace"))
+        self.assertFalse((self.root / "dx-called").exists())
+
+    def test_missing_dx_does_not_build_host(self):
+        self.dx.unlink()
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((self.root / "cargo-called").exists())
+
+    def test_cargo_spawn_failure_does_not_launch_dx(self):
+        self.env["CARGO"] = str(self.root / "missing-cargo.exe")
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 1)
+        self.assertFalse((self.root / "dx-called").exists())
+
+    def test_argument_with_whitespace_is_rejected_before_building(self):
+        # dx は --args= を空白で分割するため、空白入りの引数は渡す前に拒否する。
+        result = subprocess.run(
+            [str(self.launcher), "--hot-reload", "C:\\my dir"], cwd=self.root.parent,
+            env=self.env, capture_output=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr.decode(errors="replace"))
+        self.assertIn("空白", result.stderr.decode("utf-8", errors="replace"))
+        self.assertFalse((self.root / "cargo-called").exists())
+        self.assertFalse((self.root / "dx-called").exists())
+
+    def test_second_launcher_cannot_rebuild_host_while_first_is_running(self):
+        self.env["LAPIS_TEST_SCENARIO"] = "hold"
+        first = subprocess.Popen(
+            [str(self.launcher), "--hot-reload"], cwd=self.root, env=self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            deadline = time.monotonic() + 15
+            while not (self.root / "dx-called").exists():
+                if first.poll() is not None or time.monotonic() > deadline:
+                    self.fail("fixture dx did not start")
+                time.sleep(0.02)
+            (self.root / "cargo-called").unlink()
+            second = self.run_launcher()
+            self.assertEqual(second.returncode, 1)
+            self.assertFalse((self.root / "cargo-called").exists())
+        finally:
+            (self.root / "release-dx").touch()
+            first.communicate(timeout=20)
+        self.assertEqual(first.returncode, 17)
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows専用launcher")
+class HostFileWaitTests(unittest.TestCase):
+    """Hostを別のRunで起動しても、Desktopの起動が招待の出現を待つことを検証する。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="lapis host file wait ")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        launcher = cls.root / "scripts" / "dev-session"
+        launcher.mkdir(parents=True)
+        shutil.copytree(ROOT / "scripts" / "dev-session" / "src", launcher / "src")
+        for name in ("Cargo.toml", "Cargo.lock"):
+            shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
+        (cls.root / ".cargo").mkdir()
+        (cls.root / ".cargo" / "config.toml").write_text('[alias]\nide-build = "version"\n', encoding="utf-8")
+        binary_dir = cls.root / "target" / "dev-build" / "debug"
+        binary_dir.mkdir(parents=True)
+        source = cls.root / "fixture.rs"
+        source.write_text(r'''
+use std::{env, fs};
+fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let host = args.iter().position(|arg| arg == "--host").map(|index| args[index + 1].clone());
+    fs::write("desktop-started", host.unwrap_or_default()).unwrap();
+}
+''', encoding="utf-8")
+        for name in ("lapis.exe", "lapis-host.exe"):
+            subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
+        subprocess.run([
+            "cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"),
+            "--target-dir", str(cls.root / "launcher-target"), "--quiet",
+        ], cwd=cls.root, check=True, capture_output=True)
+        cls.launcher = cls.root / "launcher-target" / "debug" / "lapis-dev-session.exe"
+
+    def setUp(self):
+        self.hosts = self.root / "dev"
+        self.hosts.mkdir(exist_ok=True)
+        for path in self.hosts.iterdir():
+            path.unlink()
+        (self.root / "desktop-started").unlink(missing_ok=True)
+        self.env = dict(os.environ)
+        self.env.pop("LAPIS_HOST_FILE", None)
+
+    def test_desktop_starts_after_host_file_appears(self):
+        threading.Timer(1.0, (self.hosts / "desktop.json").write_text, args=("{}",)).start()
+        started = time.monotonic()
+        result = subprocess.run(
+            [str(self.launcher), "--host", "dev/desktop.json"], cwd=self.root,
+            env=self.env, capture_output=True, timeout=30,
+        )
+        waited = time.monotonic() - started
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertIn("Host の接続情報を待っています", stderr)
+        self.assertGreater(waited, 0.8)
+        self.assertEqual((self.root / "desktop-started").read_text(), "dev/desktop.json")
+
+    def test_existing_host_file_starts_without_waiting(self):
+        (self.hosts / "desktop.host").write_text("{}")
+        result = subprocess.run(
+            [str(self.launcher), "--host", "dev/desktop.host"], cwd=self.root,
+            env=self.env, capture_output=True, timeout=30,
+        )
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertNotIn("Host の接続情報を待っています", stderr)
+        self.assertEqual((self.root / "desktop-started").read_text(), "dev/desktop.host")
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows専用launcher")
+class HostOnlyBuildTests(unittest.TestCase):
+    """`--host-only` が Desktop をビルドせず、Host だけをビルドすることを検証する。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.directory = tempfile.TemporaryDirectory(prefix="lapis host only ")
+        cls.addClassCleanup(cls.directory.cleanup)
+        cls.root = Path(cls.directory.name)
+        launcher = cls.root / "scripts" / "dev-session"
+        launcher.mkdir(parents=True)
+        shutil.copytree(ROOT / "scripts" / "dev-session" / "src", launcher / "src")
+        for name in ("Cargo.toml", "Cargo.lock"):
+            shutil.copyfile(ROOT / "scripts" / "dev-session" / name, launcher / name)
+        # ide-build だけを失敗させ、--host-only が Desktop をビルドしないことを示す。
+        (cls.root / ".cargo").mkdir()
+        (cls.root / ".cargo" / "config.toml").write_text(
+            '[alias]\nide-build = "no-such-command-for-ide-build"\nhost-build = "version"\n',
+            encoding="utf-8",
+        )
+        binary_dir = cls.root / "target" / "dev-build" / "debug"
+        binary_dir.mkdir(parents=True)
+        source = cls.root / "fixture.rs"
+        source.write_text("fn main() {}\n", encoding="utf-8")
+        for name in ("lapis.exe", "lapis-host.exe"):
+            subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
+        subprocess.run([
+            "cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"),
+            "--target-dir", str(cls.root / "launcher-target"), "--quiet",
+        ], cwd=cls.root, check=True, capture_output=True)
+        cls.launcher = cls.root / "launcher-target" / "debug" / "lapis-dev-session.exe"
+
+    def test_host_only_builds_without_desktop(self):
+        result = subprocess.run(
+            [str(self.launcher), "--host-only"], cwd=self.root,
+            capture_output=True, timeout=30,
+        )
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        self.assertEqual(result.returncode, 0, stderr)
+        self.assertIn("Host session:", stderr)
+
+    def test_default_build_keeps_building_desktop(self):
+        result = subprocess.run(
+            [str(self.launcher)], cwd=self.root, capture_output=True, timeout=30,
+        )
+        self.assertNotEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

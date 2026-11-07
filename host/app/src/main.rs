@@ -4,7 +4,6 @@ use remote::{
     AuthConfig, AuthPolicy, CredentialId, CredentialLifetime, PairingLifetime, QuicServer,
     RemoteAuth, RemoteLimits, tls13_server_config,
 };
-use rustls::pki_types::PrivateKeyDer;
 use std::{
     io::{BufRead, Write},
     net::SocketAddr,
@@ -26,6 +25,8 @@ struct Options {
     certificate: PathBuf,
     listen: SocketAddr,
     state_directory: Option<PathBuf>,
+    connection_info: Option<PathBuf>,
+    invitation: Option<PathBuf>,
     replace_certificate: bool,
 }
 
@@ -34,8 +35,10 @@ impl Options {
         let mut arguments = arguments;
         let mut workspace = None;
         let mut certificate = None;
-        let mut listen = "127.0.0.1:0".parse()?;
+        let mut listen = "127.0.0.1:4749".parse()?;
         let mut state_directory = None;
+        let mut connection_info = None;
+        let mut invitation = None;
         let mut replace_certificate = false;
         while let Some(argument) = arguments.next() {
             if argument == "--replace-certificate" {
@@ -48,6 +51,8 @@ impl Options {
                 Some("--certificate") => certificate = Some(PathBuf::from(value)),
                 Some("--listen") => listen = value.to_str().ok_or("invalid address")?.parse()?,
                 Some("--state-directory") => state_directory = Some(PathBuf::from(value)),
+                Some("--connection-info") => connection_info = Some(PathBuf::from(value)),
+                Some("--invitation") => invitation = Some(PathBuf::from(value)),
                 _ => return Err("unknown option".into()),
             }
         }
@@ -56,6 +61,8 @@ impl Options {
             certificate: certificate.ok_or("--certificate is required")?,
             listen,
             state_directory,
+            connection_info,
+            invitation,
             replace_certificate,
         })
     }
@@ -100,7 +107,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>]"
+            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>] [--connection-info <file>] [--invitation <file>]"
         );
         std::process::exit(1);
     }
@@ -109,20 +116,15 @@ fn main() {
 fn run() -> Result<(), Error> {
     let options = Options::parse(std::env::args_os().skip(1))?;
     let state_directory = options.state_directory.clone();
+    // 証明書と秘密鍵は state directory に保存し、再起動しても同じ身元で待ち受ける。
+    let identity = host::HostIdentity::load_or_create(state_directory.as_deref())?;
     let host = match options.state_directory {
         Some(directory) => BackendHost::start_with_state_directory(directory)?,
         None => BackendHost::start()?,
     };
     let credentials_path = state_directory.map(|directory| directory.join(CREDENTIAL_DB));
     let workspace = host.register_workspace(&options.workspace)?;
-    // 秘密鍵はHostのメモリ内だけに保持する。
-    let certified =
-        rcgen::generate_simple_self_signed(vec!["localhost".to_owned(), "lapis-host".to_owned()])?;
-    let key = Zeroizing::new(certified.signing_key.serialize_der());
-    let tls = tls13_server_config(
-        vec![certified.cert.der().clone()],
-        PrivateKeyDer::Pkcs8(key.to_vec().into()),
-    )?;
+    let tls = tls13_server_config(vec![identity.certificate.clone()], identity.key.clone_key())?;
     let auth = Arc::new(Mutex::new(RemoteAuth::system(
         AuthConfig::new(
             PairingLifetime::new(3600)?,
@@ -191,8 +193,42 @@ fn run() -> Result<(), Error> {
         let server = QuicServer::bind(options.listen, tls, auth.clone(),
             Arc::new(host::HostRemoteHandler::new(host.clone())), RemoteLimits::default()).await?;
         // listenに失敗した起動が稼働中Hostの証明書を置き換えない。
-        write_public_certificate(&options.certificate, certified.cert.der(), options.replace_certificate)?;
-        println!("address={} server_name=lapis-host workspace={}", server.listening_address()?, workspace.as_str());
+        write_public_certificate(&options.certificate, identity.certificate.as_ref(), options.replace_certificate)?;
+        let address = server.listening_address()?;
+        if let Some(path) = &options.connection_info {
+            let connection = wire::HostConnection {
+                version: wire::HOST_CONNECTION_VERSION,
+                address,
+                server_name: "lapis-host".to_owned(),
+                workspace_id: workspace.as_str().to_owned(),
+                certificate: identity.certificate.as_ref().to_vec(),
+            };
+            write_connection_info(path, &connection)?;
+        }
+        println!("address={address} server_name=lapis-host workspace={}", workspace.as_str());
+        // Desktop用の招待は1回限りのtokenを含むため、起動のたびに作り直す。
+        if let Some(path) = &options.invitation {
+            let token = auth
+                .lock()
+                .map_err(|_| "authentication unavailable")?
+                .begin_pairing(workspace.clone())?;
+            let invitation = host::HostInvitation {
+                version: 1,
+                address,
+                server_name: "lapis-host".to_owned(),
+                certificate: identity.certificate.as_ref().to_vec(),
+                workspace_id: workspace.as_str().to_owned(),
+                name: options
+                    .workspace
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned(),
+                token: token.secret_bytes().to_vec(),
+            };
+            host::write_invitation_replacing(path, &invitation)?;
+            println!("invitation={}", path.display());
+        }
         println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / quit");
         std::io::stdout().flush()?;
         let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
@@ -249,7 +285,7 @@ fn run() -> Result<(), Error> {
                         let path = parts.next().map(str::trim).filter(|path| !path.is_empty());
                         if let (Some(address), Some(path)) = (address, path) {
                             let token = auth.lock().map_err(|_| "authentication unavailable")?.begin_pairing(workspace.clone())?;
-                            let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                            let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: identity.certificate.as_ref().to_vec(),
                                 workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: token.secret_bytes().to_vec() };
                             match host::write_invitation(std::path::Path::new(path), &invitation) {
                                 Ok(()) => println!("招待を作成しました（1時間・一回限り）。安全な経路でClientへ渡してください。"),
@@ -264,7 +300,7 @@ fn run() -> Result<(), Error> {
                             if !host::oidc_configured() {
                                 eprintln!("OIDC設定がありません（LAPIS_OIDC_* を設定してください）");
                             } else {
-                                let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: certified.cert.der().to_vec(),
+                                let invitation = host::HostInvitation { version: 1, address, server_name: "lapis-host".to_owned(), certificate: identity.certificate.as_ref().to_vec(),
                                     workspace_id: workspace.as_str().to_owned(), name: options.workspace.file_name().unwrap_or_default().to_string_lossy().into_owned(), token: Vec::new() };
                                 match host::write_invitation(std::path::Path::new(path), &invitation) {
                                     Ok(()) => println!("OIDC招待を作成しました。IdPアカウントでログインできます。"),
@@ -329,6 +365,13 @@ fn run() -> Result<(), Error> {
             &mut saved_credentials,
         )?;
         server.shutdown().await;
+        if let Some(path) = &options.connection_info {
+            remove_connection_info(path, address);
+        }
+        // 期限切れのtokenを残すと次回の接続先と誤認するため、正常終了で消す。
+        if let Some(path) = &options.invitation {
+            let _ = std::fs::remove_file(path);
+        }
         Ok::<_, Error>(())
     })
 }
@@ -365,6 +408,30 @@ fn save_credentials(
 fn auto_approve_oidc_devices() -> bool {
     std::env::var("LAPIS_AUTO_APPROVE_OIDC_DEVICES")
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+fn write_connection_info(
+    path: &std::path::Path,
+    connection: &wire::HostConnection,
+) -> Result<(), Error> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    wire::write_connection(path, connection)?;
+    Ok(())
+}
+
+/// 自分が書いた接続情報だけを消す。後から起動したHostの情報を残す。
+fn remove_connection_info(path: &std::path::Path, address: SocketAddr) {
+    let owned = wire::read_connection(path).is_ok_and(|connection| connection.address == address);
+    if !owned {
+        return;
+    }
+    if let Err(error) = std::fs::remove_file(path) {
+        eprintln!("接続情報を削除できません ({}): {error}", path.display());
+    }
 }
 
 fn write_public_certificate(
@@ -414,6 +481,7 @@ mod tests {
         assert!(options.listen.ip().is_loopback());
         assert_eq!(options.workspace, PathBuf::from("repo"));
         assert!(options.state_directory.is_none());
+        assert!(options.connection_info.is_none());
         let options = Options::parse(
             [
                 "--workspace",
@@ -422,11 +490,44 @@ mod tests {
                 "host.der",
                 "--state-directory",
                 "state",
+                "--connection-info",
+                "dev/connection.json",
             ]
             .map(Into::into)
             .into_iter(),
         )
         .unwrap();
         assert_eq!(options.state_directory, Some(PathBuf::from("state")));
+        assert_eq!(
+            options.connection_info,
+            Some(PathBuf::from("dev/connection.json"))
+        );
+    }
+
+    #[test]
+    fn connection_info_is_only_removed_by_its_owner() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("dev").join("connection.json");
+        let connection = wire::HostConnection {
+            version: wire::HOST_CONNECTION_VERSION,
+            address: "127.0.0.1:1".parse().unwrap(),
+            server_name: "lapis-host".to_owned(),
+            workspace_id: "workspace-1".to_owned(),
+            certificate: vec![1, 2, 3],
+        };
+        write_connection_info(&path, &connection).unwrap();
+        assert!(path.is_file());
+
+        // 後から起動したHostの接続情報は、先のHostの終了では消さない。
+        let other = wire::HostConnection {
+            address: "127.0.0.1:2".parse().unwrap(),
+            ..connection.clone()
+        };
+        write_connection_info(&path, &other).unwrap();
+        remove_connection_info(&path, connection.address);
+        assert!(path.is_file());
+
+        remove_connection_info(&path, other.address);
+        assert!(!path.exists());
     }
 }

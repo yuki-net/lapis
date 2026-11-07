@@ -1,10 +1,10 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Lapis" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+  <configuration default="false" name="Run Host" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher --" />
+    <option name="command" value="run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --host-only --connection-info target/dev-web/connection.json --invitation target/dev-desktop/desktop.json --state-directory target/dev-web/state" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
-    <option name="emulateTerminal" value="false" />
+    <option name="emulateTerminal" value="true" />
     <option name="channel" value="DEFAULT" />
     <option name="requiredFeatures" value="true" />
     <option name="allFeatures" value="false" />

@@ -43,66 +43,35 @@ Host が OIDC を設定している場合、Host の `invite-oidc` で作成し�
 
 ## 開発コマンド
 
-Desktopを変更・確認する開発者向け。以下は対象のworktreeルートで実行します。
+起動手順・ポート・保存先・Hot Reload の起動方法は [開発時の起動](../../docs/dev.md) を参照してください。
 
-| 操作 | コマンド |
-| --- | --- |
-| ビルドして起動 | `cargo dev` |
-| ビルドのみ | `cargo dev-build` |
-| ファイルを開いて起動 | `cargo dev --open-file README.md` |
-| DesktopのCIと同じ検証 | `python scripts/check.py desktop` |
-| BackendのCIと同じ検証 | `python scripts/check.py backend` |
-| 特定の検証のみ | `python scripts/check.py desktop test` |
+`.run` の入口は `Run Host`（Host）・`Run Desktop`（Desktop）・`Run Web`（bridge とページ配信）の3つです。Desktop と Web は同じ Host に同時に繋げます。`Run Desktop` は Host を起動しないため、「1つだけ起動して Local Host も自動」の経路は `cargo dev` です。`cargo dev` も `Run Desktop` も Desktop と Host の両方をビルドするため、2段階ビルドはありません。Lapis 内で作成した worktree の Terminal からも、その worktree ルートで同じコマンドを実行できます。単体の回帰テストは `cargo test -p <package> <filter>` で実行します。
 
-初回起動前とHost変更後は `cargo dev-build` でDesktopとHostの両方をビルドしてください。`cargo dev` はDesktopだけをビルドするため、Host binaryを自動更新しません。Lapis内で作成したworktreeのTerminalからも、そのworktreeルートで同じコマンドを実行できます。単体の回帰テストは通常の `cargo test -p <package> <filter>` で実行します。Mobile / Webの既存コマンドは変更しません。
+WindowsのRustRoverでは `Run Host` と `Run Desktop` のRun Configurationを使用できます。Run用のビルド先は `target/dev-build/` に分け、実行中の通常開発用binaryと競合しないようにします。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したprocessを終了し、既存Hostへの接続や別Runには影響しません。`Run Host` は自分で Host を止めるまで動き続けます。sessionごとのDesktop設定は別々で、次のRunへ自動引き継ぎしません。残ったsessionのLocal Hostは、Desktopを終了後、ログの `Desktop session:` に表示された名前を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。`--local-host-directory <directory>` を指定してそのRunがHostを起動した場合は、同じdirectoryを `-Session <session名> -LocalHostDirectory <directory>` に指定します。Hostを停止するとDocument・Terminalの実行状態は失われます。
 
-WindowsのRustRoverでは `Lapis` と `Lapis Host` のRun Configurationを使用できます。Run用のビルド先は `target/dev-build/` に分け、実行中の通常開発用binaryと競合しないようにします。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したHostを終了し、既存Hostへの接続や別Runには影響しません。通常のDesktop終了後はHostが残ります。sessionごとのDesktop設定は別々で、次のRunへ自動引き継ぎしません。残ったsessionのLocal Hostは、Desktopを終了後、ログの `Desktop session:` に表示された名前を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。`--local-host-directory <directory>` を指定してそのRunがHostを起動した場合は、同じdirectoryを `-Session <session名> -LocalHostDirectory <directory>` に指定します。Hostを停止するとDocument・Terminalの実行状態は失われます。
+Web をブラウザーから使う手順は [開発時の起動](../../docs/dev.md) を参照してください。
 
 `cargo dev` は `target/debug/` のbinaryを使い、開発用の設定・会話・復元状態・Host接続情報を `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 
 生成物と開発用状態はGit管理外の `target/` 内に置くため、worktreeのディレクトリ削除と一緒に消えます。`cargo clean`でも開発用状態ごと削除されるため、残したいファイルは先に保存してください。worktree削除前に起動中のプロセスを終了し、復元用の下書きも必要なら保存します。以前の `target/run/` は自動移動・削除しません。不要なら停止後に削除できます。Cargoのダウンロードキャッシュはユーザー共通で再利用します。
 
-`lapis.exe`（Desktop）と `lapis-host.exe`（Host）は明確に分離されています。Local Workspaceを開くと `lapis-host.exe` がlazy startされ、loopback QUICで接続します。Remote接続のみではLocal Hostは起動しません。Desktopを終了してもLocal Hostは製品仕様どおり存続し、Host上の未保存Document・Terminalは残ります。IDEの強制停止では未保存状態の確定を保証しないため、編集がある場合は先に保存して画面を閉じてください。Windowsで残ったHostを明示停止する場合は、画面と作業プロセスを終了してから、`cargo dev` のHostには引数なしの `powershell -NoProfile -File scripts/stop_dev_host.ps1`、`Lapis` Runが起動したLocal Hostには上記の `-Session <session名>` 付きコマンドを使います。`Lapis Host` RunはRustRoverのStopで停止します。この操作でHost上の実行状態は失われますが、他のworktreeのexeは停止しません。
+`lapis.exe`（Desktop）と `lapis-host.exe`（Host）は明確に分離されています。Local Workspaceを開くと `lapis-host.exe` がlazy startされ、loopback QUICで接続します。Remote接続のみではLocal Hostは起動しません。Desktopを終了してもLocal Hostは製品仕様どおり存続し、Host上の未保存Document・Terminalは残ります。IDEの強制停止では未保存状態の確定を保証しないため、編集がある場合は先に保存して画面を閉じてください。Windowsで残ったHostを明示停止する場合は、画面と作業プロセスを終了してから、`cargo dev` のHostには引数なしの `powershell -NoProfile -File scripts/stop_dev_host.ps1`、それ以外で残ったHostには上記の `-Session <session名>` 付きコマンドを使います。`Run Host` はRustRoverのStopまたはコンソールの `quit` で停止します。この操作でHost上の実行状態は失われますが、他のworktreeのexeは停止しません。
 
 コミット時のhookはRustのfmtとworkspace全体の`cargo check`で、変更関連のテストは手元で実行します。全体の合否は `.github/workflows/ci.yml` のCIで確認します。Rustの検証内容は `scripts/check.py` をCIとローカルで共有し、既存の対象・警告の扱いを維持しています。実画面の確認はCIとは別に行います。
 
 ## Hot Reload（Windows 開発用）
 
-WindowsのDebug開発時に、Rust/GPUIのUIコードを変更してもLapisを終了せずに既存Windowへ描画変更を反映できます。Releaseには一切含めません。
-
-| 操作 | コマンド |
-| --- | --- |
-| 通常起動（Hot Reloadなし） | `cargo dev` |
-| Hot Reload起動 | 修正版 `dx serve`（下記参照） |
-
-IDEの `.run/Lapis.run.xml` は通常起動、`.run/Lapis Hot Reload.run.xml` は修正版dx経由のHot Reload起動です。
-
-Hot Reloadには修正版 `dx` CLIからアプリを起動します。詳細は [ui/experiments/hot-reload/README.md](ui/experiments/hot-reload/README.md) を参照してください。
-
-launcherはWindows x64用のHostを毎回ビルドし、`--local-host-executable` でDesktopへ渡します。dxのapp出力先にHostをコピーする必要はありません。通常起動では引き続きDesktopと同じ出力先のHostを使用します。
-
-### 概要
+起動方法・制約は [開発時の起動](../../docs/dev.md) を参照してください。ここでは実装側の前提だけを書きます。
 
 - GPUIの共通View dispatchにHot Reload境界を置き、各Entity / AnyViewの通常描画を対象とします。Theme / Syntaxの可変状態はApp Globalで所有します。
-- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は `ui/experiments/hot-reload/evidence.txt` を参照してください。
+- 旧TLS実装ではHot Patch後にアクセス違反を確認しました。App Globalへの移行後、ShellとSettingsの表示変更を同一PIDで確認しています。検証範囲は [evidence.txt](../ui/experiments/hot-reload/evidence.txt) を参照してください。
 - Document / 未保存編集 / Tab / Panel / Task / Terminalの状態維持を意図していますが、Hot Reload中の一通りの確認は未実施です。
-- devserverへの接続は起動時の1回だけです。自動再接続には対応していません。
-- 独自`Element`の`request_layout` / `prepaint` / `paint`は対象外です。
-- 構造体レイアウト変更や埋め込みアセットの変更は再起動が必要です。
-
-### 接続
-
-接続先はDioxus CLIが設定する環境変数から取得します。初回接続に失敗した場合や接続が切れた場合は、devserverとLapisを手動で再起動してください。自動再接続が必要な場合はDioxus upstreamの改善を含む別課題として扱います。
-
-### 制限
-
-- Windows x64でのみ検証済み。他のプラットフォームでの動作は未確認です。
-- 修正版`dx` CLIが必要です（Dioxus PR #5967がマージされるまで）。
-- ReleaseビルドにはHot Reloadランタイムを含めません。
+- 接続先はDioxus CLIが設定する環境変数から取得し、接続は起動時の1回だけです。
+- 実装の詳細は [ui/experiments/hot-reload/README.md](../ui/experiments/hot-reload/README.md) を参照してください。
 
 ## Host接続
 
-通常起動は独立したLocal HostへQUICで接続します。「ファイル → Hostに接続…」は招待または保存済みprofileを選び、新しい接続画面を開きます。既存画面の未保存編集は保持します。起動時は `--host <file>`、検証用に状態を分離する場合は `--state-directory <directory>` を使用できます。
+通常起動は独立したLocal HostへQUICで接続します。「ファイル → Hostに接続…」は招待または保存済みprofileを選び、新しい接続画面を開きます。既存画面の未保存編集は保持します。起動時は `--host <file>`、検証用に状態を分離する場合は `--state-directory <directory>` を使用できます。`--host` は環境変数 `LAPIS_HOST_FILE` でも指定でき、`--host` を優先します。どちらも無ければ独立した Local Host を自動起動します。
 
 既定の保存先を変更した環境でも、旧保存先にだけdraft・会話・設定がある場合は元の場所を継続使用します。新旧両方に状態がある場合は新しい保存先を使用し、旧保存先を標準エラーへ通知します。自動で混合・上書きせず、必要な保存先は `--state-directory` で選択できます。
 

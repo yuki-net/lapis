@@ -26,7 +26,8 @@
 - 長さを検証してからpayloadを読み、受信の途中でイベント配信へ切り替わってもcodecに部分frameを保持します。message上限・認証timeout・idle timeout・送信timeoutと、endpointあたり128接続の上限を設けます。
 - Clientは利用者が信頼して渡した公開証明書とServer名を検証し、不一致を拒否します。証明書検証の省略や0-RTTでの認証・更新は行いません。
 - 切断時は認証sessionとattachmentのみを解除します。RuntimeのDocument・PTYはHostが所有し、再認証とWorkspace接続後にsnapshotから復元します。送信失敗後のstreamは再利用しません。
-- Host側の秘密鍵・credential検証情報はメモリ内に限ります。Host再起動を跨ぐ実行資源や資格情報の復元は実装していません。
+- Hostの秘密鍵と証明書は、`--state-directory` 指定時に `<state>/identity` へOSのユーザー保護で保存し、再起動後も同じ身元で待ち受けます。state directory未指定ではメモリ内に限ります。credential検証情報は state directory 指定時に保存し、再起動を跨ぐ実行資源の復元は実装していません。保存済みの同一性を読めない場合は作り直し、その場合だけ証明書が変わるため再接続にはペアリングを要します。
+- Hostは任意で、待受開始後の接続情報（待受アドレス・server_name・Workspace ID・公開証明書DERと版）をJSONファイルへ書き出せます。これはtoken・秘密鍵を含まない非機密の受け渡しで、招待ファイルの代替ではありません。書くのは待受成功後だけ、消すのは正常終了時だけとし、書いたアドレスが自分の待受アドレスと一致する場合に限ります。接続情報を読むClientは、認証要件と証明書検証を緩めません。同じ待受成功後に招待ファイルも書き出せますが、こちらは1回限りのtokenを含む機密として扱い、他の利用者が読めない場所へだけ置きます。
 
 Desktopは招待ファイルから証明書と一回限りのtokenを取り込み、以後は証明書とcredentialを保存したprofileを使います。Windowsではユーザー単位DPAPI、Unixの開発・CIではprivate directory/fileで保護します。Local所有者情報は親子の匿名pipeだけで受け渡し、引数やログへ秘密を出しません。Local所有者の鍵はOSユーザーとHostの寿命に紐付き、Remote credentialとは期限を分けます。
 
@@ -42,7 +43,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 ## 未実装事項
 
 - QR・手動codeによるPairing招待の配布。
-- Server秘密鍵・証明書の保存と更新手順。
+- Server秘密鍵・証明書のローテーションと失効手順。保存と再利用は `--state-directory` 指定時に実装済みです。
 
 ## 状態と回復
 

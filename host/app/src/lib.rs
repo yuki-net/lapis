@@ -5,12 +5,14 @@ mod oidc;
 mod profile;
 mod remote_handler;
 pub use remote_handler::HostRemoteHandler;
+mod identity;
+pub use identity::HostIdentity;
 mod protected;
 pub use local::run_managed_host;
 pub use oidc::{HostOidc, configured as oidc_configured, from_env as oidc_from_env};
 pub use profile::{
     HostInvitation, OidcProfile, open_host_file, read_invitation, write_invitation,
-    write_oidc_profile,
+    write_invitation_replacing, write_oidc_profile,
 };
 mod document;
 pub use client::BackendClient;

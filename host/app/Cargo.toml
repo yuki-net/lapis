@@ -21,6 +21,7 @@ client-api = { path = "../../contracts/protocol" }
 platform = { path = "../adapters/local" }
 terminal = { path = "../../contracts/domain/terminal" }
 remote = { path = "../transport/remote" }
+wire = { path = "../../contracts/wire" }
 tokio = { workspace = true, features = ["signal"] }
 rustls.workspace = true
 rcgen.workspace = true

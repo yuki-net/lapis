@@ -24,6 +24,18 @@ fn hello() -> ClientHello {
     }
 }
 
+fn wait_for_exit(process: &mut Child) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = process.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        assert!(Instant::now() < deadline, "Host did not shut down");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 async fn request(client: &mut QuicClient, id: &str, body: RequestBody) -> ResponseBody {
     let request_id = RequestId::try_new(id).unwrap();
     client
@@ -100,6 +112,8 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
         .arg(directory.path())
         .arg("--certificate")
         .arg(&certificate)
+        .arg("--listen")
+        .arg("127.0.0.1:0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -285,4 +299,175 @@ fn independent_host_keeps_running_after_client_disconnect_and_rejects_certificat
         .output()
         .unwrap();
     assert!(!result.status.success());
+}
+
+#[test]
+fn host_connection_info_matches_the_running_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let certificate = directory.path().join("host.der");
+    let connection = directory.path().join("dev").join("connection.json");
+    let invitation = directory.path().join("dev").join("desktop.json");
+
+    // 指定しない起動では接続情報を作らない。
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lapis-host"));
+    command
+        .arg("--workspace")
+        .arg(directory.path())
+        .arg("--certificate")
+        .arg(&certificate)
+        .arg("--listen")
+        .arg("127.0.0.1:0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut process = HostProcess(command.spawn().unwrap());
+    let mut input = process.0.stdin.take().unwrap();
+    let mut output = BufReader::new(process.0.stdout.take().unwrap());
+    let mut line = String::new();
+    output.read_line(&mut line).unwrap();
+    line.clear();
+    output.read_line(&mut line).unwrap();
+    assert!(!connection.exists());
+    writeln!(input, "quit").unwrap();
+    input.flush().unwrap();
+    wait_for_exit(&mut process.0);
+
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lapis-host"));
+    command
+        .arg("--workspace")
+        .arg(directory.path())
+        .arg("--certificate")
+        .arg(&certificate)
+        .arg("--replace-certificate")
+        .arg("--listen")
+        .arg("127.0.0.1:0")
+        .arg("--connection-info")
+        .arg(&connection)
+        .arg("--invitation")
+        .arg(&invitation)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut process = HostProcess(command.spawn().unwrap());
+    let mut input = process.0.stdin.take().unwrap();
+    let mut output = BufReader::new(process.0.stdout.take().unwrap());
+    let mut startup = String::new();
+    output.read_line(&mut startup).unwrap();
+    let address = startup
+        .split_whitespace()
+        .find_map(|value| value.strip_prefix("address="))
+        .unwrap()
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let workspace = startup
+        .split_whitespace()
+        .find_map(|value| value.strip_prefix("workspace="))
+        .unwrap()
+        .to_owned();
+    let mut commands = String::new();
+    output.read_line(&mut commands).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !connection.is_file() {
+        assert!(Instant::now() < deadline, "接続情報が書かれません");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let info = wire::read_connection(&connection).unwrap();
+    assert_eq!(info.version, wire::HOST_CONNECTION_VERSION);
+    assert_eq!(info.address, address);
+    assert_eq!(info.server_name, "lapis-host");
+    assert_eq!(info.workspace_id, workspace);
+    assert_eq!(info.certificate, std::fs::read(&certificate).unwrap());
+    let raw = String::from_utf8(std::fs::read(&connection).unwrap()).unwrap();
+    assert!(!raw.contains("token") && !raw.contains("secret"), "{raw}");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !invitation.is_file() {
+        assert!(Instant::now() < deadline, "招待が書かれません");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (certificate_der, token) = read_host_invitation(&invitation, address, &workspace);
+    assert_eq!(certificate_der, std::fs::read(&certificate).unwrap());
+    assert_eq!(token.len(), 32);
+
+    writeln!(input, "quit").unwrap();
+    input.flush().unwrap();
+    wait_for_exit(&mut process.0);
+    assert!(!connection.exists(), "正常終了で接続情報を消す");
+    assert!(!invitation.exists(), "正常終了で招待を消す");
+
+    // 再起動すると前回のtokenを置き換える。
+    let mut command = Command::new(env!("CARGO_BIN_EXE_lapis-host"));
+    command
+        .arg("--workspace")
+        .arg(directory.path())
+        .arg("--certificate")
+        .arg(&certificate)
+        .arg("--replace-certificate")
+        .arg("--listen")
+        .arg("127.0.0.1:0")
+        .arg("--invitation")
+        .arg(&invitation)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut process = HostProcess(command.spawn().unwrap());
+    let mut input = process.0.stdin.take().unwrap();
+    let mut output = BufReader::new(process.0.stdout.take().unwrap());
+    let mut startup = String::new();
+    output.read_line(&mut startup).unwrap();
+    let address = startup
+        .split_whitespace()
+        .find_map(|value| value.strip_prefix("address="))
+        .unwrap()
+        .parse::<std::net::SocketAddr>()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !invitation.is_file() {
+        assert!(Instant::now() < deadline, "招待が書き直されません");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (_, replaced) = read_host_invitation(&invitation, address, &workspace);
+    assert_ne!(token, replaced);
+    writeln!(input, "quit").unwrap();
+    input.flush().unwrap();
+    wait_for_exit(&mut process.0);
+    assert!(!invitation.exists());
+}
+
+/// 招待が指す接続先と、証明書・tokenの実体を返す。
+fn read_host_invitation(
+    path: &std::path::Path,
+    address: std::net::SocketAddr,
+    workspace: &str,
+) -> (Vec<u8>, Vec<u8>) {
+    let value: serde_json::Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert_eq!(value["version"], 1);
+    assert_eq!(value["address"], address.to_string());
+    assert_eq!(value["server_name"], "lapis-host");
+    assert_eq!(value["workspace_id"], workspace);
+    let bytes = |field: &str| -> Vec<u8> {
+        value[field]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|byte| u8::try_from(byte.as_u64().unwrap()).unwrap())
+            .collect()
+    };
+    (bytes("certificate"), bytes("token"))
 }
