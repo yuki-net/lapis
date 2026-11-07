@@ -21,6 +21,7 @@ mod workbench;
 mod workspace;
 
 pub mod capability;
+pub mod git;
 
 pub use ::workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCapabilities};

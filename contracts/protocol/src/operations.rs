@@ -1,6 +1,6 @@
+use crate::git::{GitDiffSnapshot, GitSnapshot, WorktreeSnapshot};
 use crate::{WorkspaceId, WorkspaceRelativePath};
 use editor_core::{ExecutionId, TaskId};
-use git::{GitDiffSnapshot, GitSnapshot, WorktreeSnapshot};
 use serde::{Deserialize, Serialize};
 use task::{TaskControl, TaskSnapshot, TaskStart};
 
@@ -24,11 +24,11 @@ pub enum WorkspaceOperation {
     },
     RepositoryGitAction {
         repository_id: String,
-        request: git::GitActionRequest,
+        request: crate::git::GitActionRequest,
     },
     GitAction {
         worktree: Option<TaskId>,
-        request: git::GitActionRequest,
+        request: crate::git::GitActionRequest,
     },
     GitStatus {
         worktree: Option<TaskId>,
@@ -102,12 +102,12 @@ impl WorkspaceOperation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum WorkspaceOperationResult {
-    GitRepositories(Vec<git::GitRepositorySnapshot>),
+    GitRepositories(Vec<crate::git::GitRepositorySnapshot>),
     RepositoryGitStatus {
         repository_id: String,
         status: GitSnapshot,
     },
-    GitAction(git::GitActionResult),
+    GitAction(crate::git::GitActionResult),
     GitStatus(GitSnapshot),
     GitDiff(GitDiffSnapshot),
     Worktrees(Vec<WorktreeSnapshot>),
@@ -120,9 +120,9 @@ pub enum WorkspaceOperationResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::{ChangeKind, GitFileSnapshot, WorktreeState};
     use crate::{RequestBody, RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope};
     use editor_core::{ConversationId, WorkspaceId as CoreWorkspaceId};
-    use git::{ChangeKind, GitFileSnapshot, WorktreeState};
     use serde_json::{Value, json};
     use task::{ExecutionSnapshot, ExecutionStatus, Task, TaskMode};
 
@@ -197,8 +197,8 @@ mod tests {
             },
             WorkspaceOperation::RepositoryGitAction {
                 repository_id: "path:frontend".into(),
-                request: git::GitActionRequest {
-                    action: git::GitAction::History,
+                request: crate::git::GitActionRequest {
+                    action: crate::git::GitAction::History,
                     expected_head: None,
                 },
             },
