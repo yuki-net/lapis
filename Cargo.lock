@@ -728,6 +728,7 @@ dependencies = [
  "text",
  "workbench",
  "workbench-state",
+ "workspace-state",
 ]
 
 [[package]]
@@ -10450,6 +10451,15 @@ dependencies = [
  "editor-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "workspace-state"
+version = "0.1.0"
+dependencies = [
+ "client-api",
+ "document",
+ "tempfile",
 ]
 
 [[package]]
