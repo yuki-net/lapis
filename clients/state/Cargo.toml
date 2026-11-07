@@ -9,7 +9,7 @@ license.workspace = true
 client-api = { path = "../../contracts/protocol" }
 document = { path = "../../contracts/domain/document" }
 editor-core = { path = "../../contracts/domain/editor-core" }
-git = { path = "../../contracts/domain/git" }
+git = { package = "git-contract", path = "../../extensions/git/contract" }
 lsp = { path = "../../contracts/domain/lsp" }
 project = { path = "../../contracts/domain/project" }
 localization = { path = "../../contracts/domain/localization" }

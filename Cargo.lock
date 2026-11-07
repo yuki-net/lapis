@@ -1818,7 +1818,7 @@ dependencies = [
  "futures-channel",
  "futures-util",
  "getrandom 0.3.4",
- "git",
+ "git-contract",
  "localization",
  "lsp",
  "project",
