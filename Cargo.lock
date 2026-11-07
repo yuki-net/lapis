@@ -4617,6 +4617,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-git"
+version = "0.1.0"
+dependencies = [
+ "editor-core",
+ "git",
+ "local-fs",
+ "notify",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "local-lsp"
 version = "0.1.0"
 dependencies = [
@@ -6012,15 +6024,13 @@ dependencies = [
  "editor-core",
  "git",
  "local-credentials",
- "local-fs",
+ "local-git",
  "local-lsp",
  "local-tasks",
  "local-terminal",
  "local-workbench",
  "local-workspace",
  "lsp",
- "notify",
- "serde_json",
  "task-runner",
  "tempfile",
  "terminal",

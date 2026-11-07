@@ -1,5 +1,5 @@
 use git::{ConflictSide, GitAction, GitActionRequest, GitBackend};
-use platform::LocalGitBackend;
+use local_git::LocalGitBackend;
 use std::{path::Path, process::Command};
 
 fn git(root: &Path, args: &[&str]) -> String {

@@ -6,13 +6,12 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-notify = "8.2.0"
 backend-state = { path = "../../runtime" }
 document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
 local-credentials = { path = "../credentials" }
-local-fs = { path = "../fs" }
+local-git = { path = "../git" }
 local-lsp = { path = "../lsp" }
 local-tasks = { path = "../tasks" }
 local-terminal = { path = "../terminal" }
@@ -23,7 +22,6 @@ terminal = { path = "../../../contracts/domain/terminal" }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../contracts/domain/workspace" }
 workbench = { path = "../../../contracts/domain/workbench" }
-serde_json.workspace = true
-tempfile.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
