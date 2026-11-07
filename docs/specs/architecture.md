@@ -8,6 +8,7 @@
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
+| `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |

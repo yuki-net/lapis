@@ -1,0 +1,9 @@
+[package]
+name = "git-contract"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+git = { path = "../../../contracts/domain/git" }

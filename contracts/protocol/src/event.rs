@@ -19,7 +19,7 @@ pub enum EventBody {
     #[serde(rename = "git.status_changed")]
     GitStatusChanged {
         workspace_id: WorkspaceId,
-        repository: git::GitRepositoryStatus,
+        repository: crate::git::GitRepositoryStatus,
     },
     #[serde(rename = "git.repositories_changed")]
     GitRepositoriesChanged { workspace_id: WorkspaceId },
