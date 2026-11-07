@@ -25,15 +25,15 @@ macro_rules! define_file_icons {
 define_file_icons! {
     TextAlignStart => (
         "file-icons/text-align-start.svg",
-        include_bytes!("../../../assets/icons/file/text-align-start.svg")
+        include_bytes!("../../../../assets/icons/file/text-align-start.svg")
     ),
     Javascript => (
         "file-icons/javascript.svg",
-        include_bytes!("../../../assets/icons/file/javascript.svg")
+        include_bytes!("../../../../assets/icons/file/javascript.svg")
     ),
     Typescript => (
         "file-icons/typescript.svg",
-        include_bytes!("../../../assets/icons/file/typescript.svg")
+        include_bytes!("../../../../assets/icons/file/typescript.svg")
     ),
 }
 

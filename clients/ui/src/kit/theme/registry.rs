@@ -16,8 +16,8 @@ struct ThemeRegistry {
 impl ThemeRegistry {
     fn bundled() -> Self {
         const BUILTIN: [&str; 2] = [
-            include_str!("../../assets/themes/dark.json"),
-            include_str!("../../assets/themes/white.json"),
+            include_str!("../../../assets/themes/dark.json"),
+            include_str!("../../../assets/themes/white.json"),
         ];
         let mut definitions = BTreeMap::new();
         let mut fallback = None;

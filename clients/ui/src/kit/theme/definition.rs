@@ -291,14 +291,14 @@ mod tests {
 
     #[test]
     fn parses_bundled_theme_and_rejects_unknown_version() {
-        let source = include_str!("../../assets/themes/dark.json");
+        let source = include_str!("../../../assets/themes/dark.json");
         let definition = ThemeDefinition::from_json(source).unwrap();
         assert_eq!(definition.id.as_str(), "lapis.dark");
         assert_eq!(definition.name, "Dark");
         assert_eq!(definition.appearance, ThemeAppearance::Dark);
 
         let light =
-            ThemeDefinition::from_json(include_str!("../../assets/themes/white.json")).unwrap();
+            ThemeDefinition::from_json(include_str!("../../../assets/themes/white.json")).unwrap();
         assert_eq!(light.appearance, ThemeAppearance::Light);
 
         let invalid = source.replace(r#""version": 1"#, r#""version": 2"#);
