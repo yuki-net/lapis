@@ -203,8 +203,8 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
           value="${escapeHtml(defaultUrl)}" />
       </label>
       <label>
-        <span>Workspace ID</span>
-        <input name="workspace" type="text" required autocomplete="off"
+        <span>Workspace ID <small>（空欄なら Host が選択）</small></span>
+        <input name="workspace" type="text" autocomplete="off"
           placeholder="workspace-..."
           value="${escapeHtml(defaultWorkspace)}" />
       </label>
@@ -237,8 +237,8 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     const { url, workspace, token } = read();
-    if (url === "" || workspace === "") {
-      showLoginError("Host URL と Workspace ID を入力してください");
+    if (url === "") {
+      showLoginError("Host URL を入力してください");
       return;
     }
     setLoginBusy(true);
@@ -249,9 +249,9 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
   });
 
   form.querySelector<HTMLButtonElement>("#oidc-login")?.addEventListener("click", () => {
-    const { url, workspace, token } = read();
-    if (url === "" || workspace === "") {
-      showLoginError("Host URL と Workspace ID を入力してください");
+    const { url, workspace } = read();
+    if (url === "") {
+      showLoginError("Host URL を入力してください");
       return;
     }
     const origin = bridgeOrigin(url);
@@ -334,7 +334,6 @@ async function boot() {
 
     if (
       url !== "" &&
-      workspace !== "" &&
       (token !== "" || hasIdToken || hasCredential(url, workspace))
     ) {
       try {

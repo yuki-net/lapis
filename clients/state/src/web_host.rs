@@ -88,21 +88,31 @@ pub struct HostConfig {
 
 /// Hostへ接続し、初期状態を取得してバックエンドを設置する。pairing時はcredentialを返す。
 pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
-    let api_workspace =
-        ApiWorkspaceId::try_new(config.workspace.clone()).map_err(|_| "Workspace IDが不正です")?;
+    let requested_workspace = if config.workspace.trim().is_empty() {
+        None
+    } else {
+        Some(
+            ApiWorkspaceId::try_new(config.workspace.clone())
+                .map_err(|_| "Workspace IDが不正です")?,
+        )
+    };
+    let (connection, fresh_credential, selected_workspace) =
+        connect_web_client(WebClientConnectOptions {
+            url: &config.url,
+            workspace: requested_workspace.clone(),
+            client_id: &config.client_id,
+            client_name: "lapis-web",
+            client_kind: ClientKind::Desktop,
+            token: config.token.as_deref(),
+            credential: config.credential.as_deref(),
+            id_token: config.id_token.as_deref(),
+            capabilities: WEB_CAPABILITIES,
+        })
+        .await?;
+    let api_workspace = selected_workspace
+        .or(requested_workspace)
+        .ok_or_else(|| "Host が Workspace を返しません".to_owned())?;
     let workspace = WorkspaceId::new(api_workspace.as_str());
-    let (connection, fresh_credential) = connect_web_client(WebClientConnectOptions {
-        url: &config.url,
-        workspace: api_workspace.clone(),
-        client_id: &config.client_id,
-        client_name: "lapis-web",
-        client_kind: ClientKind::Desktop,
-        token: config.token.as_deref(),
-        credential: config.credential.as_deref(),
-        id_token: config.id_token.as_deref(),
-        capabilities: WEB_CAPABILITIES,
-    })
-    .await?;
     let mut connection = Rc::new(connection);
     let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
     request(

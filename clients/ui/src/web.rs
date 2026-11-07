@@ -46,15 +46,15 @@ pub async fn start(
     client_id: String,
 ) -> Result<Option<String>, JsValue> {
     console_error_panic_hook::set_once();
-    let (Some(url), Some(workspace)) = (url, workspace) else {
+    let Some(url) = url else {
         return start_without_host(backend_preference);
     };
-    if url.trim().is_empty() || workspace.trim().is_empty() {
+    if url.trim().is_empty() {
         return start_without_host(backend_preference);
     }
     let credential = desktop_client::web_host::connect(desktop_client::web_host::HostConfig {
         url,
-        workspace,
+        workspace: workspace.unwrap_or_default(),
         client_id,
         token,
         credential,
@@ -76,7 +76,7 @@ pub async fn start(
 fn start_without_host(backend_preference: &str) -> Result<Option<String>, JsValue> {
     if !demo_requested() {
         return Err(JsValue::from_str(
-            "Host URL と Workspace ID を指定してください。デモは ?demo=1 で起動できます。",
+            "Host URL を指定してください。Workspace は空欄でも Host が選択します。デモは ?demo=1 で起動できます。",
         ));
     }
     start_prototype(backend_preference).map_err(|error| JsValue::from_str(&error))?;
