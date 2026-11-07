@@ -14,6 +14,7 @@ const SECRET_BYTES: usize = 32;
 /// Host が提示する認証方式。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// 接続時の認証方式。
 pub enum AuthMethod {
     Token,
     Oidc,
@@ -21,6 +22,7 @@ pub enum AuthMethod {
 
 /// 接続直後に Host が返す認証方式の一覧。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Host が要求する認証方式の提示。
 pub struct AuthRequired {
     pub methods: Vec<AuthMethod>,
     /// ネイティブ Client が OIDC ログインに使う公開設定。
@@ -31,6 +33,7 @@ pub struct AuthRequired {
 
 /// OIDC Provider の公開情報。秘密情報は含めない。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// OIDC Device 承認に必要な Client 設定。
 pub struct OidcClientConfig {
     pub issuer: String,
     pub client_id: String,
@@ -39,6 +42,7 @@ pub struct OidcClientConfig {
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
+/// remote transport の Client 送信 message。
 pub enum ClientMessage {
     #[serde(rename = "hello")]
     Hello(ClientHello),
@@ -53,6 +57,7 @@ pub enum ClientMessage {
 }
 
 #[derive(Serialize, Deserialize)]
+/// ペアリング要求。
 pub struct PairRequest {
     pub hello: ClientHello,
     token: SecretHex,
@@ -72,6 +77,7 @@ impl PairRequest {
 }
 
 #[derive(Serialize, Deserialize)]
+/// credential による認証要求。
 pub struct AuthenticateRequest {
     pub hello: ClientHello,
     /// 未指定の場合は Host が最初の Workspace を選ぶ。
@@ -120,6 +126,7 @@ impl AuthenticateRequest {
 
 /// OIDC Provider が発行した ID Token を Host へ提示する。
 #[derive(Serialize, Deserialize)]
+/// OIDC Device 承認の要求。
 pub struct OidcRequest {
     pub hello: ClientHello,
     /// 未指定の場合は Host が最初の Workspace を選ぶ。
@@ -158,6 +165,7 @@ impl Drop for OidcRequest {
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
+/// remote transport の Host 送信 message。
 pub enum ServerMessage {
     #[serde(rename = "auth.required")]
     AuthRequired(AuthRequired),
@@ -174,6 +182,7 @@ pub enum ServerMessage {
 }
 
 #[derive(Serialize, Deserialize)]
+/// ペアリング結果。
 pub struct PairedResponse {
     pub hello: ServerHello,
     credential_id: String,
@@ -245,6 +254,7 @@ fn decode_nibble(byte: u8) -> Result<u8, InvalidSecretHex> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// secret が hex として不正。
 pub struct InvalidSecretHex;
 
 impl fmt::Display for InvalidSecretHex {

@@ -6,6 +6,7 @@ use crate::{DocumentId, Revision, WorkspaceId, WorkspaceRelativePath};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Document の文字 encoding。
 pub enum DocumentEncoding {
     Utf8,
     Utf8Bom,
@@ -36,6 +37,7 @@ impl From<DocumentEncoding> for ::document::Encoding {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document の内容と未保存状態。
 pub struct DocumentSnapshot {
     pub document_id: DocumentId,
     pub workspace_id: WorkspaceId,
@@ -51,6 +53,7 @@ pub struct DocumentSnapshot {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// 外部変更と保存内容の関係。
 pub enum DocumentExternalChange {
     Unchanged,
     Modified,
@@ -58,11 +61,13 @@ pub enum DocumentExternalChange {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document の状態だけを取得する。
 pub struct DocumentInspectRequest {
     pub document_id: DocumentId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 未保存 Document を別 path へ移す。
 pub struct DocumentRelocateRequest {
     pub document_id: DocumentId,
     pub destination_workspace: WorkspaceId,
@@ -71,11 +76,13 @@ pub struct DocumentRelocateRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 無題 Document を作る。
 pub struct DocumentUntitledRequest {
     pub workspace_id: WorkspaceId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document を別 path へ保存する。
 pub struct DocumentSaveAsRequest {
     pub document_id: DocumentId,
     pub base_revision: Revision,
@@ -83,6 +90,7 @@ pub struct DocumentSaveAsRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// 1つの範囲置換。
 pub struct DocumentTextEdit {
     start_char: u64,
     end_char: u64,
@@ -137,6 +145,7 @@ impl<'de> Deserialize<'de> for DocumentTextEdit {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 範囲が不正、または置換が空。
 pub struct InvalidDocumentTextEdit;
 
 impl fmt::Display for InvalidDocumentTextEdit {
@@ -153,6 +162,7 @@ const MAX_EDITS_PER_TRANSACTION: usize = 128;
 /// rangeは重複不可、隣接可。backendは末尾から適用してindex shiftを避ける。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(transparent)]
+/// 順序付きで重複しない編集の集合。
 pub struct DocumentTransaction(Vec<DocumentTextEdit>);
 
 impl DocumentTransaction {
@@ -190,6 +200,7 @@ impl<'de> Deserialize<'de> for DocumentTransaction {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// 編集の順序・重複・空が不正。
 pub struct InvalidDocumentTransaction;
 
 impl fmt::Display for InvalidDocumentTransaction {
@@ -202,12 +213,14 @@ impl fmt::Display for InvalidDocumentTransaction {
 impl Error for InvalidDocumentTransaction {}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 既存 file を開く。
 pub struct DocumentOpenRequest {
     pub workspace_id: WorkspaceId,
     pub path: WorkspaceRelativePath,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 新規 file を作って開く。
 pub struct DocumentCreateRequest {
     pub workspace_id: WorkspaceId,
     pub path: WorkspaceRelativePath,
@@ -217,17 +230,20 @@ pub struct DocumentCreateRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 作成した Document の snapshot。
 pub struct DocumentCreateResponse {
     pub document: DocumentSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 開いた Document の snapshot。
 pub struct DocumentOpenResponse {
     pub document: DocumentSnapshot,
     pub reused: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// base revision を指定して編集する。
 pub struct DocumentEditRequest {
     pub document_id: DocumentId,
     pub base_revision: Revision,
@@ -235,51 +251,60 @@ pub struct DocumentEditRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 編集後の revision と snapshot。
 pub struct DocumentEditResponse {
     pub document_id: DocumentId,
     pub revision: Revision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document を保存する。
 pub struct DocumentSaveRequest {
     pub document_id: DocumentId,
     pub base_revision: Revision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 保存後の snapshot。
 pub struct DocumentSaveResponse {
     pub document_id: DocumentId,
     pub revision: Revision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// reload / discard の対象 Document。
 pub struct DocumentHistoryRequest {
     pub document_id: DocumentId,
     pub base_revision: Revision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 対象 Document の snapshot。
 pub struct DocumentHistoryResponse {
     pub document: DocumentSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document を閉じる。
 pub struct DocumentCloseRequest {
     pub document_id: DocumentId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 未保存変更を捨てる。
 pub struct DocumentDiscardRequest {
     pub document_id: DocumentId,
     pub base_revision: Revision,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 破棄後の snapshot。
 pub struct DocumentDiscardResponse {
     pub document: DocumentSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 閉じた Document。
 pub struct DocumentCloseResponse {
     pub document_id: DocumentId,
 }
