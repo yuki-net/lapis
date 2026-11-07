@@ -6,6 +6,7 @@ use std::{
 
 use ::document::Document;
 use ::terminal::TerminalBackend;
+use client_api::git as git_api;
 use client_api::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentEncoding,
     DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse, ErrorCode,
@@ -59,7 +60,7 @@ pub struct WorkspaceRegistration {
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
     pub terminal: Option<Arc<dyn TerminalBackend>>,
-    pub git: Option<Arc<dyn ::git::GitBackend>>,
+    pub git: Option<Arc<dyn git_api::GitBackend>>,
     pub tasks: Option<Arc<dyn task::TaskBackend>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
     pub(crate) workbench_initial: workbench::VersionedViewState,
@@ -85,7 +86,7 @@ impl WorkspaceRegistration {
         }
     }
 
-    pub fn with_git(mut self, backend: Arc<dyn ::git::GitBackend>) -> Self {
+    pub fn with_git(mut self, backend: Arc<dyn git_api::GitBackend>) -> Self {
         self.git = Some(backend);
         self
     }
@@ -145,7 +146,7 @@ impl PreparedWorktreeLookup {
             .lock()
             .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
             .worktree(&self.root, &self.worktree)?;
-        if tree.state == ::git::WorktreeState::Discarded {
+        if tree.state == git_api::WorktreeState::Discarded {
             return Err(BackendStateError::WorkspaceDenied);
         }
         Ok(tree.path)
@@ -766,7 +767,7 @@ struct WorkspaceState {
     terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
-    git_statuses: HashMap<String, ::git::GitRepositoryStatus>,
+    git_statuses: HashMap<String, git_api::GitRepositoryStatus>,
     removed_worktrees: HashSet<String>,
     git_repositories: Option<HashSet<String>>,
     git_driver_started: bool,

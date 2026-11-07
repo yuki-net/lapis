@@ -2,13 +2,16 @@ use backend_state::{
     BackendService, BackendState, EmbeddedClient, WorkspaceEntry, WorkspaceFileBackend,
     WorkspaceRegistration,
 };
+use client_api::git;
+use client_api::git::{
+    FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree, WorktreeState,
+};
 use client_api::{
     RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceOperation as Operation,
     WorkspaceOperationRequest, WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
 };
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use editor_core::{ConversationId, ExecutionId, TaskId};
-use git::{FileDiff, GitBackend, GitError, RepositoryStatus, TaskWorktree, WorktreeState};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},

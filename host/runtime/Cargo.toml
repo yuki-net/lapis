@@ -6,7 +6,6 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-git = { path = "../../contracts/domain/git" }
 task = { path = "../../contracts/domain/task" }
 editor-core = { path = "../../contracts/domain/editor-core" }
 client-api = { path = "../../contracts/protocol" }

@@ -1,5 +1,5 @@
 use crate::BackendStateError;
-use ::git::{
+use client_api::git::{
     GitBackend, GitDiffSnapshot, GitFileSnapshot, GitSnapshot, RepositoryStatus, TaskWorktree,
     WorktreeSnapshot,
 };
@@ -34,7 +34,7 @@ pub(crate) struct WorkspaceOperations {
 }
 
 struct CachedRepository {
-    watch: Option<Box<dyn ::git::GitWatch>>,
+    watch: Option<Box<dyn client_api::git::GitWatch>>,
     status: RepositoryStatus,
     revision: u64,
     refreshed: Instant,
@@ -94,7 +94,7 @@ impl WorkspaceOperations {
                         return Err(BackendStateError::WorkspaceDenied);
                     }
                     discovered.insert(directory);
-                    repositories.push(::git::GitRepositorySnapshot {
+                    repositories.push(client_api::git::GitRepositorySnapshot {
                         id: path
                             .as_ref()
                             .map_or_else(|| "root".to_owned(), |path| format!("path:{path}")),
@@ -217,13 +217,13 @@ impl WorkspaceOperations {
 trait SafeOperationFailure {
     fn message(&self) -> &'static str;
 }
-impl SafeOperationFailure for ::git::GitError {
+impl SafeOperationFailure for client_api::git::GitError {
     fn message(&self) -> &'static str {
         match self.kind() {
-            ::git::GitErrorKind::NotRepository => "Git repository not found",
-            ::git::GitErrorKind::Conflict => "Git operation conflicts with current state",
-            ::git::GitErrorKind::InvalidOutput => "Git returned invalid output",
-            ::git::GitErrorKind::Io => "Git command failed",
+            client_api::git::GitErrorKind::NotRepository => "Git repository not found",
+            client_api::git::GitErrorKind::Conflict => "Git operation conflicts with current state",
+            client_api::git::GitErrorKind::InvalidOutput => "Git returned invalid output",
+            client_api::git::GitErrorKind::Io => "Git command failed",
         }
     }
 }
@@ -269,22 +269,22 @@ mod tests {
     #[test]
     fn operation_failure_messages_are_fixed_and_distinguishable() {
         for (kind, expected) in [
-            (::git::GitErrorKind::Io, "Git command failed"),
+            (client_api::git::GitErrorKind::Io, "Git command failed"),
             (
-                ::git::GitErrorKind::NotRepository,
+                client_api::git::GitErrorKind::NotRepository,
                 "Git repository not found",
             ),
             (
-                ::git::GitErrorKind::Conflict,
+                client_api::git::GitErrorKind::Conflict,
                 "Git operation conflicts with current state",
             ),
             (
-                ::git::GitErrorKind::InvalidOutput,
+                client_api::git::GitErrorKind::InvalidOutput,
                 "Git returned invalid output",
             ),
         ] {
             let BackendStateError::Operation(message) =
-                problem(::git::GitError::new(kind, "/private/path secret"))
+                problem(client_api::git::GitError::new(kind, "/private/path secret"))
             else {
                 panic!("Expected safe operation failure");
             };

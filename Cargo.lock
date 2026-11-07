@@ -719,7 +719,6 @@ dependencies = [
  "document",
  "document-state",
  "editor-core",
- "git",
  "serde",
  "serde_json",
  "task",

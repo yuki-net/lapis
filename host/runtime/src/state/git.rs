@@ -5,7 +5,7 @@ use super::*;
 impl BackendState {
     pub(crate) fn start_git_updates(
         &mut self,
-        publish: Arc<dyn Fn(WorkspaceId, String, ::git::GitSnapshot) + Send + Sync>,
+        publish: Arc<dyn Fn(WorkspaceId, String, client_api::git::GitSnapshot) + Send + Sync>,
     ) {
         for (id, workspace) in &mut self.workspaces {
             if workspace.git_driver_started {
@@ -26,7 +26,7 @@ impl BackendState {
         &mut self,
         workspace_id: WorkspaceId,
         repository_id: String,
-        status: ::git::GitSnapshot,
+        status: client_api::git::GitSnapshot,
     ) -> Result<Option<PublishedEvent>, BackendStateError> {
         let workspace = self
             .workspaces
@@ -50,7 +50,7 @@ impl BackendState {
         {
             return Ok(None);
         }
-        let repository = ::git::GitRepositoryStatus {
+        let repository = client_api::git::GitRepositoryStatus {
             repository_id: repository_id.clone(),
             status,
         };
@@ -78,7 +78,7 @@ impl BackendState {
                 .ok_or(BackendStateError::WorkspaceNotFound)?;
             if let client_api::WorkspaceOperationResult::Worktree(tree) = result {
                 let id = format!("worktree:{}", tree.worktree_id.as_str());
-                if tree.state == ::git::WorktreeState::Discarded {
+                if tree.state == client_api::git::WorktreeState::Discarded {
                     workspace.git_statuses.remove(&id);
                     workspace.removed_worktrees.insert(id);
                 } else {
