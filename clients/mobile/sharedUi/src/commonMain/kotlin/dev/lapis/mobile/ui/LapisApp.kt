@@ -156,7 +156,7 @@ fun ConnectionScreen(
             },
             modifier = Modifier.align(Alignment.End),
         ) {
-            Text("OIDC でログイン")
+            Text("OIDC で接続")
         }
         inputError?.let { Text(it, color = Color(0xFFF7768E)) }
         storageError?.let { Text(it, color = Color(0xFFF7768E)) }

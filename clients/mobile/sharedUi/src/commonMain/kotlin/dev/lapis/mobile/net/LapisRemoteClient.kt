@@ -26,6 +26,12 @@ sealed interface ConnectionStatus {
     data class Error(val message: String) : ConnectionStatus
 }
 
+private enum class StoredOidcResult {
+    Authenticated,
+    Rejected,
+    Failed,
+}
+
 class LapisRemoteClient(
     private val client: HttpClient = HttpClient {
         install(WebSockets)
@@ -98,8 +104,8 @@ class LapisRemoteClient(
     }
 
     /**
-     * OIDC でログインし、ID Token を secure storage に保存する。
-     * Host の `AuthRequired.oidc` が必須。
+     * OIDC で接続する。保存済み Token が有効ならそれを使い、
+     * 拒否された場合だけブラウザーログインへフォールバックする。
      */
     suspend fun connectWithOidc(
         host: String,
@@ -109,13 +115,75 @@ class LapisRemoteClient(
         clientName: String = "Lapis Mobile",
         clientKind: ClientKind = ClientKind.Android,
     ) {
-        _status.value = ConnectionStatus.Connecting
         _authRequired.value = null
         _storageError.value = null
+        val helloMessage = hello(clientId, clientName, clientKind)
+        val currentKey = oidcCurrentKey(host, port)
+        val stored = runCatching { tokenStore.load(currentKey) }.getOrNull()
+        if (stored != null) {
+            when (tryStoredOidc(host, port, workspaceId, helloMessage, stored, currentKey)) {
+                StoredOidcResult.Authenticated -> return
+                StoredOidcResult.Failed -> return
+                StoredOidcResult.Rejected -> {
+                    runCatching { tokenStore.delete(currentKey) }
+                    _status.value = ConnectionStatus.Connecting
+                }
+            }
+        }
+        browserOidc(host, port, workspaceId, helloMessage)
+    }
+
+    private suspend fun tryStoredOidc(
+        host: String,
+        port: Int,
+        workspaceId: String,
+        helloMessage: ClientHello,
+        idToken: String,
+        currentKey: String,
+    ): StoredOidcResult {
+        _status.value = ConnectionStatus.Connecting
+        var authenticated = false
         try {
             client.webSocket(host = host, port = port, path = "/remote") {
                 session = this
-                val helloMessage = hello(clientId, clientName, clientKind)
+                sendOidc(helloMessage, workspaceId, idToken)
+                receiveMessages { message ->
+                    if (message is ServerMessage.Authenticated) {
+                        authenticated = true
+                        saveOidcToken(host, port, message.payload.subject, idToken, currentKey)
+                    }
+                    handleServerMessage(message)
+                    message !is ServerMessage.Error
+                }
+            }
+        } catch (e: Exception) {
+            if (!authenticated) {
+                _status.value = ConnectionStatus.Error(e.message ?: "OIDC connection error")
+                return StoredOidcResult.Failed
+            }
+        } finally {
+            if (!authenticated && _status.value !is ConnectionStatus.Error) {
+                _status.value = ConnectionStatus.Disconnected
+            }
+            session = null
+        }
+        return if (authenticated) {
+            StoredOidcResult.Authenticated
+        } else {
+            StoredOidcResult.Rejected
+        }
+    }
+
+    private suspend fun browserOidc(
+        host: String,
+        port: Int,
+        workspaceId: String,
+        helloMessage: ClientHello,
+    ) {
+        _status.value = ConnectionStatus.Connecting
+        try {
+            client.webSocket(host = host, port = port, path = "/remote") {
+                session = this
                 send(
                     Frame.Text(
                         lapisJson.encodeToString<ClientMessage>(ClientMessage.Hello(helloMessage))
@@ -130,35 +198,14 @@ class LapisRemoteClient(
                 val oidc = required.payload.oidc
                     ?: error("Host が OIDC ログインを提示していません")
                 val idToken = oidcClient.login(oidc)
-                send(
-                    Frame.Text(
-                        lapisJson.encodeToString<ClientMessage>(
-                            ClientMessage.Oidc(
-                                OidcRequest(
-                                    hello = helloMessage,
-                                    workspaceId = workspaceId,
-                                    idToken = idToken,
-                                )
-                            )
-                        )
-                    )
-                )
-                for (frame in incoming) {
-                    if (frame is Frame.Text) {
-                        val serverMsg = lapisJson.decodeFromString<ServerMessage>(frame.readText())
-                        if (serverMsg is ServerMessage.Authenticated) {
-                            serverMsg.payload.subject?.let { subject ->
-                                val error = runCatching {
-                                    tokenStore.save(oidcTokenKey(host, port, subject), idToken)
-                                    tokenStore.save(oidcCurrentKey(host, port), idToken)
-                                }.exceptionOrNull()
-                                _storageError.value = error?.let {
-                                    "ID Token を secure storage に保存できません: ${it.message}"
-                                }
-                            }
-                        }
-                        handleServerMessage(serverMsg)
+                sendOidc(helloMessage, workspaceId, idToken)
+                val currentKey = oidcCurrentKey(host, port)
+                receiveMessages { message ->
+                    if (message is ServerMessage.Authenticated) {
+                        saveOidcToken(host, port, message.payload.subject, idToken, currentKey)
                     }
+                    handleServerMessage(message)
+                    true
                 }
             }
         } catch (e: Exception) {
@@ -168,6 +215,58 @@ class LapisRemoteClient(
                 _status.value = ConnectionStatus.Disconnected
             }
             session = null
+        }
+    }
+
+    private suspend fun DefaultClientWebSocketSession.sendOidc(
+        helloMessage: ClientHello,
+        workspaceId: String,
+        idToken: String,
+    ) {
+        send(
+            Frame.Text(
+                lapisJson.encodeToString<ClientMessage>(
+                    ClientMessage.Oidc(
+                        OidcRequest(
+                            hello = helloMessage,
+                            workspaceId = workspaceId,
+                            idToken = idToken,
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    private suspend fun DefaultClientWebSocketSession.receiveMessages(
+        onMessage: suspend (ServerMessage) -> Boolean,
+    ) {
+        for (frame in incoming) {
+            if (frame is Frame.Text) {
+                val message = lapisJson.decodeFromString<ServerMessage>(frame.readText())
+                if (!onMessage(message)) {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun saveOidcToken(
+        host: String,
+        port: Int,
+        subject: String?,
+        idToken: String,
+        currentKey: String,
+    ) {
+        if (subject == null) {
+            return
+        }
+        val error = runCatching {
+            tokenStore.save(oidcTokenKey(host, port, subject), idToken)
+            tokenStore.save(currentKey, idToken)
+        }.exceptionOrNull()
+        _storageError.value = error?.let {
+            "ID Token を secure storage に保存できません: ${it.message}"
         }
     }
 
