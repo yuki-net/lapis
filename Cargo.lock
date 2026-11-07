@@ -4608,6 +4608,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-fs"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "local-tasks"
+version = "0.1.0"
+dependencies = [
+ "editor-core",
+ "local-fs",
+ "serde",
+ "serde_json",
+ "task-runner",
+]
+
+[[package]]
 name = "local-terminal"
 version = "0.1.0"
 dependencies = [
@@ -5982,12 +6002,13 @@ dependencies = [
  "editor-core",
  "git",
  "local-credentials",
+ "local-fs",
+ "local-tasks",
  "local-terminal",
  "local-workbench",
  "local-workspace",
  "lsp",
  "notify",
- "serde",
  "serde_json",
  "task-runner",
  "tempfile",

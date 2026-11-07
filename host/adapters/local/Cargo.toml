@@ -12,6 +12,8 @@ document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
 local-credentials = { path = "../credentials" }
+local-fs = { path = "../fs" }
+local-tasks = { path = "../tasks" }
 local-terminal = { path = "../terminal" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
@@ -20,7 +22,6 @@ terminal = { path = "../../../contracts/domain/terminal" }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../contracts/domain/workspace" }
 workbench = { path = "../../../contracts/domain/workbench" }
-serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 
