@@ -1,0 +1,13 @@
+[package]
+name = "local-tasks"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+editor-core = { path = "../../../contracts/domain/editor-core" }
+local-fs = { path = "../fs" }
+serde.workspace = true
+serde_json.workspace = true
+task-runner = { path = "../agent" }
