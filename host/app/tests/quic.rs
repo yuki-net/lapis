@@ -852,9 +852,34 @@ fn invitation_import_is_one_time_and_protected_profile_restores_the_same_host_do
                 .await
                 .unwrap()
         };
+        // 使用済みの招待は新しいcredentialを作らない。同じHostのprofileがあればそれを再利用する。
+        let (reused_backend, reused_namespace, reused_profile) =
+            reused.expect("同じHostへ接続済みなら、1回限りの招待を使い切っていても接続できる");
+        assert_eq!(reused_namespace, namespace);
+        assert_eq!(reused_profile, profile);
+        drop(reused_backend);
+        // 使用済みの招待を、別のHost（証明書が違う）の流用には使わない。
+        let other = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let other_invitation = host::HostInvitation {
+            version: 1,
+            address: fixture.address(),
+            server_name: "localhost".to_owned(),
+            certificate: other.cert.der().to_vec(),
+            workspace_id: fixture.workspace.as_str().to_owned(),
+            name: "RemoteProject".to_owned(),
+            token: token.secret_bytes().to_vec(),
+        };
+        let other_path = state.path().join("other.json");
+        host::write_invitation(&other_path, &other_invitation).unwrap();
+        let other_result = {
+            let profiles = profiles.clone();
+            tokio::task::spawn_blocking(move || host::open_host_file(&other_path, &profiles))
+                .await
+                .unwrap()
+        };
         assert!(
-            reused.is_err(),
-            "used invitations must not silently replace a credential"
+            other_result.is_err(),
+            "別のHostを指す使用済み招待を既存profileへ流用してはいけない"
         );
         assert!(std::fs::read(&profile).unwrap().as_slice() == before.as_slice());
         std::fs::write(&profile, b"corrupt data").unwrap();
