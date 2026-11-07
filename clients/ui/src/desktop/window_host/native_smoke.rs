@@ -1249,7 +1249,7 @@ async fn verify_drag_routes(
             let group = root.group.clone();
             let weak_root = cx.entity().downgrade();
             let worker = root.worker.clone();
-            let options = crate::app::window_options(cx);
+            let options = crate::desktop::window_options(cx);
             cx.open_window(options, move |window, cx| {
                 cx.new(|cx| WindowHost::new(group, second, weak_root, worker, window, cx))
             })

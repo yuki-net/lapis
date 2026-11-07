@@ -227,7 +227,7 @@ impl InspectorController {
         }
         let inspector = Inspection::enable(target, cx);
         let observed = inspector.clone();
-        let mut options = crate::app::window_options(cx);
+        let mut options = crate::desktop::window_options(cx);
         options.window_bounds = Some(WindowBounds::Windowed(Bounds::centered(
             None,
             size(px(900.), px(800.)),
