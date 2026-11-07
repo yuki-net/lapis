@@ -4,7 +4,6 @@ extern crate gpui_preview as gpui;
 mod client_adapter;
 mod client_worker;
 mod commands;
-mod components;
 #[cfg(all(debug_assertions, not(target_family = "wasm")))]
 mod devtools;
 pub mod extension_ui;
@@ -13,19 +12,21 @@ mod gpui_compat;
 #[cfg(all(feature = "hot-reload", debug_assertions))]
 mod hot_reload;
 pub mod keymap;
+pub mod kit;
 pub mod localization;
 pub mod notification;
 mod root;
 mod shell;
-pub mod theme;
 mod timer;
-pub mod tokens;
 #[cfg(target_family = "wasm")]
 mod web;
 #[cfg(target_family = "wasm")]
 mod web_prototype;
 mod window_host;
 mod workbench;
+
+pub(crate) use kit::components;
+pub use kit::{theme, tokens};
 
 #[cfg(target_family = "wasm")]
 pub use web::{is_ready, start};
