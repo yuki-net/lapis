@@ -38,6 +38,9 @@ class LapisRemoteClient(
     private val _authRequired = MutableStateFlow<AuthRequired?>(null)
     val authRequired: StateFlow<AuthRequired?> = _authRequired.asStateFlow()
 
+    private val _storageError = MutableStateFlow<String?>(null)
+    val storageError: StateFlow<String?> = _storageError.asStateFlow()
+
     private val _events = MutableSharedFlow<EventEnvelope>(extraBufferCapacity = 64)
     val events: SharedFlow<EventEnvelope> = _events.asSharedFlow()
 
@@ -87,7 +90,9 @@ class LapisRemoteClient(
         } catch (e: Exception) {
             _status.value = ConnectionStatus.Error(e.message ?: "Connection error")
         } finally {
-            _status.value = ConnectionStatus.Disconnected
+            if (_status.value !is ConnectionStatus.Error) {
+                _status.value = ConnectionStatus.Disconnected
+            }
             session = null
         }
     }
@@ -106,6 +111,7 @@ class LapisRemoteClient(
     ) {
         _status.value = ConnectionStatus.Connecting
         _authRequired.value = null
+        _storageError.value = null
         try {
             client.webSocket(host = host, port = port, path = "/remote") {
                 session = this
@@ -115,8 +121,8 @@ class LapisRemoteClient(
                         lapisJson.encodeToString<ClientMessage>(ClientMessage.Hello(helloMessage))
                     )
                 )
-                val first = (incoming.receive() as? Frame.Text)
-                    ?.readText()
+                val first = withTimeout(10_000) { incoming.receive() }
+                    .let { (it as? Frame.Text)?.readText() }
                     ?: error("Host が認証方式を返しません")
                 val required = lapisJson.decodeFromString<ServerMessage>(first) as? ServerMessage.AuthRequired
                     ?: error("Host が認証方式を返しません")
@@ -142,9 +148,12 @@ class LapisRemoteClient(
                         val serverMsg = lapisJson.decodeFromString<ServerMessage>(frame.readText())
                         if (serverMsg is ServerMessage.Authenticated) {
                             serverMsg.payload.subject?.let { subject ->
-                                runCatching {
+                                val error = runCatching {
                                     tokenStore.save(oidcTokenKey(host, port, subject), idToken)
                                     tokenStore.save(oidcCurrentKey(host, port), idToken)
+                                }.exceptionOrNull()
+                                _storageError.value = error?.let {
+                                    "ID Token を secure storage に保存できません: ${it.message}"
                                 }
                             }
                         }
@@ -155,7 +164,9 @@ class LapisRemoteClient(
         } catch (e: Exception) {
             _status.value = ConnectionStatus.Error(e.message ?: "OIDC connection error")
         } finally {
-            _status.value = ConnectionStatus.Disconnected
+            if (_status.value !is ConnectionStatus.Error) {
+                _status.value = ConnectionStatus.Disconnected
+            }
             session = null
         }
     }

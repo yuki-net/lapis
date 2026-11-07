@@ -9,7 +9,8 @@ import dev.lapis.mobile.net.LapisRemoteClient
 import dev.lapis.mobile.ui.LapisApp
 
 class MainActivity : ComponentActivity() {
-    private val remoteClient = LapisRemoteClient()
+    private val remoteClient: LapisRemoteClient
+        get() = ClientHolder.client
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,5 +29,10 @@ class MainActivity : ComponentActivity() {
 
     private fun handleOidcIntent(intent: Intent?) {
         intent?.dataString?.let(remoteClient::handleOidcCallback)
+    }
+
+    // Activity 再作成をまたいで OIDC の待機状態を保持する。
+    private object ClientHolder {
+        val client = LapisRemoteClient()
     }
 }

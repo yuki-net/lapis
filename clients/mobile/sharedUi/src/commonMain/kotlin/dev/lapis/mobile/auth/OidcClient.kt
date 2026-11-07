@@ -7,7 +7,9 @@ import io.ktor.client.request.forms.FormDataContent
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
+import io.ktor.client.plugins.timeout
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.Parameters
 import io.ktor.http.Url
@@ -39,7 +41,8 @@ class OidcClient(private val http: HttpClient = HttpClient()) {
         val state = encodeBase64Url(secureRandomBytes(16))
         val challenge = pkceChallenge(verifier)
         val deferred = CompletableDeferred<Result<String>>()
-        pending = Pending(state, deferred)
+        val pending = Pending(state, deferred)
+        this.pending = pending
         try {
             openBrowser(
                 authorizationUrl(
@@ -59,7 +62,9 @@ class OidcClient(private val http: HttpClient = HttpClient()) {
                 redirectUri,
             )
         } finally {
-            pending = null
+            if (this.pending === pending) {
+                this.pending = null
+            }
         }
     }
 
@@ -86,15 +91,21 @@ class OidcClient(private val http: HttpClient = HttpClient()) {
     private suspend fun discover(issuer: String): Discovery {
         require(issuer.startsWith("https://")) { "OIDC issuer は HTTPS で指定してください" }
         val url = issuer.trimEnd('/') + "/.well-known/openid-configuration"
-        val response = http.get(url)
+        val response = http.get(url) {
+            timeout { requestTimeoutMillis = 10_000 }
+        }
         if (response.status != HttpStatusCode.OK) {
             error("OIDC discovery が ${response.status} を返しました")
         }
+        checkBodyLimit(response, MAX_DISCOVERY_BYTES)
         val body = response.bodyAsText()
         if (body.length > MAX_DISCOVERY_BYTES) {
             error("OIDC discovery の応答が大きすぎます")
         }
         val discovery = lapisJson.decodeFromString<Discovery>(body)
+        if (discovery.issuer.trimEnd('/') != issuer.trimEnd('/')) {
+            error("OIDC discovery の issuer が一致しません")
+        }
         validateEndpoint("authorization_endpoint", discovery.authorizationEndpoint)
         validateEndpoint("token_endpoint", discovery.tokenEndpoint)
         return discovery
@@ -108,6 +119,7 @@ class OidcClient(private val http: HttpClient = HttpClient()) {
         redirectUri: String,
     ): String {
         val response = http.post(tokenEndpoint) {
+            timeout { requestTimeoutMillis = 30_000 }
             setBody(
                 FormDataContent(
                     Parameters.build {
@@ -123,6 +135,7 @@ class OidcClient(private val http: HttpClient = HttpClient()) {
         if (response.status != HttpStatusCode.OK) {
             error("OIDC token endpoint が ${response.status} を返しました")
         }
+        checkBodyLimit(response, MAX_TOKEN_BYTES)
         val body = response.bodyAsText()
         if (body.length > MAX_TOKEN_BYTES) {
             error("OIDC token の応答が大きすぎます")
@@ -136,6 +149,13 @@ class OidcClient(private val http: HttpClient = HttpClient()) {
     }
 }
 
+private fun checkBodyLimit(response: io.ktor.client.statement.HttpResponse, limit: Int) {
+    val length = response.headers[HttpHeaders.ContentLength]?.toLongOrNull()
+    if (length != null && length > limit) {
+        error("OIDC 応答が大きすぎます")
+    }
+}
+
 private class Pending(
     val state: String,
     val deferred: CompletableDeferred<Result<String>>,
@@ -143,6 +163,7 @@ private class Pending(
 
 @Serializable
 private data class Discovery(
+    val issuer: String,
     @SerialName("authorization_endpoint") val authorizationEndpoint: String,
     @SerialName("token_endpoint") val tokenEndpoint: String,
 )

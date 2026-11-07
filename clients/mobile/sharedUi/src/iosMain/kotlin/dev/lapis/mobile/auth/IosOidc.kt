@@ -21,8 +21,11 @@ actual fun secureRandomBytes(size: Int): ByteArray {
 
 @OptIn(ExperimentalForeignApi::class)
 actual fun openBrowser(url: String) {
-    val target = NSURL(string = url)
-    UIApplication.sharedApplication.openURL(target)
+    require(url.startsWith("https://")) { "OIDC URL は HTTPS で指定してください" }
+    val target = NSURL.URLWithString(url) ?: error("OIDC URL が不正です")
+    check(UIApplication.sharedApplication.openURL(target)) {
+        "ブラウザーを開けませんでした"
+    }
 }
 
 actual fun createSecureTokenStore(): SecureTokenStore =

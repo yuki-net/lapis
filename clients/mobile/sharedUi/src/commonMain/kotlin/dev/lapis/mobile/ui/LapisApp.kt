@@ -48,6 +48,7 @@ enum class MobileScreen {
 fun LapisApp(remoteClient: LapisRemoteClient = remember { LapisRemoteClient() }) {
     var currentScreen by remember { mutableStateOf(MobileScreen.Connection) }
     val connectionStatus by remoteClient.status.collectAsState()
+    val storageError by remoteClient.storageError.collectAsState()
     val scope = rememberCoroutineScope()
 
     MaterialTheme {
@@ -79,6 +80,7 @@ fun LapisApp(remoteClient: LapisRemoteClient = remember { LapisRemoteClient() })
                     when (currentScreen) {
                         MobileScreen.Connection -> ConnectionScreen(
                             connectionStatus,
+                            storageError,
                             onOidcLogin = { host, port, workspace ->
                                 scope.launch {
                                     remoteClient.connectWithOidc(host, port, workspace)
@@ -99,6 +101,7 @@ fun LapisApp(remoteClient: LapisRemoteClient = remember { LapisRemoteClient() })
 @Composable
 fun ConnectionScreen(
     status: ConnectionStatus,
+    storageError: String?,
     onOidcLogin: (host: String, port: Int, workspaceId: String) -> Unit,
 ) {
     Column(
@@ -114,6 +117,7 @@ fun ConnectionScreen(
         var host by remember { mutableStateOf("127.0.0.1") }
         var port by remember { mutableStateOf("8080") }
         var workspaceId by remember { mutableStateOf("workspace-default") }
+        var inputError by remember { mutableStateOf<String?>(null) }
 
         TextField(
             value = host,
@@ -143,7 +147,10 @@ fun ConnectionScreen(
         Button(
             onClick = {
                 val parsedPort = port.toIntOrNull()
-                if (parsedPort != null) {
+                if (parsedPort == null || parsedPort !in 1..65535) {
+                    inputError = "Port は 1〜65535 で入力してください"
+                } else {
+                    inputError = null
                     onOidcLogin(host, parsedPort, workspaceId)
                 }
             },
@@ -151,6 +158,8 @@ fun ConnectionScreen(
         ) {
             Text("OIDC でログイン")
         }
+        inputError?.let { Text(it, color = Color(0xFFF7768E)) }
+        storageError?.let { Text(it, color = Color(0xFFF7768E)) }
     }
 }
 
