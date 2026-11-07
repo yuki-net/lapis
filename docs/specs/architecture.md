@@ -96,6 +96,10 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `ViewId`は種類、`ViewInstanceId`は個体を識別する。Layoutの保存値はZone・Panel・Tab参照だけを含む。旧Layout形式は復元せず、Task・未保存Documentなど別の保存値は保持する。
 - 復元時はZone・Panel IDとTab個体の一意性、所属、比率、有限サイズを検証し、不正なLayoutは既定配置へ戻す。利用できないTabは除外する。
 - Zoneの開閉とPanel個別の表示状態は別に保存する。最後のTabが移動したSide Panelは閉鎖中の状態を経て除去する。空のSide Zoneも再び開くことができる。
+- Viewport幅の境界は `LayoutProfile` が決める。Wide は 960px 以上、Compact は 960px 未満とし、境界付近の往復を抑えるため Compact から Wide へは 960px、Wide から Compact へは 928px（960px − 32px のヒステリシス）で切り替える。
+- `InteractionPolicy` は Profile と入力方式（Mouse / Touch）から操作の可否を決める。Compact では Panel の drag / resize / tab detach を無効化し、Context Menu は Mouse なら右クリック、Touch なら長押しとする。
+- Compact では Panel 配置を永続化しない。Wide に戻したときは既定配置から始め、Wide で保存した配置だけを復元する。
+- Viewport 幅・入力方式の参照は Shell と `kit` の共通 wrapper に限定し、Feature からは直接参照しない。`scripts/check_architecture.py` が Feature 配下の `viewport_size` / `user_agent` 参照を拒否する。
 
 ## Desktop の共通Tab操作
 
