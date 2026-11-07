@@ -4608,6 +4608,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-workbench"
+version = "0.1.0"
+dependencies = [
+ "backend-state",
+ "editor-core",
+ "serde_json",
+ "tempfile",
+ "workbench",
+]
+
+[[package]]
 name = "local-workspace"
 version = "0.1.0"
 dependencies = [
@@ -5961,6 +5972,7 @@ dependencies = [
  "editor-core",
  "git",
  "local-terminal",
+ "local-workbench",
  "local-workspace",
  "lsp",
  "notify",
