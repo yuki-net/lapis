@@ -6,16 +6,17 @@ use std::{
 
 use client_api::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentEncoding,
-    DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse,
-    DocumentSnapshot, ErrorCode, EventBody, EventEnvelope, EventSequence, FORBIDDEN, FileTreeEntry,
-    FileTreeKind, FileTreeResponse, INTERNAL, INVALID_PATH, INVALID_REQUEST, NOT_FOUND,
-    ProtocolError, RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, Revision,
-    RevisionConflict, SessionId, SnapshotResponse, TerminalCommandResponse, TerminalId,
-    TerminalInputRequest, TerminalResizeRequest, TerminalStartRequest, TerminalStartResponse,
-    TerminalTerminateRequest, UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse,
-    WorkspaceId, WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
+    DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse, ErrorCode,
+    EventBody, EventEnvelope, EventSequence, FORBIDDEN, FileTreeEntry, FileTreeKind,
+    FileTreeResponse, INTERNAL, INVALID_PATH, INVALID_REQUEST, NOT_FOUND, ProtocolError,
+    RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, Revision, RevisionConflict,
+    SessionId, SnapshotResponse, TerminalCommandResponse, TerminalId, TerminalInputRequest,
+    TerminalResizeRequest, TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest,
+    UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId,
+    WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
-use document::{Document, Encoding};
+use document::Document;
+use document_state::{DocumentResource, to_document_encoding};
 use terminal::TerminalBackend;
 use text::TextEdit;
 
@@ -479,7 +480,7 @@ impl BackendState {
             .workspaces
             .get_mut(&destination)
             .ok_or(BackendStateError::WorkspaceNotFound)?;
-        let snapshot = resource.snapshot(&destination)?;
+        let snapshot = resource.snapshot(&destination);
         target
             .documents_by_path
             .insert(absolute, document_id.clone());
@@ -865,7 +866,7 @@ impl BackendState {
             document: Document::new(),
             attached_sessions: HashSet::from([session.session_id.clone()]),
         };
-        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace.documents.insert(document_id, resource);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
@@ -889,7 +890,7 @@ impl BackendState {
         resource
             .attached_sessions
             .insert(session.session_id.clone());
-        let mut snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
         let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
             .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
         if missing_root && resource.path.is_some() {
@@ -959,7 +960,7 @@ impl BackendState {
         let previous_absolute = resource.document.path().map(ToOwned::to_owned);
         resource.document.mark_saved(absolute.clone(), fingerprint);
         resource.path = Some(path);
-        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         if let Some(previous) = previous_absolute {
             workspace.documents_by_path.remove(&previous);
         }
@@ -1000,7 +1001,7 @@ impl BackendState {
             .get_mut(&document_id)
             .ok_or(BackendStateError::DocumentNotFound)?;
         resource.document.reload(data)?;
-        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
         })?;
@@ -1047,7 +1048,7 @@ impl BackendState {
         if resource.document.path().is_none() {
             resource.path = None;
         }
-        let snapshot = resource.snapshot(&workspace_id)?;
+        let snapshot = resource.snapshot(&workspace_id);
         if snapshot.path.is_none()
             && let Some(previous) = previous_path
         {
@@ -1103,7 +1104,7 @@ impl BackendState {
             document
                 .attached_sessions
                 .insert(session.session_id.clone());
-            let snapshot = document.snapshot(&workspace.summary.workspace_id)?;
+            let snapshot = document.snapshot(&workspace.summary.workspace_id);
             return Ok((
                 ResponseBody::DocumentOpen(DocumentOpenResponse {
                     document: snapshot,
@@ -1119,7 +1120,7 @@ impl BackendState {
         resource
             .attached_sessions
             .insert(session.session_id.clone());
-        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace
             .documents_by_path
             .insert(absolute, document_id.clone());
@@ -1163,7 +1164,7 @@ impl BackendState {
         resource
             .attached_sessions
             .insert(session.session_id.clone());
-        let snapshot = resource.snapshot(&workspace.summary.workspace_id)?;
+        let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace
             .documents_by_path
             .insert(absolute, document_id.clone());
@@ -1271,7 +1272,7 @@ impl BackendState {
         } else {
             document.document.redo()
         };
-        let snapshot = document.snapshot(&workspace_id)?;
+        let snapshot = document.snapshot(&workspace_id);
         let events = if changed {
             vec![workspace.publish(EventBody::DocumentReplaced {
                 document: snapshot.clone(),
@@ -1397,7 +1398,7 @@ impl BackendState {
             .documents
             .values()
             .map(|document| document.snapshot(&workspace.summary.workspace_id))
-            .collect::<Result<Vec<_>, BackendStateError>>()?;
+            .collect::<Vec<_>>();
         let terminals = workspace
             .terminals
             .snapshots_for_session(&session.session_id, &workspace.summary.workspace_id);
@@ -1568,43 +1569,6 @@ impl WorkspaceState {
     }
 }
 
-struct DocumentResource {
-    document_id: DocumentId,
-    path: Option<WorkspaceRelativePath>,
-    document: Document,
-    attached_sessions: HashSet<SessionId>,
-}
-
-impl DocumentResource {
-    fn new(document_id: DocumentId, path: WorkspaceRelativePath, document: Document) -> Self {
-        Self {
-            document_id,
-            path: Some(path),
-            document,
-            attached_sessions: HashSet::new(),
-        }
-    }
-
-    fn revision(&self) -> Revision {
-        Revision::new(self.document.revision().number())
-    }
-
-    fn snapshot(&self, workspace_id: &WorkspaceId) -> Result<DocumentSnapshot, BackendStateError> {
-        Ok(DocumentSnapshot {
-            document_id: self.document_id.clone(),
-            workspace_id: workspace_id.clone(),
-            path: self.path.clone(),
-            content: self.document.content_for_save(),
-            encoding: from_document_encoding(self.document.encoding()),
-            revision: self.revision(),
-            dirty: self.document.is_dirty(),
-            can_undo: self.document.can_undo(),
-            can_redo: self.document.can_redo(),
-            external_change: client_api::DocumentExternalChange::Unchanged,
-        })
-    }
-}
-
 #[derive(Default)]
 struct EventJournal {
     next_sequence: EventSequence,
@@ -1699,22 +1663,4 @@ fn canonical_document_path(
         .ok_or(crate::PathSecurityError::InvalidEntry)?;
     WorkspaceRelativePath::parse(relative.replace('\\', "/"))
         .map_err(|_| crate::PathSecurityError::InvalidEntry.into())
-}
-
-fn to_document_encoding(encoding: DocumentEncoding) -> Encoding {
-    match encoding {
-        DocumentEncoding::Utf8 => Encoding::Utf8,
-        DocumentEncoding::Utf8Bom => Encoding::Utf8Bom,
-        DocumentEncoding::Utf16Le => Encoding::Utf16Le,
-        DocumentEncoding::Utf16Be => Encoding::Utf16Be,
-    }
-}
-
-fn from_document_encoding(encoding: Encoding) -> DocumentEncoding {
-    match encoding {
-        Encoding::Utf8 => DocumentEncoding::Utf8,
-        Encoding::Utf8Bom => DocumentEncoding::Utf8Bom,
-        Encoding::Utf16Le => DocumentEncoding::Utf16Le,
-        Encoding::Utf16Be => DocumentEncoding::Utf16Be,
-    }
 }
