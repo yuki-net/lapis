@@ -11,6 +11,7 @@ members = [
     "host/documents",
     "host/app",
     "host/adapters/*",
+    "host/extensions/*",
     "host/transport/*",
     "contracts/domain/*",
     "contracts/transport/*",

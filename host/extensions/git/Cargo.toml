@@ -8,7 +8,7 @@ license.workspace = true
 [dependencies]
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
-local-fs = { path = "../fs" }
+local-fs = { path = "../../adapters/fs" }
 notify = "8.2.0"
 serde_json.workspace = true
 tempfile.workspace = true

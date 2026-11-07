@@ -14,7 +14,8 @@
 | `host/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
 | `host/terminal/` | Terminal の正規状態・画面差分・接続 session | PTY の具体実装、画面描画 |
 | `host/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
-| `host/adapters/` | FS、Git CLI、PTY、LSP、runner、永続化 | 画面の判断 |
+| `host/adapters/` | FS、PTY、LSP、runner、永続化 | 画面の判断 |
+| `host/extensions/git/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
 | `host/transport/` | 認証・wire・接続と共通 Runtime への配送 | 独立した Workspace/Document 正本 |
 | `host/app/` | Runtime と具体実装の組み立て、開始・終了 | UI |
 
