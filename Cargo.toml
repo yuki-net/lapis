@@ -9,6 +9,7 @@ members = [
     "host/workbench",
     "host/terminal",
     "host/documents",
+    "host/workspaces",
     "host/app",
     "host/adapters/*",
     "host/extensions/*",

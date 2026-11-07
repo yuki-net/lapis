@@ -1,0 +1,13 @@
+[package]
+name = "workspace-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+client-api = { path = "../../contracts/protocol" }
+document = { path = "../../contracts/domain/document" }
+
+[dev-dependencies]
+tempfile.workspace = true
