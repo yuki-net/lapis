@@ -7,6 +7,7 @@ use crate::{
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
+/// Host から Client へ送る状態変化。
 pub enum EventBody {
     #[serde(rename = "workbench.changed")]
     WorkbenchChanged {

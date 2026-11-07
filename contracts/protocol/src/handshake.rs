@@ -4,6 +4,7 @@ use crate::{CapabilitySet, ClientId, ProtocolRange, ProtocolVersion, SessionId, 
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// 接続元 Client の種類。
 pub enum ClientKind {
     Android,
     Ios,
@@ -11,6 +12,7 @@ pub enum ClientKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Client が接続時に提示する protocol・capability。
 pub struct ClientHello {
     pub protocol: ProtocolRange,
     pub client_id: ClientId,
@@ -20,6 +22,7 @@ pub struct ClientHello {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Host が選択した protocol・session・capability。
 pub struct ServerHello {
     pub protocol: ProtocolVersion,
     pub session_id: SessionId,

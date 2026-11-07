@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{EventBody, EventSequence, RequestBody, RequestId, ResponseBody};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// request ID と RequestBody をまとめた wire envelope。
 pub struct RequestEnvelope {
     pub request_id: RequestId,
     #[serde(flatten)]
@@ -10,6 +11,7 @@ pub struct RequestEnvelope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// request ID と ResponseBody をまとめた wire envelope。
 pub struct ResponseEnvelope {
     pub request_id: RequestId,
     #[serde(flatten)]
@@ -17,6 +19,7 @@ pub struct ResponseEnvelope {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// event 連番と EventBody をまとめた wire envelope。
 pub struct EventEnvelope {
     pub event_sequence: EventSequence,
     #[serde(flatten)]
