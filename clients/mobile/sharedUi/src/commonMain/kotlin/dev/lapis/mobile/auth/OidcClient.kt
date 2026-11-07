@@ -237,4 +237,4 @@ private fun validateEndpoint(name: String, value: String) {
 
 expect fun secureRandomBytes(size: Int): ByteArray
 
-expect fun openBrowser(url: String)
+expect suspend fun openBrowser(url: String)
