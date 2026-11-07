@@ -16,7 +16,7 @@ use client_api::{
     WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
 use document::Document;
-use document_state::{DocumentResource, to_document_encoding};
+use document_state::{DocumentRegistry, DocumentResource, to_document_encoding};
 use terminal::TerminalBackend;
 use text::TextEdit;
 
@@ -446,7 +446,7 @@ impl BackendState {
             .ok_or(BackendStateError::WorkspaceNotFound)?;
         let absolute = self.document_target(&destination, &path)?;
         let path = canonical_document_path(&target.resolver, &absolute)?;
-        if target.documents_by_path.contains_key(&absolute) {
+        if target.documents.contains_path(&absolute) {
             return Err(document::DocumentError::conflict(
                 "保存先は開いている文書と重複しています",
             )
@@ -468,7 +468,7 @@ impl BackendState {
             .remove(&document_id)
             .ok_or(BackendStateError::DocumentNotFound)?;
         if let Some(previous) = resource.document.path() {
-            source_workspace.documents_by_path.remove(previous);
+            source_workspace.documents.remove_path(previous);
         }
         let closed = source_workspace.publish(EventBody::DocumentClosed {
             document_id: document_id.clone(),
@@ -481,9 +481,7 @@ impl BackendState {
             .get_mut(&destination)
             .ok_or(BackendStateError::WorkspaceNotFound)?;
         let snapshot = resource.snapshot(&destination);
-        target
-            .documents_by_path
-            .insert(absolute, document_id.clone());
+        target.documents.insert_path(absolute, document_id.clone());
         target.documents.insert(document_id, resource);
         let replaced = target.publish(EventBody::DocumentReplaced { document: snapshot })?;
         Ok(vec![closed, replaced])
@@ -938,7 +936,7 @@ impl BackendState {
             };
             return Ok((ResponseBody::DocumentSaveAs(snapshot), events));
         }
-        if workspace.documents_by_path.contains_key(&absolute) {
+        if workspace.documents.contains_path(&absolute) {
             return Err(document::DocumentError::conflict(
                 "保存先は開いている文書と重複しています",
             )
@@ -962,11 +960,11 @@ impl BackendState {
         resource.path = Some(path);
         let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         if let Some(previous) = previous_absolute {
-            workspace.documents_by_path.remove(&previous);
+            workspace.documents.remove_path(&previous);
         }
         workspace
-            .documents_by_path
-            .insert(absolute, request.document_id);
+            .documents
+            .insert_path(absolute, request.document_id);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
         })?;
@@ -1052,7 +1050,7 @@ impl BackendState {
         if snapshot.path.is_none()
             && let Some(previous) = previous_path
         {
-            workspace.documents_by_path.remove(&previous);
+            workspace.documents.remove_path(&previous);
         }
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
@@ -1076,7 +1074,7 @@ impl BackendState {
             .ok_or(BackendStateError::WorkspaceNotFound)?;
         let absolute = workspace.resolver.resolve_new_file(path)?;
         if self.workspaces.iter().any(|(owner, workspace)| {
-            owner != workspace_id && workspace.documents_by_path.contains_key(&absolute)
+            owner != workspace_id && workspace.documents.contains_path(&absolute)
         }) {
             return Err(document::DocumentError::conflict(
                 "別の Workspace が同じ Document を所有しています",
@@ -1095,7 +1093,7 @@ impl BackendState {
         let absolute = self.document_target(&session.workspace_id, &path)?;
         let workspace = self.workspace_mut(session)?;
         let path = canonical_document_path(&workspace.resolver, &absolute)?;
-        let existing = workspace.documents_by_path.get(&absolute).cloned();
+        let existing = workspace.documents.get_by_path(&absolute).cloned();
         if let Some(document_id) = existing {
             let document = workspace
                 .documents
@@ -1122,8 +1120,8 @@ impl BackendState {
             .insert(session.session_id.clone());
         let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace
-            .documents_by_path
-            .insert(absolute, document_id.clone());
+            .documents
+            .insert_path(absolute, document_id.clone());
         workspace.documents.insert(document_id, resource);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
@@ -1148,7 +1146,7 @@ impl BackendState {
         let absolute = self.document_target(&session.workspace_id, &path)?;
         let workspace = self.workspace_mut(session)?;
         let path = canonical_document_path(&workspace.resolver, &absolute)?;
-        if workspace.documents_by_path.contains_key(&absolute) {
+        if workspace.documents.contains_path(&absolute) {
             return Err(document::DocumentError::conflict(
                 "document already exists in backend state",
             )
@@ -1166,8 +1164,8 @@ impl BackendState {
             .insert(session.session_id.clone());
         let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace
-            .documents_by_path
-            .insert(absolute, document_id.clone());
+            .documents
+            .insert_path(absolute, document_id.clone());
         workspace.documents.insert(document_id, resource);
         let event = workspace.publish(EventBody::DocumentReplaced {
             document: snapshot.clone(),
@@ -1502,8 +1500,7 @@ struct WorkspaceState {
     summary: WorkspaceSummary,
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
-    documents: HashMap<DocumentId, DocumentResource>,
-    documents_by_path: HashMap<PathBuf, DocumentId>,
+    documents: DocumentRegistry,
     terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
@@ -1529,8 +1526,7 @@ impl WorkspaceState {
             },
             resolver: WorkspacePathResolver::new(registration.root)?,
             files: registration.files,
-            documents: HashMap::new(),
-            documents_by_path: HashMap::new(),
+            documents: DocumentRegistry::new(),
             terminals: TerminalRegistry::new(registration.terminal),
             operations: Arc::new(Mutex::new(crate::operations::WorkspaceOperations::new(
                 registration.git,
@@ -1550,14 +1546,9 @@ impl WorkspaceState {
         session: &BackendSession,
         document_id: &DocumentId,
     ) -> Result<&mut DocumentResource, BackendStateError> {
-        let document = self
+        Ok(self
             .documents
-            .get_mut(document_id)
-            .ok_or(BackendStateError::DocumentNotFound)?;
-        if !document.attached_sessions.contains(&session.session_id) {
-            return Err(BackendStateError::DocumentNotAttached);
-        }
-        Ok(document)
+            .require_attached_mut(&session.session_id, document_id)?)
     }
 
     fn publish(&mut self, body: EventBody) -> Result<PublishedEvent, BackendStateError> {

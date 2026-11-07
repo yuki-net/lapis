@@ -102,3 +102,12 @@ impl From<workbench_state::WorkbenchStateError> for BackendStateError {
         Self::InvalidWorkbench
     }
 }
+
+impl From<document_state::DocumentStateError> for BackendStateError {
+    fn from(error: document_state::DocumentStateError) -> Self {
+        match error {
+            document_state::DocumentStateError::NotFound => Self::DocumentNotFound,
+            document_state::DocumentStateError::NotAttached => Self::DocumentNotAttached,
+        }
+    }
+}
