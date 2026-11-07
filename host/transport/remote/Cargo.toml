@@ -11,7 +11,7 @@ axum-server.workspace = true
 backend-state = { path = "../../runtime" }
 client-api = { path = "../../../contracts/protocol" }
 client-core = { path = "../../../clients/transport" }
-wire = { path = "../../../contracts/wire" }
+wire = { path = "../../../contracts/transport/wire" }
 getrandom.workspace = true
 jsonwebtoken = { version = "11", features = ["aws_lc_rs"] }
 rcgen.workspace = true

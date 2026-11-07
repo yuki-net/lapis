@@ -19,7 +19,7 @@ js-sys = "0.3"
 client-api = { path = "../../../contracts/protocol" }
 client-core = { path = "../../transport" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
-wire = { path = "../../../contracts/wire" }
+wire = { path = "../../../contracts/transport/wire" }
 workbench = { path = "../../../contracts/domain/workbench" }
 serde.workspace = true
 serde_json.workspace = true
