@@ -1,5 +1,7 @@
 //! Client 側の拡張機能レジストリ。
 
+pub mod git;
+
 /// 組み込み拡張の識別子。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExtensionId {

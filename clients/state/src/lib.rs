@@ -150,12 +150,11 @@ pub use conversation::{
 };
 pub use project::{Project, SourceRole, TaskEnvironment};
 
-mod git_session;
+#[cfg(test)]
+use extensions::git::client::apply_git_status;
+pub use extensions::git::{GitDiffSelection, GitSession};
 #[cfg(test)]
 use git::GitError;
-#[cfg(test)]
-use git_session::apply_git_status;
-pub use git_session::{GitDiffSelection, GitSession};
 
 pub struct TerminalSession {
     backend: Arc<dyn TerminalBackend>,
