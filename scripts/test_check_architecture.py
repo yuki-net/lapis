@@ -27,6 +27,22 @@ class ArchitectureTests(unittest.TestCase):
             source.write_text('use crate::shell::panel_layout::PanelLayout;\n', encoding="utf-8")
             self.assertTrue(any("Feature" in error for error in check_desktop_layout(root)))
 
+    def test_feature_viewport_and_user_agent_access_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "clients/ui/src/features/example.rs"
+            source.parent.mkdir(parents=True)
+            source.write_text('// viewport_size() は共通 wrapper を使う\n', encoding="utf-8")
+            self.assertEqual(check_desktop_layout(root), [])
+            source.write_text('fn f(window: &Window) { window.viewport_size(); }\n', encoding="utf-8")
+            self.assertTrue(
+                any("viewport" in error for error in check_desktop_layout(root))
+            )
+            source.write_text('fn f() -> String { navigator.userAgent.into() }\n', encoding="utf-8")
+            self.assertTrue(
+                any("viewport" in error for error in check_desktop_layout(root))
+            )
+
     def test_zone_persistence_rejects_legacy_names_and_helpers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

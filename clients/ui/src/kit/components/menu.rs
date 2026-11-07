@@ -10,6 +10,10 @@ const FONT_SIZE: Pixels = px(13.);
 const ICON_SIZE: Pixels = px(16.);
 const CHEVRON_SIZE: Pixels = px(14.);
 const LABEL_GAP: Pixels = px(16.);
+/// Popup と画面端のあいだに残す余白。
+const VIEWPORT_MARGIN: Pixels = px(56.);
+/// viewport が極端に低いときでも操作できる最小の高さ。
+const MIN_VIEWPORT_HEIGHT: Pixels = px(80.);
 
 #[derive(Clone, Copy)]
 pub(crate) enum TreeItem {
@@ -93,6 +97,13 @@ impl Menu {
 
     pub(crate) fn max_height(mut self, height: Pixels) -> Self {
         self.max_height = Some(height);
+        self
+    }
+
+    /// viewport の高さに収まる上限を決める。Feature が viewport を直接読まないための共通 wrapper。
+    pub(crate) fn max_height_in_viewport(mut self, window: &Window) -> Self {
+        let available = (window.viewport_size().height - VIEWPORT_MARGIN).max(MIN_VIEWPORT_HEIGHT);
+        self.max_height = Some(px(450.).min(available));
         self
     }
 

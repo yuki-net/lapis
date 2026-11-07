@@ -49,6 +49,12 @@ def check_desktop_layout(root=ROOT):
             errors.append(f"{path.relative_to(root)}: PanelHostへのZone所属の二重保持は禁止")
         if "/features/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: FeatureからLayout内部表現へ依存")
+        if "/features/" in path.as_posix() and re.search(
+            r"\bviewport_size\s*\(|\buser_agent\b|navigator\.userAgent", code_text
+        ):
+            errors.append(
+                f"{path.relative_to(root)}: Featureからviewport・user-agentへ依存（共通wrapperを使う）"
+            )
         if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
         if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()
