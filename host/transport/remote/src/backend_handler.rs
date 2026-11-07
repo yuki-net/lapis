@@ -148,7 +148,7 @@ mod tests {
     };
     use client_api::{
         CapabilityId, WorkspaceOperation as Operation, WorkspaceOperationRequest,
-        WorkspaceOperationResult as Outcome,
+        WorkspaceOperationResponse as Outcome,
     };
     use client_api::{
         CapabilitySet, DocumentCreateRequest, DocumentEncoding, EventBody, RequestBody, RequestId,

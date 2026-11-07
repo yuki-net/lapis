@@ -4,7 +4,7 @@ use client_api::git::{
     WorktreeSnapshot,
 };
 use client_api::{
-    WorkspaceOperation as Operation, WorkspaceOperationResult as Outcome, WorkspaceRelativePath,
+    WorkspaceOperation as Operation, WorkspaceOperationResponse as Outcome, WorkspaceRelativePath,
 };
 use editor_core::{ExecutionId, TaskId, WorkspaceId};
 use std::{

@@ -130,7 +130,7 @@ impl BackendState {
     pub(crate) fn apply_git_updates(
         &mut self,
         workspace_id: &WorkspaceId,
-        result: &client_api::WorkspaceOperationResult,
+        result: &client_api::WorkspaceOperationResponse,
         worktrees_changed: bool,
         events: &mut Vec<PublishedEvent>,
     ) -> Result<(), BackendStateError> {
@@ -139,14 +139,14 @@ impl BackendState {
                 .workspaces
                 .get_mut(workspace_id)
                 .ok_or(BackendStateError::WorkspaceNotFound)?;
-            if let client_api::WorkspaceOperationResult::Worktree(tree) = result {
+            if let client_api::WorkspaceOperationResponse::Worktree(tree) = result {
                 workspace.git.apply_worktree(tree);
             }
             events.push(workspace.publish(EventBody::GitWorktreesChanged {
                 workspace_id: workspace_id.clone(),
             })?);
         }
-        if let client_api::WorkspaceOperationResult::GitRepositories(repositories) = result {
+        if let client_api::WorkspaceOperationResponse::GitRepositories(repositories) = result {
             let workspace = self
                 .workspaces
                 .get_mut(workspace_id)

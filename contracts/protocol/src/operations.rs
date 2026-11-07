@@ -104,7 +104,7 @@ impl WorkspaceOperation {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 /// Workspace 操作の結果。
-pub enum WorkspaceOperationResult {
+pub enum WorkspaceOperationResponse {
     GitRepositories(Vec<crate::git::GitRepositorySnapshot>),
     RepositoryGitStatus {
         repository_id: String,
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn every_result_round_trips_without_internal_roots() {
         let cases = [
-            WorkspaceOperationResult::GitStatus(GitSnapshot {
+            WorkspaceOperationResponse::GitStatus(GitSnapshot {
                 workspace_id: CoreWorkspaceId::new("workspace-1"),
                 worktree_id: None,
                 revision: 1,
@@ -271,18 +271,18 @@ mod tests {
                     staged: false,
                 }],
             }),
-            WorkspaceOperationResult::GitDiff(GitDiffSnapshot {
+            WorkspaceOperationResponse::GitDiff(GitDiffSnapshot {
                 path: "note.txt".into(),
                 additions: 1,
                 deletions: 0,
                 patch: "+新規\n".into(),
                 binary: false,
             }),
-            WorkspaceOperationResult::Worktrees(vec![worktree()]),
-            WorkspaceOperationResult::Worktree(worktree()),
-            WorkspaceOperationResult::Tasks(vec![task(ExecutionStatus::Queued)]),
-            WorkspaceOperationResult::TaskStarted(Box::new(task(ExecutionStatus::Queued))),
-            WorkspaceOperationResult::Completed,
+            WorkspaceOperationResponse::Worktrees(vec![worktree()]),
+            WorkspaceOperationResponse::Worktree(worktree()),
+            WorkspaceOperationResponse::Tasks(vec![task(ExecutionStatus::Queued)]),
+            WorkspaceOperationResponse::TaskStarted(Box::new(task(ExecutionStatus::Queued))),
+            WorkspaceOperationResponse::Completed,
         ];
         for result in cases {
             let response = ResponseEnvelope {

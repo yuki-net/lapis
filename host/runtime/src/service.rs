@@ -448,7 +448,7 @@ enum Command {
         changed: bool,
         worktrees_changed: bool,
         request_id: client_api::RequestId,
-        result: Result<client_api::WorkspaceOperationResult, BackendStateError>,
+        result: Result<client_api::WorkspaceOperationResponse, BackendStateError>,
         reserved: Option<std::path::PathBuf>,
         admitted: bool,
         respond: mpsc::SyncSender<ResponseEnvelope>,

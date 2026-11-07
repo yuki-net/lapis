@@ -154,7 +154,9 @@ impl PreparedWorktreeLookup {
 }
 
 impl PreparedWorkspaceOperation {
-    pub(crate) fn execute(self) -> Result<client_api::WorkspaceOperationResult, BackendStateError> {
+    pub(crate) fn execute(
+        self,
+    ) -> Result<client_api::WorkspaceOperationResponse, BackendStateError> {
         self.operations
             .lock()
             .map_err(|_| BackendStateError::Operation("Workspace operation unavailable".into()))?
@@ -288,7 +290,7 @@ impl BackendState {
         changed: bool,
         worktrees_changed: bool,
         request_id: client_api::RequestId,
-        result: Result<client_api::WorkspaceOperationResult, BackendStateError>,
+        result: Result<client_api::WorkspaceOperationResponse, BackendStateError>,
     ) -> DispatchOutcome {
         let result = result.and_then(|result| {
             let mut events = Vec::new();
