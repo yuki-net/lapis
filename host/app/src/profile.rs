@@ -122,6 +122,7 @@ pub fn open_host_file(
             &invitation.server_name,
             &invitation.workspace_id,
             &invitation.certificate,
+            None,
         )?;
         let credential = config
             .credential()
@@ -156,6 +157,7 @@ fn profile_key(
     server_name: &str,
     workspace_id: &str,
     certificate: &[u8],
+    account: Option<&str>,
 ) -> Result<String, Error> {
     Ok(format!(
         "{auth}-{:x}",
@@ -163,7 +165,8 @@ fn profile_key(
             address,
             server_name,
             workspace_id,
-            certificate
+            certificate,
+            account
         ))?)
     ))
 }
@@ -222,6 +225,8 @@ pub struct OidcProfile {
     pub workspace_id: String,
     pub name: String,
     pub client: String,
+    /// Host が検証した ID Token の `sub`。保存先をアカウント別に分ける。
+    pub account: String,
     pub id_token: String,
 }
 
@@ -243,6 +248,7 @@ pub fn write_oidc_profile(
         workspace_id,
         name,
         client,
+        account,
         id_token,
     } = profile;
     if certificate.len() > 64 * 1024 || server_name.len() > 253 {
@@ -250,10 +256,20 @@ pub fn write_oidc_profile(
     }
     ClientId::try_new(&client)?;
     WorkspaceId::try_new(&workspace_id)?;
+    if account.is_empty() {
+        return Err("OIDC accountが空です".into());
+    }
     if id_token.is_empty() {
         return Err("OIDC ID Tokenが空です".into());
     }
-    let key = profile_key("oidc", address, &server_name, &workspace_id, &certificate)?;
+    let key = profile_key(
+        "oidc",
+        address,
+        &server_name,
+        &workspace_id,
+        &certificate,
+        Some(&account),
+    )?;
     let record = Record {
         version: 1,
         key,
@@ -293,6 +309,7 @@ mod tests {
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
                 client: "desktop-1".to_owned(),
+                account: "alice".to_owned(),
                 id_token: "id-token".to_owned(),
             },
         )
@@ -327,8 +344,15 @@ mod tests {
         fs::create_dir_all(&profiles).unwrap();
         let address = "127.0.0.1:1".parse().unwrap();
         let certificate = vec![1, 2, 3];
-        let key =
-            profile_key("remote", address, "lapis-host", "workspace-1", &certificate).unwrap();
+        let key = profile_key(
+            "remote",
+            address,
+            "lapis-host",
+            "workspace-1",
+            &certificate,
+            None,
+        )
+        .unwrap();
         let credential = Record {
             version: 1,
             key,
@@ -355,6 +379,7 @@ mod tests {
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
                 client: "desktop-1".to_owned(),
+                account: "alice".to_owned(),
                 id_token: "id-token".to_owned(),
             },
         )
@@ -362,6 +387,59 @@ mod tests {
         assert_ne!(credential_path, oidc_path);
         assert!(credential_path.is_file());
         assert!(oidc_path.is_file());
+    }
+
+    #[test]
+    fn oidc_profiles_are_separated_by_account() {
+        let state = tempfile::tempdir().unwrap();
+        let profiles = state.path().join("profiles");
+        let write = |account: &str, id_token: &str| {
+            write_oidc_profile(
+                &profiles,
+                OidcProfile {
+                    address: "127.0.0.1:1".parse().unwrap(),
+                    server_name: "lapis-host".to_owned(),
+                    certificate: vec![1, 2, 3],
+                    workspace_id: "workspace-1".to_owned(),
+                    name: "Remote".to_owned(),
+                    client: "desktop-1".to_owned(),
+                    account: account.to_owned(),
+                    id_token: id_token.to_owned(),
+                },
+            )
+            .unwrap()
+            .2
+        };
+        let alice = write("alice", "id-token-1");
+        let bob = write("bob", "id-token-2");
+        assert_ne!(alice, bob);
+        assert!(alice.is_file());
+        assert!(bob.is_file());
+
+        let alice_updated = write("alice", "id-token-3");
+        assert_eq!(alice, alice_updated);
+    }
+
+    #[test]
+    fn empty_oidc_account_is_rejected() {
+        let state = tempfile::tempdir().unwrap();
+        let result = write_oidc_profile(
+            state.path(),
+            OidcProfile {
+                address: "127.0.0.1:1".parse().unwrap(),
+                server_name: "lapis-host".to_owned(),
+                certificate: Vec::new(),
+                workspace_id: "workspace-1".to_owned(),
+                name: "Remote".to_owned(),
+                client: "desktop-1".to_owned(),
+                account: String::new(),
+                id_token: "id-token".to_owned(),
+            },
+        );
+        let Err(error) = result else {
+            panic!("empty account must be rejected");
+        };
+        assert!(error.to_string().contains("account"));
     }
 
     #[test]
@@ -376,6 +454,7 @@ mod tests {
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
                 client: "desktop-1".to_owned(),
+                account: "alice".to_owned(),
                 id_token: "a".repeat(200 * 1024),
             },
         );
@@ -397,6 +476,7 @@ mod tests {
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
                 client: "desktop-1".to_owned(),
+                account: "alice".to_owned(),
                 id_token: String::new(),
             },
         );
