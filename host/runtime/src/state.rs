@@ -25,7 +25,7 @@ use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, Workspa
 use terminal_state::TerminalRegistry;
 
 mod document;
-mod git;
+mod git_state;
 mod terminal;
 mod workspace;
 
@@ -670,7 +670,7 @@ impl BackendState {
                     workspace: workspace.summary.clone(),
                     documents,
                     terminals,
-                    git_repositories: workspace.git_statuses.values().cloned().collect(),
+                    git_repositories: workspace.git.statuses().cloned().collect(),
                 },
             }),
             Vec::new(),
@@ -767,10 +767,7 @@ struct WorkspaceState {
     terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
-    git_statuses: HashMap<String, git_api::GitRepositoryStatus>,
-    removed_worktrees: HashSet<String>,
-    git_repositories: Option<HashSet<String>>,
-    git_driver_started: bool,
+    git: git_state::GitState,
 }
 
 impl WorkspaceState {
@@ -797,10 +794,7 @@ impl WorkspaceState {
                 &registration.workspace_id,
             ))),
             events: EventJournal::default(),
-            git_statuses: HashMap::new(),
-            removed_worktrees: HashSet::new(),
-            git_repositories: None,
-            git_driver_started: false,
+            git: git_state::GitState::default(),
         })
     }
 
