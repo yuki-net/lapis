@@ -81,6 +81,34 @@ resource_id!(WorkspaceId, "workspace");
 resource_id!(DocumentId, "document");
 resource_id!(TerminalId, "terminal");
 
+impl TryFrom<&editor_core::WorkspaceId> for WorkspaceId {
+    type Error = InvalidResourceId;
+
+    fn try_from(value: &editor_core::WorkspaceId) -> Result<Self, Self::Error> {
+        Self::try_new(value.as_str())
+    }
+}
+
+impl From<WorkspaceId> for editor_core::WorkspaceId {
+    fn from(value: WorkspaceId) -> Self {
+        Self::new(value.into_inner())
+    }
+}
+
+impl TryFrom<&editor_core::DocumentId> for DocumentId {
+    type Error = InvalidResourceId;
+
+    fn try_from(value: &editor_core::DocumentId) -> Result<Self, Self::Error> {
+        Self::try_new(value.as_str())
+    }
+}
+
+impl From<DocumentId> for editor_core::DocumentId {
+    fn from(value: DocumentId) -> Self {
+        Self::new(value.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +122,18 @@ mod tests {
         assert_eq!(serde_json::from_str::<DocumentId>(&json).unwrap(), id);
         assert!(serde_json::from_str::<DocumentId>(r#"" ""#).is_err());
         assert!(DocumentId::try_new("x".repeat(MAX_RESOURCE_ID_BYTES + 1)).is_err());
+    }
+
+    #[test]
+    fn domain_ids_convert_through_try_from_and_from() {
+        let domain = editor_core::WorkspaceId::new("workspace-1");
+        let wire = WorkspaceId::try_from(&domain).unwrap();
+        assert_eq!(wire.as_str(), "workspace-1");
+        assert_eq!(editor_core::WorkspaceId::from(wire), domain);
+
+        let domain = editor_core::DocumentId::new("document-1");
+        let wire = DocumentId::try_from(&domain).unwrap();
+        assert_eq!(wire.as_str(), "document-1");
+        assert_eq!(editor_core::DocumentId::from(wire), domain);
     }
 }

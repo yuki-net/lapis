@@ -182,7 +182,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
 }
 
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
-    ApiWorkspaceId::try_new(id.as_str()).expect("workspace id is valid")
+    ApiWorkspaceId::try_from(id).expect("workspace id is valid")
 }
 
 /// 起動時に開くHost上のファイル。

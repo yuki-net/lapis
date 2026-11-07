@@ -38,7 +38,7 @@ impl Connections {
 
 fn client(host: &Connections, workspace: &WorkspaceId) -> Result<Client, String> {
     let workspace =
-        client_api::WorkspaceId::try_new(workspace.as_str()).map_err(|error| error.to_string())?;
+        client_api::WorkspaceId::try_from(workspace).map_err(|error| error.to_string())?;
     host.connect(workspace)
 }
 fn execute(
@@ -137,7 +137,7 @@ impl GitConnection for HostGit {
         &self,
         workspace: &WorkspaceId,
     ) -> Result<Box<dyn git::GitSubscription>, GitError> {
-        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
+        let id = client_api::WorkspaceId::try_from(workspace).map_err(git_error)?;
         let client = self
             .host
             .host
@@ -216,7 +216,7 @@ impl GitConnection for HostGit {
         workspace: &WorkspaceId,
         worktree: &TaskId,
     ) -> Result<std::path::PathBuf, GitError> {
-        let id = client_api::WorkspaceId::try_new(workspace.as_str()).map_err(git_error)?;
+        let id = client_api::WorkspaceId::try_from(workspace).map_err(git_error)?;
         self.host
             .host
             .open_worktree(id, worktree.clone())
