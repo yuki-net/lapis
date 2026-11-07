@@ -4617,6 +4617,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-lsp"
+version = "0.1.0"
+dependencies = [
+ "document",
+ "lsp",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "local-tasks"
 version = "0.1.0"
 dependencies = [
@@ -6003,6 +6013,7 @@ dependencies = [
  "git",
  "local-credentials",
  "local-fs",
+ "local-lsp",
  "local-tasks",
  "local-terminal",
  "local-workbench",

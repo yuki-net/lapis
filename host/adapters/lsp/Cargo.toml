@@ -1,0 +1,14 @@
+[package]
+name = "local-lsp"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+document = { path = "../../../contracts/domain/document" }
+lsp = { path = "../../../contracts/domain/lsp" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

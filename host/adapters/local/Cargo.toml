@@ -13,6 +13,7 @@ editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
 local-credentials = { path = "../credentials" }
 local-fs = { path = "../fs" }
+local-lsp = { path = "../lsp" }
 local-tasks = { path = "../tasks" }
 local-terminal = { path = "../terminal" }
 local-workbench = { path = "../workbench" }
