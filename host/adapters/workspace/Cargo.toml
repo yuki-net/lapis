@@ -1,0 +1,12 @@
+[package]
+name = "local-workspace"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+backend-state = { path = "../../runtime" }
+document = { path = "../../../contracts/domain/document" }
+tempfile.workspace = true
+workspace = { path = "../../../contracts/domain/workspace" }

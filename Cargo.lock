@@ -4608,6 +4608,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-workspace"
+version = "0.1.0"
+dependencies = [
+ "backend-state",
+ "document",
+ "tempfile",
+ "workspace",
+]
+
+[[package]]
 name = "localization"
 version = "0.1.0"
 dependencies = [
@@ -5951,6 +5961,7 @@ dependencies = [
  "editor-core",
  "git",
  "local-terminal",
+ "local-workspace",
  "lsp",
  "notify",
  "rusqlite",
