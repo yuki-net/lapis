@@ -11,12 +11,12 @@ backend-state = { path = "../../runtime" }
 document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { path = "../../../contracts/domain/git" }
+local-credentials = { path = "../credentials" }
 local-terminal = { path = "../terminal" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 lsp = { path = "../../../contracts/domain/lsp" }
 terminal = { path = "../../../contracts/domain/terminal" }
-rusqlite = { version = "0.32", features = ["bundled"] }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../contracts/domain/workspace" }
 workbench = { path = "../../../contracts/domain/workbench" }
