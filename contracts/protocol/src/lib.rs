@@ -1,4 +1,16 @@
 //! DesktopとMobileが共有する、transport非依存のclient契約。
+//!
+//! # 命名規則
+//!
+//! wire の境界を越える message は役割を接尾辞で示す。
+//!
+//! - `XxxRequest` / `XxxResponse`: 1つの method の要求と応答
+//! - `XxxSnapshot`: ある時点の状態の複製
+//! - `XxxEvent`: 片方向の状態変化
+//!
+//! 上記のどれでもない値型（`FileTreeEntry` / `RevisionConflict` / `ClientKind` など）は
+//! ドメインの名詞をそのまま使う。境界を越える message に `Result` / `Hello` のような
+//! 役割の曖昧な名前を付けない。
 
 mod connection;
 mod credential_id;
