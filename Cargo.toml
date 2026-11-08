@@ -68,3 +68,4 @@ rcgen = "0.14"
 zeroize = "1.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+winresource = "0.1"

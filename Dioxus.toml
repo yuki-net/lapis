@@ -1,0 +1,9 @@
+# dx（Hot Reload）が Windows の exe に埋め込む表示情報。
+# 通常の cargo ビルドは各 crate の build.rs が同じ値を埋め込む。
+[application]
+name = "Lapis"
+
+[bundle]
+short_description = "Lapis"
+long_description = "Desktop と Mobile のための軽量な開発ワークスペース"
+icon = ["assets/lapis.ico"]

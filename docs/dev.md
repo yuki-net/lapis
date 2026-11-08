@@ -108,6 +108,25 @@ bridge は CLI 引数、環境変数、既定値の順に設定を解決しま�
 - 監視するのは上記5ディレクトリの `.rs` だけです。`vendor/`（patched GPUI）と `apps/` を変えたときは `npm run wasm` を手で実行してください。
 - 再ビルドは開発サーバーだけの機能です。`npm run build` と CI は従来どおり起動時に1回だけ生成します。
 
+## Windows でのプロセス表示
+
+Task Manager などの表示名には exe に埋め込んだ Windows リソース（`FileDescription`）が使われる。
+
+| 表示する exe | 表示名 |
+| --- | --- |
+| `lapis.exe` | `Lapis` |
+| `lapis-host.exe` | `Lapis Host` |
+| `lapis-web-bridge.exe` | `Lapis Web Bridge` |
+
+埋め込む経路は2つある。
+
+| ビルド | 設定場所 |
+| --- | --- |
+| dx（Hot Reload） | `Dioxus.toml` |
+| cargo（`Run Desktop`、Host、bridge） | 各 crate の `build.rs` と `assets/lapis.ico` |
+
+dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` があるときは何もしない。表示名とアイコンを変えるときは `Dioxus.toml` と `build.rs` の両方を揃える。Host の表示名は静的で、インスタンスごとの名前は Task Manager では表現できない。
+
 ## 検証
 
 | 対象 | コマンド |
