@@ -43,6 +43,34 @@ class ArchitectureTests(unittest.TestCase):
                 any("viewport" in error for error in check_desktop_layout(root))
             )
 
+    def test_dialog_access_from_feature_and_root_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature = root / "clients/ui/src/features/example.rs"
+            feature.parent.mkdir(parents=True)
+            feature.write_text(
+                '// file_dialog() は client wrapper を使う\n', encoding="utf-8"
+            )
+            self.assertEqual(check_desktop_layout(root), [])
+
+            feature.write_text(
+                'fn f(client: &Client) { client.editor.file_dialog(); }\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                any("Dialog" in error for error in check_desktop_layout(root))
+            )
+
+            feature.unlink()
+            root_file = root / "clients/ui/src/root.rs"
+            root_file.write_text(
+                'fn f(client: &Client) { client.editor.file_dialog().choose_workspace_path(); }\n',
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                any("Dialog" in error for error in check_desktop_layout(root))
+            )
+
     def test_zone_persistence_rejects_legacy_names_and_helpers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

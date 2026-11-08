@@ -820,8 +820,7 @@ impl DesktopRoot {
                     client.persist_view(view)?;
                     match event {
                         ConversationEvent::RegisterProject => {
-                            if let Some(path) = client.editor.file_dialog().choose_workspace_path()
-                            {
+                            if let Some(path) = client.choose_workspace_path() {
                                 client
                                     .conversation
                                     .register_project(&mut client.editor, path)
@@ -830,8 +829,7 @@ impl DesktopRoot {
                             Ok(())
                         }
                         ConversationEvent::RegisterSource(project) => {
-                            if let Some(path) = client.editor.file_dialog().choose_workspace_path()
-                            {
+                            if let Some(path) = client.choose_workspace_path() {
                                 client
                                     .conversation
                                     .register_source(&mut client.editor, &project, path)
@@ -1421,7 +1419,7 @@ impl DesktopRoot {
                         }
                         let path = match command {
                             UiCommand::OpenRecent(path) => Some(path),
-                            _ => client.editor.file_dialog().choose_workspace_path(),
+                            _ => client.choose_workspace_path(),
                         };
                         if let Some(path) = path {
                             client

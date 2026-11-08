@@ -164,6 +164,11 @@ pub(crate) struct PersistedView {
 }
 
 impl DocumentClient {
+    /// Workspace の選択ダイアログを開く。UI 側は `WorkspaceDialog` を直接呼ばない。
+    pub(crate) fn choose_workspace_path(&self) -> Option<std::path::PathBuf> {
+        self.editor.file_dialog().choose_workspace_path()
+    }
+
     pub(crate) fn persist_view(&mut self, view: PersistedView) -> Result<(), String> {
         let epoch = self.edit_chain.epoch();
         let recovered = self.edit_chain.apply(epoch, || Ok(())).is_err();
