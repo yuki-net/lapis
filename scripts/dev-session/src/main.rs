@@ -78,9 +78,11 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         command
             .current_dir(root)
             .arg("--state-directory")
-            .arg(session.join("state"))
-            .arg("--workspace")
-            .arg(root);
+            .arg(session.join("state"));
+        // Host に接続するときは Host 側の Workspace を開くため、ローカルの --workspace は渡さない。
+        if !uses_host_file(&arguments) && !has_flag(&arguments, "--workspace") {
+            command.arg("--workspace").arg(root);
+        }
         if !arguments.iter().any(|arg| arg == "--local-host-directory") {
             command.arg("--local-host-directory").arg(hosts);
         }
@@ -103,6 +105,12 @@ fn mode(arguments: &[OsString]) -> Result<Mode, Box<dyn std::error::Error>> {
         (false, true) => Ok(Mode::HostOnly),
         (false, false) => Ok(Mode::Desktop),
     }
+}
+
+/// `--host` または LAPIS_HOST_FILE で Host に接続するかを返す。
+fn uses_host_file(arguments: &[OsString]) -> bool {
+    has_flag(arguments, "--host")
+        || env::var_os("LAPIS_HOST_FILE").is_some_and(|value| !value.is_empty())
 }
 
 /// 指定したフラグが引数に含まれるかを返す。
@@ -196,7 +204,11 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
         let state = relative(root, &session.join("state"))?;
         let executable = relative(root, &host)?;
         let mut app_arguments =
-            format!("--state-directory {state} --workspace . --local-host-executable {executable}");
+            format!("--state-directory {state} --local-host-executable {executable}");
+        // Host に接続するときは Host 側の Workspace を開くため、ローカルの --workspace は渡さない。
+        if !uses_host_file(arguments) && !has_flag(arguments, "--workspace") {
+            app_arguments.push_str(" --workspace .");
+        }
         // Desktop と同じ既定にそろえる。利用者が後置した指定が優先される。
         if !arguments
             .iter()
@@ -364,6 +376,17 @@ mod tests {
                 OsString::from("target/dev-desktop/desktop.json"),
             ]
         );
+    }
+
+    #[test]
+    fn host_file_is_detected_from_the_arguments() {
+        assert!(uses_host_file(&[
+            OsString::from("--host"),
+            OsString::from("target/dev-desktop/desktop.json"),
+        ]));
+        if env::var_os("LAPIS_HOST_FILE").is_none_or(|value| value.is_empty()) {
+            assert!(!uses_host_file(&[]));
+        }
     }
 
     #[test]

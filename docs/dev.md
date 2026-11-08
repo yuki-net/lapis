@@ -33,7 +33,7 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 `Run Desktop` と `Run Desktop (Hot Reload)` は `--state-directory target/dev-desktop/state` を共有するため、profile・設定・復元状態は Run を跨いで残ります。同じ state を同時に使うと、設定とレイアウトは後から保存した側が残り、会話は保存時に競合を検出してエラーになります。
 
-Desktop の接続先は `--host`、環境変数 `LAPIS_HOST_FILE`、ローカル Host の自動起動の順に解決します。どれも無ければ従来どおり自分で Local Host を起動するため、製品の通常起動と Run で経路は分かれません。
+Desktop の接続先は `--host`、環境変数 `LAPIS_HOST_FILE`、ローカル Host の自動起動の順に解決します。どれも無ければ従来どおり自分で Local Host を起動するため、製品の通常起動と Run で経路は分かれません。`--host` で Host に接続するときは Host 側の Workspace を開くため、`--workspace` は渡しません。
 
 ## Desktop
 
