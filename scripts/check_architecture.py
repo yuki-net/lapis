@@ -60,6 +60,11 @@ def check_desktop_layout(root=ROOT):
                 errors.append(
                     f"{path.relative_to(root)}: Dialog を直接呼ぶ（DocumentClient の wrapper を使う）"
                 )
+        if "/features/" in path.as_posix():
+            if re.search(r"\.overflow_(y_)?scroll\s*\(\s*\)", code_text):
+                errors.append(
+                    f"{path.relative_to(root)}: Featureがスクロールを直接組む（scroll_viewport を使う）"
+                )
         if "/shell/main/" in path.as_posix() and identifiers & {"PanelLayout", "ZonePolicy", "Arrangement"}:
             errors.append(f"{path.relative_to(root)}: 描画・操作からLayout内部表現へ依存")
         if ("/shell/" in path.as_posix() and "/shell/main/header/" not in path.as_posix()

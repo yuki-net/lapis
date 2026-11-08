@@ -71,6 +71,26 @@ class ArchitectureTests(unittest.TestCase):
                 any("Dialog" in error for error in check_desktop_layout(root))
             )
 
+    def test_feature_manual_scroll_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            feature = root / "clients/ui/src/features/example.rs"
+            feature.parent.mkdir(parents=True)
+            feature.write_text(
+                '// overflow_y_scroll() は scroll_viewport を使う\n', encoding="utf-8"
+            )
+            self.assertEqual(check_desktop_layout(root), [])
+
+            feature.write_text('fn f() { div().overflow_y_scroll(); }\n', encoding="utf-8")
+            self.assertTrue(
+                any("scroll_viewport" in error for error in check_desktop_layout(root))
+            )
+
+            feature.write_text('fn f() { div().overflow_scroll(); }\n', encoding="utf-8")
+            self.assertTrue(
+                any("scroll_viewport" in error for error in check_desktop_layout(root))
+            )
+
     def test_zone_persistence_rejects_legacy_names_and_helpers(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
