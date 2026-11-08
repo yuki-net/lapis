@@ -92,9 +92,16 @@ bridge は CLI 引数、環境変数、既定値の順に設定を解決しま�
 
 `4749` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
 
-## Web の UI だけを素早く確認する
+## Web の UI を確認する
 
-Web の UI は `clients/ui` の Rust を Wasm にしたもので、vite は起動時に1回しかビルドしません。自動の再ビルドは無いため、UI を変えたら `npm run wasm` を実行してブラウザーを再読み込みします。Desktop のようにファイル保存だけで反映する手段はありません。
+`npm run dev` を立ち上げたまま `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` 配下の `.rs` を保存すると、Wasm が自動で作り直され、ブラウザーが再読み込みします。`localStorage` の credential で再接続するため、ログインし直す必要はありません。
+
+- 反映は再読み込みで行います。Desktop の Hot Reload のように State を保ったまま差し替えるものではありません。
+- 初回と依存 crate を変えたときは数十秒かかります。2回目以降は cargo の増分ビルドで数秒です。
+- 250ms 以内の連続保存は1回にまとまり、ビルド中に保存した分は終わってから1回だけ追加で走ります。ビルドは常に1本です。
+- 失敗すると vite のコンソールに `web: wasm build failed` とエラー出力が出て、古い Wasm を配り続けます。画面は壊れず、修正して保存すれば再試行します。
+- 監視するのは上記5ディレクトリの `.rs` だけです。`vendor/`（patched GPUI）と `apps/` を変えたときは `npm run wasm` を手で実行してください。
+- 再ビルドは開発サーバーだけの機能です。`npm run build` と CI は従来どおり起動時に1回だけ生成します。
 
 ## 検証
 

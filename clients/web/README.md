@@ -46,6 +46,8 @@ npm run dev
 
 `npm run dev` と `npm run build` は先に `wasm-bindgen` で Wasm を生成します。Node.js 24 と `wasm-bindgen-cli` 0.2.129 が必要です。
 
+`npm run dev` 中は `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` 配下の `.rs` を保存すると Wasm が自動で作り直され、ブラウザーが再読み込みします（初回は数十秒、以降は増分で数秒）。監視するのはこの5ディレクトリの `.rs` だけで、`vendor/` と `apps/` は手動です。再ビルドは開発サーバーだけの機能で、`npm run build` は従来どおり1回だけ生成します。
+
 WebGPU が使えない環境では `?backend=webgl` を付けてください。
 
 ## Tailscaleで開く
