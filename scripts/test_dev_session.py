@@ -333,6 +333,7 @@ fn main() {
     let app_args: Vec<_> = app_args.split_whitespace().collect();
     let index = app_args.iter().position(|arg| *arg == "--local-host-executable").unwrap();
     assert_eq!(fs::read_to_string(app_args[index + 1]).unwrap(), "fresh-host");
+    fs::write("dx-app-args", app_args.join("\n")).unwrap();
     fs::write("dx-called", "yes").unwrap();
     if env::var("LAPIS_TEST_SCENARIO").unwrap() == "hold" {
         while !Path::new("release-dx").exists() { thread::sleep(Duration::from_millis(10)); }
@@ -347,7 +348,7 @@ fn main() {
 
     def setUp(self):
         shutil.copyfile(self.cargo, self.dx)
-        for name in ("cargo-called", "dx-called", "release-dx"):
+        for name in ("cargo-called", "dx-called", "dx-app-args", "release-dx"):
             (self.root / name).unlink(missing_ok=True)
         self.env = dict(os.environ, CARGO=str(self.cargo), LAPIS_TEST_SCENARIO="success")
 
@@ -407,6 +408,25 @@ fn main() {
                 process.kill()
                 process.communicate()
         self.assertEqual(process.returncode, 17)
+
+    def app_arguments(self):
+        return (self.root / "dx-app-args").read_text(encoding="utf-8").splitlines()
+
+    def test_hot_reload_opens_the_local_workspace_without_host(self):
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 17, result.stderr.decode(errors="replace"))
+        self.assertIn("--workspace", self.app_arguments())
+
+    def test_hot_reload_with_host_leaves_the_workspace_to_the_host(self):
+        invitation = self.root / "target/dev-desktop/desktop.json"
+        invitation.parent.mkdir(parents=True, exist_ok=True)
+        invitation.write_text("{}", encoding="utf-8")
+        result = subprocess.run(
+            [str(self.launcher), "--hot-reload", "--host", "target/dev-desktop/desktop.json"],
+            cwd=self.root.parent, env=self.env, capture_output=True, timeout=20,
+        )
+        self.assertEqual(result.returncode, 17, result.stderr.decode(errors="replace"))
+        self.assertNotIn("--workspace", self.app_arguments())
 
     def test_argument_with_whitespace_is_rejected_before_building(self):
         # dx は --args= を空白で分割するため、空白入りの引数は渡す前に拒否する。
