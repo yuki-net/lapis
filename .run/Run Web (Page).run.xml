@@ -1,5 +1,5 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Run Web Page" type="js.build_tools.npm" factoryName="npm">
+  <configuration default="false" name="Run Web (Page)" type="js.build_tools.npm" factoryName="npm">
     <package-json value="$PROJECT_DIR$/clients/web/package.json" />
     <command value="run" />
     <scripts>

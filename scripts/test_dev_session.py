@@ -386,6 +386,28 @@ fn main() {
         self.assertEqual(result.returncode, 1)
         self.assertFalse((self.root / "dx-called").exists())
 
+    def test_hot_reload_waits_for_host_invitation_before_dx(self):
+        """Desktopと同じく、Hostの招待が現れるまでdxを起動しないことを検証する。"""
+        # Desktopと同じく、Hostを別のRunで起動している場合は招待が現れるまで待つ。
+        invitation = self.root / "target/dev-desktop/desktop.json"
+        invitation.parent.mkdir(parents=True, exist_ok=True)
+        invitation.unlink(missing_ok=True)
+        process = subprocess.Popen(
+            [str(self.launcher), "--hot-reload", "--host", "target/dev-desktop/desktop.json"],
+            cwd=self.root.parent, env=self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        try:
+            time.sleep(0.5)
+            self.assertFalse((self.root / "dx-called").exists())
+            invitation.write_text("{}", encoding="utf-8")
+            process.communicate(timeout=20)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate()
+        self.assertEqual(process.returncode, 17)
+
     def test_argument_with_whitespace_is_rejected_before_building(self):
         # dx は --args= を空白で分割するため、空白入りの引数は渡す前に拒否する。
         result = subprocess.run(
