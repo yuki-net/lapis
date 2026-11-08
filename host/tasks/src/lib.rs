@@ -3,7 +3,7 @@
 use std::{
     error::Error,
     fmt,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -125,7 +125,6 @@ impl TaskOperations {
             {
                 continue;
             }
-            let _ = root;
             return Ok((task, execution));
         }
     }
@@ -253,11 +252,6 @@ fn path_matches(left: &Path, right: &Path) -> bool {
         || left
             .canonicalize()
             .is_ok_and(|left| right.canonicalize().is_ok_and(|right| left == right))
-}
-
-/// worktree の path を Workspace からの相対 path として扱うための補助。
-pub fn worktree_root(tree: &TaskWorktree) -> PathBuf {
-    tree.path.clone()
 }
 
 #[cfg(test)]
