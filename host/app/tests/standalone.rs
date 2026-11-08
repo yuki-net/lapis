@@ -14,8 +14,8 @@ impl Drop for HostProcess {
     }
 }
 
-fn hello() -> ClientHello {
-    ClientHello {
+fn hello() -> HelloRequest {
+    HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new("standalone-test").unwrap(),
         client_name: "Test".to_owned(),

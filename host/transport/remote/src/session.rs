@@ -5,16 +5,16 @@ use std::{
 };
 
 use client_api::{
-    CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, INTERNAL, INVALID_REQUEST, PROTOCOL_ERROR,
-    ProtocolError, ProtocolRange, RATE_LIMITED, RequestEnvelope, RequestId, ResponseBody,
-    ResponseEnvelope, ServerHello, UNAUTHORIZED,
+    CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, HelloResponse, INTERNAL, INVALID_REQUEST,
+    PROTOCOL_ERROR, ProtocolError, ProtocolRange, RATE_LIMITED, RequestEnvelope, RequestId,
+    ResponseBody, ResponseEnvelope, UNAUTHORIZED,
 };
 
 use crate::{
     AccessError, AuthError, CredentialHandle, PairingToken, RemoteAuth, RemoteRequestHandler,
     SessionGrant,
     wire::{
-        AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, OidcRequest,
+        AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, HelloRequest, OidcRequest,
         PairRequest, PairedResponse, ServerMessage, protocol_error,
     },
 };
@@ -28,7 +28,7 @@ pub(crate) struct SessionReply {
 
 pub(crate) struct ConnectionSession {
     grant: Option<SessionGrant>,
-    hello: Option<ClientHello>,
+    hello: Option<HelloRequest>,
     request_ids: HashSet<RequestId>,
 }
 
@@ -84,7 +84,7 @@ impl ConnectionSession {
         }
     }
 
-    fn hello(&mut self, hello: ClientHello, auth: &SharedRemoteAuth) -> SessionReply {
+    fn hello(&mut self, hello: HelloRequest, auth: &SharedRemoteAuth) -> SessionReply {
         if negotiate(&hello).is_err() {
             return protocol_rejected();
         }
@@ -116,7 +116,7 @@ impl ConnectionSession {
         }
     }
 
-    fn hello_matches(&self, hello: &ClientHello) -> bool {
+    fn hello_matches(&self, hello: &HelloRequest) -> bool {
         self.hello
             .as_ref()
             .is_none_or(|expected| expected.client_id == hello.client_id)
@@ -309,7 +309,7 @@ impl ConnectionSession {
 }
 
 fn negotiate(
-    hello: &client_api::ClientHello,
+    hello: &client_api::HelloRequest,
 ) -> Result<client_api::ProtocolVersion, client_api::VersionMismatch> {
     ProtocolRange::exact(CURRENT_PROTOCOL).negotiate(hello.protocol)
 }
@@ -321,8 +321,8 @@ fn protocol_rejected() -> SessionReply {
     }
 }
 
-fn server_hello(protocol: client_api::ProtocolVersion, grant: &SessionGrant) -> ServerHello {
-    ServerHello {
+fn server_hello(protocol: client_api::ProtocolVersion, grant: &SessionGrant) -> HelloResponse {
+    HelloResponse {
         protocol,
         session_id: grant.session_id().clone(),
         granted_capabilities: grant.capabilities().clone(),
@@ -365,9 +365,9 @@ mod tests {
     use std::time::Duration;
 
     use client_api::{
-        CapabilityId, CapabilitySet, ClientHello, ClientId, ClientKind, ProtocolRange, RequestBody,
-        RequestId, ResponseBody, WorkspaceId, WorkspaceListRequest, WorkspaceListResponse,
-        capability,
+        CapabilityId, CapabilitySet, ClientId, ClientKind, HelloRequest, ProtocolRange,
+        RequestBody, RequestId, ResponseBody, WorkspaceId, WorkspaceListRequest,
+        WorkspaceListResponse, capability,
     };
 
     use crate::{AuthConfig, AuthPolicy, CredentialLifetime, PairingLifetime};
@@ -434,8 +434,8 @@ mod tests {
         Arc::new(Mutex::new(auth))
     }
 
-    fn hello() -> ClientHello {
-        ClientHello {
+    fn hello() -> HelloRequest {
+        HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new("mobile-1").unwrap(),
             client_name: "Mobile".to_owned(),

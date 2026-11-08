@@ -28,7 +28,7 @@ pub struct QuicConnectionConfig {
     pub address: SocketAddr,
     pub server_name: String,
     pub certificate: CertificateDer<'static>,
-    pub hello: ClientHello,
+    pub hello: HelloRequest,
     pub workspace_id: WorkspaceId,
     pub auth: QuicAuth,
 }
@@ -39,7 +39,7 @@ impl QuicConnectionConfig {
         address: SocketAddr,
         server_name: String,
         certificate: CertificateDer<'static>,
-        hello: ClientHello,
+        hello: HelloRequest,
         workspace_id: WorkspaceId,
         token: &[u8; 32],
     ) -> Result<Self, Error> {
@@ -79,7 +79,7 @@ impl QuicConnectionConfig {
         address: SocketAddr,
         server_name: String,
         certificate: CertificateDer<'static>,
-        hello: ClientHello,
+        hello: HelloRequest,
         workspace_id: WorkspaceId,
         id_token: String,
     ) -> Self {
@@ -107,15 +107,15 @@ impl QuicConnectionConfig {
         }
     }
 
-    /// 指定された認証材料で Host に接続し、検証済みの ServerHello を返す。
+    /// 指定された認証材料で Host に接続し、検証済みの HelloResponse を返す。
     /// 接続は close packet を送ってから破棄する。
-    pub async fn verify(&self) -> Result<ServerHello, Error> {
+    pub async fn verify(&self) -> Result<HelloResponse, Error> {
         let (client, hello) = self.authenticate().await?;
         client.shutdown().await;
         Ok(hello)
     }
 
-    async fn authenticate(&self) -> Result<(QuicClient, ServerHello), Error> {
+    async fn authenticate(&self) -> Result<(QuicClient, HelloResponse), Error> {
         let mut client = QuicClient::connect(
             self.address,
             &self.server_name,
@@ -492,8 +492,8 @@ mod tests {
         }
     }
 
-    fn hello() -> ClientHello {
-        ClientHello {
+    fn hello() -> HelloRequest {
+        HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new("desktop-oidc-test").unwrap(),
             client_name: "Desktop".to_owned(),

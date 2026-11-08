@@ -1,6 +1,6 @@
 use client_api::{
-    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
-    ClientKind, ClientMessage, PairRequest, ProtocolRange, RequestBody, ResponseBody,
+    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientId, ClientKind,
+    ClientMessage, HelloRequest, PairRequest, ProtocolRange, RequestBody, ResponseBody,
     ServerMessage, WorkspaceConnectRequest, WorkspaceId,
 };
 use futures_util::StreamExt;
@@ -55,7 +55,7 @@ pub async fn bridge_smoke(
         secret[index] = (digit(pair[0]).ok_or_else(|| JsValue::from_str("invalid token"))? << 4)
             | digit(pair[1]).ok_or_else(|| JsValue::from_str("invalid token"))?;
     }
-    let hello = ClientHello {
+    let hello = HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new("wasm-smoke").unwrap(),
         client_name: "wasm-smoke".into(),

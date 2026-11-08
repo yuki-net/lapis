@@ -54,7 +54,7 @@ Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立pro
 - `LAPIS_OIDC_JWKS_FILE` または `LAPIS_OIDC_JWKS_URI`（どちらか一方）
 - `LAPIS_OIDC_CLOCK_SKEW_SECONDS`（任意、既定60秒）
 
-`LAPIS_OIDC_ISSUER` と `LAPIS_OIDC_CLIENT_ID`、`LAPIS_OIDC_SCOPES` は `AuthRequired.oidc` としてネイティブ Client へ提示します。ネイティブ Client は issuer の OIDC discovery で endpoint を解決します。OIDC 認証に成功すると、Host は `ServerHello.subject` に検証済み `sub` を返します。
+`LAPIS_OIDC_ISSUER` と `LAPIS_OIDC_CLIENT_ID`、`LAPIS_OIDC_SCOPES` は `AuthRequired.oidc` としてネイティブ Client へ提示します。ネイティブ Client は issuer の OIDC discovery で endpoint を解決します。OIDC 認証に成功すると、Host は `HelloResponse.subject` に検証済み `sub` を返します。
 
 Host の標準入力で `invite-oidc <Clientから到達可能なip:port> <新規の招待.json>` を実行すると、pairing token を含まない OIDC 用の招待を作成します。Desktop は `lapis --host <招待.json>` でこの招待を開き、システムブラウザーでログインします。
 

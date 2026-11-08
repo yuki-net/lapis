@@ -6,10 +6,10 @@
 use std::path::Path;
 
 use client_api::{
-    AuthMethod, AuthRequired, AuthenticateRequest, CURRENT_PROTOCOL, ClientHello, ClientId,
-    ClientKind, ClientMessage, CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence,
-    INVALID_REQUEST, OidcClientConfig, OidcRequest, PairedResponse, ProtocolError, ProtocolRange,
-    RequestBody, RequestEnvelope, RequestId, ServerHello, ServerMessage, SessionId, WorkspaceId,
+    AuthMethod, AuthRequired, AuthenticateRequest, CURRENT_PROTOCOL, ClientId, ClientKind,
+    ClientMessage, CredentialId, ErrorCode, EventBody, EventEnvelope, EventSequence, HelloRequest,
+    HelloResponse, INVALID_REQUEST, OidcClientConfig, OidcRequest, PairedResponse, ProtocolError,
+    ProtocolRange, RequestBody, RequestEnvelope, RequestId, ServerMessage, SessionId, WorkspaceId,
     WorkspaceListRequest,
 };
 
@@ -26,8 +26,8 @@ const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"prot
 
 const MOBILE_TEST_PATH: &str = "../../clients/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
 
-fn hello() -> ClientHello {
-    ClientHello {
+fn hello() -> HelloRequest {
+    HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new("mobile-1").unwrap(),
         client_name: "Mobile".to_owned(),
@@ -130,7 +130,7 @@ fn protocol_error_matches_mobile_fixture() {
 #[test]
 fn paired_response_matches_mobile_fixture() {
     let credential = CredentialId::parse("0123456789abcdef0123456789abcdef").unwrap();
-    let server_hello = ServerHello {
+    let server_hello = HelloResponse {
         protocol: CURRENT_PROTOCOL,
         session_id: SessionId::try_new("session-1").unwrap(),
         granted_capabilities: Default::default(),
@@ -144,7 +144,7 @@ fn paired_response_matches_mobile_fixture() {
 
 #[test]
 fn server_hello_subject_is_optional() {
-    let subject = ServerHello {
+    let subject = HelloResponse {
         protocol: CURRENT_PROTOCOL,
         session_id: SessionId::try_new("session-1").unwrap(),
         granted_capabilities: Default::default(),
@@ -153,7 +153,7 @@ fn server_hello_subject_is_optional() {
     };
     let json = serde_json::to_string(&subject).unwrap();
     assert!(json.contains("\"subject\":\"alice\""));
-    let without = ServerHello {
+    let without = HelloResponse {
         subject: None,
         ..subject
     };

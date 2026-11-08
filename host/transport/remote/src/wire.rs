@@ -1,6 +1,6 @@
 pub use ::wire::{REMOTE_WEBSOCKET_PATH, REMOTE_WEBSOCKET_PROTOCOL};
 pub use client_api::{
-    AuthMethod, AuthRequired, AuthenticateRequest, ClientHello, ClientMessage, InvalidSecretHex,
+    AuthMethod, AuthRequired, AuthenticateRequest, ClientMessage, HelloRequest, InvalidSecretHex,
     OidcRequest, PairRequest, PairedResponse, ServerMessage,
 };
 

@@ -47,7 +47,7 @@ pub use files::{
     CreateDirectoryRequest, CreateDirectoryResponse, FileTreeEntry, FileTreeKind, FileTreeRequest,
     FileTreeResponse,
 };
-pub use handshake::{ClientHello, ClientKind, ServerHello};
+pub use handshake::{ClientKind, HelloRequest, HelloResponse};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };

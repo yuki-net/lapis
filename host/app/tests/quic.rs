@@ -186,8 +186,8 @@ async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd
     .unwrap();
 }
 
-fn hello(id: &str) -> ClientHello {
-    ClientHello {
+fn hello(id: &str) -> HelloRequest {
+    HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new(id).unwrap(),
         client_name: id.to_owned(),

@@ -3,8 +3,8 @@ use std::{collections::HashMap, error::Error, fmt, marker::PhantomData, sync::Ar
 use backend_state::DeviceStatus;
 pub use backend_state::{StoredCredential, StoredDevice};
 use client_api::{
-    AuthMethod, AuthRequired, CapabilityId, CapabilitySet, ClientHello, ClientId, OidcClientConfig,
-    RequestBody, SessionId, WorkspaceId,
+    AuthMethod, AuthRequired, CapabilityId, CapabilitySet, ClientId, HelloRequest,
+    OidcClientConfig, RequestBody, SessionId, WorkspaceId,
 };
 
 use crate::{
@@ -322,7 +322,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     }
 
     /// 明示的な pairing token で接続した Client を承認済み device として登録する。
-    pub fn ensure_token_device(&mut self, hello: &ClientHello) -> Result<(), AuthError> {
+    pub fn ensure_token_device(&mut self, hello: &HelloRequest) -> Result<(), AuthError> {
         self.ensure_device(
             &hello.client_id,
             &hello.client_name,
@@ -618,7 +618,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn complete_pairing_and_authenticate(
         &mut self,
         token: &PairingToken,
-        hello: &ClientHello,
+        hello: &HelloRequest,
         requested_capabilities: &CapabilitySet,
     ) -> Result<(CredentialHandle, SessionGrant), AuthError> {
         let credential = self.complete_pairing(token, &hello.client_id, requested_capabilities)?;
@@ -712,7 +712,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn authenticate_oidc(
         &mut self,
         id_token: &str,
-        hello: &ClientHello,
+        hello: &HelloRequest,
         workspace_id: &WorkspaceId,
         requested_capabilities: &CapabilitySet,
     ) -> Result<(SessionGrant, String), AuthError> {
@@ -871,8 +871,8 @@ mod tests {
     use super::*;
     use client_api::{CURRENT_PROTOCOL, CapabilityId, ClientKind, ProtocolRange, capability};
 
-    fn hello(client_id: &str) -> ClientHello {
-        ClientHello {
+    fn hello(client_id: &str) -> HelloRequest {
+        HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new(client_id).unwrap(),
             client_name: "Web".to_owned(),

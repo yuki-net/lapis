@@ -41,7 +41,7 @@ async fn short_lived_clients_release_connections_and_feature_ports_keep_working(
         server.listening_address().unwrap(),
         "localhost".to_owned(),
         certificate,
-        ClientHello {
+        HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new("lifetime-test").unwrap(),
             client_name: "test".to_owned(),

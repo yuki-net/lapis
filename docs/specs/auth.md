@@ -28,11 +28,11 @@ Host・Web・Desktop・Mobile の実装者が、認証方式の追加・変更�
 - Client は Authorization Code + PKCE で IdP から ID Token を取得する。
 - Host は `AuthRequired.oidc` に `issuer`、`client_id`、`scopes` を提示する。ネイティブ Client は issuer の OIDC discovery で Authorization / Token Endpoint を解決する。
 - Desktop はシステムブラウザーと `http://127.0.0.1:<port>` の loopback callback で code を受け取り、Token Endpoint で ID Token と交換する。Mobile は各 OS のブラウザーと redirect 方式を使う。
-- Host は OIDC 認証成功時の `ServerHello.subject` に検証済み `sub` を返す。Client はこれを secure storage のアカウント識別子に使う。
+- Host は OIDC 認証成功時の `HelloResponse.subject` に検証済み `sub` を返す。Client はこれを secure storage のアカウント識別子に使う。
 - Web は Host（Web bridge）の `/auth/oidc/start` を開き、`/auth/oidc/callback` から `postMessage` で ID Token を受け取る。Token は URL に載せない。
 - Web bridge は confidential client として `client_secret` を任意で使える。Public client の場合は PKCE だけで交換する。
 - Client は `ClientMessage::Oidc(OidcRequest)` に ID Token と Workspace を入れて送る。
-- Host は Token をローカルで検証し、成功時に `ServerMessage::Authenticated(ServerHello)` を返す。
+- Host は Token をローカルで検証し、成功時に `ServerMessage::Authenticated(HelloResponse)` を返す。
 - OIDC Session は credential secret を発行しない。Session ID は bearer secret として扱わない。
 - 再接続時も Client は保存した OIDC ID Token を `ClientMessage::Oidc` で再提示し、Host が再検証して新しい Session を発行する。
 - Web は Token を `sessionStorage` に置く。Desktop / Mobile は OS の secure storage に置く。

@@ -80,8 +80,8 @@ impl Record {
         })
     }
 }
-fn hello(client: &str) -> Result<ClientHello, Error> {
-    Ok(ClientHello {
+fn hello(client: &str) -> Result<HelloRequest, Error> {
+    Ok(HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new(client)?,
         client_name: "Desktop".to_owned(),
