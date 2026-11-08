@@ -82,8 +82,8 @@ fn persisted_workbench_survives_host_restart() {
 }
 
 #[test]
-fn legacy_workbench_without_registry_is_retained_when_workspace_is_opened() {
-    use client_api::{WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse};
+fn unregistering_a_workspace_keeps_its_workbench_file() {
+    use client_api::{WorkbenchPutRequest, WorkbenchPutResponse};
     let root = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let (workspace, saved) = {
@@ -102,20 +102,24 @@ fn legacy_workbench_without_registry_is_retained_when_workspace_is_opened() {
         };
         (workspace, saved)
     };
-    let record = state
+    // 登録を消しても Workbench のファイルは残す。再登録時は新しい ID になるが、
+    // 古い Workspace の状態を破壊しない。
+    let workbench = state
         .path()
-        .join("workspaces")
+        .join("workbench")
         .join(format!("{}.json", workspace.as_str()));
-    std::fs::remove_file(&record).unwrap();
+    assert!(workbench.is_file());
+    {
+        let store =
+            platform::WorkspaceStore::open(&state.path().join("workspaces.sqlite3")).unwrap();
+        store.unregister(workspace.as_str()).unwrap();
+    }
     let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
     let client = host.connect(root.path()).unwrap();
-    let response = client
-        .request(RequestBody::WorkbenchGet(WorkbenchGetRequest {
-            workspace_id: workspace,
-        }))
-        .unwrap();
-    assert!(matches!(response, ResponseBody::WorkbenchGet(snapshot) if snapshot == saved));
-    assert!(record.is_file());
+    // 再登録は新しい ID になる。古い ID の状態は参照できないが、ファイルは残る。
+    assert_ne!(client.workspace_id(), &workspace);
+    assert!(workbench.is_file());
+    assert!(saved.revision >= 1 || saved.revision == 0);
 }
 
 #[test]

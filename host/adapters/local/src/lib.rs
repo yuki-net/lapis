@@ -17,6 +17,7 @@ pub use local_tasks::{LocalTaskBackend, run_task_worker};
 pub use local_terminal::LocalTerminalBackend;
 pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::LocalWorkspaceRepository;
+pub use local_workspace_store::{WorkspaceRecord, WorkspaceStore, WorkspaceStoreError};
 use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };

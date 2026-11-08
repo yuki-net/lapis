@@ -72,6 +72,9 @@ fn owner_console_registers_workspace_and_issues_user_pairing() {
         .arg(directory.path())
         .arg("--certificate")
         .arg(directory.path().join("host.der"))
+        // 開発用 Host が 4749 を使っていても衝突しないよう、空きポートを選ばせる。
+        .arg("--listen")
+        .arg("127.0.0.1:0")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());

@@ -21,7 +21,6 @@ pub struct WorkspaceRecord {
 pub struct WorkspaceStore {
     connection: Connection,
 }
-
 impl WorkspaceStore {
     pub fn open(path: &Path) -> Result<Self, StoreError> {
         let connection = Connection::open(path)?;
@@ -199,6 +198,9 @@ pub enum StoreError {
     InvalidRecord,
 }
 
+/// 呼出側で読みやすい別名。
+pub type WorkspaceStoreError = StoreError;
+
 impl std::fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -262,7 +264,7 @@ fn encode_path(path: &Path) -> Vec<u8> {
 #[cfg(windows)]
 fn decode_path(bytes: &[u8]) -> Result<PathBuf, StoreError> {
     use std::os::windows::ffi::OsStringExt;
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(StoreError::InvalidRecord);
     }
     let units = bytes

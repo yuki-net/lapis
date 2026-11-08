@@ -6099,6 +6099,7 @@ dependencies = [
  "local-terminal",
  "local-workbench",
  "local-workspace",
+ "local-workspace-store",
  "lsp",
  "task-runner",
  "tempfile",

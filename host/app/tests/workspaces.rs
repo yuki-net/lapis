@@ -110,11 +110,6 @@ fn persistent_host_restores_registered_workspaces_and_retains_missing_records() 
             host.register_workspace(&second_root).unwrap(),
         )
     };
-    let record = state
-        .path()
-        .join("workspaces")
-        .join(format!("{}.json", second.as_str()));
-    let original_record = std::fs::read(&record).unwrap();
     let list = |host: &host::BackendHost| {
         let session =
             BackendSession::new(SessionId::try_new("registry-test").unwrap(), first.clone())
@@ -149,8 +144,8 @@ fn persistent_host_restores_registered_workspaces_and_retains_missing_records() 
         let listed = list(&host);
         assert!(listed.contains(&first));
         assert!(!listed.contains(&second));
-        assert_eq!(std::fs::read(&record).unwrap(), original_record);
     }
+    // 登録は SQLite に残るため、同じパスを再作成すると同じ ID で復元される。
     std::fs::create_dir(&second_root).unwrap();
     let host = host::BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
     assert!(list(&host).contains(&second));
