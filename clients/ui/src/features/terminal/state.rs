@@ -122,6 +122,14 @@ pub(crate) struct TerminalFeature {
     bound_resource: Option<terminal::TerminalId>,
     pub(super) focus: gpui::FocusHandle,
     pub(super) marked: String,
+    /// 右クリック／「＋」で開くメニューのアンカー。None のときは閉じている。
+    pub(super) context_menu: Option<()>,
+    pub(super) context_anchor: Option<gpui::Point<gpui::Pixels>>,
+    /// 描画に使うフォント設定。設定 UI から変更できるようにする。
+    pub(super) font_family: gpui::SharedString,
+    pub(super) font_size: f32,
+    pub(super) last_metrics: Option<super::view::TerminalMetrics>,
+    pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
     /// Terminal出力の表示状態。
     /// None = 未処理（output変更を検知していない）
     /// Some(None) = scroll pending（outputは変更済みだがscroll-followが未完了）
@@ -191,6 +199,12 @@ impl TerminalFeature {
             bound_resource: None,
             focus: cx.focus_handle(),
             marked: String::new(),
+            context_menu: None,
+            context_anchor: None,
+            font_family: "Cascadia Mono".into(),
+            font_size: 13.0,
+            last_metrics: None,
+            last_size: None,
             visible_output: None, // None = 未処理
             root,
             conversation,
@@ -319,7 +333,17 @@ impl TerminalFeature {
             cx.notify();
         }
     }
-    pub(crate) fn send_clipboard(&mut self, cx: &mut gpui::Context<Self>) {
+    pub(super) fn open_menu(
+        &mut self,
+        anchor: Option<gpui::Point<gpui::Pixels>>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.context_anchor = anchor;
+        self.context_menu = anchor.map(|_| ());
+        cx.notify();
+    }
+
+    pub(super) fn send_clipboard(&mut self, cx: &mut gpui::Context<Self>) {
         let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
             return;
         };
