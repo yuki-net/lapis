@@ -7,7 +7,8 @@ use document::{Document, DocumentConnection, DocumentError, ExternalChange, Revi
 use std::{
     collections::{HashMap, HashSet},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc},
+    time::Duration,
 };
 use workspace::WorkspaceError;
 
