@@ -100,7 +100,6 @@ impl TaskOperations {
     /// 既存 Task と衝突しない ID を割り当てる。
     pub fn allocate_ids(
         &self,
-        root: &Path,
         trees: &[TaskWorktree],
     ) -> Result<(TaskId, ExecutionId), TaskStateError> {
         let records = self
@@ -140,7 +139,7 @@ impl TaskOperations {
         validate_start(&input)?;
         let backend = self.tasks.as_ref().ok_or(TaskStateError::Unsupported)?;
         let trees = trees();
-        let (task_id, execution_id) = self.allocate_ids(root, &trees)?;
+        let (task_id, execution_id) = self.allocate_ids(&trees)?;
         let tree = if input.isolated {
             let tree = create_worktree(&task_id)?;
             if !path_matches(&tree.repository_root, root) || tree.task_id != task_id {

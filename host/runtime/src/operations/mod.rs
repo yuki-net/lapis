@@ -160,7 +160,7 @@ impl WorkspaceOperations {
             }
             Operation::CreateWorktree => {
                 self.require_repository(root)?;
-                let (id, _) = self.tasks.allocate_ids(root, &self.trees_for_tasks(root))?;
+                let (id, _) = self.tasks.allocate_ids(&self.trees_for_tasks(root))?;
                 let tree = self.git()?.create_worktree(root, &id).map_err(problem)?;
                 if tree.task_id != id {
                     return Err(BackendStateError::WorkspaceDenied);
