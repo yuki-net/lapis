@@ -126,6 +126,15 @@ struct Discovery {
 }
 
 fn discover(issuer: &str) -> Result<Discovery, Error> {
+    discover_inner(issuer, false)
+}
+
+#[cfg(test)]
+fn discover_http(issuer: &str) -> Result<Discovery, Error> {
+    discover_inner(issuer, true)
+}
+
+fn discover_inner(issuer: &str, allow_http: bool) -> Result<Discovery, Error> {
     let issuer = issuer.trim_end_matches('/');
     let url = format!("{issuer}/.well-known/openid-configuration");
     let client = reqwest::blocking::Client::builder()
@@ -144,8 +153,12 @@ fn discover(issuer: &str) -> Result<Discovery, Error> {
         return Err("OIDC discovery の応答が大きすぎます".into());
     }
     let discovery: Discovery = serde_json::from_slice(&body)?;
-    validate_endpoint("authorization_endpoint", &discovery.authorization_endpoint)?;
-    validate_endpoint("token_endpoint", &discovery.token_endpoint)?;
+    validate_endpoint(
+        "authorization_endpoint",
+        &discovery.authorization_endpoint,
+        allow_http,
+    )?;
+    validate_endpoint("token_endpoint", &discovery.token_endpoint, allow_http)?;
     Ok(discovery)
 }
 
@@ -159,12 +172,13 @@ fn https_redirects() -> reqwest::redirect::Policy {
     })
 }
 
-fn validate_endpoint(name: &'static str, value: &str) -> Result<(), Error> {
+fn validate_endpoint(name: &'static str, value: &str, allow_http: bool) -> Result<(), Error> {
     if value.chars().any(char::is_control) {
         return Err(format!("OIDC {name} が不正です").into());
     }
     let url = reqwest::Url::parse(value)?;
-    if url.scheme() != "https" || url.host_str().is_none() || url.fragment().is_some() {
+    let scheme_allowed = url.scheme() == "https" || (allow_http && url.scheme() == "http");
+    if !scheme_allowed || url.host_str().is_none() || url.fragment().is_some() {
         return Err(format!("OIDC {name} は HTTPS URL で指定してください").into());
     }
     Ok(())
@@ -502,8 +516,10 @@ mod tests {
 
     #[test]
     fn endpoints_must_use_https() {
-        assert!(validate_endpoint("authorization_endpoint", "http://idp.example/auth").is_err());
-        assert!(validate_endpoint("token_endpoint", "https://idp.example/token").is_ok());
+        assert!(
+            validate_endpoint("authorization_endpoint", "http://idp.example/auth", false).is_err()
+        );
+        assert!(validate_endpoint("token_endpoint", "https://idp.example/token", false).is_ok());
     }
 
     #[test]
@@ -511,5 +527,160 @@ mod tests {
         assert!(parse_redirect_uri("http://192.0.2.1:53682/auth/callback").is_err());
         assert!(parse_redirect_uri("http://localhost:53682/auth/callback").is_err());
         assert!(parse_redirect_uri("http://127.0.0.1:53682/auth/callback").is_ok());
+    }
+
+    /// 実 IdP の代わりに discovery / JWKS / token を返す最小の provider。
+    struct MockProvider {
+        base: String,
+    }
+
+    impl MockProvider {
+        fn start() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            let token = crate::oidc::test_token_for(
+                &base,
+                "alice",
+                jsonwebtoken::get_current_timestamp() + 300,
+            );
+            let server_base = base.clone();
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else {
+                        break;
+                    };
+                    let Some(request) = read_mock_request(&mut stream) else {
+                        continue;
+                    };
+                    let (status, body) = match (request.method.as_str(), request.path.as_str()) {
+                        ("GET", "/.well-known/openid-configuration") => (
+                            "200 OK",
+                            serde_json::json!({
+                                "issuer": server_base,
+                                "authorization_endpoint": format!("{server_base}/authorize"),
+                                "token_endpoint": format!("{server_base}/token"),
+                                "jwks_uri": format!("{server_base}/jwks"),
+                            })
+                            .to_string(),
+                        ),
+                        ("GET", "/jwks") => ("200 OK", crate::oidc::TEST_JWKS.to_owned()),
+                        ("POST", "/token")
+                            if [
+                                "grant_type=authorization_code",
+                                "code=code-1",
+                                "client_id=lapis-desktop",
+                                "code_verifier=verifier-1",
+                            ]
+                            .iter()
+                            .all(|field| request.body.contains(field)) =>
+                        {
+                            (
+                                "200 OK",
+                                serde_json::json!({ "id_token": token }).to_string(),
+                            )
+                        }
+                        ("POST", "/token") => ("400 Bad Request", "{}".to_owned()),
+                        _ => ("404 Not Found", "{}".to_owned()),
+                    };
+                    let _ = write_mock_response(&mut stream, status, &body);
+                }
+            });
+            Self { base }
+        }
+    }
+
+    struct MockRequest {
+        method: String,
+        path: String,
+        body: String,
+    }
+
+    fn read_mock_request(stream: &mut TcpStream) -> Option<MockRequest> {
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 1024];
+        let head_end = loop {
+            let read = stream.read(&mut chunk).ok()?;
+            if read == 0 {
+                return None;
+            }
+            buffer.extend_from_slice(&chunk[..read]);
+            if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
+                break index + 4;
+            }
+            if buffer.len() > 64 * 1024 {
+                return None;
+            }
+        };
+        let head = String::from_utf8_lossy(&buffer[..head_end]).to_string();
+        let mut lines = head.split("\r\n");
+        let mut request_line = lines.next()?.split_whitespace();
+        let method = request_line.next()?.to_owned();
+        let path = request_line.next()?.split('?').next()?.to_owned();
+        let content_length = lines
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let mut body = buffer[head_end..].to_vec();
+        while body.len() < content_length {
+            let read = stream.read(&mut chunk).ok()?;
+            if read == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..read]);
+        }
+        Some(MockRequest {
+            method,
+            path,
+            body: String::from_utf8_lossy(&body[..body.len().min(content_length)]).to_string(),
+        })
+    }
+
+    fn write_mock_response(
+        stream: &mut TcpStream,
+        status: &str,
+        body: &str,
+    ) -> std::io::Result<()> {
+        write!(
+            stream,
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )?;
+        stream.flush()
+    }
+
+    #[test]
+    fn mock_provider_token_is_accepted_after_discovery_and_exchange() {
+        let provider = MockProvider::start();
+        let discovery = discover_http(&provider.base).unwrap();
+        assert_eq!(
+            discovery.authorization_endpoint,
+            format!("{}/authorize", provider.base)
+        );
+        assert_eq!(discovery.token_endpoint, format!("{}/token", provider.base));
+
+        let redirect_uri = "http://127.0.0.1:53682/auth/callback";
+        let token = exchange(
+            &discovery.token_endpoint,
+            "lapis-desktop",
+            "code-1",
+            "verifier-1",
+            redirect_uri,
+        )
+        .unwrap();
+
+        let config = crate::oidc::OidcConfig::new(
+            provider.base.clone(),
+            "lapis",
+            vec![jsonwebtoken::Algorithm::RS256],
+            60,
+        )
+        .unwrap();
+        let verifier =
+            crate::oidc::OidcVerifier::from_remote_http(config, format!("{}/jwks", provider.base))
+                .unwrap();
+        let claims = verifier.verify(token.as_str()).unwrap();
+        assert_eq!(claims.subject, "alice");
+        assert_eq!(claims.issuer, provider.base);
     }
 }

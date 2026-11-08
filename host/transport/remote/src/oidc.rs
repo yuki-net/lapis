@@ -117,7 +117,7 @@ impl OidcVerifier {
     }
 
     #[cfg(test)]
-    fn from_remote_http(
+    pub(crate) fn from_remote_http(
         config: OidcConfig,
         jwks_uri: impl Into<String>,
     ) -> Result<Self, OidcError> {
@@ -313,7 +313,7 @@ impl fmt::Display for OidcError {
 impl Error for OidcError {}
 
 #[cfg(test)]
-pub(crate) use tests::{test_token, test_verifier};
+pub(crate) use tests::{TEST_JWKS, test_token, test_token_for, test_verifier};
 
 #[derive(Deserialize)]
 struct Claims {
@@ -369,7 +369,7 @@ t0f+7q2VROR7iJ6VMePTAuTKUgXM5Q6lmHm3ocrbft7gI9egFt/giCtC7VgFHTdo
 QpNdCy1VwA1iKz1CyJaSeQ==
 -----END PRIVATE KEY-----"#;
 
-    const TEST_JWKS: &str = r#"{"keys":[{"kty":"RSA","kid":"test-key","use":"sig","alg":"RS256","n":"u-X554nXUxF-s8in1y6DETqeqWA0wApFxMX_V8uRJEkXOC3PZNnhmAHBFyEsNL-yKF4huNNAt1ga4wc7b5IvamnKtEqwkgqhpPrzCfMGaTT7EiuMta7mYF0AkOtTY2179ILKFSDCwFC9Plxp2r04s0yuxPGDxdOlt-Cbda6hwTT1vcMDNQqVipn3eRdK35Ri7t21U78wepMc0PHA1PV40Ac_Uw66C8zK5jcRopIbKF9D1Wb99EbG4BLEg4i1uRjiH7CodND-iB2SNcrBUbK4f-LaxVauKzxgtglfQIE1_Pe0HgVpHXbr_yDHyQglekdUJcBHClWKqupFwCK-sqzPYw","e":"AQAB"}]}"#;
+    pub(crate) const TEST_JWKS: &str = r#"{"keys":[{"kty":"RSA","kid":"test-key","use":"sig","alg":"RS256","n":"u-X554nXUxF-s8in1y6DETqeqWA0wApFxMX_V8uRJEkXOC3PZNnhmAHBFyEsNL-yKF4huNNAt1ga4wc7b5IvamnKtEqwkgqhpPrzCfMGaTT7EiuMta7mYF0AkOtTY2179ILKFSDCwFC9Plxp2r04s0yuxPGDxdOlt-Cbda6hwTT1vcMDNQqVipn3eRdK35Ri7t21U78wepMc0PHA1PV40Ac_Uw66C8zK5jcRopIbKF9D1Wb99EbG4BLEg4i1uRjiH7CodND-iB2SNcrBUbK4f-LaxVauKzxgtglfQIE1_Pe0HgVpHXbr_yDHyQglekdUJcBHClWKqupFwCK-sqzPYw","e":"AQAB"}]}"#;
 
     fn config() -> OidcConfig {
         OidcConfig::new("https://idp.example", "lapis", vec![Algorithm::RS256], 60).unwrap()
@@ -384,9 +384,13 @@ QpNdCy1VwA1iKz1CyJaSeQ==
     }
 
     pub(crate) fn test_token(subject: &str, expires_at: u64) -> String {
+        test_token_for("https://idp.example", subject, expires_at)
+    }
+
+    pub(crate) fn test_token_for(issuer: &str, subject: &str, expires_at: u64) -> String {
         let claims = json!({
             "sub": subject,
-            "iss": "https://idp.example",
+            "iss": issuer,
             "aud": "lapis",
             "exp": expires_at,
         });
