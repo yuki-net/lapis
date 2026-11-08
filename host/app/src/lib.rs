@@ -20,8 +20,6 @@ mod features;
 mod terminal;
 mod workbench;
 mod workspace;
-mod workspace_registry;
-
 /// Hostが提供する操作だけをペアリングで許可する。
 pub fn supported_capabilities() -> client_api::CapabilitySet {
     use client_api::{CapabilityId, CapabilitySet, capability::*};
@@ -75,8 +73,24 @@ struct HostInner {
     workspaces: Mutex<HashMap<PathBuf, WorkspaceId>>,
     next_session: AtomicU64,
     state_directory: Option<PathBuf>,
+    store: Option<Mutex<platform::WorkspaceStore>>,
 }
 
+impl HostInner {
+    /// パスから永続 ID を得る。state directory が無い場合はパスから導出する。
+    fn workspace_id(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
+        let Some(store) = &self.store else {
+            return Ok(workspace_id_for_root(root));
+        };
+        let store = store.lock().map_err(|_| BackendServiceError::Unavailable)?;
+        let record = store
+            .register(root)
+            .map_err(|_| BackendServiceError::Unavailable)?;
+        WorkspaceId::try_new(record.id).map_err(|_| BackendServiceError::Unavailable)
+    }
+}
+
+/// state directory が無い場合の暫定 ID。パスから導出し、再起動しても同じ値になる。
 fn workspace_id_for_root(root: &Path) -> WorkspaceId {
     use sha2::{Digest, Sha256};
     let key = format!("{:x}", Sha256::digest(root.as_os_str().as_encoded_bytes()));
@@ -100,29 +114,40 @@ impl BackendHost {
 
     fn start_inner(state_directory: Option<PathBuf>) -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
+        let store = match &state_directory {
+            Some(directory) => {
+                std::fs::create_dir_all(directory).map_err(|_| BackendServiceError::Unavailable)?;
+                let path = directory.join("workspaces.sqlite3");
+                Some(Mutex::new(
+                    platform::WorkspaceStore::open(&path)
+                        .map_err(|_| BackendServiceError::Unavailable)?,
+                ))
+            }
+            None => None,
+        };
         let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
                 workspaces: Mutex::new(HashMap::new()),
                 next_session: AtomicU64::new(1),
                 state_directory,
+                store,
             }),
         };
-        if let Some(directory) = &host.inner.state_directory {
-            let records = workspace_registry::load(directory)
+        if let Some(store) = &host.inner.store {
+            let records = store
+                .lock()
+                .map_err(|_| BackendServiceError::Unavailable)?
+                .list()
                 .map_err(|_| BackendServiceError::Unavailable)?;
-            for (expected, root) in records {
-                let canonical = match root.canonicalize() {
+            for record in records {
+                let canonical = match record.root.canonicalize() {
                     Ok(root) => root,
                     Err(_) => {
                         eprintln!("保存されたWorkspaceを復元できません。登録情報は保持します。");
                         continue;
                     }
                 };
-                if workspace_id_for_root(&canonical) != expected {
-                    eprintln!("保存されたWorkspaceの識別が一致しません。登録情報は保持します。");
-                    continue;
-                }
                 host.register_workspace(&canonical)?;
             }
         }
@@ -142,7 +167,6 @@ impl BackendHost {
             .get(root)
             .cloned()
         {
-            self.persist_workspace(root, &id)?;
             return Ok(id);
         }
         let root = root
@@ -154,13 +178,12 @@ impl BackendHost {
             .lock()
             .map_err(|_| BackendServiceError::Unavailable)?;
         if let Some(workspace_id) = workspaces.get(&root) {
-            self.persist_workspace(&root, workspace_id)?;
             return Ok(workspace_id.clone());
         }
         if !root.is_dir() {
             return Err(BackendServiceError::Unavailable);
         }
-        let workspace_id = workspace_id_for_root(&root);
+        let workspace_id = self.inner.workspace_id(&root)?;
         let mut registration = WorkspaceRegistration::new(
             workspace_id.clone(),
             root.file_name().unwrap_or_default().to_string_lossy(),
@@ -179,30 +202,36 @@ impl BackendHost {
         }
         self.inner.service.register_workspace(registration)?;
         workspaces.insert(root.clone(), workspace_id.clone());
-        self.persist_workspace(&root, &workspace_id)?;
         Ok(workspace_id)
-    }
-
-    fn persist_workspace(&self, root: &Path, id: &WorkspaceId) -> Result<(), BackendServiceError> {
-        if let Some(directory) = &self.inner.state_directory {
-            workspace_registry::save(directory, id, root)
-                .map_err(|_| BackendServiceError::Unavailable)?;
-        }
-        Ok(())
-    }
-
-    pub fn connect(&self, root: &Path) -> Result<EmbeddedClient, BackendServiceError> {
-        let workspace_id = self.register_workspace(root)?;
-        self.connect_workspace(workspace_id)
     }
 
     /// 接続先 Workspace を指定しなかった Client に提示する既定 Workspace。
     pub fn default_workspace(&self) -> Option<WorkspaceId> {
+        if let Some(store) = &self.inner.store
+            && let Ok(store) = store.lock()
+            && let Ok(Some(record)) = store.primary()
+            && let Ok(id) = WorkspaceId::try_new(record.id)
+        {
+            return Some(id);
+        }
         let workspaces = self.inner.workspaces.lock().ok()?;
         workspaces
             .values()
             .min_by(|left, right| left.as_str().cmp(right.as_str()))
             .cloned()
+    }
+
+    /// Host の永続的な同一性。state directory が無い場合は `None`。
+    pub fn host_id(&self) -> Option<String> {
+        let store = self.inner.store.as_ref()?;
+        let store = store.lock().ok()?;
+        store.host_id().ok()
+    }
+
+    /// 既定 Workspace へ接続する。
+    pub fn connect(&self, root: &Path) -> Result<EmbeddedClient, BackendServiceError> {
+        let workspace_id = self.register_workspace(root)?;
+        self.connect_workspace(workspace_id)
     }
 
     pub(crate) fn connect_workspace(

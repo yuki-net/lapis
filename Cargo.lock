@@ -4739,6 +4739,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-workspace-store"
+version = "0.1.0"
+dependencies = [
+ "getrandom 0.3.4",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "localization"
 version = "0.1.0"
 dependencies = [
@@ -6089,6 +6099,7 @@ dependencies = [
  "local-terminal",
  "local-workbench",
  "local-workspace",
+ "local-workspace-store",
  "lsp",
  "task-runner",
  "tempfile",

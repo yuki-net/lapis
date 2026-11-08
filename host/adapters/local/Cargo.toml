@@ -18,6 +18,7 @@ local-search = { path = "../search" }
 local-terminal = { path = "../terminal" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
+local-workspace-store = { path = "../workspace-store" }
 lsp = { path = "../../../contracts/domain/lsp" }
 terminal = { path = "../../../contracts/domain/terminal" }
 task-runner = { path = "../agent" }
