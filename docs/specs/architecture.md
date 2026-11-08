@@ -135,6 +135,16 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - 両 target が共有する `DesktopServices` / `InitialView` / `WindowFactory` / `open_desktop_window` は crate ルートの `app` に置く。target 固有のコードを `app` へ戻さない。
 - 共通 UI 部品は `kit::components` の wrapper（popup / menu / scroll / row / surface など）を経由して使い、Feature が同じ見た目を個別に組み立てない。
 
+### 描画系 Feature の wrapper 適用範囲
+
+- 一覧・カード・検索結果の行は `kit::components::{hover_row, selectable_row}` を使う（ファイル、検索、Task、コマンド検索、設定のテーマカード）。
+- Dialog は Feature と `root.rs` から `WorkspaceDialog` を直接呼ばず、`DocumentClient::choose_workspace_path` を経由する。`scripts/check_architecture.py` が `file_dialog()` の直接呼び出しを拒否する。
+- Terminal と Editor も、外側の Scroll は `kit` の `scroll_viewport` を使う。ペインが空のときの表示は `shell/main/content.rs` が `panel_empty_state` で出し、Feature 側では持たない。
+- Terminal のセル描画と Editor のテキスト描画は、GPUI の `Element` を直接実装して行う。理由は次のとおりで、`row` / `menu` 系の wrapper へは寄せない。
+  - Terminal は可視行だけを仮想化して描画し、行ごとの色・属性・カーソルを `TerminalCell` から直接組む。行の高さと spacer が文字の実測に依存するため、wrapper を挟むと再計測が増える。
+  - Editor は `ShapedLine` と IME / 選択範囲のハンドリングを `Element::paint` で行う。1文字単位の配置は wrapper ではなくテキスト整形の結果で決まる。
+- したがって「Terminal / Editor の描画を共通 wrapper に寄せる」は対象外とする。共通化するのは外側の Scroll・空状態・操作ボタンまでとし、セル / 行の描画ロジックは各 Feature が持つ。
+
 ## Desktop の共通Tab操作
 
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
