@@ -10,4 +10,7 @@
 .idea/libraries
 .idea/modules
 
+# Junie の作業用プラン（共有する設定は .junie/AGENTS.md 等として追跡可能に残す）
+.junie/plans/
+
 __pycache__/
