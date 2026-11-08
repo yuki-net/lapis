@@ -17,6 +17,7 @@ workbench-state = { path = "../workbench" }
 terminal-state = { path = "../terminal" }
 document-state = { path = "../documents" }
 workspace-state = { path = "../workspaces" }
+auth-state = { path = "../auth" }
 serde.workspace = true
 serde_json.workspace = true
 
