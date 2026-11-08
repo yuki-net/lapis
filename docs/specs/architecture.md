@@ -179,6 +179,12 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Keymap は Desktop が所有し、Command ごとの Binding 一覧を既定値、選択 Preset、User Override の順に解決する。各層の未指定は継承、明示解除は空、指定された一覧は下位層の全 Binding を置換する。先頭を表示用とする。未登録 Preset は既定値へ戻す。Preset と解決結果を User Settings へコピーしない。
 - GPUI の Binding は解決結果の adapter であり、設定変更時は内部入力を含めて再登録する。他の登録元による変更を検知した場合は全消去せず再適用を拒否する。Host へ Keymap を同期しない。
 
+## CLI の対象
+
+- `clients/cli/` は利用者向けの非対話 CLI とし、models / protocol にのみ依存する。Host の管理操作や開発用の内部コマンドを持たない。
+- Host の管理操作（device の承認・失効、credential の発行・失効、Workspace の登録）は `lapis-host` の標準入力で行う。
+- 開発用のコマンド（Host の起動、Web のビルド、アーキテクチャ検査、smoke）は `scripts/` と `clients/desktop/app` に置き、利用者向け CLI には含めない。
+
 ## 依存の検査
 
 `python scripts/check_architecture.py` は `cargo metadata --locked --no-deps` の全 workspace member と全 dependency（dev/build/target 条件を含む）を検査する。
