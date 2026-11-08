@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -10,13 +10,13 @@ use client_api::git as git_api;
 use client_api::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentEncoding,
     DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse, ErrorCode,
-    EventBody, EventEnvelope, EventSequence, FORBIDDEN, FileTreeEntry, FileTreeKind,
-    FileTreeResponse, INTERNAL, INVALID_PATH, INVALID_REQUEST, NOT_FOUND, ProtocolError,
-    RequestBody, RequestEnvelope, ResponseBody, ResponseEnvelope, Revision, RevisionConflict,
-    SessionId, SnapshotResponse, TerminalCommandResponse, TerminalId, TerminalInputRequest,
-    TerminalResizeRequest, TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest,
-    UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId,
-    WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
+    EventBody, EventEnvelope, FORBIDDEN, FileTreeEntry, FileTreeKind, FileTreeResponse, INTERNAL,
+    INVALID_PATH, INVALID_REQUEST, NOT_FOUND, ProtocolError, RequestBody, RequestEnvelope,
+    ResponseBody, ResponseEnvelope, Revision, SessionId, SnapshotResponse, TerminalCommandResponse,
+    TerminalId, TerminalInputRequest, TerminalResizeRequest, TerminalStartRequest,
+    TerminalStartResponse, TerminalTerminateRequest, UNSUPPORTED, WorkspaceCloseResponse,
+    WorkspaceConnectResponse, WorkspaceId, WorkspaceListResponse, WorkspaceRelativePath,
+    WorkspaceSnapshot, WorkspaceSummary,
 };
 use document_state::{DocumentRegistry, DocumentResource};
 use text::TextEdit;
@@ -25,11 +25,12 @@ use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, Workspa
 use terminal_state::TerminalRegistry;
 
 mod document;
+mod event;
 mod git_state;
 mod terminal;
 mod workspace;
 
-const MAX_RETAINED_EVENTS: usize = 1024;
+pub(crate) use event::{EventJournal, require_revision};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackendSession {
@@ -816,51 +817,6 @@ impl WorkspaceState {
             workspace_id: self.summary.workspace_id.clone(),
             event,
         })
-    }
-}
-
-#[derive(Default)]
-struct EventJournal {
-    next_sequence: EventSequence,
-    events: VecDeque<EventEnvelope>,
-}
-
-impl EventJournal {
-    fn push(&mut self, body: EventBody) -> Result<EventEnvelope, BackendStateError> {
-        let sequence = self
-            .next_sequence
-            .checked_next()
-            .ok_or(BackendStateError::CounterOverflow)?;
-        self.next_sequence = sequence;
-        let event = EventEnvelope {
-            event_sequence: sequence,
-            body,
-        };
-        self.events.push_back(event.clone());
-        if self.events.len() > MAX_RETAINED_EVENTS {
-            self.events.pop_front();
-        }
-        Ok(event)
-    }
-
-    fn watermark(&self) -> EventSequence {
-        self.next_sequence
-    }
-}
-
-fn require_revision(
-    document_id: &DocumentId,
-    expected: Revision,
-    actual: Revision,
-) -> Result<(), BackendStateError> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(BackendStateError::RevisionConflict(RevisionConflict {
-            document_id: document_id.clone(),
-            expected,
-            actual,
-        }))
     }
 }
 
