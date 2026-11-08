@@ -5,15 +5,11 @@
   "type": "module",
   "scripts": {
     "wasm": "cargo build -p desktop-ui --target wasm32-unknown-unknown --profile web && wasm-bindgen --target web --out-dir src/generated/wasm --out-name lapis_ui ../../target/wasm32-unknown-unknown/web/desktop_ui.wasm",
-    "predev": "npm run wasm",
-    "dev": "vite",
-    "prebuild": "npm run wasm",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "prepare:dist": "node scripts/prepare-dist.mjs",
+    "typecheck": "tsc -b",
+    "build": "npm run wasm && npm run prepare:dist && tsc -p tsconfig.build.json"
   },
   "devDependencies": {
-    "@types/node": "24.3.0",
-    "typescript": "5.9.2",
-    "vite": "7.3.6"
+    "typescript": "5.9.2"
   }
 }

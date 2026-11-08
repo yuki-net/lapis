@@ -30,6 +30,7 @@ PATH_RULES = [
     # Backend共通（Host以外）
     (["host/runtime/"], {"rust_core", "host", "desktop"}),
     (["host/adapters/"], {"rust_core", "host", "desktop"}),
+    (["host/transport/web/"], {"rust_core", "host", "desktop", "web"}),
     (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
     (["host/application/"], {"rust_core", "host", "desktop"}),

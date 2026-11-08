@@ -37,7 +37,7 @@ cargo run -p web-bridge -- --listen 0.0.0.0:4748 --allow-remote --host 127.0.0.1
 Webの開発サーバーもtailnetで待ち受けます。
 
 ```powershell
-npm run dev -- --host 0.0.0.0 --port 4747
+cargo run -p lapis-web -- --dev --listen 0.0.0.0:4747 --dist clients/web/dist
 ```
 
 ページは `http://TAILSCALE_IP:4747/?url=ws://TAILSCALE_IP:4748/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN` を開きます。
