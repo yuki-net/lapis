@@ -1,0 +1,12 @@
+[package]
+name = "local-search"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+workspace = { path = "../../../contracts/domain/workspace" }
+
+[dev-dependencies]
+tempfile.workspace = true
