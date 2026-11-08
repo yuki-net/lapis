@@ -11,6 +11,7 @@ members = [
     "host/documents",
     "host/workspaces",
     "host/auth",
+    "host/tasks",
     "host/app",
     "host/adapters/*",
     "host/extensions/*",

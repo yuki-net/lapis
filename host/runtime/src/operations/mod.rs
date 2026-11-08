@@ -10,23 +10,14 @@ use editor_core::{ExecutionId, TaskId, WorkspaceId};
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-        mpsc,
-    },
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
-use task::{
-    Execution, ExecutionSnapshot, ExecutionStatus, Task, TaskBackend, TaskRecord, TaskSnapshot,
-    TaskStart, unix_time_ms,
-};
-
-static NEXT_RESOURCE: AtomicU64 = AtomicU64::new(1);
+use task::{TaskBackend, TaskControl, TaskSnapshot, TaskStart};
 
 pub(crate) struct WorkspaceOperations {
     git: Option<Arc<dyn GitBackend>>,
-    tasks: Option<Arc<dyn TaskBackend>>,
+    tasks: task_state::TaskOperations,
     workspace_id: WorkspaceId,
     repository_cache: HashMap<PathBuf, CachedRepository>,
     next_git_revision: u64,
@@ -54,7 +45,7 @@ impl WorkspaceOperations {
     ) -> Self {
         Self {
             git,
-            tasks,
+            tasks: task_state::TaskOperations::new(tasks, WorkspaceId::new(workspace_id.as_str())),
             workspace_id: WorkspaceId::new(workspace_id.as_str()),
             repository_cache: HashMap::new(),
             next_git_revision: 1,
@@ -169,7 +160,7 @@ impl WorkspaceOperations {
             }
             Operation::CreateWorktree => {
                 self.require_repository(root)?;
-                let (id, _) = self.allocate_ids(root)?;
+                let (id, _) = self.tasks.allocate_ids(&self.trees_for_tasks(root))?;
                 let tree = self.git()?.create_worktree(root, &id).map_err(problem)?;
                 if tree.task_id != id {
                     return Err(BackendStateError::WorkspaceDenied);
@@ -198,17 +189,7 @@ impl WorkspaceOperations {
                 execution_id,
                 control,
             } => {
-                require_safe_id(execution_id.as_str())?;
-                if !self.records(root)?.iter().any(|record| {
-                    record.execution.id == execution_id && !record.execution.status.is_terminal()
-                }) {
-                    return Err(BackendStateError::WorkspaceDenied);
-                }
-                self.tasks
-                    .as_ref()
-                    .ok_or(BackendStateError::Unsupported)?
-                    .control(&execution_id, &control)
-                    .map_err(problem)?;
+                self.control(&execution_id, &control, root)?;
                 Ok(Outcome::Completed)
             }
         }

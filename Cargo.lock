@@ -731,6 +731,7 @@ dependencies = [
  "serde",
  "serde_json",
  "task",
+ "task-state",
  "tempfile",
  "terminal",
  "terminal-state",
@@ -8174,6 +8175,16 @@ dependencies = [
  "serde",
  "serde_json",
  "task",
+]
+
+[[package]]
+name = "task-state"
+version = "0.1.0"
+dependencies = [
+ "editor-core",
+ "git-contract",
+ "task",
+ "tempfile",
 ]
 
 [[package]]

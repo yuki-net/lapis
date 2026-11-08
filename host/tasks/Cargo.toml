@@ -1,0 +1,14 @@
+[package]
+name = "task-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+editor-core = { path = "../../contracts/domain/editor-core" }
+git = { package = "git-contract", path = "../../extensions/git/contract" }
+task = { path = "../../contracts/domain/task" }
+
+[dev-dependencies]
+tempfile.workspace = true
