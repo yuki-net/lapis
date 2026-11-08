@@ -7,6 +7,11 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
+  pre_merge_checks:
+    docstrings:
+      # Rust の /// を検出できず常に 0% と判定されるため無効にする。
+      # docstring の網羅は本リポジトリの規約ではない。
+      mode: "off"
   path_instructions:
     - path: "host/transport/remote/**"
       instructions: |
