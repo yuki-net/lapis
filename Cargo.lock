@@ -4659,6 +4659,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "local-search"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "workspace",
+]
+
+[[package]]
 name = "local-tasks"
 version = "0.1.0"
 dependencies = [
@@ -6046,6 +6054,7 @@ dependencies = [
  "local-credentials",
  "local-git",
  "local-lsp",
+ "local-search",
  "local-tasks",
  "local-terminal",
  "local-workbench",

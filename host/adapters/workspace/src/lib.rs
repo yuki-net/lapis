@@ -1,19 +1,10 @@
 //! Local Host のファイルシステムを使う Workspace / Document backend。
 
-use std::{
-    fs,
-    io::Write,
-    path::Path,
-    sync::atomic::{AtomicBool, Ordering},
-    time::UNIX_EPOCH,
-};
+use std::{fs, io::Write, path::Path, time::UNIX_EPOCH};
 
 use backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
-use workspace::{
-    FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
-    WorkspaceSearchBackend,
-};
+use workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceRepository};
 
 #[derive(Default)]
 pub struct LocalWorkspaceRepository;
@@ -155,78 +146,6 @@ impl WorkspaceRepository for LocalWorkspaceRepository {
         collect_tree(root, root, 0, &mut entries)?;
         Ok(entries)
     }
-}
-
-#[derive(Default)]
-pub struct LocalWorkspaceSearchBackend;
-
-impl WorkspaceSearchBackend for LocalWorkspaceSearchBackend {
-    fn search(
-        &self,
-        root: &Path,
-        query: &str,
-        cancelled: &AtomicBool,
-    ) -> Result<Vec<SearchHit>, SearchError> {
-        if query.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut hits = Vec::new();
-        search_directory(root, root, query, cancelled, &mut hits)?;
-        Ok(hits)
-    }
-}
-
-fn search_directory(
-    root: &Path,
-    directory: &Path,
-    query: &str,
-    cancelled: &AtomicBool,
-    hits: &mut Vec<SearchHit>,
-) -> Result<(), SearchError> {
-    if cancelled.load(Ordering::Relaxed) || hits.len() >= 2_000 {
-        return Ok(());
-    }
-    let entries = fs::read_dir(directory).map_err(|error| SearchError::new(error.to_string()))?;
-    for entry in entries.flatten() {
-        if cancelled.load(Ordering::Relaxed) || hits.len() >= 2_000 {
-            break;
-        }
-        let name = entry.file_name();
-        if matches!(name.to_str(), Some(".git" | "target" | ".DS_Store")) {
-            continue;
-        }
-        let path = entry.path();
-        if path.is_dir() {
-            search_directory(root, &path, query, cancelled, hits)?;
-            continue;
-        }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if metadata.len() > 2 * 1024 * 1024 {
-            continue;
-        }
-        let Ok(bytes) = fs::read(&path) else {
-            continue;
-        };
-        let Ok(text) = std::str::from_utf8(&bytes) else {
-            continue;
-        };
-        for (line_index, line) in text.lines().enumerate() {
-            for (column, _) in line.match_indices(query) {
-                hits.push(SearchHit {
-                    path: path.strip_prefix(root).unwrap_or(&path).to_owned(),
-                    line: line_index + 1,
-                    utf8_column: column + 1,
-                    preview: line.trim().chars().take(240).collect(),
-                });
-                if hits.len() >= 2_000 {
-                    return Ok(());
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn collect_tree(
@@ -411,24 +330,5 @@ mod tests {
                 .iter()
                 .any(|entry| entry.relative_path.starts_with("target"))
         );
-    }
-
-    #[test]
-    fn workspace_search_finds_utf8_text_and_skips_build_output() {
-        let directory = tempfile::tempdir().unwrap();
-        fs::create_dir_all(directory.path().join("src")).unwrap();
-        fs::create_dir_all(directory.path().join("target")).unwrap();
-        fs::write(
-            directory.path().join("src/main.rs"),
-            "fn main() { /* 検索語 */ }\n",
-        )
-        .unwrap();
-        fs::write(directory.path().join("target/generated.rs"), "検索語\n").unwrap();
-        let hits = LocalWorkspaceSearchBackend
-            .search(directory.path(), "検索語", &AtomicBool::new(false))
-            .unwrap();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].path, Path::new("src/main.rs"));
-        assert_eq!(hits[0].line, 1);
     }
 }

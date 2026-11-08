@@ -12,10 +12,11 @@ use git::{FileDiff, GitBackend, GitError, GitErrorKind, RepositoryStatus, TaskWo
 pub use local_credentials::{CredentialStore, CredentialStoreError};
 pub use local_git::LocalGitBackend;
 pub use local_lsp::LocalLspBackend;
+pub use local_search::LocalWorkspaceSearchBackend;
 pub use local_tasks::{LocalTaskBackend, run_task_worker};
 pub use local_terminal::LocalTerminalBackend;
 pub use local_workbench::LocalWorkbenchStore;
-pub use local_workspace::{LocalWorkspaceRepository, LocalWorkspaceSearchBackend};
+pub use local_workspace::LocalWorkspaceRepository;
 use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
