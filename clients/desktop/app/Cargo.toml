@@ -25,3 +25,6 @@ rfd.workspace = true
 editor-core = { path = "../../../contracts/domain/editor-core" }
 workspace = { path = "../../../contracts/domain/workspace" }
 tempfile.workspace = true
+
+[build-dependencies]
+winresource.workspace = true
