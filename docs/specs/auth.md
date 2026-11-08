@@ -74,6 +74,7 @@ Host の認証設定は次の値を持つ。
 - Web の再読み込みでは `sessionStorage` の Token で再接続する。Token が無効なら `AuthRequired` からやり直す。
 - Desktop / Mobile は secure storage の Token で再接続する。Cookie は使わない。
 - 新しい Device は既定で明示承認とする。自動承認は設定で明示した場合だけ許可する。
+- OIDC などの新しい認証方式を追加した場合、旧方式の pairing token と credential は同じ変更で削除する。互換期間を設けず、旧方式の受理コードを残さない。
 - Session のローテーションは行わない。Session ID は接続ごとに発行し、Host の再起動で全 Session を破棄する。再接続時は同じ Token から新しい Session を発行する。
 - Device / credential の失効は Host の標準入力（`devices` / `approve` / `revoke-device` / `revoke`）で行う。Desktop / Web に管理 UI は置かない。失効は次の要求から反映し、接続中の Session も同時に破棄する。
 
