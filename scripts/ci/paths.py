@@ -37,7 +37,7 @@ PATH_RULES = [
     # Contracts / Client transport
     (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
     (["contracts/protocol/"], {"rust_core", "host", "desktop", "web"}),
-    (["contracts/wire/"], {"rust_core", "host", "desktop", "web"}),
+    (["contracts/transport/wire/"], {"rust_core", "host", "desktop", "web"}),
     (["clients/transport/"], {"rust_core", "host", "desktop", "web"}),
     
     # Mobile

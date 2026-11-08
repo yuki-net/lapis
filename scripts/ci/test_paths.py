@@ -64,7 +64,7 @@ class TestPathRouting(unittest.TestCase):
         expected = {"rust_core", "host", "desktop", "web"}
         self.assertEqual(jobs_for_paths(["contracts/protocol/src/lib.rs"]), expected)
         self.assertEqual(jobs_for_paths(["clients/transport/src/lib.rs"]), expected)
-        self.assertEqual(jobs_for_paths(["contracts/wire/src/lib.rs"]), expected)
+        self.assertEqual(jobs_for_paths(["contracts/transport/wire/src/lib.rs"]), expected)
 
     def test_backend_transport_runs_rust_surfaces(self):
         expected = {"rust_core", "host", "desktop"}
