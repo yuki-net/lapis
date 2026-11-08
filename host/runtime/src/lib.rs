@@ -1,17 +1,14 @@
 //! DesktopとRemote clientが共有するWorkspace・Document・Terminalの正規状態。
 
 mod client;
-mod credential;
-mod device;
 mod error;
 mod events;
 mod operations;
 mod service;
 mod state;
 
+pub use auth_state::{DeviceStatus, StoredCredential, StoredDevice};
 pub use client::EmbeddedClient;
-pub use credential::StoredCredential;
-pub use device::{DeviceStatus, StoredDevice};
 pub use error::BackendStateError;
 pub use events::{BackendEventReceiver, BackendEventSink};
 pub use service::{BackendService, BackendServiceError};
