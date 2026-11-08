@@ -113,7 +113,8 @@ impl Render for TerminalFeature {
         self.last_metrics = Some(metrics.clone());
         let viewport = self.scroll.handle().bounds().size;
         if let Some(size) = self.desired_size(viewport)
-            && self.last_size != Some(size)
+            && let Some(id) = self.active_id()
+            && self.last_size.as_ref() != Some(&(id, size))
         {
             cx.on_next_frame(window, move |feature, _, cx| {
                 feature.fit_to_viewport(viewport, cx);
@@ -328,11 +329,12 @@ impl TerminalFeature {
                 }
             },
         ));
-        entries.push(menu_entry(
+        entries.push(menu_entry_inner(
             "terminal.menu.discover",
             "Host の端末を探す",
             true,
             true,
+            false,
             cx,
             |this, _, cx| this.discover(cx),
         ));
@@ -396,12 +398,28 @@ fn menu_entry(
     cx: &mut Context<TerminalFeature>,
     handler: impl Fn(&mut TerminalFeature, &mut Window, &mut Context<TerminalFeature>) + 'static,
 ) -> MenuEntry {
+    menu_entry_inner(id, label, enabled, separator_before, true, cx, handler)
+}
+
+/// `close_on_click` が false の項目は、結果を同じメニューで見せたいときに使う。
+#[allow(clippy::too_many_arguments)]
+fn menu_entry_inner(
+    id: &'static str,
+    label: &'static str,
+    enabled: bool,
+    separator_before: bool,
+    close_on_click: bool,
+    cx: &mut Context<TerminalFeature>,
+    handler: impl Fn(&mut TerminalFeature, &mut Window, &mut Context<TerminalFeature>) + 'static,
+) -> MenuEntry {
     let listener = cx.listener(
         move |this: &mut TerminalFeature,
               _: &gpui::ClickEvent,
               window: &mut Window,
               cx: &mut Context<TerminalFeature>| {
-            this.context_menu = None;
+            if close_on_click {
+                this.context_menu = None;
+            }
             handler(this, window, cx);
             cx.notify();
         },
@@ -497,10 +515,14 @@ impl TerminalFeature {
         let Some((columns, rows)) = self.desired_size(size) else {
             return;
         };
-        if self.last_size == Some((columns, rows)) {
+        let Some(id) = self.active_id() else {
+            return;
+        };
+        // Terminal が変われば同じ寸法でも適用し直す必要がある。
+        if self.last_size.as_ref() == Some(&(id.clone(), (columns, rows))) {
             return;
         }
-        self.last_size = Some((columns, rows));
+        self.last_size = Some((id, (columns, rows)));
         self.resize(columns, rows, cx);
     }
 }

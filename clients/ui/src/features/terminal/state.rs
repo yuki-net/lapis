@@ -129,7 +129,7 @@ pub(crate) struct TerminalFeature {
     pub(super) font_family: gpui::SharedString,
     pub(super) font_size: f32,
     pub(super) last_metrics: Option<super::view::TerminalMetrics>,
-    pub(super) last_size: Option<(u16, u16)>,
+    pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
     /// Terminal出力の表示状態。
     /// None = 未処理（output変更を検知していない）
     /// Some(None) = scroll pending（outputは変更済みだがscroll-followが未完了）
