@@ -568,6 +568,7 @@ mod tests {
                             if [
                                 "grant_type=authorization_code",
                                 "code=code-1",
+                                "redirect_uri=http%3A%2F%2F127.0.0.1%3A53682%2Fauth%2Fcallback",
                                 "client_id=lapis-desktop",
                                 "code_verifier=verifier-1",
                             ]
