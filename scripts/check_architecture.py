@@ -109,6 +109,7 @@ def layer(manifest, root):
         ("host/adapters/", "infrastructure"), ("host/extensions/", "infrastructure"),
         ("host/workspaces/", "runtime"),
         ("host/auth/", "runtime"),
+        ("host/tasks/", "runtime"),
         ("host/transport/", "transport"),
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),

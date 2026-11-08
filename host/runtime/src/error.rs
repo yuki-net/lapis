@@ -103,6 +103,24 @@ impl From<workbench_state::WorkbenchStateError> for BackendStateError {
     }
 }
 
+impl From<task_state::TaskStateError> for BackendStateError {
+    fn from(error: task_state::TaskStateError) -> Self {
+        match error {
+            task_state::TaskStateError::Unsupported => Self::Unsupported,
+            task_state::TaskStateError::Denied => Self::WorkspaceDenied,
+            task_state::TaskStateError::CounterOverflow => Self::CounterOverflow,
+            task_state::TaskStateError::Backend(error) => {
+                Self::Operation(task_state_message(&error).to_owned())
+            }
+            task_state::TaskStateError::Operation(message) => Self::Operation(message),
+        }
+    }
+}
+
+fn task_state_message(_: &task::TaskError) -> &'static str {
+    "Task execution or persistence failed"
+}
+
 impl From<document_state::DocumentStateError> for BackendStateError {
     fn from(error: document_state::DocumentStateError) -> Self {
         match error {
