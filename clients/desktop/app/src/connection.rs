@@ -1,4 +1,6 @@
-use client_api::{CURRENT_PROTOCOL, ClientHello, ClientId, ClientKind, ProtocolRange, WorkspaceId};
+use client_api::{
+    CURRENT_PROTOCOL, ClientId, ClientKind, HelloRequest, ProtocolRange, WorkspaceId,
+};
 use host::BackendClient;
 use std::{
     ffi::OsString,
@@ -75,7 +77,7 @@ impl Startup {
                 let invitation = host::read_invitation(&path)?;
                 if invitation.token.is_empty() {
                     let client = create_oidc_client_id()?;
-                    let hello = ClientHello {
+                    let hello = HelloRequest {
                         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
                         client_id: ClientId::try_new(&client)?,
                         client_name: "Desktop".to_owned(),

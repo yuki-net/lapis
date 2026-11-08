@@ -1,7 +1,7 @@
 use std::{error::Error, fmt};
 
 use crate::{
-    ClientHello, EventEnvelope, ProtocolError, RequestEnvelope, ResponseEnvelope, ServerHello,
+    EventEnvelope, HelloRequest, HelloResponse, ProtocolError, RequestEnvelope, ResponseEnvelope,
     WorkspaceId,
 };
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ pub struct OidcClientConfig {
 /// remote transport の Client 送信 message。
 pub enum ClientMessage {
     #[serde(rename = "hello")]
-    Hello(ClientHello),
+    Hello(HelloRequest),
     #[serde(rename = "auth.pair")]
     Pair(PairRequest),
     #[serde(rename = "auth.authenticate")]
@@ -59,12 +59,12 @@ pub enum ClientMessage {
 #[derive(Serialize, Deserialize)]
 /// ペアリング要求。
 pub struct PairRequest {
-    pub hello: ClientHello,
+    pub hello: HelloRequest,
     token: SecretHex,
 }
 
 impl PairRequest {
-    pub fn new(hello: ClientHello, token: &[u8; SECRET_BYTES]) -> Self {
+    pub fn new(hello: HelloRequest, token: &[u8; SECRET_BYTES]) -> Self {
         Self {
             hello,
             token: SecretHex::encode(token),
@@ -79,7 +79,7 @@ impl PairRequest {
 #[derive(Serialize, Deserialize)]
 /// credential による認証要求。
 pub struct AuthenticateRequest {
-    pub hello: ClientHello,
+    pub hello: HelloRequest,
     /// 未指定の場合は Host が最初の Workspace を選ぶ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<WorkspaceId>,
@@ -89,7 +89,7 @@ pub struct AuthenticateRequest {
 
 impl AuthenticateRequest {
     pub fn new(
-        hello: ClientHello,
+        hello: HelloRequest,
         workspace_id: WorkspaceId,
         credential_id: &CredentialId,
         secret: &[u8; SECRET_BYTES],
@@ -103,7 +103,7 @@ impl AuthenticateRequest {
     }
 
     pub fn new_auto(
-        hello: ClientHello,
+        hello: HelloRequest,
         credential_id: &CredentialId,
         secret: &[u8; SECRET_BYTES],
     ) -> Self {
@@ -128,7 +128,7 @@ impl AuthenticateRequest {
 #[derive(Serialize, Deserialize)]
 /// OIDC Device 承認の要求。
 pub struct OidcRequest {
-    pub hello: ClientHello,
+    pub hello: HelloRequest,
     /// 未指定の場合は Host が最初の Workspace を選ぶ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<WorkspaceId>,
@@ -136,7 +136,7 @@ pub struct OidcRequest {
 }
 
 impl OidcRequest {
-    pub fn new(hello: ClientHello, workspace_id: WorkspaceId, id_token: String) -> Self {
+    pub fn new(hello: HelloRequest, workspace_id: WorkspaceId, id_token: String) -> Self {
         Self {
             hello,
             workspace_id: Some(workspace_id),
@@ -144,7 +144,7 @@ impl OidcRequest {
         }
     }
 
-    pub fn new_auto(hello: ClientHello, id_token: String) -> Self {
+    pub fn new_auto(hello: HelloRequest, id_token: String) -> Self {
         Self {
             hello,
             workspace_id: None,
@@ -172,7 +172,7 @@ pub enum ServerMessage {
     #[serde(rename = "auth.paired")]
     Paired(PairedResponse),
     #[serde(rename = "auth.authenticated")]
-    Authenticated(ServerHello),
+    Authenticated(HelloResponse),
     #[serde(rename = "response")]
     Response(ResponseEnvelope),
     #[serde(rename = "event")]
@@ -184,14 +184,14 @@ pub enum ServerMessage {
 #[derive(Serialize, Deserialize)]
 /// ペアリング結果。
 pub struct PairedResponse {
-    pub hello: ServerHello,
+    pub hello: HelloResponse,
     credential_id: String,
     secret: SecretHex,
 }
 
 impl PairedResponse {
     pub fn new(
-        hello: ServerHello,
+        hello: HelloResponse,
         credential_id: &CredentialId,
         secret: &[u8; SECRET_BYTES],
     ) -> Self {
@@ -270,8 +270,8 @@ mod tests {
     use super::*;
     use crate::{CURRENT_PROTOCOL, CapabilitySet, ClientId, ClientKind, ProtocolRange};
 
-    fn hello() -> ClientHello {
-        ClientHello {
+    fn hello() -> HelloRequest {
+        HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new("mobile-1").unwrap(),
             client_name: "Mobile".to_owned(),

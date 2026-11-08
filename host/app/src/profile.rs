@@ -153,7 +153,7 @@ pub fn open_host_file(
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>()
         );
-        let hello = ClientHello {
+        let hello = HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new(&client)?,
             client_name: "Desktop".to_owned(),

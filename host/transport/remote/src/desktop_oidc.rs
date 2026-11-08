@@ -10,7 +10,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use client_api::{AuthRequired, ClientHello, ClientMessage, ServerMessage, WorkspaceId};
+use client_api::{AuthRequired, ClientMessage, HelloRequest, ServerMessage, WorkspaceId};
 use client_core::pkce::{Pkce, authorization_url};
 use rustls::pki_types::CertificateDer;
 use serde::Deserialize;
@@ -32,7 +32,7 @@ pub struct DesktopOidcLogin {
     pub address: std::net::SocketAddr,
     pub server_name: String,
     pub certificate: CertificateDer<'static>,
-    pub hello: ClientHello,
+    pub hello: HelloRequest,
     pub workspace_id: WorkspaceId,
     /// IdP に登録済みの loopback redirect URI。
     pub redirect_uri: String,

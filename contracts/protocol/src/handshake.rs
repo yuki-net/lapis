@@ -13,7 +13,7 @@ pub enum ClientKind {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Client が接続時に提示する protocol・capability。
-pub struct ClientHello {
+pub struct HelloRequest {
     pub protocol: ProtocolRange,
     pub client_id: ClientId,
     pub client_name: String,
@@ -23,7 +23,7 @@ pub struct ClientHello {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Host が選択した protocol・session・capability。
-pub struct ServerHello {
+pub struct HelloResponse {
     pub protocol: ProtocolVersion,
     pub session_id: SessionId,
     pub granted_capabilities: CapabilitySet,
@@ -42,7 +42,7 @@ mod tests {
 
     #[test]
     fn hello_round_trip_preserves_unknown_capabilities() {
-        let hello = ClientHello {
+        let hello = HelloRequest {
             protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
             client_id: ClientId::try_new("mobile-1").unwrap(),
             client_name: "iPhone".to_owned(),

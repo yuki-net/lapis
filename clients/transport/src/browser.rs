@@ -5,8 +5,8 @@ use std::{
 
 use crate::ClientCore;
 use client_api::{
-    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientHello, ClientId,
-    ClientKind, ClientMessage, CredentialId, EventEnvelope, OidcRequest, PairRequest,
+    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientId, ClientKind,
+    ClientMessage, CredentialId, EventEnvelope, HelloRequest, OidcRequest, PairRequest,
     ProtocolRange, RequestBody, ResponseBody, ServerMessage, WorkspaceId,
 };
 use futures_channel::{mpsc, oneshot};
@@ -80,7 +80,7 @@ impl BrowserConnection {
     /// Helloで認証方式を問い合わせてから認証する。
     pub async fn connect_with_hello(
         url: &str,
-        hello: ClientHello,
+        hello: HelloRequest,
         auth: ClientMessage,
     ) -> Result<(Self, ServerMessage), String> {
         Self::connect_inner(url, Some(hello), auth).await
@@ -88,7 +88,7 @@ impl BrowserConnection {
 
     async fn connect_inner(
         url: &str,
-        hello: Option<ClientHello>,
+        hello: Option<HelloRequest>,
         auth: ClientMessage,
     ) -> Result<(Self, ServerMessage), String> {
         let pairing = match &auth {
@@ -353,14 +353,14 @@ fn client_hello(
     client_name: &str,
     client_kind: ClientKind,
     capabilities: &[&str],
-) -> Result<ClientHello, String> {
+) -> Result<HelloRequest, String> {
     let capabilities = capabilities
         .iter()
         .map(|capability| {
             CapabilityId::try_new(*capability).map_err(|_| "capabilityが不正です".to_owned())
         })
         .collect::<Result<Vec<_>, _>>()?;
-    Ok(ClientHello {
+    Ok(HelloRequest {
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new(client_id).map_err(|_| "Client IDが不正です".to_owned())?,
         client_name: client_name.to_owned(),
