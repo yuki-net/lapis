@@ -20,6 +20,7 @@ enum Mode {
     HotReload,
 }
 
+/// 起動モードに応じて Host、Desktop、Hot Reload のいずれかを起動する。
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -91,6 +92,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     Ok(status.code().unwrap_or(1))
 }
 
+/// ランチャーのフラグから起動モードを決める。同時指定は受け付けない。
 fn mode(arguments: &[OsString]) -> Result<Mode, Box<dyn std::error::Error>> {
     match (
         has_flag(arguments, "--hot-reload"),
@@ -103,12 +105,14 @@ fn mode(arguments: &[OsString]) -> Result<Mode, Box<dyn std::error::Error>> {
     }
 }
 
+/// 指定したフラグが引数に含まれるかを返す。
 fn has_flag(arguments: &[OsString], flag: &str) -> bool {
     arguments
         .iter()
         .any(|argument| argument.as_os_str() == OsStr::new(flag))
 }
 
+/// ランチャー自身のフラグを取り除いた引数を返す。
 fn without_flags(arguments: &[OsString], flags: &[&str]) -> Vec<OsString> {
     arguments
         .iter()
@@ -121,6 +125,7 @@ fn without_flags(arguments: &[OsString], flags: &[&str]) -> Vec<OsString> {
         .collect()
 }
 
+/// Desktop を修正版 dx で Hot Reload 起動する。Windows x64 専用。
 fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::error::Error>> {
     #[cfg(not(windows))]
     {

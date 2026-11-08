@@ -387,6 +387,7 @@ fn main() {
         self.assertFalse((self.root / "dx-called").exists())
 
     def test_hot_reload_waits_for_host_invitation_before_dx(self):
+        """Desktopと同じく、Hostの招待が現れるまでdxを起動しないことを検証する。"""
         # Desktopと同じく、Hostを別のRunで起動している場合は招待が現れるまで待つ。
         invitation = self.root / "target/dev-desktop/desktop.json"
         invitation.parent.mkdir(parents=True, exist_ok=True)
