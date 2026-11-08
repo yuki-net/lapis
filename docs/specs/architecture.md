@@ -2,6 +2,8 @@
 
 機能を追加・移行する開発者が、状態の所有者と配置先を判断するための正本。
 
+scripts/check_architecture.py は crate 間の依存方向に加え、Desktop Layout の旧識別子、Feature からの viewport / user-agent / file_dialog 参照、Feature のスクロール直書き、crate をまたぐ同名の公開型を検査する。同名型を新たに増やす場合は重複として拒否される。
+
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |

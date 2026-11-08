@@ -121,6 +121,57 @@ def layer(manifest, root):
     raise ValueError(f"未分類の workspace crate: {relative}")
 
 
+
+# 同名の公開型を許す既知の組。新しい重複は設計の重複として拒否する。
+DUPLICATE_TYPE_ALLOWLIST = {
+    "OidcConfig": {"remote", "web-bridge"},
+    "OidcError": {"remote", "web-bridge"},
+    "Revision": {"document", "protocol"},
+    "StoredCredential": {"auth", "transport"},
+    "TerminalSnapshot": {"protocol", "terminal"},
+    "TerminalStatus": {"protocol", "terminal"},
+    "WorkspaceSnapshot": {"protocol", "state"},
+}
+
+PUBLIC_TYPE = re.compile(r"^pub (?:struct|enum|trait) ([A-Za-z_][A-Za-z0-9_]*)", re.M)
+
+
+def crate_name_of(path, root):
+    directory = path.parent
+    while directory != root and not (directory / "Cargo.toml").exists():
+        directory = directory.parent
+    return directory.name
+
+
+def check_duplicate_type_names(root=ROOT):
+    """crate をまたいだ同名の公開型を検出する。"""
+    source = root / "clients", root / "host", root / "contracts", root / "extensions"
+    found = {}
+    for base in source:
+        if not base.exists():
+            continue
+        for path in base.rglob("*.rs"):
+            posix = path.as_posix()
+            if "/target/" in posix or "/vendor/" in posix or "/clients/mobile/" in posix:
+                continue
+            text = path.read_text(encoding="utf-8")
+            crate = crate_name_of(path, root)
+            for match in PUBLIC_TYPE.finditer(text):
+                found.setdefault(match.group(1), set()).add(crate)
+
+    errors = []
+    for name, crates in sorted(found.items()):
+        if len(crates) < 2:
+            continue
+        allowed = DUPLICATE_TYPE_ALLOWLIST.get(name)
+        if allowed is not None and crates <= allowed:
+            continue
+        errors.append(
+            f"公開型 {name} が複数 crate で定義されている: {', '.join(sorted(crates))}"
+        )
+    return errors
+
+
 def check(metadata, exceptions, root=ROOT):
     members = set(metadata["workspace_members"])
     packages = {item["name"]: item for item in metadata["packages"] if item["id"] in members}
@@ -157,7 +208,7 @@ def main():
         "cargo", "metadata", "--locked", "--no-deps", "--format-version", "1",
     ], cwd=ROOT))
     exceptions = json.loads((ROOT / "scripts/architecture-exceptions.json").read_text(encoding="utf-8"))
-    errors = check(metadata, exceptions) + check_desktop_layout()
+    errors = check(metadata, exceptions) + check_desktop_layout() + check_duplicate_type_names()
     if errors:
         print("\n".join(errors), file=sys.stderr)
         return 1
