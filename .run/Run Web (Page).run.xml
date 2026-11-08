@@ -1,12 +1,20 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Run Web (Page)" type="js.build_tools.npm" factoryName="npm">
-    <package-json value="$PROJECT_DIR$/clients/web/package.json" />
-    <command value="run" />
-    <scripts>
-      <script value="dev" />
-    </scripts>
-    <node-interpreter value="project" />
+  <configuration default="false" name="Run Web (Page)" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+    <option name="buildProfileId" value="dev" />
+    <option name="command" value="run --locked -p lapis-web -- --dev --dist clients/web/dist" />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
-    <method v="2" />
+    <option name="emulateTerminal" value="true" />
+    <option name="channel" value="DEFAULT" />
+    <option name="requiredFeatures" value="true" />
+    <option name="allFeatures" value="false" />
+    <option name="withSudo" value="false" />
+    <option name="buildTarget" value="REMOTE" />
+    <option name="backtrace" value="SHORT" />
+    <option name="isRedirectInput" value="false" />
+    <option name="redirectInputPath" value="" />
+    <method v="2">
+
+    </method>
   </configuration>
 </component>

@@ -1,4 +1,3 @@
-import "./style.css";
 import init, { is_ready, start } from "./generated/wasm/lapis_ui.js";
 
 const root = document.querySelector<HTMLElement>("#app");
@@ -123,6 +122,12 @@ async function launchDemo(backend: string) {
   await launch(backend, null, null, null, null);
 }
 
+function defaultBridgeUrl(): string {
+  // 同梱起動ではページと bridge が同じホストで動くため、bridge の既定ポートを使う。
+  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
+  return `${scheme}//${location.hostname || "127.0.0.1"}:4748/remote`;
+}
+
 function bridgeOrigin(hostUrl: string): string | null {
   try {
     const url = new URL(hostUrl);
@@ -199,7 +204,7 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
       <label>
         <span>Host URL</span>
         <input name="url" type="url" required autocomplete="url"
-          placeholder="ws://127.0.0.1:8787/remote"
+          placeholder="ws://127.0.0.1:4748/remote"
           value="${escapeHtml(defaultUrl)}" />
       </label>
       <label>
@@ -323,7 +328,11 @@ async function boot() {
   try {
     const params = new URLSearchParams(location.search);
     const backend = params.get("backend") ?? "auto";
-    const url = (params.get("url") ?? localStorage.getItem(STORAGE.url) ?? "").trim();
+    const url = (
+      params.get("url") ??
+      localStorage.getItem(STORAGE.url) ??
+      defaultBridgeUrl()
+    ).trim();
     const workspace = (
       params.get("workspace") ??
       localStorage.getItem(STORAGE.workspace) ??

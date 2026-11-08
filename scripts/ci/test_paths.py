@@ -70,6 +70,10 @@ class TestPathRouting(unittest.TestCase):
         expected = {"rust_core", "host", "desktop"}
         self.assertEqual(jobs_for_paths(["host/transport/remote/src/lib.rs"]), expected)
 
+    def test_web_page_server_runs_web_and_rust_surfaces(self):
+        expected = {"rust_core", "host", "desktop", "web"}
+        self.assertEqual(jobs_for_paths(["host/transport/web/src/main.rs"]), expected)
+
     def test_rust_core_path_runs_rust_core(self):
         jobs = jobs_for_paths(["contracts/domain/workspace/src/lib.rs"])
         self.assertIn("rust_core", jobs)

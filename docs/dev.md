@@ -70,9 +70,9 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 | --- | --- | --- |
 | Host（`lapis-host`） | Workspace と認証の本体 | QUIC。既定 `4749` |
 | bridge（`lapis-web-bridge`） | ブラウザーの WebSocket を Host の QUIC へ転送し、OIDC の token 交換を行う | TCP `4748` |
-| ページ配信（vite） | Wasm UI を配る | TCP `4747` |
+| ページ配信（`lapis-web`） | `clients/web/dist` の Wasm UI を配る。`--dev` で `.rs` とページの変更を監視して作り直す | TCP `4747` |
 
-初回だけ `cd clients\web` で `npm ci` を実行します。`npm run dev` は起動時に Wasm をビルドするため、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129、Node.js 24 が必要です。
+初回だけ `cd clients\web` で `npm ci` を実行します。`npm run build` は Wasm をビルドして `clients/web/dist` に HTML・JS・CSS・Wasm を揃えるため、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129、Node.js 24（`tsc` 用）が必要です。`Run Web` のページ側は `lapis-web --dev --dist clients/web/dist` で起動し、起動時と変更時に `npm run build` を実行します。
 
 起動順は問いません。Host は待受を始めた後に接続情報を `target/dev-web/connection.json` へ書き出し、bridge は起動時にそれが現れるまで待ち（10 秒ごとに待機中を表示）、接続のたびに読み直します。Host の初回ビルドに時間がかかっても bridge は終了しません。Host を正常終了すると、自分が書いた接続情報だけが削除されます。
 
@@ -89,7 +89,7 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 | 用途 | 値 | 理由 |
 | --- | --- | --- |
-| ページ | `4747` 固定 | ブラウザーで開く URL。`strictPort` で衝突時は明示的に失敗する |
+| ページ | `4747` 固定 | ブラウザーで開く URL。バインドに失敗したら明示的に終了する |
 | bridge | `4748` 固定 | ログインフォームに入力する URL |
 | Host | `4749` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
 
@@ -99,14 +99,14 @@ bridge は CLI 引数、環境変数、既定値の順に設定を解決しま�
 
 ## Web の UI を確認する
 
-`npm run dev` を立ち上げたまま `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` 配下の `.rs` を保存すると、Wasm が自動で作り直され、ブラウザーが再読み込みします。`localStorage` の credential で再接続するため、ログインし直す必要はありません。
+`Run Web`（ページ側は `lapis-web --dev --dist clients/web/dist`）を立ち上げたまま `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` 配下の `.rs`、または `clients/web/src` と `clients/web/index.html` を変更すると、`npm run build` が走って `clients/web/dist` が作り直され、ブラウザーが再読み込みします。`localStorage` の credential で再接続するため、ログインし直す必要はありません。
 
 - 反映は再読み込みで行います。Desktop の Hot Reload のように State を保ったまま差し替えるものではありません。
 - 初回と依存 crate を変えたときは数十秒かかります。2回目以降は cargo の増分ビルドで数秒です。
 - 250ms 以内の連続保存は1回にまとまり、ビルド中に保存した分は終わってから1回だけ追加で走ります。ビルドは常に1本です。
-- 失敗すると vite のコンソールに `web: wasm build failed` とエラー出力が出て、古い Wasm を配り続けます。画面は壊れず、修正して保存すれば再試行します。
-- 監視するのは上記5ディレクトリの `.rs` だけです。`vendor/`（patched GPUI）と `apps/` を変えたときは `npm run wasm` を手で実行してください。
-- 再ビルドは開発サーバーだけの機能です。`npm run build` と CI は従来どおり起動時に1回だけ生成します。
+- 失敗すると `lapis-web` のコンソールに `web: build failed` と出力の末尾20行が出て、古い `dist` を配り続けます。画面は壊れず、修正して保存すれば再試行します。
+- 監視するのは上記5ディレクトリの `.rs` と `clients/web` のページ一式です。`vendor/`（patched GPUI）や `clients/web/src/generated` 配下は監視しません。必要なら `npm run wasm` を手で実行してください。
+- 再ビルドは開発サーバーだけの機能です。`npm run build` と CI は起動時に1回だけ生成します。
 
 ## Windows でのプロセス表示
 

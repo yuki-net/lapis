@@ -69,3 +69,5 @@ zeroize = "1.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
 winresource = "0.1"
+tower-http = { version = "0.7", features = ["fs", "set-header"] }
+notify = "8.2"
