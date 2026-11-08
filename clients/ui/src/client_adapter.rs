@@ -1,6 +1,3 @@
-use crate::timer::Timer;
-use std::{sync::mpsc, time::Duration};
-
 use desktop_client::{
     ConversationRecord, ConversationSession, ConversationViewState, DocumentTab, EditorSession,
     LspSession,
@@ -217,24 +214,16 @@ impl<State: Send + 'static> ClientWorker<State> {
         complete: impl FnOnce(&mut Entity, Result<Output, String>, &mut Context<Entity>) + 'static,
     ) -> Result<(), String> {
         let receiver = self.try_request(operation)?;
+        // worker thread の結果をブロックせずに待つ。16ms 間隔のポーリングは行わない。
+        let reply = cx
+            .background_executor()
+            .spawn(async move { receiver.recv() });
         cx.spawn(async move |this, cx| {
-            loop {
-                let result = match receiver.try_recv() {
-                    Ok(result) => result,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        Err("Client workerが終了しました".to_owned())
-                    }
-                    Err(mpsc::TryRecvError::Empty) => {
-                        if this.upgrade().is_none() {
-                            break;
-                        }
-                        Timer::after(Duration::from_millis(16)).await;
-                        continue;
-                    }
-                };
-                let _ = this.update(cx, |entity, cx| complete(entity, result, cx));
-                break;
-            }
+            let result = match reply.await {
+                Ok(result) => result,
+                Err(_) => Err("Client workerが終了しました".to_owned()),
+            };
+            let _ = this.update(cx, |entity, cx| complete(entity, result, cx));
         })
         .detach();
         Ok(())
