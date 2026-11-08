@@ -1,6 +1,6 @@
 use std::{
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     fs, io,
     path::{Path, PathBuf},
     process::{Command, ExitCode},
@@ -12,19 +12,29 @@ use std::{
 const HOST_FILE_TIMEOUT: Duration = Duration::from_secs(15);
 const HOST_FILE_POLL: Duration = Duration::from_millis(100);
 
+/// 起動するもの。`HotReload` は Desktop の起動方法だけを差し替える。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    HostOnly,
+    Desktop,
+    HotReload,
+}
+
 fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)
         .ok_or("worktree root is unavailable")?;
     let arguments: Vec<OsString> = env::args_os().skip(1).collect();
-    // Hot Reload は dx が Desktop をビルドするため、ide-build を実行しない。
-    if arguments.first().is_some_and(|arg| arg == "--hot-reload") {
-        return hot_reload(root, &arguments[1..]);
+    let mode = mode(&arguments)?;
+    // ランチャー自身のフラグはアプリへ渡さない。
+    let arguments = without_flags(&arguments, &["--hot-reload", "--host-only"]);
+    if mode == Mode::HotReload {
+        return hot_reload(root, &arguments);
     }
     // `--host-only` は Desktop を起動しないため、Host だけをビルドする。
     // Desktop のビルド失敗で Web 用 Host が起動できなくなるのを避ける。
-    let host_only = arguments.first().is_some_and(|arg| arg == "--host-only");
+    let host_only = mode == Mode::HostOnly;
     let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let build = Command::new(cargo)
         .current_dir(root)
@@ -47,7 +57,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             .arg(root)
             .arg("--certificate")
             .arg(session.join("host.der"))
-            .args(&arguments[1..]);
+            .args(&arguments);
         eprintln!(
             "Host session: {}",
             session.file_name().unwrap().to_string_lossy()
@@ -79,6 +89,36 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     #[cfg(windows)]
     job.disarm()?;
     Ok(status.code().unwrap_or(1))
+}
+
+fn mode(arguments: &[OsString]) -> Result<Mode, Box<dyn std::error::Error>> {
+    match (
+        has_flag(arguments, "--hot-reload"),
+        has_flag(arguments, "--host-only"),
+    ) {
+        (true, true) => Err("--hot-reload と --host-only は同時に指定できません".into()),
+        (true, false) => Ok(Mode::HotReload),
+        (false, true) => Ok(Mode::HostOnly),
+        (false, false) => Ok(Mode::Desktop),
+    }
+}
+
+fn has_flag(arguments: &[OsString], flag: &str) -> bool {
+    arguments
+        .iter()
+        .any(|argument| argument.as_os_str() == OsStr::new(flag))
+}
+
+fn without_flags(arguments: &[OsString], flags: &[&str]) -> Vec<OsString> {
+    arguments
+        .iter()
+        .filter(|argument| {
+            !flags
+                .iter()
+                .any(|flag| argument.as_os_str() == OsStr::new(flag))
+        })
+        .cloned()
+        .collect()
 }
 
 fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::error::Error>> {
@@ -143,11 +183,23 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
         fs::create_dir(&bin)?;
         let host = bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX));
         fs::copy(&built, &host)?;
+        let hosts = session.join("hosts");
+        fs::create_dir(&hosts)?;
+        // Desktop と同じく、Host を別の Run で起動していれば招待を待ってから接続する。
+        wait_for_host_file(root, arguments)?;
         // dx は --args= を空白で分割するため、worktree ルートからの相対パスを使う。
         let state = relative(root, &session.join("state"))?;
         let executable = relative(root, &host)?;
         let mut app_arguments =
             format!("--state-directory {state} --workspace . --local-host-executable {executable}");
+        // Desktop と同じ既定にそろえる。利用者が後置した指定が優先される。
+        if !arguments
+            .iter()
+            .any(|argument| argument == "--local-host-directory")
+        {
+            app_arguments.push_str(" --local-host-directory ");
+            app_arguments.push_str(&relative(root, &hosts)?);
+        }
         for argument in arguments {
             app_arguments.push(' ');
             app_arguments.push_str(&argument.to_string_lossy());
@@ -291,6 +343,41 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn launcher_flags_are_not_forwarded_to_the_app() {
+        let arguments = vec![
+            OsString::from("--hot-reload"),
+            OsString::from("--host"),
+            OsString::from("target/dev-desktop/desktop.json"),
+            OsString::from("--host-only"),
+        ];
+        assert_eq!(
+            without_flags(&arguments, &["--hot-reload", "--host-only"]),
+            vec![
+                OsString::from("--host"),
+                OsString::from("target/dev-desktop/desktop.json"),
+            ]
+        );
+    }
+
+    #[test]
+    fn launcher_modes_are_exclusive_and_default_to_desktop() {
+        let both = vec![
+            OsString::from("--hot-reload"),
+            OsString::from("--host-only"),
+        ];
+        assert!(mode(&both).is_err());
+        assert_eq!(
+            mode(&[OsString::from("--hot-reload")]).unwrap(),
+            Mode::HotReload
+        );
+        assert_eq!(
+            mode(&[OsString::from("--host-only")]).unwrap(),
+            Mode::HostOnly
+        );
+        assert_eq!(mode(&[]).unwrap(), Mode::Desktop);
+    }
 
     #[test]
     fn sessions_never_reuse_host_or_binary_directories() {

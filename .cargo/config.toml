@@ -5,4 +5,4 @@ ide-build = "build --locked --target-dir target/dev-build -p lapis -p host --bin
 # Web 用 Host のみ。Desktop のビルド失敗に巻き込まれないようにする。
 host-build = "build --locked --target-dir target/dev-build -p host --bins"
 # Hot Reload 付き開発起動。Windows x64 で Subsecond devserver を使用する。
-dev-hot-reload = "run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --hot-reload --state-directory target/dev-state"
+dev-hot-reload = "run --locked --manifest-path scripts/dev-session/Cargo.toml --target-dir target/dev-launcher -- --hot-reload --state-directory target/dev-state --local-host-directory target/dev-state/hosts"

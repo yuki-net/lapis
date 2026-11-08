@@ -47,9 +47,9 @@ GPUI Entity / AnyView dispatch (HotFn境界)
 
 ### 起動方法
 
-起動手順は [開発時の起動](../../../../docs/dev.md) を参照してください。`.run/Run Hot Reload` または `cargo dev-hot-reload` が、Desktop と同じ launcher（`scripts/dev-session`）の `--hot-reload` を起動します。
+起動手順は [開発時の起動](../../../../docs/dev.md) を参照してください。`.run/Run Desktop (Hot Reload)` または `cargo dev-hot-reload` が、Desktop と同じ launcher（`scripts/dev-session`）の `--hot-reload` を起動します。Hot Reload は Desktop の起動方法だけを変えたもので、`--host` の招待待ちと `--state-directory` の扱いは `Run Desktop` と同じです。
 
-launcher は修正版 `target/dx-fixed0710/bin/dx.exe` の存在確認と同一 worktree の排他ロック（`target/hot-reload.lock`）を取得した後、Windows x64 向けに Host をビルドしてから dx を起動します。Host のビルドに失敗した場合は dx を起動しません。修正版 dx がない場合は下記の手順で準備してください。
+launcher は修正版 `target/dx-fixed0710/bin/dx.exe` の存在確認と同一 worktree の排他ロック（`target/hot-reload.lock`）を取得した後、Windows x64 向けに Host をビルドしてから dx を起動します。`--host` を指定した場合は、dx を起動する前に招待ファイルを最大15秒待ちます。Host のビルドに失敗した場合は dx を起動しません。修正版 dx がない場合は下記の手順で準備してください。
 
 Host は `target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe` に置き、session へ複製して Desktop の `--local-host-executable` に渡します。dx は起動時に app 出力先を削除するため、そこへ Host を手動コピーする必要はありません。パスは worktree ルートからの相対指定なので、空白を含む worktree でも dx の引数分割に影響されません。
 

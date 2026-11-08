@@ -12,7 +12,9 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 3つは独立していて、起動順は問いません。`Run Host` を1つ立ち上げれば、Desktop と Web が同じ Host に同時に繋がります。
 
-`.run` のその他は、`Run Web` の部品（`Run Web Bridge` / `Run Web Page`）、`Run Hot Reload`、`Build Web`、`Run Android`、`Build Android` です。部品は単体で動きを調べたいときだけ押します。
+`Run Desktop (Hot Reload)` は `Run Desktop` の起動方法だけを変えたもので、Host の招待待ちと `target/dev-desktop/state` は共通です。
+
+`.run` のその他は、`Run Web` の部品（`Run Web (Bridge)` / `Run Web (Page)`）、`Build Web`、`Run Android`、`Build Android` です。部品は単体で動きを調べたいときだけ押します。`Run Web (Page)` だけを起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host と bridge なしで UI を確認できます。
 
 ## Host と Desktop の接続
 
@@ -29,6 +31,8 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 
 `--state-directory` を指定した Host は秘密鍵と証明書を `<state>/identity` に保存して再利用するため、Host を再起動しても Desktop の profile と Web の credential は無効になりません。
 
+`Run Desktop` と `Run Desktop (Hot Reload)` は `--state-directory target/dev-desktop/state` を共有するため、profile・設定・復元状態は Run を跨いで残ります。同じ state を同時に使うと、設定とレイアウトは後から保存した側が残り、会話は保存時に競合を検出してエラーになります。
+
 Desktop の接続先は `--host`、環境変数 `LAPIS_HOST_FILE`、ローカル Host の自動起動の順に解決します。どれも無ければ従来どおり自分で Local Host を起動するため、製品の通常起動と Run で経路は分かれません。
 
 ## Desktop
@@ -38,19 +42,20 @@ Desktop の接続先は `--host`、環境変数 `LAPIS_HOST_FILE`、ローカル
 | ローカル Host を自動起動して起動 | `cargo dev` |
 | `Run Host` に繋いで起動 | `Run Desktop`、または `LAPIS_HOST_FILE` を設定して `cargo dev` |
 | ファイルを開いて起動 | `cargo dev --open-file README.md` |
-| Hot Reload で起動 | `Run Hot Reload` または `cargo dev-hot-reload` |
+| Hot Reload で起動 | `Run Desktop (Hot Reload)` または `cargo dev-hot-reload` |
 
 ```powershell
 # Run Host に繋ぎたいとき（Run Desktop と同じ動き）
 $env:LAPIS_HOST_FILE = "target/dev-desktop/desktop.json"; cargo dev
 ```
 
-`cargo dev` も `Run Desktop` も Desktop と Host の両方をビルドします。2段階ビルドはありません。`Run Web Host` だけは Desktop を起動しないため Host だけをビルドし、Desktop のビルドが壊れていても Web 用 Host は起動できます。
+`cargo dev` も `Run Desktop` も Desktop と Host の両方をビルドします。2段階ビルドはありません。`Run Host` だけは Desktop を起動しないため Host だけをビルドし、Desktop のビルドが壊れていても Web 用 Host は起動できます。`Run Desktop (Hot Reload)` は Host を Cargo で、Desktop を修正版 `dx` でビルドします。
 
 Run は Windows の Job Object で、その Run が起動した process をまとめて管理します。Stop は Run が起動した process だけを終了し、他の Run や既存の Host には影響しません。`cargo dev` や製品の通常起動では Desktop を閉じても Local Host は残るため、残した場合はログの `Desktop session:` の名前を使って `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止します。
 
 Hot Reload は次を守ります。
 
+- `Run Desktop (Hot Reload)` は `Run Desktop` と同じく `--host` の招待を最大15秒待ち、`target/dev-desktop/state` を共有します。違うのは Desktop を修正版 `dx` でビルドして差し替える点だけです。
 - 修正版 `dx`（`target/dx-fixed0710/bin/dx.exe`）が必要です。Dioxus PR #5967 がマージされるまでの暫定です。
 - 対象は Windows x64 の Debug のみで、Release には Hot Reload の runtime を含めません。
 - 構造体のレイアウト変更、埋め込みアセットの変更、`request_layout` / `prepaint` / `paint` を自前実装した `Element` は反映されません。再起動してください。
