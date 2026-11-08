@@ -1,6 +1,9 @@
 # デフォルトの無視対象ファイル
 /shelf/
 /workspace.xml
+# Cargo から生成されるモジュール定義と、ローカルだけのスキーマ割当
+/*.iml
+/jsonSchemas.xml
 # エディターベースの HTTP クライアントリクエスト
 /httpRequests/
 # 無視対象のデフォルトフォルダー (クエリファイルを含む)
