@@ -249,7 +249,14 @@ impl TerminalRegistry {
                             });
                             continue;
                         }
-                        resource.apply_delta(&delta)?;
+                        if resource.apply_delta(&delta).is_err() {
+                            // 1 Terminal の delta 失敗で、同じ poll の owner 解放通知まで捨てない。
+                            published.push(EventBody::SnapshotRequired {
+                                workspace_id: resource.workspace_id.clone(),
+                                reason: SnapshotReason::EventGap,
+                            });
+                            continue;
+                        }
                         published.push(EventBody::TerminalDelta {
                             terminal_id: resource.terminal_id.clone(),
                             delta,
@@ -646,6 +653,38 @@ mod tests {
         let backend = Arc::new(ScriptedSource::default());
         let (mut registry, _workspace, _session, terminal) = start_registry(backend);
         registry.owner_idle_timeout = Duration::ZERO;
+
+        let events = registry.poll().unwrap();
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EventBody::TerminalOwner { terminal_id, owner: None } if terminal_id == &terminal
+        )));
+    }
+
+    #[test]
+    fn owner_release_survives_an_invalid_delta_in_the_same_poll() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, _workspace, _session, terminal) = start_registry(backend.clone());
+        registry.owner_idle_timeout = Duration::ZERO;
+        backend.events.lock().unwrap().insert(
+            "source-1".to_owned(),
+            Ok(vec![TerminalEvent::Delta(TerminalDelta {
+                revision: 1,
+                size: TerminalSize::new(80, 24),
+                // 列数と一致しない行は apply_delta が拒否する。
+                changed_rows: vec![TerminalRowUpdate {
+                    row: 0,
+                    value: TerminalRow {
+                        cells: Vec::new(),
+                        wrapped: false,
+                    },
+                }],
+                cursor: Default::default(),
+                modes: Default::default(),
+                scrollback: None,
+            })]),
+        );
 
         let events = registry.poll().unwrap();
 
