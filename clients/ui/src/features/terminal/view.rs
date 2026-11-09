@@ -282,22 +282,31 @@ impl TerminalFeature {
                 crate::gpui_compat::focus(window, &this.focus, cx);
             },
         ));
-        let platforms: &[(&'static str, &'static str, TerminalShell)] = if cfg!(windows) {
-            &[
-                (
-                    "terminal.menu.powershell",
-                    "PowerShell を開く",
-                    TerminalShell::PowerShell,
-                ),
-                ("terminal.menu.cmd", "cmd を開く", TerminalShell::Cmd),
-            ]
-        } else {
-            &[
-                ("terminal.menu.bash", "bash を開く", TerminalShell::Bash),
-                ("terminal.menu.zsh", "zsh を開く", TerminalShell::Zsh),
-                ("terminal.menu.fish", "fish を開く", TerminalShell::Fish),
-            ]
-        };
+        // Web では接続先 Host の OS が分からないため、OS 固有のシェル候補は出さない。
+        let platforms: &[(&'static str, &'static str, TerminalShell)] =
+            if cfg!(target_family = "wasm") {
+                &[]
+            } else if cfg!(windows) {
+                &[
+                    (
+                        "terminal.menu.powershell",
+                        "PowerShell を開く",
+                        TerminalShell::PowerShell,
+                    ),
+                    ("terminal.menu.cmd", "cmd を開く", TerminalShell::Cmd),
+                ]
+            } else {
+                &[
+                    (
+                        "terminal.menu.pwsh",
+                        "pwsh を開く",
+                        TerminalShell::PowerShell,
+                    ),
+                    ("terminal.menu.bash", "bash を開く", TerminalShell::Bash),
+                    ("terminal.menu.zsh", "zsh を開く", TerminalShell::Zsh),
+                    ("terminal.menu.fish", "fish を開く", TerminalShell::Fish),
+                ]
+            };
         for &(id, label, shell) in platforms {
             entries.push(menu_entry(
                 id,
