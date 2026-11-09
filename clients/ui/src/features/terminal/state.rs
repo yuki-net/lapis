@@ -34,6 +34,11 @@ impl TerminalSessions {
         self.version
     }
 
+    /// 各 Terminal の操作権。owner だけが入力できる。
+    pub fn owners(&self) -> &std::collections::HashMap<String, Option<String>> {
+        self.session.owners()
+    }
+
     fn bump(&mut self) {
         self.version = self.version.wrapping_add(1);
     }
@@ -153,6 +158,8 @@ impl TerminalRequests {
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
+    /// 各 Terminal の操作権。表示に使う。
+    pub(super) owners: HashMap<String, Option<String>>,
     /// `terminals` に適用した最後の版。古い結果で上書きしないために使う。
     projected: u64,
     pub(super) discovered: Vec<terminal::TerminalSnapshot>,
@@ -296,6 +303,7 @@ impl TerminalFeature {
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
             terminals,
+            owners: HashMap::new(),
             projected: 0,
             discovered: Vec::new(),
             selected: None,
@@ -660,15 +668,22 @@ impl TerminalFeature {
             cx,
             |sessions| {
                 let changed = sessions.refresh().map_err(|error| error.to_string())?;
-                Ok(changed.then(|| (sessions.version(), sessions.session.terminals().to_vec())))
+                Ok(changed.then(|| {
+                    (
+                        sessions.version(),
+                        sessions.session.terminals().to_vec(),
+                        sessions.owners().clone(),
+                    )
+                }))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_poll(token) {
                     return;
                 }
                 match result {
-                    Ok(Some((version, terminals))) => {
+                    Ok(Some((version, terminals, owners))) => {
                         feature.project(version, terminals);
+                        feature.owners = owners;
                         if feature.message_from_poll {
                             feature.message.clear();
                             feature.message_from_poll = false;

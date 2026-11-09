@@ -177,6 +177,7 @@ use git::GitError;
 pub struct TerminalSession {
     backend: Arc<dyn TerminalBackend>,
     terminals: Vec<TerminalSnapshot>,
+    owners: std::collections::HashMap<String, Option<String>>,
 }
 
 impl TerminalSession {
@@ -184,7 +185,17 @@ impl TerminalSession {
         Self {
             backend,
             terminals: Vec::new(),
+            owners: std::collections::HashMap::new(),
         }
+    }
+
+    /// 入力できる Session。`None` は不明または未所有。
+    pub fn owner(&self, id: &TerminalId) -> Option<&str> {
+        self.owners.get(id.as_str()).and_then(Option::as_deref)
+    }
+
+    pub fn owners(&self) -> &std::collections::HashMap<String, Option<String>> {
+        &self.owners
     }
 
     pub fn terminals(&self) -> &[TerminalSnapshot] {
@@ -311,6 +322,7 @@ impl TerminalSession {
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
         let mut attach_error = None;
+        let mut owner_updates = Vec::new();
         for terminal in &mut self.terminals {
             if terminal.status == TerminalStatus::Disconnected {
                 match self.backend.attach(&terminal.cwd, &terminal.id) {
@@ -350,6 +362,9 @@ impl TerminalSession {
                         }
                         terminal.revision = delta.revision;
                     }
+                    TerminalEvent::Owner { owner } => {
+                        owner_updates.push((terminal.id.as_str().to_owned(), owner));
+                    }
                     TerminalEvent::Exited { .. } => terminal.status = TerminalStatus::Exited,
                     TerminalEvent::Failed(_) => {
                         terminal.status = TerminalStatus::Failed;
@@ -367,6 +382,9 @@ impl TerminalSession {
                 *terminal = snapshot;
                 changed = true;
             }
+        }
+        for (id, owner) in owner_updates {
+            self.owners.insert(id, owner);
         }
         match attach_error {
             Some(error) => Err(TerminalError::new(error)),

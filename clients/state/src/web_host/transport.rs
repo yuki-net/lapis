@@ -309,6 +309,18 @@ pub(super) async fn event_pump(
                     }
                 }
             }
+            EventBody::TerminalOwner { terminal_id, owner } => {
+                if let Some(state) = replica
+                    .borrow_mut()
+                    .terminals
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&terminal_id))
+                {
+                    state.events.push(TerminalEvent::Owner {
+                        owner: owner.map(|owner| owner.as_str().to_owned()),
+                    });
+                }
+            }
             EventBody::WorkbenchChanged { .. } => {
                 let workspace = api_workspace(&replica.borrow().workspace);
                 if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(

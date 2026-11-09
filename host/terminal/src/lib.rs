@@ -234,6 +234,7 @@ impl TerminalRegistry {
                             delta,
                         });
                     }
+                    TerminalEvent::Owner { .. } => {}
                     TerminalEvent::Exited { .. } => {
                         resource.status = TerminalStatus::Exited;
                         published.push(EventBody::TerminalStatus {

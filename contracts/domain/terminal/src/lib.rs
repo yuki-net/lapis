@@ -390,7 +390,13 @@ pub enum TerminalInput {
 pub enum TerminalEvent {
     Delta(TerminalDelta),
     Snapshot(TerminalSnapshot),
-    Exited { code: Option<i32> },
+    /// 入力できる Session。`None` は誰も操作していない。
+    Owner {
+        owner: Option<String>,
+    },
+    Exited {
+        code: Option<i32>,
+    },
     Failed(String),
 }
 

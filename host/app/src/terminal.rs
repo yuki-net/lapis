@@ -180,6 +180,10 @@ impl Attachment {
             return Err(error("terminal snapshot revision regressed"));
         }
         let status = model_status(terminal.status);
+        let owner = terminal
+            .owner
+            .as_ref()
+            .map(|owner| owner.as_str().to_owned());
         let snapshot = TerminalSnapshot {
             id: TerminalId::new(self.terminal_id.as_str()),
             cwd: self.cwd.clone(),
@@ -196,7 +200,10 @@ impl Attachment {
         ) {
             self.detach();
         }
-        Ok(vec![TerminalEvent::Snapshot(snapshot)])
+        Ok(vec![
+            TerminalEvent::Snapshot(snapshot),
+            TerminalEvent::Owner { owner },
+        ])
     }
 
     fn poll(&mut self) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -276,6 +283,13 @@ impl Attachment {
                     if self.finished || self.recovery.is_some() {
                         break;
                     }
+                }
+                EventBody::TerminalOwner { terminal_id, owner }
+                    if terminal_id == self.terminal_id =>
+                {
+                    events.push(TerminalEvent::Owner {
+                        owner: owner.map(|owner| owner.as_str().to_owned()),
+                    });
                 }
                 EventBody::SnapshotRequired { reason, .. } => {
                     self.resync(reason)?;
