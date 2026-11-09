@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 editor-core = { path = "../editor-core" }
+futures-channel = "0.3"
 serde.workspace = true
 
 [dev-dependencies]

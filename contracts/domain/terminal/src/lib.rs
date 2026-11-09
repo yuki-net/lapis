@@ -477,6 +477,13 @@ pub trait TerminalBackend: Send + Sync {
             "この接続ではTerminalの操作権を手放せません",
         ))
     }
+
+    /// 画面や状態が変わったときに通知する。未対応の backend は `None`。
+    ///
+    /// receiver は 1 度だけ取得できる。UI はこの通知を受けて `poll` を呼ぶ。
+    fn changes(&self) -> Option<futures_channel::mpsc::UnboundedReceiver<()>> {
+        None
+    }
 }
 
 #[cfg(test)]
