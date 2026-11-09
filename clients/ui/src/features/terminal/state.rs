@@ -960,6 +960,88 @@ mod tests {
         assert_eq!(sessions.session.owner(&id), Some("session-a"));
     }
 
+    #[gpui::test]
+    fn refresh_errors_project_the_owner_to_the_feature(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+
+        cx.update(|cx| {
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(Arc::new(Backend::default())),
+                    None,
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+
+            // poll エラー: 別 Terminal の poll が失敗しても、先の owner を UI に投影する。
+            let (mut sessions, backend) = feature();
+            let first = sessions
+                .session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            let second = sessions
+                .session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            backend.events.lock().unwrap().insert(
+                first.as_str().to_owned(),
+                vec![TerminalEvent::Owner {
+                    owner: Some("owner-poll".to_owned()),
+                }],
+            );
+            *backend.fail_poll_for.lock().unwrap() = Some(second.as_str().to_owned());
+            assert!(
+                sessions
+                    .refresh()
+                    .map_err(|error| error.to_string())
+                    .is_err()
+            );
+            let version = sessions.version();
+            let owners = sessions.owners().clone();
+            let terminals = sessions.session.terminals().to_vec();
+            entity.update(cx, |feature, _| {
+                feature.apply_projection(version, terminals, owners);
+                assert_eq!(
+                    feature.owners.get(first.as_str()),
+                    Some(&Some("owner-poll".to_owned()))
+                );
+            });
+
+            // 再同期 attach エラー: revision gap の後の attach が失敗しても owner を投影する。
+            let (mut sessions, backend) = feature();
+            let id = sessions
+                .session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            backend.events.lock().unwrap().insert(
+                id.as_str().to_owned(),
+                vec![
+                    TerminalEvent::Owner {
+                        owner: Some("owner-resync".to_owned()),
+                    },
+                    TerminalEvent::Delta(model_delta(5, TerminalSize::new(80, 24), "gap")),
+                ],
+            );
+            assert!(
+                sessions
+                    .refresh()
+                    .map_err(|error| error.to_string())
+                    .is_err()
+            );
+            let version = sessions.version();
+            let owners = sessions.owners().clone();
+            let terminals = sessions.session.terminals().to_vec();
+            entity.update(cx, |feature, _| {
+                feature.apply_projection(version, terminals, owners);
+                assert_eq!(
+                    feature.owners.get(id.as_str()),
+                    Some(&Some("owner-resync".to_owned()))
+                );
+            });
+        });
+    }
+
     #[test]
     fn owner_updates_survive_a_later_terminal_poll_error() {
         let (mut sessions, backend) = feature();
