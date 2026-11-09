@@ -300,6 +300,14 @@ impl TerminalSession {
         self.backend.resize(id, columns, rows)
     }
 
+    pub fn claim(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.backend.claim(id)
+    }
+
+    pub fn release(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.backend.release(id)
+    }
+
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
         let mut attach_error = None;

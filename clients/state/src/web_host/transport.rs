@@ -10,10 +10,10 @@ use client_api::{
     DocumentEditRequest, DocumentInspectRequest, DocumentOpenRequest, DocumentSaveRequest,
     DocumentTextEdit, DocumentTransaction, EventBody, EventEnvelope, FileTreeKind, FileTreeRequest,
     RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason, SnapshotRequest,
-    TerminalInputRequest, TerminalResizeRequest, TerminalSize, TerminalStartRequest,
-    TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkbenchGetRequest,
-    WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceId as ApiWorkspaceId,
-    WorkspaceRelativePath,
+    TerminalClaimRequest, TerminalInputRequest, TerminalReleaseRequest, TerminalResizeRequest,
+    TerminalSize, TerminalStartRequest, TerminalStatus as WireTerminalStatus,
+    TerminalTerminateRequest, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
+    WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
 };
 use client_core::{AsyncHostConnection, browser::BrowserConnection};
 use document::{ExternalChange, FileFingerprint};
@@ -68,6 +68,12 @@ pub(super) enum Command {
         rows: u16,
     },
     TerminalTerminate {
+        local: TerminalId,
+    },
+    TerminalClaim {
+        local: TerminalId,
+    },
+    TerminalRelease {
         local: TerminalId,
     },
     SaveWorkbench {
@@ -653,6 +659,38 @@ async fn handle(
             if let Some(state) = replica.borrow_mut().terminals.get_mut(local.as_str()) {
                 state.events.push(TerminalEvent::Exited { code: None });
                 state.finished = true;
+            }
+        }
+        Command::TerminalClaim { local } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .terminals
+                    .get(local.as_str())
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let _ = request(
+                    connection,
+                    RequestBody::TerminalClaim(TerminalClaimRequest { terminal_id: host }),
+                )
+                .await;
+            }
+        }
+        Command::TerminalRelease { local } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .terminals
+                    .get(local.as_str())
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let _ = request(
+                    connection,
+                    RequestBody::TerminalRelease(TerminalReleaseRequest { terminal_id: host }),
+                )
+                .await;
             }
         }
         Command::SaveWorkbench { view } => {

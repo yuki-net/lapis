@@ -458,6 +458,17 @@ fn a_busy_runtime_actor_does_not_block_poll_or_turn_disconnect_into_exit() {
     *fixture.backend.blocked_input.lock().unwrap() = Some((entered_sender, release_receiver));
     let client = fixture.observer.clone();
     let terminal_id = client_api::TerminalId::try_new(fixture.id.as_str()).unwrap();
+    // 操作権を取得してから入力する。owner の Session 以外は入力できない。
+    assert!(matches!(
+        client
+            .request(RequestBody::TerminalClaim(
+                client_api::TerminalClaimRequest {
+                    terminal_id: terminal_id.clone(),
+                }
+            ))
+            .unwrap(),
+        ResponseBody::TerminalClaim(_)
+    ));
     let request = thread::spawn(move || {
         client.request(RequestBody::TerminalInput(TerminalInputRequest {
             terminal_id,

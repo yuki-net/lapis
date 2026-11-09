@@ -65,6 +65,10 @@ pub enum RequestBody {
     TerminalResize(TerminalResizeRequest),
     #[serde(rename = "terminal.terminate")]
     TerminalTerminate(TerminalTerminateRequest),
+    #[serde(rename = "terminal.claim")]
+    TerminalClaim(crate::TerminalClaimRequest),
+    #[serde(rename = "terminal.release")]
+    TerminalRelease(crate::TerminalReleaseRequest),
     #[serde(rename = "snapshot.resync")]
     SnapshotResync(SnapshotRequest),
 }
@@ -99,6 +103,8 @@ impl RequestBody {
             Self::TerminalInput(_) => "terminal.input",
             Self::TerminalResize(_) => "terminal.resize",
             Self::TerminalTerminate(_) => "terminal.terminate",
+            Self::TerminalClaim(_) => "terminal.claim",
+            Self::TerminalRelease(_) => "terminal.release",
             Self::SnapshotResync(_) => "snapshot.resync",
         }
     }
@@ -126,9 +132,11 @@ impl RequestBody {
             | Self::DocumentUndo(_)
             | Self::DocumentRedo(_) => capability::DOCUMENTS_WRITE,
             Self::TerminalStart(_) => capability::TERMINAL_START,
-            Self::TerminalInput(_) | Self::TerminalResize(_) | Self::TerminalTerminate(_) => {
-                capability::TERMINAL_CONTROL
-            }
+            Self::TerminalInput(_)
+            | Self::TerminalResize(_)
+            | Self::TerminalTerminate(_)
+            | Self::TerminalClaim(_)
+            | Self::TerminalRelease(_) => capability::TERMINAL_CONTROL,
             Self::SnapshotResync(_) => capability::WORKSPACE_SYNC,
         }
     }
@@ -161,7 +169,9 @@ impl RequestBody {
             | Self::DocumentClose(_)
             | Self::TerminalInput(_)
             | Self::TerminalResize(_)
-            | Self::TerminalTerminate(_) => None,
+            | Self::TerminalTerminate(_)
+            | Self::TerminalClaim(_)
+            | Self::TerminalRelease(_) => None,
         }
     }
 }

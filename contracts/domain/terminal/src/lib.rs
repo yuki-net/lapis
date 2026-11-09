@@ -463,6 +463,20 @@ pub trait TerminalBackend: Send + Sync {
     }
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError>;
     fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError>;
+    /// 入力できる操作権を取得する。他の Session が所有中なら奪う。
+    fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        let _ = id;
+        Err(TerminalError::new(
+            "この接続ではTerminalの操作権を取得できません",
+        ))
+    }
+    /// 操作権を手放す。
+    fn release(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        let _ = id;
+        Err(TerminalError::new(
+            "この接続ではTerminalの操作権を手放せません",
+        ))
+    }
 }
 
 #[cfg(test)]

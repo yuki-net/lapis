@@ -332,6 +332,22 @@ impl TerminalFeature {
             },
         ));
         entries.push(menu_entry(
+            "terminal.menu.claim",
+            "操作権を取得",
+            true,
+            true,
+            cx,
+            |this, _, cx| this.claim(cx),
+        ));
+        entries.push(menu_entry(
+            "terminal.menu.release",
+            "操作権を手放す",
+            true,
+            false,
+            cx,
+            |this, _, cx| this.release(cx),
+        ));
+        entries.push(menu_entry(
             "terminal.menu.copy",
             "画面をコピー",
             true,

@@ -86,4 +86,40 @@ impl BackendState {
             events,
         ))
     }
+
+    pub(super) fn terminal_claim(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalClaimRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let (_, event_body) = workspace.terminals.claim(
+            &session.session_id,
+            &workspace.summary.workspace_id,
+            &request.terminal_id,
+        )?;
+        let event = workspace.publish(event_body)?;
+        Ok((
+            ResponseBody::TerminalClaim(TerminalCommandResponse::default()),
+            vec![event],
+        ))
+    }
+
+    pub(super) fn terminal_release(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalReleaseRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let (_, event_body) = workspace.terminals.release(
+            &session.session_id,
+            &workspace.summary.workspace_id,
+            &request.terminal_id,
+        )?;
+        let event = workspace.publish(event_body)?;
+        Ok((
+            ResponseBody::TerminalRelease(TerminalCommandResponse::default()),
+            vec![event],
+        ))
+    }
 }

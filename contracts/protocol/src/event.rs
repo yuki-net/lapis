@@ -51,6 +51,12 @@ pub enum EventBody {
         terminal_id: TerminalId,
         status: TerminalStatus,
     },
+    #[serde(rename = "terminal.owner")]
+    TerminalOwner {
+        terminal_id: TerminalId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<crate::SessionId>,
+    },
     #[serde(rename = "snapshot.required")]
     SnapshotRequired {
         workspace_id: WorkspaceId,

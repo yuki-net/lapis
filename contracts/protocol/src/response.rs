@@ -65,6 +65,10 @@ pub enum ResponseBody {
     TerminalResize(TerminalCommandResponse),
     #[serde(rename = "terminal.terminate")]
     TerminalTerminate(TerminalCommandResponse),
+    #[serde(rename = "terminal.claim")]
+    TerminalClaim(TerminalCommandResponse),
+    #[serde(rename = "terminal.release")]
+    TerminalRelease(TerminalCommandResponse),
     #[serde(rename = "snapshot.resync")]
     SnapshotResync(SnapshotResponse),
     #[serde(rename = "error")]
@@ -101,6 +105,8 @@ impl ResponseBody {
             Self::TerminalInput(_) => Some("terminal.input"),
             Self::TerminalResize(_) => Some("terminal.resize"),
             Self::TerminalTerminate(_) => Some("terminal.terminate"),
+            Self::TerminalClaim(_) => Some("terminal.claim"),
+            Self::TerminalRelease(_) => Some("terminal.release"),
             Self::SnapshotResync(_) => Some("snapshot.resync"),
             Self::Error(_) => None,
         }

@@ -17,6 +17,7 @@ pub enum BackendStateError {
     TerminalNotFound,
     TerminalNotAttached,
     TerminalNotRunning,
+    TerminalNotOwner,
     InvalidTerminalSize,
     InvalidWorkbench,
     RevisionConflict(RevisionConflict),
@@ -41,6 +42,7 @@ impl fmt::Display for BackendStateError {
             Self::TerminalNotFound => formatter.write_str("terminal was not found"),
             Self::TerminalNotAttached => formatter.write_str("terminal is not attached to session"),
             Self::TerminalNotRunning => formatter.write_str("terminal is not running"),
+            Self::TerminalNotOwner => formatter.write_str("terminal is owned by another session"),
             Self::InvalidTerminalSize => {
                 formatter.write_str("terminal size must be greater than zero")
             }
@@ -91,6 +93,7 @@ impl From<terminal_state::TerminalStateError> for BackendStateError {
             terminal_state::TerminalStateError::NotFound => Self::TerminalNotFound,
             terminal_state::TerminalStateError::NotAttached => Self::TerminalNotAttached,
             terminal_state::TerminalStateError::NotRunning => Self::TerminalNotRunning,
+            terminal_state::TerminalStateError::NotOwner => Self::TerminalNotOwner,
             terminal_state::TerminalStateError::InvalidSize => Self::InvalidTerminalSize,
             terminal_state::TerminalStateError::Backend(error) => Self::Terminal(error),
         }

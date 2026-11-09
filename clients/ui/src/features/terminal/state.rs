@@ -542,6 +542,17 @@ impl TerminalFeature {
         self.operate(move |session| session.input_semantic(&id, input), cx);
     }
 
+    /// 他の Client が操作中でも、明示的に操作権を奪う。
+    pub(super) fn claim(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        self.operate(move |session| session.claim(&id), cx);
+    }
+
+    pub(super) fn release(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        self.operate(move |session| session.release(&id), cx);
+    }
+
     pub(super) fn resize(&mut self, columns: u16, rows: u16, cx: &mut gpui::Context<Self>) {
         let Some(id) = self.active_id() else { return };
         self.operate(move |session| session.resize(&id, columns, rows), cx);

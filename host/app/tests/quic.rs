@@ -141,6 +141,8 @@ async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd
         assert_eq!(found.status, ModelStatus::Running);
         let attached = observer.attach(&virtual_root, &id).unwrap();
         assert_eq!(attached.id, id);
+        // 別 Client が操作するには操作権を取得する。
+        observer.claim(&id).unwrap();
         drop(terminals);
         let command = if cfg!(windows) {
             "set LAPIS_PART=SHARED\r\necho LAPIS_PORT_%LAPIS_PART%\r\ntype cwd-proof.txt\r\n"
@@ -1255,25 +1257,37 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
         assert!(matches!(
             request(
                 &mut second,
-                2,
-                RequestBody::TerminalInput(TerminalInputRequest {
+                3,
+                RequestBody::TerminalClaim(TerminalClaimRequest {
                     terminal_id: terminal.clone(),
-                    input: TerminalInput::Text(
-                        if cfg!(windows) {
-                            "Write-Output ('LAPIS_QUIC_' + 'SHARED_PTY')\r\n"
-                        } else {
-                            "printf 'LAPIS_QUIC_%s\\n' SHARED_PTY\n"
-                        }
-                        .to_owned()
-                    ),
                 })
             )
             .await,
-            ResponseBody::TerminalInput(_)
+            ResponseBody::TerminalClaim(_)
         ));
+        let input_response = request(
+            &mut second,
+            2,
+            RequestBody::TerminalInput(TerminalInputRequest {
+                terminal_id: terminal.clone(),
+                input: TerminalInput::Text(
+                    if cfg!(windows) {
+                        "Write-Output ('LAPIS_QUIC_' + 'SHARED_PTY')\r\n"
+                    } else {
+                        "printf 'LAPIS_QUIC_%s\\n' SHARED_PTY\n"
+                    }
+                    .to_owned(),
+                ),
+            }),
+        )
+        .await;
+        assert!(
+            matches!(input_response, ResponseBody::TerminalInput(_)),
+            "terminal input failed: {input_response:?}"
+        );
         let mut last_output = String::new();
         let completed = tokio::time::timeout(Duration::from_secs(15), async {
-            let mut number = 3;
+            let mut number = 4;
             loop {
                 let ResponseBody::SnapshotResync(response) = request(
                     &mut second,

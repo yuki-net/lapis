@@ -67,6 +67,8 @@ Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
 - 通常更新は連続した `TerminalDelta.revision` の changed rows を使う。
 - `terminal.input` / `terminal.resize` / `terminal.terminate` の応答は受理だけを返し、
   画面や状態は載せない。状態は `terminal.delta` / `terminal.status` イベントで届く。
+- 入力と resize は操作権を持つ Session だけが行える。`terminal.claim` で取得し、
+  `terminal.release` または接続断で解放する。操作権の変更は `terminal.owner` で通知する。
 - Client から Host へは `TerminalInput::Text`、`Key`、`Paste` を送り、PTY bytes
   への変換と bracketed paste の処理は Host の Terminal Engine 境界で行う。
 - attach、表示、focus、別 Client の接続では PTY size を変更しない。Client の
