@@ -889,6 +889,55 @@ mod tests {
         }
     }
 
+    #[gpui::test]
+    fn older_action_or_poll_responses_do_not_restore_terminal_list_or_owner(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, _| {
+                let newer = terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("newer"),
+                    "workspace".into(),
+                    TerminalStatus::Running,
+                    TerminalSize::new(80, 24),
+                );
+                let older = terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("older"),
+                    "workspace".into(),
+                    TerminalStatus::Running,
+                    TerminalSize::new(80, 24),
+                );
+                let newer_owners =
+                    HashMap::from([("newer".to_owned(), Some("owner-newer".to_owned()))]);
+                let older_owners =
+                    HashMap::from([("older".to_owned(), Some("owner-older".to_owned()))]);
+
+                // 新しい応答の後に古い poll が届いても、一覧と owner を戻さない。
+                feature.apply_projection(2, vec![newer.clone()], newer_owners.clone());
+                feature.apply_projection(1, vec![older.clone()], older_owners.clone());
+                assert_eq!(feature.terminals[0].id, newer.id);
+                assert_eq!(feature.owners, newer_owners);
+
+                // 新しい poll の後に古い action が届いても同じ。
+                feature.apply_projection(4, vec![newer.clone()], newer_owners.clone());
+                feature.apply_projection(3, vec![older], older_owners);
+                assert_eq!(feature.terminals[0].id, newer.id);
+                assert_eq!(feature.owners, newer_owners);
+            });
+        });
+    }
+
     #[test]
     fn owner_updates_survive_a_later_terminal_poll_error() {
         let (mut sessions, backend) = feature();
