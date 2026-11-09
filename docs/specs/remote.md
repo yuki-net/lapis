@@ -56,6 +56,13 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 ## 最低限の確認項目
 
 未認証・権限不足・Workspace外path・失効済credentialを拒否できるか、stale revisionを検出できるか、切断中の実行状態を誤認しないか、再接続時にcacheを更新できるかを検証します。実行可能な検証手段の正本はテストコードとCIです。
+## Workbench のタブ参照
+
+Workbench に保存するタブは `TabRef` で参照先だけを保持する。Document は `DocumentId`、
+Terminal は Host の `TerminalId`、その他の View は `ViewInstanceId` を識別子とする。
+復元した Client は参照先の Resource に再アタッチし、Terminal では新しい shell を開始しない。
+保存済みの旧形式（文字列の View ID）は読み込み時に `TabRef` へ変換する。
+
 ## Terminal の同期契約
 
 Terminal の正規状態は Host が所有する。PTY の raw bytes は Host 内部の

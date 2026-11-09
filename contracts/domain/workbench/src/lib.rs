@@ -1,7 +1,8 @@
 //! ClientとHostが共有する作業画面の配置値。
 
 use editor_core::{ConversationId, DocumentId, WorkspaceId};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use terminal::TerminalId;
 use workspace::WorkspaceRelativePath;
 
 mod replica;
@@ -158,12 +159,75 @@ pub enum PanelLayoutViewState {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ZonePanelViewState {
     pub id: String,
-    pub tabs: Vec<String>,
+    #[serde(default)]
+    pub tabs: Vec<TabRef>,
     /// ピン留めされたタブ。古い保存データには存在しないため default で補う。
     #[serde(default)]
-    pub pinned_tabs: Vec<String>,
-    pub active_tab: Option<String>,
+    pub pinned_tabs: Vec<TabRef>,
+    #[serde(default)]
+    pub active_tab: Option<TabRef>,
     pub open: bool,
+}
+
+/// Panelに置かれたタブが参照するResource。Viewの所有権は持たない。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum TabRef {
+    Document {
+        id: DocumentId,
+    },
+    Terminal {
+        id: TerminalId,
+    },
+    /// ViewInstanceId。同じViewを複数開いても個体を区別できる。
+    View {
+        id: String,
+    },
+}
+
+impl TabRef {
+    /// 旧形式の文字列を読み、現在の参照へ変換する。
+    pub fn from_legacy(value: &str) -> Option<Self> {
+        if let Some(id) = value.strip_prefix("document:") {
+            return (!id.is_empty()).then(|| Self::Document {
+                id: DocumentId::new(id),
+            });
+        }
+        let (_, instance) = value.strip_prefix("tool:")?.split_once(':')?;
+        (!instance.is_empty()).then(|| Self::View {
+            id: instance.to_owned(),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for TabRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Encoded {
+            Legacy(String),
+            Current { kind: String, id: String },
+        }
+
+        match Encoded::deserialize(deserializer)? {
+            Encoded::Legacy(value) => {
+                Self::from_legacy(&value).ok_or_else(|| serde::de::Error::custom("不正なタブ参照"))
+            }
+            Encoded::Current { kind, id } => match kind.as_str() {
+                "document" if !id.is_empty() => Ok(Self::Document {
+                    id: DocumentId::new(id),
+                }),
+                "terminal" if !id.is_empty() => Ok(Self::Terminal {
+                    id: TerminalId::new(id),
+                }),
+                "view" if !id.is_empty() => Ok(Self::View { id }),
+                _ => Err(serde::de::Error::custom("不正なタブ参照")),
+            },
+        }
+    }
 }
 
 /// Hostが保持する表示状態。revisionは同時更新の検出に使う。
@@ -218,6 +282,49 @@ mod tests {
         assert!(view.workspace.is_none());
         let encoded = serde_json::to_value(view).unwrap();
         assert!(encoded.get("workspace").is_none());
+    }
+
+    #[test]
+    fn legacy_string_tabs_are_readable_and_new_tabs_are_resource_refs() {
+        let old = serde_json::json!({
+            "id": "panel-1",
+            "tabs": [
+                "document:doc-a",
+                "tool:lapis.view.terminal:lapis.view.terminal:token"
+            ],
+            "pinned_tabs": ["document:doc-a"],
+            "active_tab": "tool:lapis.view.terminal:lapis.view.terminal:token",
+            "open": true
+        });
+        let panel: ZonePanelViewState = serde_json::from_value(old).unwrap();
+        assert_eq!(
+            panel.tabs,
+            vec![
+                TabRef::Document {
+                    id: DocumentId::new("doc-a")
+                },
+                TabRef::View {
+                    id: "lapis.view.terminal:token".into()
+                }
+            ]
+        );
+        assert_eq!(panel.pinned_tabs, vec![panel.tabs[0].clone()]);
+        assert_eq!(panel.active_tab, Some(panel.tabs[1].clone()));
+
+        let encoded = serde_json::to_value(ZonePanelViewState {
+            id: "panel-2".into(),
+            tabs: vec![TabRef::Terminal {
+                id: TerminalId::new("host-terminal"),
+            }],
+            pinned_tabs: Vec::new(),
+            active_tab: None,
+            open: true,
+        })
+        .unwrap();
+        assert_eq!(
+            encoded["tabs"][0],
+            serde_json::json!({"kind": "terminal", "id": "host-terminal"})
+        );
     }
 
     #[test]

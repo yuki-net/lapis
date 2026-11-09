@@ -147,7 +147,7 @@ pub enum DocumentCloseDisposition {
 }
 
 pub use workbench::{
-    ConversationViewState, PanelLayoutViewState, SharedDocumentView, SharedWorkspaceView,
+    ConversationViewState, PanelLayoutViewState, SharedDocumentView, SharedWorkspaceView, TabRef,
     ViewBindingState, ViewScopeState, WorkbenchLayoutState, WorkbenchModeState, WorkbenchViewState,
     ZONE_LAYOUT_VERSION, ZoneLayoutViewState, ZonePanelViewState, ZoneViewState,
 };

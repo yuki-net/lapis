@@ -549,10 +549,10 @@ mod tests {
         let saved = zone.capture();
         let json = serde_json::to_string(&saved).unwrap();
         let decoded = serde_json::from_str(&json).unwrap();
-        let mut parse = |raw: &str| {
-            if raw.contains("tool:a:") {
+        let mut parse = |raw: &desktop_client::TabRef| {
+            if matches!(raw, desktop_client::TabRef::View { id } if id == "shared:a") {
                 Some(a.clone())
-            } else if raw.contains("tool:b:") {
+            } else if matches!(raw, desktop_client::TabRef::View { id } if id == "shared:b") {
                 Some(b.clone())
             } else {
                 None

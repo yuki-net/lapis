@@ -97,6 +97,12 @@ impl TerminalSessions {
     }
 }
 
+/// Terminal Resourceの変化。Shellは受信してタブをResource参照へ更新する。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TerminalFeatureEvent {
+    Started(terminal::TerminalId),
+}
+
 #[derive(Default)]
 struct TerminalRequests {
     gate: crate::client_adapter::ResponseGate,
@@ -175,6 +181,9 @@ pub(crate) struct TerminalFeature {
     message_from_poll: bool,
     pub(super) scroll: crate::components::ScrollState,
 }
+
+impl gpui::EventEmitter<TerminalFeatureEvent> for TerminalFeature {}
+
 impl TerminalFeature {
     /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
     fn project(&mut self, version: u64, terminals: Vec<terminal::TerminalSnapshot>) {
@@ -247,6 +256,19 @@ impl TerminalFeature {
     }
     pub(crate) fn bind_resource(&mut self, resource: Option<terminal::TerminalId>) {
         self.bound_resource = resource;
+    }
+
+    /// タブが参照するHost Terminalへ接続する。見つからない場合も新しいshellは開始しない。
+    pub(crate) fn show_resource(
+        &mut self,
+        resource: terminal::TerminalId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.bound_resource.as_ref() == Some(&resource) {
+            return;
+        }
+        self.bound_resource = Some(resource.clone());
+        self.attach(resource, cx);
     }
     pub(crate) fn new(
         session: TerminalSession,
@@ -411,6 +433,11 @@ impl TerminalFeature {
                         feature.project(version, terminals);
                         feature.selected =
                             feature.terminals.last().map(|terminal| terminal.id.clone());
+                        if result.is_ok()
+                            && let Some(id) = feature.selected.clone()
+                        {
+                            cx.emit(TerminalFeatureEvent::Started(id));
+                        }
                         feature.message = result.err().unwrap_or_default();
                         feature.message_from_poll = false;
                     }

@@ -15,12 +15,15 @@ const POSITIONS: [ZonePosition; 4] = [
     ZonePosition::Bottom,
 ];
 
-pub(crate) fn serialize_tab(tab: &PanelTab) -> String {
+pub(crate) fn serialize_tab(tab: &PanelTab) -> desktop_client::TabRef {
     match tab {
-        PanelTab::Document(id) => format!("document:{}", id.as_str()),
-        PanelTab::Tool { view, instance } => {
-            format!("tool:{}:{}", view.as_str(), instance.as_str())
-        }
+        PanelTab::Document(id) => desktop_client::TabRef::Document { id: id.clone() },
+        PanelTab::Tool { instance, .. } => match tab.terminal_id() {
+            Some(id) => desktop_client::TabRef::Terminal { id },
+            None => desktop_client::TabRef::View {
+                id: instance.as_str().to_owned(),
+            },
+        },
     }
 }
 
@@ -546,6 +549,32 @@ impl DockLayout {
         })
     }
 
+    /// 既存Panel内のTabを、同じ位置を保ったまま別のResource参照へ置き換える。
+    pub(crate) fn replace_tab(&mut self, id: &PanelId, old: &PanelTab, new: PanelTab) -> bool {
+        if self
+            .placements()
+            .iter()
+            .any(|(existing, _)| existing.instance_id() == new.instance_id())
+        {
+            return false;
+        }
+        let Some(panel) = self.panel_mut(id) else {
+            return false;
+        };
+        let Some(index) = panel.tabs.iter().position(|tab| tab == old) else {
+            return false;
+        };
+        let pinned = panel.pinned.remove(old);
+        panel.tabs[index] = new.clone();
+        if pinned {
+            panel.pinned.insert(new.clone());
+        }
+        if panel.active.as_ref() == Some(old) {
+            panel.active = Some(new);
+        }
+        true
+    }
+
     pub(crate) fn remove_tab(&mut self, id: &PanelId, tab: &PanelTab, now: Instant) -> bool {
         let Some(position) = self.zone_for_panel(id) else {
             return false;
@@ -674,7 +703,7 @@ impl DockLayout {
         mut parse_tab: F,
     ) -> Option<Self>
     where
-        F: FnMut(&str) -> Option<PanelTab>,
+        F: FnMut(&desktop_client::TabRef) -> Option<PanelTab>,
     {
         if saved.version != desktop_client::ZONE_LAYOUT_VERSION {
             return None;
@@ -758,7 +787,7 @@ mod tests {
             PanelTab::tool(crate::features::id::VIEW_FILES),
         ];
         let mut restored = DockLayout::restore(&saved, |raw| {
-            all.iter().find(|tab| serialize_tab(tab) == raw).cloned()
+            all.iter().find(|tab| &serialize_tab(tab) == raw).cloned()
         })
         .unwrap();
         assert!(restored.tab_is_pinned(&pinned));
@@ -991,7 +1020,7 @@ mod tests {
             .collect::<Vec<_>>();
         let restored = DockLayout::restore(&decoded, |raw| {
             tabs.iter()
-                .find(|tab| super::super::layout::serialize_tab(tab) == raw)
+                .find(|tab| &super::super::layout::serialize_tab(tab) == raw)
                 .cloned()
         })
         .unwrap();
@@ -1085,6 +1114,50 @@ mod tests {
         let before = model.capture();
         assert!(model.open_tab(ZonePosition::Right, duplicate).is_err());
         assert_eq!(model.capture(), before);
+    }
+
+    #[test]
+    fn terminal_tab_persists_the_host_id_and_restores_the_same_resource() {
+        let mut layout = DockLayout::default();
+        let id = terminal::TerminalId::new("host-terminal");
+        let tab = PanelTab::terminal(id.clone());
+        layout.open_tab(ZonePosition::Bottom, tab.clone()).unwrap();
+        let saved = layout.capture();
+        assert!(
+            saved
+                .zones
+                .iter()
+                .flat_map(|zone| &zone.panels)
+                .flat_map(|panel| &panel.tabs)
+                .any(|reference| reference == &desktop_client::TabRef::Terminal { id: id.clone() })
+        );
+        let tabs = layout
+            .placements()
+            .into_iter()
+            .map(|(tab, _)| tab)
+            .collect::<Vec<_>>();
+        let restored = DockLayout::restore(&saved, |reference| {
+            tabs.iter()
+                .find(|tab| &serialize_tab(tab) == reference)
+                .cloned()
+        })
+        .unwrap();
+        assert!(restored.find_tab(&tab).is_some());
+        assert_eq!(restored.capture(), saved);
+    }
+
+    #[test]
+    fn replacing_a_terminal_view_keeps_its_panel_and_active_position() {
+        let mut layout = DockLayout::default();
+        let generic = PanelTab::tool(crate::features::id::VIEW_TERMINAL);
+        let panel = layout
+            .open_tab(ZonePosition::Bottom, generic.clone())
+            .unwrap();
+        let terminal = PanelTab::terminal(terminal::TerminalId::new("host-terminal"));
+        assert!(layout.replace_tab(&panel, &generic, terminal.clone()));
+        assert_eq!(layout.find_tab(&terminal), Some(panel.clone()));
+        assert_eq!(layout.panel(&panel).unwrap().active, Some(terminal));
+        assert!(layout.find_tab(&generic).is_none());
     }
 
     #[test]
@@ -1186,7 +1259,7 @@ mod tests {
             .collect::<Vec<_>>();
         let restored = DockLayout::restore(&saved, |raw| {
             tabs.iter()
-                .find(|tab| super::super::layout::serialize_tab(tab) == raw)
+                .find(|tab| &super::super::layout::serialize_tab(tab) == raw)
                 .cloned()
         })
         .unwrap();
@@ -1340,9 +1413,10 @@ mod tests {
             .unwrap();
         zone.panels[0].id = "panel-999".into();
         assert!(
-            DockLayout::restore(&saved, |raw| raw
-                .contains(crate::features::id::VIEW_FILES)
-                .then(|| PanelTab::tool(crate::features::id::VIEW_FILES)))
+            DockLayout::restore(&saved, |raw| {
+                matches!(raw, desktop_client::TabRef::View { id } if id.contains(crate::features::id::VIEW_FILES))
+                    .then(|| PanelTab::tool(crate::features::id::VIEW_FILES))
+            })
             .is_none()
         );
     }
@@ -1365,10 +1439,15 @@ mod tests {
         right.panels[0].tabs = vec![raw.clone()];
         right.panels[0].active_tab = Some(raw);
         assert!(
-            DockLayout::restore(&saved, |raw| if raw.contains("tool:same:") {
-                Some(tab.clone())
-            } else {
-                Some(PanelTab::tool(crate::features::id::VIEW_FILES))
+            DockLayout::restore(&saved, |raw| {
+                if matches!(
+                    raw,
+                    desktop_client::TabRef::View { id } if id.contains("shared:same")
+                ) {
+                    Some(tab.clone())
+                } else {
+                    Some(PanelTab::tool(crate::features::id::VIEW_FILES))
+                }
             })
             .is_none()
         );

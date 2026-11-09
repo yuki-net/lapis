@@ -10538,6 +10538,7 @@ dependencies = [
  "editor-core",
  "serde",
  "serde_json",
+ "terminal",
  "workspace",
 ]
 

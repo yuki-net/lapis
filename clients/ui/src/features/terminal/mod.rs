@@ -7,7 +7,7 @@ mod input;
 mod state;
 mod view;
 
-pub(crate) use state::TerminalFeature;
+pub(crate) use state::{TerminalFeature, TerminalFeatureEvent};
 
 /// OS ごとの既定等幅フォント。
 pub(crate) fn default_font_family() -> &'static str {

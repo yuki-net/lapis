@@ -211,12 +211,17 @@ impl Shell {
                         }),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
-                        PanelTab::Tool { .. } => this.select_tab_in_panel(
-                            select_panel.clone(),
-                            position,
-                            tab.clone(),
-                            cx,
-                        ),
+                        PanelTab::Tool { .. } => {
+                            this.select_tab_in_panel(
+                                select_panel.clone(),
+                                position,
+                                tab.clone(),
+                                cx,
+                            );
+                            if let Some(id) = tab.terminal_id() {
+                                cx.emit(UiCommand::ActivateTerminal(id));
+                            }
+                        }
                         PanelTab::Document(document_id) => {
                             this.select_tab_in_panel(
                                 select_panel.clone(),

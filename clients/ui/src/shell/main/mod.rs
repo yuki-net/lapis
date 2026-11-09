@@ -294,6 +294,15 @@ impl Shell {
     pub(crate) fn view_state(&self) -> desktop_client::ConversationViewState {
         crate::features::conversation::capture_view_state(&self.shell)
     }
+
+    /// 表示中のPanelから、Host Terminalを参照しているタブのResourceを返す。
+    pub(crate) fn active_terminal_resource(&self) -> Option<terminal::TerminalId> {
+        self.shell
+            .layout
+            .visible_panels()
+            .filter_map(|panel| self.shell.visible_active(panel))
+            .find_map(PanelTab::terminal_id)
+    }
     pub(crate) fn restore_view(
         &mut self,
         view: desktop_client::ConversationViewState,

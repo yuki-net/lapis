@@ -18,7 +18,7 @@ use crate::{
         search::SearchFeature,
         settings::SettingsFeature,
         tasks::TasksFeature,
-        terminal::TerminalFeature,
+        terminal::{TerminalFeature, TerminalFeatureEvent},
     },
     shell::main::{Shell, ShellPresentation},
     workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
@@ -244,6 +244,9 @@ impl DesktopRoot {
                 shell.restore_view(view, cx);
             }
         });
+        if let Some(id) = shell.read(cx).active_terminal_resource() {
+            terminal.update(cx, |terminal, cx| terminal.show_resource(id, cx));
+        }
         let group = cx.new(|_| {
             crate::window_host::WindowGroup::new(
                 window,
@@ -280,6 +283,11 @@ impl DesktopRoot {
                     cx.refresh_windows();
                 },
             ),
+            cx.subscribe(&terminal, |root, _, event: &TerminalFeatureEvent, cx| {
+                let TerminalFeatureEvent::Started(id) = event;
+                root.activate_terminal(id.clone(), cx);
+                root.schedule_persist(cx);
+            }),
             cx.subscribe_in(&shell, window, |root, _, command, window, cx| {
                 root.command(command.clone(), window, cx)
             }),
@@ -504,6 +512,7 @@ impl DesktopRoot {
                             }
                             root.shell
                                 .update(cx, |shell, cx| shell.restore_view(layout, cx));
+                            root.sync_terminal_tab(cx);
                             let _ = worker.submit(
                                 cx,
                                 move |client| client.restore_workbench(shared),
@@ -653,6 +662,8 @@ impl DesktopRoot {
             self.terminal.read(cx).context_task(),
             &snapshot.conversations,
         );
+        // Resource参照タブが表示中なら、そのHost Terminalを優先して再接続する。
+        let resource = self.shell.read(cx).active_terminal_resource().or(resource);
         self.terminal.update(cx, |terminal, cx| {
             terminal.bind_resource(resource);
             if let Some(target) = terminal_target {
@@ -718,6 +729,7 @@ impl DesktopRoot {
             }
             shell.apply_scope_visibility(hidden, cx);
         });
+        self.sync_terminal_tab(cx);
         self.sync_preview(cx);
     }
 
@@ -793,6 +805,24 @@ impl DesktopRoot {
         let task = self.workbench.context_task().cloned();
         let view = self.shell.read(cx).view_state();
         self.workbench.prepare_task_switch(task.as_ref(), &view);
+    }
+
+    /// Terminalタブの参照先をShellとTerminal Featureへ同時に反映する。
+    fn activate_terminal(&mut self, id: terminal::TerminalId, cx: &mut Context<Self>) {
+        self.shell
+            .update(cx, |shell, cx| shell.open_terminal_tab(id.clone(), cx));
+        self.terminal
+            .update(cx, |terminal, cx| terminal.show_resource(id, cx));
+        cx.notify();
+    }
+
+    /// 復元したLayoutのうち、表示中のTerminalタブをHostの既存PTYへ再接続する。
+    fn sync_terminal_tab(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.shell.read(cx).active_terminal_resource() else {
+            return;
+        };
+        self.terminal
+            .update(cx, |terminal, cx| terminal.show_resource(id, cx));
     }
 
     /// 一覧のTask選択は共通APIへ渡し、作業環境を変える操作だけWindow数で制限する。
@@ -1501,6 +1531,10 @@ impl DesktopRoot {
             UiCommand::ActivateDocument(id) => {
                 self.editor.update(cx, |editor, cx| editor.activate(id, cx));
                 crate::gpui_compat::focus(window, &self.editor.focus_handle(cx), cx);
+            }
+            UiCommand::ActivateTerminal(id) => {
+                self.activate_terminal(id, cx);
+                self.schedule_persist(cx);
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::SelectTask(id) => self.select_task(id, cx),

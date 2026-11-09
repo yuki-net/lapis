@@ -36,6 +36,7 @@ pub(crate) enum UiCommand {
     Copy,
     Paste,
     ActivateDocument(DocumentId),
+    ActivateTerminal(terminal::TerminalId),
     CloseDocument(DocumentId),
     CloseTabs(Vec<crate::shell::PanelTab>),
     SelectTask(editor_core::ConversationId),
