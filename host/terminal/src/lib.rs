@@ -4,6 +4,7 @@ use std::{
     fmt,
     path::Path,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use client_api::{
@@ -59,6 +60,8 @@ impl From<terminal::TerminalError> for TerminalStateError {
 pub struct TerminalRegistry {
     backend: Option<Arc<dyn TerminalBackend>>,
     resources: BTreeMap<TerminalId, TerminalResource>,
+    /// 操作権を自動解放するまでの無操作時間。
+    owner_idle_timeout: Duration,
 }
 
 impl TerminalRegistry {
@@ -76,7 +79,14 @@ impl TerminalRegistry {
         Self {
             backend,
             resources: BTreeMap::new(),
+            owner_idle_timeout: Duration::from_secs(300),
         }
+    }
+
+    /// 操作権の無操作タイムアウトを変更する（テスト・設定用）。
+    pub fn with_owner_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.owner_idle_timeout = timeout;
+        self
     }
 
     pub fn start(
@@ -100,6 +110,7 @@ impl TerminalRegistry {
         resource.cwd = request.cwd.clone();
         resource.attached_sessions.insert(session_id.clone());
         resource.owner = Some(session_id.clone());
+        resource.last_activity = Instant::now();
         let snapshot = resource.snapshot(workspace_id);
         self.resources.insert(terminal_id.clone(), resource);
         Ok((
@@ -125,6 +136,7 @@ impl TerminalRegistry {
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
         resource.require_owner(session_id)?;
+        resource.last_activity = Instant::now();
         backend.input(&resource.backend_id, input)?;
         Ok(resource.snapshot(workspace_id))
     }
@@ -144,6 +156,7 @@ impl TerminalRegistry {
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
         resource.require_owner(session_id)?;
+        resource.last_activity = Instant::now();
         let delta = backend.resize_delta(&resource.backend_id, size.columns, size.rows)?;
         resource.apply_delta(&delta)?;
         let snapshot = resource.snapshot(workspace_id);
@@ -187,7 +200,15 @@ impl TerminalRegistry {
             return Ok(Vec::new());
         };
         let mut published = Vec::new();
+        let idle_timeout = self.owner_idle_timeout;
         for resource in self.resources.values_mut() {
+            if resource.owner.is_some() && resource.last_activity.elapsed() >= idle_timeout {
+                resource.owner = None;
+                published.push(EventBody::TerminalOwner {
+                    terminal_id: resource.terminal_id.clone(),
+                    owner: None,
+                });
+            }
             if !matches!(
                 resource.status,
                 TerminalStatus::Running | TerminalStatus::Disconnected
@@ -281,6 +302,7 @@ impl TerminalRegistry {
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
         resource.owner = Some(session_id.clone());
+        resource.last_activity = Instant::now();
         Ok((
             resource.snapshot(workspace_id),
             EventBody::TerminalOwner {
@@ -359,6 +381,8 @@ struct TerminalResource {
     attached_sessions: HashSet<SessionId>,
     /// 入力を許可する Session。`None` は未所有。
     owner: Option<SessionId>,
+    /// 最後に操作した時刻。無操作で owner を解放する。
+    last_activity: Instant,
 }
 
 impl TerminalResource {
@@ -380,6 +404,7 @@ impl TerminalResource {
             screen: TerminalScreen::empty(size),
             attached_sessions: HashSet::new(),
             owner: None,
+            last_activity: Instant::now(),
         }
     }
 
@@ -614,6 +639,20 @@ mod tests {
             )
             .unwrap();
         assert_eq!(backend.input_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn idle_owner_is_released_and_notified() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, _workspace, _session, terminal) = start_registry(backend);
+        registry.owner_idle_timeout = Duration::ZERO;
+
+        let events = registry.poll().unwrap();
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            EventBody::TerminalOwner { terminal_id, owner: None } if terminal_id == &terminal
+        )));
     }
 
     #[test]
