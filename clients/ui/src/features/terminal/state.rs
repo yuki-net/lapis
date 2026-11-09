@@ -193,14 +193,6 @@ impl gpui::EventEmitter<TerminalFeatureEvent> for TerminalFeature {}
 
 impl TerminalFeature {
     /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
-    fn project(&mut self, version: u64, terminals: Vec<terminal::TerminalSnapshot>) {
-        if version < self.projected {
-            return;
-        }
-        self.projected = version;
-        self.terminals = terminals;
-    }
-
     /// 端末一覧と操作権を同じ版で投影する。古い版なら両方とも捨てる。
     fn apply_projection(
         &mut self,
@@ -447,15 +439,20 @@ impl TerminalFeature {
             move |sessions| {
                 let (result, terminals) = sessions
                     .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ()));
-                Ok((result, sessions.version(), terminals))
+                Ok((
+                    result,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok((result, version, terminals)) => {
-                        feature.project(version, terminals);
+                    Ok((result, version, terminals, owners)) => {
+                        feature.apply_projection(version, terminals, owners);
                         feature.selected =
                             feature.terminals.last().map(|terminal| terminal.id.clone());
                         if result.is_ok()
@@ -564,16 +561,21 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let (outcome, terminals) = sessions.action(|session| session.attach(&root, &id));
-                Ok((outcome, sessions.version(), terminals))
+                Ok((
+                    outcome,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
             },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, version, terminals)) => {
+                        Ok((outcome, version, terminals, owners)) => {
                             if outcome.is_ok() {
                                 feature.selected = Some(selected);
                             }
-                            feature.project(version, terminals);
+                            feature.apply_projection(version, terminals, owners);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -654,13 +656,18 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let (outcome, terminals) = sessions.action(operation);
-                Ok((outcome, sessions.version(), terminals))
+                Ok((
+                    outcome,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
             },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, version, terminals)) => {
-                            feature.project(version, terminals);
+                        Ok((outcome, version, terminals, owners)) => {
+                            feature.apply_projection(version, terminals, owners);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
