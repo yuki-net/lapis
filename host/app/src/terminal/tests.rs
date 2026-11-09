@@ -560,7 +560,6 @@ fn commands_reattach_after_disconnect_without_waiting_for_ui_poll_or_resync_comp
     {
         let mut attachments = fixture.terminals.attachments.lock().unwrap();
         let attachment = attachments.get_mut(fixture.id.as_str()).unwrap();
-        attachment.receiver = None;
         attachment.recovery = Some(pending_recovery);
     }
     fixture

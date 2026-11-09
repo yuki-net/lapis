@@ -11,10 +11,11 @@ use client_api::{
     TerminalTerminateRequest, WorkspaceConnectRequest,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     path::{Path, PathBuf},
     sync::{
         Mutex, TryLockError,
+        atomic::{AtomicBool, Ordering},
         mpsc::{self, TryRecvError},
     },
     thread,
@@ -24,11 +25,21 @@ use std::{
 pub(super) struct HostTerminals {
     host: BackendClient,
     attachments: Mutex<HashMap<String, Attachment>>,
+    changes: futures_channel::mpsc::UnboundedSender<()>,
+    changes_rx: Mutex<Option<futures_channel::mpsc::UnboundedReceiver<()>>>,
+}
+
+/// 受信スレッドが積み、`poll` が消費するイベントの箱。
+#[derive(Default)]
+struct Inbox {
+    events: Mutex<VecDeque<client_api::EventEnvelope>>,
+    closed: AtomicBool,
 }
 
 struct Attachment {
     client: Option<Client>,
-    receiver: Option<BackendEventReceiver>,
+    inbox: std::sync::Arc<Inbox>,
+    changes: futures_channel::mpsc::UnboundedSender<()>,
     terminal_id: client_api::TerminalId,
     cwd: PathBuf,
     event_watermark: Option<u64>,
@@ -56,42 +67,58 @@ impl Attachment {
         thread::Builder::new()
             .name("lapis-terminal-resync".to_owned())
             .spawn(move || {
-                let result = (|| {
-                    match client
-                        .request(RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
-                            workspace_id: client.workspace_id().clone(),
-                        }))
-                        .map_err(error)?
-                    {
-                        ResponseBody::WorkspaceConnect(_) => {}
-                        _ => return Err(error("terminal reconnect rejected")),
+                // 通知駆動の UI では再試行タイマーが無いため、接続が戻るまでここで待つ。
+                let mut last_error = None;
+                for attempt in 0..60 {
+                    let result = (|| {
+                        match client
+                            .request(RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                                workspace_id: client.workspace_id().clone(),
+                            }))
+                            .map_err(error)?
+                        {
+                            ResponseBody::WorkspaceConnect(_) => {}
+                            _ => return Err(error("terminal reconnect rejected")),
+                        }
+                        let receiver = client.subscribe().map_err(error)?;
+                        let ResponseBody::SnapshotResync(response) = client
+                            .request(RequestBody::SnapshotResync(SnapshotRequest {
+                                workspace_id: client.workspace_id().clone(),
+                                reason,
+                            }))
+                            .map_err(error)?
+                        else {
+                            return Err(error("terminal resync rejected"));
+                        };
+                        let terminal = response
+                            .snapshot
+                            .terminals
+                            .into_iter()
+                            .find(|terminal| terminal.terminal_id == terminal_id)
+                            .ok_or_else(|| error("terminal missing from authoritative snapshot"))?;
+                        Ok(Recovery {
+                            receiver,
+                            event_watermark: response.snapshot.event_watermark.value(),
+                            terminal,
+                        })
+                    })();
+                    match result {
+                        Ok(recovery) => {
+                            let _ = sender.send(Ok(recovery));
+                            return;
+                        }
+                        Err(error) => last_error = Some(error),
                     }
-                    let receiver = client.subscribe().map_err(error)?;
-                    let ResponseBody::SnapshotResync(response) = client
-                        .request(RequestBody::SnapshotResync(SnapshotRequest {
-                            workspace_id: client.workspace_id().clone(),
-                            reason,
-                        }))
-                        .map_err(error)?
-                    else {
-                        return Err(error("terminal resync rejected"));
-                    };
-                    let terminal = response
-                        .snapshot
-                        .terminals
-                        .into_iter()
-                        .find(|terminal| terminal.terminal_id == terminal_id)
-                        .ok_or_else(|| error("terminal missing from authoritative snapshot"))?;
-                    Ok(Recovery {
-                        receiver,
-                        event_watermark: response.snapshot.event_watermark.value(),
-                        terminal,
-                    })
-                })();
-                let _ = sender.send(result);
+                    if attempt < 59 {
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                }
+                let _ = sender.send(Err(
+                    last_error.unwrap_or_else(|| error("terminal resync stopped"))
+                ));
             })
             .map_err(error)?;
-        self.receiver = None;
+        self.inbox.closed.store(true, Ordering::Release);
         self.recovery = Some(receiver);
         Ok(())
     }
@@ -111,11 +138,31 @@ impl Attachment {
 
     fn detach(&mut self) {
         self.finished = true;
-        let receiver = self.receiver.take();
         let client = self.client.take();
         let _ = thread::Builder::new()
             .name("lapis-terminal-detach".to_owned())
-            .spawn(move || drop((receiver, client)));
+            .spawn(move || drop(client));
+    }
+
+    /// 受信したイベントを箱へ移す専用スレッドを開始する。UI は通知で `poll` する。
+    fn start_forwarder(&mut self, receiver: BackendEventReceiver) {
+        let inbox = std::sync::Arc::new(Inbox::default());
+        self.inbox = inbox.clone();
+        let changes = self.changes.clone();
+        let _ = thread::Builder::new()
+            .name("lapis-terminal-events".to_owned())
+            .spawn(move || {
+                while let Ok(event) = receiver.recv() {
+                    if let Ok(mut events) = inbox.events.lock() {
+                        events.push_back(event);
+                    }
+                    if changes.unbounded_send(()).is_err() {
+                        return;
+                    }
+                }
+                inbox.closed.store(true, Ordering::Release);
+                let _ = changes.unbounded_send(());
+            });
     }
 
     fn restore(&mut self, recovery: Recovery) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -142,7 +189,7 @@ impl Attachment {
         };
         self.revision = snapshot.revision;
         self.event_watermark = Some(recovery.event_watermark);
-        self.receiver = Some(recovery.receiver);
+        self.start_forwarder(recovery.receiver);
         if matches!(
             status,
             ModelTerminalStatus::Exited | ModelTerminalStatus::Failed
@@ -166,22 +213,28 @@ impl Attachment {
             self.retry_at = Instant::now() + Duration::from_millis(100);
             return self.restore(recovered?);
         }
-        if self.receiver.is_none() {
+        if self.inbox.closed.load(Ordering::Acquire) {
             if Instant::now() >= self.retry_at {
                 self.resync(SnapshotReason::Reconnect)?;
             }
             return Ok(Vec::new());
         }
-        let mut events = Vec::new();
-        for _ in 0..256 {
-            let event = match self.receiver.as_ref().expect("active receiver").try_recv() {
-                Ok(event) => event,
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => {
-                    self.resync(SnapshotReason::Reconnect)?;
-                    break;
-                }
+        let queued: Vec<_> = {
+            let Ok(mut events) = self.inbox.events.lock() else {
+                return Ok(Vec::new());
             };
+            // VecDeque::drain は途中で捨てると残りも消えるため、pop で必要数だけ取り出す。
+            let mut queued = Vec::with_capacity(256);
+            while queued.len() < 256 {
+                let Some(event) = events.pop_front() else {
+                    break;
+                };
+                queued.push(event);
+            }
+            queued
+        };
+        let mut events = Vec::new();
+        for event in queued {
             let sequence = event.event_sequence.value();
             if self
                 .event_watermark
@@ -237,9 +290,12 @@ impl Attachment {
 
 impl HostTerminals {
     pub(super) fn new(host: BackendClient) -> Self {
+        let (changes, changes_rx) = futures_channel::mpsc::unbounded();
         Self {
             host,
             attachments: Mutex::new(HashMap::new()),
+            changes,
+            changes_rx: Mutex::new(Some(changes_rx)),
         }
     }
 
@@ -334,20 +390,23 @@ impl TerminalBackend for HostTerminals {
         let initial_revision = response.terminal.revision;
         let terminal_id = response.terminal.terminal_id;
         let id = TerminalId::new(terminal_id.as_str());
-        self.attachments.lock().map_err(error)?.insert(
-            id.as_str().to_owned(),
-            Attachment {
-                client: Some(client),
-                receiver: Some(receiver),
-                terminal_id,
-                cwd: cwd.to_owned(),
-                event_watermark: None,
-                revision: initial_revision,
-                recovery: None,
-                retry_at: Instant::now(),
-                finished: false,
-            },
-        );
+        let mut attachment = Attachment {
+            client: Some(client),
+            inbox: std::sync::Arc::new(Inbox::default()),
+            changes: self.changes.clone(),
+            terminal_id,
+            cwd: cwd.to_owned(),
+            event_watermark: None,
+            revision: initial_revision,
+            recovery: None,
+            retry_at: Instant::now(),
+            finished: false,
+        };
+        attachment.start_forwarder(receiver);
+        self.attachments
+            .lock()
+            .map_err(error)?
+            .insert(id.as_str().to_owned(), attachment);
         Ok(id)
     }
 
@@ -393,7 +452,8 @@ impl TerminalBackend for HostTerminals {
         let snapshot = model_snapshot(&root, terminal.clone())?;
         let mut attachment = Attachment {
             client: Some(client),
-            receiver: None,
+            inbox: std::sync::Arc::new(Inbox::default()),
+            changes: self.changes.clone(),
             terminal_id: terminal.terminal_id.clone(),
             cwd: snapshot.cwd.clone(),
             event_watermark: None,
@@ -481,6 +541,10 @@ impl TerminalBackend for HostTerminals {
             })
         })
         .map(|_| ())
+    }
+
+    fn changes(&self) -> Option<futures_channel::mpsc::UnboundedReceiver<()>> {
+        self.changes_rx.lock().ok()?.take()
     }
 }
 

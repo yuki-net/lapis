@@ -74,6 +74,7 @@ struct BackendState {
     workspace: WorkspaceId,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
+    changes_rx: Option<mpsc::UnboundedReceiver<()>>,
 }
 
 /// Host接続の設定。ページのクエリかlocalStorageから渡される。
@@ -181,16 +182,23 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     }
     preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
+    let (changes, changes_rx) = mpsc::unbounded();
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             workspace,
             replica: replica.clone(),
             commands,
+            changes_rx: Some(changes_rx),
         })
     });
     wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
     if let Some(events) = events {
-        wasm_bindgen_futures::spawn_local(event_pump(connection.clone(), events, replica.clone()));
+        wasm_bindgen_futures::spawn_local(event_pump(
+            connection.clone(),
+            events,
+            replica.clone(),
+            changes,
+        ));
     }
     preload(&connection, &replica).await?;
     Ok(fresh_credential)
@@ -914,6 +922,10 @@ impl TerminalBackend for WebBackend {
             return Err(TerminalError::new("Terminalの要求を送信できません"));
         }
         Ok(())
+    }
+
+    fn changes(&self) -> Option<mpsc::UnboundedReceiver<()>> {
+        self.with(|state| state.changes_rx.take()).ok().flatten()
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {

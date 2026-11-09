@@ -1857,6 +1857,7 @@ dependencies = [
  "dioxus-devtools",
  "document",
  "editor-core",
+ "futures-util",
  "getrandom 0.3.4",
  "git-contract",
  "gloo-timers",
@@ -3839,6 +3840,7 @@ dependencies = [
  "client-api",
  "document",
  "editor-core",
+ "futures-channel",
  "futures-util",
  "getrandom 0.3.4",
  "git-contract",
@@ -8267,6 +8269,7 @@ name = "terminal"
 version = "0.1.0"
 dependencies = [
  "editor-core",
+ "futures-channel",
  "serde",
  "serde_json",
 ]

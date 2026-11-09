@@ -268,8 +268,11 @@ pub(super) async fn event_pump(
     connection: Rc<BrowserConnection>,
     mut events: mpsc::Receiver<EventEnvelope>,
     replica: Rc<RefCell<Replica>>,
+    changes: mpsc::UnboundedSender<()>,
 ) {
     while let Some(event) = events.next().await {
+        // 画面や状態の変化を UI に知らせる。UI は通知で terminal の poll を呼ぶ。
+        let _ = changes.unbounded_send(());
         match event.body {
             EventBody::TerminalDelta { terminal_id, delta } => {
                 if let Some(state) = replica

@@ -13,6 +13,7 @@ hot-reload = ["dep:async-channel", "dep:dioxus-devtools", "dep:subsecond", "gpui
 
 [dependencies]
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+futures-util.workspace = true
 getrandom.workspace = true
 web-time = "1.1"
 serde.workspace = true

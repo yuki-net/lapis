@@ -255,6 +255,7 @@ impl TerminalFeature {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let terminals = session.terminals().to_vec();
+        let changes = session.backend().changes();
         let coordinator =
             crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx);
         let values = coordinator
@@ -301,15 +302,18 @@ impl TerminalFeature {
             })
             .detach();
         }
-        cx.spawn(async move |this, cx| {
-            loop {
-                crate::timer::Timer::after(std::time::Duration::from_millis(250)).await;
-                if this.update(cx, |feature, cx| feature.poll(cx)).is_err() {
-                    break;
+        if let Some(mut changes) = changes {
+            // 受信スレッドからの通知で取得する。250ms の定期取得は行わない。
+            cx.spawn(async move |this, cx| {
+                use futures_util::StreamExt;
+                while changes.next().await.is_some() {
+                    if this.update(cx, |feature, cx| feature.poll(cx)).is_err() {
+                        break;
+                    }
                 }
-            }
-        })
-        .detach();
+            })
+            .detach();
+        }
         feature
     }
     pub(crate) fn set_context(
