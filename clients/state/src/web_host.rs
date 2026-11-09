@@ -17,7 +17,7 @@ use crate::{
 use client_api::{
     ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
     SnapshotRequest, WorkbenchGetRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
-    WorkspaceRelativePath,
+    WorkspaceListRequest, WorkspaceRelativePath,
 };
 use client_core::browser::{WebClientConnectOptions, connect_web_client};
 use document::{
@@ -55,6 +55,7 @@ const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
 const WEB_CAPABILITIES: &[&str] = &[
     "workspace.list",
     "workspace.connect",
+    "workspace.switch",
     "workspace.sync",
     "workspace.workbench.write",
     "workspace.documents.read",
@@ -108,11 +109,26 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             capabilities: WEB_CAPABILITIES,
         })
         .await?;
-    let api_workspace = selected_workspace
-        .or(requested_workspace)
-        .ok_or_else(|| "Host が Workspace を返しません".to_owned())?;
-    let workspace = WorkspaceId::new(api_workspace.as_str());
     let mut connection = Rc::new(connection);
+    let api_workspace = match selected_workspace.or(requested_workspace) {
+        Some(workspace) => workspace,
+        None => {
+            // credential が Workspace に固定されていない場合は Host の一覧から選ぶ。
+            let ResponseBody::WorkspaceList(list) = request(
+                &connection,
+                RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+            )
+            .await?
+            else {
+                return Err("Workspace一覧を取得できません".to_owned());
+            };
+            list.workspaces
+                .first()
+                .map(|workspace| workspace.workspace_id.clone())
+                .ok_or_else(|| "HostにWorkspaceが登録されていません".to_owned())?
+        }
+    };
+    let workspace = WorkspaceId::new(api_workspace.as_str());
     let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
     request(
         &connection,
