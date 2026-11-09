@@ -78,7 +78,7 @@ impl TerminalSessions {
                 Err(_) => {}
             }
         }
-        if changed {
+        if changed || first_error.is_some() {
             self.bump();
         }
         first_error.map_or(Ok(changed), Err)
@@ -908,7 +908,10 @@ mod tests {
         );
         *backend.fail_poll_for.lock().unwrap() = Some(second.as_str().to_owned());
 
+        let before = sessions.version();
         assert!(sessions.refresh().is_err());
+        // エラーでも部分的な更新を投影できるよう、版は進める。
+        assert!(sessions.version() > before);
         assert_eq!(sessions.session.owner(&first), Some("session-a"));
     }
 
