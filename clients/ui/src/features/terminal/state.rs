@@ -11,6 +11,8 @@ pub(crate) struct TerminalSessions {
     pub session: TerminalSession,
     active_context: (Option<PathBuf>, ConversationId),
     inactive_sessions: HashMap<(Option<PathBuf>, ConversationId), TerminalSession>,
+    /// 画面の投影順を決める単調増加の版。worker 上で観測した順序を表す。
+    version: u64,
 }
 
 impl TerminalSessions {
@@ -23,7 +25,17 @@ impl TerminalSessions {
             session,
             active_context: (root, conversation),
             inactive_sessions: HashMap::new(),
+            version: 0,
         }
+    }
+
+    /// 最後に観測した画面の版。UI はより新しい版だけを適用する。
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    fn bump(&mut self) {
+        self.version = self.version.wrapping_add(1);
     }
 
     pub fn switch_context(
@@ -46,6 +58,7 @@ impl TerminalSessions {
         let previous = std::mem::replace(&mut self.session, next);
         let previous_context = std::mem::replace(&mut self.active_context, context);
         self.inactive_sessions.insert(previous_context, previous);
+        self.bump();
         self.session.terminals().to_vec()
     }
 
@@ -60,6 +73,9 @@ impl TerminalSessions {
                 Err(_) => {}
             }
         }
+        if changed {
+            self.bump();
+        }
         first_error.map_or(Ok(changed), Err)
     }
 
@@ -68,6 +84,7 @@ impl TerminalSessions {
         operation: impl FnOnce(&mut TerminalSession) -> Result<(), TerminalError>,
     ) -> (Result<(), String>, Vec<terminal::TerminalSnapshot>) {
         let result = operation(&mut self.session).map_err(|error| error.to_string());
+        self.bump();
         (result, self.session.terminals().to_vec())
     }
 
@@ -111,8 +128,12 @@ impl TerminalRequests {
     }
 
     fn finish_poll(&mut self, token: crate::client_worker::RequestToken) -> bool {
+        // 古い応答で新しい poll の pending を解除しない。
+        if !self.poll_gate.accept(token) {
+            return false;
+        }
         self.poll_pending = false;
-        self.poll_gate.accept(token)
+        true
     }
 
     /// context の切替などで、進行中の action と poll の両方を破棄する。
@@ -126,6 +147,8 @@ impl TerminalRequests {
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
+    /// `terminals` に適用した最後の版。古い結果で上書きしないために使う。
+    projected: u64,
     pub(super) discovered: Vec<terminal::TerminalSnapshot>,
     pub(super) selected: Option<terminal::TerminalId>,
     selected_by_context: HashMap<(Option<PathBuf>, ConversationId), terminal::TerminalId>,
@@ -153,6 +176,15 @@ pub(crate) struct TerminalFeature {
     pub(super) scroll: crate::components::ScrollState,
 }
 impl TerminalFeature {
+    /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
+    fn project(&mut self, version: u64, terminals: Vec<terminal::TerminalSnapshot>) {
+        if version < self.projected {
+            return;
+        }
+        self.projected = version;
+        self.terminals = terminals;
+    }
+
     pub(crate) fn summaries(&self) -> Vec<terminal::TerminalSnapshot> {
         self.terminals.clone()
     }
@@ -203,6 +235,7 @@ impl TerminalFeature {
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
             terminals,
+            projected: 0,
             discovered: Vec::new(),
             selected: None,
             selected_by_context: HashMap::new(),
@@ -253,13 +286,16 @@ impl TerminalFeature {
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.switch_context(next_root, next, &summaries)),
+            move |sessions| {
+                let terminals = sessions.switch_context(next_root, next, &summaries);
+                Ok((sessions.version(), terminals))
+            },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok(terminals) => feature.terminals = terminals,
+                    Ok((version, terminals)) => feature.project(version, terminals),
                     Err(error) => {
                         feature.requests.context_unavailable = true;
                         feature.root = None;
@@ -313,16 +349,17 @@ impl TerminalFeature {
         let admitted = self.worker.submit(
             cx,
             move |sessions| {
-                Ok(sessions
-                    .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ())))
+                let (result, terminals) = sessions
+                    .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ()));
+                Ok((result, sessions.version(), terminals))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok((result, terminals)) => {
-                        feature.terminals = terminals;
+                    Ok((result, version, terminals)) => {
+                        feature.project(version, terminals);
                         feature.selected =
                             feature.terminals.last().map(|terminal| terminal.id.clone());
                         feature.message = result.err().unwrap_or_default();
@@ -424,15 +461,18 @@ impl TerminalFeature {
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.action(|session| session.attach(&root, &id))),
+            move |sessions| {
+                let (outcome, terminals) = sessions.action(|session| session.attach(&root, &id));
+                Ok((outcome, sessions.version(), terminals))
+            },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, terminals)) => {
+                        Ok((outcome, version, terminals)) => {
                             if outcome.is_ok() {
                                 feature.selected = Some(selected);
                             }
-                            feature.terminals = terminals;
+                            feature.project(version, terminals);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -500,12 +540,15 @@ impl TerminalFeature {
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.action(operation)),
+            move |sessions| {
+                let (outcome, terminals) = sessions.action(operation);
+                Ok((outcome, sessions.version(), terminals))
+            },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, terminals)) => {
-                            feature.terminals = terminals;
+                        Ok((outcome, version, terminals)) => {
+                            feature.project(version, terminals);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -530,15 +573,15 @@ impl TerminalFeature {
             cx,
             |sessions| {
                 let changed = sessions.refresh().map_err(|error| error.to_string())?;
-                Ok(changed.then(|| sessions.session.terminals().to_vec()))
+                Ok(changed.then(|| (sessions.version(), sessions.session.terminals().to_vec())))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_poll(token) {
                     return;
                 }
                 match result {
-                    Ok(Some(terminals)) => {
-                        feature.terminals = terminals;
+                    Ok(Some((version, terminals))) => {
+                        feature.project(version, terminals);
                         if feature.message_from_poll {
                             feature.message.clear();
                             feature.message_from_poll = false;
@@ -718,6 +761,46 @@ mod tests {
             modes: Default::default(),
             scrollback: None,
         }
+    }
+
+    #[test]
+    fn stale_poll_does_not_release_a_newer_poll() {
+        let mut requests = TerminalRequests::default();
+        let stale = requests.begin_poll().unwrap();
+        requests.invalidate();
+        let current = requests.begin_poll().unwrap();
+        assert!(!requests.finish_poll(stale));
+        // 古い応答では現在の poll の pending を解除しない。
+        assert!(requests.begin_poll().is_none());
+        assert!(requests.finish_poll(current));
+        assert!(requests.begin_poll().is_some());
+    }
+
+    #[test]
+    fn projection_version_bumps_on_actions_and_changes_only() {
+        let (mut sessions, backend) = feature();
+        let initial = sessions.version();
+        let terminals = sessions
+            .action(|session| session.start(Path::new("workspace"), 80, 24).map(|_| ()))
+            .1;
+        let id = terminals.last().unwrap().id.clone();
+        let after_start = sessions.version();
+        assert!(after_start > initial);
+
+        // 変更が無い refresh では版を進めない。
+        assert!(!sessions.refresh().unwrap());
+        assert_eq!(sessions.version(), after_start);
+
+        backend.events.lock().unwrap().insert(
+            id.as_str().to_owned(),
+            vec![TerminalEvent::Delta(model_delta(
+                1,
+                TerminalSize::new(80, 24),
+                "x",
+            ))],
+        );
+        assert!(sessions.refresh().unwrap());
+        assert!(sessions.version() > after_start);
     }
 
     #[test]
