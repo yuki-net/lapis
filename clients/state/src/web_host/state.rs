@@ -12,10 +12,7 @@ use client_api::{
 };
 use document::{Document, DocumentCache, Encoding, ExternalChange, Revision};
 use editor_core::{DocumentId, WorkspaceId};
-use terminal::{
-    TerminalDelta, TerminalEvent, TerminalId, TerminalRowUpdate, TerminalScrollbackDelta,
-    TerminalSnapshot, TerminalStatus,
-};
+use terminal::{TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus};
 use workbench::{VersionedViewState, WorkbenchReplica};
 use workspace::FileEntry;
 
@@ -136,30 +133,6 @@ pub(super) fn model_terminal_snapshot(
         status: model_terminal_status(snapshot.status),
         revision: snapshot.revision,
         screen: snapshot.screen.clone(),
-    }
-}
-
-pub(super) fn full_terminal_delta(snapshot: &TerminalSnapshot) -> TerminalDelta {
-    TerminalDelta {
-        revision: snapshot.revision,
-        size: snapshot.screen.size,
-        changed_rows: snapshot
-            .screen
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(row, value)| TerminalRowUpdate {
-                row: row as u16,
-                value: value.clone(),
-            })
-            .collect(),
-        cursor: snapshot.screen.cursor,
-        modes: snapshot.screen.modes,
-        scrollback: Some(TerminalScrollbackDelta {
-            reset: true,
-            dropped: 0,
-            rows: snapshot.screen.scrollback.clone(),
-        }),
     }
 }
 

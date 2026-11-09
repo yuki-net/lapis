@@ -175,7 +175,11 @@ impl TerminalBackend for LocalTerminalBackend {
         terminal.engine.input(input)
     }
 
-    fn resize(
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        self.resize_delta(id, columns, rows).map(|_| ())
+    }
+
+    fn resize_delta(
         &self,
         id: &TerminalId,
         columns: u16,
@@ -325,7 +329,7 @@ mod tests {
     fn terminal_pty_accepts_input_and_returns_output() {
         let backend = LocalTerminalBackend::default();
         let id = backend.start(Path::new("."), 100, 30).unwrap();
-        let resize = backend.resize(&id, 120, 32).unwrap();
+        let resize = backend.resize_delta(&id, 120, 32).unwrap();
         let mut screen = TerminalScreen::empty(resize.size);
         screen.apply_delta(&resize).unwrap();
         let command = if cfg!(windows) {

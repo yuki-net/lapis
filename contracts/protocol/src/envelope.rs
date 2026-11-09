@@ -178,16 +178,7 @@ mod tests {
         };
         let mismatched = ResponseEnvelope {
             request_id: request.request_id.clone(),
-            body: ResponseBody::TerminalInput(crate::TerminalCommandResponse {
-                terminal: crate::TerminalSnapshot {
-                    terminal_id: TerminalId::try_new("terminal-1").unwrap(),
-                    workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
-                    cwd: None,
-                    status: crate::TerminalStatus::Running,
-                    revision: 0,
-                    screen: crate::TerminalScreen::empty(crate::TerminalSize::new(80, 24)),
-                },
-            }),
+            body: ResponseBody::TerminalInput(crate::TerminalCommandResponse::default()),
         };
 
         assert!(!mismatched.matches_request(&request));

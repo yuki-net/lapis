@@ -32,8 +32,7 @@ use lsp::{
 use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 use terminal::{
-    TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-    TerminalSnapshot,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSnapshot,
 };
 use workbench::ConversationViewState;
 use workspace::{
@@ -44,8 +43,8 @@ mod state;
 mod transport;
 
 use state::{
-    DocumentState, Replica, TerminalState, cache_of, full_terminal_delta, local_id,
-    model_terminal_snapshot, versioned_workbench,
+    DocumentState, Replica, TerminalState, cache_of, local_id, model_terminal_snapshot,
+    versioned_workbench,
 };
 use transport::{Command, event_pump, fetch_tree, preload, preload_workbench, pump, request};
 
@@ -851,32 +850,24 @@ impl TerminalBackend for WebBackend {
         .map_err(TerminalError::new)
     }
 
-    fn resize(
-        &self,
-        id: &TerminalId,
-        columns: u16,
-        rows: u16,
-    ) -> Result<TerminalDelta, TerminalError> {
-        let delta = self
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        let sent = self
             .with(|state| {
-                let replica = state.replica.borrow();
-                let delta = match replica
-                    .terminals
-                    .get(id.as_str())
-                    .and_then(|state| state.snapshot.as_ref())
-                {
-                    Some(snapshot) => full_terminal_delta(snapshot),
-                    None => return Err("Terminalがまだ開始していません".to_owned()),
-                };
-                let _ = state.commands.unbounded_send(Command::TerminalResize {
-                    local: id.clone(),
-                    columns,
-                    rows,
-                });
-                Ok(delta)
+                // 画面は terminal.delta イベントで届くため、ここでは要求だけ送る。
+                state
+                    .commands
+                    .unbounded_send(Command::TerminalResize {
+                        local: id.clone(),
+                        columns,
+                        rows,
+                    })
+                    .is_ok()
             })
             .map_err(TerminalError::new)?;
-        delta.map_err(TerminalError::new)
+        if !sent {
+            return Err(TerminalError::new("Terminalの要求を送信できません"));
+        }
+        Ok(())
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {

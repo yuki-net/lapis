@@ -27,7 +27,7 @@ use workspace::{FileEntry, FileEntryKind};
 use super::{
     MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace,
     state::{
-        DocumentState, Replica, diff_chars, document_from_snapshot, full_terminal_delta, local_id,
+        DocumentState, Replica, diff_chars, document_from_snapshot, local_id,
         model_terminal_snapshot, versioned_workbench,
     },
 };
@@ -570,7 +570,8 @@ async fn handle(
                     .and_then(|state| state.host.clone())
             };
             if let Some(host) = host {
-                let body = request(
+                // 画面は terminal.delta イベントで届くため、応答は受理確認だけ。
+                request(
                     connection,
                     RequestBody::TerminalResize(TerminalResizeRequest {
                         terminal_id: host,
@@ -578,16 +579,6 @@ async fn handle(
                     }),
                 )
                 .await?;
-                let ResponseBody::TerminalResize(response) = body else {
-                    return Err("TerminalResize応答が不正です".into());
-                };
-                let mut replica = replica.borrow_mut();
-                if let Some(state) = replica.terminals.get_mut(local.as_str()) {
-                    let snapshot = model_terminal_snapshot(&local, &response.terminal);
-                    let delta = full_terminal_delta(&snapshot);
-                    state.snapshot = Some(snapshot);
-                    state.events.push(TerminalEvent::Delta(delta));
-                }
             }
         }
         Command::TerminalTerminate { local } => {

@@ -1,9 +1,8 @@
 use crate::BackendClient;
 use crate::client::Client;
 use ::terminal::{
-    MAX_SCROLLBACK_LINES, TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId,
-    TerminalInput, TerminalRevision, TerminalRowUpdate, TerminalScrollbackDelta, TerminalSnapshot,
-    TerminalStatus as ModelTerminalStatus,
+    MAX_SCROLLBACK_LINES, TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput,
+    TerminalRevision, TerminalSnapshot, TerminalStatus as ModelTerminalStatus,
 };
 use backend_state::BackendEventReceiver;
 use client_api::{
@@ -426,28 +425,15 @@ impl TerminalBackend for HostTerminals {
         .map(|_| ())
     }
 
-    fn resize(
-        &self,
-        id: &TerminalId,
-        columns: u16,
-        rows: u16,
-    ) -> Result<TerminalDelta, TerminalError> {
-        let response = self.command(id, |terminal_id| {
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        self.command(id, |terminal_id| {
             RequestBody::TerminalResize(TerminalResizeRequest {
                 terminal_id: terminal_id.clone(),
                 size: TerminalSize { columns, rows },
             })
         })?;
-        let ResponseBody::TerminalResize(response) = response else {
-            return Err(error("unexpected terminal resize response"));
-        };
-        let delta = snapshot_delta(&response.terminal)?;
-        if let Ok(mut attachments) = self.attachments.lock()
-            && let Some(attachment) = attachments.get_mut(id.as_str())
-        {
-            attachment.revision = attachment.revision.max(delta.revision);
-        }
-        Ok(delta)
+        // 画面の更新は EventBody::TerminalDelta で届く。応答には状態を載せない。
+        Ok(())
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -524,31 +510,6 @@ fn validate_snapshot(terminal: &client_api::TerminalSnapshot) -> Result<(), Term
         return Err(error("terminal snapshot is invalid"));
     }
     Ok(())
-}
-
-fn snapshot_delta(terminal: &client_api::TerminalSnapshot) -> Result<TerminalDelta, TerminalError> {
-    validate_snapshot(terminal)?;
-    Ok(TerminalDelta {
-        revision: terminal.revision,
-        size: terminal.screen.size,
-        changed_rows: terminal
-            .screen
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(row, value)| TerminalRowUpdate {
-                row: row as u16,
-                value: value.clone(),
-            })
-            .collect(),
-        cursor: terminal.screen.cursor,
-        modes: terminal.screen.modes,
-        scrollback: Some(TerminalScrollbackDelta {
-            reset: true,
-            dropped: 0,
-            rows: terminal.screen.scrollback.clone(),
-        }),
-    })
 }
 
 fn error(value: impl std::fmt::Display) -> TerminalError {

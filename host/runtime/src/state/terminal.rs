@@ -34,14 +34,14 @@ impl BackendState {
         request: TerminalInputRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
-        let terminal = workspace.terminals.input(
+        workspace.terminals.input(
             &session.session_id,
             &workspace.summary.workspace_id,
             &request.terminal_id,
             &request.input,
         )?;
         Ok((
-            ResponseBody::TerminalInput(TerminalCommandResponse { terminal }),
+            ResponseBody::TerminalInput(TerminalCommandResponse::default()),
             Vec::new(),
         ))
     }
@@ -52,7 +52,7 @@ impl BackendState {
         request: TerminalResizeRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
-        let (terminal, event_body) = workspace.terminals.resize(
+        let (_, event_body) = workspace.terminals.resize(
             &session.session_id,
             &workspace.summary.workspace_id,
             &request.terminal_id,
@@ -60,7 +60,7 @@ impl BackendState {
         )?;
         let event = workspace.publish(event_body)?;
         Ok((
-            ResponseBody::TerminalResize(TerminalCommandResponse { terminal }),
+            ResponseBody::TerminalResize(TerminalCommandResponse::default()),
             vec![event],
         ))
     }
@@ -71,7 +71,7 @@ impl BackendState {
         request: TerminalTerminateRequest,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
-        let (terminal, event_body) = workspace.terminals.terminate(
+        let (_, event_body) = workspace.terminals.terminate(
             &session.session_id,
             &workspace.summary.workspace_id,
             &request.terminal_id,
@@ -82,7 +82,7 @@ impl BackendState {
             .into_iter()
             .collect();
         Ok((
-            ResponseBody::TerminalTerminate(TerminalCommandResponse { terminal }),
+            ResponseBody::TerminalTerminate(TerminalCommandResponse::default()),
             events,
         ))
     }

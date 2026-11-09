@@ -441,12 +441,22 @@ pub trait TerminalBackend: Send + Sync {
         ))
     }
     fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError>;
-    fn resize(
+    /// Client 視点の resize。画面の反映はイベントで届く。
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError>;
+    /// Host 側エミュレータが resize を適用し、配布する差分を返す。
+    ///
+    /// 既定実装は差分を生成できない。リモート接続の Client は `resize` だけを使う。
+    fn resize_delta(
         &self,
         id: &TerminalId,
         columns: u16,
         rows: u16,
-    ) -> Result<TerminalDelta, TerminalError>;
+    ) -> Result<TerminalDelta, TerminalError> {
+        let _ = (id, columns, rows);
+        Err(TerminalError::new(
+            "この接続ではTerminalの画面差分を生成できません",
+        ))
+    }
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError>;
     fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError>;
 }

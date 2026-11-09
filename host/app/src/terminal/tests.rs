@@ -43,7 +43,11 @@ impl TerminalBackend for ScriptedTerminal {
         Ok(())
     }
 
-    fn resize(
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        self.resize_delta(id, columns, rows).map(|_| ())
+    }
+
+    fn resize_delta(
         &self,
         _: &TerminalId,
         columns: u16,
@@ -329,14 +333,17 @@ fn repeated_resize_and_delta_updates_replace_model_without_duplicates() {
     for round in 0..4 {
         let columns = 90 + round;
         let rows = 30 + round;
-        let resized = fixture
+        fixture
             .terminals
             .resize(&fixture.id, columns, rows)
             .unwrap();
         revision += 1;
-        assert_eq!(resized.revision, revision);
-        fixture.apply(TerminalEvent::Delta(resized));
-        until(|| fixture.snapshot().revision >= revision);
+        // resize の差分は応答ではなくイベントで届く。
+        fixture.output(revision);
+        assert_eq!(
+            fixture.cache.lock().unwrap().screen.size,
+            TerminalSize::new(columns, rows)
+        );
         revision += 1;
         fixture.publish(
             vec![TerminalEvent::Delta(delta(
@@ -550,7 +557,7 @@ fn commands_reattach_after_disconnect_without_waiting_for_ui_poll_or_resync_comp
         .input(&fixture.id, &TerminalInput::Text("exactly once".to_owned()))
         .unwrap();
     assert_eq!(fixture.backend.inputs.load(Ordering::SeqCst), 1);
-    let _ = fixture.terminals.resize(&fixture.id, 100, 40).unwrap();
+    fixture.terminals.resize(&fixture.id, 100, 40).unwrap();
     let snapshot = fixture.snapshot();
     assert_eq!(snapshot.status, TerminalStatus::Running);
     assert_eq!(snapshot.screen.size, TerminalSize::new(100, 40));

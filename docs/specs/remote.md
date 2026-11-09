@@ -65,10 +65,13 @@ Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
 
 - 初回 attach、再接続、revision gap、状態不一致では Snapshot を使う。
 - 通常更新は連続した `TerminalDelta.revision` の changed rows を使う。
+- `terminal.input` / `terminal.resize` / `terminal.terminate` の応答は受理だけを返し、
+  画面や状態は載せない。状態は `terminal.delta` / `terminal.status` イベントで届く。
 - Client から Host へは `TerminalInput::Text`、`Key`、`Paste` を送り、PTY bytes
   への変換と bracketed paste の処理は Host の Terminal Engine 境界で行う。
-- attach、表示、focus、別 Client の接続では PTY size を変更しない。明示的な
-  resize 操作だけが canonical size と Engine size を更新し、全 Client に通知する。
+- attach、表示、focus、別 Client の接続では PTY size を変更しない。Client の
+  panel 幅に追従した resize など、明示的な resize 操作だけが canonical size と
+  Engine size を更新し、全 Client に通知する。
 - Client の切断、Window の close、画面の切替は Terminal process を終了させない。
 
 この契約により、Desktop は GPUI Renderer、将来の Mobile は native Renderer として
