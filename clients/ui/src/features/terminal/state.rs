@@ -201,6 +201,21 @@ impl TerminalFeature {
         self.terminals = terminals;
     }
 
+    /// 端末一覧と操作権を同じ版で投影する。古い版なら両方とも捨てる。
+    fn apply_projection(
+        &mut self,
+        version: u64,
+        terminals: Vec<terminal::TerminalSnapshot>,
+        owners: HashMap<String, Option<String>>,
+    ) {
+        if version < self.projected {
+            return;
+        }
+        self.projected = version;
+        self.terminals = terminals;
+        self.owners = owners;
+    }
+
     /// 設定の変更を描画へ反映する。フォントが変わると列数・行数も変わる。
     fn apply_terminal_font(
         &mut self,
@@ -375,8 +390,7 @@ impl TerminalFeature {
                 }
                 match result {
                     Ok((version, terminals, owners)) => {
-                        feature.project(version, terminals);
-                        feature.owners = owners;
+                        feature.apply_projection(version, terminals, owners);
                     }
                     Err(error) => {
                         feature.requests.context_unavailable = true;
@@ -670,35 +684,35 @@ impl TerminalFeature {
         let admitted = self.worker.submit(
             cx,
             |sessions| {
-                let changed = sessions.refresh().map_err(|error| error.to_string())?;
-                Ok(changed.then(|| {
-                    (
-                        sessions.version(),
-                        sessions.session.terminals().to_vec(),
-                        sessions.owners().clone(),
-                    )
-                }))
+                let outcome = sessions.refresh().map_err(|error| error.to_string());
+                let owners = sessions.owners().clone();
+                let state = (
+                    sessions.version(),
+                    sessions.session.terminals().to_vec(),
+                    owners,
+                );
+                Ok((outcome, state))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_poll(token) {
                     return;
                 }
                 match result {
-                    Ok(Some((version, terminals, owners))) => {
-                        feature.project(version, terminals);
-                        feature.owners = owners;
-                        if feature.message_from_poll {
-                            feature.message.clear();
-                            feature.message_from_poll = false;
+                    Ok((outcome, (version, terminals, owners))) => {
+                        feature.apply_projection(version, terminals, owners);
+                        match outcome {
+                            Ok(_) => {
+                                if feature.message_from_poll {
+                                    feature.message.clear();
+                                    feature.message_from_poll = false;
+                                }
+                            }
+                            Err(error) => {
+                                feature.message = error;
+                                feature.message_from_poll = true;
+                            }
                         }
                         cx.notify();
-                    }
-                    Ok(None) => {
-                        if feature.message_from_poll {
-                            feature.message.clear();
-                            feature.message_from_poll = false;
-                            cx.notify();
-                        }
                     }
                     Err(error) => {
                         feature.message = error;
@@ -869,6 +883,29 @@ mod tests {
     }
 
     #[test]
+    fn owner_updates_survive_a_later_terminal_poll_error() {
+        let (mut sessions, backend) = feature();
+        let first = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        let second = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        backend.events.lock().unwrap().insert(
+            first.as_str().to_owned(),
+            vec![TerminalEvent::Owner {
+                owner: Some("session-a".to_owned()),
+            }],
+        );
+        *backend.fail_poll_for.lock().unwrap() = Some(second.as_str().to_owned());
+
+        assert!(sessions.refresh().is_err());
+        assert_eq!(sessions.session.owner(&first), Some("session-a"));
+    }
+
+    #[test]
     fn stale_poll_does_not_release_a_newer_poll() {
         let mut requests = TerminalRequests::default();
         let stale = requests.begin_poll().unwrap();
@@ -1010,6 +1047,7 @@ mod tests {
         terminated: AtomicUsize,
         events: Mutex<HashMap<String, Vec<TerminalEvent>>>,
         inputs: Mutex<Vec<TerminalId>>,
+        fail_poll_for: Mutex<Option<String>>,
     }
 
     impl TerminalBackend for Backend {
@@ -1027,6 +1065,9 @@ mod tests {
             Ok(())
         }
         fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            if self.fail_poll_for.lock().unwrap().as_deref() == Some(id.as_str()) {
+                return Err(TerminalError::new("poll failed"));
+            }
             Ok(self
                 .events
                 .lock()
