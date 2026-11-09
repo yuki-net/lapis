@@ -108,12 +108,24 @@ impl TerminalBackend for LocalTerminalBackend {
                 command.arg("/D");
                 command
             }
+            #[cfg(windows)]
+            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Fish => {
+                return Err(TerminalError::new(
+                    "bash / zsh / fish は Windows Host では利用できません",
+                ));
+            }
             #[cfg(not(windows))]
             TerminalShell::Default => portable_pty::CommandBuilder::new(
                 std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
             ),
             #[cfg(not(windows))]
             TerminalShell::PowerShell => portable_pty::CommandBuilder::new("pwsh"),
+            #[cfg(not(windows))]
+            TerminalShell::Bash => portable_pty::CommandBuilder::new("bash"),
+            #[cfg(not(windows))]
+            TerminalShell::Zsh => portable_pty::CommandBuilder::new("zsh"),
+            #[cfg(not(windows))]
+            TerminalShell::Fish => portable_pty::CommandBuilder::new("fish"),
             #[cfg(not(windows))]
             TerminalShell::Cmd => {
                 return Err(TerminalError::new("cmdはWindows Hostでのみ利用できます"));

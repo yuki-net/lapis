@@ -352,6 +352,8 @@ mod tests {
             locale: LocaleId::new("ja-JP"),
             theme: "lapis.white".to_owned(),
             syntax_theme: Some(settings::SyntaxTheme::Zed),
+            terminal_font_family: Some("Menlo".to_owned()),
+            terminal_font_size: Some(15),
         };
 
         repository.save(&settings).unwrap();

@@ -33,10 +33,14 @@ pub enum TerminalStatus {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TerminalShell {
+    /// Host の既定 shell。
     #[default]
     Default,
     PowerShell,
     Cmd,
+    Bash,
+    Zsh,
+    Fish,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

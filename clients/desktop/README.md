@@ -79,7 +79,7 @@ Remoteのファイル操作はHostのWorkspaceを使用し、Client上に同じs
 
 Remoteの「Open」「Save As」と未保存文書の保存は、Workspaceからの相対pathを入力します。保存先が競合すると変更を保持したまま拒否します。ファイルの通常保存はCtrl+S、名前を付けて保存はCtrl+Shift+Sです。
 
-Terminalの操作は右クリックメニューとタブの「＋」に集約しています。シェルを開く、貼り付け、画面のコピー、Host上の既存端末への接続、終了をここから行います。入力・Ctrl+C・矢印は端末に直接送れます。列数と行数はパネルの大きさとフォントから自動で決まり、固定サイズの指定はありません。既定セルの背景は透明で、テーマの背景が見えます。フォントとサイズは固定値で、設定UIは未実装です。サイズは共有端末全体へ反映され、終了は確認後に全Clientへ反映されます。Task切替・画面終了ではprocessを終了しません。前回保存したTerminal IDはworkerから再アタッチし、shellを再実行しません。
+Terminalの操作は右クリックメニューとタブの「＋」に集約しています。シェルを開く、貼り付け、画面のコピー、Host上の既存端末への接続、終了をここから行います。入力・Ctrl+C・矢印は端末に直接送れます。列数と行数はパネルの大きさとフォントから自動で決まり、固定サイズの指定はありません。デフォルトセルの背景は透明で、テーマの背景が見えます。フォントとサイズは設定の「ターミナル」から変更できます。シェルは Windows では PowerShell / cmd、macOS / Linux では bash / zsh / fish を選べます。サイズは共有端末全体へ反映され、終了は確認後に全Clientへ反映されます。Task切替・画面終了ではprocessを終了しません。前回保存したTerminal IDはworkerから再アタッチし、shellを再実行しません。
 ## Window の所有と検証
 
 Root ごとに WindowGroup を作り、Detached は元の Client worker と Document を共有する。Shell の共通描画を使い、Focus・Active Tab・scroll は Window ごとに持つ。Tool の実行資源を複製して移動することはない。終了・移動・将来の配置復元の契約は [WindowGroup](../../docs/specs/architecture.md#desktop-の-windowgroup) を参照。

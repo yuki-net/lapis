@@ -12,18 +12,18 @@ class ProtocolSerializationTest {
     @Test
     fun clientHelloMatchesRustFixture() {
         val json =
-            """{"protocol":{"major":0,"minimum_minor":6,"maximum_minor":6},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"""
+            """{"protocol":{"major":0,"minimum_minor":7,"maximum_minor":7},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"""
 
         val hello = lapisJson.decodeFromString<ClientHello>(json)
 
-        assertEquals(ProtocolRange(0, 6, 6), hello.protocol)
+        assertEquals(ProtocolRange(0, 7, 7), hello.protocol)
         assertEquals(json, lapisJson.encodeToString(hello))
     }
 
     @Test
     fun authenticateMessageMatchesRustFixture() {
         val json =
-            """{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":6,"maximum_minor":6},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"""
+            """{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":7,"maximum_minor":7},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"""
 
         val message = lapisJson.decodeFromString<ClientMessage>(json)
 
@@ -33,7 +33,7 @@ class ProtocolSerializationTest {
     @Test
     fun oidcMessageMatchesRustFixture() {
         val json =
-            """{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":6,"maximum_minor":6},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"""
+            """{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":7,"maximum_minor":7},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"""
 
         val message = lapisJson.decodeFromString<ClientMessage>(json)
 
@@ -95,7 +95,7 @@ class ProtocolSerializationTest {
     @Test
     fun pairedResponseMatchesRustFixture() {
         val json =
-            """{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":6},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
+            """{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":7},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"""
 
         val message = lapisJson.decodeFromString<ServerMessage>(json)
 

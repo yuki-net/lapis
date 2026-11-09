@@ -14,6 +14,10 @@ pub(crate) enum Change {
     Theme(String),
     Syntax(SyntaxTheme),
     Locale(LocaleId),
+    TerminalFont {
+        family: Option<String>,
+        size: Option<u8>,
+    },
 }
 
 impl Change {
@@ -22,6 +26,10 @@ impl Change {
             Self::Theme(id) => values.theme = id.clone(),
             Self::Syntax(id) => values.syntax_theme = Some(*id),
             Self::Locale(id) => values.locale = id.clone(),
+            Self::TerminalFont { family, size } => {
+                values.terminal_font_family = family.clone();
+                values.terminal_font_size = *size;
+            }
         }
     }
 
@@ -30,6 +38,7 @@ impl Change {
             Self::Theme(id) => session.set_theme(id.clone()),
             Self::Syntax(id) => session.set_syntax_theme(*id),
             Self::Locale(id) => session.set_locale(id.clone()),
+            Self::TerminalFont { family, size } => session.set_terminal_font(family.clone(), *size),
         }
     }
 }
@@ -75,6 +84,12 @@ impl SettingsCoordinator {
 
     pub(crate) fn shared(cx: &App) -> Entity<Self> {
         cx.global::<SettingsGlobal>().0.clone()
+    }
+
+    /// 設定が未初期化の環境（テストなど）では `None`。
+    pub(crate) fn try_shared(cx: &App) -> Option<Entity<Self>> {
+        cx.try_global::<SettingsGlobal>()
+            .map(|global| global.0.clone())
     }
 
     #[cfg(any(not(target_family = "wasm"), test))]
