@@ -47,6 +47,8 @@ struct Attachment {
     recovery: Option<mpsc::Receiver<Result<Recovery, TerminalError>>>,
     retry_at: Instant,
     finished: bool,
+    /// attach / restore で受け取ったが、まだ poll に渡していないイベント。
+    pending: Vec<TerminalEvent>,
 }
 
 struct Recovery {
@@ -240,7 +242,7 @@ impl Attachment {
             }
             queued
         };
-        let mut events = Vec::new();
+        let mut events = std::mem::take(&mut self.pending);
         for event in queued {
             let sequence = event.event_sequence.value();
             if self
@@ -415,6 +417,7 @@ impl TerminalBackend for HostTerminals {
             recovery: None,
             retry_at: Instant::now(),
             finished: false,
+            pending: Vec::new(),
         };
         attachment.start_forwarder(receiver);
         self.attachments
@@ -475,17 +478,24 @@ impl TerminalBackend for HostTerminals {
             recovery: None,
             retry_at: Instant::now(),
             finished: false,
+            pending: Vec::new(),
         };
-        attachment.restore(Recovery {
+        let events = attachment.restore(Recovery {
             receiver,
             event_watermark: response.snapshot.event_watermark.value(),
             terminal,
         })?;
+        attachment.pending = events
+            .into_iter()
+            .filter(|event| !matches!(event, TerminalEvent::Snapshot(_)))
+            .collect();
         if !attachment.finished {
             self.attachments
                 .lock()
                 .map_err(error)?
                 .insert(id.as_str().to_owned(), attachment);
+            // 初回 attach の Owner を poll で届けるため、変更通知を送る。
+            let _ = self.changes.unbounded_send(());
         }
         Ok(snapshot)
     }

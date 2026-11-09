@@ -340,7 +340,14 @@ impl TerminalSession {
                 continue;
             }
             let mut resync = false;
-            for event in self.backend.poll(&terminal.id)? {
+            let events = match self.backend.poll(&terminal.id) {
+                Ok(events) => events,
+                Err(error) => {
+                    attach_error.get_or_insert_with(|| error.to_string());
+                    break;
+                }
+            };
+            for event in events {
                 match event {
                     TerminalEvent::Snapshot(snapshot) => {
                         if snapshot.id != terminal.id || snapshot.revision < terminal.revision {
@@ -375,9 +382,17 @@ impl TerminalSession {
             if resync {
                 let id = terminal.id.clone();
                 let cwd = terminal.cwd.clone();
-                let snapshot = self.backend.attach(&cwd, &id)?;
+                let snapshot = match self.backend.attach(&cwd, &id) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                        break;
+                    }
+                };
                 if snapshot.id != id || snapshot.revision < terminal.revision {
-                    return Err(TerminalError::new("terminal snapshot resync failed"));
+                    attach_error
+                        .get_or_insert_with(|| "terminal snapshot resync failed".to_owned());
+                    break;
                 }
                 *terminal = snapshot;
                 changed = true;

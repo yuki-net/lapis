@@ -367,14 +367,17 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let terminals = sessions.switch_context(next_root, next, &summaries);
-                Ok((sessions.version(), terminals))
+                Ok((sessions.version(), terminals, sessions.owners().clone()))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok((version, terminals)) => feature.project(version, terminals),
+                    Ok((version, terminals, owners)) => {
+                        feature.project(version, terminals);
+                        feature.owners = owners;
+                    }
                     Err(error) => {
                         feature.requests.context_unavailable = true;
                         feature.root = None;
