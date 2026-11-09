@@ -57,6 +57,10 @@ pub enum ResponseBody {
     DocumentRedo(DocumentHistoryResponse),
     #[serde(rename = "document.close")]
     DocumentClose(DocumentCloseResponse),
+    #[serde(rename = "document.claim")]
+    DocumentClaim(crate::DocumentCommandResponse),
+    #[serde(rename = "document.release")]
+    DocumentRelease(crate::DocumentCommandResponse),
     #[serde(rename = "terminal.start")]
     TerminalStart(TerminalStartResponse),
     #[serde(rename = "terminal.input")]
@@ -101,6 +105,8 @@ impl ResponseBody {
             Self::DocumentUndo(_) => Some("document.undo"),
             Self::DocumentRedo(_) => Some("document.redo"),
             Self::DocumentClose(_) => Some("document.close"),
+            Self::DocumentClaim(_) => Some("document.claim"),
+            Self::DocumentRelease(_) => Some("document.release"),
             Self::TerminalStart(_) => Some("terminal.start"),
             Self::TerminalInput(_) => Some("terminal.input"),
             Self::TerminalResize(_) => Some("terminal.resize"),

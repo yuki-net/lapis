@@ -57,6 +57,10 @@ pub enum RequestBody {
     DocumentRedo(DocumentHistoryRequest),
     #[serde(rename = "document.close")]
     DocumentClose(DocumentCloseRequest),
+    #[serde(rename = "document.claim")]
+    DocumentClaim(crate::DocumentClaimRequest),
+    #[serde(rename = "document.release")]
+    DocumentRelease(crate::DocumentReleaseRequest),
     #[serde(rename = "terminal.start")]
     TerminalStart(TerminalStartRequest),
     #[serde(rename = "terminal.input")]
@@ -99,6 +103,8 @@ impl RequestBody {
             Self::DocumentUndo(_) => "document.undo",
             Self::DocumentRedo(_) => "document.redo",
             Self::DocumentClose(_) => "document.close",
+            Self::DocumentClaim(_) => "document.claim",
+            Self::DocumentRelease(_) => "document.release",
             Self::TerminalStart(_) => "terminal.start",
             Self::TerminalInput(_) => "terminal.input",
             Self::TerminalResize(_) => "terminal.resize",
@@ -130,7 +136,9 @@ impl RequestBody {
             | Self::DocumentEdit(_)
             | Self::DocumentSave(_)
             | Self::DocumentUndo(_)
-            | Self::DocumentRedo(_) => capability::DOCUMENTS_WRITE,
+            | Self::DocumentRedo(_)
+            | Self::DocumentClaim(_)
+            | Self::DocumentRelease(_) => capability::DOCUMENTS_WRITE,
             Self::TerminalStart(_) => capability::TERMINAL_START,
             Self::TerminalInput(_)
             | Self::TerminalResize(_)
@@ -167,6 +175,8 @@ impl RequestBody {
             | Self::DocumentUndo(_)
             | Self::DocumentRedo(_)
             | Self::DocumentClose(_)
+            | Self::DocumentClaim(_)
+            | Self::DocumentRelease(_)
             | Self::TerminalInput(_)
             | Self::TerminalResize(_)
             | Self::TerminalTerminate(_)

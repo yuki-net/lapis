@@ -612,6 +612,14 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.document_edit(session, request)
             }
+            RequestBody::DocumentClaim(request) => {
+                self.require_connected(session)?;
+                self.document_claim(session, request)
+            }
+            RequestBody::DocumentRelease(request) => {
+                self.require_connected(session)?;
+                self.document_release(session, request)
+            }
             RequestBody::DocumentSave(request) => {
                 self.require_connected(session)?;
                 self.document_save(session, request.document_id, request.base_revision)
@@ -834,6 +842,10 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         error.detail = Some(message.clone());
         return error;
     }
+    if matches!(&error, BackendStateError::DocumentNotOwner) {
+        return ProtocolError::new(ErrorCode::try_new(INVALID_REQUEST).expect("valid code"))
+            .with_detail("他のClientが編集中です");
+    }
     if matches!(&error, BackendStateError::TerminalNotOwner) {
         return ProtocolError::new(ErrorCode::try_new(INVALID_REQUEST).expect("valid code"))
             .with_detail("他のClientが操作中です");
@@ -853,6 +865,7 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         BackendStateError::WorkspaceDenied
         | BackendStateError::DocumentNotAttached
         | BackendStateError::TerminalNotAttached => FORBIDDEN,
+        BackendStateError::DocumentNotOwner => INVALID_REQUEST,
         BackendStateError::WorkspaceNotConnected
         | BackendStateError::DuplicateWorkspace
         | BackendStateError::Document(_)

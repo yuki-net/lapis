@@ -242,6 +242,22 @@ pub struct DocumentOpenResponse {
     pub reused: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// 編集権の取得・解放を受理したことだけを返す。
+pub struct DocumentCommandResponse {}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document の編集権を取得する。
+pub struct DocumentClaimRequest {
+    pub document_id: DocumentId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Document の編集権を手放す。
+pub struct DocumentReleaseRequest {
+    pub document_id: DocumentId,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// base revision を指定して編集する。
 pub struct DocumentEditRequest {
