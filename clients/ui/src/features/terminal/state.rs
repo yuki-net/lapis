@@ -11,6 +11,8 @@ pub(crate) struct TerminalSessions {
     pub session: TerminalSession,
     active_context: (Option<PathBuf>, ConversationId),
     inactive_sessions: HashMap<(Option<PathBuf>, ConversationId), TerminalSession>,
+    /// 画面の投影順を決める単調増加の版。worker 上で観測した順序を表す。
+    version: u64,
 }
 
 impl TerminalSessions {
@@ -23,7 +25,17 @@ impl TerminalSessions {
             session,
             active_context: (root, conversation),
             inactive_sessions: HashMap::new(),
+            version: 0,
         }
+    }
+
+    /// 最後に観測した画面の版。UI はより新しい版だけを適用する。
+    pub fn version(&self) -> u64 {
+        self.version
+    }
+
+    fn bump(&mut self) {
+        self.version = self.version.wrapping_add(1);
     }
 
     pub fn switch_context(
@@ -46,6 +58,7 @@ impl TerminalSessions {
         let previous = std::mem::replace(&mut self.session, next);
         let previous_context = std::mem::replace(&mut self.active_context, context);
         self.inactive_sessions.insert(previous_context, previous);
+        self.bump();
         self.session.terminals().to_vec()
     }
 
@@ -60,6 +73,9 @@ impl TerminalSessions {
                 Err(_) => {}
             }
         }
+        if changed {
+            self.bump();
+        }
         first_error.map_or(Ok(changed), Err)
     }
 
@@ -68,6 +84,7 @@ impl TerminalSessions {
         operation: impl FnOnce(&mut TerminalSession) -> Result<(), TerminalError>,
     ) -> (Result<(), String>, Vec<terminal::TerminalSnapshot>) {
         let result = operation(&mut self.session).map_err(|error| error.to_string());
+        self.bump();
         (result, self.session.terminals().to_vec())
     }
 
@@ -83,6 +100,7 @@ impl TerminalSessions {
 #[derive(Default)]
 struct TerminalRequests {
     gate: crate::client_adapter::ResponseGate,
+    poll_gate: crate::client_adapter::ResponseGate,
     poll_pending: bool,
     pending_actions: usize,
     context_unavailable: bool,
@@ -100,22 +118,37 @@ impl TerminalRequests {
     }
 
     fn begin_poll(&mut self) -> Option<crate::client_worker::RequestToken> {
-        if self.context_unavailable || self.poll_pending || self.pending_actions > 0 {
+        // 応答は受理だけなので、進行中の action が画面取得を妨げない。
+        // poll は専用の gate を使い、action の結果を上書きしない。
+        if self.context_unavailable || self.poll_pending {
             return None;
         }
         self.poll_pending = true;
-        Some(self.gate.issue())
+        Some(self.poll_gate.issue())
     }
 
     fn finish_poll(&mut self, token: crate::client_worker::RequestToken) -> bool {
+        // 古い応答で新しい poll の pending を解除しない。
+        if !self.poll_gate.accept(token) {
+            return false;
+        }
         self.poll_pending = false;
-        self.gate.accept(token)
+        true
+    }
+
+    /// context の切替などで、進行中の action と poll の両方を破棄する。
+    fn invalidate(&mut self) {
+        self.gate.invalidate();
+        self.poll_gate.invalidate();
+        self.poll_pending = false;
     }
 }
 
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
+    /// `terminals` に適用した最後の版。古い結果で上書きしないために使う。
+    projected: u64,
     pub(super) discovered: Vec<terminal::TerminalSnapshot>,
     pub(super) selected: Option<terminal::TerminalId>,
     selected_by_context: HashMap<(Option<PathBuf>, ConversationId), terminal::TerminalId>,
@@ -143,6 +176,15 @@ pub(crate) struct TerminalFeature {
     pub(super) scroll: crate::components::ScrollState,
 }
 impl TerminalFeature {
+    /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
+    fn project(&mut self, version: u64, terminals: Vec<terminal::TerminalSnapshot>) {
+        if version < self.projected {
+            return;
+        }
+        self.projected = version;
+        self.terminals = terminals;
+    }
+
     pub(crate) fn summaries(&self) -> Vec<terminal::TerminalSnapshot> {
         self.terminals.clone()
     }
@@ -193,6 +235,7 @@ impl TerminalFeature {
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
             terminals,
+            projected: 0,
             discovered: Vec::new(),
             selected: None,
             selected_by_context: HashMap::new(),
@@ -239,17 +282,20 @@ impl TerminalFeature {
         }
         let next = conversation.clone();
         let next_root = root.clone();
-        self.requests.gate.invalidate();
+        self.requests.invalidate();
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.switch_context(next_root, next, &summaries)),
+            move |sessions| {
+                let terminals = sessions.switch_context(next_root, next, &summaries);
+                Ok((sessions.version(), terminals))
+            },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok(terminals) => feature.terminals = terminals,
+                    Ok((version, terminals)) => feature.project(version, terminals),
                     Err(error) => {
                         feature.requests.context_unavailable = true;
                         feature.root = None;
@@ -303,16 +349,17 @@ impl TerminalFeature {
         let admitted = self.worker.submit(
             cx,
             move |sessions| {
-                Ok(sessions
-                    .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ())))
+                let (result, terminals) = sessions
+                    .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ()));
+                Ok((result, sessions.version(), terminals))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok((result, terminals)) => {
-                        feature.terminals = terminals;
+                    Ok((result, version, terminals)) => {
+                        feature.project(version, terminals);
                         feature.selected =
                             feature.terminals.last().map(|terminal| terminal.id.clone());
                         feature.message = result.err().unwrap_or_default();
@@ -414,15 +461,18 @@ impl TerminalFeature {
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.action(|session| session.attach(&root, &id))),
+            move |sessions| {
+                let (outcome, terminals) = sessions.action(|session| session.attach(&root, &id));
+                Ok((outcome, sessions.version(), terminals))
+            },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, terminals)) => {
+                        Ok((outcome, version, terminals)) => {
                             if outcome.is_ok() {
                                 feature.selected = Some(selected);
                             }
-                            feature.terminals = terminals;
+                            feature.project(version, terminals);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -490,12 +540,15 @@ impl TerminalFeature {
         let token = self.requests.begin_action();
         let admitted = self.worker.submit(
             cx,
-            move |sessions| Ok(sessions.action(operation)),
+            move |sessions| {
+                let (outcome, terminals) = sessions.action(operation);
+                Ok((outcome, sessions.version(), terminals))
+            },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, terminals)) => {
-                            feature.terminals = terminals;
+                        Ok((outcome, version, terminals)) => {
+                            feature.project(version, terminals);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -520,15 +573,15 @@ impl TerminalFeature {
             cx,
             |sessions| {
                 let changed = sessions.refresh().map_err(|error| error.to_string())?;
-                Ok(changed.then(|| sessions.session.terminals().to_vec()))
+                Ok(changed.then(|| (sessions.version(), sessions.session.terminals().to_vec())))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_poll(token) {
                     return;
                 }
                 match result {
-                    Ok(Some(terminals)) => {
-                        feature.terminals = terminals;
+                    Ok(Some((version, terminals))) => {
+                        feature.project(version, terminals);
                         if feature.message_from_poll {
                             feature.message.clear();
                             feature.message_from_poll = false;
@@ -711,56 +764,91 @@ mod tests {
     }
 
     #[test]
-    fn failed_context_admission_suppresses_polling_until_retry_is_admitted() {
+    fn stale_poll_does_not_release_a_newer_poll() {
         let mut requests = TerminalRequests::default();
-        let previous_poll = requests.begin_poll().unwrap();
-        requests.gate.invalidate();
-        let rejected = requests.begin_action();
-        requests.finish_action(rejected);
-        requests.context_unavailable = true;
-        assert!(!requests.finish_poll(previous_poll));
+        let stale = requests.begin_poll().unwrap();
+        requests.invalidate();
+        let current = requests.begin_poll().unwrap();
+        assert!(!requests.finish_poll(stale));
+        // 古い応答では現在の poll の pending を解除しない。
         assert!(requests.begin_poll().is_none());
-        requests.gate.invalidate();
-        let retry = requests.begin_action();
-        requests.context_unavailable = false;
-        assert!(requests.begin_poll().is_none());
-        assert!(requests.finish_action(retry));
+        assert!(requests.finish_poll(current));
         assert!(requests.begin_poll().is_some());
     }
 
     #[test]
-    fn pending_operation_errors_cannot_be_superseded_by_periodic_polling() {
-        for message in ["PTY start failed", "terminal input failed"] {
-            let worker = crate::client_adapter::ClientWorker::new(());
-            let mut requests = TerminalRequests::default();
-            let token = requests.begin_action();
-            let receive = worker
-                .try_request(move |_| Err::<(), _>(message.to_owned()))
-                .unwrap();
-            let result = receive
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .unwrap();
-            assert!(requests.begin_poll().is_none());
-            assert!(requests.finish_action(token));
-            assert_eq!(result.unwrap_err(), message);
-            let poll = requests.begin_poll().unwrap();
-            assert!(requests.finish_poll(poll));
-        }
+    fn projection_version_bumps_on_actions_and_changes_only() {
+        let (mut sessions, backend) = feature();
+        let initial = sessions.version();
+        let terminals = sessions
+            .action(|session| session.start(Path::new("workspace"), 80, 24).map(|_| ()))
+            .1;
+        let id = terminals.last().unwrap().id.clone();
+        let after_start = sessions.version();
+        assert!(after_start > initial);
+
+        // 変更が無い refresh では版を進めない。
+        assert!(!sessions.refresh().unwrap());
+        assert_eq!(sessions.version(), after_start);
+
+        backend.events.lock().unwrap().insert(
+            id.as_str().to_owned(),
+            vec![TerminalEvent::Delta(model_delta(
+                1,
+                TerminalSize::new(80, 24),
+                "x",
+            ))],
+        );
+        assert!(sessions.refresh().unwrap());
+        assert!(sessions.version() > after_start);
     }
 
     #[test]
-    fn rejected_or_stale_actions_release_poll_suppression_only_after_all_callbacks_finish() {
+    fn failed_context_admission_suppresses_polling_until_retry_is_admitted() {
+        let mut requests = TerminalRequests::default();
+        let previous_poll = requests.begin_poll().unwrap();
+        requests.invalidate();
+        requests.context_unavailable = true;
+        assert!(!requests.finish_poll(previous_poll));
+        assert!(requests.begin_poll().is_none());
+        requests.context_unavailable = false;
+        let poll = requests.begin_poll().unwrap();
+        assert!(requests.finish_poll(poll));
+    }
+
+    #[test]
+    fn polling_during_an_action_does_not_drop_the_action_result() {
+        let worker = crate::client_adapter::ClientWorker::new(());
+        let mut requests = TerminalRequests::default();
+        let token = requests.begin_action();
+        let poll = requests
+            .begin_poll()
+            .expect("polling must not wait for a pending action");
+        assert!(requests.finish_poll(poll));
+        let receive = worker
+            .try_request(|_| Err::<(), _>("terminal input failed".to_owned()))
+            .unwrap();
+        let result = receive
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        assert!(requests.finish_action(token));
+        assert_eq!(result.unwrap_err(), "terminal input failed");
+    }
+
+    #[test]
+    fn stale_actions_do_not_block_polling_and_pending_count_is_tracked() {
         let mut requests = TerminalRequests::default();
         let first = requests.begin_action();
         let second = requests.begin_action();
         assert!(!requests.finish_action(first));
+        let poll = requests
+            .begin_poll()
+            .expect("polling does not wait for actions");
         assert!(requests.begin_poll().is_none());
+        assert!(requests.finish_poll(poll));
         requests.gate.invalidate();
         assert!(!requests.finish_action(second));
         assert_eq!(requests.pending_actions, 0);
-        let poll = requests.begin_poll().unwrap();
-        assert!(requests.begin_poll().is_none());
-        assert!(requests.finish_poll(poll));
         let rejected = requests.begin_action();
         assert!(requests.finish_action(rejected));
         assert_eq!(requests.pending_actions, 0);
@@ -787,7 +875,7 @@ mod tests {
         assert!(sessions.refresh().unwrap());
         let action = requests.begin_action();
         let (outcome, terminals) = sessions.action(|_| Err(TerminalError::new("input failed")));
-        assert!(!requests.finish_poll(poll));
+        assert!(requests.finish_poll(poll));
         assert!(requests.finish_action(action));
         assert_eq!(outcome.unwrap_err(), "input failed");
         assert!(
@@ -799,14 +887,15 @@ mod tests {
     }
 
     #[test]
-    fn a_pending_poll_cannot_overwrite_a_later_user_action() {
+    fn polls_and_actions_use_independent_response_gates() {
         let mut requests = TerminalRequests::default();
         let poll = requests.begin_poll().unwrap();
         let action = requests.begin_action();
-        assert!(!requests.finish_poll(poll));
-        assert!(requests.begin_poll().is_none());
+        // poll の結果は action の結果を破棄しない。
+        assert!(requests.finish_poll(poll));
         assert!(requests.finish_action(action));
         let next_poll = requests.begin_poll().unwrap();
+        assert!(requests.begin_poll().is_none());
         assert!(requests.finish_poll(next_poll));
     }
 
@@ -829,13 +918,8 @@ mod tests {
             self.inputs.lock().unwrap().push(id.clone());
             Ok(())
         }
-        fn resize(
-            &self,
-            _: &TerminalId,
-            columns: u16,
-            rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
-            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
+        fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+            Ok(())
         }
         fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
             Ok(self
@@ -943,7 +1027,7 @@ mod tests {
         let old_snapshot = worker
             .try_request(|sessions| Ok(sessions.session.terminals().to_vec()))
             .unwrap();
-        requests.gate.invalidate();
+        requests.invalidate();
         let switched = requests.begin_action();
         let next_snapshot =
             worker
@@ -964,7 +1048,10 @@ mod tests {
             1
         );
         assert!(!requests.finish_poll(poll));
-        assert!(requests.begin_poll().is_none());
+        let next_poll = requests
+            .begin_poll()
+            .expect("polling does not wait for the switch action");
+        assert!(requests.finish_poll(next_poll));
         assert!(
             next_snapshot
                 .recv_timeout(std::time::Duration::from_secs(2))
@@ -1055,7 +1142,10 @@ mod tests {
                 ))
             })
             .unwrap();
-        assert!(requests.begin_poll().is_none());
+        let poll = requests
+            .begin_poll()
+            .expect("polling does not wait for pending switches");
+        assert!(requests.finish_poll(poll));
         assert!(
             first_response
                 .recv_timeout(std::time::Duration::from_secs(2))
@@ -1064,7 +1154,10 @@ mod tests {
                 .is_empty()
         );
         assert!(!requests.finish_action(first));
-        assert!(requests.begin_poll().is_none());
+        let poll = requests
+            .begin_poll()
+            .expect("polling does not wait for pending switches");
+        assert!(requests.finish_poll(poll));
         let terminals = second_response
             .recv_timeout(std::time::Duration::from_secs(2))
             .unwrap()

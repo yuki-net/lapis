@@ -24,7 +24,7 @@ use lsp::{
 };
 use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
-use terminal::{TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId};
+use terminal::{TerminalBackend, TerminalError, TerminalEvent, TerminalId};
 use workspace::{
     FileEntry, FileEntryKind, SearchError, SearchHit, WorkspaceError, WorkspaceRepository,
     WorkspaceSearchBackend,
@@ -495,7 +495,7 @@ impl TerminalBackend for PrototypeBackend {
     fn input(&self, _: &TerminalId, _: &terminal::TerminalInput) -> Result<(), TerminalError> {
         Err(TerminalError::new(UNAVAILABLE))
     }
-    fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<TerminalDelta, TerminalError> {
+    fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
         Err(TerminalError::new(UNAVAILABLE))
     }
     fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {

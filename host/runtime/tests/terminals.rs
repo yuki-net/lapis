@@ -175,7 +175,11 @@ impl TerminalBackend for FakeTerminalBackend {
         })
     }
 
-    fn resize(
+    fn resize(&self, id: &BackendTerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        self.resize_delta(id, columns, rows).map(|_| ())
+    }
+
+    fn resize_delta(
         &self,
         id: &BackendTerminalId,
         columns: u16,

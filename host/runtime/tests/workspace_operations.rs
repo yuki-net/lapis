@@ -928,6 +928,14 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
             _: &terminal::TerminalId,
             _: u16,
             _: u16,
+        ) -> Result<(), terminal::TerminalError> {
+            Ok(())
+        }
+        fn resize_delta(
+            &self,
+            _: &terminal::TerminalId,
+            _: u16,
+            _: u16,
         ) -> Result<terminal::TerminalDelta, terminal::TerminalError> {
             Ok(terminal::TerminalDelta {
                 revision: 1,

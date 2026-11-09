@@ -9,8 +9,8 @@ use std::{
 use client_api::{
     DocumentEditRequest, DocumentInspectRequest, DocumentOpenRequest, DocumentSaveRequest,
     DocumentTextEdit, DocumentTransaction, EventBody, EventEnvelope, FileTreeKind, FileTreeRequest,
-    RequestBody, ResponseBody, Revision as ApiRevision, TerminalInputRequest,
-    TerminalResizeRequest, TerminalSize, TerminalStartRequest,
+    RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason, SnapshotRequest,
+    TerminalInputRequest, TerminalResizeRequest, TerminalSize, TerminalStartRequest,
     TerminalStatus as WireTerminalStatus, TerminalTerminateRequest, WorkbenchGetRequest,
     WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceId as ApiWorkspaceId,
     WorkspaceRelativePath,
@@ -27,7 +27,7 @@ use workspace::{FileEntry, FileEntryKind};
 use super::{
     MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace,
     state::{
-        DocumentState, Replica, diff_chars, document_from_snapshot, full_terminal_delta, local_id,
+        DocumentState, Replica, TerminalState, diff_chars, document_from_snapshot, local_id,
         model_terminal_snapshot, versioned_workbench,
     },
 };
@@ -315,8 +315,62 @@ pub(super) async fn event_pump(
                     let _ = replica.workbench.refresh(state);
                 }
             }
+            EventBody::SnapshotRequired { .. } => {
+                // イベントを取りこぼした。全 Terminal を Host の Snapshot で置き換える。
+                sync_terminals(&connection, &replica).await;
+            }
             _ => {}
         }
+    }
+}
+
+/// `snapshot.required` の後で、Terminal の cache と表示用イベントを最新へ置き換える。
+async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell<Replica>>) {
+    let workspace = api_workspace(&replica.borrow().workspace);
+    let Ok(ResponseBody::SnapshotResync(response)) = request(
+        connection,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id: workspace,
+            reason: SnapshotReason::EventGap,
+        }),
+    )
+    .await
+    else {
+        return;
+    };
+    let Ok(mut replica) = replica.try_borrow_mut() else {
+        return;
+    };
+    for terminal in response.snapshot.terminals {
+        if let Some(state) = replica
+            .terminals
+            .values_mut()
+            .find(|state| state.host.as_ref() == Some(&terminal.terminal_id))
+        {
+            let local = state
+                .snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.id.clone())
+                .unwrap_or_else(|| TerminalId::new(terminal.terminal_id.as_str()));
+            let snapshot = model_terminal_snapshot(&local, &terminal);
+            state.snapshot = Some(snapshot.clone());
+            state.events.clear();
+            state.events.push(TerminalEvent::Snapshot(snapshot));
+            state.finished = false;
+            continue;
+        }
+        let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
+        replica.next_terminal += 1;
+        let snapshot = model_terminal_snapshot(&local, &terminal);
+        replica.terminals.insert(
+            local.as_str().to_owned(),
+            TerminalState {
+                host: Some(terminal.terminal_id.clone()),
+                snapshot: Some(snapshot.clone()),
+                events: vec![TerminalEvent::Snapshot(snapshot)],
+                finished: false,
+            },
+        );
     }
 }
 
@@ -570,7 +624,8 @@ async fn handle(
                     .and_then(|state| state.host.clone())
             };
             if let Some(host) = host {
-                let body = request(
+                // 画面は terminal.delta イベントで届くため、応答は受理確認だけ。
+                request(
                     connection,
                     RequestBody::TerminalResize(TerminalResizeRequest {
                         terminal_id: host,
@@ -578,16 +633,6 @@ async fn handle(
                     }),
                 )
                 .await?;
-                let ResponseBody::TerminalResize(response) = body else {
-                    return Err("TerminalResize応答が不正です".into());
-                };
-                let mut replica = replica.borrow_mut();
-                if let Some(state) = replica.terminals.get_mut(local.as_str()) {
-                    let snapshot = model_terminal_snapshot(&local, &response.terminal);
-                    let delta = full_terminal_delta(&snapshot);
-                    state.snapshot = Some(snapshot);
-                    state.events.push(TerminalEvent::Delta(delta));
-                }
             }
         }
         Command::TerminalTerminate { local } => {

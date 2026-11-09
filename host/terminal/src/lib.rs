@@ -139,7 +139,7 @@ impl TerminalRegistry {
             .ok_or(TerminalStateError::Unsupported)?;
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
-        let delta = backend.resize(&resource.backend_id, size.columns, size.rows)?;
+        let delta = backend.resize_delta(&resource.backend_id, size.columns, size.rows)?;
         resource.apply_delta(&delta)?;
         let snapshot = resource.snapshot(workspace_id);
         Ok((
@@ -424,7 +424,11 @@ mod tests {
             }
         }
 
-        fn resize(
+        fn resize(&self, _: &BackendTerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+            Ok(())
+        }
+
+        fn resize_delta(
             &self,
             _: &BackendTerminalId,
             columns: u16,

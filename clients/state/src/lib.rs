@@ -278,16 +278,8 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<(), TerminalError> {
-        let delta = self.backend.resize(id, columns, rows)?;
-        if let Some(terminal) = self
-            .terminals
-            .iter_mut()
-            .find(|terminal| terminal.id == *id)
-        {
-            terminal.screen.apply_delta(&delta)?;
-            terminal.revision = delta.revision;
-        }
-        Ok(())
+        // 画面の反映は delta イベントで届くため、ここでは何も変更しない。
+        self.backend.resize(id, columns, rows)
     }
 
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
@@ -2141,12 +2133,7 @@ mod tests {
             Err(TerminalError::new("unavailable"))
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            _columns: u16,
-            _rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
             Err(TerminalError::new("unavailable"))
         }
 
@@ -2177,13 +2164,8 @@ mod tests {
             Ok(())
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            columns: u16,
-            rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
-            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            Ok(())
         }
 
         fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -2214,13 +2196,8 @@ mod tests {
             Ok(())
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            columns: u16,
-            rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
-            Ok(model_delta(1, TerminalSize::new(columns, rows), ""))
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
+            Ok(())
         }
 
         fn poll(&self, _id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
@@ -2265,12 +2242,7 @@ mod tests {
             unreachable!("refresh does not send terminal input")
         }
 
-        fn resize(
-            &self,
-            _id: &TerminalId,
-            _columns: u16,
-            _rows: u16,
-        ) -> Result<TerminalDelta, TerminalError> {
+        fn resize(&self, _id: &TerminalId, _columns: u16, _rows: u16) -> Result<(), TerminalError> {
             unreachable!("refresh does not resize terminals")
         }
 
@@ -2827,12 +2799,7 @@ mod tests {
             fn input(&self, _: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
                 unreachable!()
             }
-            fn resize(
-                &self,
-                _: &TerminalId,
-                _: u16,
-                _: u16,
-            ) -> Result<TerminalDelta, TerminalError> {
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
                 unreachable!()
             }
             fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {

@@ -72,8 +72,9 @@ pub struct TerminalTerminateRequest {
     pub terminal_id: TerminalId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-/// 操作後の Terminal 状態。
-pub struct TerminalCommandResponse {
-    pub terminal: TerminalSnapshot,
-}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// 入力・サイズ変更・終了を受理したことだけを返す。
+///
+/// 状態は応答に載せず、`EventBody::TerminalDelta` / `TerminalStatus` で通知する。
+/// 取りこぼしは `SnapshotResync` で回復する。
+pub struct TerminalCommandResponse {}

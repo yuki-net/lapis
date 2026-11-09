@@ -282,7 +282,14 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
         self.inner.input(id, input)
     }
 
-    fn resize(
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        if !self.gate.is_connected() {
+            return Err(TerminalError::new("loopback workspace is disconnected"));
+        }
+        self.inner.resize(id, columns, rows)
+    }
+
+    fn resize_delta(
         &self,
         id: &TerminalId,
         columns: u16,
@@ -291,7 +298,7 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
         if !self.gate.is_connected() {
             return Err(TerminalError::new("loopback workspace is disconnected"));
         }
-        self.inner.resize(id, columns, rows)
+        self.inner.resize_delta(id, columns, rows)
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
