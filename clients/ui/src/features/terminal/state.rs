@@ -939,6 +939,28 @@ mod tests {
     }
 
     #[test]
+    fn resync_attach_error_keeps_prior_owner_projection() {
+        let (mut sessions, backend) = feature();
+        let id = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        backend.events.lock().unwrap().insert(
+            id.as_str().to_owned(),
+            vec![
+                TerminalEvent::Owner {
+                    owner: Some("session-a".to_owned()),
+                },
+                // revision gap で再同期に入り、attach はこのテストの backend では失敗する。
+                TerminalEvent::Delta(model_delta(5, TerminalSize::new(80, 24), "gap")),
+            ],
+        );
+
+        assert!(sessions.refresh().is_err());
+        assert_eq!(sessions.session.owner(&id), Some("session-a"));
+    }
+
+    #[test]
     fn owner_updates_survive_a_later_terminal_poll_error() {
         let (mut sessions, backend) = feature();
         let first = sessions
