@@ -26,7 +26,7 @@ impl Fixture {
             server_name: "localhost".to_owned(),
             certificate: self.cert.clone(),
             hello: hello(id),
-            workspace_id: self.workspace.clone(),
+            workspace_id: Some(self.workspace.clone()),
             auth: QuicAuth::Credential(Arc::new(CredentialHandle::from_parts(
                 paired.credential_id().unwrap(),
                 &mut paired.take_secret().unwrap(),
@@ -196,6 +196,30 @@ fn hello(id: &str) -> HelloRequest {
         client_kind: ClientKind::Desktop,
         requested_capabilities: host::supported_capabilities(),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn desktop_connection_without_workspace_uses_host_selection() {
+    let fixture = Fixture::new().await;
+    let mut config = fixture.config("desktop-auto-workspace").await;
+    assert!(
+        config
+            .hello
+            .requested_capabilities
+            .iter()
+            .any(|capability| capability.as_str() == "workspace.switch")
+    );
+    config.workspace_id = None;
+    let expected = fixture.workspace.clone();
+    let root = fixture._root.path().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let connection = QuicConnection::connect(config.clone()).unwrap();
+        assert_eq!(connection.workspace_id(), &expected);
+        let backend = host::BackendClient::remote(root.clone(), config).unwrap();
+        assert_eq!(backend.register_workspace(&root).unwrap(), expected);
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

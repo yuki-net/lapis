@@ -29,7 +29,8 @@ pub struct QuicConnectionConfig {
     pub server_name: String,
     pub certificate: CertificateDer<'static>,
     pub hello: HelloRequest,
-    pub workspace_id: WorkspaceId,
+    /// 接続先 Workspace。None は認証後に Host の選択へ従う。
+    pub workspace_id: Option<WorkspaceId>,
     pub auth: QuicAuth,
 }
 
@@ -40,7 +41,7 @@ impl QuicConnectionConfig {
         server_name: String,
         certificate: CertificateDer<'static>,
         hello: HelloRequest,
-        workspace_id: WorkspaceId,
+        workspace_id: Option<WorkspaceId>,
         token: &[u8; 32],
     ) -> Result<Self, Error> {
         let mut client = QuicClient::connect(
@@ -60,6 +61,8 @@ impl QuicConnectionConfig {
         if paired.hello.protocol != CURRENT_PROTOCOL {
             return Err("Protocolが一致しません".into());
         }
+        // token に結び付いた Workspace を Host の応答から採用する。
+        let workspace_id = paired.hello.workspace_id.clone().or(workspace_id);
         let credential = Arc::new(CredentialHandle::from_parts(
             paired.credential_id()?,
             &mut paired.take_secret()?,
@@ -80,7 +83,7 @@ impl QuicConnectionConfig {
         server_name: String,
         certificate: CertificateDer<'static>,
         hello: HelloRequest,
-        workspace_id: WorkspaceId,
+        workspace_id: Option<WorkspaceId>,
         id_token: String,
     ) -> Self {
         Self {
@@ -125,18 +128,28 @@ impl QuicConnectionConfig {
         .await?;
         let message = match &self.auth {
             QuicAuth::Credential(credential) => {
-                ClientMessage::Authenticate(AuthenticateRequest::new(
-                    self.hello.clone(),
-                    self.workspace_id.clone(),
-                    credential.id(),
-                    credential.secret_bytes(),
-                ))
+                ClientMessage::Authenticate(match &self.workspace_id {
+                    Some(workspace_id) => AuthenticateRequest::new(
+                        self.hello.clone(),
+                        workspace_id.clone(),
+                        credential.id(),
+                        credential.secret_bytes(),
+                    ),
+                    None => AuthenticateRequest::new_auto(
+                        self.hello.clone(),
+                        credential.id(),
+                        credential.secret_bytes(),
+                    ),
+                })
             }
-            QuicAuth::Oidc(id_token) => ClientMessage::Oidc(OidcRequest::new(
-                self.hello.clone(),
-                self.workspace_id.clone(),
-                id_token.to_string(),
-            )),
+            QuicAuth::Oidc(id_token) => ClientMessage::Oidc(match &self.workspace_id {
+                Some(workspace_id) => OidcRequest::new(
+                    self.hello.clone(),
+                    workspace_id.clone(),
+                    id_token.to_string(),
+                ),
+                None => OidcRequest::new_auto(self.hello.clone(), id_token.to_string()),
+            }),
         };
         client.send(&message).await?;
         let message = timeout(Duration::from_secs(10), client.recv()).await??;
@@ -192,7 +205,6 @@ impl RequestReply {
 
 impl QuicConnection {
     pub fn connect(config: QuicConnectionConfig) -> Result<Self, BackendServiceError> {
-        let workspace = config.workspace_id.clone();
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
         let (started_tx, started_rx) = mpsc::sync_channel(1);
         thread::Builder::new()
@@ -212,7 +224,7 @@ impl QuicConnection {
             })
             .map_err(BackendServiceError::ThreadSpawn)?;
         match started_rx.recv_timeout(Duration::from_secs(45)) {
-            Ok(Ok(())) => Ok(Self {
+            Ok(Ok(workspace)) => Ok(Self {
                 inner: Arc::new(ConnectionInner { workspace, sender }),
             }),
             Ok(Err(error)) => Err(error),
@@ -280,20 +292,22 @@ impl client_core::AsyncHostConnection for QuicConnection {
 }
 
 async fn run(
-    config: QuicConnectionConfig,
+    mut config: QuicConnectionConfig,
     mut commands: tokio::sync::mpsc::Receiver<Command>,
-    started: mpsc::SyncSender<Result<(), BackendServiceError>>,
+    started: mpsc::SyncSender<Result<WorkspaceId, BackendServiceError>>,
 ) {
     let mut core = client_core::ClientCore::default();
     let mut subscribers = Vec::new();
-    let mut socket = match restore(&config, &mut core, &mut subscribers).await {
-        Ok(client) => Some(client),
+    let (mut socket, workspace) = match restore(&config, &mut core, &mut subscribers).await {
+        Ok((client, workspace)) => (Some(client), workspace),
         Err(error) => {
             let _ = started.send(Err(error));
             return;
         }
     };
-    if started.send(Ok(())).is_err() {
+    // 一度解決した Workspace を再接続でも使い、接続中に選択先を変えない。
+    config.workspace_id = Some(workspace.clone());
+    if started.send(Ok(workspace)).is_err() {
         close(&mut socket).await;
         return;
     }
@@ -341,7 +355,8 @@ async fn run(
                 let result =
                     tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
                         if socket.is_none() {
-                            socket = Some(restore(&config, &mut core, &mut subscribers).await?);
+                            let (client, _) = restore(&config, &mut core, &mut subscribers).await?;
+                            socket = Some(client);
                         }
                         if let Some(client) = socket.as_mut() {
                             exchange(client, body, &mut core, &mut subscribers).await
@@ -373,7 +388,7 @@ async fn restore(
     config: &QuicConnectionConfig,
     core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
-) -> Result<QuicClient, BackendServiceError> {
+) -> Result<(QuicClient, WorkspaceId), BackendServiceError> {
     timeout(
         Duration::from_secs(30),
         restore_inner(config, core, subscribers),
@@ -386,17 +401,50 @@ async fn restore_inner(
     config: &QuicConnectionConfig,
     core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
-) -> Result<QuicClient, BackendServiceError> {
-    let (mut client, _) = config
+) -> Result<(QuicClient, WorkspaceId), BackendServiceError> {
+    let (mut client, hello) = config
         .authenticate()
         .await
         .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
     core.connected()
         .map_err(|_| BackendServiceError::Unavailable)?;
+    // Host の認証応答を優先し、指定も応答も無い場合だけ一覧の先頭を使う。
+    let workspace = match hello
+        .workspace_id
+        .clone()
+        .or_else(|| config.workspace_id.clone())
+    {
+        Some(workspace) => workspace,
+        None => {
+            let list = exchange(
+                &mut client,
+                RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+                core,
+                subscribers,
+            )
+            .await?;
+            match list {
+                ResponseBody::WorkspaceList(list) => list
+                    .workspaces
+                    .first()
+                    .map(|workspace| workspace.workspace_id.clone())
+                    .ok_or_else(|| {
+                        BackendServiceError::Connection(
+                            "HostにWorkspaceが登録されていません".to_owned(),
+                        )
+                    })?,
+                _ => {
+                    return Err(BackendServiceError::Connection(
+                        "Workspace一覧を取得できません".to_owned(),
+                    ));
+                }
+            }
+        }
+    };
     let connected = exchange(
         &mut client,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
-            workspace_id: config.workspace_id.clone(),
+            workspace_id: workspace.clone(),
         }),
         core,
         subscribers,
@@ -411,7 +459,7 @@ async fn restore_inner(
     let snapshot = exchange(
         &mut client,
         RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: config.workspace_id.clone(),
+            workspace_id: workspace.clone(),
             reason: SnapshotReason::Reconnect,
         }),
         core,
@@ -423,7 +471,7 @@ async fn restore_inner(
             "snapshot取得が拒否されました".to_owned(),
         ));
     }
-    Ok(client)
+    Ok((client, workspace))
 }
 
 fn publish(subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>, event: EventEnvelope) {
@@ -557,7 +605,7 @@ mod tests {
             "localhost".to_owned(),
             certificate,
             hello(),
-            WorkspaceId::try_new("workspace-1").unwrap(),
+            Some(WorkspaceId::try_new("workspace-1").unwrap()),
             id_token.clone(),
         );
         assert_eq!(config.id_token(), Some(id_token.as_str()));

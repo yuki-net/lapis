@@ -107,7 +107,7 @@ impl BackendClient {
     /// rootはClient内だけの表示上の名前空間。RemoteのOS pathとしては使用しない。
     pub fn remote(
         root: PathBuf,
-        config: QuicConnectionConfig,
+        mut config: QuicConnectionConfig,
     ) -> Result<Self, BackendServiceError> {
         if !root.is_absolute()
             || root
@@ -115,6 +115,13 @@ impl BackendClient {
                 .any(|part| matches!(part, Component::ParentDir))
         {
             return Err(BackendServiceError::Unavailable);
+        }
+        if config.workspace_id.is_none() {
+            // Workspace 未指定の profile は接続時に Host が選ぶ。以後の経路を単純にするため、
+            // ここで一度だけ解決して具体的な ID を保持する。
+            let connection = QuicConnection::connect(config.clone())?;
+            config.workspace_id = Some(connection.workspace_id().clone());
+            drop(connection);
         }
         Ok(Self {
             source: Source::Quic {
@@ -147,12 +154,21 @@ impl BackendClient {
             Source::Embedded(host) => host.register_workspace(root),
             Source::Local(hosts) => hosts
                 .config(root)
-                .map(|config| config.workspace_id)
-                .map_err(|error| BackendServiceError::Connection(error.to_string())),
+                .and_then(|config| {
+                    config
+                        .workspace_id
+                        .ok_or_else(|| "Workspaceが登録されていません".into())
+                })
+                .map_err(|error: Box<dyn std::error::Error + Send + Sync>| {
+                    BackendServiceError::Connection(error.to_string())
+                }),
             Source::Quic {
                 root: expected,
                 config,
-            } if root == expected => Ok(config.workspace_id.clone()),
+            } if root == expected => config
+                .workspace_id
+                .clone()
+                .ok_or(BackendServiceError::Unavailable),
             _ => Err(BackendServiceError::Unavailable),
         }
     }
@@ -188,7 +204,11 @@ impl BackendClient {
                 .iter()
                 .map(|(root, id)| (root.clone(), id.clone()))
                 .collect()),
-            Source::Quic { root, config } => Ok(vec![(root.clone(), config.workspace_id.clone())]),
+            Source::Quic { root, config } => Ok(config
+                .workspace_id
+                .clone()
+                .map(|workspace_id| vec![(root.clone(), workspace_id)])
+                .unwrap_or_default()),
             Source::Local(hosts) => hosts
                 .roots()
                 .map_err(|error| BackendServiceError::Connection(error.to_string())),
@@ -216,7 +236,7 @@ impl BackendClient {
                     .map_err(|error| BackendServiceError::Connection(error.to_string()))?,
             )
             .map(Client::Quic),
-            Source::Quic { config, .. } if config.workspace_id == workspace => {
+            Source::Quic { config, .. } if config.workspace_id.as_ref() == Some(&workspace) => {
                 QuicConnection::connect(config.as_ref().clone()).map(Client::Quic)
             }
             _ => Err(BackendServiceError::Unavailable),
