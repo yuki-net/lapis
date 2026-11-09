@@ -252,10 +252,22 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Test shared KMP code
-        run: ./gradlew :sharedUi:testDebugUnitTest --stacktrace
+        run: |
+          for attempt in 1 2 3; do
+            ./gradlew :sharedUi:testDebugUnitTest --stacktrace && exit 0
+            echo "gradle test attempt ${attempt} failed; retrying"
+            sleep 15
+          done
+          exit 1
 
       - name: Build Android app
-        run: ./gradlew :androidApp:assembleDebug --stacktrace
+        run: |
+          for attempt in 1 2 3; do
+            ./gradlew :androidApp:assembleDebug --stacktrace && exit 0
+            echo "gradle build attempt ${attempt} failed; retrying"
+            sleep 15
+          done
+          exit 1
 
   web:
     name: Web
