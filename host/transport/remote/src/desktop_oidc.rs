@@ -33,7 +33,8 @@ pub struct DesktopOidcLogin {
     pub server_name: String,
     pub certificate: CertificateDer<'static>,
     pub hello: HelloRequest,
-    pub workspace_id: WorkspaceId,
+    /// None は Host の既定 Workspace を選ぶ。
+    pub workspace_id: Option<WorkspaceId>,
     /// IdP に登録済みの loopback redirect URI。
     pub redirect_uri: String,
 }
@@ -42,6 +43,8 @@ pub struct DesktopOidcLogin {
 pub struct DesktopOidcSession {
     pub id_token: Zeroizing<String>,
     pub subject: String,
+    /// Host が認証時に選んだ Workspace。未指定接続ではこれを使う。
+    pub workspace_id: Option<WorkspaceId>,
 }
 
 /// OIDC ログインを実行し、Host が検証した ID Token と `sub` を返す。
@@ -92,8 +95,13 @@ pub fn login_desktop_oidc(request: DesktopOidcLogin) -> Result<DesktopOidcSessio
         id_token.to_string(),
     );
     let hello = runtime.block_on(config.verify())?;
+    let workspace_id = hello.workspace_id.clone();
     let subject = hello.subject.ok_or("Host が OIDC subject を返しません")?;
-    Ok(DesktopOidcSession { id_token, subject })
+    Ok(DesktopOidcSession {
+        id_token,
+        subject,
+        workspace_id,
+    })
 }
 
 fn read_auth_required(

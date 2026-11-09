@@ -91,16 +91,25 @@ impl Startup {
                         server_name: invitation.server_name.clone(),
                         certificate: invitation.certificate.clone().into(),
                         hello,
-                        workspace_id: WorkspaceId::try_new(&invitation.workspace_id)?,
+                        workspace_id: if invitation.workspace_id.trim().is_empty() {
+                            None
+                        } else {
+                            Some(WorkspaceId::try_new(&invitation.workspace_id)?)
+                        },
                         redirect_uri,
                     })?;
+                    let workspace_id = session
+                        .workspace_id
+                        .as_ref()
+                        .map(|workspace| workspace.as_str().to_owned())
+                        .unwrap_or_else(|| invitation.workspace_id.clone());
                     let (backend, root, profile) = host::write_oidc_profile(
                         &directory.join("hosts"),
                         host::OidcProfile {
                             address: invitation.address,
                             server_name: invitation.server_name.clone(),
                             certificate: invitation.certificate.clone(),
-                            workspace_id: invitation.workspace_id.clone(),
+                            workspace_id,
                             name: invitation.name.clone(),
                             client,
                             account: session.subject,

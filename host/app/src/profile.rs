@@ -170,7 +170,7 @@ pub fn open_host_file(
             invitation.server_name.clone(),
             invitation.certificate.clone().into(),
             hello,
-            WorkspaceId::try_new(&invitation.workspace_id)?,
+            workspace_request(&invitation.workspace_id)?,
             &token,
         ))?;
         let key = profile_key(
@@ -194,7 +194,11 @@ pub fn open_host_file(
             server_name: config.server_name.clone(),
             label: invitation.name.clone(),
             certificate: config.certificate.to_vec(),
-            workspace: config.workspace_id.as_str().to_owned(),
+            workspace: config
+                .workspace_id
+                .as_ref()
+                .map(|workspace| workspace.as_str().to_owned())
+                .unwrap_or_default(),
             client,
             credential: Some(credential.id().as_str().to_owned()),
             secret: Some(credential.secret_bytes().to_vec()),
@@ -230,6 +234,15 @@ fn parse_invitation(bytes: &[u8]) -> Result<HostInvitation, Error> {
         return Err("Host招待が不正です".into());
     }
     Ok(invitation)
+}
+
+/// 招待の Workspace。空は Host の選択に任せる。
+fn workspace_request(value: &str) -> Result<Option<WorkspaceId>, Error> {
+    if value.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(WorkspaceId::try_new(value)?))
+    }
 }
 
 fn profile_key(
@@ -336,7 +349,9 @@ pub fn write_oidc_profile(
         return Err("Host情報が不正です".into());
     }
     ClientId::try_new(&client)?;
-    WorkspaceId::try_new(&workspace_id)?;
+    if !workspace_id.trim().is_empty() {
+        WorkspaceId::try_new(&workspace_id)?;
+    }
     if account.is_empty() {
         return Err("OIDC accountが空です".into());
     }

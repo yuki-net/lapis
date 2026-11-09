@@ -48,7 +48,7 @@ async fn short_lived_clients_release_connections_and_feature_ports_keep_working(
             client_kind: ClientKind::Desktop,
             requested_capabilities: host::supported_capabilities(),
         },
-        workspace.clone(),
+        Some(workspace.clone()),
         token.secret_bytes(),
     )
     .await

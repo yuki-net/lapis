@@ -75,7 +75,11 @@ impl Record {
             server_name: self.server_name.clone(),
             certificate: self.certificate.clone().into(),
             hello: hello(&self.client)?,
-            workspace_id: WorkspaceId::try_new(&self.workspace)?,
+            workspace_id: if self.workspace.trim().is_empty() {
+                None
+            } else {
+                Some(WorkspaceId::try_new(&self.workspace)?)
+            },
             auth,
         })
     }
@@ -110,7 +114,12 @@ impl LocalHosts {
             .lock()
             .map_err(|_| "Host一覧が利用できません")?
             .iter()
-            .map(|(root, config)| (root.clone(), config.workspace_id.clone()))
+            .filter_map(|(root, config)| {
+                config
+                    .workspace_id
+                    .clone()
+                    .map(|workspace_id| (root.clone(), workspace_id))
+            })
             .collect())
     }
     pub(crate) fn by_id(&self, id: &WorkspaceId) -> Result<QuicConnectionConfig, Error> {
@@ -118,7 +127,7 @@ impl LocalHosts {
             .lock()
             .map_err(|_| "Host一覧が利用できません")?
             .values()
-            .find(|config| &config.workspace_id == id)
+            .find(|config| config.workspace_id.as_ref() == Some(id))
             .cloned()
             .ok_or_else(|| "Workspaceが登録されていません".into())
     }
@@ -529,7 +538,7 @@ fn register(mut config: QuicConnectionConfig, root: &Path) -> Result<QuicConnect
     let ResponseBody::HostRegister(workspace) = response else {
         return Err("HostへのWorkspace登録が拒否されました".into());
     };
-    config.workspace_id = workspace.workspace_id;
+    config.workspace_id = Some(workspace.workspace_id);
     Ok(config)
 }
 

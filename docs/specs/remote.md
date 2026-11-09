@@ -36,6 +36,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 ## Clientの回復
 
 - `sync_client.rs` は機能workerから呼び出し、再接続では保存済みの証明書・credentialを検証し、Workspace接続とsnapshot取得でattachmentを復元します。送信済み更新要求は自動再送しません。期限を過ぎた待機要求は実行しません。
+- Workspace を指定していない profile は、認証で Workspace を要求せず、Host が返す Workspace へ接続します。Host が返さない場合は `workspace.list` の先頭を使います。
 - イベント購読のqueue上限を超えた場合は購読を切断し、snapshotから回復します。
 
 認証拒否、protocol不一致、証明書不一致を単なる一時切断として自動的に信頼し直しません。
