@@ -99,6 +99,24 @@ impl SettingsSession {
         *self.settings.lock().expect("settings state lock failed") = settings;
         Ok(())
     }
+
+    /// ターミナルのフォント family とサイズを保存する。`None` は OS 既定へ戻す。
+    pub fn set_terminal_font(
+        &self,
+        family: Option<String>,
+        size: Option<u8>,
+    ) -> Result<(), SettingsError> {
+        let _writer = self.writer.lock().expect("settings writer lock failed");
+        let mut settings = self.settings();
+        if settings.terminal_font_family == family && settings.terminal_font_size == size {
+            return Ok(());
+        }
+        settings.terminal_font_family = family;
+        settings.terminal_font_size = size;
+        self.repository.save(&settings)?;
+        *self.settings.lock().expect("settings state lock failed") = settings;
+        Ok(())
+    }
 }
 
 /// ネイティブダイアログを利用するユースケース側の契約。
@@ -280,6 +298,14 @@ impl TerminalSession {
     ) -> Result<(), TerminalError> {
         // 画面の反映は delta イベントで届くため、ここでは何も変更しない。
         self.backend.resize(id, columns, rows)
+    }
+
+    pub fn claim(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.backend.claim(id)
+    }
+
+    pub fn release(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.backend.release(id)
     }
 
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {

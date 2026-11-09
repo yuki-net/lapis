@@ -22,6 +22,7 @@ pub enum TerminalStateError {
     NotFound,
     NotAttached,
     NotRunning,
+    NotOwner,
     InvalidSize,
     Backend(terminal::TerminalError),
 }
@@ -33,6 +34,7 @@ impl fmt::Display for TerminalStateError {
             Self::NotFound => formatter.write_str("terminal was not found"),
             Self::NotAttached => formatter.write_str("terminal is not attached to session"),
             Self::NotRunning => formatter.write_str("terminal is not running"),
+            Self::NotOwner => formatter.write_str("terminal is owned by another session"),
             Self::InvalidSize => formatter.write_str("terminal size must be greater than zero"),
             Self::Backend(error) => error.fmt(formatter),
         }
@@ -97,6 +99,7 @@ impl TerminalRegistry {
         resource.cwd_path = cwd.to_owned();
         resource.cwd = request.cwd.clone();
         resource.attached_sessions.insert(session_id.clone());
+        resource.owner = Some(session_id.clone());
         let snapshot = resource.snapshot(workspace_id);
         self.resources.insert(terminal_id.clone(), resource);
         Ok((
@@ -121,6 +124,7 @@ impl TerminalRegistry {
             .ok_or(TerminalStateError::Unsupported)?;
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
+        resource.require_owner(session_id)?;
         backend.input(&resource.backend_id, input)?;
         Ok(resource.snapshot(workspace_id))
     }
@@ -139,6 +143,7 @@ impl TerminalRegistry {
             .ok_or(TerminalStateError::Unsupported)?;
         let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
         resource.require_running()?;
+        resource.require_owner(session_id)?;
         let delta = backend.resize_delta(&resource.backend_id, size.columns, size.rows)?;
         resource.apply_delta(&delta)?;
         let snapshot = resource.snapshot(workspace_id);
@@ -165,6 +170,7 @@ impl TerminalRegistry {
         if resource.status != TerminalStatus::Running {
             return Ok((resource.snapshot(workspace_id), None));
         }
+        resource.require_owner(session_id)?;
         backend.terminate(&resource.backend_id)?;
         resource.status = TerminalStatus::Terminated;
         Ok((
@@ -265,10 +271,61 @@ impl TerminalRegistry {
             .collect()
     }
 
-    pub fn detach(&mut self, session_id: &SessionId) {
+    pub fn claim(
+        &mut self,
+        session_id: &SessionId,
+        workspace_id: &WorkspaceId,
+        terminal_id: &TerminalId,
+    ) -> Result<(TerminalSnapshot, EventBody), TerminalStateError> {
+        let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
+        resource.require_running()?;
+        resource.owner = Some(session_id.clone());
+        Ok((
+            resource.snapshot(workspace_id),
+            EventBody::TerminalOwner {
+                terminal_id: terminal_id.clone(),
+                owner: Some(session_id.clone()),
+            },
+        ))
+    }
+
+    pub fn release(
+        &mut self,
+        session_id: &SessionId,
+        workspace_id: &WorkspaceId,
+        terminal_id: &TerminalId,
+    ) -> Result<(TerminalSnapshot, EventBody), TerminalStateError> {
+        let resource = require_attached_mut(&mut self.resources, session_id, terminal_id)?;
+        if resource
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != session_id)
+        {
+            return Err(TerminalStateError::NotOwner);
+        }
+        resource.owner = None;
+        Ok((
+            resource.snapshot(workspace_id),
+            EventBody::TerminalOwner {
+                terminal_id: terminal_id.clone(),
+                owner: None,
+            },
+        ))
+    }
+
+    pub fn detach(&mut self, session_id: &SessionId) -> Vec<EventBody> {
+        let mut events = Vec::new();
         for resource in self.resources.values_mut() {
             resource.attached_sessions.remove(session_id);
+            if resource.owner.as_ref() == Some(session_id) {
+                resource.owner = None;
+                events.push(EventBody::TerminalOwner {
+                    terminal_id: resource.terminal_id.clone(),
+                    owner: None,
+                });
+            }
         }
+        events
     }
 }
 
@@ -299,6 +356,8 @@ struct TerminalResource {
     revision: u64,
     screen: TerminalScreen,
     attached_sessions: HashSet<SessionId>,
+    /// 入力を許可する Session。`None` は未所有。
+    owner: Option<SessionId>,
 }
 
 impl TerminalResource {
@@ -319,6 +378,7 @@ impl TerminalResource {
             revision: 0,
             screen: TerminalScreen::empty(size),
             attached_sessions: HashSet::new(),
+            owner: None,
         }
     }
 
@@ -350,6 +410,15 @@ impl TerminalResource {
             status: self.status,
             revision: self.revision,
             screen: self.screen.clone(),
+            owner: self.owner.clone(),
+        }
+    }
+
+    fn require_owner(&self, session_id: &SessionId) -> Result<(), TerminalStateError> {
+        if self.owner.as_ref().is_none_or(|owner| owner == session_id) {
+            Ok(())
+        } else {
+            Err(TerminalStateError::NotOwner)
         }
     }
 }
@@ -503,6 +572,47 @@ mod tests {
             )
             .unwrap();
         (registry, workspace, session, terminal)
+    }
+
+    #[test]
+    fn only_the_owner_can_send_input_and_claim_transfers_ownership() {
+        let backend = Arc::new(ScriptedSource::default());
+        let (mut registry, workspace, owner, terminal) = start_registry(backend.clone());
+        let other = SessionId::try_new("session-other").unwrap();
+        registry.snapshots_for_session(&other, &workspace);
+
+        assert!(matches!(
+            registry.input(
+                &other,
+                &workspace,
+                &terminal,
+                &TerminalInput::Text("x".to_owned())
+            ),
+            Err(TerminalStateError::NotOwner)
+        ));
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 0);
+
+        registry.claim(&other, &workspace, &terminal).unwrap();
+        registry
+            .input(
+                &other,
+                &workspace,
+                &terminal,
+                &TerminalInput::Text("x".to_owned()),
+            )
+            .unwrap();
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 1);
+
+        registry.release(&other, &workspace, &terminal).unwrap();
+        registry
+            .input(
+                &owner,
+                &workspace,
+                &terminal,
+                &TerminalInput::Text("y".to_owned()),
+            )
+            .unwrap();
+        assert_eq!(backend.input_calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]

@@ -12,11 +12,11 @@ use client_api::{
     DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse, ErrorCode,
     EventBody, EventEnvelope, FORBIDDEN, FileTreeEntry, FileTreeKind, FileTreeResponse, INTERNAL,
     INVALID_PATH, INVALID_REQUEST, NOT_FOUND, ProtocolError, RequestBody, RequestEnvelope,
-    ResponseBody, ResponseEnvelope, Revision, SessionId, SnapshotResponse, TerminalCommandResponse,
-    TerminalId, TerminalInputRequest, TerminalResizeRequest, TerminalStartRequest,
-    TerminalStartResponse, TerminalTerminateRequest, UNSUPPORTED, WorkspaceCloseResponse,
-    WorkspaceConnectResponse, WorkspaceId, WorkspaceListResponse, WorkspaceRelativePath,
-    WorkspaceSnapshot, WorkspaceSummary,
+    ResponseBody, ResponseEnvelope, Revision, SessionId, SnapshotResponse, TerminalClaimRequest,
+    TerminalCommandResponse, TerminalId, TerminalInputRequest, TerminalReleaseRequest,
+    TerminalResizeRequest, TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest,
+    UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId,
+    WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
 use document_state::{DocumentRegistry, DocumentResource};
 use text::TextEdit;
@@ -650,6 +650,14 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.terminal_terminate(session, request)
             }
+            RequestBody::TerminalClaim(request) => {
+                self.require_connected(session)?;
+                self.terminal_claim(session, request)
+            }
+            RequestBody::TerminalRelease(request) => {
+                self.require_connected(session)?;
+                self.terminal_release(session, request)
+            }
         }
     }
 
@@ -826,6 +834,10 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         error.detail = Some(message.clone());
         return error;
     }
+    if matches!(&error, BackendStateError::TerminalNotOwner) {
+        return ProtocolError::new(ErrorCode::try_new(INVALID_REQUEST).expect("valid code"))
+            .with_detail("他のClientが操作中です");
+    }
     if let BackendStateError::Document(ref document) = error
         && document.kind() == ::document::DocumentErrorKind::Conflict
     {
@@ -845,6 +857,7 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         | BackendStateError::DuplicateWorkspace
         | BackendStateError::Document(_)
         | BackendStateError::TerminalNotRunning
+        | BackendStateError::TerminalNotOwner
         | BackendStateError::InvalidWorkbench
         | BackendStateError::InvalidTerminalSize => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,

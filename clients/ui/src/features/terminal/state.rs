@@ -185,6 +185,30 @@ impl TerminalFeature {
         self.terminals = terminals;
     }
 
+    /// 設定の変更を描画へ反映する。フォントが変わると列数・行数も変わる。
+    fn apply_terminal_font(
+        &mut self,
+        values: &settings::GlobalSettings,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let family: gpui::SharedString = values
+            .terminal_font_family
+            .clone()
+            .unwrap_or_else(|| super::default_font_family().to_owned())
+            .into();
+        let size = values
+            .terminal_font_size
+            .unwrap_or_else(super::default_font_size) as f32;
+        if self.font_family == family && self.font_size == size {
+            return;
+        }
+        self.font_family = family;
+        self.font_size = size;
+        self.last_metrics = None;
+        self.last_size = None;
+        cx.notify();
+    }
+
     pub(crate) fn summaries(&self) -> Vec<terminal::TerminalSnapshot> {
         self.terminals.clone()
     }
@@ -231,6 +255,20 @@ impl TerminalFeature {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let terminals = session.terminals().to_vec();
+        let coordinator =
+            crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx);
+        let values = coordinator
+            .as_ref()
+            .map(|coordinator| coordinator.read(cx).values.clone());
+        let font_family: gpui::SharedString = values
+            .as_ref()
+            .and_then(|values| values.terminal_font_family.clone())
+            .unwrap_or_else(|| super::default_font_family().to_owned())
+            .into();
+        let font_size = values
+            .as_ref()
+            .and_then(|values| values.terminal_font_size)
+            .unwrap_or_else(super::default_font_size) as f32;
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
@@ -244,8 +282,8 @@ impl TerminalFeature {
             marked: String::new(),
             context_menu: None,
             context_anchor: None,
-            font_family: "Cascadia Mono".into(),
-            font_size: 13.0,
+            font_family,
+            font_size,
             last_metrics: None,
             last_size: None,
             visible_output: None, // None = 未処理
@@ -256,6 +294,13 @@ impl TerminalFeature {
             message_from_poll: false,
             scroll: crate::components::ScrollState::new(),
         };
+        if let Some(coordinator) = coordinator {
+            cx.observe(&coordinator, |feature, coordinator, cx| {
+                let values = coordinator.read(cx).values.clone();
+                feature.apply_terminal_font(&values, cx);
+            })
+            .detach();
+        }
         cx.spawn(async move |this, cx| {
             loop {
                 crate::timer::Timer::after(std::time::Duration::from_millis(250)).await;
@@ -495,6 +540,17 @@ impl TerminalFeature {
     pub(super) fn send_input(&mut self, input: TerminalInput, cx: &mut gpui::Context<Self>) {
         let Some(id) = self.active_id() else { return };
         self.operate(move |session| session.input_semantic(&id, input), cx);
+    }
+
+    /// 他の Client が操作中でも、明示的に操作権を奪う。
+    pub(super) fn claim(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        self.operate(move |session| session.claim(&id), cx);
+    }
+
+    pub(super) fn release(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(id) = self.active_id() else { return };
+        self.operate(move |session| session.release(&id), cx);
     }
 
     pub(super) fn resize(&mut self, columns: u16, rows: u16, cx: &mut gpui::Context<Self>) {

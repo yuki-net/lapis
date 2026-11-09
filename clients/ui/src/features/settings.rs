@@ -72,9 +72,44 @@ impl SettingsFeature {
         });
     }
 
+    fn select_terminal_font(&mut self, family: &'static str, cx: &mut Context<Self>) {
+        let size = self.values.terminal_font_size;
+        self.coordinator.update(cx, |coordinator, cx| {
+            coordinator.change(
+                Change::TerminalFont {
+                    family: Some(family.to_owned()),
+                    size,
+                },
+                cx,
+            )
+        });
+    }
+
+    fn select_terminal_size(&mut self, size: u8, cx: &mut Context<Self>) {
+        let family = self.values.terminal_font_family.clone();
+        self.coordinator.update(cx, |coordinator, cx| {
+            coordinator.change(
+                Change::TerminalFont {
+                    family,
+                    size: Some(size),
+                },
+                cx,
+            )
+        });
+    }
+
     pub(super) fn render_settings_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let active_theme = theme::active_id(cx);
         let current_locale = self.values.locale.clone();
+        let current_font = self
+            .values
+            .terminal_font_family
+            .clone()
+            .unwrap_or_else(|| super::terminal::default_font_family().to_owned());
+        let current_size = self
+            .values
+            .terminal_font_size
+            .unwrap_or_else(super::terminal::default_font_size);
         let workspace_info = self
             .root
             .as_deref()
@@ -134,6 +169,60 @@ impl SettingsFeature {
                                             .on_click(cx.listener(move |this, _, _, cx| {
                                                 this.select_syntax_theme(id, cx)
                                             }))
+                                    }),
+                                )),
+                        )
+                        .child(
+                            div()
+                                .p_4()
+                                .rounded(px(8.0))
+                                .border_1()
+                                .border_color(theme::colors(cx).border_default)
+                                .bg(theme::colors(cx).background_tertiary)
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_size(px(14.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                        .text_color(theme::colors(cx).text_primary)
+                                        .child(self.t("settings.terminal")),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_tertiary)
+                                        .child(self.t("settings.terminal-font")),
+                                )
+                                .child(div().flex().flex_wrap().gap_2().children(
+                                    super::terminal::font_choices().iter().map(|&family| {
+                                        let selected = current_font == family;
+                                        crate::components::action_button(family, selected, cx)
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_terminal_font(family, cx)
+                                            }))
+                                    }),
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_tertiary)
+                                        .child(self.t("settings.terminal-size")),
+                                )
+                                .child(div().flex().flex_wrap().gap_2().children(
+                                    super::terminal::font_size_choices().iter().map(|&size| {
+                                        let selected = current_size == size;
+                                        crate::components::action_button(
+                                            format!("{size}"),
+                                            selected,
+                                            cx,
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.select_terminal_size(size, cx)
+                                            }),
+                                        )
                                     }),
                                 )),
                         )

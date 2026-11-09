@@ -73,11 +73,12 @@ pub use response::ResponseBody;
 pub use revision::{EventSequence, Revision};
 pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceSnapshot};
 pub use terminal::{
-    TerminalCell, TerminalColor, TerminalCommandResponse, TerminalCursor, TerminalDelta,
-    TerminalInput, TerminalInputRequest, TerminalKey, TerminalKeyEvent, TerminalModes,
-    TerminalModifiers, TerminalResizeRequest, TerminalRevision, TerminalRow, TerminalRowUpdate,
-    TerminalScreen, TerminalScrollbackDelta, TerminalShell, TerminalSize, TerminalSnapshot,
-    TerminalStartRequest, TerminalStartResponse, TerminalStatus, TerminalTerminateRequest,
+    TerminalCell, TerminalClaimRequest, TerminalColor, TerminalCommandResponse, TerminalCursor,
+    TerminalDelta, TerminalInput, TerminalInputRequest, TerminalKey, TerminalKeyEvent,
+    TerminalModes, TerminalModifiers, TerminalReleaseRequest, TerminalResizeRequest,
+    TerminalRevision, TerminalRow, TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta,
+    TerminalShell, TerminalSize, TerminalSnapshot, TerminalStartRequest, TerminalStartResponse,
+    TerminalStatus, TerminalTerminateRequest,
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,

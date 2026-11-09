@@ -282,26 +282,40 @@ impl TerminalFeature {
                 crate::gpui_compat::focus(window, &this.focus, cx);
             },
         ));
-        if cfg!(windows) {
+        // Web では接続先 Host の OS が分からないため、OS 固有のシェル候補は出さない。
+        let platforms: &[(&'static str, &'static str, TerminalShell)] =
+            if cfg!(target_family = "wasm") {
+                &[]
+            } else if cfg!(windows) {
+                &[
+                    (
+                        "terminal.menu.powershell",
+                        "PowerShell を開く",
+                        TerminalShell::PowerShell,
+                    ),
+                    ("terminal.menu.cmd", "cmd を開く", TerminalShell::Cmd),
+                ]
+            } else {
+                &[
+                    (
+                        "terminal.menu.pwsh",
+                        "pwsh を開く",
+                        TerminalShell::PowerShell,
+                    ),
+                    ("terminal.menu.bash", "bash を開く", TerminalShell::Bash),
+                    ("terminal.menu.zsh", "zsh を開く", TerminalShell::Zsh),
+                    ("terminal.menu.fish", "fish を開く", TerminalShell::Fish),
+                ]
+            };
+        for &(id, label, shell) in platforms {
             entries.push(menu_entry(
-                "terminal.menu.powershell",
-                "PowerShell を開く",
+                id,
+                label,
                 true,
                 false,
                 cx,
-                |this, window, cx| {
-                    this.start_shell(TerminalShell::PowerShell, cx);
-                    crate::gpui_compat::focus(window, &this.focus, cx);
-                },
-            ));
-            entries.push(menu_entry(
-                "terminal.menu.cmd",
-                "cmd を開く",
-                true,
-                false,
-                cx,
-                |this, window, cx| {
-                    this.start_shell(TerminalShell::Cmd, cx);
+                move |this, window, cx| {
+                    this.start_shell(shell, cx);
                     crate::gpui_compat::focus(window, &this.focus, cx);
                 },
             ));
@@ -316,6 +330,22 @@ impl TerminalFeature {
                 this.send_clipboard(cx);
                 crate::gpui_compat::focus(window, &this.focus, cx);
             },
+        ));
+        entries.push(menu_entry(
+            "terminal.menu.claim",
+            "操作権を取得",
+            true,
+            true,
+            cx,
+            |this, _, cx| this.claim(cx),
+        ));
+        entries.push(menu_entry(
+            "terminal.menu.release",
+            "操作権を手放す",
+            true,
+            false,
+            cx,
+            |this, _, cx| this.release(cx),
         ));
         entries.push(menu_entry(
             "terminal.menu.copy",

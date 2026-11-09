@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{TerminalId, WorkspaceId, WorkspaceRelativePath};
+use crate::{SessionId, TerminalId, WorkspaceId, WorkspaceRelativePath};
 
 pub use ::terminal::TerminalShell;
 pub use ::terminal::{
@@ -31,6 +31,9 @@ pub struct TerminalSnapshot {
     pub status: TerminalStatus,
     pub revision: TerminalRevision,
     pub screen: TerminalScreen,
+    /// 入力できる Session。`None` は誰も操作していない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<SessionId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +72,18 @@ pub struct TerminalResizeRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 /// Terminal を終了する。
 pub struct TerminalTerminateRequest {
+    pub terminal_id: TerminalId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Terminal の操作権を取得する。取得すると他の Session は入力できなくなる。
+pub struct TerminalClaimRequest {
+    pub terminal_id: TerminalId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Terminal の操作権を手放す。
+pub struct TerminalReleaseRequest {
     pub terminal_id: TerminalId,
 }
 

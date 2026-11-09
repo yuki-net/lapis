@@ -294,7 +294,9 @@ impl HostTerminals {
         match response {
             response @ (ResponseBody::TerminalInput(_)
             | ResponseBody::TerminalResize(_)
-            | ResponseBody::TerminalTerminate(_)) => Ok(response),
+            | ResponseBody::TerminalTerminate(_)
+            | ResponseBody::TerminalClaim(_)
+            | ResponseBody::TerminalRelease(_)) => Ok(response),
             ResponseBody::Error(problem) => Err(error(
                 problem.detail.as_deref().unwrap_or(problem.code.as_str()),
             )),
@@ -461,6 +463,24 @@ impl TerminalBackend for HostTerminals {
         .map(|_| ())?;
         self.attachments.lock().map_err(error)?.remove(id.as_str());
         Ok(())
+    }
+
+    fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.command(id, |terminal_id| {
+            RequestBody::TerminalClaim(client_api::TerminalClaimRequest {
+                terminal_id: terminal_id.clone(),
+            })
+        })
+        .map(|_| ())
+    }
+
+    fn release(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        self.command(id, |terminal_id| {
+            RequestBody::TerminalRelease(client_api::TerminalReleaseRequest {
+                terminal_id: terminal_id.clone(),
+            })
+        })
+        .map(|_| ())
     }
 }
 

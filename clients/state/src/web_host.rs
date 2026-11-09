@@ -886,6 +886,36 @@ impl TerminalBackend for WebBackend {
         Ok(())
     }
 
+    fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        let sent = self
+            .with(|state| {
+                state
+                    .commands
+                    .unbounded_send(Command::TerminalClaim { local: id.clone() })
+                    .is_ok()
+            })
+            .map_err(TerminalError::new)?;
+        if !sent {
+            return Err(TerminalError::new("Terminalの要求を送信できません"));
+        }
+        Ok(())
+    }
+
+    fn release(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        let sent = self
+            .with(|state| {
+                state
+                    .commands
+                    .unbounded_send(Command::TerminalRelease { local: id.clone() })
+                    .is_ok()
+            })
+            .map_err(TerminalError::new)?;
+        if !sent {
+            return Err(TerminalError::new("Terminalの要求を送信できません"));
+        }
+        Ok(())
+    }
+
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
         let events = self
             .with(|state| {

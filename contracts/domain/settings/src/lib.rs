@@ -29,6 +29,12 @@ pub struct GlobalSettings {
     /// 配色の系統だけを保存する。省略時はLapis、明暗は常にUIテーマへ追従。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub syntax_theme: Option<SyntaxTheme>,
+    /// ターミナルのフォント family。省略時は OS ごとの既定値。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_font_family: Option<String>,
+    /// ターミナルのフォントサイズ（px）。省略時は 13。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_font_size: Option<u8>,
 }
 
 fn default_theme() -> String {
@@ -42,6 +48,8 @@ impl Default for GlobalSettings {
             locale: LocaleId::new("en-US"),
             theme: default_theme(),
             syntax_theme: None,
+            terminal_font_family: None,
+            terminal_font_size: None,
         }
     }
 }
@@ -79,6 +87,23 @@ mod tests {
 
         assert_eq!(settings.theme, "lapis.dark");
         assert_eq!(settings.syntax_theme, None);
+    }
+
+    #[test]
+    fn terminal_font_defaults_are_optional() {
+        let settings: GlobalSettings =
+            serde_json::from_str(r#"{"version":1,"locale":"ja-JP"}"#).unwrap();
+        assert_eq!(settings.terminal_font_family, None);
+        assert_eq!(settings.terminal_font_size, None);
+
+        let selected = GlobalSettings {
+            terminal_font_family: Some("Menlo".to_owned()),
+            terminal_font_size: Some(15),
+            ..settings
+        };
+        let loaded: GlobalSettings =
+            serde_json::from_str(&serde_json::to_string(&selected).unwrap()).unwrap();
+        assert_eq!(loaded, selected);
     }
 
     #[test]
