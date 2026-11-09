@@ -34,6 +34,11 @@ impl TerminalSessions {
         self.version
     }
 
+    /// 各 Terminal の操作権。owner だけが入力できる。
+    pub fn owners(&self) -> &std::collections::HashMap<String, Option<String>> {
+        self.session.owners()
+    }
+
     fn bump(&mut self) {
         self.version = self.version.wrapping_add(1);
     }
@@ -73,7 +78,7 @@ impl TerminalSessions {
                 Err(_) => {}
             }
         }
-        if changed {
+        if changed || first_error.is_some() {
             self.bump();
         }
         first_error.map_or(Ok(changed), Err)
@@ -153,6 +158,8 @@ impl TerminalRequests {
 pub(crate) struct TerminalFeature {
     worker: crate::client_adapter::ClientWorker<TerminalSessions>,
     pub(super) terminals: Vec<terminal::TerminalSnapshot>,
+    /// 各 Terminal の操作権。表示に使う。
+    pub(super) owners: HashMap<String, Option<String>>,
     /// `terminals` に適用した最後の版。古い結果で上書きしないために使う。
     projected: u64,
     pub(super) discovered: Vec<terminal::TerminalSnapshot>,
@@ -186,12 +193,19 @@ impl gpui::EventEmitter<TerminalFeatureEvent> for TerminalFeature {}
 
 impl TerminalFeature {
     /// より新しい版だけを画面へ適用する。古い action / poll の結果で上書きしない。
-    fn project(&mut self, version: u64, terminals: Vec<terminal::TerminalSnapshot>) {
+    /// 端末一覧と操作権を同じ版で投影する。古い版なら両方とも捨てる。
+    fn apply_projection(
+        &mut self,
+        version: u64,
+        terminals: Vec<terminal::TerminalSnapshot>,
+        owners: HashMap<String, Option<String>>,
+    ) {
         if version < self.projected {
             return;
         }
         self.projected = version;
         self.terminals = terminals;
+        self.owners = owners;
     }
 
     /// 設定の変更を描画へ反映する。フォントが変わると列数・行数も変わる。
@@ -296,6 +310,7 @@ impl TerminalFeature {
         let feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
             terminals,
+            owners: HashMap::new(),
             projected: 0,
             discovered: Vec::new(),
             selected: None,
@@ -359,14 +374,16 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let terminals = sessions.switch_context(next_root, next, &summaries);
-                Ok((sessions.version(), terminals))
+                Ok((sessions.version(), terminals, sessions.owners().clone()))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok((version, terminals)) => feature.project(version, terminals),
+                    Ok((version, terminals, owners)) => {
+                        feature.apply_projection(version, terminals, owners);
+                    }
                     Err(error) => {
                         feature.requests.context_unavailable = true;
                         feature.root = None;
@@ -422,15 +439,20 @@ impl TerminalFeature {
             move |sessions| {
                 let (result, terminals) = sessions
                     .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ()));
-                Ok((result, sessions.version(), terminals))
+                Ok((
+                    result,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_action(token) {
                     return;
                 }
                 match result {
-                    Ok((result, version, terminals)) => {
-                        feature.project(version, terminals);
+                    Ok((result, version, terminals, owners)) => {
+                        feature.apply_projection(version, terminals, owners);
                         feature.selected =
                             feature.terminals.last().map(|terminal| terminal.id.clone());
                         if result.is_ok()
@@ -539,16 +561,21 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let (outcome, terminals) = sessions.action(|session| session.attach(&root, &id));
-                Ok((outcome, sessions.version(), terminals))
+                Ok((
+                    outcome,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
             },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, version, terminals)) => {
+                        Ok((outcome, version, terminals, owners)) => {
                             if outcome.is_ok() {
                                 feature.selected = Some(selected);
                             }
-                            feature.project(version, terminals);
+                            feature.apply_projection(version, terminals, owners);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -629,13 +656,18 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let (outcome, terminals) = sessions.action(operation);
-                Ok((outcome, sessions.version(), terminals))
+                Ok((
+                    outcome,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
             },
             move |feature, result, cx| {
                 if feature.requests.finish_action(token) {
                     match result {
-                        Ok((outcome, version, terminals)) => {
-                            feature.project(version, terminals);
+                        Ok((outcome, version, terminals, owners)) => {
+                            feature.apply_projection(version, terminals, owners);
                             feature.message = outcome.err().unwrap_or_default();
                         }
                         Err(error) => feature.message = error,
@@ -659,28 +691,35 @@ impl TerminalFeature {
         let admitted = self.worker.submit(
             cx,
             |sessions| {
-                let changed = sessions.refresh().map_err(|error| error.to_string())?;
-                Ok(changed.then(|| (sessions.version(), sessions.session.terminals().to_vec())))
+                let outcome = sessions.refresh().map_err(|error| error.to_string());
+                let owners = sessions.owners().clone();
+                let state = (
+                    sessions.version(),
+                    sessions.session.terminals().to_vec(),
+                    owners,
+                );
+                Ok((outcome, state))
             },
             move |feature, result, cx| {
                 if !feature.requests.finish_poll(token) {
                     return;
                 }
                 match result {
-                    Ok(Some((version, terminals))) => {
-                        feature.project(version, terminals);
-                        if feature.message_from_poll {
-                            feature.message.clear();
-                            feature.message_from_poll = false;
+                    Ok((outcome, (version, terminals, owners))) => {
+                        feature.apply_projection(version, terminals, owners);
+                        match outcome {
+                            Ok(_) => {
+                                if feature.message_from_poll {
+                                    feature.message.clear();
+                                    feature.message_from_poll = false;
+                                }
+                            }
+                            Err(error) => {
+                                feature.message = error;
+                                feature.message_from_poll = true;
+                            }
                         }
                         cx.notify();
-                    }
-                    Ok(None) => {
-                        if feature.message_from_poll {
-                            feature.message.clear();
-                            feature.message_from_poll = false;
-                            cx.notify();
-                        }
                     }
                     Err(error) => {
                         feature.message = error;
@@ -850,6 +889,185 @@ mod tests {
         }
     }
 
+    #[gpui::test]
+    fn older_action_or_poll_responses_do_not_restore_terminal_list_or_owner(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+
+        cx.update(|cx| {
+            let (_, backend) = feature();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, _| {
+                let newer = terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("newer"),
+                    "workspace".into(),
+                    TerminalStatus::Running,
+                    TerminalSize::new(80, 24),
+                );
+                let older = terminal::TerminalSnapshot::empty(
+                    terminal::TerminalId::new("older"),
+                    "workspace".into(),
+                    TerminalStatus::Running,
+                    TerminalSize::new(80, 24),
+                );
+                let newer_owners =
+                    HashMap::from([("newer".to_owned(), Some("owner-newer".to_owned()))]);
+                let older_owners =
+                    HashMap::from([("older".to_owned(), Some("owner-older".to_owned()))]);
+
+                // 新しい応答の後に古い poll が届いても、一覧と owner を戻さない。
+                feature.apply_projection(2, vec![newer.clone()], newer_owners.clone());
+                feature.apply_projection(1, vec![older.clone()], older_owners.clone());
+                assert_eq!(feature.terminals[0].id, newer.id);
+                assert_eq!(feature.owners, newer_owners);
+
+                // 新しい poll の後に古い action が届いても同じ。
+                feature.apply_projection(4, vec![newer.clone()], newer_owners.clone());
+                feature.apply_projection(3, vec![older], older_owners);
+                assert_eq!(feature.terminals[0].id, newer.id);
+                assert_eq!(feature.owners, newer_owners);
+            });
+        });
+    }
+
+    #[test]
+    fn resync_attach_error_keeps_prior_owner_projection() {
+        let (mut sessions, backend) = feature();
+        let id = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        backend.events.lock().unwrap().insert(
+            id.as_str().to_owned(),
+            vec![
+                TerminalEvent::Owner {
+                    owner: Some("session-a".to_owned()),
+                },
+                // revision gap で再同期に入り、attach はこのテストの backend では失敗する。
+                TerminalEvent::Delta(model_delta(5, TerminalSize::new(80, 24), "gap")),
+            ],
+        );
+
+        assert!(sessions.refresh().is_err());
+        assert_eq!(sessions.session.owner(&id), Some("session-a"));
+    }
+
+    #[gpui::test]
+    fn refresh_errors_project_the_owner_to_the_feature(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+
+        cx.update(|cx| {
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(Arc::new(Backend::default())),
+                    None,
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+
+            // poll エラー: 別 Terminal の poll が失敗しても、先の owner を UI に投影する。
+            let (mut sessions, backend) = feature();
+            let first = sessions
+                .session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            let second = sessions
+                .session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            backend.events.lock().unwrap().insert(
+                first.as_str().to_owned(),
+                vec![TerminalEvent::Owner {
+                    owner: Some("owner-poll".to_owned()),
+                }],
+            );
+            *backend.fail_poll_for.lock().unwrap() = Some(second.as_str().to_owned());
+            assert!(
+                sessions
+                    .refresh()
+                    .map_err(|error| error.to_string())
+                    .is_err()
+            );
+            let version = sessions.version();
+            let owners = sessions.owners().clone();
+            let terminals = sessions.session.terminals().to_vec();
+            entity.update(cx, |feature, _| {
+                feature.apply_projection(version, terminals, owners);
+                assert_eq!(
+                    feature.owners.get(first.as_str()),
+                    Some(&Some("owner-poll".to_owned()))
+                );
+            });
+
+            // 再同期 attach エラー: revision gap の後の attach が失敗しても owner を投影する。
+            let (mut sessions, backend) = feature();
+            let id = sessions
+                .session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            backend.events.lock().unwrap().insert(
+                id.as_str().to_owned(),
+                vec![
+                    TerminalEvent::Owner {
+                        owner: Some("owner-resync".to_owned()),
+                    },
+                    TerminalEvent::Delta(model_delta(5, TerminalSize::new(80, 24), "gap")),
+                ],
+            );
+            assert!(
+                sessions
+                    .refresh()
+                    .map_err(|error| error.to_string())
+                    .is_err()
+            );
+            let version = sessions.version();
+            let owners = sessions.owners().clone();
+            let terminals = sessions.session.terminals().to_vec();
+            entity.update(cx, |feature, _| {
+                feature.apply_projection(version, terminals, owners);
+                assert_eq!(
+                    feature.owners.get(id.as_str()),
+                    Some(&Some("owner-resync".to_owned()))
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn owner_updates_survive_a_later_terminal_poll_error() {
+        let (mut sessions, backend) = feature();
+        let first = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        let second = sessions
+            .session
+            .start(Path::new("workspace"), 80, 24)
+            .unwrap();
+        backend.events.lock().unwrap().insert(
+            first.as_str().to_owned(),
+            vec![TerminalEvent::Owner {
+                owner: Some("session-a".to_owned()),
+            }],
+        );
+        *backend.fail_poll_for.lock().unwrap() = Some(second.as_str().to_owned());
+
+        let before = sessions.version();
+        assert!(sessions.refresh().is_err());
+        // エラーでも部分的な更新を投影できるよう、版は進める。
+        assert!(sessions.version() > before);
+        assert_eq!(sessions.session.owner(&first), Some("session-a"));
+    }
+
     #[test]
     fn stale_poll_does_not_release_a_newer_poll() {
         let mut requests = TerminalRequests::default();
@@ -992,6 +1210,7 @@ mod tests {
         terminated: AtomicUsize,
         events: Mutex<HashMap<String, Vec<TerminalEvent>>>,
         inputs: Mutex<Vec<TerminalId>>,
+        fail_poll_for: Mutex<Option<String>>,
     }
 
     impl TerminalBackend for Backend {
@@ -1009,6 +1228,9 @@ mod tests {
             Ok(())
         }
         fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            if self.fail_poll_for.lock().unwrap().as_deref() == Some(id.as_str()) {
+                return Err(TerminalError::new("poll failed"));
+            }
             Ok(self
                 .events
                 .lock()

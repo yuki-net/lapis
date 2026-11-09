@@ -177,6 +177,7 @@ use git::GitError;
 pub struct TerminalSession {
     backend: Arc<dyn TerminalBackend>,
     terminals: Vec<TerminalSnapshot>,
+    owners: std::collections::HashMap<String, Option<String>>,
 }
 
 impl TerminalSession {
@@ -184,7 +185,17 @@ impl TerminalSession {
         Self {
             backend,
             terminals: Vec::new(),
+            owners: std::collections::HashMap::new(),
         }
+    }
+
+    /// 入力できる Session。`None` は不明または未所有。
+    pub fn owner(&self, id: &TerminalId) -> Option<&str> {
+        self.owners.get(id.as_str()).and_then(Option::as_deref)
+    }
+
+    pub fn owners(&self) -> &std::collections::HashMap<String, Option<String>> {
+        &self.owners
     }
 
     pub fn terminals(&self) -> &[TerminalSnapshot] {
@@ -311,6 +322,7 @@ impl TerminalSession {
     pub fn refresh(&mut self) -> Result<bool, TerminalError> {
         let mut changed = false;
         let mut attach_error = None;
+        let mut owner_updates = Vec::new();
         for terminal in &mut self.terminals {
             if terminal.status == TerminalStatus::Disconnected {
                 match self.backend.attach(&terminal.cwd, &terminal.id) {
@@ -328,7 +340,14 @@ impl TerminalSession {
                 continue;
             }
             let mut resync = false;
-            for event in self.backend.poll(&terminal.id)? {
+            let events = match self.backend.poll(&terminal.id) {
+                Ok(events) => events,
+                Err(error) => {
+                    attach_error.get_or_insert_with(|| error.to_string());
+                    break;
+                }
+            };
+            for event in events {
                 match event {
                     TerminalEvent::Snapshot(snapshot) => {
                         if snapshot.id != terminal.id || snapshot.revision < terminal.revision {
@@ -350,6 +369,9 @@ impl TerminalSession {
                         }
                         terminal.revision = delta.revision;
                     }
+                    TerminalEvent::Owner { owner } => {
+                        owner_updates.push((terminal.id.as_str().to_owned(), owner));
+                    }
                     TerminalEvent::Exited { .. } => terminal.status = TerminalStatus::Exited,
                     TerminalEvent::Failed(_) => {
                         terminal.status = TerminalStatus::Failed;
@@ -360,13 +382,24 @@ impl TerminalSession {
             if resync {
                 let id = terminal.id.clone();
                 let cwd = terminal.cwd.clone();
-                let snapshot = self.backend.attach(&cwd, &id)?;
+                let snapshot = match self.backend.attach(&cwd, &id) {
+                    Ok(snapshot) => snapshot,
+                    Err(error) => {
+                        attach_error.get_or_insert_with(|| error.to_string());
+                        break;
+                    }
+                };
                 if snapshot.id != id || snapshot.revision < terminal.revision {
-                    return Err(TerminalError::new("terminal snapshot resync failed"));
+                    attach_error
+                        .get_or_insert_with(|| "terminal snapshot resync failed".to_owned());
+                    break;
                 }
                 *terminal = snapshot;
                 changed = true;
             }
+        }
+        for (id, owner) in owner_updates {
+            self.owners.insert(id, owner);
         }
         match attach_error {
             Some(error) => Err(TerminalError::new(error)),

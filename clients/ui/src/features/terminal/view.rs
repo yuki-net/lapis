@@ -122,6 +122,11 @@ impl Render for TerminalFeature {
         }
         let cell_width = metrics.cell_width;
         let row_height = metrics.row_height;
+        let owner = active
+            .as_ref()
+            .and_then(|id| self.owners.get(id.as_str()))
+            .cloned()
+            .flatten();
         let tabs = self
             .terminals
             .iter()
@@ -170,6 +175,14 @@ impl Render for TerminalFeature {
                             })),
                     )
                     .child(div().flex_1())
+                    .when_some(owner, |el, owner| {
+                        el.child(
+                            div()
+                                .text_size(px(10.0))
+                                .text_color(theme::colors(cx).text_warning)
+                                .child(format!("操作中: {owner}")),
+                        )
+                    })
                     .child(
                         div()
                             .text_size(px(10.0))

@@ -181,6 +181,7 @@ impl Fixture {
                 assert!(snapshot.revision >= cache.revision);
                 *cache = snapshot;
             }
+            TerminalEvent::Owner { .. } => {}
             TerminalEvent::Exited { .. } => cache.status = ModelTerminalStatus::Exited,
             TerminalEvent::Failed(_) => cache.status = ModelTerminalStatus::Failed,
         }
@@ -211,6 +212,20 @@ fn until(mut predicate: impl FnMut() -> bool) {
         assert!(Instant::now() < deadline, "terminal operation timed out");
         thread::sleep(Duration::from_millis(1));
     }
+}
+
+#[test]
+fn claim_publishes_the_owner_to_the_client() {
+    let fixture = Fixture::new();
+    fixture.terminals.claim(&fixture.id).unwrap();
+    until(|| {
+        fixture
+            .terminals
+            .poll(&fixture.id)
+            .unwrap()
+            .iter()
+            .any(|event| matches!(event, TerminalEvent::Owner { owner } if owner.is_some()))
+    });
 }
 
 #[test]
@@ -487,8 +502,18 @@ fn a_busy_runtime_actor_does_not_block_poll_or_turn_disconnect_into_exit() {
         request.join().unwrap().unwrap(),
         ResponseBody::TerminalInput(_)
     ));
-    assert!(first.unwrap().is_empty());
-    assert!(second.unwrap().is_empty());
+    assert!(
+        first
+            .unwrap()
+            .iter()
+            .all(|event| matches!(event, TerminalEvent::Owner { .. }))
+    );
+    assert!(
+        second
+            .unwrap()
+            .iter()
+            .all(|event| matches!(event, TerminalEvent::Owner { .. }))
+    );
     assert!(elapsed < Duration::from_millis(100));
 }
 
@@ -542,8 +567,10 @@ fn subscribed_events_at_snapshot_watermark_are_not_replayed() {
             terminal: response.snapshot.terminals.into_iter().next().unwrap(),
         })
         .unwrap();
-    assert!(matches!(&events[..], [TerminalEvent::Snapshot(snapshot)]
-        if snapshot.revision == 2 && snapshot.status == ModelTerminalStatus::Running));
+    assert!(
+        matches!(&events[..], [TerminalEvent::Snapshot(snapshot), TerminalEvent::Owner { .. }]
+        if snapshot.revision == 2 && snapshot.status == ModelTerminalStatus::Running)
+    );
     assert!(attachment.poll().unwrap().is_empty());
 }
 
