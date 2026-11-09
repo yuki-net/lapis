@@ -554,8 +554,14 @@ mod tests {
         let saved = original.layout.capture();
         let mut restored = ShellState {
             layout: DockLayout::restore(&saved, |raw| {
-                let (view, instance) = raw.strip_prefix("tool:")?.split_once(':')?;
-                Some(PanelTab::tool_instance(view, instance))
+                let desktop_client::TabRef::View { id } = raw else {
+                    return None;
+                };
+                let view = id
+                    .strip_prefix("shared:")
+                    .or_else(|| id.split_once(':').map(|(view, _)| view))
+                    .unwrap_or(id.as_str());
+                Some(PanelTab::tool_instance(view, id.clone()))
             })
             .unwrap(),
             ..Default::default()

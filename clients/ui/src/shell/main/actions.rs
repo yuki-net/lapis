@@ -1,5 +1,6 @@
 use super::*;
 use crate::extension_ui::ZonePosition;
+use terminal::TerminalId;
 
 impl Shell {
     pub(super) fn panel_visibility_entries(&self) -> Vec<(super::super::PanelId, String, bool)> {
@@ -141,6 +142,49 @@ impl Shell {
         );
         self.refresh_feature_activation(cx);
         cx.notify();
+    }
+
+    /// 起動済みのHost Terminalをタブとして開く。既存のTerminal Viewタブは同じ位置で置き換える。
+    pub(crate) fn open_terminal_tab(&mut self, id: TerminalId, cx: &mut Context<Self>) {
+        let tab = PanelTab::terminal(id);
+        if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
+            self.focus_terminal_tab(&panel_id, &tab);
+            self.refresh_feature_activation(cx);
+            cx.notify();
+            return;
+        }
+        let generic = self.shell.layout.placements().into_iter().find(|(tab, _)| {
+            tab.terminal_id().is_none()
+                && tab
+                    .view_id()
+                    .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL)
+        });
+        if let Some((old, panel_id)) = generic
+            && self.shell.layout.replace_tab(&panel_id, &old, tab.clone())
+        {
+            self.focus_terminal_tab(&panel_id, &tab);
+            self.refresh_feature_activation(cx);
+            cx.notify();
+            return;
+        }
+        if let Ok(panel_id) = self.shell.layout.move_tab_to_zone(
+            ZonePosition::Bottom,
+            tab.clone(),
+            crate::time::Instant::now(),
+        ) {
+            self.focus_terminal_tab(&panel_id, &tab);
+        }
+        self.refresh_feature_activation(cx);
+        cx.notify();
+    }
+
+    fn focus_terminal_tab(&mut self, panel_id: &PanelId, tab: &PanelTab) {
+        self.shell.layout.set_panel_open(panel_id, true);
+        if let Some(position) = self.shell.layout.zone_for_panel(panel_id) {
+            self.shell.layout.set_zone_open(position, true);
+        }
+        self.shell.layout.activate_existing_tab(tab);
+        self.shell.focused_panel = Some(panel_id.clone());
     }
 
     pub(crate) fn close_zone(&mut self, position: ZonePosition, cx: &mut Context<Self>) {

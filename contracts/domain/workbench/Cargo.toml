@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 editor-core = { path = "../editor-core" }
+terminal = { path = "../terminal" }
 workspace = { path = "../workspace" }
 serde.workspace = true
 

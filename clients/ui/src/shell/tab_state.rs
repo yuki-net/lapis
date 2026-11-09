@@ -1,7 +1,11 @@
 use crate::extension_ui::ViewId;
 use editor_core::DocumentId;
+use terminal::TerminalId;
 
 pub(crate) use crate::extension_ui::ViewInstanceId;
+
+/// Host Terminalを参照するタブのInstance接頭辞。Resource IDと表示個体を分離する。
+const TERMINAL_INSTANCE_PREFIX: &str = "terminal:";
 
 /// Panel内のTabの所属を識別する。ZoneやResourceの識別子とは独立する。
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -87,6 +91,25 @@ impl PanelTab {
             view: view.into(),
             instance: instance.into(),
         }
+    }
+
+    /// Host Terminalを参照するタブ。InstanceにTerminalIdを保持し、再起動後も同じPTYへ戻す。
+    pub(crate) fn terminal(id: TerminalId) -> Self {
+        Self::Tool {
+            view: ViewId::new(crate::features::id::VIEW_TERMINAL),
+            instance: ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{}", id.as_str())),
+        }
+    }
+
+    pub(crate) fn terminal_id(&self) -> Option<TerminalId> {
+        let Self::Tool { view, instance } = self else {
+            return None;
+        };
+        (view.as_str() == crate::features::id::VIEW_TERMINAL)
+            .then(|| instance.as_str().strip_prefix(TERMINAL_INSTANCE_PREFIX))
+            .flatten()
+            .filter(|id| !id.is_empty())
+            .map(TerminalId::new)
     }
 
     pub(crate) fn view_id(&self) -> Option<&ViewId> {

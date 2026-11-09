@@ -3,7 +3,7 @@ use crate::{
     kit::layout_profile::LayoutProfile,
     shell::{DockLayout, PanelTab, ShellState},
 };
-use desktop_client::{ConversationViewState, DocumentTab};
+use desktop_client::{ConversationViewState, DocumentTab, TabRef};
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {
@@ -22,10 +22,14 @@ pub(crate) fn apply_view_state(
     registry: &FeatureRegistry,
 ) {
     let restored = view.layout.as_ref().and_then(|layout| {
-        DockLayout::restore(layout, |raw| {
-            let tab = deserialize_panel_tab(raw)?;
+        DockLayout::restore(layout, |reference| {
+            let tab = deserialize_panel_tab(reference)?;
             match &tab {
                 PanelTab::Document(id) => documents.iter().any(|document| &document.id == id),
+                // TerminalはHost側の存在確認を再アタッチ時に任せ、参照IDだけで復元する。
+                PanelTab::Tool { view, .. } if tab.terminal_id().is_some() => {
+                    view.as_str() == crate::features::id::VIEW_TERMINAL
+                }
                 PanelTab::Tool { view, .. } => [
                     ZonePosition::Main,
                     ZonePosition::Left,
@@ -44,18 +48,25 @@ pub(crate) fn apply_view_state(
     shell.synchronize_documents(documents);
 }
 
-fn deserialize_panel_tab(value: &str) -> Option<PanelTab> {
-    if let Some(id) = value.strip_prefix("document:") {
-        return (!id.is_empty()).then(|| PanelTab::Document(editor_core::DocumentId::new(id)));
+fn deserialize_panel_tab(value: &TabRef) -> Option<PanelTab> {
+    match value {
+        TabRef::Document { id } => Some(PanelTab::Document(id.clone())),
+        TabRef::Terminal { id } => Some(PanelTab::terminal(id.clone())),
+        TabRef::View { id } => {
+            if id.is_empty() {
+                return None;
+            }
+            // ViewInstanceIdは "shared:<view>" か "<view>:<token>" の形を取る。
+            let view = id
+                .strip_prefix("shared:")
+                .or_else(|| id.split_once(':').map(|(view, _)| view))
+                .unwrap_or(id.as_str());
+            if view.is_empty() {
+                return None;
+            }
+            Some(PanelTab::tool_instance(ViewId::new(view), id.clone()))
+        }
     }
-    let (view, instance) = value.strip_prefix("tool:")?.split_once(':')?;
-    if view.is_empty() || instance.is_empty() {
-        return None;
-    }
-    Some(PanelTab::tool_instance(
-        ViewId::new(view),
-        instance.to_owned(),
-    ))
 }
 
 #[cfg(test)]

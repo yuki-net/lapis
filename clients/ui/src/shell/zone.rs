@@ -435,7 +435,7 @@ impl Zone {
         parse_tab: &mut F,
     ) -> Option<Self>
     where
-        F: FnMut(&str) -> Option<PanelTab>,
+        F: FnMut(&desktop_client::TabRef) -> Option<PanelTab>,
     {
         let position = super::layout::zone_position(&saved.position)?;
         if super::layout::zone_position_name(position) != saved.position
@@ -463,7 +463,7 @@ impl Zone {
             }
             let active = item
                 .active_tab
-                .as_deref()
+                .as_ref()
                 .and_then(&mut *parse_tab)
                 .filter(|tab| tabs.contains(tab))
                 .or_else(|| tabs.first().cloned());
