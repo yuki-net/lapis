@@ -175,6 +175,8 @@ pub(crate) struct TerminalFeature {
     /// 失敗後に再同期付きの再送を 1 回だけ行うための印。
     input_recovery: bool,
     resyncing_inputs: bool,
+    /// 再同期を開始したコンテキスト世代。切り替え後の古い結果を捨てるために使う。
+    input_epoch: u64,
     /// 入力失敗で表示中のエラー。次の入力成功時に同じ端末の同じ message だけを消す。
     input_error: Option<(terminal::TerminalId, String)>,
     /// 右クリック／「＋」で開くメニューのアンカー。None のときは閉じている。
@@ -332,6 +334,7 @@ impl TerminalFeature {
             input_flush_scheduled: false,
             input_recovery: false,
             resyncing_inputs: false,
+            input_epoch: 0,
             input_error: None,
             context_menu: None,
             context_anchor: None,
@@ -436,6 +439,8 @@ impl TerminalFeature {
         self.input_flush_scheduled = false;
         self.input_recovery = false;
         self.resyncing_inputs = false;
+        // 進行中の再同期の結果を、切り替え後の状態へ適用しない。
+        self.input_epoch = self.input_epoch.wrapping_add(1);
         let input_error = self.input_error.take();
         if input_error.is_some_and(|(_, error)| error == self.message) {
             self.message.clear();
@@ -778,6 +783,7 @@ impl TerminalFeature {
         }
         self.resyncing_inputs = true;
         let token = self.requests.begin_action();
+        let epoch = self.input_epoch;
         let admitted = self.worker.submit(
             cx,
             |sessions| {
@@ -790,28 +796,34 @@ impl TerminalFeature {
                 ))
             },
             move |feature, result, cx| {
-                if !feature.requests.finish_action(token) {
+                let accepted = feature.requests.finish_action(token);
+                if feature.input_epoch != epoch {
+                    // コンテキストが切り替わった。フラグは set_context が初期化済み。
                     return;
                 }
+                // 後続 action（resize / claim / operate 等）に追い越されても、
+                // 再同期中フラグと未送信入力の再送は必ず完了させる。
                 feature.resyncing_inputs = false;
-                match result {
-                    Ok((Ok(_), version, terminals, owners)) => {
-                        feature.apply_projection(version, terminals, owners);
-                    }
-                    Ok((Err(error), version, terminals, owners)) => {
-                        feature.apply_projection(version, terminals, owners);
-                        feature.input_recovery = false;
-                        feature.message = error;
-                        feature.message_from_poll = false;
-                        cx.notify();
-                        return;
-                    }
-                    Err(error) => {
-                        feature.input_recovery = false;
-                        feature.message = error;
-                        feature.message_from_poll = false;
-                        cx.notify();
-                        return;
+                if accepted {
+                    match result {
+                        Ok((Ok(_), version, terminals, owners)) => {
+                            feature.apply_projection(version, terminals, owners);
+                        }
+                        Ok((Err(error), version, terminals, owners)) => {
+                            feature.apply_projection(version, terminals, owners);
+                            feature.input_recovery = false;
+                            feature.message = error;
+                            feature.message_from_poll = false;
+                            cx.notify();
+                            return;
+                        }
+                        Err(error) => {
+                            feature.input_recovery = false;
+                            feature.message = error;
+                            feature.message_from_poll = false;
+                            cx.notify();
+                            return;
+                        }
                     }
                 }
                 cx.notify();
@@ -1650,6 +1662,61 @@ mod tests {
                 TerminalInput::Paste("xy".into()),
                 TerminalInput::Text("z".into()),
             ]
+        );
+    }
+
+    #[gpui::test]
+    fn superseded_resync_clears_state_and_still_retries_pending_input(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                let id = feature.active_id().unwrap();
+                feature.queue_mut(&id).enqueue_text("ab".into());
+                feature.resync_inputs(cx);
+                assert!(feature.resyncing_inputs);
+                // resize / claim / operate と同じく、再同期の応答前に action を進める。
+                feature.requests.begin_action();
+            });
+            (entity, backend)
+        });
+
+        let sent = backend.clone();
+        drain_inputs(cx, &entity, move |feature| {
+            !feature.resyncing_inputs
+                && !feature.input_recovery
+                && sent.sent_inputs.lock().unwrap().len() == 1
+                && feature.inputs.iter().all(|(_, queue)| !queue.has_pending())
+        });
+        assert_eq!(
+            *backend.sent_inputs.lock().unwrap(),
+            vec![TerminalInput::Text("ab".into())],
+            "追い越されても未送信入力は失わない"
+        );
+
+        // フラグが残っていないため、次の再同期も即座に実行できる。
+        let polls = backend.polls.load(Ordering::Relaxed);
+        cx.update(|cx| {
+            entity.update(cx, |feature, cx| {
+                feature.resync_inputs(cx);
+            })
+        });
+        drain_inputs(cx, &entity, |feature| !feature.resyncing_inputs);
+        assert!(
+            backend.polls.load(Ordering::Relaxed) > polls,
+            "再同期が再び実行される"
         );
     }
 
