@@ -81,16 +81,12 @@ impl ProblemsFeature {
     }
     /// backend の診断更新通知で再取得する。ポーリングは行わない。
     fn subscribe_diagnostics(&self, cx: &mut Context<Self>) {
-        let worker = self.worker.clone();
+        let receiver = self
+            .worker
+            .request(|client| Ok(client.lsp.diagnostics_changes()));
         let executor = cx.background_executor().clone();
         cx.spawn(async move |this, cx| {
-            let opened = executor
-                .spawn(async move {
-                    worker
-                        .request(|client| Ok(client.lsp.diagnostics_changes()))
-                        .recv()
-                })
-                .await;
+            let opened = executor.spawn(async move { receiver.recv() }).await;
             let Ok(Ok(Some(mut changes))) = opened else {
                 return;
             };
