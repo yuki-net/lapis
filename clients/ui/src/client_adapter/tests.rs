@@ -322,6 +322,26 @@ pub(crate) fn plan(
 }
 
 #[test]
+fn restoring_a_remote_workbench_keeps_local_dirty_edits() {
+    let fixture = Fixture::default();
+    let mut client = fixture.client();
+    client.editor.replace_range(0..0, "未保存の入力").unwrap();
+    let shared = desktop_client::SharedWorkspaceView {
+        workspace_id: WorkspaceId::new("workspace"),
+        open_documents: Vec::new(),
+        active_path: None,
+        active_document_id: None,
+    };
+    let error = match client.restore_workbench(shared) {
+        Ok(_) => panic!("未保存の変更があるのにHostの状態を適用しました"),
+        Err(error) => error,
+    };
+    assert!(error.contains("未保存"), "予期しないエラー: {error}");
+    assert_eq!(client.editor.active_text().unwrap(), "未保存の入力");
+    assert!(client.editor.is_dirty());
+}
+
+#[test]
 fn close_report_keeps_commits_when_view_persistence_or_snapshot_fails() {
     for (persistence_failure, snapshot_failure) in [(true, false), (false, true), (true, true)] {
         let fixture = Fixture::default();

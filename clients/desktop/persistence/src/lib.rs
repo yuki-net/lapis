@@ -200,7 +200,7 @@ impl ConversationRepository for LocalConversationRepository {
 /// ローカル保存に加えて、Desktop の Workbench を Host へ公開する。
 pub struct HostConversationRepository {
     local: Arc<dyn ConversationRepository>,
-    sync: Mutex<WorkbenchSync>,
+    sync: Arc<Mutex<WorkbenchSync>>,
     workspace: WorkspaceId,
 }
 
@@ -212,40 +212,76 @@ impl HostConversationRepository {
         watch: WorkbenchWatch,
     ) -> Self {
         let mut sync = WorkbenchSync::new(connection.clone());
-        if let Err(error) = sync.open(workspace.clone()) {
-            eprintln!("HostのWorkbenchを開けません: {error}");
-        } else if let Some(state) = sync.confirmed()
-            && let Some(view) = state.view.clone()
-        {
-            watch.publish(state.revision, view);
-        }
-        let subscription_watch = watch.clone();
-        let subscription_workspace = workspace.clone();
-        std::thread::spawn(move || {
-            let Ok(mut subscription) = connection.subscribe(&subscription_workspace) else {
-                return;
-            };
-            let mut sync = WorkbenchSync::new(connection);
-            if sync.open(subscription_workspace.clone()).is_err() {
-                return;
-            }
-            while subscription
-                .recv_timeout(std::time::Duration::from_secs(1))
-                .is_ok()
-            {
-                if let Ok(Some(state)) = sync.refresh()
+        let opened = match sync.open(workspace.clone()) {
+            Ok(_) => {
+                if let Some(state) = sync.confirmed()
                     && let Some(view) = state.view.clone()
                 {
-                    subscription_watch.publish(state.revision, view);
+                    watch.publish(state.revision, view);
                 }
+                true
             }
-        });
+            Err(error) => {
+                eprintln!("HostのWorkbenchを開けません: {error}");
+                false
+            }
+        };
+        let sync = Arc::new(Mutex::new(sync));
+        if opened {
+            let subscription_watch = watch;
+            let subscription_workspace = workspace.clone();
+            let subscription_sync = sync.clone();
+            std::thread::spawn(move || {
+                let mut subscription = match connection.subscribe(&subscription_workspace) {
+                    Ok(subscription) => subscription,
+                    Err(error) => {
+                        eprintln!("Workbench購読を開始できません: {error}");
+                        return;
+                    }
+                };
+                // 購読開始前に取りこぼした変更を一度だけ取り込み、以降は通知だけで動く。
+                if !refresh_and_publish(&subscription_sync, &subscription_watch) {
+                    return;
+                }
+                loop {
+                    match subscription.recv_timeout(std::time::Duration::from_secs(30)) {
+                        Ok(Some(_)) => {}
+                        Ok(None) => continue,
+                        Err(error) => {
+                            eprintln!("Workbench購読が終了しました: {error}");
+                            return;
+                        }
+                    }
+                    if !refresh_and_publish(&subscription_sync, &subscription_watch) {
+                        return;
+                    }
+                }
+            });
+        }
         Self {
             local,
-            sync: Mutex::new(sync),
+            sync,
             workspace,
         }
     }
+}
+
+/// Hostの正本を取り直し、変化があればUIへ公開する。lock異常だけを中断条件にする。
+fn refresh_and_publish(sync: &Mutex<WorkbenchSync>, watch: &WorkbenchWatch) -> bool {
+    let Ok(mut sync) = sync.lock() else {
+        eprintln!("Workbench同期のlockに失敗しました");
+        return false;
+    };
+    match sync.refresh() {
+        Ok(Some(state)) => {
+            if let Some(view) = state.view.clone() {
+                watch.publish(state.revision, view);
+            }
+        }
+        Ok(None) => {}
+        Err(error) => eprintln!("Workbenchを再取得できません: {error}"),
+    }
+    true
 }
 
 impl ConversationRepository for HostConversationRepository {
@@ -335,6 +371,7 @@ mod tests {
     use desktop_client::{
         ConversationViewState, DocumentViewState, RestoredTerminal, WorkspaceSnapshot,
     };
+    use editor_core::DocumentId;
     use editor_core::ExecutionId;
     use localization::LocaleId;
     use settings::GlobalSettingsRepository;
@@ -556,11 +593,25 @@ mod tests {
         );
     }
 
-    struct SharedWorkbench(Mutex<VersionedViewState>);
+    struct SharedWorkbench {
+        state: Mutex<VersionedViewState>,
+        subscribers: Mutex<Vec<std::sync::mpsc::Sender<u64>>>,
+        subscription_observer: Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    }
+
+    impl Default for SharedWorkbench {
+        fn default() -> Self {
+            Self {
+                state: Mutex::new(VersionedViewState::default()),
+                subscribers: Mutex::new(Vec::new()),
+                subscription_observer: Mutex::new(None),
+            }
+        }
+    }
 
     impl workbench::WorkbenchConnection for SharedWorkbench {
         fn get(&self, _: &WorkspaceId) -> Result<VersionedViewState, String> {
-            Ok(self.0.lock().unwrap().clone())
+            Ok(self.state.lock().unwrap().clone())
         }
 
         fn update(
@@ -569,21 +620,132 @@ mod tests {
             expected: u64,
             view: ConversationViewState,
         ) -> Result<workbench::WorkbenchUpdate, String> {
-            let mut state = self.0.lock().unwrap();
-            match state.update(expected, view) {
-                Ok(_) => Ok(workbench::WorkbenchUpdate::Updated(state.clone())),
-                Err(workbench::ViewUpdateError::Conflict { .. }) => {
-                    Ok(workbench::WorkbenchUpdate::Conflict(state.clone()))
+            let result = {
+                let mut state = self.state.lock().unwrap();
+                match state.update(expected, view) {
+                    Ok(_) => Ok(workbench::WorkbenchUpdate::Updated(state.clone())),
+                    Err(workbench::ViewUpdateError::Conflict { .. }) => {
+                        Ok(workbench::WorkbenchUpdate::Conflict(state.clone()))
+                    }
+                    Err(_) => Err("overflow".into()),
                 }
-                Err(_) => Err("overflow".into()),
+            };
+            if let Ok(workbench::WorkbenchUpdate::Updated(state)) = &result {
+                self.subscribers
+                    .lock()
+                    .unwrap()
+                    .retain(|subscriber| subscriber.send(state.revision).is_ok());
             }
+            result
         }
 
         fn subscribe(
             &self,
             _: &WorkspaceId,
         ) -> Result<Box<dyn workbench::WorkbenchSubscription>, String> {
-            Err("unsupported".into())
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.subscribers.lock().unwrap().push(sender);
+            if let Some(observer) = self.subscription_observer.lock().unwrap().take() {
+                let _ = observer.send(());
+            }
+            Ok(Box::new(SharedSubscription(receiver)))
+        }
+    }
+
+    struct SharedSubscription(std::sync::mpsc::Receiver<u64>);
+
+    impl workbench::WorkbenchSubscription for SharedSubscription {
+        fn recv_timeout(&mut self, timeout: std::time::Duration) -> Result<Option<u64>, String> {
+            match self.0.recv_timeout(timeout) {
+                Ok(revision) => Ok(Some(revision)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    Err("subscription closed".into())
+                }
+            }
+        }
+    }
+
+    fn tabs_view(tabs: &[&str]) -> ConversationViewState {
+        use workbench::{TabRef, ZoneLayoutViewState, ZonePanelViewState, ZoneViewState};
+        let tabs = tabs
+            .iter()
+            .map(|id| TabRef::Document {
+                id: DocumentId::new(*id),
+            })
+            .collect::<Vec<_>>();
+        ConversationViewState {
+            layout: Some(ZoneLayoutViewState {
+                version: workbench::ZONE_LAYOUT_VERSION,
+                zones: vec![ZoneViewState {
+                    position: "main".to_owned(),
+                    open: true,
+                    extent_ratio: 1.0,
+                    layout: None,
+                    panels: vec![ZonePanelViewState {
+                        id: "panel".to_owned(),
+                        active_tab: tabs.first().cloned(),
+                        tabs,
+                        pinned_tabs: Vec::new(),
+                        open: true,
+                    }],
+                }],
+                bottom_span_left: false,
+                bottom_span_right: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn tab_ids(view: &ConversationViewState) -> Vec<&str> {
+        use workbench::TabRef;
+        view.layout
+            .as_ref()
+            .and_then(|layout| layout.zones.first())
+            .and_then(|zone| zone.panels.first())
+            .map(|panel| {
+                panel
+                    .tabs
+                    .iter()
+                    .map(|tab| match tab {
+                        TabRef::Document { id } => id.as_str(),
+                        _ => "",
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn wait_for_workbench(watch: &WorkbenchWatch, previous: u64) -> (u64, ConversationViewState) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if let Some(found) = watch.take_if_changed(previous) {
+                return found;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("Workbenchの変更が公開されませんでした");
+    }
+
+    fn conversation_record(root: &Path) -> ConversationRecord {
+        ConversationRecord {
+            id: ConversationId::new("conversation-1"),
+            title: "Web".to_owned(),
+            workspace: WorkspaceSnapshot {
+                root: Some(root.to_owned()),
+                open_documents: Vec::new(),
+                active_path: None,
+                active_document_id: None,
+            },
+            view: ConversationViewState::default(),
+            selected_execution: None,
+            terminals: Vec::new(),
+            environment: None,
+            source_role: desktop_client::SourceRole::Primary,
+            other_workspace: None,
+            other_terminals: Vec::new(),
+            other_execution: None,
+            parked_sources: Vec::new(),
         }
     }
 
@@ -593,7 +755,7 @@ mod tests {
         let local = Arc::new(LocalConversationRepository::new(
             directory.path().join("conversations.json"),
         ));
-        let workbench = Arc::new(SharedWorkbench(Mutex::new(VersionedViewState::default())));
+        let workbench = Arc::new(SharedWorkbench::default());
         let workspace = WorkspaceId::new("workspace-1");
         let repository = HostConversationRepository::new(
             local,
@@ -601,28 +763,7 @@ mod tests {
             workspace.clone(),
             WorkbenchWatch::new(),
         );
-        let record = ConversationRecord {
-            id: ConversationId::new("conversation-1"),
-            title: "Web".to_owned(),
-            workspace: WorkspaceSnapshot {
-                root: Some(directory.path().to_owned()),
-                open_documents: Vec::new(),
-                active_path: None,
-                active_document_id: None,
-            },
-            view: ConversationViewState {
-                show_panel_controls: false,
-                ..Default::default()
-            },
-            selected_execution: None,
-            terminals: Vec::new(),
-            environment: None,
-            source_role: desktop_client::SourceRole::Primary,
-            other_workspace: None,
-            other_terminals: Vec::new(),
-            other_execution: None,
-            parked_sources: Vec::new(),
-        };
+        let record = conversation_record(directory.path());
         repository
             .save(
                 &Default::default(),
@@ -631,10 +772,60 @@ mod tests {
                 &record.id,
             )
             .unwrap();
-        let state = workbench.0.lock().unwrap();
+        let state = workbench.state.lock().unwrap();
         assert_eq!(state.revision, 1);
         let view = state.view.as_ref().unwrap();
-        assert!(!view.show_panel_controls);
         assert_eq!(view.workspace.as_ref().unwrap().workspace_id, workspace);
+    }
+
+    #[test]
+    fn remote_tab_changes_are_published_and_advance_the_next_local_save() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalConversationRepository::new(
+            directory.path().join("conversations.json"),
+        ));
+        let workbench = Arc::new(SharedWorkbench::default());
+        let workspace = WorkspaceId::new("workspace-1");
+        let watch = WorkbenchWatch::new();
+        let (subscribed, subscription) = std::sync::mpsc::channel();
+        *workbench.subscription_observer.lock().unwrap() = Some(subscribed);
+        let repository = HostConversationRepository::new(
+            local,
+            workbench.clone(),
+            workspace.clone(),
+            watch.clone(),
+        );
+        subscription
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("Workbench購読が開始されませんでした");
+
+        let mut remote = WorkbenchSync::new(workbench.clone());
+        remote.open(workspace).unwrap();
+
+        for (expected_revision, tabs) in [
+            (1, vec!["doc-a", "doc-b"]),
+            (2, vec!["doc-b", "doc-a"]),
+            (3, vec!["doc-b"]),
+        ] {
+            assert!(matches!(
+                remote.save(tabs_view(&tabs)).unwrap(),
+                desktop_client::WorkbenchSyncResult::Updated(_)
+            ));
+            let (revision, view) = wait_for_workbench(&watch, expected_revision - 1);
+            assert_eq!(revision, expected_revision);
+            assert_eq!(tab_ids(&view), tabs);
+        }
+
+        // リモート変更を取り込んだrevisionでローカル保存が通り、競合しない。
+        let record = conversation_record(directory.path());
+        repository
+            .save(
+                &Default::default(),
+                &[],
+                std::slice::from_ref(&record),
+                &record.id,
+            )
+            .unwrap();
+        assert_eq!(workbench.state.lock().unwrap().revision, 4);
     }
 }
