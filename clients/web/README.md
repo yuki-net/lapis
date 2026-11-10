@@ -9,7 +9,7 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 URL と Workspace ID をクエリか localStorage に渡します。OIDC を使う場合はログインフォームから IdP で認証します。OIDC を使わない場合は、初回は pairing token、以降は保存済み credential で接続します。
 
 ```text
-http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
+http://127.0.0.1:4747/?url=ws://127.0.0.1:4757/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
 ```
 
 Host なしのデモ:
@@ -18,9 +18,9 @@ Host なしのデモ:
 http://127.0.0.1:4747/?demo=1
 ```
 
-URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。Host URL には bridge の既定（`ws://<hostname>:4748/remote`）があらかじめ入ります。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
+URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。Host URL には bridge の既定（`ws://<hostname>:4757/remote`）があらかじめ入ります。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
 
-起動手順・ポート・ログインの詳細は [開発時の起動](../../docs/dev.md) を参照してください。ログインフォームの Host URL には **bridge** の WebSocket（`ws://127.0.0.1:4748/remote`）を入力します。Host の QUIC アドレスではありません。
+起動手順・ポート・ログインの詳細は [開発時の起動](../../docs/dev.md) を参照してください。ログインフォームの Host URL には **bridge** の WebSocket（`ws://127.0.0.1:4757/remote`）を入力します。Host の QUIC アドレスではありません。
 
 - 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
