@@ -421,22 +421,55 @@ impl TaskConnection for HostTasks {
 
     fn subscribe(&self, workspace: &WorkspaceId) -> Option<Box<dyn task::TaskSubscription>> {
         let id = client_api::WorkspaceId::try_from(workspace).ok()?;
-        let client = self.host.connect(id.clone()).ok()?;
-        let receiver = client.subscribe().ok()?;
+        let client = match self.host.connect(id.clone()) {
+            Ok(client) => client,
+            Err(error) => {
+                return Some(Box::new(FailedTaskSubscription(format!(
+                    "Task購読の接続に失敗しました: {error}"
+                ))));
+            }
+        };
+        let receiver = match client.subscribe() {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                return Some(Box::new(FailedTaskSubscription(format!(
+                    "Task購読を開始できませんでした: {error}"
+                ))));
+            }
+        };
         // 購読開始前の変更を watermark で補うため Snapshot を一度取得する。
-        let ResponseBody::SnapshotResync(snapshot) = client
-            .request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
+        let snapshot =
+            match client.request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
                 workspace_id: id,
                 reason: client_api::SnapshotReason::Reconnect,
-            }))
-            .ok()?
-        else {
-            return None;
-        };
+            })) {
+                Ok(ResponseBody::SnapshotResync(snapshot)) => snapshot,
+                Ok(_) => {
+                    return Some(Box::new(FailedTaskSubscription(
+                        "Task購読のSnapshot応答が不正です".to_owned(),
+                    )));
+                }
+                Err(error) => {
+                    return Some(Box::new(FailedTaskSubscription(format!(
+                        "Task購読の再同期に失敗しました: {error}"
+                    ))));
+                }
+            };
         Some(Box::new(HostTaskSubscription {
             _client: client,
             receiver,
             watermark: Some(snapshot.snapshot.event_watermark.value()),
         }))
+    }
+}
+
+/// 一時的な購読失敗を UI の再同期・再購読経路へ流すための購読。
+///
+/// `None` は「購読に未対応の接続」だけに使う。
+struct FailedTaskSubscription(String);
+
+impl task::TaskSubscription for FailedTaskSubscription {
+    fn recv_timeout(&mut self, _: std::time::Duration) -> Result<bool, TaskError> {
+        Err(TaskError::new(self.0.clone()))
     }
 }

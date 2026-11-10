@@ -164,7 +164,12 @@ impl TaskBackend for LocalTaskBackend {
         let (sender, receiver) = mpsc::sync_channel(1);
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.is_ok_and(|event| !matches!(event.kind, notify::EventKind::Access(_))) {
+                let changed = match event {
+                    Ok(event) => !matches!(event.kind, notify::EventKind::Access(_)),
+                    // 取りこぼしの可能性があるため、再同期を促す。
+                    Err(_) => true,
+                };
+                if changed {
                     let _ = sender.try_send(());
                 }
             })

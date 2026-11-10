@@ -232,33 +232,32 @@ impl TasksFeature {
             },
             move |tasks, result, cx| {
                 tasks.pending = tasks.pending.saturating_sub(1);
+                if tasks.gate.accept(token) {
+                    match result {
+                        Ok((records, selected)) => {
+                            tasks.records = records;
+                            tasks.selected_execution = select_visible_execution(
+                                &tasks.visible_records(),
+                                selected,
+                                tasks.selected_execution.clone(),
+                            );
+                            if !is_refresh || tasks.message_from_refresh {
+                                tasks.message.clear();
+                                tasks.message_from_refresh = false;
+                            }
+                        }
+                        Err(error) => {
+                            tasks.message = error;
+                            tasks.message_from_refresh = is_refresh;
+                        }
+                    }
+                    cx.notify();
+                }
                 if tasks.pending == 0 && tasks.sync_pending {
-                    // 通知を処理中だった分は、完了後に1回だけ取り直す。
+                    // 通知を処理中だった分は、結果の適用後に取り直す。
                     tasks.sync_pending = false;
                     tasks.refresh(cx);
                 }
-                if !tasks.gate.accept(token) {
-                    return;
-                }
-                match result {
-                    Ok((records, selected)) => {
-                        tasks.records = records;
-                        tasks.selected_execution = select_visible_execution(
-                            &tasks.visible_records(),
-                            selected,
-                            tasks.selected_execution.clone(),
-                        );
-                        if !is_refresh || tasks.message_from_refresh {
-                            tasks.message.clear();
-                            tasks.message_from_refresh = false;
-                        }
-                    }
-                    Err(error) => {
-                        tasks.message = error;
-                        tasks.message_from_refresh = is_refresh;
-                    }
-                }
-                cx.notify();
             },
         );
         if let Err(error) = admitted {

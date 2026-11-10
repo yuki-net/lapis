@@ -88,7 +88,7 @@ impl HostDocuments {
             .connect_workspace(workspace.clone())
             .map_err(|error| DocumentError::io(error.to_string()))?;
         connections.insert(workspace, client.clone());
-        forward_document_events(client.clone(), self.changes.clone());
+        forward_document_events(client.clone(), Arc::downgrade(&self.changes));
         Ok(client)
     }
     fn connect(&self, root: &Path) -> Result<Client, DocumentError> {
@@ -203,34 +203,37 @@ impl HostDocuments {
 }
 
 /// Host の Document / ファイル変更 event を Window の再同期通知へ変換する。
-fn forward_document_events(client: Client, changes: Arc<DocumentChanges>) {
+///
+/// 購読が切れたら再同期を促し、少し待って購読し直す。
+/// `HostDocuments` が破棄されたら `Weak` の upgrade に失敗して終了する。
+fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChanges>) {
     std::thread::spawn(move || {
-        let Ok(receiver) = client.subscribe() else {
-            changes.publish();
-            return;
-        };
         loop {
-            let event = match receiver.recv() {
-                Ok(event) => event,
-                Err(_) => {
-                    changes.publish();
-                    break;
-                }
+            let Some(changes) = changes.upgrade() else {
+                return;
             };
-            match event.body {
-                wire::EventBody::DocumentEdited { .. }
-                | wire::EventBody::DocumentSaved { .. }
-                | wire::EventBody::DocumentReplaced { .. }
-                | wire::EventBody::DocumentClosed { .. }
-                | wire::EventBody::DocumentOwner { .. }
-                | wire::EventBody::WorkspaceChanged { .. }
-                | wire::EventBody::FilesChanged { .. } => changes.publish(),
-                wire::EventBody::SnapshotRequired { .. } => {
-                    changes.publish();
-                    break;
+            if let Ok(receiver) = client.subscribe() {
+                while let Ok(event) = receiver.recv() {
+                    match event.body {
+                        wire::EventBody::DocumentEdited { .. }
+                        | wire::EventBody::DocumentSaved { .. }
+                        | wire::EventBody::DocumentReplaced { .. }
+                        | wire::EventBody::DocumentClosed { .. }
+                        | wire::EventBody::DocumentOwner { .. }
+                        | wire::EventBody::WorkspaceChanged { .. }
+                        | wire::EventBody::FilesChanged { .. } => changes.publish(),
+                        wire::EventBody::SnapshotRequired { .. } => {
+                            changes.publish();
+                            break;
+                        }
+                        _ => {}
+                    }
                 }
-                _ => {}
             }
+            // 切断・購読失敗時は購読先の変化を取りこぼしている可能性がある。
+            changes.publish();
+            drop(changes);
+            std::thread::sleep(Duration::from_secs(2));
         }
     });
 }

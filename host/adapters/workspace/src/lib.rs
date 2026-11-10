@@ -19,6 +19,17 @@ pub struct LocalWorkspaceRepository {
     watch: Mutex<Option<WorkspaceWatch>>,
 }
 
+/// Workspace のツリーとイベント通知で無視するディレクトリ／ファイル名。
+const IGNORED_NAMES: &[&str] = &[".git", "target", ".DS_Store"];
+
+fn is_ignored_path(path: &Path) -> bool {
+    path.components().any(|part| {
+        IGNORED_NAMES
+            .iter()
+            .any(|name| part.as_os_str() == std::ffi::OsStr::new(name))
+    })
+}
+
 struct WorkspaceWatch {
     _watcher: notify::RecommendedWatcher,
 }
@@ -163,13 +174,12 @@ impl WorkspaceFileBackend for LocalWorkspaceRepository {
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 let Ok(event) = event else {
+                    // 取りこぼしの可能性があるため、再同期を促す。
+                    let _ = sender.try_send(());
                     return;
                 };
                 if matches!(event.kind, notify::EventKind::Access(_))
-                    || event.paths.iter().all(|path| {
-                        path.components()
-                            .any(|part| part.as_os_str() == std::ffi::OsStr::new(".git"))
-                    })
+                    || event.paths.iter().all(|path| is_ignored_path(path))
                 {
                     return;
                 }
@@ -220,10 +230,10 @@ fn collect_tree(
     let mut children = read_dir
         .filter_map(Result::ok)
         .filter(|entry| {
-            !matches!(
-                entry.file_name().to_str(),
-                Some(".git" | "target" | ".DS_Store")
-            )
+            !entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| IGNORED_NAMES.contains(&name))
         })
         .collect::<Vec<_>>();
     children.sort_by(|left, right| {
