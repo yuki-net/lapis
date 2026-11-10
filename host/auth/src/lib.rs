@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 pub struct StoredCredential {
     pub id: String,
     pub client_id: String,
-    pub workspace_id: String,
+    /// Workspace 限定 credential の固定先。切り替え可能な credential は持たない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<String>,
     pub capabilities: Vec<String>,
     pub digest: String,
     pub expires_at: u64,
@@ -58,7 +60,7 @@ mod tests {
         let credential = StoredCredential {
             id: "credential-1".to_owned(),
             client_id: "client-1".to_owned(),
-            workspace_id: "workspace-1".to_owned(),
+            workspace_id: Some("workspace-1".to_owned()),
             capabilities: vec!["workspace.list".to_owned()],
             digest: "digest".to_owned(),
             expires_at: 42,

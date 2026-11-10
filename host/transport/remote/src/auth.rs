@@ -104,6 +104,20 @@ impl AuthPolicy {
     }
 }
 
+/// Host が所有する Workspace 登録と Host 同一性を認証層へ提供する。
+///
+/// Workspace の正本は Host が持つため、認証層は候補を推測せずこの境界に問い合わせる。
+pub trait WorkspaceResolver: Send + Sync {
+    /// 永続化された Host ID。state directory を持たない Host は `None`。
+    fn host_id(&self) -> Option<String>;
+
+    /// 接続先を指定しなかった Client に提示する primary Workspace。
+    fn primary_workspace(&self) -> Option<WorkspaceId>;
+
+    /// 登録済み Workspace かどうか。
+    fn contains(&self, workspace_id: &WorkspaceId) -> bool;
+}
+
 #[derive(Debug)]
 pub enum AuthConfigError {
     ZeroLifetime,
@@ -126,6 +140,9 @@ pub enum AuthError {
     CredentialUnavailable,
     CredentialBindingMismatch,
     CredentialExpired,
+    WorkspaceMismatch,
+    WorkspaceUnavailable,
+    HostMismatch,
     CapacityReached,
     Random(RandomError),
     OidcUnavailable,
@@ -143,6 +160,11 @@ impl fmt::Display for AuthError {
                 formatter.write_str("credential binding does not match")
             }
             Self::CredentialExpired => formatter.write_str("credential has expired"),
+            Self::WorkspaceMismatch => {
+                formatter.write_str("credential is not valid for this workspace")
+            }
+            Self::WorkspaceUnavailable => formatter.write_str("workspace is not registered"),
+            Self::HostMismatch => formatter.write_str("credential belongs to another host"),
             Self::CapacityReached => formatter.write_str("authentication capacity reached"),
             Self::Random(_) => formatter.write_str("authentication secret generation failed"),
             Self::OidcUnavailable => formatter.write_str("OIDC token is invalid or unavailable"),
@@ -205,7 +227,10 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             .map(|(id, record)| StoredCredential {
                 id: id.as_str().to_owned(),
                 client_id: record.client_id.as_str().to_owned(),
-                workspace_id: record.workspace_id.as_str().to_owned(),
+                workspace_id: record
+                    .workspace_id
+                    .as_ref()
+                    .map(|workspace| workspace.as_str().to_owned()),
                 capabilities: record
                     .capabilities
                     .iter()
@@ -226,8 +251,12 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             let Ok(client_id) = ClientId::try_new(record.client_id) else {
                 continue;
             };
-            let Ok(workspace_id) = WorkspaceId::try_new(record.workspace_id) else {
-                continue;
+            let workspace_id = match record.workspace_id {
+                Some(value) => match WorkspaceId::try_new(value) {
+                    Ok(workspace_id) => Some(workspace_id),
+                    Err(_) => continue,
+                },
+                None => None,
             };
             let capabilities = record
                 .capabilities
@@ -440,6 +469,7 @@ pub struct RemoteAuth<C = SystemClock, R = OsRandom> {
     policy: AuthPolicy,
     oidc: Option<Arc<OidcVerifier>>,
     oidc_client: Option<OidcClientConfig>,
+    resolver: Option<Arc<dyn WorkspaceResolver>>,
     enabled: bool,
     pairings: HashMap<[u8; SECRET_BYTES], PendingPairing>,
     credentials: HashMap<CredentialId, CredentialRecord>,
@@ -463,6 +493,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             policy,
             oidc: None,
             oidc_client: None,
+            resolver: None,
             enabled: false,
             pairings: HashMap::new(),
             credentials: HashMap::new(),
@@ -476,6 +507,18 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     pub fn enable_oidc(&mut self, verifier: Arc<OidcVerifier>, client: OidcClientConfig) {
         self.oidc = Some(verifier);
         self.oidc_client = Some(client);
+    }
+
+    /// 認証時に Workspace の既定値と存在確認を委譲する。
+    pub fn set_workspace_resolver(&mut self, resolver: Arc<dyn WorkspaceResolver>) {
+        self.resolver = Some(resolver);
+    }
+
+    /// 接続先 Client へ提示する Host ID。
+    pub fn host_id(&self) -> Option<String> {
+        self.resolver
+            .as_ref()
+            .and_then(|resolver| resolver.host_id())
     }
 
     /// 現在の接続で提示する認証方式。
@@ -603,9 +646,18 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
                 .cloned(),
         )
         .expect("intersection cannot exceed capability limit");
+        // Workspace を切り替えられる credential は接続先を固定しない。
+        // ゲスト等の Workspace 限定 credential は pairing 先へ固定したままにする。
+        let switchable = capabilities.iter().any(|capability| {
+            matches!(
+                capability.as_str(),
+                client_api::capability::HOST_MANAGE | client_api::capability::WORKSPACES_SWITCH
+            )
+        });
+        let workspace_id = (!switchable).then_some(pairing.workspace_id);
         let record = CredentialRecord {
             client_id: client_id.clone(),
-            workspace_id: pairing.workspace_id,
+            workspace_id,
             capabilities,
             digest: digest(&secret),
             expires_at: self.expiry(self.config.credential_lifetime.seconds()),
@@ -623,13 +675,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     ) -> Result<(CredentialHandle, SessionGrant), AuthError> {
         let credential = self.complete_pairing(token, &hello.client_id, requested_capabilities)?;
         self.ensure_token_device(hello)?;
-        let workspace_id = self
-            .credentials
-            .get(credential.id())
-            .ok_or(AuthError::CredentialUnavailable)?
-            .workspace_id
-            .clone();
-        match self.authenticate(&credential, &hello.client_id, &workspace_id) {
+        match self.authenticate_auto(&credential, &hello.client_id) {
             Ok(grant) => Ok((credential, grant)),
             Err(error) => {
                 self.revoke(credential.id());
@@ -644,16 +690,37 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         client_id: &ClientId,
         workspace_id: &WorkspaceId,
     ) -> Result<SessionGrant, AuthError> {
-        self.authenticate_inner(credential, client_id, Some(workspace_id))
+        self.authenticate_inner(credential, client_id, Some(workspace_id), None)
     }
 
-    /// Workspace を指定せず、credential に結び付いた Workspace で Session を発行する。
+    /// credential が発行された Host を Client が表明する場合の認証。
+    pub fn authenticate_with_host(
+        &mut self,
+        credential: &CredentialHandle,
+        client_id: &ClientId,
+        workspace_id: &WorkspaceId,
+        host_id: Option<&str>,
+    ) -> Result<SessionGrant, AuthError> {
+        self.authenticate_inner(credential, client_id, Some(workspace_id), host_id)
+    }
+
+    /// Workspace を指定せず、固定先または Host の primary Workspace で Session を発行する。
     pub fn authenticate_auto(
         &mut self,
         credential: &CredentialHandle,
         client_id: &ClientId,
     ) -> Result<SessionGrant, AuthError> {
-        self.authenticate_inner(credential, client_id, None)
+        self.authenticate_inner(credential, client_id, None, None)
+    }
+
+    /// Host を表明し、Workspace を指定せずに認証する。
+    pub fn authenticate_auto_with_host(
+        &mut self,
+        credential: &CredentialHandle,
+        client_id: &ClientId,
+        host_id: Option<&str>,
+    ) -> Result<SessionGrant, AuthError> {
+        self.authenticate_inner(credential, client_id, None, host_id)
     }
 
     fn authenticate_inner(
@@ -661,6 +728,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         credential: &CredentialHandle,
         client_id: &ClientId,
         workspace_id: Option<&WorkspaceId>,
+        expected_host_id: Option<&str>,
     ) -> Result<SessionGrant, AuthError> {
         self.require_enabled()?;
         let record = self
@@ -670,29 +738,52 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         if !constant_time_digest_matches(credential.secret_bytes(), &record.digest) {
             return Err(AuthError::CredentialUnavailable);
         }
+        if &record.client_id != client_id {
+            return Err(AuthError::CredentialBindingMismatch);
+        }
+        if let Some(expected_host_id) = expected_host_id
+            && let Some(host_id) = self.host_id()
+            && host_id != expected_host_id
+        {
+            return Err(AuthError::HostMismatch);
+        }
+        let now = self.clock.now_unix_seconds();
+        if now >= record.expires_at {
+            return Err(AuthError::CredentialExpired);
+        }
         let may_switch = record.capabilities.iter().any(|capability| {
             matches!(
                 capability.as_str(),
                 client_api::capability::HOST_MANAGE | client_api::capability::WORKSPACES_SWITCH
             )
         });
-        if &record.client_id != client_id {
-            return Err(AuthError::CredentialBindingMismatch);
-        }
-        if let Some(workspace_id) = workspace_id
-            && !may_switch
-            && &record.workspace_id != workspace_id
-        {
-            return Err(AuthError::CredentialBindingMismatch);
-        }
-        let now = self.clock.now_unix_seconds();
-        if now >= record.expires_at {
-            return Err(AuthError::CredentialExpired);
-        }
+        let granted_workspace = match workspace_id {
+            Some(requested) => {
+                if may_switch {
+                    // 切り替え可能でも、Host に登録されていない ID は受け付けない。
+                    if let Some(resolver) = &self.resolver
+                        && !resolver.contains(requested)
+                    {
+                        return Err(AuthError::WorkspaceUnavailable);
+                    }
+                    requested.clone()
+                } else if record.workspace_id.as_ref() == Some(requested) {
+                    requested.clone()
+                } else {
+                    return Err(AuthError::WorkspaceMismatch);
+                }
+            }
+            None => match &record.workspace_id {
+                Some(workspace_id) => workspace_id.clone(),
+                None if may_switch => self
+                    .resolver
+                    .as_ref()
+                    .and_then(|resolver| resolver.primary_workspace())
+                    .ok_or(AuthError::WorkspaceUnavailable)?,
+                None => return Err(AuthError::WorkspaceUnavailable),
+            },
+        };
         let record_client_id = record.client_id.clone();
-        let granted_workspace = workspace_id
-            .cloned()
-            .unwrap_or_else(|| record.workspace_id.clone());
         let granted_capabilities = record.capabilities.clone();
         self.ensure_device(&record_client_id, record_client_id.as_str(), "token", true)?;
         let session_id = self.generate_session_id()?;
@@ -924,6 +1015,36 @@ mod tests {
         )
     }
 
+    struct TestResolver {
+        host_id: Option<String>,
+        primary: Option<WorkspaceId>,
+        registered: Vec<WorkspaceId>,
+    }
+
+    impl TestResolver {
+        fn new(primary: WorkspaceId, registered: Vec<WorkspaceId>) -> Self {
+            Self {
+                host_id: Some("host-1".to_owned()),
+                primary: Some(primary),
+                registered,
+            }
+        }
+    }
+
+    impl WorkspaceResolver for TestResolver {
+        fn host_id(&self) -> Option<String> {
+            self.host_id.clone()
+        }
+
+        fn primary_workspace(&self) -> Option<WorkspaceId> {
+            self.primary.clone()
+        }
+
+        fn contains(&self, workspace_id: &WorkspaceId) -> bool {
+            self.registered.contains(workspace_id)
+        }
+    }
+
     #[test]
     fn disabled_by_default_and_disable_preserves_paired_credentials() {
         let mut auth = setup();
@@ -1040,7 +1161,7 @@ mod tests {
             .unwrap();
         assert!(matches!(
             auth.authenticate(&guest, &client, &other),
-            Err(AuthError::CredentialBindingMismatch)
+            Err(AuthError::WorkspaceMismatch)
         ));
         let token = auth.begin_owner_pairing(workspace).unwrap();
         let credential = auth
@@ -1105,7 +1226,7 @@ mod tests {
         );
         assert!(matches!(
             auth.authenticate(&normal, &client, &other),
-            Err(AuthError::CredentialBindingMismatch)
+            Err(AuthError::WorkspaceMismatch)
         ));
         let user = auth.begin_user_session_pairing(workspace.clone()).unwrap();
         let user = auth.complete_pairing(&user, &client, &requested).unwrap();
@@ -1120,6 +1241,61 @@ mod tests {
         ));
         assert!(auth.revoke(user.id()));
         assert!(auth.require_active_session(&grant).is_err());
+    }
+
+    #[test]
+    fn user_session_authenticate_auto_resolves_the_primary_workspace() {
+        let mut auth = setup();
+        let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+        let requested = CapabilitySet::try_new([switch.clone()]).unwrap();
+        auth.policy = AuthPolicy::new(requested.clone());
+        auth.enable();
+        let (client, workspace) = ids();
+        let primary = WorkspaceId::try_new("workspace-2").unwrap();
+        auth.set_workspace_resolver(Arc::new(TestResolver::new(
+            primary.clone(),
+            vec![workspace.clone(), primary.clone()],
+        )));
+        let token = auth.begin_user_session_pairing(workspace).unwrap();
+        let credential = auth.complete_pairing(&token, &client, &requested).unwrap();
+
+        // 切り替え可能な credential は Workspace に固定しない。
+        assert_eq!(auth.export_credentials()[0].workspace_id, None);
+        let grant = auth.authenticate_auto(&credential, &client).unwrap();
+        assert_eq!(grant.workspace_id(), &primary);
+
+        let unknown = WorkspaceId::try_new("workspace-unknown").unwrap();
+        assert!(matches!(
+            auth.authenticate(&credential, &client, &unknown),
+            Err(AuthError::WorkspaceUnavailable)
+        ));
+        assert_eq!(
+            auth.authenticate_auto_with_host(&credential, &client, Some("host-1"))
+                .unwrap()
+                .workspace_id(),
+            &primary
+        );
+        assert!(matches!(
+            auth.authenticate_auto_with_host(&credential, &client, Some("other-host")),
+            Err(AuthError::HostMismatch)
+        ));
+    }
+
+    #[test]
+    fn auto_authentication_without_primary_workspace_is_unavailable() {
+        let mut auth = setup();
+        let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+        let requested = CapabilitySet::try_new([switch]).unwrap();
+        auth.policy = AuthPolicy::new(requested.clone());
+        auth.enable();
+        let (client, workspace) = ids();
+        let token = auth.begin_user_session_pairing(workspace).unwrap();
+        let credential = auth.complete_pairing(&token, &client, &requested).unwrap();
+
+        assert!(matches!(
+            auth.authenticate_auto(&credential, &client),
+            Err(AuthError::WorkspaceUnavailable)
+        ));
     }
 
     #[test]

@@ -10,6 +10,7 @@ use std::{
 
 struct Fixture {
     _root: tempfile::TempDir,
+    _state: tempfile::TempDir,
     host: BackendHost,
     workspace: WorkspaceId,
     auth: SharedRemoteAuth,
@@ -35,16 +36,19 @@ impl Fixture {
     }
     async fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let host = BackendHost::start().unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let host = BackendHost::start_with_state_directory(state.path().to_path_buf()).unwrap();
         let workspace = host.register_workspace(root.path()).unwrap();
-        let auth = Arc::new(Mutex::new(RemoteAuth::system(
+        let mut auth = RemoteAuth::system(
             AuthConfig::new(
                 PairingLifetime::new(300).unwrap(),
                 CredentialLifetime::new(3600).unwrap(),
             ),
             AuthPolicy::new(host::supported_capabilities()),
-        )));
-        auth.lock().unwrap().enable();
+        );
+        auth.set_workspace_resolver(Arc::new(host.clone()));
+        auth.enable();
+        let auth = Arc::new(Mutex::new(auth));
         let certified = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
         let cert = certified.cert.der().clone();
         let tls = tls13_server_config(
@@ -63,6 +67,7 @@ impl Fixture {
         .unwrap();
         Self {
             _root: root,
+            _state: state,
             host,
             workspace,
             auth,
@@ -525,6 +530,47 @@ async fn explicit_user_session_lists_and_connects_registered_workspaces_without_
         request(&mut first, 3, RequestBody::HostWorktree(editor_core::TaskId::new("untrusted"))).await,
         ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_session_without_workspace_uses_the_host_primary() {
+    let fixture = Fixture::new().await;
+    let other_root = tempfile::tempdir().unwrap();
+    let other = fixture.host.register_workspace(other_root.path()).unwrap();
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_user_session_pairing(other)
+        .unwrap();
+    let mut paired = fixture.connect().await;
+    paired
+        .send(&ClientMessage::Pair(PairRequest::new(
+            hello("primary-user"),
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    let ServerMessage::Paired(mut response) = receive(&mut paired).await else {
+        panic!("user pairing")
+    };
+    let credential = response.credential_id().unwrap();
+    let secret = zeroize::Zeroizing::new(response.take_secret().unwrap());
+    drop(paired);
+
+    let mut client = fixture.connect().await;
+    client
+        .send(&ClientMessage::Authenticate(AuthenticateRequest::new_auto(
+            hello("primary-user"),
+            &credential,
+            &secret,
+        )))
+        .await
+        .unwrap();
+    let ServerMessage::Authenticated(hello) = receive(&mut client).await else {
+        panic!("auto authentication")
+    };
+    assert_eq!(hello.workspace_id, Some(fixture.workspace.clone()));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -51,9 +51,10 @@ pub use document::{
 };
 pub use envelope::{EventEnvelope, RequestEnvelope, ResponseEnvelope};
 pub use error::{
-    ErrorCode, FORBIDDEN, INTERNAL, INVALID_PATH, INVALID_REQUEST, InvalidErrorCode, NOT_FOUND,
-    PROTOCOL_ERROR, ProtocolError, RATE_LIMITED, REVISION_CONFLICT, RevisionConflict, UNAUTHORIZED,
-    UNSUPPORTED,
+    CREDENTIAL_EXPIRED, ErrorCode, FORBIDDEN, HOST_MISMATCH, INTERNAL, INVALID_PATH,
+    INVALID_REQUEST, InvalidErrorCode, NOT_FOUND, PROTOCOL_ERROR, ProtocolError, RATE_LIMITED,
+    REVISION_CONFLICT, RevisionConflict, UNAUTHORIZED, UNSUPPORTED, WORKSPACE_MISMATCH,
+    WORKSPACE_UNAVAILABLE,
 };
 pub use event::EventBody;
 pub use files::{

@@ -97,6 +97,20 @@ fn workspace_id_for_root(root: &Path) -> WorkspaceId {
     WorkspaceId::try_new(format!("workspace-{key}")).expect("bounded workspace id")
 }
 
+impl remote::WorkspaceResolver for BackendHost {
+    fn host_id(&self) -> Option<String> {
+        BackendHost::host_id(self)
+    }
+
+    fn primary_workspace(&self) -> Option<WorkspaceId> {
+        self.default_workspace()
+    }
+
+    fn contains(&self, workspace_id: &WorkspaceId) -> bool {
+        self.workspace_exists(workspace_id)
+    }
+}
+
 impl BackendHost {
     pub fn workspaces(&self) -> Arc<dyn ::workspace::WorkspaceRepository> {
         BackendClient::from(self.clone()).workspaces()
@@ -226,6 +240,23 @@ impl BackendHost {
         let store = self.inner.store.as_ref()?;
         let store = store.lock().ok()?;
         store.host_id().ok()
+    }
+
+    /// Workspace ID が Host に登録されているか。
+    pub fn workspace_exists(&self, workspace_id: &WorkspaceId) -> bool {
+        if let Some(store) = &self.inner.store
+            && let Ok(store) = store.lock()
+            && let Ok(records) = store.list()
+        {
+            return records
+                .iter()
+                .any(|record| record.id == workspace_id.as_str());
+        }
+        self.inner
+            .workspaces
+            .lock()
+            .map(|workspaces| workspaces.values().any(|known| known == workspace_id))
+            .unwrap_or(false)
     }
 
     /// 既定 Workspace へ接続する。

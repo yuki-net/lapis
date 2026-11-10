@@ -453,6 +453,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
         .with_auto_approve_oidc_devices(true),
         AuthPolicy::new(owner_capabilities.clone()),
     );
+    auth.set_workspace_resolver(Arc::new(host.clone()));
     auth.enable();
     match crate::oidc_from_env() {
         Ok(Some(oidc)) => auth.enable_oidc(oidc.verifier, oidc.client),

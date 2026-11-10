@@ -28,7 +28,7 @@ pub(crate) use kit::components;
 pub use kit::{theme, tokens};
 
 #[cfg(target_family = "wasm")]
-pub use web::{is_ready, start};
+pub use web::{connection_info, is_ready, start};
 
 /// wasmにはstdの時刻APIが無いため、ブラウザーではweb-timeを使う。
 pub(crate) mod time {

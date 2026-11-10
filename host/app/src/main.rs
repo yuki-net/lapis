@@ -125,14 +125,16 @@ fn run() -> Result<(), Error> {
     let credentials_path = state_directory.map(|directory| directory.join(CREDENTIAL_DB));
     let workspace = host.register_workspace(&options.workspace)?;
     let tls = tls13_server_config(vec![identity.certificate.clone()], identity.key.clone_key())?;
-    let auth = Arc::new(Mutex::new(RemoteAuth::system(
+    let mut auth = RemoteAuth::system(
         AuthConfig::new(
             PairingLifetime::new(3600)?,
             CredentialLifetime::new(CREDENTIAL_LIFETIME_SECONDS)?,
         )
         .with_auto_approve_oidc_devices(auto_approve_oidc_devices()),
         AuthPolicy::new(host::supported_capabilities()),
-    )));
+    );
+    auth.set_workspace_resolver(Arc::new(host.clone()));
+    let auth = Arc::new(Mutex::new(auth));
     if let Some(oidc) = host::oidc_from_env()? {
         auth.lock()
             .map_err(|_| "authentication unavailable")?

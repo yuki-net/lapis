@@ -5,9 +5,10 @@ use std::{
 };
 
 use client_api::{
-    CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, HelloResponse, INTERNAL, INVALID_REQUEST,
-    PROTOCOL_ERROR, ProtocolError, ProtocolRange, RATE_LIMITED, RequestEnvelope, RequestId,
-    ResponseBody, ResponseEnvelope, UNAUTHORIZED,
+    CREDENTIAL_EXPIRED, CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, HOST_MISMATCH, HelloResponse,
+    INTERNAL, INVALID_REQUEST, PROTOCOL_ERROR, ProtocolError, ProtocolRange, RATE_LIMITED,
+    RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope, UNAUTHORIZED, WORKSPACE_MISMATCH,
+    WORKSPACE_UNAVAILABLE,
 };
 
 use crate::{
@@ -149,7 +150,7 @@ impl ConnectionSession {
             Ok(result) => result,
             Err(_) => return authentication_rejected(),
         };
-        let hello = server_hello(protocol, &grant);
+        let hello = server_hello(protocol, &grant, auth);
         let response = PairedResponse::new(hello, credential.id(), credential.secret_bytes());
         self.hello = None;
         self.grant = Some(grant);
@@ -181,19 +182,27 @@ impl ConnectionSession {
         };
         let credential = CredentialHandle::from_parts(credential_id, &mut secret);
         let workspace_id = request.workspace_id.clone();
+        let host_id = request.host_id.clone();
         let grant = match auth
             .lock()
             .map_err(|_| AuthError::CredentialUnavailable)
             .and_then(|mut auth| match workspace_id.as_ref() {
-                Some(workspace_id) => {
-                    auth.authenticate(&credential, &request.hello.client_id, workspace_id)
-                }
-                None => auth.authenticate_auto(&credential, &request.hello.client_id),
+                Some(workspace_id) => auth.authenticate_with_host(
+                    &credential,
+                    &request.hello.client_id,
+                    workspace_id,
+                    host_id.as_deref(),
+                ),
+                None => auth.authenticate_auto_with_host(
+                    &credential,
+                    &request.hello.client_id,
+                    host_id.as_deref(),
+                ),
             }) {
             Ok(grant) => grant,
-            Err(_) => return authentication_rejected(),
+            Err(error) => return authentication_failure(error),
         };
-        let hello = server_hello(protocol, &grant);
+        let hello = server_hello(protocol, &grant, auth);
         self.hello = None;
         self.grant = Some(grant);
         SessionReply {
@@ -236,7 +245,7 @@ impl ConnectionSession {
             Ok(result) => result,
             Err(_) => return authentication_rejected(),
         };
-        let mut hello = server_hello(protocol, &grant);
+        let mut hello = server_hello(protocol, &grant, auth);
         hello.subject = Some(subject);
         self.hello = None;
         self.grant = Some(grant);
@@ -321,12 +330,18 @@ fn protocol_rejected() -> SessionReply {
     }
 }
 
-fn server_hello(protocol: client_api::ProtocolVersion, grant: &SessionGrant) -> HelloResponse {
+fn server_hello(
+    protocol: client_api::ProtocolVersion,
+    grant: &SessionGrant,
+    auth: &SharedRemoteAuth,
+) -> HelloResponse {
+    let host_id = auth.lock().ok().and_then(|auth| auth.host_id());
     HelloResponse {
         protocol,
         session_id: grant.session_id().clone(),
         granted_capabilities: grant.capabilities().clone(),
         subject: None,
+        host_id,
         workspace_id: Some(grant.workspace_id().clone()),
     }
 }
@@ -334,6 +349,20 @@ fn server_hello(protocol: client_api::ProtocolVersion, grant: &SessionGrant) -> 
 fn authentication_rejected() -> SessionReply {
     SessionReply {
         message: protocol_error(UNAUTHORIZED),
+        close: true,
+    }
+}
+
+fn authentication_failure(error: AuthError) -> SessionReply {
+    let code = match error {
+        AuthError::CredentialExpired => CREDENTIAL_EXPIRED,
+        AuthError::WorkspaceMismatch => WORKSPACE_MISMATCH,
+        AuthError::WorkspaceUnavailable => WORKSPACE_UNAVAILABLE,
+        AuthError::HostMismatch => HOST_MISMATCH,
+        _ => UNAUTHORIZED,
+    };
+    SessionReply {
+        message: protocol_error(code),
         close: true,
     }
 }

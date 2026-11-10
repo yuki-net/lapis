@@ -21,7 +21,8 @@ Host・Web・Desktop・Mobile の実装者が、認証方式の追加・変更�
 
 - 初回は pairing token、以後は Host が発行した credential secret を使う。
 - credential は SQLite に保存し、Host は secret の digest だけを保持する。
-- 接続時の `ClientMessage::Pair` / `ClientMessage::Authenticate` は現行契約を維持する。
+- `workspace.switch` を持つ credential は Workspace に固定せず、接続ごとに接続先を選ぶ。持たない credential は pairing 先へ固定する。
+- 接続時の `ClientMessage::Pair` / `ClientMessage::Authenticate` は現行契約を維持する。Workspace 省略時は固定先、無ければ Host の primary Workspace を使う。
 
 ### OIDC 方式
 

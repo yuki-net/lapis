@@ -157,8 +157,25 @@ impl QuicConnectionConfig {
             ServerMessage::Authenticated(hello) if hello.protocol == CURRENT_PROTOCOL => {
                 Ok((client, hello))
             }
+            ServerMessage::Error(error) => Err(authentication_error(error.code.as_str()).into()),
             _ => Err("Hostの認証が拒否されました".into()),
         }
+    }
+}
+
+fn authentication_error(code: &str) -> String {
+    match code {
+        client_api::CREDENTIAL_EXPIRED => {
+            "credentialの有効期限が切れています。再ペアリングしてください".to_owned()
+        }
+        client_api::WORKSPACE_MISMATCH => {
+            "指定したWorkspaceは、このcredentialの接続先ではありません".to_owned()
+        }
+        client_api::WORKSPACE_UNAVAILABLE => {
+            "指定したWorkspaceはHostに登録されていません".to_owned()
+        }
+        client_api::HOST_MISMATCH => "保存しているcredentialは別のHostのものです".to_owned(),
+        other => format!("Hostの認証が拒否されました: {other}"),
     }
 }
 

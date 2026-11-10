@@ -47,7 +47,7 @@ impl WebSession {
     ) -> Result<WebSession, JsValue> {
         let workspace = WorkspaceId::try_new(workspace)
             .map_err(|_| JsValue::from_str("Workspace IDが不正です"))?;
-        let (connection, credential, _) = client_core::browser::connect_web_client(
+        let connected = client_core::browser::connect_web_client(
             client_core::browser::WebClientConnectOptions {
                 url: &url,
                 workspace: Some(workspace.clone()),
@@ -62,7 +62,8 @@ impl WebSession {
         )
         .await
         .map_err(|error| JsValue::from_str(&error))?;
-        let mut connection = Rc::new(connection);
+        let credential = connected.credential;
+        let mut connection = Rc::new(connected.connection);
         let events = Rc::get_mut(&mut connection)
             .ok_or_else(|| JsValue::from_str("接続を初期化できません"))?
             .take_events()

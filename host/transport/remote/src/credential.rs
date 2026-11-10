@@ -59,7 +59,8 @@ impl fmt::Debug for CredentialHandle {
 
 pub(crate) struct CredentialRecord {
     pub(crate) client_id: ClientId,
-    pub(crate) workspace_id: WorkspaceId,
+    /// Workspace 限定 credential の固定先。切り替え可能な credential は持たない。
+    pub(crate) workspace_id: Option<WorkspaceId>,
     pub(crate) capabilities: client_api::CapabilitySet,
     pub(crate) digest: [u8; SECRET_BYTES],
     pub(crate) expires_at: u64,

@@ -37,7 +37,7 @@ impl CredentialStore {
                 "CREATE TABLE IF NOT EXISTS credentials (
                     id TEXT PRIMARY KEY NOT NULL,
                     client_id TEXT NOT NULL,
-                    workspace_id TEXT NOT NULL,
+                    workspace_id TEXT,
                     capabilities TEXT NOT NULL,
                     digest TEXT NOT NULL,
                     expires_at INTEGER NOT NULL
@@ -54,7 +54,52 @@ impl CredentialStore {
                     revoked_at INTEGER
                 );",
             )
-            .map_err(CredentialStoreError::Sqlite)
+            .map_err(CredentialStoreError::Sqlite)?;
+        self.migrate_nullable_workspace()
+    }
+
+    /// 旧 schema の `workspace_id NOT NULL` を、固定先を持たない credential 向けに緩める。
+    fn migrate_nullable_workspace(&self) -> Result<(), CredentialStoreError> {
+        let mut statement = self
+            .connection
+            .prepare("PRAGMA table_info(credentials)")
+            .map_err(CredentialStoreError::Sqlite)?;
+        let mut rows = statement.query([]).map_err(CredentialStoreError::Sqlite)?;
+        let mut rebuild = false;
+        while let Some(row) = rows.next().map_err(CredentialStoreError::Sqlite)? {
+            let name: String = row.get(1).map_err(CredentialStoreError::Sqlite)?;
+            let not_null: i64 = row.get(3).map_err(CredentialStoreError::Sqlite)?;
+            if name == "workspace_id" && not_null != 0 {
+                rebuild = true;
+            }
+        }
+        drop(rows);
+        drop(statement);
+        if !rebuild {
+            return Ok(());
+        }
+        let result = self.connection.execute_batch(
+            "BEGIN IMMEDIATE;
+                 ALTER TABLE credentials RENAME TO credentials_legacy;
+                 CREATE TABLE credentials (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    client_id TEXT NOT NULL,
+                    workspace_id TEXT,
+                    capabilities TEXT NOT NULL,
+                    digest TEXT NOT NULL,
+                    expires_at INTEGER NOT NULL
+                 );
+                 INSERT INTO credentials
+                    (id, client_id, workspace_id, capabilities, digest, expires_at)
+                 SELECT id, client_id, workspace_id, capabilities, digest, expires_at
+                 FROM credentials_legacy;
+                 DROP TABLE credentials_legacy;
+                 COMMIT;",
+        );
+        if result.is_err() {
+            let _ = self.connection.execute_batch("ROLLBACK;");
+        }
+        result.map_err(CredentialStoreError::Sqlite)
     }
 
     /// 保存済み credential をすべて読み込む。
@@ -71,7 +116,7 @@ impl CredentialStore {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, String>(4)?,
                     row.get::<_, i64>(5)?,
@@ -223,7 +268,7 @@ fn write_credentials(
             .execute(params![
                 &record.id,
                 &record.client_id,
-                &record.workspace_id,
+                record.workspace_id.as_deref(),
                 capabilities,
                 &record.digest,
                 record.expires_at as i64,
@@ -332,7 +377,7 @@ mod tests {
         StoredCredential {
             id: id.to_owned(),
             client_id: "client-1".to_owned(),
-            workspace_id: "workspace-1".to_owned(),
+            workspace_id: Some("workspace-1".to_owned()),
             capabilities: vec!["workspace.sync".to_owned()],
             digest: "digest".to_owned(),
             expires_at: 42,
@@ -349,6 +394,50 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0], record("a"));
         assert_eq!(loaded[1], record("b"));
+    }
+
+    #[test]
+    fn switchable_credentials_round_trip_without_a_workspace() {
+        let mut store = CredentialStore::open_in_memory().unwrap();
+        let mut switchable = record("switchable");
+        switchable.workspace_id = None;
+        store.replace_all(&[switchable.clone()]).unwrap();
+
+        assert_eq!(store.load().unwrap(), vec![switchable]);
+    }
+
+    #[test]
+    fn legacy_not_null_workspace_column_is_migrated() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("credentials.sqlite3");
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE credentials (
+                        id TEXT PRIMARY KEY NOT NULL,
+                        client_id TEXT NOT NULL,
+                        workspace_id TEXT NOT NULL,
+                        capabilities TEXT NOT NULL,
+                        digest TEXT NOT NULL,
+                        expires_at INTEGER NOT NULL
+                    );",
+                )
+                .unwrap();
+            connection
+                .execute(
+                    "INSERT INTO credentials VALUES ('legacy', 'client-1', 'workspace-1', '[]', 'digest', 42)",
+                    [],
+                )
+                .unwrap();
+        }
+
+        let mut store = CredentialStore::open(&path).unwrap();
+        let mut switchable = record("switchable");
+        switchable.workspace_id = None;
+        store.replace_all(&[switchable.clone()]).unwrap();
+
+        assert_eq!(store.load().unwrap(), vec![switchable]);
     }
 
     #[test]

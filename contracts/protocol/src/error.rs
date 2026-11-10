@@ -12,6 +12,14 @@ pub const UNSUPPORTED: &str = "unsupported";
 pub const PROTOCOL_ERROR: &str = "protocol_error";
 pub const RATE_LIMITED: &str = "rate_limited";
 pub const INTERNAL: &str = "internal";
+/// credential の有効期限が切れている。
+pub const CREDENTIAL_EXPIRED: &str = "credential_expired";
+/// 固定された Workspace と接続先が一致しない。
+pub const WORKSPACE_MISMATCH: &str = "workspace_mismatch";
+/// 指定された Workspace が Host に登録されていない。
+pub const WORKSPACE_UNAVAILABLE: &str = "workspace_unavailable";
+/// credential が別の Host のもの。
+pub const HOST_MISMATCH: &str = "host_mismatch";
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]

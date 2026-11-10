@@ -30,6 +30,9 @@ pub struct HelloResponse {
     /// OIDC で認証した場合の検証済み `sub`。Token 方式では省略する。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject: Option<String>,
+    /// Host の永続的な同一性。state directory を持たない Host では省略する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
     /// Host が選択した Workspace。Client が Workspace を指定しなかった場合に使う。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<WorkspaceId>,
