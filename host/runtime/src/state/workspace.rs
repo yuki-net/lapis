@@ -38,12 +38,12 @@ impl BackendState {
         workspace_id: WorkspaceId,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         self.require_workspace(session, &workspace_id)?;
-        let summary = self
+        let workspace = self
             .workspaces
             .get(&workspace_id)
-            .ok_or(BackendStateError::WorkspaceNotFound)?
-            .summary
-            .clone();
+            .ok_or(BackendStateError::WorkspaceNotFound)?;
+        let summary = workspace.summary.clone();
+        let identity = workspace.identity.clone();
         if self
             .connected_sessions
             .get(&session.session_id)
@@ -54,7 +54,10 @@ impl BackendState {
         self.connected_sessions
             .insert(session.session_id.clone(), workspace_id);
         Ok((
-            ResponseBody::WorkspaceConnect(WorkspaceConnectResponse { workspace: summary }),
+            ResponseBody::WorkspaceConnect(WorkspaceConnectResponse {
+                workspace: summary,
+                identity,
+            }),
             Vec::new(),
         ))
     }

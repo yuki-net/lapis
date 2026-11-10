@@ -92,5 +92,6 @@ pub use workbench::{
 };
 pub use workspace::{
     HostRegisterRequest, WorkspaceCloseRequest, WorkspaceCloseResponse, WorkspaceConnectRequest,
-    WorkspaceConnectResponse, WorkspaceListRequest, WorkspaceListResponse, WorkspaceSummary,
+    WorkspaceConnectResponse, WorkspaceIdentitySnapshot, WorkspaceListRequest,
+    WorkspaceListResponse, WorkspaceSummary,
 };

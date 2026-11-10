@@ -36,7 +36,8 @@ use terminal::{
 };
 use workbench::ConversationViewState;
 use workspace::{
-    FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceRepository, WorkspaceSearchBackend,
+    FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceIdentity, WorkspaceRepository,
+    WorkspaceSearchBackend,
 };
 
 mod state;
@@ -73,6 +74,7 @@ thread_local! {
 
 struct BackendState {
     workspace: WorkspaceId,
+    workspace_identity: WorkspaceIdentity,
     host_name: String,
     host_id: Option<String>,
     can_switch: bool,
@@ -163,13 +165,22 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     let workspaces = workspace_list.workspaces;
     let workspace = WorkspaceId::new(api_workspace.as_str());
     let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
-    request(
+    let workspace_identity = match request(
         &connection,
         RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
             workspace_id: api_workspace.clone(),
         }),
     )
-    .await?;
+    .await?
+    {
+        ResponseBody::WorkspaceConnect(response) => WorkspaceIdentity {
+            id: workspace.clone(),
+            name: response.identity.name,
+            root_name: response.identity.root_name,
+        },
+        ResponseBody::Error(error) => return Err(error.code.as_str().to_owned()),
+        _ => return Err("Workspace identityを取得できません".to_owned()),
+    };
     let entries = fetch_tree(&connection, &api_workspace).await?;
     let terminals = match request(
         &connection,
@@ -236,6 +247,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             workspace,
+            workspace_identity,
             host_name,
             host_id,
             can_switch,
@@ -268,13 +280,12 @@ pub fn connection_info() -> Option<ConnectionInfo> {
         let backend = backend.borrow();
         let state = backend.as_ref()?;
         let workspace_id = state.workspace.as_str().to_owned();
-        let workspace_name = state
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.workspace_id.as_str() == workspace_id.as_str())
-            .map(|workspace| workspace.name.clone())
-            .filter(|name| !name.trim().is_empty())
-            .unwrap_or_else(|| workspace_id.clone());
+        let connected_name = crate::connected_workspace_name(&state.workspace_identity);
+        let workspace_name = if connected_name.trim().is_empty() {
+            workspace_id.clone()
+        } else {
+            connected_name.to_owned()
+        };
         let identity = crate::connection_label(
             Some(&state.host_name),
             state.host_id.as_deref(),
@@ -680,6 +691,11 @@ impl DocumentConnection for WebBackend {
 }
 
 impl WorkspaceRepository for WebBackend {
+    fn identity(&self, _: &Path) -> Result<Option<WorkspaceIdentity>, WorkspaceError> {
+        self.with(|state| Some(state.workspace_identity.clone()))
+            .map_err(WorkspaceError::new)
+    }
+
     fn create_directory(&self, _: &Path, _: &str) -> Result<(), WorkspaceError> {
         Err(WorkspaceError::new("Webからはフォルダーを作成できません"))
     }

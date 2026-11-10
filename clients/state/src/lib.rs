@@ -27,15 +27,17 @@ use terminal::{
 };
 #[cfg(test)]
 use terminal::{TerminalDelta, TerminalRow, TerminalRowUpdate, TerminalScreen};
-use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
+use workspace::{
+    FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceIdentity, WorkspaceSearchBackend,
+};
 
 mod connection_display;
 mod extensions;
 mod view_state;
 mod workbench_sync;
 pub use connection_display::{
-    connection_label, host_label, host_name_from_url, short_workspace_label, window_title,
-    workspace_label,
+    connected_workspace_name, connection_label, host_label, host_name_from_url,
+    short_workspace_label, window_title, workspace_label,
 };
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
@@ -1029,6 +1031,25 @@ impl std::fmt::Display for DocumentCloseFailure {
 
 impl std::error::Error for DocumentCloseFailure {}
 
+/// Host の identity から Workspace の表示名を決める。
+///
+/// identity が使えない接続先だけ root のディレクトリ名へ退避する。
+fn workspace_display_name(identity: Option<&WorkspaceIdentity>, root: &Path) -> String {
+    identity
+        .map(WorkspaceIdentity::display_name)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "Workspace".to_owned())
+}
+
 /// UIからDocumentと外部I/Oを分離する、複数文書Workspace編集セッション。
 pub struct EditorSession {
     documents: Vec<OpenDocument>,
@@ -1454,12 +1475,9 @@ impl EditorSession {
             .workspace(&root)
             .map_err(|error| WorkspaceError::new(error.to_string()))?;
         let tree = self.repository.list_tree(&root)?;
+        let identity = self.repository.identity(&root).ok().flatten();
         self.detach_documents();
-        self.workspace_name = root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("Workspace")
-            .to_owned();
+        self.workspace_name = workspace_display_name(identity.as_ref(), &root);
         self.workspace_root = Some(root);
         self.workspace_restore_root = None;
         self.workspace_id = Some(workspace_id);
@@ -1943,15 +1961,16 @@ impl EditorSession {
                 .document_connection
                 .workspace(&root)
                 .map_err(|error| WorkspaceError::new(error.to_string()))
-                .and_then(|id| self.repository.list_tree(&root).map(|tree| (id, tree)));
+                .and_then(|id| {
+                    let identity = self.repository.identity(&root).ok().flatten();
+                    self.repository
+                        .list_tree(&root)
+                        .map(|tree| (id, tree, identity))
+                });
             match workspace {
-                Ok((id, tree)) => {
+                Ok((id, tree, identity)) => {
                     self.workspace_id = Some(id);
-                    self.workspace_name = root
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("Workspace")
-                        .to_owned();
+                    self.workspace_name = workspace_display_name(identity.as_ref(), &root);
                     self.file_tree = tree;
                     self.workspace_root = Some(root);
                 }
