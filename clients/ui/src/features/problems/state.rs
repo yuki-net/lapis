@@ -1,10 +1,8 @@
 use crate::client_adapter::{ClientWorker, DocumentClient, ResponseGate};
-use crate::timer::Timer;
 use document::Revision;
 use editor_core::DocumentId;
 use gpui::Context;
 use lsp::{DefinitionTarget, Diagnostic, LspPosition};
-use std::time::Duration;
 
 pub(crate) enum ProblemsEvent {
     Status(String),
@@ -54,18 +52,22 @@ impl ProblemsState {
     }
 }
 
+/// 対象パスの診断が要求 revision のものだけかを返す。
+///
+/// 他ファイルの診断は revision が違ってもよい。
+fn diagnostics_match_revision(
+    diagnostics: &[Diagnostic],
+    path: &std::path::Path,
+    revision: Revision,
+) -> bool {
+    diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.path != path || diagnostic.revision == revision)
+}
+
 impl gpui::EventEmitter<ProblemsEvent> for ProblemsFeature {}
 impl ProblemsFeature {
-    pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_millis(500)).await;
-                if this.update(cx, |problems, cx| problems.poll(cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
+    pub(crate) fn new(worker: ClientWorker<DocumentClient>, _cx: &mut Context<Self>) -> Self {
         Self {
             worker,
             state: ProblemsState::default(),
@@ -79,11 +81,22 @@ impl ProblemsFeature {
         cx: &mut Context<Self>,
     ) {
         if self.state.set_target(target) {
+            // 対象文書の revision が変わるたびに診断を取り直す。
+            self.poll(cx);
             cx.notify();
         }
     }
+    /// 診断が要求 revision に追いついていない場合に、少し待って取り直す。
+    fn schedule_poll(&mut self, cx: &mut Context<Self>) {
+        cx.spawn(async move |this, cx| {
+            crate::timer::Timer::after(std::time::Duration::from_millis(200)).await;
+            let _ = this.update(cx, |problems, cx| problems.poll(cx));
+        })
+        .detach();
+    }
+    /// 診断要求を worker で開始し、完了待ちだけを background で行う。
     fn poll(&mut self, cx: &mut Context<Self>) {
-        if self.busy {
+        if self.busy || self.state.target.is_none() {
             return;
         }
         self.busy = true;
@@ -91,41 +104,81 @@ impl ProblemsFeature {
         let admitted = self.worker.submit(
             cx,
             |client| {
-                let result = client
+                let request = client
                     .lsp
-                    .sync_active(&client.editor)
-                    .and_then(|_| client.lsp.refresh(&client.editor));
-                result.map_err(|error| error.to_string())?;
+                    .request_diagnostics(&client.editor)
+                    .map_err(|error| error.to_string())?;
                 let target = client
                     .editor
                     .active_document_id()
                     .map(|id| (id.clone(), client.editor.active_revision()));
-                let diagnostics = client.lsp.diagnostics().to_vec();
-                let current = diagnostics.iter().all(|diagnostic| {
-                    Some(diagnostic.path.as_path()) != client.editor.active_path()
-                        || diagnostic.revision == client.editor.active_revision()
-                });
-                Ok((target, current.then_some(diagnostics)))
+                Ok((request, target))
             },
             move |problems, result, cx| {
                 problems.busy = false;
-                if generation != problems.state.generation {
+                let (request, target) = match result {
+                    Ok(result) => result,
+                    Err(error) => {
+                        problems.message = error;
+                        cx.notify();
+                        return;
+                    }
+                };
+                if generation != problems.state.generation || problems.state.target != target {
+                    // 取得中に対象が変わった。現在の対象で取り直す。
+                    problems.poll(cx);
                     return;
                 }
-                match result {
-                    Ok((target, Some(diagnostics))) => {
-                        if !problems
-                            .state
-                            .apply_diagnostics(generation, target, diagnostics)
+                let (Some(request), Some(target)) = (request, target) else {
+                    return;
+                };
+                let executor = cx.background_executor().clone();
+                cx.spawn(async move |this, cx| {
+                    let (request_target, result) =
+                        executor.spawn(async move { request.wait() }).await;
+                    let _ = this.update(cx, |problems, cx| {
+                        if generation != problems.state.generation
+                            || problems.state.target.as_ref() != Some(&target)
                         {
+                            problems.poll(cx);
                             return;
                         }
-                        problems.message.clear();
-                    }
-                    Ok((_, None)) => return,
-                    Err(error) => problems.message = error,
-                }
-                cx.notify();
+                        if request_target
+                            .as_ref()
+                            .is_none_or(|(_, revision)| revision != &target.1)
+                        {
+                            problems.poll(cx);
+                            return;
+                        }
+                        match result {
+                            Ok(diagnostics) => {
+                                // 要求時の revision より古い診断は適用しない。
+                                let stale =
+                                    request_target.as_ref().is_some_and(|(path, revision)| {
+                                        !diagnostics_match_revision(&diagnostics, path, *revision)
+                                    });
+                                if stale {
+                                    // backend が診断を作り直すまで、少し待って取り直す。
+                                    problems.schedule_poll(cx);
+                                    return;
+                                }
+                                if problems.state.apply_diagnostics(
+                                    generation,
+                                    Some(target),
+                                    diagnostics,
+                                ) {
+                                    problems.message.clear();
+                                    cx.notify();
+                                }
+                            }
+                            Err(error) => {
+                                problems.message = error.to_string();
+                                cx.notify();
+                            }
+                        }
+                    });
+                })
+                .detach();
             },
         );
         if let Err(error) = admitted {
@@ -225,6 +278,27 @@ mod tests {
             message: "diagnostic".into(),
             revision: Revision::new(revision),
         }
+    }
+
+    #[test]
+    fn diagnostics_from_an_older_revision_are_not_accepted() {
+        let path = std::path::Path::new("file.rs");
+        assert!(diagnostics_match_revision(
+            &[diagnostic(3)],
+            path,
+            Revision::new(3)
+        ));
+        assert!(!diagnostics_match_revision(
+            &[diagnostic(2)],
+            path,
+            Revision::new(3)
+        ));
+        // 他ファイルの診断は revision が違ってもよい。
+        assert!(diagnostics_match_revision(
+            &[diagnostic(2)],
+            std::path::Path::new("other.rs"),
+            Revision::new(3)
+        ));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use std::{
 
 pub use text::{Position, TextRange};
 mod connection;
-pub use connection::{DocumentCache, DocumentConnection};
+pub use connection::{DocumentCache, DocumentConnection, DocumentSubscription};
 use text::{TextBuffer, TextEdit, TextError};
 
 /// Document内で単調増加する変更世代。

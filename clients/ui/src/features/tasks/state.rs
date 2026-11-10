@@ -7,16 +7,19 @@ use crate::{
 use desktop_client::TaskSession;
 use editor_core::{ExecutionId, WorkspaceId};
 use gpui::Context;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use task::{ExecutionStatus, TaskControl, TaskMode, TaskSnapshot};
 pub(crate) struct TasksFeature {
     worker: ClientWorker<TaskSession>,
+    backend: Arc<dyn task::TaskConnection>,
+    subscription_generation: u64,
     pub(super) records: Vec<TaskSnapshot>,
     pub(crate) selected_execution: Option<ExecutionId>,
     workspace: Option<WorkspaceId>,
     conversation: Option<editor_core::ConversationId>,
     pub(super) selected_text: Option<String>,
     pending: usize,
+    sync_pending: bool,
     gate: ResponseGate,
     pub(super) message: String,
     message_from_refresh: bool,
@@ -27,31 +30,19 @@ pub(super) struct TaskScrollStates {
     pub(super) task_events: ScrollState,
 }
 impl TasksFeature {
-    pub(crate) fn new(session: TaskSession, cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_millis(250)).await;
-                if this
-                    .update(cx, |tasks, cx| {
-                        if tasks.pending == 0 {
-                            tasks.refresh(cx);
-                        }
-                    })
-                    .is_err()
-                {
-                    break;
-                }
-            }
-        })
-        .detach();
+    pub(crate) fn new(session: TaskSession, _cx: &mut Context<Self>) -> Self {
+        let backend = session.backend();
         Self {
             worker: ClientWorker::new(session),
+            backend,
+            subscription_generation: 0,
             records: Vec::new(),
             selected_execution: None,
             workspace: None,
             conversation: None,
             selected_text: None,
             pending: 0,
+            sync_pending: false,
             gate: ResponseGate::default(),
             message: String::new(),
             message_from_refresh: false,
@@ -82,14 +73,111 @@ impl TasksFeature {
         if self.workspace == workspace {
             return;
         }
-        self.workspace = workspace;
+        self.workspace = workspace.clone();
+        self.subscription_generation = self.subscription_generation.wrapping_add(1);
         self.gate.invalidate();
         self.records.clear();
         self.selected_execution = None;
         self.message.clear();
         self.message_from_refresh = false;
+        self.sync_pending = false;
         self.refresh(cx);
+        if let Some(workspace) = workspace {
+            self.subscribe_updates(workspace, cx);
+        }
         cx.notify();
+    }
+
+    /// Host の Task 変更通知で取得する。欠落時は再同期して購読し直す。
+    fn subscribe_updates(&mut self, workspace: WorkspaceId, cx: &mut Context<Self>) {
+        let backend = self.backend.clone();
+        let generation = self.subscription_generation;
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let target = workspace.clone();
+                let backend = backend.clone();
+                let opened = executor
+                    .spawn(async move { backend.subscribe(&target) })
+                    .await;
+                let Some(mut subscription) = opened else {
+                    return;
+                };
+                // 購読開始前の変更を回収する。
+                let alive = this
+                    .update(cx, |tasks, cx| {
+                        if tasks.subscription_generation != generation
+                            || tasks.workspace.as_ref() != Some(&workspace)
+                        {
+                            return false;
+                        }
+                        if tasks.pending == 0 {
+                            tasks.refresh(cx);
+                        } else {
+                            tasks.sync_pending = true;
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    return;
+                }
+                loop {
+                    let (next, outcome) = executor
+                        .spawn(async move {
+                            let outcome = subscription.recv_timeout(Duration::from_secs(1));
+                            (subscription, outcome)
+                        })
+                        .await;
+                    subscription = next;
+                    match outcome {
+                        Ok(true) => {
+                            let alive = this
+                                .update(cx, |tasks, cx| {
+                                    if tasks.subscription_generation != generation
+                                        || tasks.workspace.as_ref() != Some(&workspace)
+                                    {
+                                        return false;
+                                    }
+                                    if tasks.pending == 0 {
+                                        tasks.refresh(cx);
+                                    } else {
+                                        tasks.sync_pending = true;
+                                    }
+                                    true
+                                })
+                                .unwrap_or(false);
+                            if !alive {
+                                return;
+                            }
+                        }
+                        Ok(false) => {}
+                        // 通知の欠落・切断。再同期してから購読し直す。
+                        Err(_) => break,
+                    }
+                }
+                let alive = this
+                    .update(cx, |tasks, cx| {
+                        if tasks.subscription_generation != generation
+                            || tasks.workspace.as_ref() != Some(&workspace)
+                        {
+                            return false;
+                        }
+                        if tasks.pending == 0 {
+                            tasks.refresh(cx);
+                        } else {
+                            tasks.sync_pending = true;
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    return;
+                }
+                Timer::after(Duration::from_secs(2)).await;
+            }
+        })
+        .detach();
     }
     pub(super) fn start_codex_task(
         &mut self,
@@ -144,28 +232,32 @@ impl TasksFeature {
             },
             move |tasks, result, cx| {
                 tasks.pending = tasks.pending.saturating_sub(1);
-                if !tasks.gate.accept(token) {
-                    return;
-                }
-                match result {
-                    Ok((records, selected)) => {
-                        tasks.records = records;
-                        tasks.selected_execution = select_visible_execution(
-                            &tasks.visible_records(),
-                            selected,
-                            tasks.selected_execution.clone(),
-                        );
-                        if !is_refresh || tasks.message_from_refresh {
-                            tasks.message.clear();
-                            tasks.message_from_refresh = false;
+                if tasks.gate.accept(token) {
+                    match result {
+                        Ok((records, selected)) => {
+                            tasks.records = records;
+                            tasks.selected_execution = select_visible_execution(
+                                &tasks.visible_records(),
+                                selected,
+                                tasks.selected_execution.clone(),
+                            );
+                            if !is_refresh || tasks.message_from_refresh {
+                                tasks.message.clear();
+                                tasks.message_from_refresh = false;
+                            }
+                        }
+                        Err(error) => {
+                            tasks.message = error;
+                            tasks.message_from_refresh = is_refresh;
                         }
                     }
-                    Err(error) => {
-                        tasks.message = error;
-                        tasks.message_from_refresh = is_refresh;
-                    }
+                    cx.notify();
                 }
-                cx.notify();
+                if tasks.pending == 0 && tasks.sync_pending {
+                    // 通知を処理中だった分は、結果の適用後に取り直す。
+                    tasks.sync_pending = false;
+                    tasks.refresh(cx);
+                }
             },
         );
         if let Err(error) = admitted {

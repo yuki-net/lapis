@@ -4704,6 +4704,7 @@ version = "0.1.0"
 dependencies = [
  "editor-core",
  "local-fs",
+ "notify",
  "serde",
  "serde_json",
  "task-runner",
@@ -4736,6 +4737,7 @@ version = "0.1.0"
 dependencies = [
  "backend-state",
  "document",
+ "notify",
  "tempfile",
  "workspace",
 ]

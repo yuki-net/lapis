@@ -234,7 +234,7 @@ impl BackendHost {
             workspace_id.clone(),
             root.file_name().unwrap_or_default().to_string_lossy(),
             root.clone(),
-            Arc::new(LocalWorkspaceRepository),
+            Arc::new(LocalWorkspaceRepository::new(root.clone())),
         )
         .with_terminal(Arc::new(LocalTerminalBackend::with_profiles(
             self.inner.terminal_profiles.clone(),

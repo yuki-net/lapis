@@ -8,5 +8,6 @@ license.workspace = true
 [dependencies]
 backend-state = { path = "../../runtime" }
 document = { path = "../../../contracts/domain/document" }
+notify.workspace = true
 tempfile.workspace = true
 workspace = { path = "../../../contracts/domain/workspace" }

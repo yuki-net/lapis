@@ -1,8 +1,7 @@
-use crate::timer::Timer;
 use crate::{client_adapter::ClientWorker, commands::UiCommand};
 use desktop_client::WorkspaceSearchSession;
 use gpui::Context;
-use std::{path::PathBuf, time::Duration};
+use std::path::PathBuf;
 use workspace::SearchHit;
 
 pub(crate) struct SearchFeature {
@@ -13,20 +12,10 @@ pub(crate) struct SearchFeature {
     pub(super) message: String,
     pub(super) running: bool,
     generation: u64,
-    busy: bool,
 }
 impl gpui::EventEmitter<UiCommand> for SearchFeature {}
 impl SearchFeature {
-    pub(crate) fn new(session: WorkspaceSearchSession, cx: &mut Context<Self>) -> Self {
-        cx.spawn(async move |this, cx| {
-            loop {
-                Timer::after(Duration::from_millis(100)).await;
-                if this.update(cx, |search, cx| search.poll(cx)).is_err() {
-                    break;
-                }
-            }
-        })
-        .detach();
+    pub(crate) fn new(session: WorkspaceSearchSession, _cx: &mut Context<Self>) -> Self {
         Self {
             worker: ClientWorker::new(session),
             root: None,
@@ -35,7 +24,6 @@ impl SearchFeature {
             message: String::new(),
             running: false,
             generation: 0,
-            busy: false,
         }
     }
     pub(crate) fn set_workspace(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
@@ -64,53 +52,52 @@ impl SearchFeature {
         self.hits.clear();
         self.message.clear();
         self.running = true;
-        if let Err(error) = self.worker.try_request(move |session| {
-            session.start(root, query);
-            Ok(())
-        }) {
-            self.message = error;
-            self.running = false;
-        }
-        cx.notify();
-    }
-    fn poll(&mut self, cx: &mut Context<Self>) {
-        if self.busy || !self.running {
-            return;
-        }
-        self.busy = true;
         let generation = self.generation;
         let admitted = self.worker.submit(
             cx,
-            |session| {
-                session.refresh();
-                Ok((
-                    session.hits().to_vec(),
-                    session.is_running(),
-                    session.error().unwrap_or_default().to_owned(),
-                ))
+            move |session| {
+                session.start(root, query);
+                Ok(session.take_receiver())
             },
-            move |search, result, cx| {
-                search.busy = false;
-                if generation != search.generation {
-                    return;
+            move |search, result, cx| match result {
+                Ok(Some(receiver)) => {
+                    let executor = cx.background_executor().clone();
+                    cx.spawn(async move |this, cx| {
+                        let result = executor.spawn(async move { receiver.recv() }).await;
+                        let _ = this.update(cx, |search, cx| {
+                            if generation != search.generation {
+                                return;
+                            }
+                            match result {
+                                Ok(Ok(hits)) => {
+                                    search.hits = hits;
+                                    search.message.clear();
+                                }
+                                Ok(Err(error)) => search.message = error.to_string(),
+                                Err(_) => {
+                                    search.message = "検索workerが終了しました".to_owned();
+                                }
+                            }
+                            search.running = false;
+                            cx.notify();
+                        });
+                    })
+                    .detach();
                 }
-                match result {
-                    Ok((hits, running, message)) => {
-                        search.hits = hits;
-                        search.running = running;
-                        search.message = message;
-                    }
-                    Err(error) => {
-                        search.message = error;
-                        search.running = false;
-                    }
+                Ok(None) => {
+                    search.running = false;
+                    cx.notify();
                 }
-                cx.notify();
+                Err(error) => {
+                    search.message = error;
+                    search.running = false;
+                    cx.notify();
+                }
             },
         );
         if let Err(error) = admitted {
-            self.busy = false;
             self.message = error;
+            self.running = false;
             cx.notify();
         }
     }

@@ -398,7 +398,8 @@ mod tests {
         let path = directory.path().join("note.md");
         std::fs::write(&path, "kept across reconnect\n").unwrap();
         let gate = ConnectionGate::connected();
-        let backend = LoopbackBackend::new(Arc::new(LocalWorkspaceRepository), gate.clone());
+        let backend =
+            LoopbackBackend::new(Arc::new(LocalWorkspaceRepository::default()), gate.clone());
 
         assert!(backend.read_file(&path).is_ok());
         gate.disconnect();

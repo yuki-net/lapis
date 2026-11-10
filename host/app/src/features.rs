@@ -342,6 +342,47 @@ impl HostTasks {
         }
     }
 }
+struct HostTaskSubscription {
+    _client: Client,
+    receiver: backend_state::BackendEventReceiver,
+    watermark: Option<u64>,
+}
+
+impl task::TaskSubscription for HostTaskSubscription {
+    fn recv_timeout(&mut self, timeout: std::time::Duration) -> Result<bool, TaskError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let event = match self
+                .receiver
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(event) => event,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => return Ok(false),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(TaskError::new("Task購読が切断されました"));
+                }
+            };
+            let sequence = event.event_sequence.value();
+            if let Some(previous) = self.watermark {
+                if sequence <= previous {
+                    continue;
+                }
+                if previous.checked_add(1) != Some(sequence) {
+                    return Err(TaskError::new("Task通知が欠落しました"));
+                }
+            }
+            self.watermark = Some(sequence);
+            match event.body {
+                client_api::EventBody::TasksChanged { .. } => return Ok(true),
+                client_api::EventBody::SnapshotRequired { .. } => {
+                    return Err(TaskError::new("Task状態の再取得が必要です"));
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 impl TaskConnection for HostTasks {
     fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError> {
         match execute(&self.host, workspace, Operation::Tasks).map_err(TaskError::new)? {
@@ -376,5 +417,59 @@ impl TaskConnection for HostTasks {
             Outcome::Completed => Ok(()),
             _ => Err(TaskError::new("Unexpected task control")),
         }
+    }
+
+    fn subscribe(&self, workspace: &WorkspaceId) -> Option<Box<dyn task::TaskSubscription>> {
+        let id = client_api::WorkspaceId::try_from(workspace).ok()?;
+        let client = match self.host.connect(id.clone()) {
+            Ok(client) => client,
+            Err(error) => {
+                return Some(Box::new(FailedTaskSubscription(format!(
+                    "Task購読の接続に失敗しました: {error}"
+                ))));
+            }
+        };
+        let receiver = match client.subscribe() {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                return Some(Box::new(FailedTaskSubscription(format!(
+                    "Task購読を開始できませんでした: {error}"
+                ))));
+            }
+        };
+        // 購読開始前の変更を watermark で補うため Snapshot を一度取得する。
+        let snapshot =
+            match client.request(RequestBody::SnapshotResync(client_api::SnapshotRequest {
+                workspace_id: id,
+                reason: client_api::SnapshotReason::Reconnect,
+            })) {
+                Ok(ResponseBody::SnapshotResync(snapshot)) => snapshot,
+                Ok(_) => {
+                    return Some(Box::new(FailedTaskSubscription(
+                        "Task購読のSnapshot応答が不正です".to_owned(),
+                    )));
+                }
+                Err(error) => {
+                    return Some(Box::new(FailedTaskSubscription(format!(
+                        "Task購読の再同期に失敗しました: {error}"
+                    ))));
+                }
+            };
+        Some(Box::new(HostTaskSubscription {
+            _client: client,
+            receiver,
+            watermark: Some(snapshot.snapshot.event_watermark.value()),
+        }))
+    }
+}
+
+/// 一時的な購読失敗を UI の再同期・再購読経路へ流すための購読。
+///
+/// `None` は「購読に未対応の接続」だけに使う。
+struct FailedTaskSubscription(String);
+
+impl task::TaskSubscription for FailedTaskSubscription {
+    fn recv_timeout(&mut self, _: std::time::Duration) -> Result<bool, TaskError> {
+        Err(TaskError::new(self.0.clone()))
     }
 }

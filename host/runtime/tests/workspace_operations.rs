@@ -519,6 +519,42 @@ fn request_capabilities_separate_git_reads_writes_and_task_controls() {
 }
 
 #[test]
+fn task_mutations_publish_change_events() {
+    use std::time::Duration;
+    let fixture = Fixture::new();
+    let client = fixture.client("task-events", "first");
+    let events = client.subscribe().unwrap();
+    let started = started(&client, false);
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+        if matches!(event.body, client_api::EventBody::TasksChanged { .. }) {
+            break;
+        }
+    }
+    let Outcome::Completed = outcome(execute(
+        &client,
+        Operation::ControlTask {
+            execution_id: started.execution.id,
+            control: TaskControl::Cancel,
+        },
+    )) else {
+        panic!("操作結果が必要")
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    loop {
+        let event = events
+            .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            .unwrap();
+        if matches!(event.body, client_api::EventBody::TasksChanged { .. }) {
+            break;
+        }
+    }
+}
+
+#[test]
 fn clients_share_tasks_worktrees_and_survive_all_connections_dropping() {
     let fixture = Fixture::new();
     let first = fixture.client("one", "first");

@@ -59,6 +59,17 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 ## 最低限の確認項目
 
 未認証・権限不足・Workspace外path・失効済credentialを拒否できるか、stale revisionを検出できるか、切断中の実行状態を誤認しないか、再接続時にcacheを更新できるかを検証します。実行可能な検証手段の正本はテストコードとCIです。
+
+## イベント駆動の同期
+
+Client は定期ポーリングで状態を取りに行かず、Host のイベントを契機に更新する。
+
+- Workbench は `workbench.changed`、Terminal は `terminal.delta` / `terminal.status`、Document は `document.*` を購読する。
+- 外部ファイル変更は Host の Workspace 監視から `files.changed`、Task の変更は `task.changed` として publish する。どちらも変化の通知だけを運び、状態の正本は各 snapshot とする。
+- 購読は `DocumentConnection::subscribe` / `TaskConnection::subscribe` のように Adapter が通知 channel を返す。購読できない接続では初回取得だけを行う。
+- 通知の欠落・購読の切断時は Snapshot と revision で再同期し、購読を張り直す。再接続待ちの短い backoff はタイマーで持ってよいが、通常時の定期 refresh は行わない。
+- 未確定の操作（編集中・送信中）がある間は取得結果を保留し、完了時に 1 回だけ反映する。未保存の編集を通知で上書きしない。
+
 ## Workbench のタブ参照
 
 Workbench に保存するタブは `TabRef` で参照先だけを保持する。Document は `DocumentId`、

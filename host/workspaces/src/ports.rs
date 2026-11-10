@@ -19,4 +19,9 @@ pub enum WorkspaceEntryKind {
 pub trait WorkspaceFileBackend: DocumentRepository {
     fn create_directory(&self, directory: &Path) -> Result<(), DocumentError>;
     fn list_children(&self, directory: &Path) -> Result<Vec<WorkspaceEntry>, DocumentError>;
+
+    /// Workspace 配下のファイル変更通知。未対応の backend は `None`。
+    fn changes(&self) -> Option<std::sync::mpsc::Receiver<()>> {
+        None
+    }
 }
