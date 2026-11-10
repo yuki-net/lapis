@@ -206,6 +206,70 @@ impl HostDocuments {
 ///
 /// 購読が切れたら再同期を促し、少し待って購読し直す。
 /// `HostDocuments` が破棄されたら `Weak` の upgrade に失敗して終了する。
+/// 購読イベントの受信待ちタイムアウト。破棄確認の間隔を兼ねる。
+const DOCUMENT_EVENT_POLL: Duration = Duration::from_millis(250);
+
+/// 転送するイベントの種類。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Relay {
+    /// 再同期を促す。
+    Notify,
+    /// 再同期を促して購読を張り直す。
+    Resync,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayPoll {
+    Event(Relay),
+    Idle,
+    Closed,
+}
+
+/// Host イベントを再同期通知へ変換する。対象外は `None`。
+fn relay_event(body: &wire::EventBody) -> Option<Relay> {
+    match body {
+        wire::EventBody::DocumentEdited { .. }
+        | wire::EventBody::DocumentSaved { .. }
+        | wire::EventBody::DocumentReplaced { .. }
+        | wire::EventBody::DocumentClosed { .. }
+        | wire::EventBody::DocumentOwner { .. }
+        | wire::EventBody::WorkspaceChanged { .. }
+        | wire::EventBody::FilesChanged { .. } => Some(Relay::Notify),
+        wire::EventBody::SnapshotRequired { .. } => Some(Relay::Resync),
+        _ => None,
+    }
+}
+
+/// 購読を開始した直後に再同期を促してから、イベントを転送する。
+fn relay_subscription(
+    changes: &std::sync::Weak<DocumentChanges>,
+    mut next: impl FnMut() -> RelayPoll,
+) {
+    // 購読開始前の変更を回収する。
+    publish_changes(changes);
+    relay_events(changes, &mut next);
+}
+
+/// 購読が続く間、イベントを通知へ変換する。
+///
+/// 受信待ち中も `Weak` の破棄を確認できるよう、呼び出し側は timeout 付きで待つ。
+fn relay_events(changes: &std::sync::Weak<DocumentChanges>, next: &mut impl FnMut() -> RelayPoll) {
+    loop {
+        if changes.upgrade().is_none() {
+            return;
+        }
+        match next() {
+            RelayPoll::Event(Relay::Notify) => publish_changes(changes),
+            RelayPoll::Event(Relay::Resync) => {
+                publish_changes(changes);
+                return;
+            }
+            RelayPoll::Idle => {}
+            RelayPoll::Closed => return,
+        }
+    }
+}
+
 fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChanges>) {
     std::thread::spawn(move || {
         loop {
@@ -214,24 +278,17 @@ fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChan
                 return;
             }
             if let Ok(receiver) = client.subscribe() {
-                // 購読開始前の変更を回収する。購読後に行うことで取りこぼしを防ぐ。
-                publish_changes(&changes);
-                while let Ok(event) = receiver.recv() {
-                    match event.body {
-                        wire::EventBody::DocumentEdited { .. }
-                        | wire::EventBody::DocumentSaved { .. }
-                        | wire::EventBody::DocumentReplaced { .. }
-                        | wire::EventBody::DocumentClosed { .. }
-                        | wire::EventBody::DocumentOwner { .. }
-                        | wire::EventBody::WorkspaceChanged { .. }
-                        | wire::EventBody::FilesChanged { .. } => publish_changes(&changes),
-                        wire::EventBody::SnapshotRequired { .. } => {
-                            publish_changes(&changes);
-                            break;
-                        }
-                        _ => {}
+                // 購読開始前の変更を回収し、受信待ち中も破棄を確認する。
+                relay_subscription(&changes, || {
+                    match receiver.recv_timeout(DOCUMENT_EVENT_POLL) {
+                        Ok(event) => match relay_event(&event.body) {
+                            Some(relay) => RelayPoll::Event(relay),
+                            None => RelayPoll::Idle,
+                        },
+                        Err(mpsc::RecvTimeoutError::Timeout) => RelayPoll::Idle,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => RelayPoll::Closed,
                     }
-                }
+                });
             }
             // 切断・購読失敗時は購読先の変化を取りこぼしている可能性がある。
             publish_changes(&changes);
@@ -564,5 +621,40 @@ mod tests {
         drop(receiver);
         changes.publish();
         assert!(changes.senders.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn subscription_start_and_resync_request_a_snapshot() {
+        let changes = std::sync::Arc::new(DocumentChanges::default());
+        let receiver = changes.subscribe();
+        let weak = std::sync::Arc::downgrade(&changes);
+        let mut steps = vec![RelayPoll::Closed].into_iter();
+        relay_subscription(&weak, move || steps.next().unwrap());
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(100)).is_ok(),
+            "購読開始時に再同期を促す"
+        );
+        // resync は通知したうえで購読を張り直すため終了する。
+        let mut steps = vec![RelayPoll::Event(Relay::Resync)].into_iter();
+        relay_subscription(&weak, move || {
+            steps.next().unwrap_or_else(|| panic!("resync で終了する"))
+        });
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(100)).is_ok(),
+            "resync でも再同期を促す"
+        );
+    }
+
+    #[test]
+    fn relay_loop_stops_when_the_owner_is_dropped_even_while_idle() {
+        let changes = std::sync::Arc::new(DocumentChanges::default());
+        let weak = std::sync::Arc::downgrade(&changes);
+        drop(changes);
+        let calls = std::cell::Cell::new(0);
+        relay_events(&weak, &mut || {
+            calls.set(calls.get() + 1);
+            RelayPoll::Idle
+        });
+        assert_eq!(calls.get(), 0, "破棄済みなら受信待ちに入らない");
     }
 }
