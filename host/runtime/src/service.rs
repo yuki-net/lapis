@@ -654,13 +654,17 @@ fn run_worker(
                 let _ = respond.send(Ok(BackendEventReceiver { receiver }));
             }
             Ok(Command::Disconnect(session_id)) => {
-                state.disconnect(&session_id);
+                let events = state.disconnect(&session_id);
                 subscribers.remove(&session_id);
+                publish_events(&mut subscribers, events);
             }
             Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
         if let Ok(events) = state.poll_terminals() {
+            publish_events(&mut subscribers, events);
+        }
+        if let Ok(events) = state.poll_document_owners() {
             publish_events(&mut subscribers, events);
         }
     }

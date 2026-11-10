@@ -91,6 +91,8 @@ impl PrototypeBackend {
             can_undo: document.can_undo(),
             can_redo: document.can_redo(),
             external_change: document.external_change(actual.as_ref()),
+            owner: None,
+            is_owner: false,
         }
     }
 

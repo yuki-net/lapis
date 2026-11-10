@@ -5,6 +5,7 @@ use std::{
     error::Error,
     fmt,
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use client_api::{
@@ -33,15 +34,59 @@ impl fmt::Display for DocumentStateError {
 impl Error for DocumentStateError {}
 
 /// Workspace が開いている Document の集合。
-#[derive(Default)]
 pub struct DocumentRegistry {
     resources: HashMap<DocumentId, DocumentResource>,
     by_path: HashMap<PathBuf, DocumentId>,
+    /// 編集権を自動解放するまでの無操作時間。
+    owner_idle_timeout: Duration,
+}
+
+impl Default for DocumentRegistry {
+    fn default() -> Self {
+        Self {
+            resources: HashMap::new(),
+            by_path: HashMap::new(),
+            owner_idle_timeout: Duration::from_secs(300),
+        }
+    }
 }
 
 impl DocumentRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 編集権の無操作タイムアウトを変更する（テスト・設定用）。
+    pub fn with_owner_idle_timeout(mut self, timeout: Duration) -> Self {
+        self.owner_idle_timeout = timeout;
+        self
+    }
+
+    /// 無操作の編集権を解放し、解放した Document を返す。
+    pub fn poll_owners(&mut self) -> Vec<DocumentId> {
+        let idle_timeout = self.owner_idle_timeout;
+        self.resources
+            .values_mut()
+            .filter(|resource| {
+                resource.owner.is_some() && resource.last_activity.elapsed() >= idle_timeout
+            })
+            .map(|resource| {
+                resource.owner = None;
+                resource.document_id.clone()
+            })
+            .collect()
+    }
+
+    /// 指定 Session が持つ編集権をすべて解放し、解放した Document を返す。
+    pub fn release_owned_by(&mut self, session_id: &SessionId) -> Vec<DocumentId> {
+        self.resources
+            .values_mut()
+            .filter(|resource| resource.owner.as_ref() == Some(session_id))
+            .map(|resource| {
+                resource.owner = None;
+                resource.document_id.clone()
+            })
+            .collect()
     }
 
     pub fn values(&self) -> impl Iterator<Item = &DocumentResource> {
@@ -112,6 +157,8 @@ pub struct DocumentResource {
     pub attached_sessions: HashSet<SessionId>,
     /// 編集を許可する Session。`None` は未所有。
     pub owner: Option<SessionId>,
+    /// 最後に編集権を行使した時刻。無操作で owner を解放する。
+    pub last_activity: Instant,
 }
 
 impl DocumentResource {
@@ -122,7 +169,13 @@ impl DocumentResource {
             document,
             attached_sessions: HashSet::new(),
             owner: None,
+            last_activity: Instant::now(),
         }
+    }
+
+    /// 編集権の活動時刻を更新する。
+    pub fn touch(&mut self) {
+        self.last_activity = Instant::now();
     }
 
     pub fn revision(&self) -> Revision {

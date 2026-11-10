@@ -57,6 +57,9 @@ impl Editor {
     }
 
     pub(crate) fn replace_selection(&mut self, text: &str, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         let range = self.selected_range.clone();
         if let Err(error) = self.edit(range.clone(), text, cx) {
             self.status = format!("編集失敗: {error}");
@@ -71,6 +74,9 @@ impl Editor {
     }
 
     pub(crate) fn backspace(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         if self.selected_range.is_empty() {
             let cursor = self.cursor_offset();
             self.selected_range = self.previous_boundary(cursor)..cursor;
@@ -79,6 +85,9 @@ impl Editor {
     }
 
     pub(crate) fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         if self.selected_range.is_empty() {
             let cursor = self.cursor_offset();
             self.selected_range = cursor..self.next_boundary(cursor);
@@ -170,6 +179,9 @@ impl Editor {
     }
 
     pub(crate) fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         let Some(id) = self.document_id.clone() else {
             return;
         };
@@ -184,6 +196,9 @@ impl Editor {
         );
     }
     pub(crate) fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only() {
+            return;
+        }
         let Some(id) = self.document_id.clone() else {
             return;
         };

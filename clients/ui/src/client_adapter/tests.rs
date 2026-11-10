@@ -71,6 +71,8 @@ impl Fixture {
             can_redo: document.can_redo(),
             external_change: ExternalChange::Unchanged,
             reused: true,
+            owner: None,
+            is_owner: false,
         }
     }
     pub fn client(&self) -> DocumentClient {

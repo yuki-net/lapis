@@ -64,6 +64,8 @@ pub struct WorkspaceRegistration {
     pub git: Option<Arc<dyn git_api::GitBackend>>,
     pub tasks: Option<Arc<dyn task::TaskBackend>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
+    /// Document の編集権を無操作で解放するまでの時間。`None` は既定値。
+    pub document_owner_idle_timeout: Option<std::time::Duration>,
     pub(crate) workbench_initial: workbench::VersionedViewState,
 }
 
@@ -83,8 +85,15 @@ impl WorkspaceRegistration {
             git: None,
             tasks: None,
             workbench_persistence: None,
+            document_owner_idle_timeout: None,
             workbench_initial: workbench::VersionedViewState::default(),
         }
+    }
+
+    /// Document の編集権を無操作で解放するまでの時間を変更する（テスト・設定用）。
+    pub fn with_document_owner_idle_timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.document_owner_idle_timeout = Some(timeout);
+        self
     }
 
     pub fn with_git(mut self, backend: Arc<dyn git_api::GitBackend>) -> Self {
@@ -472,14 +481,24 @@ impl BackendState {
         }
     }
 
-    pub(crate) fn disconnect(&mut self, session_id: &SessionId) {
+    pub(crate) fn disconnect(&mut self, session_id: &SessionId) -> Vec<PublishedEvent> {
         self.connected_sessions.remove(session_id);
+        let mut published = Vec::new();
         for workspace in self.workspaces.values_mut() {
             for document in workspace.documents.values_mut() {
                 document.attached_sessions.remove(session_id);
             }
+            for document_id in workspace.documents.release_owned_by(session_id) {
+                if let Ok(event) = workspace.publish(EventBody::DocumentOwner {
+                    document_id,
+                    owner: None,
+                }) {
+                    published.push(event);
+                }
+            }
             workspace.terminals.detach(session_id);
         }
+        published
     }
 
     fn dispatch_body(
@@ -775,6 +794,21 @@ impl BackendState {
         }
         Ok(published)
     }
+
+    pub(crate) fn poll_document_owners(
+        &mut self,
+    ) -> Result<Vec<PublishedEvent>, BackendStateError> {
+        let mut published = Vec::new();
+        for workspace in self.workspaces.values_mut() {
+            for document_id in workspace.documents.poll_owners() {
+                published.push(workspace.publish(EventBody::DocumentOwner {
+                    document_id,
+                    owner: None,
+                })?);
+            }
+        }
+        Ok(published)
+    }
 }
 
 struct WorkspaceState {
@@ -797,6 +831,10 @@ impl WorkspaceState {
         if let Some(view) = &registration.workbench_initial.view {
             workbench_state::validate_workspace(view, &registration.workspace_id)?;
         }
+        let documents = match registration.document_owner_idle_timeout {
+            Some(timeout) => DocumentRegistry::new().with_owner_idle_timeout(timeout),
+            None => DocumentRegistry::new(),
+        };
         Ok(Self {
             workbench: registration.workbench_initial,
             summary: WorkspaceSummary {
@@ -805,7 +843,7 @@ impl WorkspaceState {
             },
             resolver: WorkspacePathResolver::new(registration.root)?,
             files: registration.files,
-            documents: DocumentRegistry::new(),
+            documents,
             terminals: TerminalRegistry::new(registration.terminal),
             operations: Arc::new(Mutex::new(crate::operations::WorkspaceOperations::new(
                 registration.git,

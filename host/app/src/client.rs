@@ -1,6 +1,6 @@
 use crate::BackendHost;
 use backend_state::{BackendEventReceiver, BackendServiceError, EmbeddedClient};
-use client_api::{RequestBody, ResponseBody, WorkspaceId, WorkspaceRelativePath};
+use client_api::{RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceRelativePath};
 use remote::{QuicConnection, QuicConnectionConfig};
 use std::{
     path::{Component, Path, PathBuf},
@@ -45,6 +45,13 @@ impl Client {
         match self {
             Self::Embedded(client) => client.workspace_id(),
             Self::Quic(client) => client.workspace_id(),
+        }
+    }
+    /// この接続の Session。Remote が未認証なら `None`。
+    pub(crate) fn session_id(&self) -> Option<SessionId> {
+        match self {
+            Self::Embedded(client) => Some(client.session_id().clone()),
+            Self::Quic(client) => client.session_id(),
         }
     }
     pub(crate) fn request(&self, body: RequestBody) -> Result<ResponseBody, BackendServiceError> {

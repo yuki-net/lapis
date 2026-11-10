@@ -7,7 +7,7 @@ use client_api::*;
 use rustls::pki_types::CertificateDer;
 use std::{
     net::SocketAddr,
-    sync::{Arc, mpsc},
+    sync::{Arc, Mutex, mpsc},
     thread,
     time::Duration,
 };
@@ -170,6 +170,8 @@ pub struct QuicConnection {
 }
 struct ConnectionInner {
     workspace: WorkspaceId,
+    /// 認証済み Session。再接続のたびに Host が新しい ID を返す。
+    session: Arc<Mutex<Option<SessionId>>>,
     sender: tokio::sync::mpsc::Sender<Command>,
 }
 enum Command {
@@ -207,6 +209,8 @@ impl QuicConnection {
     pub fn connect(config: QuicConnectionConfig) -> Result<Self, BackendServiceError> {
         let (sender, receiver) = tokio::sync::mpsc::channel(32);
         let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let session = Arc::new(Mutex::new(None));
+        let run_session = session.clone();
         thread::Builder::new()
             .name("lapis-quic-client".to_owned())
             .spawn(move || {
@@ -220,12 +224,16 @@ impl QuicConnection {
                         return;
                     }
                 };
-                runtime.block_on(run(config, receiver, started_tx));
+                runtime.block_on(run(config, receiver, started_tx, run_session));
             })
             .map_err(BackendServiceError::ThreadSpawn)?;
         match started_rx.recv_timeout(Duration::from_secs(45)) {
             Ok(Ok(workspace)) => Ok(Self {
-                inner: Arc::new(ConnectionInner { workspace, sender }),
+                inner: Arc::new(ConnectionInner {
+                    workspace,
+                    session,
+                    sender,
+                }),
             }),
             Ok(Err(error)) => Err(error),
             _ => Err(BackendServiceError::Connection(
@@ -235,6 +243,14 @@ impl QuicConnection {
     }
     pub fn workspace_id(&self) -> &WorkspaceId {
         &self.inner.workspace
+    }
+    /// 現在の接続で認証済みの Session ID。再接続後は新しい ID になる。
+    pub fn session_id(&self) -> Option<SessionId> {
+        self.inner
+            .session
+            .lock()
+            .ok()
+            .and_then(|session| session.clone())
     }
     pub fn request(&self, body: RequestBody) -> Result<ResponseBody, BackendServiceError> {
         let (sender, receiver) = mpsc::sync_channel(1);
@@ -295,16 +311,21 @@ async fn run(
     mut config: QuicConnectionConfig,
     mut commands: tokio::sync::mpsc::Receiver<Command>,
     started: mpsc::SyncSender<Result<WorkspaceId, BackendServiceError>>,
+    session: Arc<Mutex<Option<SessionId>>>,
 ) {
     let mut core = client_core::ClientCore::default();
     let mut subscribers = Vec::new();
-    let (mut socket, workspace) = match restore(&config, &mut core, &mut subscribers).await {
-        Ok((client, workspace)) => (Some(client), workspace),
-        Err(error) => {
-            let _ = started.send(Err(error));
-            return;
-        }
-    };
+    let (mut socket, workspace, session_id) =
+        match restore(&config, &mut core, &mut subscribers).await {
+            Ok((client, workspace, session_id)) => (Some(client), workspace, session_id),
+            Err(error) => {
+                let _ = started.send(Err(error));
+                return;
+            }
+        };
+    if let Ok(mut current) = session.lock() {
+        *current = Some(session_id);
+    }
     // 一度解決した Workspace を再接続でも使い、接続中に選択先を変えない。
     config.workspace_id = Some(workspace.clone());
     if started.send(Ok(workspace)).is_err() {
@@ -355,7 +376,11 @@ async fn run(
                 let result =
                     tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {
                         if socket.is_none() {
-                            let (client, _) = restore(&config, &mut core, &mut subscribers).await?;
+                            let (client, _, session_id) =
+                                restore(&config, &mut core, &mut subscribers).await?;
+                            if let Ok(mut current) = session.lock() {
+                                *current = Some(session_id);
+                            }
                             socket = Some(client);
                         }
                         if let Some(client) = socket.as_mut() {
@@ -388,7 +413,7 @@ async fn restore(
     config: &QuicConnectionConfig,
     core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
-) -> Result<(QuicClient, WorkspaceId), BackendServiceError> {
+) -> Result<(QuicClient, WorkspaceId, SessionId), BackendServiceError> {
     timeout(
         Duration::from_secs(30),
         restore_inner(config, core, subscribers),
@@ -401,11 +426,12 @@ async fn restore_inner(
     config: &QuicConnectionConfig,
     core: &mut client_core::ClientCore,
     subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>,
-) -> Result<(QuicClient, WorkspaceId), BackendServiceError> {
+) -> Result<(QuicClient, WorkspaceId, SessionId), BackendServiceError> {
     let (mut client, hello) = config
         .authenticate()
         .await
         .map_err(|error| BackendServiceError::Connection(error.to_string()))?;
+    let session_id = hello.session_id.clone();
     core.connected()
         .map_err(|_| BackendServiceError::Unavailable)?;
     // Host の認証応答を優先し、指定も応答も無い場合だけ一覧の先頭を使う。
@@ -471,7 +497,7 @@ async fn restore_inner(
             "snapshot取得が拒否されました".to_owned(),
         ));
     }
-    Ok((client, workspace))
+    Ok((client, workspace, session_id))
 }
 
 fn publish(subscribers: &mut Vec<mpsc::SyncSender<EventEnvelope>>, event: EventEnvelope) {

@@ -23,7 +23,7 @@ use client_core::browser::{WebClientConnectOptions, connect_web_client};
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
 };
-use editor_core::{DocumentId, WorkspaceId};
+use editor_core::{DocumentId, SessionId, WorkspaceId};
 use futures_channel::mpsc;
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
 use lsp::{
@@ -151,7 +151,13 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
         _ => Vec::new(),
     };
-    let replica = Rc::new(RefCell::new(Replica::new(workspace.clone(), entries)));
+    let replica = Rc::new(RefCell::new(Replica::new(
+        workspace.clone(),
+        entries,
+        connection
+            .session_id()
+            .map(|session| SessionId::new(session.as_str())),
+    )));
     {
         let mut replica = replica.borrow_mut();
         for terminal in terminals {
@@ -245,6 +251,7 @@ impl DocumentConnection for WebBackend {
     fn create(&self, _: Option<&Path>) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             let local = local_id(&mut replica);
             let document = Document::new();
             let state = DocumentState {
@@ -255,8 +262,15 @@ impl DocumentConnection for WebBackend {
                 host_revision: ApiRevision::new(0),
                 loaded: true,
                 external_change: ExternalChange::Unchanged,
+                owner: None,
             };
-            let cache = cache_of(&local, &state.document, state.external_change);
+            let cache = cache_of(
+                &local,
+                &state.document,
+                state.external_change,
+                state.owner.as_ref(),
+                session.as_ref(),
+            );
             replica.documents.insert(local, state);
             cache
         })
@@ -266,12 +280,19 @@ impl DocumentConnection for WebBackend {
     fn open(&self, path: &Path) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             if let Some(local) = replica.by_path.get(path).cloned() {
                 let state = replica
                     .documents
                     .get(&local)
                     .ok_or_else(|| DocumentError::io("Documentがありません"))?;
-                return Ok(cache_of(&local, &state.document, state.external_change));
+                return Ok(cache_of(
+                    &local,
+                    &state.document,
+                    state.external_change,
+                    state.owner.as_ref(),
+                    session.as_ref(),
+                ));
             }
             let local = local_id(&mut replica);
             let document = Document::from_snapshot(
@@ -289,11 +310,14 @@ impl DocumentConnection for WebBackend {
                 host_revision: ApiRevision::new(0),
                 loaded: false,
                 external_change: ExternalChange::Unchanged,
+                owner: None,
             };
             let cache = cache_of(
                 &local,
                 &document_state.document,
                 document_state.external_change,
+                document_state.owner.as_ref(),
+                session.as_ref(),
             );
             replica.by_path.insert(path.to_owned(), local.clone());
             replica.documents.insert(local.clone(), document_state);
@@ -306,11 +330,79 @@ impl DocumentConnection for WebBackend {
     fn attach(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let replica = state.replica.borrow();
+            let session = replica.session.clone();
             let document = replica
                 .documents
                 .get(id)
                 .ok_or_else(|| DocumentError::io("Documentがありません"))?;
-            Ok(cache_of(id, &document.document, document.external_change))
+            Ok(cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            ))
+        })
+        .map_err(DocumentError::io)?
+    }
+
+    fn claim(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        self.with(|state| {
+            let mut replica = state.replica.borrow_mut();
+            let session = replica
+                .session
+                .clone()
+                .ok_or_else(|| DocumentError::io("Sessionが不明です"))?;
+            let document = replica
+                .documents
+                .get_mut(id)
+                .ok_or_else(|| DocumentError::io("Documentがありません"))?;
+            if document.host.is_none() {
+                return Err(DocumentError::io("HostにDocumentがありません"));
+            }
+            document.owner = Some(session.clone());
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                Some(&session),
+            );
+            let _ = state
+                .commands
+                .unbounded_send(Command::Claim { local: id.clone() });
+            Ok(cache)
+        })
+        .map_err(DocumentError::io)?
+    }
+
+    fn release(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        self.with(|state| {
+            let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
+            let document = replica
+                .documents
+                .get_mut(id)
+                .ok_or_else(|| DocumentError::io("Documentがありません"))?;
+            if document
+                .owner
+                .as_ref()
+                .is_some_and(|owner| session.as_ref().is_none_or(|session| owner != session))
+            {
+                return Err(DocumentError::conflict("他のClientが編集中です"));
+            }
+            document.owner = None;
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            );
+            let _ = state
+                .commands
+                .unbounded_send(Command::Release { local: id.clone() });
+            Ok(cache)
         })
         .map_err(DocumentError::io)?
     }
@@ -324,6 +416,7 @@ impl DocumentConnection for WebBackend {
     ) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             let document = replica
                 .documents
                 .get_mut(id)
@@ -340,7 +433,13 @@ impl DocumentConnection for WebBackend {
                 .document
                 .replace_char_range(range, replacement)
                 .map_err(|error| DocumentError::io(error.to_string()))?;
-            let cache = cache_of(id, &document.document, document.external_change);
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            );
             let _ = state
                 .commands
                 .unbounded_send(Command::Sync { local: id.clone() });
@@ -357,6 +456,7 @@ impl DocumentConnection for WebBackend {
     ) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             let document = replica
                 .documents
                 .get_mut(id)
@@ -371,7 +471,13 @@ impl DocumentConnection for WebBackend {
             } else {
                 document.document.redo();
             }
-            let cache = cache_of(id, &document.document, document.external_change);
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            );
             let _ = state
                 .commands
                 .unbounded_send(Command::Sync { local: id.clone() });
@@ -388,6 +494,7 @@ impl DocumentConnection for WebBackend {
     ) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             let document = replica
                 .documents
                 .get_mut(id)
@@ -397,7 +504,13 @@ impl DocumentConnection for WebBackend {
                     "Documentのrevisionが競合しています",
                 ));
             }
-            let cache = cache_of(id, &document.document, document.external_change);
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            );
             let _ = state
                 .commands
                 .unbounded_send(Command::Save { local: id.clone() });
@@ -409,6 +522,7 @@ impl DocumentConnection for WebBackend {
     fn reload(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             let document = replica
                 .documents
                 .get_mut(id)
@@ -418,7 +532,13 @@ impl DocumentConnection for WebBackend {
                     "Documentのrevisionが競合しています",
                 ));
             }
-            let cache = cache_of(id, &document.document, document.external_change);
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            );
             let _ = state
                 .commands
                 .unbounded_send(Command::Reload { local: id.clone() });
@@ -430,6 +550,7 @@ impl DocumentConnection for WebBackend {
     fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
+            let session = replica.session.clone();
             let document = replica
                 .documents
                 .get_mut(id)
@@ -439,7 +560,13 @@ impl DocumentConnection for WebBackend {
                     "Documentのrevisionが競合しています",
                 ));
             }
-            let cache = cache_of(id, &document.document, document.external_change);
+            let cache = cache_of(
+                id,
+                &document.document,
+                document.external_change,
+                document.owner.as_ref(),
+                session.as_ref(),
+            );
             let _ = state
                 .commands
                 .unbounded_send(Command::Discard { local: id.clone() });

@@ -7,17 +7,18 @@ use std::{
 };
 
 use client_api::{
-    DocumentEditRequest, DocumentInspectRequest, DocumentOpenRequest, DocumentSaveRequest,
-    DocumentTextEdit, DocumentTransaction, EventBody, EventEnvelope, FileTreeKind, FileTreeRequest,
-    RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason, SnapshotRequest,
-    TerminalClaimRequest, TerminalInputRequest, TerminalReleaseRequest, TerminalResizeRequest,
-    TerminalSize, TerminalStartRequest, TerminalStatus as WireTerminalStatus,
-    TerminalTerminateRequest, WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse,
-    WorkspaceId as ApiWorkspaceId, WorkspaceRelativePath,
+    DocumentClaimRequest, DocumentEditRequest, DocumentInspectRequest, DocumentOpenRequest,
+    DocumentReleaseRequest, DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody,
+    EventEnvelope, FileTreeKind, FileTreeRequest, RequestBody, ResponseBody,
+    Revision as ApiRevision, SnapshotReason, SnapshotRequest, TerminalClaimRequest,
+    TerminalInputRequest, TerminalReleaseRequest, TerminalResizeRequest, TerminalSize,
+    TerminalStartRequest, TerminalStatus as WireTerminalStatus, TerminalTerminateRequest,
+    WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceId as ApiWorkspaceId,
+    WorkspaceRelativePath,
 };
 use client_core::{AsyncHostConnection, browser::BrowserConnection};
 use document::{ExternalChange, FileFingerprint};
-use editor_core::DocumentId;
+use editor_core::{DocumentId, SessionId};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
 use terminal::{TerminalEvent, TerminalId, TerminalInput};
@@ -28,7 +29,7 @@ use super::{
     MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace,
     state::{
         DocumentState, Replica, TerminalState, diff_chars, document_from_snapshot, local_id,
-        model_terminal_snapshot, versioned_workbench,
+        model_terminal_snapshot, owner_of, versioned_workbench,
     },
 };
 
@@ -40,6 +41,12 @@ pub(super) enum Command {
         local: DocumentId,
     },
     Save {
+        local: DocumentId,
+    },
+    Claim {
+        local: DocumentId,
+    },
+    Release {
         local: DocumentId,
     },
     Reload {
@@ -190,6 +197,7 @@ pub(super) async fn preload_workbench(
                 host_revision: snapshot.revision,
                 loaded: true,
                 external_change: ExternalChange::Unchanged,
+                owner: owner_of(&snapshot),
             },
         );
     }
@@ -245,6 +253,7 @@ pub(super) async fn preload(
         host_revision: snapshot.revision,
         loaded: true,
         external_change: ExternalChange::Unchanged,
+        owner: owner_of(&snapshot),
     };
     replica.by_path.insert(path.clone(), local.clone());
     replica.documents.insert(local, state);
@@ -319,6 +328,26 @@ pub(super) async fn event_pump(
                     state.events.push(TerminalEvent::Owner {
                         owner: owner.map(|owner| owner.as_str().to_owned()),
                     });
+                }
+            }
+            EventBody::DocumentOwner { document_id, owner } => {
+                if let Some(state) = replica
+                    .borrow_mut()
+                    .documents
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&document_id))
+                {
+                    state.owner = owner.map(|owner| SessionId::new(owner.as_str()));
+                }
+            }
+            EventBody::DocumentReplaced { document } => {
+                if let Some(state) = replica
+                    .borrow_mut()
+                    .documents
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&document.document_id))
+                {
+                    state.owner = owner_of(&document);
                 }
             }
             EventBody::WorkbenchChanged { .. } => {
@@ -437,6 +466,7 @@ async fn handle(
                 state.host_revision = snapshot.revision;
                 state.loaded = true;
                 state.external_change = ExternalChange::Unchanged;
+                state.owner = owner_of(&snapshot);
             }
         }
         Command::Sync { local } => loop {
@@ -524,6 +554,40 @@ async fn handle(
                 Ok(_) => return Err("DocumentSave応答が不正です".into()),
                 Err(_) => refresh_document(connection, replica, &local).await?,
             }
+        }
+        Command::Claim { local } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .documents
+                    .get(&local)
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let _ = request(
+                    connection,
+                    RequestBody::DocumentClaim(DocumentClaimRequest { document_id: host }),
+                )
+                .await;
+            }
+            refresh_document(connection, replica, &local).await?;
+        }
+        Command::Release { local } => {
+            let host = {
+                let replica = replica.borrow();
+                replica
+                    .documents
+                    .get(&local)
+                    .and_then(|state| state.host.clone())
+            };
+            if let Some(host) = host {
+                let _ = request(
+                    connection,
+                    RequestBody::DocumentRelease(DocumentReleaseRequest { document_id: host }),
+                )
+                .await;
+            }
+            refresh_document(connection, replica, &local).await?;
         }
         Command::Reload { local } => {
             refresh_document(connection, replica, &local).await?;
@@ -792,6 +856,7 @@ async fn refresh_document(
         state.acked = snapshot.content.clone();
         state.host_revision = snapshot.revision;
         state.external_change = ExternalChange::Modified;
+        state.owner = owner_of(&snapshot);
     }
     Ok(())
 }

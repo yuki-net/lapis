@@ -46,6 +46,11 @@ impl EmbeddedClient {
         &self.inner.session.workspace_id
     }
 
+    /// この接続を表す Host の Session ID。
+    pub fn session_id(&self) -> &SessionId {
+        &self.inner.session.session_id
+    }
+
     pub fn request(&self, body: RequestBody) -> Result<ResponseBody, BackendServiceError> {
         let sequence = self.inner.next_request.fetch_add(1, Ordering::Relaxed);
         let request = RequestEnvelope {

@@ -6,6 +6,37 @@ use document::{DocumentErrorKind, ExternalChange};
 use host::BackendHost;
 
 #[test]
+fn document_claims_are_scoped_to_the_connection_session() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("lease.md");
+    std::fs::write(&path, "base").unwrap();
+    let host = BackendHost::start().unwrap();
+    let first = host.documents();
+    let opened = first.open(&path).unwrap();
+    assert!(opened.owner.is_none());
+    assert!(!opened.is_owner);
+
+    let claimed = first.claim(&opened.id).unwrap();
+    assert!(claimed.is_owner);
+    let owner = claimed.owner.clone().expect("claim sets an owner");
+    assert_eq!(claimed.document.revision(), opened.document.revision());
+
+    let second = host.documents();
+    let attached = second.attach(&opened.id).unwrap();
+    assert_eq!(attached.owner, Some(owner));
+    assert!(!attached.is_owner);
+    assert!(attached.is_read_only());
+
+    let stolen = second.claim(&opened.id).unwrap();
+    assert!(stolen.is_owner);
+    assert!(!first.attach(&opened.id).unwrap().is_owner);
+
+    let released = second.release(&opened.id).unwrap();
+    assert!(released.owner.is_none());
+    assert!(!released.is_read_only());
+}
+
+#[test]
 fn dirty_document_can_reconnect_after_the_entire_workspace_directory_is_deleted() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("draft.md");

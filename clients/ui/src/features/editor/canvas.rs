@@ -367,7 +367,7 @@ impl Editor {
         kind: input::InputKind,
         cx: &mut Context<Self>,
     ) {
-        if !self.enabled || self.document_id.is_none() {
+        if !self.enabled || self.document_id.is_none() || self.is_read_only() {
             return;
         }
         let result = input::InputEdit::new(
