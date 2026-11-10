@@ -180,6 +180,13 @@ pub struct TerminalSession {
     owners: std::collections::HashMap<String, Option<String>>,
 }
 
+/// 入力 batch の適用結果。`applied` 件は受理済みなので再送してはいけない。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalInputFailure {
+    pub message: String,
+    pub applied: usize,
+}
+
 impl TerminalSession {
     pub fn new(backend: Arc<dyn TerminalBackend>) -> Self {
         Self {
@@ -299,6 +306,26 @@ impl TerminalSession {
         input: TerminalInput,
     ) -> Result<(), TerminalError> {
         self.backend.input(id, &input)
+    }
+
+    /// 端末の入力 batch を順序どおりに送る。
+    ///
+    /// 失敗した入力は未受理として扱い、それ以前に受理した件数を返す。
+    /// 呼び出し側は `applied` 以降だけを再送し、受理済み入力を重複させない。
+    pub fn input_batch(
+        &self,
+        id: &TerminalId,
+        inputs: &[TerminalInput],
+    ) -> Result<(), TerminalInputFailure> {
+        for (applied, input) in inputs.iter().enumerate() {
+            if let Err(error) = self.backend.input(id, input) {
+                return Err(TerminalInputFailure {
+                    message: error.to_string(),
+                    applied,
+                });
+            }
+        }
+        Ok(())
     }
 
     pub fn resize(
@@ -2904,6 +2931,62 @@ mod tests {
         );
         assert_eq!(session.terminals()[0].revision, 7);
         assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
+    }
+
+    #[test]
+    fn terminal_input_batch_preserves_order_and_reports_applied_on_failure() {
+        struct Recording {
+            inputs: Mutex<Vec<TerminalInput>>,
+            fail_at: Mutex<Option<usize>>,
+        }
+        impl TerminalBackend for Recording {
+            fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+                Ok(TerminalId::new("input-terminal"))
+            }
+            fn input(&self, _: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
+                let mut inputs = self.inputs.lock().unwrap();
+                if *self.fail_at.lock().unwrap() == Some(inputs.len()) {
+                    return Err(TerminalError::new("input rejected"));
+                }
+                inputs.push(input.clone());
+                Ok(())
+            }
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+                Ok(())
+            }
+            fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+                Ok(Vec::new())
+            }
+            fn terminate(&self, _: &TerminalId) -> Result<(), TerminalError> {
+                Ok(())
+            }
+        }
+
+        let backend = Arc::new(Recording {
+            inputs: Mutex::new(Vec::new()),
+            fail_at: Mutex::new(None),
+        });
+        let session = TerminalSession::new(backend.clone());
+        let id = TerminalId::new("terminal");
+        let batch = vec![
+            TerminalInput::Text("ab".into()),
+            TerminalInput::Key(terminal::TerminalKeyEvent {
+                key: terminal::TerminalKey::Enter,
+                modifiers: terminal::TerminalModifiers::default(),
+            }),
+            TerminalInput::Paste("pasted".into()),
+        ];
+
+        *backend.fail_at.lock().unwrap() = Some(1);
+        let failure = session.input_batch(&id, &batch).unwrap_err();
+        assert_eq!(failure.message, "input rejected");
+        assert_eq!(failure.applied, 1);
+        assert_eq!(*backend.inputs.lock().unwrap(), vec![batch[0].clone()]);
+
+        // 受理済みの Text を再送せず、失敗した Key 以降だけを順序どおり送る。
+        *backend.fail_at.lock().unwrap() = None;
+        session.input_batch(&id, &batch[failure.applied..]).unwrap();
+        assert_eq!(*backend.inputs.lock().unwrap(), batch);
     }
 
     #[test]
