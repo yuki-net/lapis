@@ -38,7 +38,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 - `sync_client.rs` は機能workerから呼び出し、再接続では保存済みの証明書・credentialを検証し、Workspace接続とsnapshot取得でattachmentを復元します。送信済み更新要求は自動再送しません。期限を過ぎた待機要求は実行しません。
 - Workspace を指定していない profile は、認証で Workspace を要求せず、Host が返す Workspace へ接続します。Host が返さない場合は resolver の primary Workspace、最後に `workspace.list` の先頭を使います。
 - Host は認証応答で永続化した `host_id` を返せます。Web / Desktop は保存済み credential の `host_id` と照合し、別 Host への誤接続を区別したエラーにします。
-- Web は接続後に Host ID と Workspace ID を表示し、`workspace.switch` が付与されていれば Workspace を切り替えられます。切替は同じ credential で再接続し、Workspace ごとに credential を複製しません。
+- Web と Desktop は接続後に Host 名/ID と Workspace 名/ID を表示します。Web は `workspace.switch` が付与されていれば Workspace を切り替えられます。切替は同じ credential で再接続し、Workspace ごとに credential を複製しません。
 - イベント購読のqueue上限を超えた場合は購読を切断し、snapshotから回復します。
 
 認証拒否、protocol不一致、証明書不一致を単なる一時切断として自動的に信頼し直しません。

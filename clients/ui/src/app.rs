@@ -59,8 +59,16 @@ pub(crate) const EXTRA_COMMANDS: &[&str] = &[
     crate::features::id::COMMAND_TOGGLE_DEVTOOL,
 ];
 
+/// 接続中の Host を UI に示すための表示情報。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConnectionIdentity {
+    pub host_name: Option<String>,
+    pub host_id: Option<String>,
+}
+
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
+    pub(crate) connection: Option<ConnectionIdentity>,
     pub(crate) task: TaskSession,
     pub(crate) git: GitSession,
     pub(crate) lsp: LspSession,
@@ -83,6 +91,7 @@ impl DesktopServices {
     ) -> Self {
         Self {
             connect_host: None,
+            connection: None,
             task,
             git,
             lsp,
@@ -92,6 +101,10 @@ impl DesktopServices {
             settings,
             workbench_watch: None,
         }
+    }
+    pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
+        self.connection = Some(connection);
+        self
     }
     pub fn with_host_connector(
         mut self,
@@ -135,6 +148,7 @@ pub(crate) fn init_release_tracing() {
 #[derive(Clone)]
 pub(crate) struct WindowFactory {
     connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
+    connection: Option<ConnectionIdentity>,
     repository: std::sync::Arc<dyn workspace::WorkspaceRepository>,
     dialog: std::sync::Arc<dyn desktop_client::WorkspaceDialog>,
     state: std::sync::Arc<dyn desktop_client::WorkspaceStateRepository>,
@@ -154,6 +168,7 @@ impl WindowFactory {
     pub(crate) fn new(editor: &EditorSession, services: &DesktopServices) -> Self {
         Self {
             connect_host: services.connect_host.clone(),
+            connection: services.connection.clone(),
             repository: editor.repository(),
             dialog: editor.file_dialog(),
             state: editor.state_repository(),
@@ -181,6 +196,7 @@ impl WindowFactory {
             self.settings,
         );
         services.connect_host = self.connect_host;
+        services.connection = self.connection;
         (editor, services)
     }
     pub(crate) fn open_host(self) -> Result<(), String> {

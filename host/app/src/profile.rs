@@ -30,6 +30,22 @@ impl Drop for HostInvitation {
     }
 }
 
+/// Desktop の接続画面へ出す Host の表示情報。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostProfileInfo {
+    pub name: String,
+    pub host_id: Option<String>,
+}
+
+/// 保存済み profile から Host の表示情報を読む。
+pub fn host_profile_info(path: &Path) -> Result<HostProfileInfo, Error> {
+    let record = read_profile(path)?;
+    Ok(HostProfileInfo {
+        name: record.label.clone(),
+        host_id: record.host_id.clone(),
+    })
+}
+
 pub fn write_invitation(path: &Path, invitation: &HostInvitation) -> Result<(), Error> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
@@ -193,6 +209,7 @@ pub fn open_host_file(
             address: config.address,
             server_name: config.server_name.clone(),
             label: invitation.name.clone(),
+            host_id: config.host_id.clone(),
             certificate: config.certificate.to_vec(),
             workspace: config
                 .workspace_id
@@ -318,6 +335,7 @@ pub struct OidcProfile {
     pub certificate: Vec<u8>,
     pub workspace_id: String,
     pub name: String,
+    pub host_id: Option<String>,
     pub client: String,
     /// Host が検証した ID Token の `sub`。保存先をアカウント別に分ける。
     pub account: String,
@@ -341,6 +359,7 @@ pub fn write_oidc_profile(
         certificate,
         workspace_id,
         name,
+        host_id,
         client,
         account,
         id_token,
@@ -375,6 +394,7 @@ pub fn write_oidc_profile(
         address,
         server_name,
         label: name,
+        host_id,
         certificate,
         workspace: workspace_id,
         client,
@@ -404,6 +424,7 @@ mod tests {
                 certificate: vec![1, 2, 3],
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
+                host_id: None,
                 client: "desktop-1".to_owned(),
                 account: "alice".to_owned(),
                 id_token: "id-token".to_owned(),
@@ -458,6 +479,7 @@ mod tests {
             address,
             server_name: "lapis-host".to_owned(),
             label: "Remote".to_owned(),
+            host_id: None,
             certificate: certificate.clone(),
             workspace: "workspace-1".to_owned(),
             client: "desktop-1".to_owned(),
@@ -474,6 +496,7 @@ mod tests {
                 certificate,
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
+                host_id: None,
                 client: "desktop-1".to_owned(),
                 account: "alice".to_owned(),
                 id_token: "id-token".to_owned(),
@@ -498,6 +521,7 @@ mod tests {
                     certificate: vec![1, 2, 3],
                     workspace_id: "workspace-1".to_owned(),
                     name: "Remote".to_owned(),
+                    host_id: None,
                     client: "desktop-1".to_owned(),
                     account: account.to_owned(),
                     id_token: id_token.to_owned(),
@@ -527,6 +551,7 @@ mod tests {
                 certificate: Vec::new(),
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
+                host_id: None,
                 client: "desktop-1".to_owned(),
                 account: String::new(),
                 id_token: "id-token".to_owned(),
@@ -549,6 +574,7 @@ mod tests {
                 certificate: Vec::new(),
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
+                host_id: None,
                 client: "desktop-1".to_owned(),
                 account: "alice".to_owned(),
                 id_token: "a".repeat(200 * 1024),
@@ -595,6 +621,7 @@ mod tests {
                 certificate: Vec::new(),
                 workspace_id: "workspace-1".to_owned(),
                 name: "Remote".to_owned(),
+                host_id: None,
                 client: "desktop-1".to_owned(),
                 account: "alice".to_owned(),
                 id_token: String::new(),

@@ -85,6 +85,8 @@ pub(crate) struct ShellPresentation {
     pub(crate) documents: Vec<desktop_client::DocumentTab>,
     pub(crate) root: Option<std::path::PathBuf>,
     pub(crate) workspace_name: String,
+    pub(crate) workspace_id: Option<String>,
+    pub(crate) connection: Option<crate::app::ConnectionIdentity>,
     pub(crate) active: Option<editor_core::DocumentId>,
     pub(crate) cursor: (usize, usize),
     pub(crate) line_ending: &'static str,

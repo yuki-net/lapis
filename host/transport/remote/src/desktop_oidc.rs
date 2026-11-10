@@ -45,6 +45,8 @@ pub struct DesktopOidcSession {
     pub subject: String,
     /// Host が認証時に選んだ Workspace。未指定接続ではこれを使う。
     pub workspace_id: Option<WorkspaceId>,
+    /// Host の永続 ID。UI 表示と保存済み profile に使う。
+    pub host_id: Option<String>,
 }
 
 /// OIDC ログインを実行し、Host が検証した ID Token と `sub` を返す。
@@ -96,11 +98,13 @@ pub fn login_desktop_oidc(request: DesktopOidcLogin) -> Result<DesktopOidcSessio
     );
     let hello = runtime.block_on(config.verify())?;
     let workspace_id = hello.workspace_id.clone();
+    let host_id = hello.host_id.clone();
     let subject = hello.subject.ok_or("Host が OIDC subject を返しません")?;
     Ok(DesktopOidcSession {
         id_token,
         subject,
         workspace_id,
+        host_id,
     })
 }
 

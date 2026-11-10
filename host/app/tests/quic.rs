@@ -28,6 +28,7 @@ impl Fixture {
             certificate: self.cert.clone(),
             hello: hello(id),
             workspace_id: Some(self.workspace.clone()),
+            host_id: paired.hello.host_id.clone(),
             auth: QuicAuth::Credential(Arc::new(CredentialHandle::from_parts(
                 paired.credential_id().unwrap(),
                 &mut paired.take_secret().unwrap(),

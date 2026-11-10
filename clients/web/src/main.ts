@@ -105,8 +105,11 @@ async function launch(
 }
 
 type ConnectionInfo = {
+  host_name: string;
   host_id?: string | null;
+  workspace_name: string;
   workspace_id: string;
+  identity: string;
   can_switch: boolean;
   workspaces: Array<{ id: string; name: string }>;
 };
@@ -129,7 +132,7 @@ function showConnectionInfo(url: string | null) {
   element.replaceChildren();
   const identity = document.createElement("span");
   identity.className = "connection-identity";
-  identity.textContent = `Host ${info.host_id ?? "未永続化"} / Workspace ${info.workspace_id}`;
+  identity.textContent = info.identity;
   element.append(identity);
 
   if (info.can_switch && info.workspaces.length > 0) {
@@ -263,7 +266,7 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
           value="${escapeHtml(defaultUrl)}" />
       </label>
       <label>
-        <span>Workspace ID <small>（空欄なら Host が選択）</small></span>
+        <span>Workspace ID <small>（初回接続では primary Workspace を取得）</small></span>
         <input name="workspace" type="text" autocomplete="off"
           placeholder="workspace-..."
           value="${escapeHtml(defaultWorkspace)}" />

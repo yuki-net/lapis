@@ -1,4 +1,4 @@
-use crate::{BackendHost, protected::protect};
+use crate::{BackendHost, HostProfileInfo, protected::protect};
 use client_api::*;
 use remote::{
     AuthConfig, AuthPolicy, CredentialHandle, CredentialId, CredentialLifetime, PairingLifetime,
@@ -31,6 +31,8 @@ pub(super) struct Record {
     pub(super) address: std::net::SocketAddr,
     pub(super) server_name: String,
     pub(super) label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) host_id: Option<String>,
     pub(super) certificate: Vec<u8>,
     pub(super) workspace: String,
     pub(super) client: String,
@@ -80,6 +82,7 @@ impl Record {
             } else {
                 Some(WorkspaceId::try_new(&self.workspace)?)
             },
+            host_id: self.host_id.clone(),
             auth,
         })
     }
@@ -131,6 +134,15 @@ impl LocalHosts {
             .cloned()
             .ok_or_else(|| "Workspaceが登録されていません".into())
     }
+    /// 保存済みの Local Host 情報から、UI に表示する Host 名と ID を返す。
+    pub(crate) fn info(&self) -> Option<HostProfileInfo> {
+        let record =
+            read_record(&self.directory.join(format!("{LOCAL_KEY}.host")), LOCAL_KEY).ok()?;
+        Some(HostProfileInfo {
+            name: record.label.clone(),
+            host_id: record.host_id.clone(),
+        })
+    }
     pub(crate) fn config(&self, root: &Path) -> Result<QuicConnectionConfig, Error> {
         let mut configs = self
             .configs
@@ -170,15 +182,7 @@ impl LocalHosts {
         lock.lock()?;
         let record_path = self.directory.join(format!("{key}.host"));
         if record_path.exists() {
-            let mut bytes = Zeroizing::new(Vec::new());
-            fs::File::open(&record_path)?
-                .take(128 * 1024 + 1)
-                .read_to_end(&mut bytes)?;
-            if bytes.len() > 128 * 1024 {
-                return Err("Host情報の上限を超えています".into());
-            }
-            let plaintext = protect(&bytes, key.as_bytes(), true)?;
-            let record: Record = serde_json::from_slice(&plaintext)?;
+            let record = read_record(&record_path, key)?;
             if record.key != key || !record.address.ip().is_loopback() {
                 return Err("Host情報がWorkspaceと一致しません".into());
             }
@@ -435,6 +439,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     let root = root.canonicalize()?;
     let host = BackendHost::start_with_state_directory(directory.to_owned())?;
     let workspace = host.register_workspace(&root)?;
+    let host_id = host.host_id();
     let identity = crate::identity::HostIdentity::load_or_create(Some(directory))?;
     let tls = tls13_server_config(vec![identity.certificate.clone()], identity.key.clone_key())?;
     let owner_capabilities =
@@ -504,6 +509,7 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .into_owned(),
+                host_id: host_id.clone(),
                 certificate: identity.certificate.as_ref().to_vec(),
                 workspace: workspace.as_str().to_owned(),
                 client,
@@ -519,6 +525,18 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
             server.shutdown().await;
             Ok::<_, Error>(())
         })
+}
+
+fn read_record(path: &Path, key: &str) -> Result<Record, Error> {
+    let mut bytes = Zeroizing::new(Vec::new());
+    fs::File::open(path)?
+        .take(128 * 1024 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > 128 * 1024 {
+        return Err("Host情報の上限を超えています".into());
+    }
+    let plaintext = protect(&bytes, key.as_bytes(), true)?;
+    Ok(serde_json::from_slice(&plaintext)?)
 }
 
 fn parse_bootstrap(line: &str) -> Result<Record, Error> {
@@ -557,6 +575,7 @@ mod tests {
             address: "127.0.0.1:1".parse().unwrap(),
             server_name: "lapis-host".to_owned(),
             label: "test".to_owned(),
+            host_id: None,
             certificate: Vec::new(),
             workspace: "test".to_owned(),
             client: "test".to_owned(),

@@ -41,6 +41,8 @@ pub(super) struct Startup {
     pub root: Option<PathBuf>,
     pub directory: PathBuf,
     pub connector_directory: PathBuf,
+    /// Remote Host の表示情報。Local Host は接続後に解決する。
+    pub connection: Option<host::HostProfileInfo>,
 }
 impl Startup {
     pub fn open(arguments: &[OsString]) -> Result<Option<Self>, Error> {
@@ -111,12 +113,14 @@ impl Startup {
                             certificate: invitation.certificate.clone(),
                             workspace_id,
                             name: invitation.name.clone(),
+                            host_id: session.host_id,
                             client,
                             account: session.subject,
                             id_token: session.id_token.to_string(),
                         },
                     )?;
                     eprintln!("OIDCでHostに接続しました: {}", profile.display());
+                    let connection = host::host_profile_info(&profile)?;
                     let connector_directory = directory.clone();
                     let directory = directory
                         .join("views")
@@ -126,11 +130,13 @@ impl Startup {
                         root: Some(root),
                         directory,
                         connector_directory,
+                        connection: Some(connection),
                     }));
                 }
             }
             let (backend, root, profile) = host::open_host_file(&path, &directory.join("hosts"))?;
             eprintln!("Host接続profile: {}", profile.display());
+            let connection = host::host_profile_info(&profile)?;
             let connector_directory = directory.clone();
             let directory = directory
                 .join("views")
@@ -140,6 +146,7 @@ impl Startup {
                 root: Some(root),
                 directory,
                 connector_directory,
+                connection: Some(connection),
             }))
         } else {
             let hosts_directory = local_hosts_directory(arguments, &directory)?;
@@ -152,6 +159,7 @@ impl Startup {
                 root: None,
                 connector_directory: directory.clone(),
                 directory,
+                connection: None,
             }))
         }
     }
