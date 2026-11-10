@@ -153,6 +153,7 @@ pub trait WorkspaceRepository: Send + Sync {
     /// Host が保持する Workspace の identity を返す。
     ///
     /// 実装がない接続先では `None`。呼び出し側は root のディレクトリ名へ退避する。
+    /// `Err` は取得失敗であり、root から名前を推測して表示してはならない。
     fn identity(&self, root: &Path) -> Result<Option<WorkspaceIdentity>, WorkspaceError> {
         let _ = root;
         Ok(None)

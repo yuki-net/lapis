@@ -1033,21 +1033,26 @@ impl std::error::Error for DocumentCloseFailure {}
 
 /// Host の identity から Workspace の表示名を決める。
 ///
-/// identity が使えない接続先だけ root のディレクトリ名へ退避する。
-fn workspace_display_name(identity: Option<&WorkspaceIdentity>, root: &Path) -> String {
-    identity
-        .map(WorkspaceIdentity::display_name)
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
+/// identity を取得できなかった場合は `None` を返す。Remote の root は Host の
+/// 実ディレクトリではなく profile の label から作る仮想パスなので、取得失敗時に
+/// root から名前を推測すると接続先と無関係な名前を表示してしまう。
+fn workspace_display_name(
+    identity: Result<Option<WorkspaceIdentity>, WorkspaceError>,
+    root: &Path,
+) -> Option<String> {
+    match identity {
+        Ok(Some(identity)) => Some(identity.display_name().trim().to_owned()),
+        // identity を返さない接続先だけ root のディレクトリ名へ退避する。
+        Ok(None) => Some(
             root.file_name()
                 .and_then(|name| name.to_str())
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "Workspace".to_owned())
+                .unwrap_or_default()
+                .to_owned(),
+        ),
+        Err(_) => None,
+    }
 }
 
 /// UIからDocumentと外部I/Oを分離する、複数文書Workspace編集セッション。
@@ -1475,9 +1480,15 @@ impl EditorSession {
             .workspace(&root)
             .map_err(|error| WorkspaceError::new(error.to_string()))?;
         let tree = self.repository.list_tree(&root)?;
-        let identity = self.repository.identity(&root).ok().flatten();
+        let identity = self.repository.identity(&root);
         self.detach_documents();
-        self.workspace_name = workspace_display_name(identity.as_ref(), &root);
+        if self.workspace_root.as_deref() != Some(root.as_path()) {
+            // 別の Workspace へ移るときは前の名前を引き継がない。
+            self.workspace_name.clear();
+        }
+        if let Some(name) = workspace_display_name(identity, &root) {
+            self.workspace_name = name;
+        }
         self.workspace_root = Some(root);
         self.workspace_restore_root = None;
         self.workspace_id = Some(workspace_id);
@@ -1962,7 +1973,7 @@ impl EditorSession {
                 .workspace(&root)
                 .map_err(|error| WorkspaceError::new(error.to_string()))
                 .and_then(|id| {
-                    let identity = self.repository.identity(&root).ok().flatten();
+                    let identity = self.repository.identity(&root);
                     self.repository
                         .list_tree(&root)
                         .map(|tree| (id, tree, identity))
@@ -1970,7 +1981,8 @@ impl EditorSession {
             match workspace {
                 Ok((id, tree, identity)) => {
                     self.workspace_id = Some(id);
-                    self.workspace_name = workspace_display_name(identity.as_ref(), &root);
+                    self.workspace_name =
+                        workspace_display_name(identity, &root).unwrap_or_default();
                     self.file_tree = tree;
                     self.workspace_root = Some(root);
                 }
@@ -2724,6 +2736,123 @@ mod tests {
             state,
             documents,
         )
+    }
+
+    /// Web / Remote の接続経路を模す。表示名は Host の connect 応答だけで決まり、
+    /// 切替候補の一覧を持たない。
+    #[derive(Default)]
+    struct IdentityRepository {
+        identity: Mutex<Option<WorkspaceIdentity>>,
+        unavailable: std::sync::atomic::AtomicBool,
+    }
+
+    impl IdentityRepository {
+        fn with_identity(identity: WorkspaceIdentity) -> Self {
+            Self {
+                identity: Mutex::new(Some(identity)),
+                unavailable: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        fn fail(&self, fail: bool) {
+            self.unavailable
+                .store(fail, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl WorkspaceRepository for IdentityRepository {
+        fn create_directory(&self, _: &Path, _: &str) -> Result<(), WorkspaceError> {
+            Err(WorkspaceError::new("Unsupported"))
+        }
+
+        fn list_tree(&self, _: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
+            Ok(Vec::new())
+        }
+
+        fn identity(&self, _: &Path) -> Result<Option<WorkspaceIdentity>, WorkspaceError> {
+            if self.unavailable.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(WorkspaceError::new("workspace.connect failed"));
+            }
+            Ok(self.identity.lock().unwrap().clone())
+        }
+    }
+
+    fn identity_session(repository: Arc<IdentityRepository>) -> EditorSession {
+        EditorSession::new(
+            repository,
+            Arc::new(FixedDialog {
+                workspace: None,
+                save: None,
+            }),
+            Arc::new(MemoryState::default()),
+            Arc::new(MemoryDocuments::new(Arc::new(MemoryRepository::default()))),
+        )
+    }
+
+    fn repo_identity(name: &str, root_name: &str) -> WorkspaceIdentity {
+        WorkspaceIdentity {
+            id: WorkspaceId::new("workspace-1"),
+            name: name.to_owned(),
+            root_name: root_name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn connected_workspace_name_comes_from_the_host_identity_without_switch_candidates() {
+        let repository = Arc::new(IdentityRepository::with_identity(repo_identity(
+            "repo", "checkout",
+        )));
+        let mut editor = identity_session(repository);
+        // Remote の root は profile の label から作る仮想パスで、切替候補は空。
+        let root = PathBuf::from("remote/lapis-checkout");
+
+        editor.open_workspace(root).unwrap();
+
+        assert_eq!(editor.workspace_name(), "repo");
+        assert_eq!(
+            workspace_label(
+                Some(editor.workspace_name()),
+                editor.workspace_id().map(WorkspaceId::as_str)
+            ),
+            "Workspace repo (test-workspace)"
+        );
+    }
+
+    #[test]
+    fn identity_failure_does_not_replace_the_workspace_name_with_the_root_name() {
+        let repository = Arc::new(IdentityRepository::with_identity(repo_identity(
+            "repo", "checkout",
+        )));
+        repository.fail(true);
+        let mut editor = identity_session(repository);
+
+        editor
+            .open_workspace(PathBuf::from("remote/lapis-checkout"))
+            .unwrap();
+
+        assert_eq!(editor.workspace_name(), "");
+        assert_eq!(
+            workspace_label(
+                Some(editor.workspace_name()),
+                editor.workspace_id().map(WorkspaceId::as_str)
+            ),
+            "Workspace test-workspace"
+        );
+    }
+
+    #[test]
+    fn identity_failure_keeps_the_name_already_known_for_the_workspace() {
+        let repository = Arc::new(IdentityRepository::with_identity(repo_identity(
+            "repo", "checkout",
+        )));
+        let mut editor = identity_session(repository.clone());
+        let root = PathBuf::from("remote/lapis-checkout");
+        editor.open_workspace(root.clone()).unwrap();
+        repository.fail(true);
+
+        editor.open_workspace(root).unwrap();
+
+        assert_eq!(editor.workspace_name(), "repo");
     }
     #[test]
     fn new_empty_starts_without_workspace_or_document() {
