@@ -138,19 +138,54 @@ function normalizeLabel(value: string): string {
   return value.trim().normalize("NFC").toLocaleLowerCase();
 }
 
+function decodePathSegment(part: string): string {
+  let value: string;
+  try {
+    value = decodeURIComponent(part);
+  } catch {
+    return part;
+  }
+  if (!value.startsWith("~")) {
+    return value;
+  }
+  const hex = value.slice(1);
+  if (hex === "") {
+    return "";
+  }
+  if (hex.length % 2 !== 0 || !/^[0-9a-f]+$/i.test(hex)) {
+    return value;
+  }
+  const pairs = hex.match(/../g);
+  if (pairs === null) {
+    return value;
+  }
+  try {
+    return new TextDecoder().decode(
+      new Uint8Array(pairs.map((pair) => Number.parseInt(pair, 16))),
+    );
+  } catch {
+    return value;
+  }
+}
+
+function encodePathSegment(segment: string): string {
+  const value = segment.trim();
+  // 空・dot-only・`~` 始まりは、URL の正規化で別のパスにならないよう hex 退避する。
+  if (value !== "" && value !== "." && value !== ".." && !value.startsWith("~")) {
+    return encodeURIComponent(value);
+  }
+  const bytes = new TextEncoder().encode(value);
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `~${hex}`;
+}
+
 function splitPath(): string[] {
   const parts = location.pathname.split("/").filter((part) => part !== "");
-  return parts.map((part) => {
-    try {
-      return decodeURIComponent(part);
-    } catch {
-      return part;
-    }
-  });
+  return parts.map(decodePathSegment);
 }
 
 function pathFromSegments(segments: string[]): string {
-  return `/${segments.map((segment) => encodeURIComponent(segment)).join("/")}`;
+  return `/${segments.map(encodePathSegment).join("/")}`;
 }
 
 function pathFromCandidate(candidate: Candidate): string {
@@ -460,16 +495,27 @@ function setTaskFragment(taskId: string | null) {
 
 function stashTaskFragment(taskId: string | null) {
   if (taskId !== null) {
-    writeSession(STORAGE.pendingFragment, taskId);
+    writeSession(
+      STORAGE.pendingFragment,
+      JSON.stringify({ path: normalizePathKey(location.pathname), taskId }),
+    );
   }
 }
 
 function takeStashedTaskFragment(): string | null {
   const value = readSession(STORAGE.pendingFragment);
-  if (value !== null) {
-    removeSession(STORAGE.pendingFragment);
+  if (value === null) {
+    return null;
   }
-  return value;
+  removeSession(STORAGE.pendingFragment);
+  try {
+    const saved = JSON.parse(value) as { path?: unknown; taskId?: unknown };
+    return saved.path === normalizePathKey(location.pathname) && typeof saved.taskId === "string"
+      ? saved.taskId
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function clearStashedTaskFragment() {
