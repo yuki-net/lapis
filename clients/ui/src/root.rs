@@ -1,5 +1,5 @@
 use crate::{
-    app::{DesktopServices, InitialView},
+    app::{ConnectionIdentity, DesktopServices, InitialView},
     client_adapter::{ClientSnapshot, ClientWorker, DocumentClient, EditChain, PersistedView},
     commands::UiCommand,
     extension_ui::{ViewId, ZonePosition},
@@ -105,6 +105,7 @@ pub(crate) struct DesktopRoot {
     task_context_gate: crate::client_adapter::ResponseGate,
     task_context_resolution: TaskContextResolution,
     task_context: Option<(editor_core::ConversationId, Option<std::path::PathBuf>)>,
+    connection: Option<ConnectionIdentity>,
 }
 
 impl DesktopRoot {
@@ -128,6 +129,7 @@ impl DesktopRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
+        let connection = services.connection.clone();
         #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
         #[cfg(not(target_family = "wasm"))]
@@ -573,6 +575,7 @@ impl DesktopRoot {
             task_context: None,
             task_context_gate: Default::default(),
             task_context_resolution: Default::default(),
+            connection,
         }
     }
 
@@ -719,6 +722,11 @@ impl DesktopRoot {
             active: snapshot.active.clone(),
             root: snapshot.root.clone(),
             workspace_name: snapshot.workspace_name.clone(),
+            workspace_id: snapshot
+                .workspace
+                .as_ref()
+                .map(|workspace| workspace.as_str().to_owned()),
+            connection: self.connection.clone(),
             cursor: editor.cursor_line_column(),
             line_ending,
             encoding: editor.document().encoding(),

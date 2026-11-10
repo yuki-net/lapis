@@ -90,7 +90,7 @@ pub async fn start(
 fn start_without_host(backend_preference: &str) -> Result<Option<String>, JsValue> {
     if !demo_requested() {
         return Err(JsValue::from_str(
-            "Host URL を指定してください。Workspace は空欄でも Host が選択します。デモは ?demo=1 で起動できます。",
+            "Host URL を指定してください。Workspace ID を省略した場合は接続時に primary Workspace を取得します。デモは ?demo=1 で起動できます。",
         ));
     }
     start_prototype(backend_preference).map_err(|error| JsValue::from_str(&error))?;

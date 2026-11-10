@@ -73,6 +73,7 @@ thread_local! {
 
 struct BackendState {
     workspace: WorkspaceId,
+    host_name: String,
     host_id: Option<String>,
     can_switch: bool,
     workspaces: Vec<WorkspaceSummary>,
@@ -84,8 +85,12 @@ struct BackendState {
 /// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
 #[derive(serde::Serialize)]
 pub struct ConnectionInfo {
+    pub host_name: String,
     pub host_id: Option<String>,
+    pub workspace_name: String,
     pub workspace_id: String,
+    /// Web と Desktop で共通の表示文言。
+    pub identity: String,
     pub can_switch: bool,
     pub workspaces: Vec<WorkspaceChoice>,
 }
@@ -108,6 +113,7 @@ pub struct HostConfig {
 
 /// Hostへ接続し、初期状態を取得してバックエンドを設置する。pairing時はcredentialを返す。
 pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
+    let host_name = crate::host_name_from_url(&config.url);
     let requested_workspace = if config.workspace.trim().is_empty() {
         None
     } else {
@@ -230,6 +236,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             workspace,
+            host_name,
             host_id,
             can_switch,
             workspaces,
@@ -260,9 +267,26 @@ pub fn connection_info() -> Option<ConnectionInfo> {
     BACKEND.with(|backend| {
         let backend = backend.borrow();
         let state = backend.as_ref()?;
+        let workspace_id = state.workspace.as_str().to_owned();
+        let workspace_name = state
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.workspace_id.as_str() == workspace_id.as_str())
+            .map(|workspace| workspace.name.clone())
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| workspace_id.clone());
+        let identity = crate::connection_label(
+            Some(&state.host_name),
+            state.host_id.as_deref(),
+            Some(&workspace_name),
+            Some(&workspace_id),
+        );
         Some(ConnectionInfo {
+            host_name: state.host_name.clone(),
             host_id: state.host_id.clone(),
-            workspace_id: state.workspace.as_str().to_owned(),
+            workspace_name,
+            workspace_id,
+            identity,
             can_switch: state.can_switch,
             workspaces: state
                 .workspaces

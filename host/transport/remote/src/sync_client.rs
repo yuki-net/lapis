@@ -31,6 +31,8 @@ pub struct QuicConnectionConfig {
     pub hello: HelloRequest,
     /// 接続先 Workspace。None は認証後に Host の選択へ従う。
     pub workspace_id: Option<WorkspaceId>,
+    /// 接続先 Host の永続 ID。認証応答または保存済み profile から得る。
+    pub host_id: Option<String>,
     pub auth: QuicAuth,
 }
 
@@ -63,6 +65,7 @@ impl QuicConnectionConfig {
         }
         // token に結び付いた Workspace を Host の応答から採用する。
         let workspace_id = paired.hello.workspace_id.clone().or(workspace_id);
+        let host_id = paired.hello.host_id.clone();
         let credential = Arc::new(CredentialHandle::from_parts(
             paired.credential_id()?,
             &mut paired.take_secret()?,
@@ -73,6 +76,7 @@ impl QuicConnectionConfig {
             certificate,
             hello,
             workspace_id,
+            host_id,
             auth: QuicAuth::Credential(credential),
         })
     }
@@ -92,6 +96,7 @@ impl QuicConnectionConfig {
             certificate,
             hello,
             workspace_id,
+            host_id: None,
             auth: QuicAuth::Oidc(Arc::new(Zeroizing::new(id_token))),
         }
     }

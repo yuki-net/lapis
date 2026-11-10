@@ -89,14 +89,35 @@ impl Shell {
             true,
             false,
         );
-        let mut entries = vec![MenuEntry::new(open, cx, |row| {
+        let mut entries = Vec::new();
+        if self.session.connection.is_some() || self.session.workspace_id.is_some() {
+            let connection = self.session.connection.as_ref();
+            let label = desktop_client::connection_label(
+                connection.and_then(|connection| connection.host_name.as_deref()),
+                connection.and_then(|connection| connection.host_id.as_deref()),
+                Some(self.session.workspace_name()),
+                self.session.workspace_id.as_deref(),
+            );
+            let identity = spec(
+                "workspace-connection-info".into(),
+                label,
+                Some(IconName::Plug),
+                false,
+                false,
+            );
+            entries.push(MenuEntry::new(identity, cx, |row| {
+                row.debug_selector(|| "workspace-menu-connection".into())
+                    .into_any_element()
+            }));
+        }
+        entries.push(MenuEntry::new(open, cx, |row| {
             row.debug_selector(|| "workspace-menu-open".into())
                 .on_click(cx.listener(|this, _, window, cx| {
                     this.close_workspace_menu(cx);
                     this.open_project(window, cx);
                 }))
                 .into_any_element()
-        })];
+        }));
         let clone = spec(
             "workspace-clone".into(),
             "Git からクローン…".into(),

@@ -11,8 +11,8 @@ mod protected;
 pub use local::run_managed_host;
 pub use oidc::{HostOidc, configured as oidc_configured, from_env as oidc_from_env};
 pub use profile::{
-    HostInvitation, OidcProfile, open_host_file, read_invitation, write_invitation,
-    write_invitation_replacing, write_oidc_profile,
+    HostInvitation, HostProfileInfo, OidcProfile, host_profile_info, open_host_file,
+    read_invitation, write_invitation, write_invitation_replacing, write_oidc_profile,
 };
 mod document;
 pub use client::BackendClient;

@@ -1,4 +1,4 @@
-use crate::BackendHost;
+use crate::{BackendHost, HostProfileInfo};
 use backend_state::{BackendEventReceiver, BackendServiceError, EmbeddedClient};
 use client_api::{RequestBody, ResponseBody, SessionId, WorkspaceId, WorkspaceRelativePath};
 use remote::{QuicConnection, QuicConnectionConfig};
@@ -109,6 +109,17 @@ impl BackendClient {
                 std::env::current_dir().map_err(|_| BackendServiceError::Unavailable)
             }
             Source::Quic { root, .. } => Ok(root.clone()),
+        }
+    }
+    /// 接続中の Host を UI に表示するための名前と永続 ID。
+    pub fn host_info(&self) -> Option<HostProfileInfo> {
+        match &self.source {
+            Source::Embedded(host) => Some(HostProfileInfo {
+                name: "Local Host".to_owned(),
+                host_id: host.host_id(),
+            }),
+            Source::Local(hosts) => hosts.info(),
+            Source::Quic { .. } => None,
         }
     }
     /// rootはClient内だけの表示上の名前空間。RemoteのOS pathとしては使用しない。

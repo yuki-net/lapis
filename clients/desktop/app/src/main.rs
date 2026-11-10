@@ -43,6 +43,7 @@ fn main() {
     }) else {
         return;
     };
+    let mut host_profile = startup.connection.clone();
     let is_remote = startup.root.is_some();
     let use_loopback = is_remote || arguments.iter().any(|value| value == "--loopback");
     let connection = if is_remote {
@@ -164,6 +165,9 @@ fn main() {
         host.register_workspace(root)
             .expect("Workspace registration must succeed");
     }
+    if host_profile.is_none() {
+        host_profile = host.host_info();
+    }
     let mut task_session = TaskSession::new(host.tasks());
     if let Some(workspace) = session.workspace_id()
         && let Err(error) = task_session.refresh(workspace)
@@ -203,7 +207,18 @@ fn main() {
         show_terminal,
         show_problems: arguments.iter().any(|value| value == "--show-problems"),
     };
-    let desktop_services = desktop_ui::DesktopServices::new(
+    let connection_identity = host_profile
+        .map(|info| desktop_ui::ConnectionIdentity {
+            host_name: Some(info.name),
+            host_id: info.host_id,
+        })
+        .or_else(|| {
+            (!is_remote).then(|| desktop_ui::ConnectionIdentity {
+                host_name: Some("Local Host".to_owned()),
+                host_id: None,
+            })
+        });
+    let mut desktop_services = desktop_ui::DesktopServices::new(
         task_session,
         git_session,
         lsp_session,
@@ -214,6 +229,9 @@ fn main() {
     )
     .with_workbench_watch(workbench_watch)
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
+    if let Some(connection) = connection_identity {
+        desktop_services = desktop_services.with_connection_identity(connection);
+    }
     desktop_ui::run(session, desktop_services, initial_view);
 }
 

@@ -29,9 +29,11 @@ use terminal::{
 use terminal::{TerminalDelta, TerminalRow, TerminalRowUpdate, TerminalScreen};
 use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
 
+mod connection_display;
 mod extensions;
 mod view_state;
 mod workbench_sync;
+pub use connection_display::{connection_label, host_label, host_name_from_url, workspace_label};
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
