@@ -226,9 +226,7 @@ async fn main() -> Result<(), Error> {
     let _ = client_config(certificate)?;
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
     let listen = listener.local_addr()?;
-    let open = workspace_id
-        .as_deref()
-        .map(|workspace| open_url(&options.origin, listen, workspace));
+    let open = open_url(&options.origin);
     let bridge = Bridge {
         endpoint,
         target: options.target,
@@ -237,9 +235,10 @@ async fn main() -> Result<(), Error> {
         oidc: oidc.map(Arc::new),
     };
     eprintln!("web-bridge listening on {listen}");
-    if let Some(open) = open {
-        eprintln!("open {open}");
+    if let Some(workspace) = workspace_id.as_deref() {
+        eprintln!("web-bridge workspace {workspace}");
     }
+    eprintln!("open {open}");
     axum::serve(
         listener,
         Router::new()
@@ -294,12 +293,9 @@ async fn wait_for_connection(path: &std::path::Path) -> Result<Resolved, Error> 
     }
 }
 
-/// ブラウザーで開くURL。Host URLにはbridgeの待受アドレスを渡す。
-fn open_url(origin: &str, listen: SocketAddr, workspace: &str) -> String {
-    format!(
-        "{origin}/?url=ws://{listen}{}&workspace={workspace}",
-        wire::REMOTE_WEBSOCKET_PATH
-    )
+/// ブラウザーで開くURL。接続先や token は URL に載せない。
+fn open_url(origin: &str) -> String {
+    format!("{}/", origin.trim_end_matches('/'))
 }
 
 async fn upgrade(
@@ -537,15 +533,9 @@ mod tests {
     }
 
     #[test]
-    fn open_url_points_at_the_bridge() {
-        assert_eq!(
-            open_url(
-                "http://127.0.0.1:4747",
-                "127.0.0.1:4757".parse().unwrap(),
-                "workspace-1"
-            ),
-            "http://127.0.0.1:4747/?url=ws://127.0.0.1:4757/remote&workspace=workspace-1"
-        );
+    fn open_url_does_not_include_connection_information() {
+        assert_eq!(open_url("http://127.0.0.1:4747"), "http://127.0.0.1:4747/");
+        assert_eq!(open_url("http://127.0.0.1:4747/"), "http://127.0.0.1:4747/");
     }
 
     #[tokio::test]

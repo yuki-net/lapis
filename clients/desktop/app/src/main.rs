@@ -211,11 +211,15 @@ fn main() {
         .map(|info| desktop_ui::ConnectionIdentity {
             host_name: Some(info.name),
             host_id: info.host_id,
+            workspace_name: None,
+            workspace_id: None,
         })
         .or_else(|| {
             (!is_remote).then(|| desktop_ui::ConnectionIdentity {
                 host_name: Some("Local Host".to_owned()),
                 host_id: None,
+                workspace_name: None,
+                workspace_id: None,
             })
         });
     let mut desktop_services = desktop_ui::DesktopServices::new(

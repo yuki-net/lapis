@@ -6,11 +6,12 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 
 ## Host へ接続する
 
-URL と Workspace ID をクエリか localStorage に渡します。OIDC を使う場合はログインフォームから IdP で認証します。OIDC を使わない場合は、初回は pairing token、以降は保存済み credential で接続します。
+接続状態は URL ではなくブラウザーの保存領域（`localStorage` / `sessionStorage`）に置きます。URL は開いている状態だけを表します。
 
-```text
-http://127.0.0.1:4747/?url=ws://127.0.0.1:4757/remote&workspace=WORKSPACE_ID&token=PAIRING_TOKEN
-```
+- `/` は保存済みの Host / Workspace 一覧です。初回は Host URL・Workspace ID・pairing token を入力するフォームが表示されます。
+- `/<host>/<workspace>` はその Workspace を開いた状態です。パスのセグメントは表示用ラベルで、接続先 URL と Workspace ID は保存済みの対応表から引きます。
+- `#/t/<task-id>` は選択する Task です。選択に合わせて `history.replaceState` で更新し、履歴は増やしません。
+- 招待リンクは `#/invite?url=<bridge URL>&workspace=<ID>&token=<token>` の形で token を fragment だけに載せます。fragment はサーバーへ送られません。
 
 Host なしのデモ:
 
@@ -18,7 +19,9 @@ Host なしのデモ:
 http://127.0.0.1:4747/?demo=1
 ```
 
-URL / Workspace が無い場合は、Host URL・Workspace ID・pairing token を入力するフォームが表示されます。Host URL には bridge の既定（`ws://<hostname>:4757/remote`）があらかじめ入ります。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
+ログインフォームの Host URL には bridge の既定（`ws://<hostname>:4757/remote`）があらかじめ入ります。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
+
+旧形式の `?url=` / `?workspace=` / `?token=` は接続に使いません。読み込み時にアドレスバーから削除し、旧形式であることを画面に表示します。
 
 起動手順・ポート・ログインの詳細は [開発時の起動](../../docs/dev.md) を参照してください。ログインフォームの Host URL には **bridge** の WebSocket（`ws://127.0.0.1:4757/remote`）を入力します。Host の QUIC アドレスではありません。
 

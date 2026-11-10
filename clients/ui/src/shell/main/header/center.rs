@@ -11,12 +11,10 @@ impl Shell {
     ) -> impl IntoElement {
         let trigger = header_button(
             "header-workspace",
-            self.session
-                .root
-                .as_deref()
-                .and_then(|root| root.file_name())
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| self.session.workspace_name().to_owned()),
+            desktop_client::short_workspace_label(
+                Some(self.session.workspace_name()),
+                self.session.workspace_id.as_deref(),
+            ),
             cx,
         )
         .debug_selector(|| "workspace-menu-trigger".into())

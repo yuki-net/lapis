@@ -108,6 +108,26 @@ fn demo_requested() -> bool {
         })
 }
 
+/// URL の `#/t/<task-id>` で指定された Task。Web の初期選択にだけ使う。
+fn requested_task() -> Option<editor_core::ConversationId> {
+    let hash = web_sys::window()?.location().hash().ok()?;
+    let id = hash.strip_prefix("#/t/")?;
+    (!id.is_empty()).then(|| editor_core::ConversationId::new(id))
+}
+
+/// 選択中の Task を URL fragment へ反映するようページへ通知する。
+pub(crate) fn notify_task_selected(task: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let init = web_sys::CustomEventInit::new();
+    init.set_detail(&JsValue::from_str(task));
+    if let Ok(event) = web_sys::CustomEvent::new_with_event_init_dict("lapis:task-selected", &init)
+    {
+        let _ = window.dispatch_event(&event);
+    }
+}
+
 fn start_prototype(backend_preference: &str) -> Result<(), String> {
     let backend = Arc::new(crate::web::prototype::PrototypeBackend::new());
     launch(
@@ -159,7 +179,7 @@ where
         let _ = session.open_path(path);
     }
     let settings = SettingsSession::load(backend.clone()).map_err(|error| error.to_string())?;
-    let services = DesktopServices::new(
+    let mut services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),
         LspSession::new(backend.clone()),
@@ -168,6 +188,18 @@ where
         conversation,
         settings,
     );
+    // 表示用の Workspace 名は既存の ConnectionInfo をそのまま使う。
+    if let Some(info) = desktop_client::web_host::connection_info() {
+        services = services.with_connection_identity(crate::ConnectionIdentity {
+            host_name: Some(info.host_name),
+            host_id: info.host_id,
+            workspace_name: Some(info.workspace_name),
+            workspace_id: Some(info.workspace_id),
+        });
+    }
+    if let Some(task) = requested_task() {
+        services = services.with_initial_task(task);
+    }
     let handle = crate::run_web(
         session,
         services,

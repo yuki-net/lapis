@@ -79,9 +79,9 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 ### ログイン
 
 1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます。
-2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/?url=ws://127.0.0.1:4757/remote&workspace=<ID>` が出ます。その URL を開きます。
-3. Host URL は bridge の `ws://127.0.0.1:4757/remote`、Workspace ID は接続情報の `workspace_id` か Host ログの `workspace=`、pairing token は手順1の値です。
-4. 一度接続すると credential がブラウザーの `localStorage` に保存され、次回は token 欄が空でも接続できます。
+2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/` が出ます。その URL を開きます。接続先と token は URL に含まれません。
+3. 初回は一覧が空なので、ログインフォームに Host URL（bridge の `ws://127.0.0.1:4757/remote`）、Workspace ID（接続情報の `workspace_id` か Host ログの `workspace=`）、手順1の pairing token を入力します。
+4. 接続すると `/<host>/<workspace>` のパスで Workspace が開き、credential がブラウザーの `localStorage` に保存されます。次回は一覧から選ぶか、同じ URL を開くだけで接続できます。
 
 `?demo=1` を付けると Host なしのサンプル Workspace で UI だけを確認できます。
 

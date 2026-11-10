@@ -7,4 +7,4 @@ mod window_options;
 
 #[cfg(not(target_family = "wasm"))]
 pub use window::run;
-pub(crate) use window_options::window_options;
+pub(crate) use window_options::{window_options, window_options_with_title};

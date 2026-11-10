@@ -139,6 +139,9 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/", get(index))
+        // `/host/workspace` は SPA の状態を表すため、リロードでも index.html を返す。
+        .route("/{host}/{workspace}", get(index))
+        .route("/{host}/{workspace}/", get(index))
         .route("/__reload", get(reload_events))
         .route("/__reload.js", get(reload_script))
         .with_state(state)
