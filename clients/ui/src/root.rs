@@ -296,8 +296,12 @@ impl DesktopRoot {
                 },
             ),
             cx.subscribe(&terminal, |root, _, event: &TerminalFeatureEvent, cx| {
-                let TerminalFeatureEvent::Started(id) = event;
-                root.activate_terminal(id.clone(), cx);
+                let id = match event {
+                    TerminalFeatureEvent::Started(id) | TerminalFeatureEvent::Selected(id) => {
+                        id.clone()
+                    }
+                };
+                root.activate_terminal(id, cx);
                 root.schedule_persist(cx);
             }),
             cx.subscribe_in(&shell, window, |root, _, command, window, cx| {
