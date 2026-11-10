@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 editor-core = { path = "../../../contracts/domain/editor-core" }
+process = { path = "../../../contracts/domain/process" }
 local-fs = { path = "../fs" }
 notify.workspace = true
 serde.workspace = true

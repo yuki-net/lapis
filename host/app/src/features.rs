@@ -6,6 +6,7 @@ use client_api::{
 };
 use editor_core::{ExecutionId, TaskId, WorkspaceId};
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
+use process::{ProcessConnection, ProcessError, ProcessErrorKind, ProcessRootId, ProcessSnapshot};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 
 struct Connections {
@@ -471,5 +472,49 @@ struct FailedTaskSubscription(String);
 impl task::TaskSubscription for FailedTaskSubscription {
     fn recv_timeout(&mut self, _: std::time::Duration) -> Result<bool, TaskError> {
         Err(TaskError::new(self.0.clone()))
+    }
+}
+
+pub(super) struct HostProcesses {
+    host: Connections,
+}
+
+impl HostProcesses {
+    pub fn new(host: BackendClient) -> Self {
+        Self {
+            host: Connections::new(host),
+        }
+    }
+}
+
+fn process_error(error: impl std::fmt::Display) -> ProcessError {
+    ProcessError::new(ProcessErrorKind::Io, error.to_string())
+}
+
+impl ProcessConnection for HostProcesses {
+    fn snapshot(&self, workspace: &WorkspaceId) -> Result<ProcessSnapshot, ProcessError> {
+        match execute(&self.host, workspace, Operation::Processes).map_err(process_error)? {
+            Outcome::Processes(snapshot) => Ok(snapshot),
+            _ => Err(process_error("Unexpected process snapshot")),
+        }
+    }
+
+    fn terminate(
+        &self,
+        workspace: &WorkspaceId,
+        root_id: &ProcessRootId,
+    ) -> Result<(), ProcessError> {
+        match execute(
+            &self.host,
+            workspace,
+            Operation::TerminateProcess {
+                root_id: root_id.clone(),
+            },
+        )
+        .map_err(process_error)?
+        {
+            Outcome::Completed => Ok(()),
+            _ => Err(process_error("Unexpected process termination")),
+        }
     }
 }

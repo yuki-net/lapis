@@ -1,6 +1,6 @@
 use desktop_client::{
-    ConversationSession, EditorSession, GitSession, LspSession, SettingsSession, TaskSession,
-    TerminalSession, WorkspaceSearchSession,
+    ConversationSession, EditorSession, GitSession, LspSession, ProcessSession, SettingsSession,
+    TaskSession, TerminalSession, WorkspaceSearchSession,
 };
 use gpui::{App, AppContext, actions};
 
@@ -80,6 +80,7 @@ pub struct DesktopServices {
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
+    pub(crate) process: ProcessSession,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
 }
 
@@ -104,6 +105,7 @@ impl DesktopServices {
             search,
             conversation,
             settings,
+            process: ProcessSession::unavailable(),
             workbench_watch: None,
         }
     }
@@ -125,6 +127,10 @@ impl DesktopServices {
     }
     pub fn with_workbench_watch(mut self, watch: desktop_client::WorkbenchWatch) -> Self {
         self.workbench_watch = Some(watch);
+        self
+    }
+    pub fn with_process_session(mut self, process: ProcessSession) -> Self {
+        self.process = process;
         self
     }
     pub fn workbench_watch(&self) -> Option<&desktop_client::WorkbenchWatch> {
@@ -170,6 +176,7 @@ pub(crate) struct WindowFactory {
     search: std::sync::Arc<dyn workspace::WorkspaceSearchBackend>,
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
+    process: ProcessSession,
 }
 impl WindowFactory {
     pub(crate) fn path_scope(&self) -> Option<std::path::PathBuf> {
@@ -190,6 +197,7 @@ impl WindowFactory {
             search: services.search.backend(),
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
+            process: services.process.clone(),
         }
     }
     pub(crate) fn build(self) -> (EditorSession, DesktopServices) {
@@ -207,6 +215,7 @@ impl WindowFactory {
         );
         services.connect_host = self.connect_host;
         services.connection = self.connection;
+        services.process = self.process;
         (editor, services)
     }
     pub(crate) fn open_host(self) -> Result<(), String> {

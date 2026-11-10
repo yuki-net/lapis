@@ -1,0 +1,13 @@
+[package]
+name = "process"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+editor-core = { path = "../editor-core" }
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

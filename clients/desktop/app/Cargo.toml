@@ -14,6 +14,8 @@ client-api = { path = "../../../contracts/protocol" }
 desktop-client = { path = "../../state" }
 desktop-ui = { path = "../../ui" }
 platform = { path = "../../../host/adapters/local" }
+local-process = { path = "../../../host/adapters/process" }
+process = { path = "../../../contracts/domain/process" }
 persistence = { path = "../persistence" }
 remote = { path = "../../../host/transport/remote" }
 settings = { path = "../../../contracts/domain/settings" }

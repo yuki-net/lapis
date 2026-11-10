@@ -67,6 +67,9 @@ pub struct TerminalRegistry {
     resources: BTreeMap<TerminalId, TerminalResource>,
     /// 操作権を自動解放するまでの無操作時間。
     owner_idle_timeout: Duration,
+    /// Terminal を起動したプロセスを Resource Manager へ登録する。
+    processes: Option<Arc<dyn process::ProcessRegistry>>,
+    workspace_id: Option<editor_core::WorkspaceId>,
 }
 
 impl TerminalRegistry {
@@ -85,7 +88,42 @@ impl TerminalRegistry {
             backend,
             resources: BTreeMap::new(),
             owner_idle_timeout: Duration::from_secs(300),
+            processes: None,
+            workspace_id: None,
         }
+    }
+
+    /// 起動した Terminal の PID と子孫を Resource Manager のレジストリへ登録する。
+    pub fn with_processes(
+        mut self,
+        processes: Arc<dyn process::ProcessRegistry>,
+        workspace_id: editor_core::WorkspaceId,
+    ) -> Self {
+        self.processes = Some(processes);
+        self.workspace_id = Some(workspace_id);
+        self
+    }
+
+    fn register_process(
+        &self,
+        terminal_id: &TerminalId,
+        backend_id: &BackendTerminalId,
+        backend: &Arc<dyn TerminalBackend>,
+    ) {
+        let (Some(processes), Some(workspace_id), Some(pid)) = (
+            self.processes.as_ref(),
+            self.workspace_id.as_ref(),
+            backend.process_id(backend_id),
+        ) else {
+            return;
+        };
+        let _ = processes.register(process::ProcessRootSpec {
+            workspace: Some(workspace_id.clone()),
+            kind: process::ProcessKind::Terminal,
+            owner: process::ProcessOwner::terminal(terminal_id.as_str()),
+            pid,
+            label: format!("Terminal {}", terminal_id.as_str()),
+        });
     }
 
     /// 操作権の無操作タイムアウトを変更する（テスト・設定用）。
@@ -127,6 +165,7 @@ impl TerminalRegistry {
             size.rows,
             profile.map(|profile| &profile.id),
         )?;
+        self.register_process(&terminal_id, &backend_id, backend);
         let mut resource =
             TerminalResource::new(terminal_id.clone(), backend_id, workspace_id.clone(), size);
         resource.cwd_path = cwd.to_owned();

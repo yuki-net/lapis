@@ -31,6 +31,7 @@ use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSear
 
 mod connection_display;
 mod extensions;
+mod process;
 mod view_state;
 mod workbench_sync;
 pub use connection_display::{
@@ -38,6 +39,7 @@ pub use connection_display::{
     workspace_label,
 };
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
+pub use process::ProcessSession;
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 

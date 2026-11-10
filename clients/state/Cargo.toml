@@ -12,6 +12,7 @@ editor-core = { path = "../../contracts/domain/editor-core" }
 git = { package = "git-contract", path = "../../extensions/git/contract" }
 lsp = { path = "../../contracts/domain/lsp" }
 project = { path = "../../contracts/domain/project" }
+process = { path = "../../contracts/domain/process" }
 localization = { path = "../../contracts/domain/localization" }
 settings = { path = "../../contracts/domain/settings" }
 task = { path = "../../contracts/domain/task" }

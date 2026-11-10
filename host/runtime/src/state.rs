@@ -64,6 +64,8 @@ pub struct WorkspaceRegistration {
     pub terminal: Option<Arc<dyn TerminalBackend>>,
     pub git: Option<Arc<dyn git_api::GitBackend>>,
     pub tasks: Option<Arc<dyn task::TaskBackend>>,
+    /// Host が spawn したプロセスのレジストリ。Terminal / Task Run の所有関係を登録する。
+    pub processes: Option<Arc<dyn process::ProcessRegistry>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
     /// Document の編集権を無操作で解放するまでの時間。`None` は既定値。
     pub document_owner_idle_timeout: Option<std::time::Duration>,
@@ -85,6 +87,7 @@ impl WorkspaceRegistration {
             terminal: None,
             git: None,
             tasks: None,
+            processes: None,
             workbench_persistence: None,
             document_owner_idle_timeout: None,
             workbench_initial: workbench::VersionedViewState::default(),
@@ -103,6 +106,10 @@ impl WorkspaceRegistration {
     }
     pub fn with_tasks(mut self, backend: Arc<dyn task::TaskBackend>) -> Self {
         self.tasks = Some(backend);
+        self
+    }
+    pub fn with_processes(mut self, processes: Arc<dyn process::ProcessRegistry>) -> Self {
+        self.processes = Some(processes);
         self
     }
     pub fn with_terminal(mut self, terminal: Arc<dyn TerminalBackend>) -> Self {
@@ -902,6 +909,13 @@ impl WorkspaceState {
             Some(timeout) => DocumentRegistry::new().with_owner_idle_timeout(timeout),
             None => DocumentRegistry::new(),
         };
+        let mut terminals = TerminalRegistry::new(registration.terminal);
+        if let Some(processes) = registration.processes.clone() {
+            terminals = terminals.with_processes(
+                processes,
+                editor_core::WorkspaceId::new(registration.workspace_id.as_str()),
+            );
+        }
         Ok(Self {
             workbench: registration.workbench_initial,
             summary: WorkspaceSummary {
@@ -911,10 +925,11 @@ impl WorkspaceState {
             resolver: WorkspacePathResolver::new(registration.root)?,
             files: registration.files,
             documents,
-            terminals: TerminalRegistry::new(registration.terminal),
+            terminals,
             operations: Arc::new(Mutex::new(crate::operations::WorkspaceOperations::new(
                 registration.git,
                 registration.tasks,
+                registration.processes,
                 &registration.workspace_id,
             ))),
             events: EventJournal::default(),

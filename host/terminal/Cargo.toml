@@ -7,4 +7,6 @@ license.workspace = true
 
 [dependencies]
 client-api = { path = "../../contracts/protocol" }
+editor-core = { path = "../../contracts/domain/editor-core" }
+process = { path = "../../contracts/domain/process" }
 terminal = { path = "../../contracts/domain/terminal" }

@@ -18,6 +18,7 @@ use task::{TaskBackend, TaskControl, TaskSnapshot, TaskStart};
 pub(crate) struct WorkspaceOperations {
     git: Option<Arc<dyn GitBackend>>,
     tasks: task_state::TaskOperations,
+    processes: Option<Arc<dyn process::ProcessRegistry>>,
     workspace_id: WorkspaceId,
     repository_cache: HashMap<PathBuf, CachedRepository>,
     next_git_revision: u64,
@@ -41,11 +42,13 @@ impl WorkspaceOperations {
     pub fn new(
         git: Option<Arc<dyn GitBackend>>,
         tasks: Option<Arc<dyn TaskBackend>>,
+        processes: Option<Arc<dyn process::ProcessRegistry>>,
         workspace_id: &client_api::WorkspaceId,
     ) -> Self {
         Self {
             git,
             tasks: task_state::TaskOperations::new(tasks, WorkspaceId::new(workspace_id.as_str())),
+            processes,
             workspace_id: WorkspaceId::new(workspace_id.as_str()),
             repository_cache: HashMap::new(),
             next_git_revision: 1,
@@ -192,6 +195,25 @@ impl WorkspaceOperations {
                 self.control(&execution_id, &control, root)?;
                 Ok(Outcome::Completed)
             }
+            Operation::Processes => {
+                let processes = self
+                    .processes
+                    .as_ref()
+                    .ok_or(BackendStateError::Unsupported)?;
+                Ok(Outcome::Processes(
+                    processes.snapshot(Some(&self.workspace_id)),
+                ))
+            }
+            Operation::TerminateProcess { root_id } => {
+                let processes = self
+                    .processes
+                    .as_ref()
+                    .ok_or(BackendStateError::Unsupported)?;
+                processes
+                    .terminate(Some(&self.workspace_id), &root_id)
+                    .map_err(process_problem)?;
+                Ok(Outcome::Completed)
+            }
         }
     }
 }
@@ -215,6 +237,17 @@ impl SafeOperationFailure for task::TaskError {
 }
 fn problem(error: impl SafeOperationFailure) -> BackendStateError {
     BackendStateError::Operation(error.message().to_owned())
+}
+fn process_problem(error: process::ProcessError) -> BackendStateError {
+    match error.kind() {
+        // 所有外・不存在を区別せず、他 Workspace の root ID を探索させない。
+        process::ProcessErrorKind::NotFound | process::ProcessErrorKind::NotOwned => {
+            BackendStateError::WorkspaceDenied
+        }
+        process::ProcessErrorKind::Io => {
+            BackendStateError::Operation("process operation failed".to_owned())
+        }
+    }
 }
 fn relative_path(path: &Path) -> Result<String, BackendStateError> {
     let text = path

@@ -56,6 +56,12 @@ pub enum WorkspaceOperation {
         execution_id: ExecutionId,
         control: TaskControl,
     },
+    /// Host が所有するプロセスとその子孫。OS 全体の一覧は返さない。
+    Processes,
+    /// 所有する root とその子孫だけを終了する。
+    TerminateProcess {
+        root_id: process::ProcessRootId,
+    },
 }
 impl WorkspaceOperation {
     pub const fn is_mutation(&self) -> bool {
@@ -91,6 +97,8 @@ impl WorkspaceOperation {
             Self::Tasks => "workspace.tasks.read",
             Self::StartTask { .. } => "workspace.tasks.start",
             Self::ControlTask { .. } => "workspace.tasks.control",
+            Self::Processes => "workspace.process.read",
+            Self::TerminateProcess { .. } => "workspace.process.control",
         }
     }
     pub const fn additional_required_capability(&self) -> Option<&'static str> {
@@ -117,6 +125,7 @@ pub enum WorkspaceOperationResponse {
     Worktree(WorktreeSnapshot),
     Tasks(Vec<TaskSnapshot>),
     TaskStarted(Box<TaskSnapshot>),
+    Processes(process::ProcessSnapshot),
     Completed,
 }
 
@@ -224,6 +233,10 @@ mod tests {
             },
             WorkspaceOperation::Tasks,
             WorkspaceOperation::StartTask { input: input() },
+            WorkspaceOperation::Processes,
+            WorkspaceOperation::TerminateProcess {
+                root_id: process::ProcessRootId::try_new("process-1").unwrap(),
+            },
         ];
         for control in [
             TaskControl::Cancel,
@@ -282,6 +295,7 @@ mod tests {
             WorkspaceOperationResponse::Worktree(worktree()),
             WorkspaceOperationResponse::Tasks(vec![task(ExecutionStatus::Queued)]),
             WorkspaceOperationResponse::TaskStarted(Box::new(task(ExecutionStatus::Queued))),
+            WorkspaceOperationResponse::Processes(process::ProcessSnapshot::default()),
             WorkspaceOperationResponse::Completed,
         ];
         for result in cases {
@@ -298,6 +312,19 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn process_operations_have_read_and_control_capabilities() {
+        let terminate = WorkspaceOperation::TerminateProcess {
+            root_id: process::ProcessRootId::try_new("process-1").unwrap(),
+        };
+        assert_eq!(
+            WorkspaceOperation::Processes.required_capability(),
+            "workspace.process.read"
+        );
+        assert_eq!(terminate.required_capability(), "workspace.process.control");
+        assert!(!terminate.is_mutation());
+    }
+
     #[test]
     fn task_start_rejects_client_records_ids_and_roots() {
         for extra in [
