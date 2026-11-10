@@ -271,11 +271,11 @@ impl HostConversationRepository {
         workspace: &WorkspaceSnapshot,
     ) -> Option<ConversationViewState> {
         let shared = workspace.to_shared(self.workspace.clone()).ok()?;
+        // Hostの共有状態にはClient固有のアクティブタブを残さない。
+        // ローカル保存は元のviewを使うため、自Clientの復元用には残る。
         Some(ConversationViewState {
-            layout: view.layout.clone(),
-            show_panel_controls: view.show_panel_controls,
-            workbench: view.workbench.clone(),
             workspace: Some(shared),
+            ..view.clone().for_shared_workbench()
         })
     }
 
@@ -777,6 +777,119 @@ mod tests {
             other_execution: None,
             parked_sources: Vec::new(),
         }
+    }
+
+    fn view_with_active_tabs() -> ConversationViewState {
+        let mut view = tabs_view(&["doc-a", "doc-b"]);
+        let layout = view.layout.clone();
+        view.workbench.ide_layout = Some(workbench::WorkbenchLayoutState {
+            layout: layout.clone(),
+            show_panel_controls: true,
+        });
+        view.workbench.task_layouts.insert(
+            ConversationId::new("task-a"),
+            workbench::WorkbenchLayoutState {
+                layout,
+                show_panel_controls: true,
+            },
+        );
+        view
+    }
+
+    fn active_tab_id(view: &ZoneLayoutViewState) -> Option<&str> {
+        use workbench::TabRef;
+        match view.zones[0].panels[0].active_tab.as_ref() {
+            Some(TabRef::Document { id }) => Some(id.as_str()),
+            _ => None,
+        }
+    }
+
+    fn assert_shared_view_has_no_active_tabs(view: &ConversationViewState) {
+        let layout = view.layout.as_ref().unwrap();
+        assert_eq!(active_tab_id(layout), None);
+        assert_eq!(tab_ids(view), ["doc-a", "doc-b"]);
+        assert_eq!(
+            active_tab_id(
+                view.workbench
+                    .ide_layout
+                    .as_ref()
+                    .unwrap()
+                    .layout
+                    .as_ref()
+                    .unwrap()
+            ),
+            None
+        );
+        assert_eq!(
+            active_tab_id(
+                view.workbench.task_layouts[&ConversationId::new("task-a")]
+                    .layout
+                    .as_ref()
+                    .unwrap()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn host_shared_view_excludes_client_active_tabs_while_local_save_keeps_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = Arc::new(LocalConversationRepository::new(
+            directory.path().join("conversations.json"),
+        ));
+        let workbench = Arc::new(SharedWorkbench::default());
+        let workspace = WorkspaceId::new("workspace-1");
+        let repository = HostConversationRepository::new(
+            local.clone(),
+            workbench.clone(),
+            workspace.clone(),
+            WorkbenchWatch::new(),
+        );
+        let mut record = conversation_record(directory.path());
+        record.view = view_with_active_tabs();
+
+        // debounceのsave経路でも共有状態にアクティブタブを残さない。
+        repository
+            .save(
+                &Default::default(),
+                &[],
+                std::slice::from_ref(&record),
+                &record.id,
+            )
+            .unwrap();
+        {
+            let state = workbench.state.lock().unwrap();
+            let view = state.view.as_ref().unwrap();
+            assert_eq!(view.workspace.as_ref().unwrap().workspace_id, workspace);
+            assert_shared_view_has_no_active_tabs(view);
+        }
+
+        // Repositoryのpublish_workbench経路でも同様。
+        let mut changed = record.view.clone();
+        changed.show_panel_controls = false;
+        repository
+            .publish_workbench(&changed, &record.workspace)
+            .unwrap();
+        assert_shared_view_has_no_active_tabs(
+            workbench.state.lock().unwrap().view.as_ref().unwrap(),
+        );
+
+        // ローカル保存は自Clientの復元用なのでアクティブタブを残す。
+        let restored = local.load().unwrap();
+        let restored = &restored.1[0].view;
+        assert_eq!(
+            active_tab_id(restored.layout.as_ref().unwrap()),
+            Some("doc-a")
+        );
+        assert_eq!(
+            active_tab_id(
+                restored.workbench.task_layouts[&ConversationId::new("task-a")]
+                    .layout
+                    .as_ref()
+                    .unwrap()
+            ),
+            Some("doc-a")
+        );
     }
 
     #[test]
