@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 document = { path = "../../../contracts/domain/document" }
+futures-channel = "0.3"
 lsp = { path = "../../../contracts/domain/lsp" }
 serde_json.workspace = true
 

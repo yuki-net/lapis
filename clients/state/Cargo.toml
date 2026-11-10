@@ -32,5 +32,6 @@ web-sys = { version = "=0.3.106", features = ["console"] }
 serde_json.workspace = true
 
 [dev-dependencies]
+futures-channel = "0.3"
 serde_json.workspace = true
 tempfile.workspace = true

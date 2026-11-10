@@ -358,6 +358,9 @@ impl<T: LanguageServerBackend> LanguageServerBackend for LoopbackBackend<T> {
         }
         self.inner.diagnostics()
     }
+    fn diagnostics_changes(&self) -> Option<lsp::DiagnosticsChanges> {
+        self.inner.diagnostics_changes()
+    }
     fn completion(
         &self,
         path: &Path,

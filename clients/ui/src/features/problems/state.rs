@@ -13,6 +13,7 @@ pub(crate) struct ProblemsFeature {
     pub(super) state: ProblemsState,
     pub(super) message: String,
     busy: bool,
+    pending: bool,
 }
 #[derive(Default)]
 pub(super) struct ProblemsState {
@@ -67,13 +68,53 @@ fn diagnostics_match_revision(
 
 impl gpui::EventEmitter<ProblemsEvent> for ProblemsFeature {}
 impl ProblemsFeature {
-    pub(crate) fn new(worker: ClientWorker<DocumentClient>, _cx: &mut Context<Self>) -> Self {
-        Self {
+    pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
+        let feature = Self {
             worker,
             state: ProblemsState::default(),
             message: String::new(),
             busy: false,
-        }
+            pending: false,
+        };
+        feature.subscribe_diagnostics(cx);
+        feature
+    }
+    /// backend の診断更新通知で再取得する。ポーリングは行わない。
+    fn subscribe_diagnostics(&self, cx: &mut Context<Self>) {
+        let worker = self.worker.clone();
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            let opened = executor
+                .spawn(async move {
+                    worker
+                        .request(|client| Ok(client.lsp.diagnostics_changes()))
+                        .recv()
+                })
+                .await;
+            let Ok(Ok(Some(mut changes))) = opened else {
+                return;
+            };
+            loop {
+                let (next, outcome) = executor
+                    .spawn(async move {
+                        use futures_util::StreamExt as _;
+                        let outcome = changes.next().await;
+                        (changes, outcome)
+                    })
+                    .await;
+                changes = next;
+                if outcome.is_none() {
+                    break;
+                }
+                if this
+                    .update(cx, |problems, cx| problems.on_diagnostics_changed(cx))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
     pub(crate) fn set_target(
         &mut self,
@@ -94,12 +135,29 @@ impl ProblemsFeature {
         })
         .detach();
     }
+    fn on_diagnostics_changed(&mut self, cx: &mut Context<Self>) {
+        // 取得中は完了後に取り直す。通知を pop して捨てない。
+        self.poll(cx);
+    }
+    fn finish_poll(&mut self, cx: &mut Context<Self>) {
+        self.busy = false;
+        if self.pending {
+            self.pending = false;
+            self.poll(cx);
+        }
+    }
     /// 診断要求を worker で開始し、完了待ちだけを background で行う。
     fn poll(&mut self, cx: &mut Context<Self>) {
-        if self.busy || self.state.target.is_none() {
+        if self.state.target.is_none() {
+            self.pending = false;
+            return;
+        }
+        if self.busy {
+            self.pending = true;
             return;
         }
         self.busy = true;
+        self.pending = false;
         let generation = self.state.generation;
         let admitted = self.worker.submit(
             cx,
@@ -115,21 +173,23 @@ impl ProblemsFeature {
                 Ok((request, target))
             },
             move |problems, result, cx| {
-                problems.busy = false;
                 let (request, target) = match result {
                     Ok(result) => result,
                     Err(error) => {
                         problems.message = error;
+                        problems.finish_poll(cx);
                         cx.notify();
                         return;
                     }
                 };
                 if generation != problems.state.generation || problems.state.target != target {
                     // 取得中に対象が変わった。現在の対象で取り直す。
-                    problems.poll(cx);
+                    problems.pending = true;
+                    problems.finish_poll(cx);
                     return;
                 }
                 let (Some(request), Some(target)) = (request, target) else {
+                    problems.finish_poll(cx);
                     return;
                 };
                 let executor = cx.background_executor().clone();
@@ -140,14 +200,16 @@ impl ProblemsFeature {
                         if generation != problems.state.generation
                             || problems.state.target.as_ref() != Some(&target)
                         {
-                            problems.poll(cx);
+                            problems.pending = true;
+                            problems.finish_poll(cx);
                             return;
                         }
                         if request_target
                             .as_ref()
                             .is_none_or(|(_, revision)| revision != &target.1)
                         {
-                            problems.poll(cx);
+                            problems.pending = true;
+                            problems.finish_poll(cx);
                             return;
                         }
                         match result {
@@ -160,6 +222,7 @@ impl ProblemsFeature {
                                 if stale {
                                     // backend が診断を作り直すまで、少し待って取り直す。
                                     problems.schedule_poll(cx);
+                                    problems.finish_poll(cx);
                                     return;
                                 }
                                 if problems.state.apply_diagnostics(
@@ -176,6 +239,7 @@ impl ProblemsFeature {
                                 cx.notify();
                             }
                         }
+                        problems.finish_poll(cx);
                     });
                 })
                 .detach();
@@ -183,6 +247,7 @@ impl ProblemsFeature {
         );
         if let Err(error) = admitted {
             self.busy = false;
+            self.pending = false;
             self.message = error;
             cx.notify();
         }
@@ -299,6 +364,18 @@ mod tests {
             std::path::Path::new("other.rs"),
             Revision::new(3)
         ));
+    }
+
+    #[test]
+    fn diagnostics_updated_without_a_revision_change_replace_the_previous_result() {
+        let mut state = ProblemsState::default();
+        state.set_target(target("document", 1));
+        let generation = state.generation;
+        assert!(state.apply_diagnostics(generation, target("document", 1), vec![diagnostic(1)]));
+        let mut updated = diagnostic(1);
+        updated.message = "updated by push".into();
+        assert!(state.apply_diagnostics(generation, target("document", 1), vec![updated]));
+        assert_eq!(state.diagnostics[0].message, "updated by push");
     }
 
     #[test]

@@ -518,6 +518,11 @@ impl LspSession {
         &self.diagnostics
     }
 
+    /// 診断更新の通知。未対応の backend は `None` を返す。
+    pub fn diagnostics_changes(&self) -> Option<lsp::DiagnosticsChanges> {
+        self.backend.diagnostics_changes()
+    }
+
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
@@ -2272,6 +2277,79 @@ mod tests {
         diagnostics_results: Mutex<mpsc::Receiver<Result<Vec<Diagnostic>, LspError>>>,
     }
 
+    struct PushingLspBackend {
+        diagnostics: Mutex<Vec<Diagnostic>>,
+        sender: Mutex<Option<futures_channel::mpsc::UnboundedSender<()>>>,
+        receiver: Mutex<Option<lsp::DiagnosticsChanges>>,
+    }
+
+    impl PushingLspBackend {
+        fn new() -> Self {
+            let (sender, receiver) = futures_channel::mpsc::unbounded();
+            Self {
+                diagnostics: Mutex::new(Vec::new()),
+                sender: Mutex::new(Some(sender)),
+                receiver: Mutex::new(Some(receiver)),
+            }
+        }
+
+        fn publish(&self, diagnostics: Vec<Diagnostic>) {
+            *self.diagnostics.lock().unwrap() = diagnostics;
+            if let Some(sender) = self.sender.lock().unwrap().as_ref() {
+                let _ = sender.unbounded_send(());
+            }
+        }
+    }
+
+    impl LanguageServerBackend for PushingLspBackend {
+        fn start(&self, _workspace: &Path) -> Result<(), LspError> {
+            Ok(())
+        }
+
+        fn did_open(&self, _path: &Path, _text: &str, _revision: Revision) -> Result<(), LspError> {
+            Ok(())
+        }
+
+        fn did_change(
+            &self,
+            _path: &Path,
+            _text: &str,
+            _revision: Revision,
+        ) -> Result<(), LspError> {
+            Ok(())
+        }
+
+        fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError> {
+            Ok(self.diagnostics.lock().unwrap().clone())
+        }
+
+        fn diagnostics_changes(&self) -> Option<lsp::DiagnosticsChanges> {
+            self.receiver.lock().unwrap().take()
+        }
+
+        fn completion(
+            &self,
+            _path: &Path,
+            _position: LspPosition,
+            _revision: Revision,
+        ) -> Result<Vec<CompletionItem>, LspError> {
+            Ok(Vec::new())
+        }
+
+        fn definition(
+            &self,
+            _path: &Path,
+            _position: LspPosition,
+            _revision: Revision,
+        ) -> Result<Option<DefinitionTarget>, LspError> {
+            Ok(None)
+        }
+
+        fn shutdown(&self) -> Result<(), LspError> {
+            Ok(())
+        }
+    }
+
     impl LanguageServerBackend for ControlledLspBackend {
         fn start(&self, _workspace: &Path) -> Result<(), LspError> {
             Ok(())
@@ -3177,6 +3255,55 @@ mod tests {
             )
             .unwrap();
         assert_eq!(backend.controls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn lsp_diagnostics_push_refreshes_without_a_revision_change() {
+        let repository = Arc::new(MemoryRepository::default());
+        let root = PathBuf::from("repo");
+        let path = root.join("main.rs");
+        insert_file(&repository, path.clone(), "fn main() {}\n");
+        let mut editor = session(repository, Arc::new(MemoryState::default()));
+        editor.open_workspace(root).unwrap();
+        editor.open_path(path.clone()).unwrap();
+
+        let backend = Arc::new(PushingLspBackend::new());
+        let mut lsp = LspSession::new(backend.clone());
+        let mut changes = lsp
+            .diagnostics_changes()
+            .expect("diagnostics changes subscription");
+        lsp.sync_active(&editor).unwrap();
+        let revision = editor.active_revision();
+
+        backend.publish(vec![Diagnostic {
+            path: path.clone(),
+            range: LspRange {
+                start: LspPosition {
+                    line: 0,
+                    utf16_column: 0,
+                },
+                end: LspPosition {
+                    line: 0,
+                    utf16_column: 2,
+                },
+            },
+            severity: DiagnosticSeverity::Warning,
+            message: "pushed".to_owned(),
+            revision,
+        }]);
+
+        // revision を変えずに届いた通知で、Problems は同じ文書を再取得する。
+        assert!(matches!(changes.try_recv(), Ok(())));
+        assert_eq!(editor.active_revision(), revision);
+        let request = lsp
+            .request_diagnostics(&editor)
+            .unwrap()
+            .expect("diagnostics request");
+        let (target, result) = request.wait();
+        assert_eq!(target, Some((path, revision)));
+        let diagnostics = result.unwrap();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].message, "pushed");
     }
 
     #[test]
