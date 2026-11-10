@@ -24,7 +24,7 @@ const IO_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECTION_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const CONNECTION_POLL: Duration = Duration::from_millis(100);
 /// 開発時に `.run` から引数を消せるよう、待受とOriginに既定値を持たせる。
-const DEFAULT_LISTEN: &str = "127.0.0.1:4748";
+const DEFAULT_LISTEN: &str = "127.0.0.1:4757";
 const DEFAULT_ORIGIN: &str = "http://127.0.0.1:4747";
 const LISTEN_ENV: &str = "LAPIS_WEB_BRIDGE_LISTEN";
 const ORIGIN_ENV: &str = "LAPIS_WEB_BRIDGE_ORIGIN";
@@ -494,7 +494,7 @@ mod tests {
         ];
         // 引数を省いても既定値で起動できる。
         let defaults = parse(&host, &[]).unwrap();
-        assert_eq!(defaults.listen, "127.0.0.1:4748".parse().unwrap());
+        assert_eq!(defaults.listen, "127.0.0.1:4757".parse().unwrap());
         assert_eq!(defaults.origin, "http://127.0.0.1:4747");
         // 環境変数は既定値より優先する。
         let environment = parse(
@@ -541,10 +541,10 @@ mod tests {
         assert_eq!(
             open_url(
                 "http://127.0.0.1:4747",
-                "127.0.0.1:4748".parse().unwrap(),
+                "127.0.0.1:4757".parse().unwrap(),
                 "workspace-1"
             ),
-            "http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=workspace-1"
+            "http://127.0.0.1:4747/?url=ws://127.0.0.1:4757/remote&workspace=workspace-1"
         );
     }
 

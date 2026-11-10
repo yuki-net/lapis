@@ -35,7 +35,7 @@ impl Options {
         let mut arguments = arguments;
         let mut workspace = None;
         let mut certificate = None;
-        let mut listen = "127.0.0.1:4749".parse()?;
+        let mut listen = "127.0.0.1:4787".parse()?;
         let mut state_directory = None;
         let mut connection_info = None;
         let mut invitation = None;

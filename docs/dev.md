@@ -8,7 +8,7 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 | --- | --- |
 | `Run Host` | Host だけ。Desktop と Web の両方がここへ繋がる |
 | `Run Desktop` | Desktop だけ。Host の招待を待って接続する |
-| `Run Web` | bridge（TCP `4748`）＋ ページ配信（TCP `4747`）。Host は起動しない |
+| `Run Web` | bridge（TCP `4757`）＋ ページ配信（TCP `4747`）。Host は起動しない |
 
 3つは独立していて、起動順は問いません。`Run Host` を1つ立ち上げれば、Desktop と Web が同じ Host に同時に繋がります。
 
@@ -68,8 +68,8 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 | process | 役割 | 待受 |
 | --- | --- | --- |
-| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。既定 `4749` |
-| bridge（`lapis-web-bridge`） | ブラウザーの WebSocket を Host の QUIC へ転送し、OIDC の token 交換を行う | TCP `4748` |
+| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。既定 `4787` |
+| bridge（`lapis-web-bridge`） | ブラウザーの WebSocket を Host の QUIC へ転送し、OIDC の token 交換を行う | TCP `4757` |
 | ページ配信（`lapis-web`） | `clients/web/dist` の Wasm UI を配る。`--dev` で `.rs` とページの変更を監視して作り直す | TCP `4747` |
 
 初回だけ `cd clients\web` で `npm ci` を実行します。`npm run build` は Wasm をビルドして `clients/web/dist` に HTML・JS・CSS・Wasm を揃えるため、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129、Node.js 24（`tsc` 用）が必要です。`Run Web` のページ側は `lapis-web --dev --dist clients/web/dist` で起動し、起動時と変更時に `npm run build` を実行します。
@@ -79,8 +79,8 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 ### ログイン
 
 1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます。
-2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/?url=ws://127.0.0.1:4748/remote&workspace=<ID>` が出ます。その URL を開きます。
-3. Host URL は bridge の `ws://127.0.0.1:4748/remote`、Workspace ID は接続情報の `workspace_id` か Host ログの `workspace=`、pairing token は手順1の値です。
+2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/?url=ws://127.0.0.1:4757/remote&workspace=<ID>` が出ます。その URL を開きます。
+3. Host URL は bridge の `ws://127.0.0.1:4757/remote`、Workspace ID は接続情報の `workspace_id` か Host ログの `workspace=`、pairing token は手順1の値です。
 4. 一度接続すると credential がブラウザーの `localStorage` に保存され、次回は token 欄が空でも接続できます。
 
 `?demo=1` を付けると Host なしのサンプル Workspace で UI だけを確認できます。
@@ -90,12 +90,12 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 | 用途 | 値 | 理由 |
 | --- | --- | --- |
 | ページ | `4747` 固定 | ブラウザーで開く URL。バインドに失敗したら明示的に終了する |
-| bridge | `4748` 固定 | ログインフォームに入力する URL |
-| Host | `4749` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
+| bridge | `4757` 固定 | ログインフォームに入力する URL |
+| Host | `4787` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
 
-bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4748`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。
+bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4757`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。
 
-`4749` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
+`4787` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
 
 ## Web の UI を確認する
 

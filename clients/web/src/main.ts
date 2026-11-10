@@ -180,7 +180,7 @@ async function launchDemo(backend: string) {
 function defaultBridgeUrl(): string {
   // 同梱起動ではページと bridge が同じホストで動くため、bridge の既定ポートを使う。
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.hostname || "127.0.0.1"}:4748/remote`;
+  return `${scheme}//${location.hostname || "127.0.0.1"}:4757/remote`;
 }
 
 function bridgeOrigin(hostUrl: string): string | null {
@@ -259,7 +259,7 @@ function showLogin(defaultUrl: string, defaultWorkspace: string) {
       <label>
         <span>Host URL</span>
         <input name="url" type="url" required autocomplete="url"
-          placeholder="ws://127.0.0.1:4748/remote"
+          placeholder="ws://127.0.0.1:4757/remote"
           value="${escapeHtml(defaultUrl)}" />
       </label>
       <label>
