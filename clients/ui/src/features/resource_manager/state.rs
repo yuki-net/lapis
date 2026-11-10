@@ -1,19 +1,17 @@
 use std::time::Duration;
 
 use gpui::Context;
-use process::{ProcessOrigin, ProcessRootId, ProcessSnapshot};
+use process::{ProcessOrigin, ProcessRootId};
 
 use crate::client_adapter::{ClientWorker, DocumentClient};
 
-use super::{ResourceManagerFeature, ResourceMessages};
+use super::{ProcessPanelState, ResourceManagerFeature};
 
 impl ResourceManagerFeature {
     pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
         let mut feature = Self {
             worker,
-            snapshot: ProcessSnapshot::default(),
-            messages: ResourceMessages::default(),
-            pending_terminate: None,
+            state: ProcessPanelState::default(),
             busy: false,
             scheduled: false,
             refresh_generation: 0,
@@ -65,45 +63,35 @@ impl ResourceManagerFeature {
                     return;
                 }
                 feature.busy = false;
-                match result {
-                    Ok((snapshot, host_error)) => {
-                        feature.snapshot = snapshot;
-                        feature.messages.refresh_succeeded(host_error);
-                        cx.notify();
-                    }
-                    Err(error) => {
-                        feature.messages.refresh_failed(error);
-                        cx.notify();
-                    }
-                }
+                feature.state.apply_refresh(result);
+                cx.notify();
                 feature.schedule(cx);
             },
         );
         if let Err(error) = admitted {
             self.busy = false;
-            self.messages.refresh_failed(error);
+            self.state.messages.refresh_failed(error);
             cx.notify();
             self.schedule(cx);
         }
     }
 
     pub(crate) fn request_terminate(&mut self, root_id: ProcessRootId, cx: &mut Context<Self>) {
-        self.pending_terminate = Some(root_id);
-        self.messages.terminate.begin();
+        self.state.begin_termination(root_id);
         cx.notify();
     }
 
     pub(crate) fn cancel_terminate(&mut self, cx: &mut Context<Self>) {
-        self.pending_terminate = None;
-        self.messages.terminate.begin();
+        self.state.cancel_termination();
         cx.notify();
     }
 
     pub(crate) fn confirm_terminate(&mut self, cx: &mut Context<Self>) {
-        let Some(root_id) = self.pending_terminate.take() else {
+        let Some(root_id) = self.state.pending_terminate.take() else {
             return;
         };
         let origin = self
+            .state
             .snapshot
             .roots
             .iter()
@@ -121,12 +109,12 @@ impl ResourceManagerFeature {
                 Ok(())
             },
             |feature, result, cx| {
-                feature.messages.terminate.finished(result);
+                feature.state.termination_finished(result);
                 feature.refresh(cx);
             },
         );
         if let Err(error) = admitted {
-            self.messages.terminate.submitted(Err(error));
+            self.state.termination_submitted(Err(error));
             cx.notify();
         }
     }
@@ -134,25 +122,34 @@ impl ResourceManagerFeature {
 
 #[cfg(test)]
 mod tests {
-    use super::ResourceMessages;
+    use super::*;
+    use process::ProcessSnapshot;
 
     #[test]
     fn termination_feedback_is_not_cleared_by_a_successful_refresh() {
-        let mut messages = ResourceMessages::default();
-        messages.terminate.submitted(Err("queue full".into()));
-        // 成功した再取得は refresh 側だけを更新し、終了エラーを消さない。
-        messages.refresh_succeeded(None);
-        assert!(messages.refresh.is_empty());
-        assert_eq!(messages.terminate.error(), Some("queue full"));
+        let mut state = ProcessPanelState::default();
+        state.termination_submitted(Err("queue full".into()));
+        // 実際の再取得適用経路を通しても、終了エラーは消えない。
+        state.apply_refresh(Ok((ProcessSnapshot::default(), None)));
+        assert!(state.messages.refresh.is_empty());
+        assert_eq!(state.messages.terminate.error(), Some("queue full"));
+        assert_eq!(state.status_lines().1, Some("queue full"));
 
-        messages
-            .terminate
-            .finished(Err("termination failed".into()));
-        messages.refresh_succeeded(Some("host unavailable".into()));
-        assert_eq!(messages.refresh, "host unavailable");
-        assert_eq!(messages.terminate.error(), Some("termination failed"));
+        state.termination_finished(Err("termination failed".into()));
+        state.apply_refresh(Ok((
+            ProcessSnapshot::default(),
+            Some("host unavailable".into()),
+        )));
+        assert_eq!(state.messages.refresh, "host unavailable");
+        assert_eq!(state.messages.terminate.error(), Some("termination failed"));
+        // view が描画に使う値にも終了エラーが残る。
+        assert_eq!(
+            state.status_lines(),
+            (Some("host unavailable"), Some("termination failed"))
+        );
 
-        messages.terminate.begin();
-        assert_eq!(messages.terminate.error(), None);
+        state.cancel_termination();
+        assert_eq!(state.messages.terminate.error(), None);
+        assert_eq!(state.status_lines().1, None);
     }
 }

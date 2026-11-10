@@ -10,12 +10,58 @@ mod view;
 
 pub(crate) struct ResourceManagerFeature {
     worker: ClientWorker<DocumentClient>,
-    pub(super) snapshot: ProcessSnapshot,
-    pub(super) messages: ResourceMessages,
-    pub(super) pending_terminate: Option<ProcessRootId>,
+    pub(super) state: ProcessPanelState,
     busy: bool,
     scheduled: bool,
     refresh_generation: u64,
+}
+
+/// Resource Manager パネルの表示状態。worker や GPUI に依存せず更新できる。
+#[derive(Default)]
+pub(super) struct ProcessPanelState {
+    pub(super) snapshot: ProcessSnapshot,
+    pub(super) messages: ResourceMessages,
+    pub(super) pending_terminate: Option<ProcessRootId>,
+}
+
+impl ProcessPanelState {
+    /// パネルに表示する（再取得メッセージ, 終了エラー）。
+    pub(super) fn status_lines(&self) -> (Option<&str>, Option<&str>) {
+        let refresh = (!self.messages.refresh.is_empty()).then_some(self.messages.refresh.as_str());
+        (refresh, self.messages.terminate.error())
+    }
+
+    /// 再取得結果を適用する。終了エラーには触れない。
+    pub(super) fn apply_refresh(
+        &mut self,
+        result: Result<(ProcessSnapshot, Option<String>), String>,
+    ) {
+        match result {
+            Ok((snapshot, host_error)) => {
+                self.snapshot = snapshot;
+                self.messages.refresh_succeeded(host_error);
+            }
+            Err(error) => self.messages.refresh_failed(error),
+        }
+    }
+
+    pub(super) fn begin_termination(&mut self, root_id: ProcessRootId) {
+        self.pending_terminate = Some(root_id);
+        self.messages.terminate.begin();
+    }
+
+    pub(super) fn cancel_termination(&mut self) {
+        self.pending_terminate = None;
+        self.messages.terminate.begin();
+    }
+
+    pub(super) fn termination_submitted(&mut self, result: Result<(), String>) {
+        self.messages.terminate.submitted(result);
+    }
+
+    pub(super) fn termination_finished(&mut self, result: Result<(), String>) {
+        self.messages.terminate.finished(result);
+    }
 }
 
 /// 定期再取得のメッセージと終了操作の失敗を別々に保持する。

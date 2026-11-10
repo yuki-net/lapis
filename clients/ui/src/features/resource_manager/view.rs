@@ -1,4 +1,4 @@
-use crate::{components::action_button, theme};
+﻿use crate::{components::action_button, theme};
 use gpui::{Context, Render, Window, div, prelude::*, px};
 use process::{ProcessOrigin, ProcessState};
 
@@ -6,7 +6,7 @@ use super::{ResourceManagerFeature, ResourceRow, format_memory, kind_label, rows
 
 impl Render for ResourceManagerFeature {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let sampled = self.snapshot.roots.len();
+        let sampled = self.state.snapshot.roots.len();
         let mut content = div()
             .id("resource-manager")
             .flex()
@@ -48,21 +48,22 @@ impl Render for ResourceManagerFeature {
                     .text_color(theme::colors(cx).text_secondary)
                     .child("Only processes spawned by Lapis and their descendants are shown."),
             );
-        if !self.messages.refresh.is_empty() {
+        let (refresh_status, terminate_status) = self.state.status_lines();
+        if let Some(message) = refresh_status {
             content = content.child(
                 div()
                     .text_color(theme::colors(cx).danger_text)
-                    .child(self.messages.refresh.clone()),
+                    .child(message.to_owned()),
             );
         }
-        if let Some(error) = self.messages.terminate.error() {
+        if let Some(error) = terminate_status {
             content = content.child(
                 div()
                     .text_color(theme::colors(cx).danger_text)
                     .child(format!("Termination failed: {error}")),
             );
         }
-        if self.snapshot.roots.is_empty() {
+        if self.state.snapshot.roots.is_empty() {
             return content.child(
                 div()
                     .text_color(theme::colors(cx).text_secondary)
@@ -70,7 +71,7 @@ impl Render for ResourceManagerFeature {
             );
         }
         content = content.children(
-            rows(&self.snapshot)
+            rows(&self.state.snapshot)
                 .into_iter()
                 .enumerate()
                 .map(|(index, row)| match row {
@@ -85,7 +86,7 @@ impl Render for ResourceManagerFeature {
                     ProcessOrigin::Desktop => "Desktop",
                 }),
             ResourceRow::Root(root) => {
-                let pending = self.pending_terminate.as_ref() == Some(&root.root_id);
+                let pending = self.state.pending_terminate.as_ref() == Some(&root.root_id);
                 let mut row = div()
                     .id(("process-root", index))
                     .flex()
