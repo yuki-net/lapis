@@ -29,7 +29,7 @@ use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, W
 use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
-use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 use terminal::{
     TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSnapshot,
@@ -711,11 +711,12 @@ impl WorkspaceStateRepository for WebBackend {
     }
 }
 
-impl GlobalSettingsRepository for WebBackend {
-    fn load(&self) -> Result<GlobalSettings, SettingsError> {
-        Ok(GlobalSettings::default())
+impl SettingsRepository for WebBackend {
+    fn load(&self) -> Result<SettingsDocument, SettingsError> {
+        // Web はこのブラウザーセッションだけの設定を持つ。保存先はまだ無い。
+        Ok(SettingsDocument::empty(SettingsScope::User))
     }
-    fn save(&self, _: &GlobalSettings) -> Result<(), SettingsError> {
+    fn save(&self, _: &SettingsDocument) -> Result<(), SettingsError> {
         Ok(())
     }
 }

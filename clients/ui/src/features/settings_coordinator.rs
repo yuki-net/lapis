@@ -1,64 +1,40 @@
 use std::collections::VecDeque;
 
-use desktop_client::SettingsSession;
+use desktop_client::{SettingsSession, SettingsWatch};
 use gpui::{App, AppContext, Context, Entity, Global};
-use localization::LocaleId;
-use settings::{GlobalSettings, SyntaxTheme};
+use settings::{ResolvedSettings, SettingKey, SettingValue, SettingsError, SettingsScope};
 
 use crate::{client_adapter::ClientWorker, extension_ui::ThemeId, theme};
 
 const CAPACITY: usize = 64;
 
+/// 1つのユーザー操作としてまとめて保存する設定変更。
 #[derive(Clone, Debug)]
-pub(crate) enum Change {
-    Theme(String),
-    Syntax(SyntaxTheme),
-    Locale(LocaleId),
-    TerminalAppearance {
-        family: Option<String>,
-        size: Option<u8>,
-        line_height_percent: Option<u8>,
-        caret_shape: Option<settings::TerminalCaretShape>,
-    },
+pub(crate) struct Change {
+    values: Vec<(SettingKey, SettingValue)>,
 }
 
 impl Change {
-    fn apply(&self, values: &mut GlobalSettings) {
-        match self {
-            Self::Theme(id) => values.theme = id.clone(),
-            Self::Syntax(id) => values.syntax_theme = Some(*id),
-            Self::Locale(id) => values.locale = id.clone(),
-            Self::TerminalAppearance {
-                family,
-                size,
-                line_height_percent,
-                caret_shape,
-            } => {
-                values.terminal_font_family = family.clone();
-                values.terminal_font_size = *size;
-                values.terminal_line_height_percent = *line_height_percent;
-                values.terminal_caret_shape = *caret_shape;
-            }
+    pub(crate) fn set(key: SettingKey, value: SettingValue) -> Self {
+        Self {
+            values: vec![(key, value)],
         }
     }
 
-    fn save(&self, session: &SettingsSession) -> Result<(), settings::SettingsError> {
-        match self {
-            Self::Theme(id) => session.set_theme(id.clone()),
-            Self::Syntax(id) => session.set_syntax_theme(*id),
-            Self::Locale(id) => session.set_locale(id.clone()),
-            Self::TerminalAppearance {
-                family,
-                size,
-                line_height_percent,
-                caret_shape,
-            } => session.set_terminal_appearance(
-                family.clone(),
-                *size,
-                *line_height_percent,
-                *caret_shape,
-            ),
+    /// 表示だけ先に反映し、保存が終われば共有 state の値に置き換わる。
+    fn apply(&self, values: &mut ResolvedSettings) {
+        for (key, value) in &self.values {
+            values.overlay(SettingsScope::User, *key, value.clone());
         }
+    }
+
+    fn save(&self, session: &SettingsSession) -> Result<(), SettingsError> {
+        let changes = self
+            .values
+            .iter()
+            .map(|(key, value)| (*key, Some(value.clone())))
+            .collect::<Vec<_>>();
+        session.update(&changes)
     }
 }
 
@@ -67,24 +43,28 @@ impl Global for SettingsGlobal {}
 
 pub(crate) struct SettingsCoordinator {
     worker: ClientWorker<SettingsSession>,
-    confirmed: GlobalSettings,
+    /// 保存済みの実効値。購読で更新される。
+    confirmed: ResolvedSettings,
+    watch: SettingsWatch,
     pending: VecDeque<Change>,
     active: bool,
     quit_when_idle: bool,
     shutting_down: bool,
-    pub(crate) values: GlobalSettings,
+    pub(crate) values: ResolvedSettings,
     pub(crate) message: String,
 }
 
 impl SettingsCoordinator {
     pub(crate) fn init(session: SettingsSession, cx: &mut App) {
         let values = session.settings();
+        let watch = session.subscribe();
         let entity = cx.new(|cx: &mut Context<Self>| {
             cx.on_app_quit(|this, _| this.wait_for_shutdown_saves())
                 .detach();
             Self {
                 worker: ClientWorker::new(session),
                 confirmed: values.clone(),
+                watch,
                 pending: VecDeque::new(),
                 active: false,
                 quit_when_idle: false,
@@ -227,12 +207,16 @@ impl SettingsCoordinator {
     }
 
     fn publish(&mut self, cx: &mut Context<Self>) {
+        // coordinator を経由しない保存（別 Session）も購読から取り込む。
+        while let Ok(snapshot) = self.watch.try_recv() {
+            self.confirmed = snapshot;
+        }
         self.values = self.confirmed.clone();
         for change in &self.pending {
             change.apply(&mut self.values);
         }
-        theme::set_active(&ThemeId::new(self.values.theme.clone()), cx);
-        theme::syntax::set_active(self.values.syntax_theme, cx);
+        theme::set_active(&ThemeId::new(self.values.theme().to_owned()), cx);
+        theme::syntax::set_active(self.values.syntax_theme(), cx);
         cx.refresh_windows();
         cx.notify();
         self.finish_quit(cx);
@@ -243,20 +227,22 @@ impl SettingsCoordinator {
 mod tests {
     use super::*;
     use crate::time::Instant;
-    use settings::{GlobalSettingsRepository, SettingsError};
+    use settings::{SettingsDocument, SettingsRepository, UI_SYNTAX_THEME, UI_THEME};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     #[derive(Default)]
     struct Repository {
-        saved: Mutex<Vec<GlobalSettings>>,
+        saved: Mutex<Vec<SettingsDocument>>,
         fail_at: usize,
     }
-    impl GlobalSettingsRepository for Repository {
-        fn load(&self) -> Result<GlobalSettings, SettingsError> {
-            Ok(GlobalSettings::default())
+
+    impl SettingsRepository for Repository {
+        fn load(&self) -> Result<SettingsDocument, SettingsError> {
+            Ok(SettingsDocument::empty(SettingsScope::User))
         }
-        fn save(&self, value: &GlobalSettings) -> Result<(), SettingsError> {
+
+        fn save(&self, value: &SettingsDocument) -> Result<(), SettingsError> {
             let mut saved = self.saved.lock().unwrap();
             saved.push(value.clone());
             if self.fail_at == saved.len() {
@@ -264,6 +250,14 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    fn theme_change(theme: &str) -> Change {
+        Change::set(UI_THEME, SettingValue::text(theme))
+    }
+
+    fn syntax_change(theme: settings::SyntaxTheme) -> Change {
+        Change::set(UI_SYNTAX_THEME, SettingValue::text(theme.as_id()))
     }
 
     fn setup(
@@ -287,27 +281,34 @@ mod tests {
         }
     }
 
+    fn stored_theme(document: &SettingsDocument) -> Option<&str> {
+        document.get(UI_THEME).and_then(SettingValue::as_text)
+    }
+
     #[gpui::test]
     fn reverse_and_repeated_changes_keep_request_order(cx: &mut gpui::TestAppContext) {
         let repository = Arc::new(Repository::default());
         let coordinator = setup(cx, repository.clone());
         cx.update(|cx| {
             coordinator.update(cx, |state, cx| {
-                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
-                state.change(Change::Theme("lapis.white".into()), cx);
-                state.change(Change::Theme("lapis.dark".into()), cx);
-                state.change(Change::Theme("lapis.white".into()), cx);
+                state.change(syntax_change(settings::SyntaxTheme::Zed), cx);
+                state.change(theme_change("lapis.white"), cx);
+                state.change(theme_change("lapis.dark"), cx);
+                state.change(theme_change("lapis.white"), cx);
             })
         });
         drain(cx, &coordinator);
         cx.update(|cx| {
             let state = coordinator.read(cx);
-            assert_eq!(state.values.theme, "lapis.white");
-            assert_eq!(state.values.syntax_theme, Some(SyntaxTheme::Zed));
+            assert_eq!(state.values.theme(), "lapis.white");
+            assert_eq!(
+                state.values.syntax_theme(),
+                Some(settings::SyntaxTheme::Zed)
+            );
         });
         let saved = repository.saved.lock().unwrap();
         assert_eq!(saved.len(), 4);
-        assert_eq!(saved.last().unwrap().theme, "lapis.white");
+        assert_eq!(stored_theme(saved.last().unwrap()), Some("lapis.white"));
     }
 
     #[gpui::test]
@@ -319,15 +320,18 @@ mod tests {
         let coordinator = setup(cx, repository.clone());
         cx.update(|cx| {
             coordinator.update(cx, |state, cx| {
-                state.change(Change::Theme("lapis.white".into()), cx);
-                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
+                state.change(theme_change("lapis.white"), cx);
+                state.change(syntax_change(settings::SyntaxTheme::Zed), cx);
             })
         });
         drain(cx, &coordinator);
         cx.update(|cx| {
             let state = coordinator.read(cx);
-            assert_eq!(state.values.theme, "lapis.dark");
-            assert_eq!(state.values.syntax_theme, Some(SyntaxTheme::Zed));
+            assert_eq!(state.values.theme(), "lapis.dark");
+            assert_eq!(
+                state.values.syntax_theme(),
+                Some(settings::SyntaxTheme::Zed)
+            );
         });
         assert_eq!(repository.saved.lock().unwrap().len(), 2);
     }
@@ -338,10 +342,10 @@ mod tests {
         cx.update(|cx| {
             coordinator.update(cx, |state, cx| {
                 for _ in 0..CAPACITY {
-                    state.change(Change::Syntax(SyntaxTheme::Zed), cx);
+                    state.change(syntax_change(settings::SyntaxTheme::Zed), cx);
                 }
-                state.change(Change::Theme("lapis.white".into()), cx);
-                assert_eq!(state.values.theme, "lapis.dark");
+                state.change(theme_change("lapis.white"), cx);
+                assert_eq!(state.values.theme(), "lapis.dark");
                 assert!(!state.message.is_empty());
                 assert_eq!(state.pending.len(), CAPACITY);
             })
@@ -356,16 +360,20 @@ mod tests {
         cx.update(|cx| {
             let feature = cx.new(crate::features::settings::SettingsFeature::new);
             feature.update(cx, |feature, cx| {
-                feature.select_theme(ThemeId::new("lapis.white"), cx);
+                feature.choose(
+                    settings::UI_THEME,
+                    settings::SettingValue::text("lapis.white"),
+                    cx,
+                );
             });
             drop(feature);
         });
         drain(cx, &coordinator);
         assert_eq!(
-            repository.saved.lock().unwrap().last().unwrap().theme,
-            "lapis.white"
+            stored_theme(repository.saved.lock().unwrap().last().unwrap()),
+            Some("lapis.white")
         );
-        cx.update(|cx| assert_eq!(coordinator.read(cx).confirmed.theme, "lapis.white"));
+        cx.update(|cx| assert_eq!(coordinator.read(cx).confirmed.theme(), "lapis.white"));
     }
 
     #[gpui::test]
@@ -374,8 +382,8 @@ mod tests {
         let coordinator = setup(cx, repository.clone());
         cx.update(|cx| {
             coordinator.update(cx, |state, cx| {
-                state.change(Change::Theme("lapis.white".into()), cx);
-                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
+                state.change(theme_change("lapis.white"), cx);
+                state.change(syntax_change(settings::SyntaxTheme::Zed), cx);
                 state.quit_after_pending(cx);
                 assert!(state.quit_when_idle);
                 assert_eq!(state.pending.len(), 2);
@@ -385,8 +393,11 @@ mod tests {
         cx.update(|cx| {
             let state = coordinator.read(cx);
             assert!(!state.quit_when_idle);
-            assert_eq!(state.confirmed.theme, "lapis.white");
-            assert_eq!(state.confirmed.syntax_theme, Some(SyntaxTheme::Zed));
+            assert_eq!(state.confirmed.theme(), "lapis.white");
+            assert_eq!(
+                state.confirmed.syntax_theme(),
+                Some(settings::SyntaxTheme::Zed)
+            );
         });
         assert_eq!(repository.saved.lock().unwrap().len(), 2);
     }
@@ -398,15 +409,15 @@ mod tests {
         use std::task::{Context as TaskContext, Poll, Waker};
 
         struct GatedRepository {
-            saved: Mutex<Vec<GlobalSettings>>,
+            saved: Mutex<Vec<SettingsDocument>>,
             started: mpsc::Sender<()>,
             release: Mutex<mpsc::Receiver<()>>,
         }
-        impl GlobalSettingsRepository for GatedRepository {
-            fn load(&self) -> Result<GlobalSettings, SettingsError> {
-                Ok(GlobalSettings::default())
+        impl SettingsRepository for GatedRepository {
+            fn load(&self) -> Result<SettingsDocument, SettingsError> {
+                Ok(SettingsDocument::empty(SettingsScope::User))
             }
-            fn save(&self, value: &GlobalSettings) -> Result<(), SettingsError> {
+            fn save(&self, value: &SettingsDocument) -> Result<(), SettingsError> {
                 if self.saved.lock().unwrap().is_empty() {
                     self.started.send(()).unwrap();
                     self.release.lock().unwrap().recv().unwrap();
@@ -430,8 +441,8 @@ mod tests {
         });
         let mut shutdown = Box::pin(cx.update(|cx| {
             coordinator.update(cx, |state, cx| {
-                state.change(Change::Theme("lapis.white".into()), cx);
-                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
+                state.change(theme_change("lapis.white"), cx);
+                state.change(syntax_change(settings::SyntaxTheme::Zed), cx);
                 state.wait_for_shutdown_saves()
             })
         }));
@@ -455,8 +466,15 @@ mod tests {
         }
         let saved = repository.saved.lock().unwrap();
         assert_eq!(saved.len(), 2);
-        assert_eq!(saved.last().unwrap().theme, "lapis.white");
-        assert_eq!(saved.last().unwrap().syntax_theme, Some(SyntaxTheme::Zed));
+        assert_eq!(stored_theme(saved.last().unwrap()), Some("lapis.white"));
+        assert_eq!(
+            saved
+                .last()
+                .unwrap()
+                .get(UI_SYNTAX_THEME)
+                .and_then(SettingValue::as_text),
+            Some("zed")
+        );
     }
 
     #[gpui::test]
@@ -468,17 +486,20 @@ mod tests {
         let coordinator = setup(cx, repository);
         cx.update(|cx| {
             coordinator.update(cx, |state, cx| {
-                state.change(Change::Syntax(SyntaxTheme::Zed), cx);
-                state.change(Change::Theme("lapis.white".into()), cx);
-                state.change(Change::Locale(LocaleId::new("ja-JP")), cx);
+                state.change(syntax_change(settings::SyntaxTheme::Zed), cx);
+                state.change(theme_change("lapis.white"), cx);
+                state.change(
+                    Change::set(settings::UI_LOCALE, SettingValue::text("ja-JP")),
+                    cx,
+                );
             })
         });
         drain(cx, &coordinator);
         cx.update(|cx| {
             let values = &coordinator.read(cx).values;
-            assert_eq!(values.theme, "lapis.dark");
-            assert_eq!(values.syntax_theme, Some(SyntaxTheme::Zed));
-            assert_eq!(values.locale.as_str(), "ja-JP");
+            assert_eq!(values.theme(), "lapis.dark");
+            assert_eq!(values.syntax_theme(), Some(settings::SyntaxTheme::Zed));
+            assert_eq!(values.locale().as_str(), "ja-JP");
         });
     }
 }

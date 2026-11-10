@@ -23,7 +23,7 @@ use desktop_client::{
 use document::DocumentConnection;
 use git::GitConnection;
 use lsp::LanguageServerBackend;
-use settings::GlobalSettingsRepository;
+use settings::SettingsRepository;
 use task::TaskConnection;
 use terminal::TerminalBackend;
 use wasm_bindgen::prelude::*;
@@ -155,7 +155,7 @@ where
         + LanguageServerBackend
         + WorkspaceSearchBackend
         + ConversationRepository
-        + GlobalSettingsRepository
+        + SettingsRepository
         + Send
         + Sync
         + 'static,

@@ -34,8 +34,8 @@ pub fn run_web(
                 .expect("Web fonts should load");
             let settings = services.settings.settings();
             crate::theme::init(
-                &crate::extension_ui::ThemeId::new(settings.theme),
-                settings.syntax_theme,
+                &crate::extension_ui::ThemeId::new(settings.theme().to_owned()),
+                settings.syntax_theme(),
                 cx,
             );
             crate::features::settings_coordinator::SettingsCoordinator::init(
