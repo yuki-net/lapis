@@ -822,7 +822,7 @@ mod tests {
         );
         assert_eq!(
             active_tab_id(
-                &view.workbench.task_layouts[&ConversationId::new("task-a")]
+                view.workbench.task_layouts[&ConversationId::new("task-a")]
                     .layout
                     .as_ref()
                     .unwrap()

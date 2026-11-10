@@ -71,10 +71,13 @@ impl ConversationViewState {
         if let Some(layout) = &mut self.layout {
             layout.clear_active_tabs();
         }
-        if let Some(layout) = &mut self.workbench.ide_layout {
-            if let Some(layout) = &mut layout.layout {
-                layout.clear_active_tabs();
-            }
+        if let Some(layout) = self
+            .workbench
+            .ide_layout
+            .as_mut()
+            .and_then(|layout| layout.layout.as_mut())
+        {
+            layout.clear_active_tabs();
         }
         for layout in self.workbench.task_layouts.values_mut() {
             if let Some(layout) = &mut layout.layout {
