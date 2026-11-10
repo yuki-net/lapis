@@ -7,6 +7,9 @@ use std::{
 use document::Revision;
 use serde::{Deserialize, Serialize};
 
+/// 診断更新の通知。内容は持たず、受信側が `diagnostics()` で正本を取得する。
+pub type DiagnosticsChanges = futures_channel::mpsc::UnboundedReceiver<()>;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LspPosition {
     pub line: u32,
@@ -69,6 +72,12 @@ pub trait LanguageServerBackend: Send + Sync {
     fn did_open(&self, path: &Path, text: &str, revision: Revision) -> Result<(), LspError>;
     fn did_change(&self, path: &Path, text: &str, revision: Revision) -> Result<(), LspError>;
     fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError>;
+    /// 診断が変わったときの通知。未対応の backend は `None`。
+    ///
+    /// receiver は 1 度だけ取得できる。内容の正本は `diagnostics()` とする。
+    fn diagnostics_changes(&self) -> Option<DiagnosticsChanges> {
+        None
+    }
     fn completion(
         &self,
         path: &Path,

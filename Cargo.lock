@@ -4685,6 +4685,7 @@ name = "local-lsp"
 version = "0.1.0"
 dependencies = [
  "document",
+ "futures-channel",
  "lsp",
  "serde_json",
  "tempfile",
@@ -4814,6 +4815,7 @@ name = "lsp"
 version = "0.1.0"
 dependencies = [
  "document",
+ "futures-channel",
  "serde",
  "serde_json",
 ]

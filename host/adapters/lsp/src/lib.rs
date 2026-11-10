@@ -5,29 +5,35 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, MutexGuard, mpsc},
     thread,
     time::{Duration, Instant},
 };
 
+use futures_channel::mpsc::UnboundedSender;
 use lsp::{
-    CompletionItem, DefinitionTarget, Diagnostic, DiagnosticSeverity, LanguageServerBackend,
-    LspError, LspPosition, LspRange,
+    CompletionItem, DefinitionTarget, Diagnostic, DiagnosticSeverity, DiagnosticsChanges,
+    LanguageServerBackend, LspError, LspPosition, LspRange,
 };
 
-struct LspProcess {
-    child: std::process::Child,
-    writer: std::process::ChildStdin,
-    receiver: mpsc::Receiver<serde_json::Value>,
-    next_request: u64,
+struct LspState {
+    writer: Box<dyn Write + Send>,
     revisions: HashMap<PathBuf, document::Revision>,
     diagnostics: Vec<Diagnostic>,
     diagnostics_dirty: bool,
 }
 
+struct LspProcess {
+    child: std::process::Child,
+    state: Arc<Mutex<LspState>>,
+    responses: mpsc::Receiver<serde_json::Value>,
+    next_request: u64,
+}
+
 #[derive(Default)]
 pub struct LocalLspBackend {
     process: Mutex<Option<LspProcess>>,
+    diagnostics_notifier: Arc<Mutex<Option<UnboundedSender<()>>>>,
 }
 
 impl LocalLspBackend {
@@ -43,6 +49,20 @@ impl LocalLspBackend {
             .as_mut()
             .ok_or_else(|| LspError::new("Language server is not running"))?;
         operation(process)
+    }
+}
+
+fn lock_state(state: &Mutex<LspState>) -> Result<MutexGuard<'_, LspState>, LspError> {
+    state
+        .lock()
+        .map_err(|_| LspError::new("Language server state lock failed"))
+}
+
+fn notify_diagnostics_changed(notifier: &Mutex<Option<UnboundedSender<()>>>) {
+    if let Ok(guard) = notifier.lock()
+        && let Some(sender) = guard.as_ref()
+    {
+        let _ = sender.unbounded_send(());
     }
 }
 
@@ -80,16 +100,21 @@ impl LanguageServerBackend for LocalLspBackend {
             .stdout
             .take()
             .ok_or_else(|| LspError::new("rust-analyzer stdout is unavailable"))?;
-        let (sender, receiver) = mpsc::channel();
-        thread::spawn(move || read_lsp_messages(stdout, sender));
-        let mut process = LspProcess {
-            child,
-            writer,
-            receiver,
-            next_request: 1,
+        let (sender, responses) = mpsc::channel();
+        let state = Arc::new(Mutex::new(LspState {
+            writer: Box::new(writer),
             revisions: HashMap::new(),
             diagnostics: Vec::new(),
             diagnostics_dirty: false,
+        }));
+        let reader_state = state.clone();
+        let notifier = self.diagnostics_notifier.clone();
+        thread::spawn(move || read_lsp_messages(stdout, sender, reader_state, notifier));
+        let mut process = LspProcess {
+            child,
+            state,
+            responses,
+            next_request: 1,
         };
         let root_uri = file_uri(workspace);
         let id = lsp_request(
@@ -128,15 +153,18 @@ impl LanguageServerBackend for LocalLspBackend {
     ) -> Result<(), LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
-            process.revisions.insert(path.clone(), revision);
-            process.diagnostics_dirty = true;
-            lsp_notify(
-                process,
-                "textDocument/didOpen",
-                serde_json::json!({ "textDocument": {
-                    "uri": file_uri(&path), "languageId": "rust",
-                    "version": revision.number(), "text": text
-                }}),
+            let mut state = lock_state(&process.state)?;
+            state.revisions.insert(path.clone(), revision);
+            state.diagnostics_dirty = true;
+            lsp_write(
+                state.writer.as_mut(),
+                &serde_json::json!({
+                    "jsonrpc": "2.0", "method": "textDocument/didOpen",
+                    "params": { "textDocument": {
+                        "uri": file_uri(&path), "languageId": "rust",
+                        "version": revision.number(), "text": text
+                    }}
+                }),
             )
         })
     }
@@ -149,14 +177,17 @@ impl LanguageServerBackend for LocalLspBackend {
     ) -> Result<(), LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
-            process.revisions.insert(path.clone(), revision);
-            process.diagnostics_dirty = true;
-            lsp_notify(
-                process,
-                "textDocument/didChange",
-                serde_json::json!({
-                    "textDocument": { "uri": file_uri(&path), "version": revision.number() },
-                    "contentChanges": [{ "text": text }]
+            let mut state = lock_state(&process.state)?;
+            state.revisions.insert(path.clone(), revision);
+            state.diagnostics_dirty = true;
+            lsp_write(
+                state.writer.as_mut(),
+                &serde_json::json!({
+                    "jsonrpc": "2.0", "method": "textDocument/didChange",
+                    "params": {
+                        "textDocument": { "uri": file_uri(&path), "version": revision.number() },
+                        "contentChanges": [{ "text": text }]
+                    }
                 }),
             )
         })
@@ -164,35 +195,50 @@ impl LanguageServerBackend for LocalLspBackend {
 
     fn diagnostics(&self) -> Result<Vec<Diagnostic>, LspError> {
         self.with_process(|process| {
-            lsp_drain_notifications(process);
-            if process.diagnostics_dirty {
-                process.diagnostics_dirty = false;
-                let documents = process
+            let documents = {
+                let mut state = lock_state(&process.state)?;
+                if !state.diagnostics_dirty {
+                    return Ok(state.diagnostics.clone());
+                }
+                state.diagnostics_dirty = false;
+                state
                     .revisions
                     .iter()
                     .map(|(path, revision)| (path.clone(), *revision))
-                    .collect::<Vec<_>>();
-                for (path, revision) in documents {
-                    let id = lsp_request(
-                        process,
-                        "textDocument/diagnostic",
-                        serde_json::json!({
-                            "textDocument": { "uri": file_uri(&path) }
-                        }),
-                    )?;
-                    let response = lsp_wait_response(process, id, Duration::from_secs(8))?;
-                    if let Some(error) = response.get("error") {
-                        return Err(LspError::new(format!("LSP diagnostics failed: {error}")));
-                    }
-                    let items = response
-                        .pointer("/result/items")
-                        .and_then(|value| value.as_array())
-                        .map(Vec::as_slice);
-                    replace_diagnostics(process, &path, revision, items);
+                    .collect::<Vec<_>>()
+            };
+            for (path, revision) in documents {
+                let id = lsp_request(
+                    process,
+                    "textDocument/diagnostic",
+                    serde_json::json!({
+                        "textDocument": { "uri": file_uri(&path) }
+                    }),
+                )?;
+                let response = lsp_wait_response(process, id, Duration::from_secs(8))?;
+                if let Some(error) = response.get("error") {
+                    return Err(LspError::new(format!("LSP diagnostics failed: {error}")));
                 }
+                let items = response
+                    .pointer("/result/items")
+                    .and_then(|value| value.as_array())
+                    .map(Vec::as_slice);
+                let mut state = lock_state(&process.state)?;
+                replace_diagnostics(&mut state.diagnostics, &path, revision, items);
             }
-            Ok(process.diagnostics.clone())
+            let state = lock_state(&process.state)?;
+            Ok(state.diagnostics.clone())
         })
+    }
+
+    fn diagnostics_changes(&self) -> Option<DiagnosticsChanges> {
+        let mut notifier = self.diagnostics_notifier.lock().ok()?;
+        if notifier.is_some() {
+            return None;
+        }
+        let (sender, receiver) = futures_channel::mpsc::unbounded();
+        *notifier = Some(sender);
+        Some(receiver)
     }
 
     fn completion(
@@ -203,7 +249,7 @@ impl LanguageServerBackend for LocalLspBackend {
     ) -> Result<Vec<CompletionItem>, LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
-            if process.revisions.get(&path) != Some(&revision) {
+            if lock_state(&process.state)?.revisions.get(&path) != Some(&revision) {
                 return Ok(Vec::new());
             }
             let id = lsp_request(
@@ -252,7 +298,7 @@ impl LanguageServerBackend for LocalLspBackend {
     ) -> Result<Option<DefinitionTarget>, LspError> {
         self.with_process(|process| {
             let path = normalize_lsp_path(path);
-            if process.revisions.get(&path) != Some(&revision) {
+            if lock_state(&process.state)?.revisions.get(&path) != Some(&revision) {
                 return Ok(None);
             }
             let id = lsp_request(
@@ -299,7 +345,12 @@ impl LanguageServerBackend for LocalLspBackend {
     }
 }
 
-fn read_lsp_messages(stdout: std::process::ChildStdout, sender: mpsc::Sender<serde_json::Value>) {
+fn read_lsp_messages(
+    stdout: std::process::ChildStdout,
+    responses: mpsc::Sender<serde_json::Value>,
+    state: Arc<Mutex<LspState>>,
+    notifier: Arc<Mutex<Option<UnboundedSender<()>>>>,
+) {
     let mut reader = BufReader::new(stdout);
     loop {
         let mut content_length = None;
@@ -325,20 +376,25 @@ fn read_lsp_messages(stdout: std::process::ChildStdout, sender: mpsc::Sender<ser
         if reader.read_exact(&mut body).is_err() {
             return;
         }
-        let Ok(message) = serde_json::from_slice(&body) else {
+        let Ok(message) = serde_json::from_slice::<serde_json::Value>(&body) else {
             continue;
         };
-        if sender.send(message).is_err() {
-            return;
+        // 応答は待機中の要求へ渡し、通知と server request は読み取りスレッドで処理する。
+        if message.get("id").is_some() && message.get("method").is_none() {
+            if responses.send(message).is_err() {
+                return;
+            }
+            continue;
         }
+        lsp_handle_incoming(&state, &message, &notifier);
     }
 }
 
-fn lsp_write(process: &mut LspProcess, value: &serde_json::Value) -> Result<(), LspError> {
+fn lsp_write(writer: &mut (dyn Write + Send), value: &serde_json::Value) -> Result<(), LspError> {
     let bytes = serde_json::to_vec(value).map_err(|error| LspError::new(error.to_string()))?;
-    write!(process.writer, "Content-Length: {}\r\n\r\n", bytes.len())
-        .and_then(|()| process.writer.write_all(&bytes))
-        .and_then(|()| process.writer.flush())
+    write!(writer, "Content-Length: {}\r\n\r\n", bytes.len())
+        .and_then(|()| writer.write_all(&bytes))
+        .and_then(|()| writer.flush())
         .map_err(|error| LspError::new(error.to_string()))
 }
 
@@ -349,8 +405,9 @@ fn lsp_request(
 ) -> Result<u64, LspError> {
     let id = process.next_request;
     process.next_request += 1;
+    let mut state = lock_state(&process.state)?;
     lsp_write(
-        process,
+        state.writer.as_mut(),
         &serde_json::json!({
             "jsonrpc": "2.0", "id": id, "method": method, "params": params
         }),
@@ -363,8 +420,9 @@ fn lsp_notify(
     method: &str,
     params: serde_json::Value,
 ) -> Result<(), LspError> {
+    let mut state = lock_state(&process.state)?;
     lsp_write(
-        process,
+        state.writer.as_mut(),
         &serde_json::json!({
             "jsonrpc": "2.0", "method": method, "params": params
         }),
@@ -383,23 +441,20 @@ fn lsp_wait_response(
             return Err(LspError::new(format!("LSP request {request_id} timed out")));
         }
         let message = process
-            .receiver
+            .responses
             .recv_timeout(remaining)
             .map_err(|error| LspError::new(format!("LSP response failed: {error}")))?;
         if message.get("id").and_then(|value| value.as_u64()) == Some(request_id) {
             return Ok(message);
         }
-        lsp_handle_incoming(process, &message);
     }
 }
 
-fn lsp_drain_notifications(process: &mut LspProcess) {
-    while let Ok(message) = process.receiver.try_recv() {
-        lsp_handle_incoming(process, &message);
-    }
-}
-
-fn lsp_handle_incoming(process: &mut LspProcess, message: &serde_json::Value) {
+fn lsp_handle_incoming(
+    state: &Mutex<LspState>,
+    message: &serde_json::Value,
+    notifier: &Mutex<Option<UnboundedSender<()>>>,
+) {
     if message.get("id").is_some()
         && let Some(method) = message.get("method").and_then(|value| value.as_str())
     {
@@ -414,29 +469,36 @@ fn lsp_handle_incoming(process: &mut LspProcess, message: &serde_json::Value) {
             | "client/unregisterCapability"
             | "window/workDoneProgress/create" => serde_json::Value::Null,
             "workspace/diagnostic/refresh" => {
-                process.diagnostics_dirty = true;
+                if let Ok(mut state) = state.lock() {
+                    state.diagnostics_dirty = true;
+                }
+                notify_diagnostics_changed(notifier);
                 serde_json::Value::Null
             }
             _ => {
-                let _ = lsp_write(
-                    process,
-                    &serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "id": message.get("id").cloned().unwrap_or(serde_json::Value::Null),
-                        "error": { "code": -32601, "message": format!("Unsupported server request: {method}") }
-                    }),
-                );
+                if let Ok(mut state) = state.lock() {
+                    let _ = lsp_write(
+                        state.writer.as_mut(),
+                        &serde_json::json!({
+                            "jsonrpc": "2.0",
+                            "id": message.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                            "error": { "code": -32601, "message": format!("Unsupported server request: {method}") }
+                        }),
+                    );
+                }
                 return;
             }
         };
-        let _ = lsp_write(
-            process,
-            &serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": message.get("id").cloned().unwrap_or(serde_json::Value::Null),
-                "result": result
-            }),
-        );
+        if let Ok(mut state) = state.lock() {
+            let _ = lsp_write(
+                state.writer.as_mut(),
+                &serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": message.get("id").cloned().unwrap_or(serde_json::Value::Null),
+                    "result": result
+                }),
+            );
+        }
         return;
     }
     if message.get("method").and_then(|value| value.as_str())
@@ -454,45 +516,48 @@ fn lsp_handle_incoming(process: &mut LspProcess, message: &serde_json::Value) {
     else {
         return;
     };
-    let Some(revision) = process.revisions.get(&path).copied() else {
+    let Ok(mut state) = state.lock() else {
+        return;
+    };
+    let Some(revision) = state.revisions.get(&path).copied() else {
         return;
     };
     let items = params
         .get("diagnostics")
         .and_then(|value| value.as_array())
         .map(Vec::as_slice);
-    replace_diagnostics(process, &path, revision, items);
+    if replace_diagnostics(&mut state.diagnostics, &path, revision, items) {
+        notify_diagnostics_changed(notifier);
+    }
 }
 
 fn replace_diagnostics(
-    process: &mut LspProcess,
+    diagnostics: &mut Vec<Diagnostic>,
     path: &Path,
     revision: document::Revision,
     items: Option<&[serde_json::Value]>,
-) {
-    process
-        .diagnostics
-        .retain(|diagnostic| diagnostic.path != path);
-    process
-        .diagnostics
-        .extend(items.into_iter().flatten().filter_map(|item| {
-            Some(Diagnostic {
-                path: path.to_owned(),
-                range: parse_lsp_range(item.get("range")?)?,
-                severity: match item
-                    .get("severity")
-                    .and_then(|value| value.as_u64())
-                    .unwrap_or(3)
-                {
-                    1 => DiagnosticSeverity::Error,
-                    2 => DiagnosticSeverity::Warning,
-                    4 => DiagnosticSeverity::Hint,
-                    _ => DiagnosticSeverity::Information,
-                },
-                message: item.get("message")?.as_str()?.to_owned(),
-                revision,
-            })
-        }));
+) -> bool {
+    let previous = diagnostics.clone();
+    diagnostics.retain(|diagnostic| diagnostic.path != path);
+    diagnostics.extend(items.into_iter().flatten().filter_map(|item| {
+        Some(Diagnostic {
+            path: path.to_owned(),
+            range: parse_lsp_range(item.get("range")?)?,
+            severity: match item
+                .get("severity")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(3)
+            {
+                1 => DiagnosticSeverity::Error,
+                2 => DiagnosticSeverity::Warning,
+                4 => DiagnosticSeverity::Hint,
+                _ => DiagnosticSeverity::Information,
+            },
+            message: item.get("message")?.as_str()?.to_owned(),
+            revision,
+        })
+    }));
+    *diagnostics != previous
 }
 
 fn parse_lsp_range(value: &serde_json::Value) -> Option<LspRange> {
@@ -636,6 +701,114 @@ mod tests {
         };
 
         assert_eq!(path_from_file_uri(&file_uri(&path)), path);
+    }
+
+    #[test]
+    fn diagnostics_notifications_are_delivered_without_a_request() {
+        let workspace = tempfile::tempdir().unwrap();
+        fs::create_dir(workspace.path().join("src")).unwrap();
+        let path = workspace.path().join("src/lib.rs");
+        fs::write(&path, "").unwrap();
+        let path = normalize_lsp_path(&path);
+        let (sender, mut changes) = futures_channel::mpsc::unbounded();
+        let notifier = Mutex::new(Some(sender));
+        let state = Mutex::new(LspState {
+            writer: Box::new(Vec::new()),
+            revisions: HashMap::from([(path.clone(), document::Revision::default())]),
+            diagnostics: Vec::new(),
+            diagnostics_dirty: false,
+        });
+
+        lsp_handle_incoming(
+            &state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/publishDiagnostics",
+                "params": {
+                    "uri": file_uri(&path),
+                    "diagnostics": [{
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 1 }
+                        },
+                        "severity": 1,
+                        "message": "broken"
+                    }]
+                }
+            }),
+            &notifier,
+        );
+
+        assert!(matches!(changes.try_recv(), Ok(())));
+        assert_eq!(state.lock().unwrap().diagnostics.len(), 1);
+        // 内容が変わらない再送では通知しない。
+        lsp_handle_incoming(
+            &state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "textDocument/publishDiagnostics",
+                "params": {
+                    "uri": file_uri(&path),
+                    "diagnostics": [{
+                        "range": {
+                            "start": { "line": 0, "character": 0 },
+                            "end": { "line": 0, "character": 1 }
+                        },
+                        "severity": 1,
+                        "message": "broken"
+                    }]
+                }
+            }),
+            &notifier,
+        );
+        assert!(changes.try_recv().is_err());
+
+        lsp_handle_incoming(
+            &state,
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "workspace/diagnostic/refresh",
+                "params": {}
+            }),
+            &notifier,
+        );
+        assert!(matches!(changes.try_recv(), Ok(())));
+        assert!(state.lock().unwrap().diagnostics_dirty);
+    }
+
+    #[test]
+    fn rust_analyzer_pushes_diagnostics_after_initial_analysis() {
+        let _guard = RUST_ANALYZER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let (workspace, path) = rust_analyzer_workspace();
+        let backend = LocalLspBackend::default();
+        if let Err(error) = backend.start(workspace.path()) {
+            assert!(error.to_string().contains("rust-analyzer is unavailable"));
+            return;
+        }
+        let mut changes = backend
+            .diagnostics_changes()
+            .expect("diagnostics changes subscription");
+        backend
+            .did_open(&path, "fn broken( {\n", document::Revision::default())
+            .unwrap();
+        // 初回の解析を開始させ、以降は通知だけで更新されることを確認する。
+        let _ = backend.diagnostics().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let notified = loop {
+            match changes.try_recv() {
+                Ok(()) => break true,
+                Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(50)),
+                Err(_) => break false,
+            }
+        };
+        backend.shutdown().unwrap();
+        assert!(
+            notified,
+            "rust-analyzer の publishDiagnostics を要求なしで受信できませんでした"
+        );
     }
 
     #[test]
