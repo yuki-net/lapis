@@ -292,6 +292,9 @@ fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChan
             }
             // 切断・購読失敗時は購読先の変化を取りこぼしている可能性がある。
             publish_changes(&changes);
+            if changes.upgrade().is_none() {
+                return;
+            }
             std::thread::sleep(Duration::from_secs(2));
         }
     });
@@ -624,37 +627,49 @@ mod tests {
     }
 
     #[test]
-    fn subscription_start_and_resync_request_a_snapshot() {
+    fn subscription_start_requests_a_snapshot() {
         let changes = std::sync::Arc::new(DocumentChanges::default());
         let receiver = changes.subscribe();
         let weak = std::sync::Arc::downgrade(&changes);
-        let mut steps = vec![RelayPoll::Closed].into_iter();
-        relay_subscription(&weak, move || steps.next().unwrap());
+        relay_subscription(&weak, || RelayPoll::Closed);
         assert!(
             receiver.recv_timeout(Duration::from_millis(100)).is_ok(),
             "購読開始時に再同期を促す"
         );
-        // resync は通知したうえで購読を張り直すため終了する。
+    }
+
+    #[test]
+    fn resync_notifies_and_stops() {
+        let changes = std::sync::Arc::new(DocumentChanges::default());
+        let receiver = changes.subscribe();
+        let weak = std::sync::Arc::downgrade(&changes);
         let mut steps = vec![RelayPoll::Event(Relay::Resync)].into_iter();
-        relay_subscription(&weak, move || {
+        relay_events(&weak, &mut || {
             steps.next().unwrap_or_else(|| panic!("resync で終了する"))
         });
         assert!(
             receiver.recv_timeout(Duration::from_millis(100)).is_ok(),
             "resync でも再同期を促す"
         );
+        assert!(receiver.try_recv().is_err(), "通知は 1 回にまとめる");
     }
 
     #[test]
-    fn relay_loop_stops_when_the_owner_is_dropped_even_while_idle() {
+    fn relay_loop_stops_when_the_owner_is_dropped_while_waiting() {
         let changes = std::sync::Arc::new(DocumentChanges::default());
         let weak = std::sync::Arc::downgrade(&changes);
-        drop(changes);
+        let mut owner = Some(changes);
         let calls = std::cell::Cell::new(0);
         relay_events(&weak, &mut || {
             calls.set(calls.get() + 1);
+            if calls.get() == 1 {
+                // 受信待ち中に相当するタイミングで破棄する。
+                drop(owner.take());
+            }
             RelayPoll::Idle
         });
-        assert_eq!(calls.get(), 0, "破棄済みなら受信待ちに入らない");
+        // 受信待ち中に破棄したら、次の確認でループを抜ける（追加の待機をしない）。
+        assert_eq!(calls.get(), 1, "破棄後の再待機は行わない");
+        assert!(weak.upgrade().is_none());
     }
 }
