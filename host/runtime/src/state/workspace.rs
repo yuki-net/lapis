@@ -65,10 +65,10 @@ impl BackendState {
         workspace_id: WorkspaceId,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         self.require_workspace(session, &workspace_id)?;
-        self.disconnect(&session.session_id);
+        let events = self.disconnect(&session.session_id);
         Ok((
             ResponseBody::WorkspaceClose(WorkspaceCloseResponse { workspace_id }),
-            Vec::new(),
+            events,
         ))
     }
 

@@ -98,6 +98,15 @@ impl HostDocuments {
         snapshot: wire::DocumentSnapshot,
     ) -> Result<DocumentCache, DocumentError> {
         let id = DocumentId::new(snapshot.document_id.as_str());
+        let owner = snapshot
+            .owner
+            .as_ref()
+            .map(|owner| editor_core::SessionId::new(owner.as_str()));
+        let is_owner = owner.as_ref().is_some_and(|owner| {
+            client
+                .session_id()
+                .is_some_and(|session| session.as_str() == owner.as_str())
+        });
         let path = snapshot.path.map(|path| root.join(path.as_str()));
         let document = Document::from_snapshot(
             path,
@@ -126,6 +135,8 @@ impl HostDocuments {
                 wire::DocumentExternalChange::Modified => ExternalChange::Modified,
                 wire::DocumentExternalChange::Deleted => ExternalChange::Deleted,
             },
+            owner,
+            is_owner,
         })
     }
 
@@ -235,6 +246,24 @@ impl DocumentConnection for HostDocuments {
             }
         }
         Err(DocumentError::io("Document がありません"))
+    }
+
+    fn claim(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        let (client, _, document_id) = self.resource(id)?;
+        Self::request(
+            &client,
+            wire::RequestBody::DocumentClaim(wire::DocumentClaimRequest { document_id }),
+        )?;
+        self.inspect(id)
+    }
+
+    fn release(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        let (client, _, document_id) = self.resource(id)?;
+        Self::request(
+            &client,
+            wire::RequestBody::DocumentRelease(wire::DocumentReleaseRequest { document_id }),
+        )?;
+        self.inspect(id)
     }
 
     fn edit(

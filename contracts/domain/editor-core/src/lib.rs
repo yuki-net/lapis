@@ -33,6 +33,7 @@ define_id!(ConversationId);
 define_id!(DocumentId);
 define_id!(TaskId);
 define_id!(ExecutionId);
+define_id!(SessionId);
 
 #[cfg(test)]
 mod tests {

@@ -109,6 +109,20 @@ impl From<DocumentId> for editor_core::DocumentId {
     }
 }
 
+impl TryFrom<&editor_core::SessionId> for SessionId {
+    type Error = InvalidResourceId;
+
+    fn try_from(value: &editor_core::SessionId) -> Result<Self, Self::Error> {
+        Self::try_new(value.as_str())
+    }
+}
+
+impl From<SessionId> for editor_core::SessionId {
+    fn from(value: SessionId) -> Self {
+        Self::new(value.into_inner())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,5 +149,10 @@ mod tests {
         let wire = DocumentId::try_from(&domain).unwrap();
         assert_eq!(wire.as_str(), "document-1");
         assert_eq!(editor_core::DocumentId::from(wire), domain);
+
+        let domain = editor_core::SessionId::new("session-1");
+        let wire = SessionId::try_from(&domain).unwrap();
+        assert_eq!(wire.as_str(), "session-1");
+        assert_eq!(editor_core::SessionId::from(wire), domain);
     }
 }

@@ -4,6 +4,8 @@ struct MemoryDocuments {
     concurrent_edit: Arc<Mutex<Option<String>>>,
     workspace_failure: Arc<std::sync::atomic::AtomicBool>,
     faults: Arc<Mutex<CloseFaults>>,
+    session: editor_core::SessionId,
+    owner: Arc<Mutex<Option<editor_core::SessionId>>>,
 }
 
 #[derive(Default)]
@@ -53,6 +55,50 @@ fn internal_document_selection_and_idle_polls_do_not_persist_window_activity() {
     assert!(editor.active_text().unwrap().is_empty());
     editor.update_active_view(0..0, 0, 0., 10.);
     assert_eq!(state.saves.load(Ordering::Relaxed), before + 3);
+}
+
+#[test]
+fn lease_claim_release_and_foreign_owner_update_the_active_document() {
+    let repository = Arc::new(MemoryRepository::default());
+    let connection = Arc::new(MemoryDocuments::new(repository.clone()));
+    let mut editor = EditorSession::new_empty(
+        repository,
+        Arc::new(FixedDialog {
+            workspace: None,
+            save: None,
+        }),
+        Arc::new(MemoryState::default()),
+        connection.clone(),
+    );
+    editor.new_document();
+    assert!(!editor.active_is_owner());
+    assert!(!editor.active_is_read_only());
+
+    editor.claim_active().unwrap();
+    assert!(editor.active_is_owner());
+    assert_eq!(
+        editor.active_owner().map(|owner| owner.as_str()),
+        Some("test-session")
+    );
+    assert!(!editor.active_is_read_only());
+
+    // 他の Session が所有する snapshot では読み取り専用になる。
+    *connection.owner.lock().unwrap() = Some(editor_core::SessionId::new("another-session"));
+    editor.refresh_documents().unwrap();
+    assert!(editor.active_is_read_only());
+    assert_eq!(
+        editor.active_owner().map(|owner| owner.as_str()),
+        Some("another-session")
+    );
+
+    // 取得操作は他の Session から編集権を奪う。
+    editor.claim_active().unwrap();
+    assert!(editor.active_is_owner());
+    assert!(!editor.active_is_read_only());
+
+    editor.release_active().unwrap();
+    assert!(!editor.active_is_owner());
+    assert!(editor.active_owner().is_none());
 }
 
 #[test]
@@ -299,6 +345,8 @@ impl MemoryDocuments {
             concurrent_edit: Arc::new(Mutex::new(None)),
             workspace_failure: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             faults: Arc::new(Mutex::new(CloseFaults::default())),
+            session: editor_core::SessionId::new("test-session"),
+            owner: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -306,6 +354,7 @@ impl MemoryDocuments {
         let actual = document
             .path()
             .and_then(|path| self.repository.fingerprint(path).ok().flatten());
+        let owner = self.owner.lock().unwrap().clone();
         DocumentCache {
             reused: true,
             id: id.clone(),
@@ -313,6 +362,8 @@ impl MemoryDocuments {
             can_undo: document.can_undo(),
             can_redo: document.can_redo(),
             external_change: document.external_change(actual.as_ref()),
+            is_owner: owner.as_ref() == Some(&self.session),
+            owner,
         }
     }
 
@@ -342,6 +393,8 @@ impl DocumentConnection for MemoryDocuments {
             concurrent_edit: self.concurrent_edit.clone(),
             workspace_failure: self.workspace_failure.clone(),
             faults: self.faults.clone(),
+            session: self.session.clone(),
+            owner: self.owner.clone(),
         })
     }
     fn workspace(&self, _: &Path) -> Result<WorkspaceId, DocumentError> {
@@ -388,6 +441,23 @@ impl DocumentConnection for MemoryDocuments {
                 .get(id)
                 .ok_or_else(|| DocumentError::io("not found"))?,
         ))
+    }
+    fn claim(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        *self.owner.lock().unwrap() = Some(self.session.clone());
+        self.attach(id)
+    }
+    fn release(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
+        {
+            let mut owner = self.owner.lock().unwrap();
+            if owner
+                .as_ref()
+                .is_some_and(|owner| owner != &self.session)
+            {
+                return Err(DocumentError::conflict("owned by another session"));
+            }
+            *owner = None;
+        }
+        self.attach(id)
     }
     fn edit(
         &self,

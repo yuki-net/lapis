@@ -845,6 +845,8 @@ struct OpenDocument {
     view: DocumentViewState,
     can_undo: bool,
     can_redo: bool,
+    owner: Option<editor_core::SessionId>,
+    is_owner: bool,
 }
 
 impl OpenDocument {
@@ -855,6 +857,8 @@ impl OpenDocument {
             external_change: cache.external_change,
             can_undo: cache.can_undo,
             can_redo: cache.can_redo,
+            owner: cache.owner,
+            is_owner: cache.is_owner,
             view,
         }
     }
@@ -864,6 +868,8 @@ impl OpenDocument {
         self.external_change = cache.external_change;
         self.can_undo = cache.can_undo;
         self.can_redo = cache.can_redo;
+        self.owner = cache.owner;
+        self.is_owner = cache.is_owner;
     }
 }
 
@@ -1122,6 +1128,44 @@ impl EditorSession {
         self.external_change() != ExternalChange::Unchanged
     }
 
+    /// 編集権を持つ Session。`None` は未所有。
+    pub fn active_owner(&self) -> Option<&editor_core::SessionId> {
+        self.active_document()?.owner.as_ref()
+    }
+
+    /// この接続が編集権を持つか。
+    pub fn active_is_owner(&self) -> bool {
+        self.active_document().is_some_and(|open| open.is_owner)
+    }
+
+    /// 他の Session が編集権を持ち、編集できない状態か。
+    pub fn active_is_read_only(&self) -> bool {
+        self.active_document()
+            .is_some_and(|open| open.owner.is_some() && !open.is_owner)
+    }
+
+    /// 編集権を取得する。他の Session が所有中なら奪う。
+    pub fn claim_active(&mut self) -> Result<(), DocumentError> {
+        let id = self
+            .active_document()
+            .map(|open| open.id.clone())
+            .ok_or_else(|| DocumentError::io("文書が開かれていません"))?;
+        let cache = self.document_connection.claim(&id)?;
+        self.required_document_mut()?.update(cache);
+        Ok(())
+    }
+
+    /// 編集権を手放す。
+    pub fn release_active(&mut self) -> Result<(), DocumentError> {
+        let id = self
+            .active_document()
+            .map(|open| open.id.clone())
+            .ok_or_else(|| DocumentError::io("文書が開かれていません"))?;
+        let cache = self.document_connection.release(&id)?;
+        self.required_document_mut()?.update(cache);
+        Ok(())
+    }
+
     pub fn len_chars(&self) -> usize {
         self.active_document()
             .map(|open| open.document.len_chars())
@@ -1362,6 +1406,8 @@ impl EditorSession {
                 can_redo: open.can_redo,
                 external_change: open.external_change,
                 reused: true,
+                owner: open.owner.clone(),
+                is_owner: open.is_owner,
             })
             .collect()
     }

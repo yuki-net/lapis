@@ -26,6 +26,8 @@ struct Shared {
     events: mpsc::Sender<EventEnvelope>,
     authenticated: bool,
     pairing: bool,
+    /// Host が認証応答で割り当てた Session。
+    session_id: Option<client_api::SessionId>,
 }
 
 impl Shared {
@@ -72,6 +74,11 @@ impl Drop for RequestGuard {
 }
 
 impl BrowserConnection {
+    /// 認証応答で Host が割り当てた Session。認証前は `None`。
+    pub fn session_id(&self) -> Option<client_api::SessionId> {
+        self.shared.borrow().session_id.clone()
+    }
+
     /// ペアリングまたは保存済みcredentialで認証する。要求は認証後だけ受け付ける。
     pub async fn connect(url: &str, auth: ClientMessage) -> Result<(Self, ServerMessage), String> {
         Self::connect_inner(url, None, auth).await
@@ -110,6 +117,7 @@ impl BrowserConnection {
             events: events_tx,
             authenticated: false,
             pairing,
+            session_id: None,
         }));
 
         let weak = Rc::downgrade(&shared);
@@ -457,6 +465,7 @@ fn handle_message(shared: &mut Shared, message: ServerMessage) -> Result<(), Str
             .connected()
             .map_err(|_| "Clientを開始できません")?;
         shared.authenticated = true;
+        shared.session_id = Some(hello.session_id.clone());
         let reply = shared
             .authentication
             .take()

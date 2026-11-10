@@ -12,11 +12,12 @@ use backend_state::{
     WorkspaceFileBackend, WorkspaceRegistration,
 };
 use client_api::{
-    DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest, DocumentEncoding,
-    DocumentHistoryRequest, DocumentOpenRequest, DocumentSaveRequest, DocumentTextEdit,
-    DocumentTransaction, EventBody, FileTreeRequest, REVISION_CONFLICT, RequestBody,
-    RequestEnvelope, RequestId, ResponseBody, Revision, SessionId, SnapshotReason, SnapshotRequest,
-    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId, WorkspaceRelativePath,
+    DocumentClaimRequest, DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest,
+    DocumentEncoding, DocumentHistoryRequest, DocumentOpenRequest, DocumentSaveRequest,
+    DocumentTextEdit, DocumentTransaction, EventBody, FileTreeRequest, REVISION_CONFLICT,
+    RequestBody, RequestEnvelope, RequestId, ResponseBody, Revision, SessionId, SnapshotReason,
+    SnapshotRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
+    WorkspaceRelativePath,
 };
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 
@@ -542,17 +543,29 @@ fn service(
     workspace: &str,
     session: &str,
 ) -> (BackendService, BackendSession, WorkspaceId) {
+    service_with_timeout(root, workspace, session, None)
+}
+
+fn service_with_timeout(
+    root: &Path,
+    workspace: &str,
+    session: &str,
+    document_owner_idle_timeout: Option<Duration>,
+) -> (BackendService, BackendSession, WorkspaceId) {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<BackendService>();
 
     let workspace_id = WorkspaceId::try_new(workspace).unwrap();
-    let state = BackendState::new([WorkspaceRegistration::new(
+    let mut registration = WorkspaceRegistration::new(
         workspace_id.clone(),
         "Lapis",
         root.to_owned(),
         Arc::new(TestFiles),
-    )])
-    .unwrap();
+    );
+    if let Some(timeout) = document_owner_idle_timeout {
+        registration = registration.with_document_owner_idle_timeout(timeout);
+    }
+    let state = BackendState::new([registration]).unwrap();
     let service = BackendService::start(state).unwrap();
     let session = BackendSession::new(SessionId::try_new(session).unwrap(), workspace_id.clone());
     (service, session, workspace_id)
@@ -700,6 +713,277 @@ fn workbench_save_finishes_after_client_disconnect_without_blocking_other_reques
     assert!(
         matches!(after, ResponseBody::WorkbenchGet(snapshot) if snapshot.revision == 1 && snapshot.view["show_panel_controls"] == false)
     );
+}
+
+#[test]
+fn claim_transfers_the_edit_lease_and_keeps_revision_conflict_detection() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("shared.ts");
+    fs::write(&path, "base").unwrap();
+    let (service, owner, workspace_id) = service(root.path(), "workspace-lease", "session-owner");
+    connect(&service, &owner, workspace_id.clone(), 1);
+    let other = BackendSession::new(
+        SessionId::try_new("session-other").unwrap(),
+        workspace_id.clone(),
+    );
+    connect(&service, &other, workspace_id.clone(), 2);
+
+    let ResponseBody::DocumentOpen(opened) = dispatch(
+        &service,
+        &owner,
+        3,
+        RequestBody::DocumentOpen(DocumentOpenRequest {
+            workspace_id: workspace_id.clone(),
+            path: WorkspaceRelativePath::parse("shared.ts").unwrap(),
+        }),
+    ) else {
+        panic!("expected opened document");
+    };
+    let document_id = opened.document.document_id.clone();
+    assert!(opened.document.owner.is_none());
+    assert!(matches!(
+        dispatch(
+            &service,
+            &other,
+            4,
+            RequestBody::DocumentInspect(client_api::DocumentInspectRequest {
+                document_id: document_id.clone(),
+            }),
+        ),
+        ResponseBody::DocumentInspect(_)
+    ));
+
+    let events = service.subscribe(owner.clone()).unwrap();
+    assert!(matches!(
+        dispatch(
+            &service,
+            &owner,
+            5,
+            RequestBody::DocumentClaim(DocumentClaimRequest {
+                document_id: document_id.clone(),
+            }),
+        ),
+        ResponseBody::DocumentClaim(_)
+    ));
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap().body,
+        EventBody::DocumentOwner { document_id: event_id, owner: Some(owner_id) }
+            if event_id == document_id && owner_id == owner.session_id
+    ));
+
+    let rejected = dispatch(
+        &service,
+        &other,
+        6,
+        RequestBody::DocumentEdit(DocumentEditRequest {
+            document_id: document_id.clone(),
+            base_revision: Revision::new(1),
+            transaction: transaction(0, 4, "other"),
+        }),
+    );
+    assert!(
+        matches!(rejected, ResponseBody::Error(ref error) if error.code.as_str() == client_api::INVALID_REQUEST)
+    );
+
+    assert!(matches!(
+        dispatch(
+            &service,
+            &other,
+            7,
+            RequestBody::DocumentClaim(DocumentClaimRequest {
+                document_id: document_id.clone(),
+            }),
+        ),
+        ResponseBody::DocumentClaim(_)
+    ));
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap().body,
+        EventBody::DocumentOwner { document_id: event_id, owner: Some(owner_id) }
+            if event_id == document_id && owner_id == other.session_id
+    ));
+    assert!(matches!(
+        dispatch(
+            &service,
+            &owner,
+            8,
+            RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id: document_id.clone(),
+                base_revision: Revision::new(1),
+                transaction: transaction(0, 4, "owner"),
+            }),
+        ),
+        ResponseBody::Error(_)
+    ));
+
+    assert!(matches!(
+        dispatch(
+            &service,
+            &other,
+            9,
+            RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id: document_id.clone(),
+                base_revision: Revision::new(1),
+                transaction: transaction(0, 4, "other"),
+            }),
+        ),
+        ResponseBody::DocumentEdit(_)
+    ));
+    // 編集権を持っていても古い revision は受理しない。
+    assert!(matches!(
+        dispatch(
+            &service,
+            &other,
+            10,
+            RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id,
+                base_revision: Revision::new(1),
+                transaction: transaction(0, 5, "stale"),
+            }),
+        ),
+        ResponseBody::Error(error) if error.code.as_str() == REVISION_CONFLICT
+    ));
+}
+
+#[test]
+fn disconnect_releases_document_ownership_for_other_sessions() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("shared.ts");
+    fs::write(&path, "base").unwrap();
+    let (service, owner, workspace_id) =
+        service(root.path(), "workspace-disconnect", "session-owner");
+    connect(&service, &owner, workspace_id.clone(), 1);
+    let other = BackendSession::new(
+        SessionId::try_new("session-other").unwrap(),
+        workspace_id.clone(),
+    );
+    connect(&service, &other, workspace_id.clone(), 2);
+
+    let ResponseBody::DocumentOpen(opened) = dispatch(
+        &service,
+        &owner,
+        3,
+        RequestBody::DocumentOpen(DocumentOpenRequest {
+            workspace_id: workspace_id.clone(),
+            path: WorkspaceRelativePath::parse("shared.ts").unwrap(),
+        }),
+    ) else {
+        panic!("expected opened document");
+    };
+    let document_id = opened.document.document_id.clone();
+    dispatch(
+        &service,
+        &other,
+        4,
+        RequestBody::DocumentInspect(client_api::DocumentInspectRequest {
+            document_id: document_id.clone(),
+        }),
+    );
+    let events = service.subscribe(other.clone()).unwrap();
+    assert!(matches!(
+        dispatch(
+            &service,
+            &owner,
+            5,
+            RequestBody::DocumentClaim(DocumentClaimRequest {
+                document_id: document_id.clone(),
+            }),
+        ),
+        ResponseBody::DocumentClaim(_)
+    ));
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap().body,
+        EventBody::DocumentOwner { owner: Some(_), .. }
+    ));
+
+    service.disconnect(owner.session_id.clone()).unwrap();
+    assert!(matches!(
+        events.recv_timeout(Duration::from_secs(1)).unwrap().body,
+        EventBody::DocumentOwner { document_id: event_id, owner: None }
+            if event_id == document_id
+    ));
+
+    assert!(matches!(
+        dispatch(
+            &service,
+            &other,
+            6,
+            RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id,
+                base_revision: Revision::new(1),
+                transaction: transaction(0, 4, "after-disconnect"),
+            }),
+        ),
+        ResponseBody::DocumentEdit(_)
+    ));
+}
+
+#[test]
+fn idle_document_owner_is_released_and_notified() {
+    let root = tempfile::tempdir().unwrap();
+    let (service, session, workspace_id) = service_with_timeout(
+        root.path(),
+        "workspace-idle",
+        "session-idle",
+        Some(Duration::ZERO),
+    );
+    connect(&service, &session, workspace_id.clone(), 1);
+    let ResponseBody::DocumentCreate(created) = dispatch(
+        &service,
+        &session,
+        2,
+        RequestBody::DocumentCreate(DocumentCreateRequest {
+            workspace_id,
+            path: WorkspaceRelativePath::parse("idle.ts").unwrap(),
+            encoding: DocumentEncoding::Utf8,
+            content: String::new(),
+        }),
+    ) else {
+        panic!("expected created document");
+    };
+    let document_id = created.document.document_id.clone();
+    let events = service.subscribe(session.clone()).unwrap();
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            3,
+            RequestBody::DocumentClaim(DocumentClaimRequest {
+                document_id: document_id.clone(),
+            }),
+        ),
+        ResponseBody::DocumentClaim(_)
+    ));
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let event = events.recv_timeout(Duration::from_millis(100)).unwrap();
+        if matches!(
+            event.body,
+            EventBody::DocumentOwner { document_id: event_id, owner: None }
+                if event_id == document_id
+        ) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "idle release was not notified"
+        );
+    }
+    let ResponseBody::DocumentInspect(snapshot) = dispatch(
+        &service,
+        &session,
+        4,
+        RequestBody::DocumentInspect(client_api::DocumentInspectRequest { document_id }),
+    ) else {
+        panic!("expected inspected document");
+    };
+    assert!(snapshot.document.owner.is_none());
+}
+
+fn transaction(start: u64, end: u64, replacement: &str) -> DocumentTransaction {
+    DocumentTransaction::try_new(vec![
+        DocumentTextEdit::try_new(start, end, replacement).unwrap(),
+    ])
+    .unwrap()
 }
 
 #[test]

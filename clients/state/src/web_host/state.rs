@@ -11,7 +11,7 @@ use client_api::{
     TerminalStatus as WireTerminalStatus, WorkbenchSnapshot,
 };
 use document::{Document, DocumentCache, Encoding, ExternalChange, Revision};
-use editor_core::{DocumentId, WorkspaceId};
+use editor_core::{DocumentId, SessionId, WorkspaceId};
 use terminal::{TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus};
 use workbench::{VersionedViewState, WorkbenchReplica};
 use workspace::FileEntry;
@@ -28,10 +28,16 @@ pub(super) struct Replica {
     pub(super) next: u64,
     pub(super) next_terminal: u64,
     pub(super) initial: Option<PathBuf>,
+    /// この接続の Session。Host の owner と比較して編集可否を決める。
+    pub(super) session: Option<SessionId>,
 }
 
 impl Replica {
-    pub(super) fn new(workspace: WorkspaceId, entries: Vec<FileEntry>) -> Self {
+    pub(super) fn new(
+        workspace: WorkspaceId,
+        entries: Vec<FileEntry>,
+        session: Option<SessionId>,
+    ) -> Self {
         Self {
             workspace,
             entries,
@@ -42,6 +48,7 @@ impl Replica {
             next: 1,
             next_terminal: 1,
             initial: None,
+            session,
         }
     }
 }
@@ -50,6 +57,8 @@ pub(super) fn cache_of(
     local: &DocumentId,
     document: &Document,
     external_change: ExternalChange,
+    owner: Option<&SessionId>,
+    session: Option<&SessionId>,
 ) -> DocumentCache {
     DocumentCache {
         reused: true,
@@ -58,7 +67,19 @@ pub(super) fn cache_of(
         can_undo: document.can_undo(),
         can_redo: document.can_redo(),
         external_change,
+        owner: owner.cloned(),
+        is_owner: owner
+            .zip(session)
+            .is_some_and(|(owner, session)| owner == session),
     }
+}
+
+/// wire の owner を UI 側の Session に変換する。
+pub(super) fn owner_of(snapshot: &DocumentSnapshot) -> Option<SessionId> {
+    snapshot
+        .owner
+        .as_ref()
+        .map(|owner| SessionId::new(owner.as_str()))
 }
 
 pub(super) fn versioned_workbench(snapshot: WorkbenchSnapshot) -> Option<VersionedViewState> {
@@ -77,6 +98,8 @@ pub(super) struct DocumentState {
     pub(super) host_revision: ApiRevision,
     pub(super) loaded: bool,
     pub(super) external_change: ExternalChange,
+    /// Host が通知した編集権の所有者。
+    pub(super) owner: Option<SessionId>,
 }
 
 pub(super) struct TerminalState {

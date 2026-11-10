@@ -110,6 +110,8 @@ pub(crate) struct Editor {
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
     status: String,
+    owner: Option<editor_core::SessionId>,
+    is_owner: bool,
     focus_handle: FocusHandle,
     is_selecting: bool,
     last_editor_bounds: Option<Bounds<Pixels>>,
@@ -169,6 +171,8 @@ impl Editor {
             selection_reversed: false,
             marked_range: None,
             status: String::new(),
+            owner: None,
+            is_owner: false,
             focus_handle: cx.focus_handle(),
             is_selecting: false,
             last_editor_bounds: None,
@@ -456,10 +460,13 @@ impl Editor {
         }
         let previous_revision = self.session.revision();
         let previous_path = self.session.path().map(ToOwned::to_owned);
-        self.session = snapshot
+        let active_cache = snapshot
             .documents
             .iter()
-            .find(|cache| Some(&cache.id) == snapshot.active.as_ref())
+            .find(|cache| Some(&cache.id) == snapshot.active.as_ref());
+        self.owner = active_cache.and_then(|cache| cache.owner.clone());
+        self.is_owner = active_cache.is_some_and(|cache| cache.is_owner);
+        self.session = active_cache
             .map(|cache| cache.document.clone())
             .unwrap_or_default();
         if changed_document
@@ -495,6 +502,51 @@ impl Editor {
             .retain(|id, _| snapshot.documents.iter().any(|cache| &cache.id == id));
     }
 
+    /// 他の Session が編集権を持ち、入力を受け付けない状態か。
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.owner.is_some() && !self.is_owner
+    }
+
+    /// 編集権を取得する。他の Session が所有中なら奪う。
+    pub(crate) fn claim_lease(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.document_id.clone() else {
+            return;
+        };
+        self.submit(
+            false,
+            move |client| {
+                if !client.editor.select_document_for_operation(&id) {
+                    return Err("編集対象の文書は閉じられています".into());
+                }
+                client
+                    .editor
+                    .claim_active()
+                    .map_err(|error| error.to_string())
+            },
+            cx,
+        );
+    }
+
+    /// 編集権を手放す。
+    pub(crate) fn release_lease(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.document_id.clone() else {
+            return;
+        };
+        self.submit(
+            false,
+            move |client| {
+                if !client.editor.select_document_for_operation(&id) {
+                    return Err("編集対象の文書は閉じられています".into());
+                }
+                client
+                    .editor
+                    .release_active()
+                    .map_err(|error| error.to_string())
+            },
+            cx,
+        );
+    }
+
     /// Optimistically replaces a range of character offsets and queues the shared-document edit.
     ///
     /// Returns false when disabled, without an active document, or for unchanged text.
@@ -508,6 +560,9 @@ impl Editor {
         cx: &mut Context<Self>,
     ) -> Result<bool, DocumentError> {
         if !self.enabled || self.context_transition {
+            return Ok(false);
+        }
+        if self.is_read_only() {
             return Ok(false);
         }
         let Some(id) = self.document_id.clone() else {
@@ -763,6 +818,36 @@ impl Focusable for Editor {
 
 impl Render for Editor {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let read_only = self.is_read_only();
+        let lease = self.owner.clone().map(|owner| {
+            let is_owner = self.is_owner;
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .bg(theme::colors(cx).background_tertiary)
+                .text_size(px(11.0))
+                .text_color(theme::colors(cx).text_secondary)
+                .child(if is_owner {
+                    format!("編集中: {owner}（このSession）")
+                } else {
+                    format!("編集中: {owner}")
+                })
+                .when(is_owner, |bar| {
+                    bar.child(
+                        crate::components::action_button("編集権を解放", false, cx)
+                            .on_click(cx.listener(|this, _, _, cx| this.release_lease(cx))),
+                    )
+                })
+                .when(!is_owner, |bar| {
+                    bar.child(
+                        crate::components::action_button("編集権を取得", true, cx)
+                            .on_click(cx.listener(|this, _, _, cx| this.claim_lease(cx))),
+                    )
+                })
+        });
         let content = div()
             .relative()
             .min_w_full()
@@ -770,7 +855,11 @@ impl Render for Editor {
             .w(px(self.content_width()))
             .px(px(18.0))
             .py(px(10.0))
-            .cursor(CursorStyle::IBeam)
+            .cursor(if read_only {
+                CursorStyle::Arrow
+            } else {
+                CursorStyle::IBeam
+            })
             .on_mouse_down(MouseButton::Left, cx.listener(Self::editor_mouse_down))
             .on_mouse_move(cx.listener(Self::editor_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::editor_mouse_up))
@@ -802,6 +891,7 @@ impl Render for Editor {
                         ),
                 )
             })
+            .when_some(lease, |view, lease| view.child(lease))
             .track_focus(&self.focus_handle)
             .key_context("Editor")
             .on_action(cx.listener(Self::backspace))

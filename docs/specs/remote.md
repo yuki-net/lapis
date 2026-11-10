@@ -91,3 +91,18 @@ Terminal の同期契約に含めない。
 Scrollback は Snapshot では bounded な履歴全体を含め、Delta では追加行と削除数を
 送る。履歴の再構成が必要な resize、alternate screen 切替、状態不一致では reset
 Delta または Snapshot を使い、Client 側で履歴が無制限に増えないようにする。
+
+## Document の編集権
+
+Document の内容と revision の正規状態は Host が所有する。編集権は Session 単位の
+owner として Host が保持し、`DocumentSnapshot.owner` と `document.owner` イベントで
+Client に通知する。
+
+- `document.edit` / `document.undo` / `document.redo` / `document.discard` は owner の
+  Session だけが実行できる。owner が未設定の Document は従来どおり編集できる。
+- `document.claim` は編集権を取得する。他の Session が所有中なら所有権を移す。
+  `document.release` は owner 自身だけが実行できる。
+- 接続断と無操作タイムアウト（既定 300 秒）で Host は owner を解放し、
+  `document.owner`（owner なし）を通知する。
+- 編集権の変更は revision を進めない。Client は owner が他の Session の間、
+  Editor を読み取り専用にする。

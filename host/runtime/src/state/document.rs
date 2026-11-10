@@ -15,6 +15,7 @@ impl BackendState {
             document: Document::new(),
             attached_sessions: HashSet::from([session.session_id.clone()]),
             owner: None,
+            last_activity: std::time::Instant::now(),
         };
         let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace.documents.insert(document_id, resource);
@@ -183,6 +184,7 @@ impl BackendState {
             request.base_revision,
             resource.revision(),
         )?;
+        resource.touch();
         let previous_path = resource.document.path().map(ToOwned::to_owned);
         let saved_path = resource
             .document
@@ -345,6 +347,7 @@ impl BackendState {
         let workspace = self.workspace_mut(session)?;
         let document = workspace.require_attached_document_mut(session, &request.document_id)?;
         document.owner = Some(session.session_id.clone());
+        document.touch();
         let event = workspace.publish(EventBody::DocumentOwner {
             document_id: request.document_id,
             owner: Some(session.session_id.clone()),
@@ -399,6 +402,7 @@ impl BackendState {
             request.base_revision,
             document.revision(),
         )?;
+        document.touch();
         let edits = request
             .transaction
             .edits()
@@ -483,6 +487,7 @@ impl BackendState {
             return Err(BackendStateError::DocumentNotOwner);
         }
         require_revision(&document_id, base_revision, document.revision())?;
+        document.touch();
         let changed = if undo {
             document.document.undo()
         } else {
