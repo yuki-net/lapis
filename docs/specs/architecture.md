@@ -77,6 +77,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 
 - Root は Entity の組み立てと機能間イベントの接続を担当する。Shell は Window・Panel・Tab・Layout を所有し、各 Feature の Backend 操作や表示 cache を集約しない。
 - Feature は自身の入力・表示 cache・更新周期を所有する。共通 Client Adapter の worker で操作を直列化し、描画・入力処理から FS・Git・PTY や同期 port を直接呼び出さない。
+- Terminal 入力は端末ごとの送信 queue で Text / Key / Paste の順序を保つ。Text は 1 frame 程度まとめて送り、Key / Paste は先行 Text を送ってから即時送信する。失敗時は受理済み入力を再送せず、端末状態を再同期して未受理分だけを再試行する。
 - 応答の適用には要求順序と対象の世代を検証する。楽観編集の先行操作が失敗したら、数値 revision が偶然一致しても依存する後続編集を適用しない。未確定入力は明示的な復旧まで保持する。
 - Window 終了時は受付済み入力と表示状態の保存を完了させる。購読・表示 worker の破棄によって Host の Terminal・Agent を終了しない。保存先や Workspace が失われても、復元用 draft を無言で破棄しない。
 

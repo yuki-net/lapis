@@ -168,6 +168,17 @@ pub(crate) struct TerminalFeature {
     bound_resource: Option<terminal::TerminalId>,
     pub(super) focus: gpui::FocusHandle,
     pub(super) marked: String,
+    /// 端末ごとの送信待ち入力。Text のバッチ化と入力順序を担う。
+    pub(super) inputs: Vec<(terminal::TerminalId, super::input::TerminalInputQueue)>,
+    input_sequence: u64,
+    input_flush_scheduled: bool,
+    /// 失敗後に再同期付きの再送を 1 回だけ行うための印。
+    input_recovery: bool,
+    resyncing_inputs: bool,
+    /// 再同期を開始したコンテキスト世代。切り替え後の古い結果を捨てるために使う。
+    input_epoch: u64,
+    /// 入力失敗で表示中のエラー。次の入力成功時に同じ端末の同じ message だけを消す。
+    input_error: Option<(terminal::TerminalId, String)>,
     /// 右クリック／「＋」で開くメニューのアンカー。None のときは閉じている。
     pub(super) context_menu: Option<()>,
     pub(super) context_anchor: Option<gpui::Point<gpui::Pixels>>,
@@ -318,6 +329,13 @@ impl TerminalFeature {
             bound_resource: None,
             focus: cx.focus_handle(),
             marked: String::new(),
+            inputs: Vec::new(),
+            input_sequence: 0,
+            input_flush_scheduled: false,
+            input_recovery: false,
+            resyncing_inputs: false,
+            input_epoch: 0,
+            input_error: None,
             context_menu: None,
             context_anchor: None,
             font_family,
@@ -416,6 +434,17 @@ impl TerminalFeature {
             .cloned();
         self.discovered.clear();
         self.marked.clear();
+        // 送信先の session が変わるため、未送信入力は引き継がない。
+        self.inputs.clear();
+        self.input_flush_scheduled = false;
+        self.input_recovery = false;
+        self.resyncing_inputs = false;
+        // 進行中の再同期の結果を、切り替え後の状態へ適用しない。
+        self.input_epoch = self.input_epoch.wrapping_add(1);
+        let input_error = self.input_error.take();
+        if input_error.is_some_and(|(_, error)| error == self.message) {
+            self.message.clear();
+        }
         self.root = root;
         self.conversation = conversation;
         self.terminals.clear();
@@ -597,7 +626,218 @@ impl TerminalFeature {
 
     pub(super) fn send_input(&mut self, input: TerminalInput, cx: &mut gpui::Context<Self>) {
         let Some(id) = self.active_id() else { return };
-        self.operate(move |session| session.input_semantic(&id, input), cx);
+        match input {
+            TerminalInput::Text(text) => {
+                self.queue_mut(&id).enqueue_text(text);
+                self.schedule_input_flush(cx);
+            }
+            input @ (TerminalInput::Key(_) | TerminalInput::Paste(_)) => {
+                self.queue_mut(&id).enqueue_immediate(input);
+                // Key/Paste は待ち Text を同じ batch に含めて即時送る。
+                self.flush_terminal_input(id, cx);
+            }
+        }
+    }
+
+    fn queue_mut(&mut self, id: &terminal::TerminalId) -> &mut super::input::TerminalInputQueue {
+        let index = match self.inputs.iter().position(|(terminal, _)| terminal == id) {
+            Some(index) => index,
+            None => {
+                self.inputs.push((id.clone(), Default::default()));
+                self.inputs.len() - 1
+            }
+        };
+        &mut self.inputs[index].1
+    }
+
+    /// 待ち Text を 1 frame 程度まとめて送る。
+    fn schedule_input_flush(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.input_flush_scheduled {
+            return;
+        }
+        self.input_flush_scheduled = true;
+        cx.spawn(async move |this, cx| {
+            crate::timer::Timer::after(super::input::INPUT_BATCH_DELAY).await;
+            this.update(cx, |feature, cx| {
+                feature.input_flush_scheduled = false;
+                feature.flush_pending_inputs(cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    fn flush_pending_inputs(&mut self, cx: &mut gpui::Context<Self>) {
+        let ids = self
+            .inputs
+            .iter()
+            .filter(|(_, queue)| queue.has_pending() && !queue.has_in_flight())
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for id in ids {
+            self.flush_terminal_input(id, cx);
+        }
+    }
+
+    fn flush_terminal_input(&mut self, id: terminal::TerminalId, cx: &mut gpui::Context<Self>) {
+        let sequence = self.input_sequence;
+        let Some(batch) = self
+            .inputs
+            .iter_mut()
+            .find(|(terminal, _)| terminal == &id)
+            .and_then(|(_, queue)| queue.begin_flush(sequence))
+        else {
+            return;
+        };
+        self.input_sequence = batch
+            .sequence
+            .checked_add(1)
+            .expect("terminal input sequence overflow");
+        let input_count = batch.inputs.len();
+        let inputs = batch.inputs;
+        let terminal = id.clone();
+        let completed = id.clone();
+        let admitted = self.worker.submit(
+            cx,
+            move |sessions| Ok(sessions.session.input_batch(&terminal, &inputs)),
+            move |feature, result, cx| {
+                let (applied, error) = match result {
+                    Ok(Ok(())) => (input_count, None),
+                    Ok(Err(failure)) => (failure.applied, Some(failure.message)),
+                    Err(error) => (0, Some(error)),
+                };
+                feature.finish_input_batch(&completed, sequence, applied, error, cx);
+            },
+        );
+        if let Err(error) = admitted {
+            self.finish_input_batch(&id, sequence, 0, Some(error), cx);
+        }
+    }
+
+    fn finish_input_batch(
+        &mut self,
+        id: &terminal::TerminalId,
+        sequence: u64,
+        applied: usize,
+        error: Option<String>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let outcome = {
+            let Some((_, queue)) = self.inputs.iter_mut().find(|(terminal, _)| terminal == id)
+            else {
+                return;
+            };
+            match error {
+                Some(error) => {
+                    if !queue.fail(sequence, applied) {
+                        return;
+                    }
+                    Err(error)
+                }
+                None => {
+                    if !queue.succeed(sequence) {
+                        return;
+                    }
+                    Ok((queue.should_flush_now(), queue.has_pending()))
+                }
+            }
+        };
+        match outcome {
+            Err(error) => {
+                self.message = error.clone();
+                self.input_error = Some((id.clone(), error));
+                self.message_from_poll = false;
+                if self.input_recovery {
+                    // 再同期後の再送も失敗したため、自動再試行を止める。
+                    // 未送信入力は保持し、次の入力で再開する。
+                    self.input_recovery = false;
+                } else {
+                    self.input_recovery = true;
+                    self.resync_inputs(cx);
+                }
+            }
+            Ok((flush_now, has_pending)) => {
+                self.input_recovery = false;
+                let matches = matches!(
+                    self.input_error.as_ref(),
+                    Some((terminal, error)) if terminal == id && error == &self.message
+                );
+                if matches {
+                    self.input_error = None;
+                    self.message.clear();
+                }
+                if flush_now {
+                    self.flush_terminal_input(id.clone(), cx);
+                } else if has_pending {
+                    self.schedule_input_flush(cx);
+                }
+            }
+        }
+        cx.notify();
+    }
+
+    /// 入力失敗後に端末状態を再同期し、未受理入力を順序どおり再送する。
+    fn resync_inputs(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.resyncing_inputs {
+            return;
+        }
+        self.resyncing_inputs = true;
+        let token = self.requests.begin_action();
+        let epoch = self.input_epoch;
+        let admitted = self.worker.submit(
+            cx,
+            |sessions| {
+                let outcome = sessions.refresh().map_err(|error| error.to_string());
+                Ok((
+                    outcome,
+                    sessions.version(),
+                    sessions.session.terminals().to_vec(),
+                    sessions.owners().clone(),
+                ))
+            },
+            move |feature, result, cx| {
+                let accepted = feature.requests.finish_action(token);
+                if feature.input_epoch != epoch {
+                    // コンテキストが切り替わった。フラグは set_context が初期化済み。
+                    return;
+                }
+                // 後続 action（resize / claim / operate 等）に追い越されても、
+                // 再同期中フラグと未送信入力の再送は必ず完了させる。
+                feature.resyncing_inputs = false;
+                if accepted {
+                    match result {
+                        Ok((Ok(_), version, terminals, owners)) => {
+                            feature.apply_projection(version, terminals, owners);
+                        }
+                        Ok((Err(error), version, terminals, owners)) => {
+                            feature.apply_projection(version, terminals, owners);
+                            feature.input_recovery = false;
+                            feature.message = error;
+                            feature.message_from_poll = false;
+                            cx.notify();
+                            return;
+                        }
+                        Err(error) => {
+                            feature.input_recovery = false;
+                            feature.message = error;
+                            feature.message_from_poll = false;
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
+                cx.notify();
+                feature.flush_pending_inputs(cx);
+            },
+        );
+        if let Err(error) = admitted {
+            self.requests.finish_action(token);
+            self.resyncing_inputs = false;
+            self.input_recovery = false;
+            self.message = error;
+            self.message_from_poll = false;
+            cx.notify();
+        }
     }
 
     /// 他の Client が操作中でも、明示的に操作権を奪う。
@@ -1210,6 +1450,11 @@ mod tests {
         terminated: AtomicUsize,
         events: Mutex<HashMap<String, Vec<TerminalEvent>>>,
         inputs: Mutex<Vec<TerminalId>>,
+        sent_inputs: Mutex<Vec<TerminalInput>>,
+        input_calls: AtomicUsize,
+        /// 0 始まりの input 呼び出し番号。一度だけ失敗させる。
+        fail_input_calls: Mutex<Vec<usize>>,
+        polls: AtomicUsize,
         fail_poll_for: Mutex<Option<String>>,
     }
 
@@ -1220,14 +1465,28 @@ mod tests {
                 self.next.fetch_add(1, Ordering::Relaxed)
             )))
         }
-        fn input(&self, id: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
+        fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
             self.inputs.lock().unwrap().push(id.clone());
+            let call = self.input_calls.fetch_add(1, Ordering::Relaxed);
+            let failed = {
+                let mut failures = self.fail_input_calls.lock().unwrap();
+                failures
+                    .iter()
+                    .position(|index| *index == call)
+                    .map(|position| failures.remove(position))
+                    .is_some()
+            };
+            if failed {
+                return Err(TerminalError::new("input failed"));
+            }
+            self.sent_inputs.lock().unwrap().push(input.clone());
             Ok(())
         }
         fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
             Ok(())
         }
         fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+            self.polls.fetch_add(1, Ordering::Relaxed);
             if self.fail_poll_for.lock().unwrap().as_deref() == Some(id.as_str()) {
                 return Err(TerminalError::new("poll failed"));
             }
@@ -1254,6 +1513,211 @@ mod tests {
             ),
             backend,
         )
+    }
+
+    fn drain_inputs(
+        cx: &mut gpui::TestAppContext,
+        feature: &gpui::Entity<TerminalFeature>,
+        done: impl Fn(&TerminalFeature) -> bool,
+    ) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            if cx.update(|cx| done(feature.read(cx))) {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "terminal input did not settle"
+            );
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(16));
+            cx.run_until_parked();
+            std::thread::yield_now();
+        }
+    }
+
+    #[gpui::test]
+    fn terminal_text_is_batched_and_control_key_flushes_it_immediately(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.send_text("ec".into(), cx);
+                feature.send_text("ho".into(), cx);
+                assert!(
+                    backend.sent_inputs.lock().unwrap().is_empty(),
+                    "text waits for the batch window"
+                );
+                feature.send_input(
+                    TerminalInput::Key(terminal::TerminalKeyEvent {
+                        key: terminal::TerminalKey::Enter,
+                        modifiers: Default::default(),
+                    }),
+                    cx,
+                );
+            });
+            (entity, backend)
+        });
+        let sent = backend.clone();
+        drain_inputs(cx, &entity, move |_| {
+            sent.sent_inputs.lock().unwrap().len() == 2
+        });
+        assert_eq!(
+            *backend.sent_inputs.lock().unwrap(),
+            vec![
+                TerminalInput::Text("echo".into()),
+                TerminalInput::Key(terminal::TerminalKeyEvent {
+                    key: terminal::TerminalKey::Enter,
+                    modifiers: Default::default(),
+                })
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn terminal_input_failure_shows_error_resyncs_and_retries_without_duplicates(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            // 1 回目の batch で Text だけ受理し、Key と再送 Key を失敗させる。
+            *backend.fail_input_calls.lock().unwrap() = vec![1, 2];
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.send_text("ab".into(), cx);
+                feature.send_input(
+                    TerminalInput::Key(terminal::TerminalKeyEvent {
+                        key: terminal::TerminalKey::Character("c".into()),
+                        modifiers: terminal::TerminalModifiers {
+                            control: true,
+                            ..Default::default()
+                        },
+                    }),
+                    cx,
+                );
+                feature.send_input(TerminalInput::Paste("xy".into()), cx);
+            });
+            (entity, backend)
+        });
+
+        let settled = backend.clone();
+        drain_inputs(cx, &entity, move |feature| {
+            feature.message.contains("input failed")
+                && !feature.resyncing_inputs
+                && feature
+                    .inputs
+                    .iter()
+                    .all(|(_, queue)| !queue.has_in_flight())
+                && settled.sent_inputs.lock().unwrap().len() == 1
+        });
+        assert!(
+            backend.polls.load(Ordering::Relaxed) >= 1,
+            "failure must resynchronize"
+        );
+        assert_eq!(
+            *backend.sent_inputs.lock().unwrap(),
+            vec![TerminalInput::Text("ab".into())],
+            "accepted text is never retried"
+        );
+
+        // 再試行が止まった後でも、次の入力で未送信分を失わずに再開する。
+        cx.update(|cx| entity.update(cx, |feature, cx| feature.send_text("z".into(), cx)));
+        let recovered = backend.clone();
+        drain_inputs(cx, &entity, move |feature| {
+            feature.message.is_empty() && recovered.sent_inputs.lock().unwrap().len() == 4
+        });
+        assert_eq!(
+            *backend.sent_inputs.lock().unwrap(),
+            vec![
+                TerminalInput::Text("ab".into()),
+                TerminalInput::Key(terminal::TerminalKeyEvent {
+                    key: terminal::TerminalKey::Character("c".into()),
+                    modifiers: terminal::TerminalModifiers {
+                        control: true,
+                        ..Default::default()
+                    },
+                }),
+                TerminalInput::Paste("xy".into()),
+                TerminalInput::Text("z".into()),
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn superseded_resync_clears_state_and_still_retries_pending_input(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                let id = feature.active_id().unwrap();
+                feature.queue_mut(&id).enqueue_text("ab".into());
+                feature.resync_inputs(cx);
+                assert!(feature.resyncing_inputs);
+                // resize / claim / operate と同じく、再同期の応答前に action を進める。
+                feature.requests.begin_action();
+            });
+            (entity, backend)
+        });
+
+        let sent = backend.clone();
+        drain_inputs(cx, &entity, move |feature| {
+            !feature.resyncing_inputs
+                && !feature.input_recovery
+                && sent.sent_inputs.lock().unwrap().len() == 1
+                && feature.inputs.iter().all(|(_, queue)| !queue.has_pending())
+        });
+        assert_eq!(
+            *backend.sent_inputs.lock().unwrap(),
+            vec![TerminalInput::Text("ab".into())],
+            "追い越されても未送信入力は失わない"
+        );
+
+        // フラグが残っていないため、次の再同期も即座に実行できる。
+        let polls = backend.polls.load(Ordering::Relaxed);
+        cx.update(|cx| {
+            entity.update(cx, |feature, cx| {
+                feature.resync_inputs(cx);
+            })
+        });
+        drain_inputs(cx, &entity, |feature| !feature.resyncing_inputs);
+        assert!(
+            backend.polls.load(Ordering::Relaxed) > polls,
+            "再同期が再び実行される"
+        );
     }
 
     #[test]
