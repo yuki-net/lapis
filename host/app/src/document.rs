@@ -270,6 +270,22 @@ fn relay_events(changes: &std::sync::Weak<DocumentChanges>, next: &mut impl FnMu
     }
 }
 
+/// 購読区間の受信処理。`Open` は購読開始、`None` は購読失敗を表す。
+type RelayPoller = Box<dyn FnMut() -> RelayPoll>;
+
+/// 1 回の購読区間を処理する。
+///
+/// 購読に成功したら開始直後に再同期を促し、区間が終わったら再度促す。
+fn relay_once(
+    changes: &std::sync::Weak<DocumentChanges>,
+    open: &mut impl FnMut() -> Option<RelayPoller>,
+) {
+    if let Some(mut next) = open() {
+        relay_subscription(changes, &mut next);
+    }
+    publish_changes(changes);
+}
+
 fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChanges>) {
     std::thread::spawn(move || {
         loop {
@@ -277,21 +293,18 @@ fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChan
             if changes.upgrade().is_none() {
                 return;
             }
-            if let Ok(receiver) = client.subscribe() {
-                // 購読開始前の変更を回収し、受信待ち中も破棄を確認する。
-                relay_subscription(&changes, || {
-                    match receiver.recv_timeout(DOCUMENT_EVENT_POLL) {
+            relay_once(&changes, &mut || {
+                client.subscribe().ok().map(|receiver| {
+                    Box::new(move || match receiver.recv_timeout(DOCUMENT_EVENT_POLL) {
                         Ok(event) => match relay_event(&event.body) {
                             Some(relay) => RelayPoll::Event(relay),
                             None => RelayPoll::Idle,
                         },
                         Err(mpsc::RecvTimeoutError::Timeout) => RelayPoll::Idle,
                         Err(mpsc::RecvTimeoutError::Disconnected) => RelayPoll::Closed,
-                    }
-                });
-            }
-            // 切断・購読失敗時は購読先の変化を取りこぼしている可能性がある。
-            publish_changes(&changes);
+                    }) as RelayPoller
+                })
+            });
             if changes.upgrade().is_none() {
                 return;
             }
@@ -652,6 +665,37 @@ mod tests {
             "resync でも再同期を促す"
         );
         assert!(receiver.try_recv().is_err(), "通知は 1 回にまとめる");
+    }
+
+    #[test]
+    fn resync_resubscribes_and_notifies_after_success() {
+        let changes = std::sync::Arc::new(DocumentChanges::default());
+        let receiver = changes.subscribe();
+        let weak = std::sync::Arc::downgrade(&changes);
+        let opens = std::cell::Cell::new(0);
+        let mut open = || {
+            opens.set(opens.get() + 1);
+            if opens.get() == 1 {
+                let mut steps = vec![RelayPoll::Event(Relay::Resync)].into_iter();
+                Some(
+                    Box::new(move || steps.next().unwrap_or_else(|| panic!("resync で終了する")))
+                        as RelayPoller,
+                )
+            } else {
+                Some(Box::new(|| RelayPoll::Closed) as RelayPoller)
+            }
+        };
+        // 1 回目は resync で購読区間が終わる。
+        relay_once(&weak, &mut open);
+        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_ok());
+        assert!(receiver.try_recv().is_err());
+        // 再購読の成功直後にも再同期を促す。
+        relay_once(&weak, &mut open);
+        assert_eq!(opens.get(), 2, "resync 後に購読し直す");
+        assert!(
+            receiver.recv_timeout(Duration::from_millis(100)).is_ok(),
+            "再購読成功後に再同期を促す"
+        );
     }
 
     #[test]
