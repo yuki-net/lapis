@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 editor-core = { path = "../../../contracts/domain/editor-core" }
 local-fs = { path = "../fs" }
+notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 task-runner = { path = "../agent" }

@@ -193,7 +193,7 @@ impl WindowHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let editor = cx.new(|cx| Editor::new_with_polling(worker, false, cx));
+        let editor = cx.new(|cx| Editor::new_with_initial_snapshot(worker, false, cx));
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), HashMap::new(), cx));
         shell.update(cx, |shell, _| {
             shell.host = host;

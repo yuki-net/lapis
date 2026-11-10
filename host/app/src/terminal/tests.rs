@@ -97,7 +97,7 @@ impl Fixture {
                     workspace_id.clone(),
                     "terminal-test",
                     root.path().canonicalize().unwrap(),
-                    Arc::new(LocalWorkspaceRepository),
+                    Arc::new(LocalWorkspaceRepository::default()),
                 )
                 .with_terminal(backend.clone()),
             )

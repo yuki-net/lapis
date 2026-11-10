@@ -3,7 +3,9 @@ use editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
 use serde::{Deserialize, Serialize};
 
 mod connection;
-pub use connection::{ExecutionSnapshot, TaskConnection, TaskSnapshot, TaskStart};
+pub use connection::{
+    ExecutionSnapshot, TaskConnection, TaskSnapshot, TaskStart, TaskSubscription,
+};
 use std::{
     fmt,
     path::PathBuf,
@@ -232,6 +234,11 @@ pub trait TaskBackend: Send + Sync {
     fn load(&self) -> Result<Vec<TaskRecord>, TaskError>;
     fn start(&self, record: &TaskRecord) -> Result<(), TaskError>;
     fn control(&self, execution_id: &ExecutionId, control: &TaskControl) -> Result<(), TaskError>;
+
+    /// Task 保存領域の変更通知。未対応の backend は `None`。
+    fn changes(&self) -> Option<std::sync::mpsc::Receiver<()>> {
+        None
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

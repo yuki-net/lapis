@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -15,6 +15,7 @@ use std::{
 
 use editor_core::ExecutionId;
 use local_fs::atomic_json_write;
+use notify::Watcher;
 use serde::{Deserialize, Serialize};
 use task_runner::{
     CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
@@ -25,6 +26,11 @@ use task_runner::{
 pub struct LocalTaskBackend {
     root: PathBuf,
     codex_executable: PathBuf,
+    watch: Arc<Mutex<Option<TaskWatch>>>,
+}
+
+struct TaskWatch {
+    _watcher: notify::RecommendedWatcher,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -39,6 +45,7 @@ impl LocalTaskBackend {
         Self {
             root,
             codex_executable,
+            watch: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -145,6 +152,28 @@ impl TaskBackend for LocalTaskBackend {
     fn control(&self, execution_id: &ExecutionId, control: &TaskControl) -> Result<(), TaskError> {
         atomic_json_write(&self.control_path(execution_id), control)?;
         Ok(())
+    }
+
+    fn changes(&self) -> Option<mpsc::Receiver<()>> {
+        let mut slot = self.watch.lock().ok()?;
+        if slot.is_some() {
+            return None;
+        }
+        fs::create_dir_all(&self.root).ok()?;
+        // worker の保存を即座に Client へ伝える。通知は1件で足りる。
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if event.is_ok_and(|event| !matches!(event.kind, notify::EventKind::Access(_))) {
+                    let _ = sender.try_send(());
+                }
+            })
+            .ok()?;
+        watcher
+            .watch(&self.root, notify::RecursiveMode::NonRecursive)
+            .ok()?;
+        *slot = Some(TaskWatch { _watcher: watcher });
+        Some(receiver)
     }
 }
 

@@ -3,6 +3,7 @@ use editor_core::{DocumentId, SessionId};
 use std::{
     ops::Range,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 #[derive(Clone, Debug)]
@@ -24,6 +25,12 @@ impl DocumentCache {
     pub fn is_read_only(&self) -> bool {
         self.owner.is_some() && !self.is_owner
     }
+}
+
+/// Host の Document / ファイル変更通知。`Ok(true)` は変化あり、
+/// `Ok(false)` は受信timeout、`Err` は再同期と再購読が必要。
+pub trait DocumentSubscription: Send {
+    fn recv_timeout(&mut self, timeout: Duration) -> Result<bool, DocumentError>;
 }
 
 pub trait DocumentConnection: Send + Sync {
@@ -68,4 +75,9 @@ pub trait DocumentConnection: Send + Sync {
     fn reload(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError>;
     fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError>;
     fn close(&self, id: &DocumentId) -> Result<(), DocumentError>;
+
+    /// Host 側の変更通知。未対応の接続は `None`。
+    fn subscribe(&self) -> Option<Box<dyn DocumentSubscription>> {
+        None
+    }
 }

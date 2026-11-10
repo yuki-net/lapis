@@ -467,6 +467,28 @@ impl TerminalSession {
     }
 }
 
+/// 非同期診断の対象（パスと revision）。
+type DiagnosticsTarget = (PathBuf, Revision);
+
+/// 非同期に取得中の LSP 診断。
+pub struct DiagnosticsRequest {
+    target: Option<DiagnosticsTarget>,
+    receiver: mpsc::Receiver<DiagnosticsResult>,
+}
+
+type DiagnosticsResult = Result<Vec<Diagnostic>, LspError>;
+
+impl DiagnosticsRequest {
+    /// 完了まで待ち、要求時の対象 revision と一緒に返す。
+    pub fn wait(self) -> (Option<DiagnosticsTarget>, DiagnosticsResult) {
+        let result = self
+            .receiver
+            .recv()
+            .unwrap_or_else(|_| Err(LspError::new("LSP diagnostics worker disconnected")));
+        (self.target, result)
+    }
+}
+
 pub struct LspSession {
     backend: Arc<dyn LanguageServerBackend>,
     attempted_workspace: Option<PathBuf>,
@@ -613,6 +635,32 @@ impl LspSession {
             .completion(path, position, editor.active_revision())
     }
 
+    /// 診断要求を非同期に開始し、worker を塞がずに結果を待てるようにする。
+    pub fn request_diagnostics(
+        &mut self,
+        editor: &EditorSession,
+    ) -> Result<Option<DiagnosticsRequest>, LspError> {
+        let Some(path) = editor.active_path().map(Path::to_owned) else {
+            return Ok(None);
+        };
+        let revision = editor.active_revision();
+        self.sync_active(editor)?;
+        // 同期対象になっていない文書（非Rust等）の診断は要求しない。
+        if self.synced_document.as_ref() != Some(&(path.clone(), revision)) {
+            return Ok(None);
+        }
+        let target = (path, revision);
+        let backend = self.backend.clone();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = sender.send(backend.diagnostics());
+        });
+        Ok(Some(DiagnosticsRequest {
+            target: Some(target),
+            receiver,
+        }))
+    }
+
     pub fn request_completion(
         &self,
         editor: &EditorSession,
@@ -717,6 +765,11 @@ impl WorkspaceSearchSession {
         self.cancelled = Some(cancelled);
         self.receiver = Some(receiver);
         self.running = true;
+    }
+
+    /// 完了通知用の receiver を UI へ渡す。渡した後は `refresh` では結果を取得しない。
+    pub fn take_receiver(&mut self) -> Option<mpsc::Receiver<Result<Vec<SearchHit>, SearchError>>> {
+        self.receiver.take()
     }
 
     pub fn cancel(&mut self) {

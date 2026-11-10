@@ -16,6 +16,10 @@ pub enum EventBody {
     },
     #[serde(rename = "workspace.changed")]
     WorkspaceChanged { workspace_id: WorkspaceId },
+    #[serde(rename = "files.changed")]
+    FilesChanged { workspace_id: WorkspaceId },
+    #[serde(rename = "task.changed")]
+    TasksChanged { workspace_id: WorkspaceId },
     #[serde(rename = "git.status_changed")]
     GitStatusChanged {
         workspace_id: WorkspaceId,

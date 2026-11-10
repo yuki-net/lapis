@@ -269,6 +269,11 @@ impl BackendService {
             client_api::WorkspaceOperation::CreateWorktree
                 | client_api::WorkspaceOperation::DiscardWorktree { .. }
         ) || matches!(&request.operation, client_api::WorkspaceOperation::StartTask { input } if input.isolated);
+        let tasks_changed = matches!(
+            request.operation,
+            client_api::WorkspaceOperation::StartTask { .. }
+                | client_api::WorkspaceOperation::ControlTask { .. }
+        );
         let workspace_id = session.workspace_id.clone();
         let removing = match &request.operation {
             client_api::WorkspaceOperation::DiscardWorktree { worktree_id } => {
@@ -321,6 +326,7 @@ impl BackendService {
                 workspace_id,
                 changed,
                 worktrees_changed,
+                tasks_changed,
                 request_id,
                 result,
                 reserved,
@@ -447,6 +453,7 @@ enum Command {
         workspace_id: WorkspaceId,
         changed: bool,
         worktrees_changed: bool,
+        tasks_changed: bool,
         request_id: client_api::RequestId,
         result: Result<client_api::WorkspaceOperationResponse, BackendStateError>,
         reserved: Option<std::path::PathBuf>,
@@ -553,6 +560,7 @@ fn run_worker(
                 workspace_id,
                 changed,
                 worktrees_changed,
+                tasks_changed,
                 request_id,
                 result,
                 reserved,
@@ -569,6 +577,7 @@ fn run_worker(
                     workspace_id,
                     changed,
                     worktrees_changed,
+                    tasks_changed,
                     request_id,
                     result,
                 );
@@ -665,6 +674,9 @@ fn run_worker(
             publish_events(&mut subscribers, events);
         }
         if let Ok(events) = state.poll_document_owners() {
+            publish_events(&mut subscribers, events);
+        }
+        if let Ok(events) = state.poll_external_changes() {
             publish_events(&mut subscribers, events);
         }
     }

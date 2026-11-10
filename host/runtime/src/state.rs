@@ -300,6 +300,7 @@ impl BackendState {
         workspace_id: WorkspaceId,
         changed: bool,
         worktrees_changed: bool,
+        tasks_changed: bool,
         request_id: client_api::RequestId,
         result: Result<client_api::WorkspaceOperationResponse, BackendStateError>,
     ) -> DispatchOutcome {
@@ -311,7 +312,17 @@ impl BackendState {
                     self.workspaces
                         .get_mut(&workspace_id)
                         .ok_or(BackendStateError::WorkspaceNotFound)?
-                        .publish(EventBody::WorkspaceChanged { workspace_id })?,
+                        .publish(EventBody::WorkspaceChanged {
+                            workspace_id: workspace_id.clone(),
+                        })?,
+                );
+            }
+            if tasks_changed {
+                events.push(
+                    self.workspaces
+                        .get_mut(&workspace_id)
+                        .ok_or(BackendStateError::WorkspaceNotFound)?
+                        .publish(EventBody::TasksChanged { workspace_id })?,
                 );
             }
             Ok((ResponseBody::WorkspaceExecute(result), events))
@@ -813,6 +824,50 @@ impl BackendState {
         }
         Ok(published)
     }
+
+    /// Adapter が監視したファイル・Task の変化を event へ変換する。
+    /// 変化は1回の Runtime loop でまとめて1 event にする。
+    pub(crate) fn poll_external_changes(
+        &mut self,
+    ) -> Result<Vec<PublishedEvent>, BackendStateError> {
+        let mut published = Vec::new();
+        for workspace in self.workspaces.values_mut() {
+            let workspace_id = workspace.summary.workspace_id.clone();
+            if take_changed(&mut workspace.file_changes) {
+                published.push(workspace.publish(EventBody::FilesChanged {
+                    workspace_id: workspace_id.clone(),
+                })?);
+            }
+            if take_changed(&mut workspace.task_changes) {
+                published.push(workspace.publish(EventBody::TasksChanged { workspace_id })?);
+            }
+        }
+        Ok(published)
+    }
+}
+
+/// 溜まった通知を1回にまとめる。監視が切れた場合も再同期を促す。
+fn take_changed(slot: &mut Option<std::sync::mpsc::Receiver<()>>) -> bool {
+    let Some(receiver) = slot.take() else {
+        return false;
+    };
+    let mut changed = false;
+    let mut disconnected = false;
+    loop {
+        match receiver.try_recv() {
+            Ok(()) => changed = true,
+            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                changed = true;
+                disconnected = true;
+                break;
+            }
+        }
+    }
+    if !disconnected {
+        *slot = Some(receiver);
+    }
+    changed
 }
 
 struct WorkspaceState {
@@ -825,6 +880,8 @@ struct WorkspaceState {
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
     git: git_state::GitState,
+    file_changes: Option<std::sync::mpsc::Receiver<()>>,
+    task_changes: Option<std::sync::mpsc::Receiver<()>>,
 }
 
 impl WorkspaceState {
@@ -835,6 +892,12 @@ impl WorkspaceState {
         if let Some(view) = &registration.workbench_initial.view {
             workbench_state::validate_workspace(view, &registration.workspace_id)?;
         }
+        // 監視は状態の正本ではなく、変更のきっかけだけを Runtime へ渡す。
+        let file_changes = registration.files.changes();
+        let task_changes = registration
+            .tasks
+            .as_ref()
+            .and_then(|tasks| tasks.changes());
         let documents = match registration.document_owner_idle_timeout {
             Some(timeout) => DocumentRegistry::new().with_owner_idle_timeout(timeout),
             None => DocumentRegistry::new(),
@@ -856,6 +919,8 @@ impl WorkspaceState {
             ))),
             events: EventJournal::default(),
             git: git_state::GitState::default(),
+            file_changes,
+            task_changes,
         })
     }
 
@@ -938,4 +1003,31 @@ fn canonical_document_path(
         .ok_or(crate::PathSecurityError::InvalidEntry)?;
     WorkspaceRelativePath::parse(relative.replace('\\', "/"))
         .map_err(|_| crate::PathSecurityError::InvalidEntry.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::take_changed;
+    use std::sync::mpsc;
+
+    #[test]
+    fn take_changed_coalesces_notifications_and_keeps_the_receiver() {
+        let (sender, receiver) = mpsc::sync_channel(2);
+        let mut slot = Some(receiver);
+        assert!(!take_changed(&mut slot));
+        sender.send(()).unwrap();
+        sender.send(()).unwrap();
+        assert!(take_changed(&mut slot), "溜まった通知を 1 回にまとめる");
+        assert!(slot.is_some(), "監視は継続する");
+        assert!(!take_changed(&mut slot));
+    }
+
+    #[test]
+    fn take_changed_resyncs_when_the_watcher_disconnects() {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut slot = Some(receiver);
+        drop(sender);
+        assert!(take_changed(&mut slot), "切断時は再同期が必要");
+        assert!(slot.is_none(), "切断した購読は破棄する");
+    }
 }

@@ -1,6 +1,7 @@
 use crate::{ExecutionStatus, Task, TaskControl, TaskError, TaskEventRecord, TaskMode};
 use editor_core::{ConversationId, ExecutionId, TaskId, WorkspaceId};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +34,12 @@ pub struct TaskSnapshot {
     pub events: Vec<TaskEventRecord>,
 }
 
+/// Host の Task 変更通知。`Ok(true)` は変化あり、`Ok(false)` は受信timeout、
+/// `Err` は再同期と再購読が必要。
+pub trait TaskSubscription: Send {
+    fn recv_timeout(&mut self, timeout: Duration) -> Result<bool, TaskError>;
+}
+
 pub trait TaskConnection: Send + Sync {
     fn load(&self, workspace: &WorkspaceId) -> Result<Vec<TaskSnapshot>, TaskError>;
     fn start(&self, workspace: &WorkspaceId, input: TaskStart) -> Result<TaskSnapshot, TaskError>;
@@ -42,4 +49,9 @@ pub trait TaskConnection: Send + Sync {
         execution: &ExecutionId,
         control: &TaskControl,
     ) -> Result<(), TaskError>;
+
+    /// Host 側の変更通知。未対応の接続は `None`。
+    fn subscribe(&self, _workspace: &WorkspaceId) -> Option<Box<dyn TaskSubscription>> {
+        None
+    }
 }

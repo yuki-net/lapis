@@ -1,7 +1,8 @@
 use crate::BackendClient;
 use crate::client::Client;
 use ::document::{
-    Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
+    Document, DocumentCache, DocumentConnection, DocumentError, DocumentSubscription, Encoding,
+    ExternalChange, Revision,
 };
 use client_api as wire;
 use editor_core::DocumentId;
@@ -9,13 +10,59 @@ use std::{
     collections::HashMap,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex, mpsc},
+    time::Duration,
 };
+
+/// Windowごとの購読へ変更通知を送る。満杯の購読は1件にまとめる。
+#[derive(Default)]
+struct DocumentChanges {
+    senders: Mutex<Vec<mpsc::SyncSender<()>>>,
+}
+
+impl DocumentChanges {
+    fn subscribe(&self) -> mpsc::Receiver<()> {
+        let (sender, receiver) = mpsc::sync_channel(1);
+        if let Ok(mut senders) = self.senders.lock() {
+            senders.push(sender);
+        }
+        receiver
+    }
+
+    fn publish(&self) {
+        let Ok(mut senders) = self.senders.lock() else {
+            return;
+        };
+        senders.retain(|sender| {
+            matches!(
+                sender.try_send(()),
+                Ok(()) | Err(mpsc::TrySendError::Full(()))
+            )
+        });
+    }
+}
+
+struct HostDocumentSubscription {
+    receiver: mpsc::Receiver<()>,
+}
+
+impl DocumentSubscription for HostDocumentSubscription {
+    fn recv_timeout(&mut self, timeout: Duration) -> Result<bool, DocumentError> {
+        match self.receiver.recv_timeout(timeout) {
+            Ok(()) => Ok(true),
+            Err(mpsc::RecvTimeoutError::Timeout) => Ok(false),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(DocumentError::io("Document購読が切断されました"))
+            }
+        }
+    }
+}
 
 pub(super) struct HostDocuments {
     host: BackendClient,
     connections: Mutex<HashMap<wire::WorkspaceId, Client>>,
     resources: Mutex<HashMap<DocumentId, (Client, PathBuf)>>,
+    changes: Arc<DocumentChanges>,
 }
 
 impl HostDocuments {
@@ -24,6 +71,7 @@ impl HostDocuments {
             host,
             connections: Mutex::new(HashMap::new()),
             resources: Mutex::new(HashMap::new()),
+            changes: Arc::new(DocumentChanges::default()),
         }
     }
 
@@ -40,6 +88,7 @@ impl HostDocuments {
             .connect_workspace(workspace.clone())
             .map_err(|error| DocumentError::io(error.to_string()))?;
         connections.insert(workspace, client.clone());
+        forward_document_events(client.clone(), self.changes.clone());
         Ok(client)
     }
     fn connect(&self, root: &Path) -> Result<Client, DocumentError> {
@@ -151,6 +200,39 @@ impl HostDocuments {
         };
         self.cache(client, root, response.document)
     }
+}
+
+/// Host の Document / ファイル変更 event を Window の再同期通知へ変換する。
+fn forward_document_events(client: Client, changes: Arc<DocumentChanges>) {
+    std::thread::spawn(move || {
+        let Ok(receiver) = client.subscribe() else {
+            changes.publish();
+            return;
+        };
+        loop {
+            let event = match receiver.recv() {
+                Ok(event) => event,
+                Err(_) => {
+                    changes.publish();
+                    break;
+                }
+            };
+            match event.body {
+                wire::EventBody::DocumentEdited { .. }
+                | wire::EventBody::DocumentSaved { .. }
+                | wire::EventBody::DocumentReplaced { .. }
+                | wire::EventBody::DocumentClosed { .. }
+                | wire::EventBody::DocumentOwner { .. }
+                | wire::EventBody::WorkspaceChanged { .. }
+                | wire::EventBody::FilesChanged { .. } => changes.publish(),
+                wire::EventBody::SnapshotRequired { .. } => {
+                    changes.publish();
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
 }
 
 impl DocumentConnection for HostDocuments {
@@ -416,6 +498,12 @@ impl DocumentConnection for HostDocuments {
             .map_err(|_| DocumentError::io("Document 接続 lock に失敗しました"))?
             .remove(id);
         Ok(())
+    }
+
+    fn subscribe(&self) -> Option<Box<dyn DocumentSubscription>> {
+        Some(Box::new(HostDocumentSubscription {
+            receiver: self.changes.subscribe(),
+        }))
     }
 }
 

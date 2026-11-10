@@ -146,6 +146,7 @@ impl DesktopRoot {
                 .unwrap_or_default();
             services.terminal.restore_summaries(&summaries);
         }
+        let document_connection = Some(session.document_connection());
         let worker = ClientWorker::new(DocumentClient {
             editor: session,
             conversation: services.conversation,
@@ -155,7 +156,8 @@ impl DesktopRoot {
             snapshot_sequence: 0,
             document_owners: Default::default(),
         });
-        let editor = cx.new(|cx| Editor::new(worker.clone(), cx));
+        let editor =
+            cx.new(|cx| Editor::new_with_subscription(worker.clone(), document_connection, cx));
         let files = cx.new(|_| FilesFeature::new());
         let git = cx.new(|cx| GitFeature::new(services.git, cx));
         let changes = cx.new(|cx| ChangesFeature::new(git.clone(), cx));

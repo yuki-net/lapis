@@ -1,13 +1,45 @@
 //! Local Host のファイルシステムを使う Workspace / Document backend。
 
-use std::{fs, io::Write, path::Path, time::UNIX_EPOCH};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+    sync::{Mutex, mpsc},
+    time::UNIX_EPOCH,
+};
 
 use backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
+use notify::Watcher;
 use workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceRepository};
 
-#[derive(Default)]
-pub struct LocalWorkspaceRepository;
+/// 監視 root を持つ Local 実装。`Default` は監視なしで使う。
+pub struct LocalWorkspaceRepository {
+    root: Option<PathBuf>,
+    watch: Mutex<Option<WorkspaceWatch>>,
+}
+
+struct WorkspaceWatch {
+    _watcher: notify::RecommendedWatcher,
+}
+
+impl Default for LocalWorkspaceRepository {
+    fn default() -> Self {
+        Self {
+            root: None,
+            watch: Mutex::new(None),
+        }
+    }
+}
+
+impl LocalWorkspaceRepository {
+    pub fn new(root: PathBuf) -> Self {
+        Self {
+            root: Some(root),
+            watch: Mutex::new(None),
+        }
+    }
+}
 
 impl DocumentRepository for LocalWorkspaceRepository {
     fn read_file(&self, path: &Path) -> Result<FileData, DocumentError> {
@@ -119,6 +151,35 @@ impl WorkspaceFileBackend for LocalWorkspaceRepository {
         children.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(children)
     }
+
+    fn changes(&self) -> Option<mpsc::Receiver<()>> {
+        let root = self.root.as_ref()?;
+        let mut slot = self.watch.lock().ok()?;
+        if slot.is_some() {
+            return None;
+        }
+        // 通知は1件で足りる。監視callbackを塞がないよう同期channelを使う。
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let Ok(event) = event else {
+                    return;
+                };
+                if matches!(event.kind, notify::EventKind::Access(_))
+                    || event.paths.iter().all(|path| {
+                        path.components()
+                            .any(|part| part.as_os_str() == std::ffi::OsStr::new(".git"))
+                    })
+                {
+                    return;
+                }
+                let _ = sender.try_send(());
+            })
+            .ok()?;
+        watcher.watch(root, notify::RecursiveMode::Recursive).ok()?;
+        *slot = Some(WorkspaceWatch { _watcher: watcher });
+        Some(receiver)
+    }
 }
 
 impl WorkspaceRepository for LocalWorkspaceRepository {
@@ -219,7 +280,7 @@ mod tests {
     fn local_repository_round_trips_and_detects_conflicts() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("note.md");
-        let repository = LocalWorkspaceRepository;
+        let repository = LocalWorkspaceRepository::default();
 
         let saved = repository.write_file(&path, b"# Hello\n", None).unwrap();
         assert_eq!(repository.read_file(&path).unwrap().bytes, b"# Hello\n");
@@ -240,7 +301,7 @@ mod tests {
         fs::create_dir_all(directory.path().join("nested").join("ignored")).unwrap();
         fs::write(directory.path().join("a-file"), b"file").unwrap();
 
-        let entries = LocalWorkspaceRepository
+        let entries = LocalWorkspaceRepository::default()
             .list_children(directory.path())
             .unwrap();
 
@@ -276,7 +337,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = LocalWorkspaceRepository
+        let entries = LocalWorkspaceRepository::default()
             .list_children(directory.path())
             .unwrap();
 
@@ -294,7 +355,7 @@ mod tests {
         let name = OsString::from_vec(vec![b'i', b'n', b'v', b'a', b'l', b'i', b'd', 0xff]);
         fs::write(directory.path().join(name), b"file").unwrap();
 
-        let error = LocalWorkspaceRepository
+        let error = LocalWorkspaceRepository::default()
             .list_children(directory.path())
             .unwrap_err();
         assert_eq!(error.kind(), document::DocumentErrorKind::Io);
@@ -306,7 +367,9 @@ mod tests {
         let file = directory.path().join("file");
         fs::write(&file, b"not a directory").unwrap();
 
-        let error = LocalWorkspaceRepository.list_children(&file).unwrap_err();
+        let error = LocalWorkspaceRepository::default()
+            .list_children(&file)
+            .unwrap_err();
         assert_eq!(error.kind(), document::DocumentErrorKind::Io);
     }
 
@@ -318,7 +381,7 @@ mod tests {
         fs::write(directory.path().join("src").join("main.rs"), "fn main() {}").unwrap();
         fs::write(directory.path().join("target").join("hidden"), "x").unwrap();
 
-        let tree = LocalWorkspaceRepository
+        let tree = LocalWorkspaceRepository::default()
             .list_tree(directory.path())
             .unwrap();
         assert!(

@@ -15,7 +15,7 @@ use crate::{
     features::id,
     theme,
 };
-use document::{Document, DocumentError};
+use document::{Document, DocumentConnection, DocumentError};
 use editor_core::DocumentId;
 mod actions;
 mod canvas;
@@ -106,6 +106,7 @@ pub(crate) struct Editor {
     edit_epoch: Option<crate::client_adapter::EditEpoch>,
     in_flight: usize,
     group_sync_pending: bool,
+    sync_pending: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
     marked_range: Option<Range<usize>>,
@@ -132,18 +133,27 @@ impl Drop for Editor {
 }
 
 impl Editor {
-    /// Creates a local editor view and starts snapshot polling on the shared worker.
-    pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
-        Self::new_with_polling(worker, true, cx)
+    /// Host の変更通知だけを契機に同期する Editor を作る。
+    /// 通知が無い接続では `connection` が `None` になり、明示操作だけで更新する。
+    pub(crate) fn new_with_subscription(
+        worker: ClientWorker<DocumentClient>,
+        connection: Option<std::sync::Arc<dyn DocumentConnection>>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let editor = Self::new_with_initial_snapshot(worker, connection.is_none(), cx);
+        if let Some(connection) = connection {
+            editor.start_subscription(connection, cx);
+        }
+        editor
     }
 
     /// Creates a local editor view over an existing worker.
     ///
-    /// With `poll`, requests an initial snapshot and polls every two seconds when
-    /// idle and outside recovery. Otherwise, snapshots must be supplied by the host.
-    pub(crate) fn new_with_polling(
+    /// With `initial_snapshot`, requests one snapshot immediately. Otherwise,
+    /// snapshots must be supplied by the host.
+    pub(crate) fn new_with_initial_snapshot(
         worker: ClientWorker<DocumentClient>,
-        poll: bool,
+        initial_snapshot: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut editor = Self {
@@ -167,6 +177,7 @@ impl Editor {
             edit_epoch: None,
             in_flight: 0,
             group_sync_pending: false,
+            sync_pending: false,
             selected_range: 0..0,
             selection_reversed: false,
             marked_range: None,
@@ -182,28 +193,79 @@ impl Editor {
             views: HashMap::new(),
             scroll_positions: HashMap::new(),
         };
-        if poll {
+        if initial_snapshot {
             editor.submit(false, |_| Ok(()), cx);
         }
-        if poll {
-            cx.spawn(async move |this, cx| {
+        editor
+    }
+
+    /// Host の変更通知で同期する。初回と再接続時は1度取り直す。
+    fn start_subscription(
+        &self,
+        connection: std::sync::Arc<dyn DocumentConnection>,
+        cx: &mut Context<Self>,
+    ) {
+        let executor = cx.background_executor().clone();
+        cx.spawn(async move |this, cx| {
+            loop {
+                let Some(mut subscription) = connection.subscribe() else {
+                    // 購読できない接続でも初回取得は行う。
+                    let _ = this.update(cx, |editor, cx| editor.request_sync(cx));
+                    return;
+                };
+                // 購読開始前の変更を回収する。
+                if this
+                    .update(cx, |editor, cx| editor.request_sync(cx))
+                    .is_err()
+                {
+                    return;
+                }
                 loop {
-                    Timer::after(Duration::from_secs(2)).await;
-                    if this
-                        .update(cx, |editor, cx| {
-                            if editor.in_flight == 0 && !editor.recovery {
-                                editor.submit_with_recovery(true, false, |_| Ok(()), cx);
-                            }
+                    let (next, outcome) = executor
+                        .spawn(async move {
+                            let outcome = subscription.recv_timeout(Duration::from_secs(1));
+                            (subscription, outcome)
                         })
-                        .is_err()
-                    {
-                        break;
+                        .await;
+                    subscription = next;
+                    match outcome {
+                        Ok(true) => {
+                            if this
+                                .update(cx, |editor, cx| editor.request_sync(cx))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                        Ok(false) => {}
+                        // 通知の欠落・切断。再同期してから購読し直す。
+                        Err(_) => break,
                     }
                 }
-            })
-            .detach();
+                if this
+                    .update(cx, |editor, cx| editor.request_sync(cx))
+                    .is_err()
+                {
+                    return;
+                }
+                Timer::after(Duration::from_secs(2)).await;
+            }
+        })
+        .detach();
+    }
+
+    /// 未確定の操作中は完了後に1回だけ同期する。
+    fn request_sync(&mut self, cx: &mut Context<Self>) {
+        if self.recovery {
+            return;
         }
-        editor
+        if self.in_flight > 0 {
+            self.sync_pending = true;
+            return;
+        }
+        if !self.submit_with_recovery(true, false, |_| Ok(()), cx) {
+            self.sync_pending = true;
+        }
     }
 
     pub(crate) fn submit(
@@ -407,6 +469,12 @@ impl Editor {
 
     /// 古い世代の応答も含め、待ち処理の解消をHostへ通知する。
     fn notify_idle(&mut self, cx: &mut Context<Self>) {
+        if self.in_flight == 0 && self.sync_pending && !self.recovery {
+            self.sync_pending = false;
+            if !self.submit_with_recovery(true, false, |_| Ok(()), cx) {
+                self.sync_pending = true;
+            }
+        }
         if self.in_flight == 0 && self.group_sync_pending {
             self.group_sync_pending = false;
             cx.emit(EditorEvent::Idle);
