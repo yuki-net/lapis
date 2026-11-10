@@ -64,7 +64,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - Git/Worktree/Task の公開操作は Workspace・Worktree・Execution の ID を指定する。実行ディレクトリ、内部 TaskRecord、OS の絶対パスを wire に公開せず、実行 ID と初期状態は Runtime が生成する。
 - Document の close や接続切断は attachment の解除であり、未保存内容・履歴・Terminal・Agent の終了ではない。実行終了には明示的な終了操作が必要。
 - Document の古い revision は拒否する。保存済みの Client 表示状態を復元しても、すでに存在する正規 Document の新しい内容を上書きしない。正規内容と復旧用 draft が異なる場合は、draft を別の未保存文書として保持する。
-- Workspaceの共有Workbench表示状態はHostのRuntimeが所有する。更新時は取得済みrevisionを指定し、不一致なら現在値を返して変更しない。更新通知は同じWorkspaceの購読者へ、Clientのローカル保存完了を待たずに配信する。未登録状態と既定表示を区別し、書き込みには専用capabilityを要求する。管理Hostと保存先を指定した独立Hostでは状態を永続化する。Desktopからの利用は未実装。
+- Workspaceの共有Workbench表示状態はHostのRuntimeが所有する。更新時は取得済みrevisionを指定し、不一致なら現在値を返して変更しない。更新通知は同じWorkspaceの購読者へ、Clientのローカル保存完了を待たずに配信する。未登録状態と既定表示を区別し、書き込みには専用capabilityを要求する。管理Hostと保存先を指定した独立Hostでは状態を永続化する。
 - 状態ディレクトリを持つHostは登録済みWorkspaceのIDとHost内pathを保持し、再起動時に復元する。利用できないpathや識別が一致しない記録は消去せず、該当Workspaceを復元できないことを通知する。Host内pathはWorkspace一覧のwire応答へ含めない。
 - 共有Workbenchの文書表示状態はWorkspace ID、Workspace相対path、文書ID、表示位置と復旧draftで表し、Client固有の絶対pathを含めない。Hostは別Workspaceの状態を拒否する。旧形式からの変換に失敗した場合は元の保存値を保持する。
 - 旧ClientがWorkbench更新で文書表示状態を省略した場合、Hostは保存済みの文書状態を保持する。新Clientは変更しない値も含めて明示し、`null`を指定した場合だけ文書状態を消去する。
