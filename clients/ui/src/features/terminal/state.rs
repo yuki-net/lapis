@@ -105,10 +105,7 @@ impl TerminalSessions {
 /// Terminal Resourceの変化。Shellは受信してタブをResource参照へ更新する。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum TerminalFeatureEvent {
-    /// 新しい Terminal を開始した。
     Started(terminal::TerminalId),
-    /// 表示する Terminal を切り替えた。Resource固定のタブでも外側のタブを追従させる。
-    Selected(terminal::TerminalId),
 }
 
 #[derive(Default)]
@@ -576,23 +573,6 @@ impl TerminalFeature {
             return;
         };
         self.send_input(TerminalInput::Paste(text), cx);
-    }
-
-    /// 表示する Terminal を選ぶ。
-    ///
-    /// Resource固定のタブでは `active_id` が固定参照を優先するため、選択だけでは
-    /// 表示が変わらない。Shellが外側のタブも同じ Terminal へ切り替えられるよう通知する。
-    pub(super) fn select_terminal(
-        &mut self,
-        id: terminal::TerminalId,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.terminals.iter().any(|terminal| terminal.id == id) {
-            return;
-        }
-        self.selected = Some(id.clone());
-        cx.emit(TerminalFeatureEvent::Selected(id));
-        cx.notify();
     }
 
     pub(super) fn active_id(&self) -> Option<terminal::TerminalId> {
@@ -1166,9 +1146,7 @@ mod tests {
     }
     use super::*;
     use std::{
-        cell::RefCell,
         path::Path,
-        rc::Rc,
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
@@ -1586,72 +1564,6 @@ mod tests {
             ),
             backend,
         )
-    }
-
-    struct EventObserver {
-        _subscription: gpui::Subscription,
-    }
-
-    #[gpui::test]
-    fn selecting_a_terminal_notifies_the_shell_even_when_a_resource_is_bound(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        use gpui::AppContext;
-
-        let (entity, events, _observer) = cx.update(|cx| {
-            let (_, backend) = feature();
-            let entity = cx.new(|cx| {
-                TerminalFeature::new(
-                    TerminalSession::new(backend),
-                    Some("workspace".into()),
-                    ConversationId::new("task-a"),
-                    cx,
-                )
-            });
-            let events = Rc::new(RefCell::new(Vec::new()));
-            let observed = events.clone();
-            let observer = cx.new(|cx| {
-                let subscription =
-                    cx.subscribe(&entity, move |_: &mut EventObserver, _, event, _| {
-                        observed.borrow_mut().push(event.clone());
-                    });
-                EventObserver {
-                    _subscription: subscription,
-                }
-            });
-            (entity, events, observer)
-        });
-        let selected = cx.update(|cx| {
-            let first = TerminalId::new("terminal-a");
-            let second = TerminalId::new("terminal-b");
-            entity.update(cx, |feature, cx| {
-                feature.terminals = [&first, &second]
-                    .into_iter()
-                    .map(|id| {
-                        terminal::TerminalSnapshot::empty(
-                            id.clone(),
-                            "workspace".into(),
-                            TerminalStatus::Running,
-                            TerminalSize::new(80, 24),
-                        )
-                    })
-                    .collect();
-                feature.bind_resource(Some(first.clone()));
-
-                feature.select_terminal(second, cx);
-
-                // 固定参照は残したまま、外側のタブを切り替える通知を出す。
-                feature.selected.clone()
-            })
-        });
-        cx.run_until_parked();
-        assert_eq!(selected, Some(TerminalId::new("terminal-b")));
-        assert_eq!(
-            *events.borrow(),
-            vec![TerminalFeatureEvent::Selected(TerminalId::new(
-                "terminal-b"
-            ))]
-        );
     }
 
     fn drain_inputs(
