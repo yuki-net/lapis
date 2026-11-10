@@ -103,6 +103,25 @@ impl TasksFeature {
                 let Some(mut subscription) = opened else {
                     return;
                 };
+                // 購読開始前の変更を回収する。
+                let alive = this
+                    .update(cx, |tasks, cx| {
+                        if tasks.subscription_generation != generation
+                            || tasks.workspace.as_ref() != Some(&workspace)
+                        {
+                            return false;
+                        }
+                        if tasks.pending == 0 {
+                            tasks.refresh(cx);
+                        } else {
+                            tasks.sync_pending = true;
+                        }
+                        true
+                    })
+                    .unwrap_or(false);
+                if !alive {
+                    return;
+                }
                 loop {
                     let (next, outcome) = executor
                         .spawn(async move {
