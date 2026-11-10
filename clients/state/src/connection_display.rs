@@ -55,6 +55,29 @@ pub fn connection_label(
     )
 }
 
+/// タブ・ヘッダー・ウィンドウタイトルへ出す短い Workspace 名。
+///
+/// 接続先 URL と Workspace ID は含めない。詳細な identity は
+/// [`connection_label`] を表示する接続情報の面が担う。
+pub fn short_workspace_label(workspace_name: Option<&str>, workspace_id: Option<&str>) -> String {
+    let name = workspace_name
+        .map(|name| name.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|name| !name.is_empty());
+    let id = non_empty(workspace_id);
+    match name {
+        Some(name) if id.is_none_or(|id| name != id) => name,
+        _ => "Workspace".to_owned(),
+    }
+}
+
+/// Desktop のウィンドウタイトル。Web のタブタイトルと同じ形式にする。
+pub fn window_title(workspace_name: Option<&str>, workspace_id: Option<&str>) -> String {
+    format!(
+        "{} - Lapis",
+        short_workspace_label(workspace_name, workspace_id)
+    )
+}
+
 fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
@@ -101,5 +124,27 @@ mod tests {
             ),
             "Host my-host (host-1) / Workspace repo (workspace-1)"
         );
+    }
+
+    #[test]
+    fn short_labels_do_not_include_urls_or_ids() {
+        assert_eq!(
+            short_workspace_label(Some("repo"), Some("workspace-1")),
+            "repo"
+        );
+        assert_eq!(
+            short_workspace_label(Some("workspace-1"), Some("workspace-1")),
+            "Workspace"
+        );
+        assert_eq!(
+            short_workspace_label(Some("  "), Some("workspace-1")),
+            "Workspace"
+        );
+        assert_eq!(short_workspace_label(None, None), "Workspace");
+        assert_eq!(
+            window_title(Some("repo"), Some("workspace-1")),
+            "repo - Lapis"
+        );
+        assert_eq!(window_title(None, None), "Workspace - Lapis");
     }
 }

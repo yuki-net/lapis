@@ -106,6 +106,10 @@ pub(crate) struct DesktopRoot {
     task_context_resolution: TaskContextResolution,
     task_context: Option<(editor_core::ConversationId, Option<std::path::PathBuf>)>,
     connection: Option<ConnectionIdentity>,
+    pending_initial_task: Option<editor_core::ConversationId>,
+    window_title: Option<String>,
+    task_url_initialized: bool,
+    last_task_for_url: Option<editor_core::ConversationId>,
 }
 
 impl DesktopRoot {
@@ -130,6 +134,7 @@ impl DesktopRoot {
     ) -> Self {
         let factory = crate::app::WindowFactory::new(&session, &services);
         let connection = services.connection.clone();
+        let pending_initial_task = services.initial_task.clone();
         #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
         #[cfg(not(target_family = "wasm"))]
@@ -576,6 +581,10 @@ impl DesktopRoot {
             task_context_gate: Default::default(),
             task_context_resolution: Default::default(),
             connection,
+            pending_initial_task,
+            window_title: None,
+            task_url_initialized: false,
+            last_task_for_url: None,
         }
     }
 
@@ -614,6 +623,23 @@ impl DesktopRoot {
             .conversations
             .iter()
             .find(|record| record.id == snapshot.conversation);
+        // URL の fragment から渡された Task は、初回 snapshot で存在を確認してから選ぶ。
+        if let Some(task) = self.pending_initial_task.take()
+            && let Some(record) = snapshot
+                .conversations
+                .iter()
+                .find(|record| record.id == task)
+        {
+            if self.workbench.mode() == WorkbenchMode::Ide {
+                self.workbench
+                    .select_task(task.clone(), record.view.clone());
+            } else {
+                let root = cx.entity().downgrade();
+                cx.defer(move |cx| {
+                    let _ = root.update(cx, |root, cx| root.select_task(task.clone(), cx));
+                });
+            }
+        }
         self.files
             .update(cx, |files, cx| files.update(snapshot, cx));
         self.git.update(cx, |git, cx| {
@@ -641,6 +667,11 @@ impl DesktopRoot {
             self.workbench
                 .select_task(selected.clone(), snapshot.view.clone());
         }
+        if self.task_url_initialized && self.last_task_for_url.as_ref() != Some(&selected) {
+            self.notify_task_url(&selected);
+        }
+        self.last_task_for_url = Some(selected.clone());
+        self.task_url_initialized = true;
         let tasks_key = ViewInstanceKey::new(
             crate::shell::PanelTab::tool(id::VIEW_ASSISTANT).stable_view_key(),
         )
@@ -717,11 +748,16 @@ impl DesktopRoot {
                 ending
             }
         };
+        let workspace_name = self
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.workspace_name.clone())
+            .unwrap_or_else(|| snapshot.workspace_name.clone());
         let presentation = ShellPresentation {
             documents: snapshot.tabs.clone(),
             active: snapshot.active.clone(),
             root: snapshot.root.clone(),
-            workspace_name: snapshot.workspace_name.clone(),
+            workspace_name,
             workspace_id: snapshot
                 .workspace
                 .as_ref()
@@ -971,11 +1007,13 @@ impl DesktopRoot {
                 self.set_status("Taskが見つかりません".into(), cx);
                 return;
             };
+            self.notify_task_url(&id);
             self.workbench.select_task(id, record.view.clone());
             self.synchronize_group(cx);
             return;
         }
         if self.workbench.context_task() == Some(&id) {
+            self.notify_task_url(&id);
             return;
         }
         if self.group.read(cx).members.len() > 1 || self.group.read(cx).closing {
@@ -1001,6 +1039,12 @@ impl DesktopRoot {
                 cx,
             )
         });
+    }
+
+    fn notify_task_url(&mut self, id: &editor_core::ConversationId) {
+        self.last_task_for_url = Some(id.clone());
+        #[cfg(target_family = "wasm")]
+        crate::web::notify_task_selected(id.as_str());
     }
 
     fn dispatch_workbench_command(&mut self, command: UiCommand, cx: &mut Context<Self>) {
@@ -1813,6 +1857,17 @@ impl DesktopRoot {
 impl Render for DesktopRoot {
     /// Renders the root shell with application quit and command-search keyboard handlers.
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let title = {
+            let session = &self.shell.read(cx).session;
+            desktop_client::window_title(
+                Some(session.workspace_name.as_str()),
+                session.workspace_id.as_deref(),
+            )
+        };
+        if self.window_title.as_deref() != Some(title.as_str()) {
+            window.set_window_title(&title);
+            self.window_title = Some(title);
+        }
         let panel_height = gpui::px(520.)
             .min((window.viewport_size().height - gpui::px(100.)).max(gpui::px(100.)));
         div()

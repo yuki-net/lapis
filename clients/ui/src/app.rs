@@ -64,11 +64,15 @@ pub(crate) const EXTRA_COMMANDS: &[&str] = &[
 pub struct ConnectionIdentity {
     pub host_name: Option<String>,
     pub host_id: Option<String>,
+    /// Web のように Host 側の Workspace 名を UI が持つ場合だけ入れる。
+    pub workspace_name: Option<String>,
+    pub workspace_id: Option<String>,
 }
 
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) connection: Option<ConnectionIdentity>,
+    pub(crate) initial_task: Option<editor_core::ConversationId>,
     pub(crate) task: TaskSession,
     pub(crate) git: GitSession,
     pub(crate) lsp: LspSession,
@@ -92,6 +96,7 @@ impl DesktopServices {
         Self {
             connect_host: None,
             connection: None,
+            initial_task: None,
             task,
             git,
             lsp,
@@ -104,6 +109,11 @@ impl DesktopServices {
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
         self.connection = Some(connection);
+        self
+    }
+    /// URL の fragment から復元した Task を、最初の snapshot で選択する。
+    pub fn with_initial_task(mut self, task: editor_core::ConversationId) -> Self {
+        self.initial_task = Some(task);
         self
     }
     pub fn with_host_connector(
@@ -212,9 +222,21 @@ pub(crate) fn open_desktop_window(
     cx: &mut App,
 ) {
     let locale_id = services.settings.settings().locale.clone();
-    let result = cx.open_window(crate::desktop::window_options(cx), move |window, cx| {
-        cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx))
-    });
+    let workspace_name = services
+        .connection
+        .as_ref()
+        .and_then(|connection| connection.workspace_name.clone())
+        .unwrap_or_else(|| editor.workspace_name().to_owned());
+    let workspace_id = services
+        .connection
+        .as_ref()
+        .and_then(|connection| connection.workspace_id.clone())
+        .or_else(|| editor.workspace_id().map(|id| id.as_str().to_owned()));
+    let title = desktop_client::window_title(Some(&workspace_name), workspace_id.as_deref());
+    let result = cx.open_window(
+        crate::desktop::window_options_with_title(cx, title),
+        move |window, cx| cx.new(|cx| DesktopRoot::new(editor, services, initial, window, cx)),
+    );
     if let Err(error) = result {
         tracing::error!(target: "lapis::app", "Windowを開けませんでした: {error}");
         let mut locale = crate::localization::Localizer::bundled();
