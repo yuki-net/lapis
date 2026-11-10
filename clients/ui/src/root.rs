@@ -1912,12 +1912,7 @@ fn terminal_context_target<'a>(
 fn workbench_publish_view(
     layout: &desktop_client::ConversationViewState,
 ) -> desktop_client::ConversationViewState {
-    desktop_client::ConversationViewState {
-        layout: layout.layout.clone(),
-        show_panel_controls: layout.show_panel_controls,
-        workbench: layout.workbench.clone(),
-        workspace: None,
-    }
+    layout.clone().for_shared_workbench()
 }
 
 fn execution_for_context(
@@ -1962,6 +1957,73 @@ mod tests {
         assert_ne!(
             workbench_publish_view(&private),
             workbench_publish_view(&changed_layout)
+        );
+    }
+
+    #[test]
+    fn workbench_publication_excludes_client_active_tabs() {
+        let tab = desktop_client::TabRef::Document {
+            id: editor_core::DocumentId::new("doc"),
+        };
+        let mut view = ConversationViewState {
+            layout: Some(desktop_client::ZoneLayoutViewState {
+                version: desktop_client::ZONE_LAYOUT_VERSION,
+                zones: vec![desktop_client::ZoneViewState {
+                    position: "main".into(),
+                    open: true,
+                    extent_ratio: 1.0,
+                    layout: None,
+                    panels: vec![desktop_client::ZonePanelViewState {
+                        id: "panel".into(),
+                        tabs: vec![tab.clone()],
+                        pinned_tabs: Vec::new(),
+                        active_tab: Some(tab),
+                        open: true,
+                    }],
+                }],
+                bottom_span_left: false,
+                bottom_span_right: false,
+            }),
+            ..Default::default()
+        };
+        view.workbench.ide_layout = Some(desktop_client::WorkbenchLayoutState {
+            layout: view.layout.clone(),
+            show_panel_controls: true,
+        });
+        view.workbench.task_layouts.insert(
+            ConversationId::new("task-a"),
+            desktop_client::WorkbenchLayoutState {
+                layout: view.layout.clone(),
+                show_panel_controls: true,
+            },
+        );
+
+        let published = workbench_publish_view(&view);
+        assert_eq!(
+            published.layout.unwrap().zones[0].panels[0].active_tab,
+            None
+        );
+        assert_eq!(
+            published
+                .workbench
+                .ide_layout
+                .unwrap()
+                .layout
+                .unwrap()
+                .zones[0]
+                .panels[0]
+                .active_tab,
+            None
+        );
+        assert_eq!(
+            published.workbench.task_layouts[&ConversationId::new("task-a")]
+                .layout
+                .as_ref()
+                .unwrap()
+                .zones[0]
+                .panels[0]
+                .active_tab,
+            None
         );
     }
 

@@ -63,6 +63,28 @@ impl Default for ConversationViewState {
     }
 }
 
+impl ConversationViewState {
+    /// 共有Workbenchへ通知できる状態に整える。
+    /// 配置とタブ一覧は共有し、Workspaceの表示位置とアクティブタブはClient固有に残す。
+    pub fn for_shared_workbench(mut self) -> Self {
+        self.workspace = None;
+        if let Some(layout) = &mut self.layout {
+            layout.clear_active_tabs();
+        }
+        if let Some(layout) = &mut self.workbench.ide_layout {
+            if let Some(layout) = &mut layout.layout {
+                layout.clear_active_tabs();
+            }
+        }
+        for layout in self.workbench.task_layouts.values_mut() {
+            if let Some(layout) = &mut layout.layout {
+                layout.clear_active_tabs();
+            }
+        }
+        self
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SharedWorkspaceView {
     pub workspace_id: WorkspaceId,
@@ -133,6 +155,49 @@ pub struct ZoneLayoutViewState {
     pub zones: Vec<ZoneViewState>,
     pub bottom_span_left: bool,
     pub bottom_span_right: bool,
+}
+
+impl ZoneLayoutViewState {
+    /// アクティブタブはClientごとに独立するため、共有状態から外す。
+    fn clear_active_tabs(&mut self) {
+        for zone in &mut self.zones {
+            for panel in &mut zone.panels {
+                panel.active_tab = None;
+            }
+        }
+    }
+
+    /// 共有状態に含まれないアクティブタブを、現在のClientの選択で補う。
+    /// 同じPanelに残っているタブだけを対象にし、別Clientの構成変更を打ち消さない。
+    pub fn retain_active_tabs_from(&mut self, local: &Self) {
+        for zone in &mut self.zones {
+            let Some(local_zone) = local
+                .zones
+                .iter()
+                .find(|candidate| candidate.position == zone.position)
+            else {
+                continue;
+            };
+            for panel in &mut zone.panels {
+                if panel.active_tab.is_some() {
+                    continue;
+                }
+                let Some(local_panel) = local_zone
+                    .panels
+                    .iter()
+                    .find(|candidate| candidate.id == panel.id)
+                else {
+                    continue;
+                };
+                let Some(active) = &local_panel.active_tab else {
+                    continue;
+                };
+                if panel.tabs.contains(active) {
+                    panel.active_tab = Some(active.clone());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -325,6 +390,108 @@ mod tests {
             encoded["tabs"][0],
             serde_json::json!({"kind": "terminal", "id": "host-terminal"})
         );
+    }
+
+    fn tabs_layout(active: Option<TabRef>) -> ZoneLayoutViewState {
+        let tabs = vec![
+            TabRef::Document {
+                id: DocumentId::new("doc-a"),
+            },
+            TabRef::Document {
+                id: DocumentId::new("doc-b"),
+            },
+        ];
+        ZoneLayoutViewState {
+            version: ZONE_LAYOUT_VERSION,
+            zones: vec![ZoneViewState {
+                position: "main".into(),
+                open: true,
+                extent_ratio: 1.0,
+                layout: None,
+                panels: vec![ZonePanelViewState {
+                    id: "panel-1".into(),
+                    tabs,
+                    pinned_tabs: Vec::new(),
+                    active_tab: active,
+                    open: true,
+                }],
+            }],
+            bottom_span_left: false,
+            bottom_span_right: false,
+        }
+    }
+
+    #[test]
+    fn shared_workbench_omits_client_active_tabs_and_keeps_local_selection() {
+        let active = TabRef::Document {
+            id: DocumentId::new("doc-a"),
+        };
+        let layout = tabs_layout(Some(active.clone()));
+        let local = layout.clone();
+        let view = ConversationViewState {
+            layout: Some(layout.clone()),
+            workbench: WorkbenchViewState {
+                ide_layout: Some(WorkbenchLayoutState {
+                    layout: Some(layout.clone()),
+                    show_panel_controls: true,
+                }),
+                task_layouts: [(
+                    ConversationId::new("task-a"),
+                    WorkbenchLayoutState {
+                        layout: Some(layout.clone()),
+                        show_panel_controls: true,
+                    },
+                )]
+                .into(),
+                ..Default::default()
+            },
+            workspace: Some(SharedWorkspaceView {
+                workspace_id: WorkspaceId::new("workspace-1"),
+                open_documents: Vec::new(),
+                active_path: None,
+                active_document_id: None,
+            }),
+            ..Default::default()
+        };
+
+        let shared = view.for_shared_workbench();
+        assert!(shared.workspace.is_none());
+        assert_eq!(
+            shared.layout.as_ref().unwrap().zones[0].panels[0].active_tab,
+            None
+        );
+        assert_eq!(
+            shared.layout.as_ref().unwrap().zones[0].panels[0].tabs,
+            local.zones[0].panels[0].tabs
+        );
+        assert_eq!(
+            shared
+                .workbench
+                .ide_layout
+                .as_ref()
+                .unwrap()
+                .layout
+                .as_ref()
+                .unwrap()
+                .zones[0]
+                .panels[0]
+                .active_tab,
+            None
+        );
+        assert_eq!(
+            shared.workbench.task_layouts[&ConversationId::new("task-a")]
+                .layout
+                .as_ref()
+                .unwrap()
+                .zones[0]
+                .panels[0]
+                .active_tab,
+            None
+        );
+
+        let mut restored = shared.layout.unwrap();
+        restored.retain_active_tabs_from(&local);
+        assert_eq!(restored, local);
     }
 
     #[test]
