@@ -55,7 +55,7 @@ impl Render for ResourceManagerFeature {
                     .child(self.message.clone()),
             );
         }
-        if let Some(error) = &self.terminate_error {
+        if let Some(error) = self.terminate.error() {
             content = content.child(
                 div()
                     .text_color(theme::colors(cx).danger_text)

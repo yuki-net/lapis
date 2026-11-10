@@ -48,8 +48,8 @@ struct RegistryState {
 struct RootState {
     spec: ProcessRootSpec,
     started_at_ms: u64,
-    /// PID 再利用を検出するための OS 起動時刻（秒）。
-    started_at_secs: Option<u64>,
+    /// 登録時に確定した OS 起動時刻（秒）。確定できない root は登録しない。
+    started_at_secs: u64,
     state: ProcessState,
     exited_at: Option<Instant>,
     cpu_centipercent: u32,
@@ -180,8 +180,14 @@ impl ProcessRegistry for LocalProcessRegistry {
                 "process pid must be greater than zero",
             ));
         }
-        // 最初のサンプル前でも PID 再利用を判定できるよう、登録時に開始時刻を保存する。
-        let started_at_secs = process_start_time(spec.pid);
+        // 最初のサンプル前でも PID 再利用を判定できるよう、登録時に開始時刻を確定する。
+        // 確定できない root は所有対象にしない（別プロセスを誤って管理しないため）。
+        let started_at_secs = process_start_time(spec.pid).ok_or_else(|| {
+            ProcessError::new(
+                ProcessErrorKind::Io,
+                "process identity could not be verified",
+            )
+        })?;
         let mut state = self
             .inner
             .lock()
@@ -197,9 +203,7 @@ impl ProcessRegistry for LocalProcessRegistry {
             root_id.clone(),
             RootState {
                 spec,
-                started_at_ms: started_at_secs
-                    .map(|seconds| seconds.saturating_mul(1_000))
-                    .unwrap_or_else(now_ms),
+                started_at_ms: started_at_secs.saturating_mul(1_000),
                 started_at_secs,
                 state: ProcessState::Running,
                 exited_at: None,
@@ -295,19 +299,10 @@ fn sample(state: &Mutex<RegistryState>, system: &mut System) {
             continue;
         };
         let started_at_secs = process.start_time();
-        if let Some(previous) = root.started_at_secs {
-            if previous != started_at_secs {
-                // PID が再利用された。別プロセスを所有ツリーとして扱わない。
-                mark_exited(root);
-                continue;
-            }
-        } else {
-            root.started_at_secs = Some(started_at_secs);
-            root.started_at_ms = if started_at_secs > 0 {
-                started_at_secs.saturating_mul(1_000)
-            } else {
-                now
-            };
+        if root.started_at_secs != started_at_secs {
+            // PID が再利用された。別プロセスを所有ツリーとして扱わない。
+            mark_exited(root);
+            continue;
         }
         let (nodes, cpu_centipercent, memory_bytes) =
             collect_tree(system, &children, root.spec.pid);
@@ -404,20 +399,14 @@ fn collect_tree(
     (nodes, cpu_centipercent, memory)
 }
 
-fn terminate_tree(pid: u32, started_at_secs: Option<u64>) -> Result<(), ProcessError> {
+fn terminate_tree(pid: u32, started_at_secs: u64) -> Result<(), ProcessError> {
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All);
     let Some(root) = system.process(Pid::from_u32(pid)) else {
         return Ok(());
     };
     // 所有した時点の開始時刻と一致しない PID は再利用された別プロセス。
-    let Some(expected) = started_at_secs else {
-        return Err(ProcessError::new(
-            ProcessErrorKind::NotOwned,
-            "process identity is not known",
-        ));
-    };
-    if root.start_time() != expected {
+    if root.start_time() != started_at_secs {
         return Ok(());
     }
     // Windows は git_action と同じ taskkill /T で子孫を含めて止める。
@@ -627,8 +616,31 @@ mod tests {
     fn termination_refuses_a_reused_pid_identity() {
         let pid = std::process::id();
         let started = process_start_time(pid).expect("current process start time");
-        terminate_tree(pid, Some(started.saturating_add(1))).unwrap();
+        terminate_tree(pid, started.saturating_add(1)).unwrap();
         assert!(process_alive(pid));
+    }
+
+    #[test]
+    fn registration_rejects_a_process_whose_identity_is_unknown() {
+        let registry =
+            LocalProcessRegistry::with_interval(ProcessOrigin::Host, Duration::from_millis(25));
+        let error = registry
+            .register(ProcessRootSpec {
+                workspace: Some(WorkspaceId::new("workspace-a")),
+                kind: ProcessKind::Terminal,
+                owner: ProcessOwner::terminal("terminal-test"),
+                pid: u32::MAX,
+                label: "unknown".into(),
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), ProcessErrorKind::Io);
+        assert!(
+            registry
+                .snapshot(None)
+                .roots
+                .iter()
+                .all(|root| root.pid != u32::MAX)
+        );
     }
 
     #[test]

@@ -12,11 +12,37 @@ pub(crate) struct ResourceManagerFeature {
     worker: ClientWorker<DocumentClient>,
     pub(super) snapshot: ProcessSnapshot,
     pub(super) message: String,
-    pub(super) terminate_error: Option<String>,
+    pub(super) terminate: TerminationFeedback,
     pub(super) pending_terminate: Option<ProcessRootId>,
     busy: bool,
     scheduled: bool,
     refresh_generation: u64,
+}
+
+/// 終了操作の失敗は、定期再取得のメッセージとは別に保持する。
+#[derive(Default)]
+pub(super) struct TerminationFeedback {
+    error: Option<String>,
+}
+
+impl TerminationFeedback {
+    pub(super) fn begin(&mut self) {
+        self.error = None;
+    }
+
+    pub(super) fn submitted(&mut self, result: Result<(), String>) {
+        if let Err(error) = result {
+            self.error = Some(error);
+        }
+    }
+
+    pub(super) fn finished(&mut self, result: Result<(), String>) {
+        self.error = result.err();
+    }
+
+    pub(super) fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
 }
 
 pub(super) fn descriptor() -> FeatureDescriptor {

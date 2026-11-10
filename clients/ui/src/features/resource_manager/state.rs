@@ -5,7 +5,7 @@ use process::{ProcessOrigin, ProcessRootId, ProcessSnapshot};
 
 use crate::client_adapter::{ClientWorker, DocumentClient};
 
-use super::ResourceManagerFeature;
+use super::{ResourceManagerFeature, TerminationFeedback};
 
 impl ResourceManagerFeature {
     pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
@@ -13,7 +13,7 @@ impl ResourceManagerFeature {
             worker,
             snapshot: ProcessSnapshot::default(),
             message: String::new(),
-            terminate_error: None,
+            terminate: TerminationFeedback::default(),
             pending_terminate: None,
             busy: false,
             scheduled: false,
@@ -90,13 +90,13 @@ impl ResourceManagerFeature {
 
     pub(crate) fn request_terminate(&mut self, root_id: ProcessRootId, cx: &mut Context<Self>) {
         self.pending_terminate = Some(root_id);
-        self.terminate_error = None;
+        self.terminate.begin();
         cx.notify();
     }
 
     pub(crate) fn cancel_terminate(&mut self, cx: &mut Context<Self>) {
         self.pending_terminate = None;
-        self.terminate_error = None;
+        self.terminate.begin();
         cx.notify();
     }
 
@@ -122,18 +122,30 @@ impl ResourceManagerFeature {
                 Ok(())
             },
             |feature, result, cx| {
-                match result {
-                    Ok(()) => {
-                        feature.terminate_error = None;
-                    }
-                    Err(error) => feature.terminate_error = Some(error),
-                }
+                feature.terminate.finished(result);
                 feature.refresh(cx);
             },
         );
         if let Err(error) = admitted {
-            self.message = error;
+            self.terminate.submitted(Err(error));
             cx.notify();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminationFeedback;
+
+    #[test]
+    fn termination_feedback_is_not_cleared_by_a_successful_refresh() {
+        let mut feedback = TerminationFeedback::default();
+        feedback.submitted(Err("queue full".into()));
+        // 定期再取得は refresh 用の message だけを更新し、この状態には触れない。
+        assert_eq!(feedback.error(), Some("queue full"));
+        feedback.finished(Err("termination failed".into()));
+        assert_eq!(feedback.error(), Some("termination failed"));
+        feedback.begin();
+        assert_eq!(feedback.error(), None);
     }
 }
