@@ -171,6 +171,13 @@ impl BackendState {
         let workspace = self.workspace_mut(session)?;
         let workspace_id = workspace.summary.workspace_id.clone();
         let resource = workspace.require_attached_document_mut(session, &request.document_id)?;
+        if resource
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != &session.session_id)
+        {
+            return Err(BackendStateError::DocumentNotOwner);
+        }
         require_revision(
             &request.document_id,
             request.base_revision,
@@ -468,6 +475,13 @@ impl BackendState {
         let workspace = self.workspace_mut(session)?;
         let workspace_id = workspace.summary.workspace_id.clone();
         let document = workspace.require_attached_document_mut(session, &document_id)?;
+        if document
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != &session.session_id)
+        {
+            return Err(BackendStateError::DocumentNotOwner);
+        }
         require_revision(&document_id, base_revision, document.revision())?;
         let changed = if undo {
             document.document.undo()

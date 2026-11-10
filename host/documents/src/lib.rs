@@ -141,6 +141,7 @@ impl DocumentResource {
             can_undo: self.document.can_undo(),
             can_redo: self.document.can_redo(),
             external_change: client_api::DocumentExternalChange::Unchanged,
+            owner: self.owner.clone(),
         }
     }
 }

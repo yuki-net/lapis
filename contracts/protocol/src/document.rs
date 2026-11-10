@@ -49,6 +49,9 @@ pub struct DocumentSnapshot {
     pub can_undo: bool,
     pub can_redo: bool,
     pub external_change: DocumentExternalChange,
+    /// 編集を許可する Session。`None` は未所有。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<crate::SessionId>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
