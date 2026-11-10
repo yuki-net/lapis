@@ -5,15 +5,14 @@ use process::{ProcessOrigin, ProcessRootId, ProcessSnapshot};
 
 use crate::client_adapter::{ClientWorker, DocumentClient};
 
-use super::{ResourceManagerFeature, TerminationFeedback};
+use super::{ResourceManagerFeature, ResourceMessages};
 
 impl ResourceManagerFeature {
     pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
         let mut feature = Self {
             worker,
             snapshot: ProcessSnapshot::default(),
-            message: String::new(),
-            terminate: TerminationFeedback::default(),
+            messages: ResourceMessages::default(),
             pending_terminate: None,
             busy: false,
             scheduled: false,
@@ -69,11 +68,11 @@ impl ResourceManagerFeature {
                 match result {
                     Ok((snapshot, host_error)) => {
                         feature.snapshot = snapshot;
-                        feature.message = host_error.unwrap_or_default();
+                        feature.messages.refresh_succeeded(host_error);
                         cx.notify();
                     }
                     Err(error) => {
-                        feature.message = error;
+                        feature.messages.refresh_failed(error);
                         cx.notify();
                     }
                 }
@@ -82,7 +81,7 @@ impl ResourceManagerFeature {
         );
         if let Err(error) = admitted {
             self.busy = false;
-            self.message = error;
+            self.messages.refresh_failed(error);
             cx.notify();
             self.schedule(cx);
         }
@@ -90,13 +89,13 @@ impl ResourceManagerFeature {
 
     pub(crate) fn request_terminate(&mut self, root_id: ProcessRootId, cx: &mut Context<Self>) {
         self.pending_terminate = Some(root_id);
-        self.terminate.begin();
+        self.messages.terminate.begin();
         cx.notify();
     }
 
     pub(crate) fn cancel_terminate(&mut self, cx: &mut Context<Self>) {
         self.pending_terminate = None;
-        self.terminate.begin();
+        self.messages.terminate.begin();
         cx.notify();
     }
 
@@ -122,12 +121,12 @@ impl ResourceManagerFeature {
                 Ok(())
             },
             |feature, result, cx| {
-                feature.terminate.finished(result);
+                feature.messages.terminate.finished(result);
                 feature.refresh(cx);
             },
         );
         if let Err(error) = admitted {
-            self.terminate.submitted(Err(error));
+            self.messages.terminate.submitted(Err(error));
             cx.notify();
         }
     }
@@ -135,17 +134,25 @@ impl ResourceManagerFeature {
 
 #[cfg(test)]
 mod tests {
-    use super::TerminationFeedback;
+    use super::ResourceMessages;
 
     #[test]
     fn termination_feedback_is_not_cleared_by_a_successful_refresh() {
-        let mut feedback = TerminationFeedback::default();
-        feedback.submitted(Err("queue full".into()));
-        // 定期再取得は refresh 用の message だけを更新し、この状態には触れない。
-        assert_eq!(feedback.error(), Some("queue full"));
-        feedback.finished(Err("termination failed".into()));
-        assert_eq!(feedback.error(), Some("termination failed"));
-        feedback.begin();
-        assert_eq!(feedback.error(), None);
+        let mut messages = ResourceMessages::default();
+        messages.terminate.submitted(Err("queue full".into()));
+        // 成功した再取得は refresh 側だけを更新し、終了エラーを消さない。
+        messages.refresh_succeeded(None);
+        assert!(messages.refresh.is_empty());
+        assert_eq!(messages.terminate.error(), Some("queue full"));
+
+        messages
+            .terminate
+            .finished(Err("termination failed".into()));
+        messages.refresh_succeeded(Some("host unavailable".into()));
+        assert_eq!(messages.refresh, "host unavailable");
+        assert_eq!(messages.terminate.error(), Some("termination failed"));
+
+        messages.terminate.begin();
+        assert_eq!(messages.terminate.error(), None);
     }
 }

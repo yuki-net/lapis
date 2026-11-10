@@ -11,12 +11,28 @@ mod view;
 pub(crate) struct ResourceManagerFeature {
     worker: ClientWorker<DocumentClient>,
     pub(super) snapshot: ProcessSnapshot,
-    pub(super) message: String,
-    pub(super) terminate: TerminationFeedback,
+    pub(super) messages: ResourceMessages,
     pub(super) pending_terminate: Option<ProcessRootId>,
     busy: bool,
     scheduled: bool,
     refresh_generation: u64,
+}
+
+/// 定期再取得のメッセージと終了操作の失敗を別々に保持する。
+#[derive(Default)]
+pub(super) struct ResourceMessages {
+    pub(super) refresh: String,
+    pub(super) terminate: TerminationFeedback,
+}
+
+impl ResourceMessages {
+    pub(super) fn refresh_succeeded(&mut self, host_error: Option<String>) {
+        self.refresh = host_error.unwrap_or_default();
+    }
+
+    pub(super) fn refresh_failed(&mut self, error: String) {
+        self.refresh = error;
+    }
 }
 
 /// 終了操作の失敗は、定期再取得のメッセージとは別に保持する。

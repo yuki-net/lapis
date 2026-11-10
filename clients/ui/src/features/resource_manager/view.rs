@@ -48,14 +48,14 @@ impl Render for ResourceManagerFeature {
                     .text_color(theme::colors(cx).text_secondary)
                     .child("Only processes spawned by Lapis and their descendants are shown."),
             );
-        if !self.message.is_empty() {
+        if !self.messages.refresh.is_empty() {
             content = content.child(
                 div()
                     .text_color(theme::colors(cx).danger_text)
-                    .child(self.message.clone()),
+                    .child(self.messages.refresh.clone()),
             );
         }
-        if let Some(error) = self.terminate.error() {
+        if let Some(error) = self.messages.terminate.error() {
             content = content.child(
                 div()
                     .text_color(theme::colors(cx).danger_text)
