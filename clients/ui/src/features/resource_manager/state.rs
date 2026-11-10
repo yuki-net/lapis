@@ -13,6 +13,7 @@ impl ResourceManagerFeature {
             worker,
             snapshot: ProcessSnapshot::default(),
             message: String::new(),
+            terminate_error: None,
             pending_terminate: None,
             busy: false,
             scheduled: false,
@@ -54,7 +55,10 @@ impl ResourceManagerFeature {
                     .process
                     .refresh(workspace.as_ref())
                     .map_err(|error| error.to_string())?;
-                Ok(client.process.snapshot().clone())
+                Ok((
+                    client.process.snapshot().clone(),
+                    client.process.host_error().map(ToOwned::to_owned),
+                ))
             },
             move |feature, result, cx| {
                 if generation != feature.refresh_generation {
@@ -63,9 +67,9 @@ impl ResourceManagerFeature {
                 }
                 feature.busy = false;
                 match result {
-                    Ok(snapshot) => {
+                    Ok((snapshot, host_error)) => {
                         feature.snapshot = snapshot;
-                        feature.message.clear();
+                        feature.message = host_error.unwrap_or_default();
                         cx.notify();
                     }
                     Err(error) => {
@@ -86,11 +90,13 @@ impl ResourceManagerFeature {
 
     pub(crate) fn request_terminate(&mut self, root_id: ProcessRootId, cx: &mut Context<Self>) {
         self.pending_terminate = Some(root_id);
+        self.terminate_error = None;
         cx.notify();
     }
 
     pub(crate) fn cancel_terminate(&mut self, cx: &mut Context<Self>) {
         self.pending_terminate = None;
+        self.terminate_error = None;
         cx.notify();
     }
 
@@ -118,9 +124,9 @@ impl ResourceManagerFeature {
             |feature, result, cx| {
                 match result {
                     Ok(()) => {
-                        feature.message.clear();
+                        feature.terminate_error = None;
                     }
-                    Err(error) => feature.message = error,
+                    Err(error) => feature.terminate_error = Some(error),
                 }
                 feature.refresh(cx);
             },

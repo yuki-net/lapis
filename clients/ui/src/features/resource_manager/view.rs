@@ -55,6 +55,13 @@ impl Render for ResourceManagerFeature {
                     .child(self.message.clone()),
             );
         }
+        if let Some(error) = &self.terminate_error {
+            content = content.child(
+                div()
+                    .text_color(theme::colors(cx).danger_text)
+                    .child(format!("Termination failed: {error}")),
+            );
+        }
         if self.snapshot.roots.is_empty() {
             return content.child(
                 div()

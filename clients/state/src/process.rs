@@ -16,6 +16,8 @@ pub struct ProcessSession {
     host: Arc<dyn ProcessConnection>,
     local: Option<Arc<dyn ProcessRegistry>>,
     snapshot: ProcessSnapshot,
+    /// Host の取得に失敗した理由。直前の Host 一覧を表示している間だけ保持する。
+    host_error: Option<String>,
 }
 
 impl Clone for ProcessSession {
@@ -24,6 +26,7 @@ impl Clone for ProcessSession {
             host: self.host.clone(),
             local: self.local.clone(),
             snapshot: self.snapshot.clone(),
+            host_error: self.host_error.clone(),
         }
     }
 }
@@ -34,6 +37,7 @@ impl ProcessSession {
             host,
             local,
             snapshot: ProcessSnapshot::default(),
+            host_error: None,
         }
     }
 
@@ -46,13 +50,29 @@ impl ProcessSession {
         &self.snapshot
     }
 
+    /// Host の一覧が取得できず、直前の値を表示している場合の理由。
+    pub fn host_error(&self) -> Option<&str> {
+        self.host_error.as_deref()
+    }
+
     /// Host と Desktop の現在値を取得する。失敗時は以前の一覧を保持する。
     pub fn refresh(&mut self, workspace: Option<&WorkspaceId>) -> Result<bool, ProcessError> {
+        let mut host_error = None;
         let host = match workspace {
             Some(workspace) => match self.host.snapshot(workspace) {
                 Ok(snapshot) => Some(snapshot),
-                // Host が一時的に応答できなくても Desktop 自身の計測は表示する。
-                Err(_) if self.local.is_some() => None,
+                // 接続断をプロセス終了と誤認しない。Host の直前値を stale として保持する。
+                Err(error) if self.local.is_some() => {
+                    host_error = Some(error.to_string());
+                    Some(ProcessSnapshot {
+                        sampled_at_ms: self.snapshot.sampled_at_ms,
+                        roots: self
+                            .snapshot
+                            .roots_for(ProcessOrigin::Host)
+                            .cloned()
+                            .collect(),
+                    })
+                }
                 Err(error) => return Err(error),
             },
             None => None,
@@ -80,6 +100,7 @@ impl ProcessSession {
         };
         let changed = snapshot != self.snapshot;
         self.snapshot = snapshot;
+        self.host_error = host_error;
         Ok(changed)
     }
 
@@ -166,10 +187,14 @@ mod tests {
     struct HostFixture {
         snapshot: ProcessSnapshot,
         terminated: std::sync::Mutex<Vec<ProcessRootId>>,
+        fail: std::sync::atomic::AtomicBool,
     }
 
     impl ProcessConnection for HostFixture {
         fn snapshot(&self, _: &WorkspaceId) -> Result<ProcessSnapshot, ProcessError> {
+            if self.fail.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(ProcessError::new(ProcessErrorKind::Io, "host unavailable"));
+            }
             Ok(self.snapshot.clone())
         }
 
@@ -236,6 +261,7 @@ mod tests {
                 roots: vec![root(ProcessOrigin::Host, 1, ProcessKind::Terminal)],
             },
             terminated: Default::default(),
+            fail: Default::default(),
         });
         let local = Arc::new(LocalFixture {
             snapshot: ProcessSnapshot {
@@ -252,6 +278,41 @@ mod tests {
         assert_eq!(snapshot.roots[0].origin, ProcessOrigin::Host);
         assert_eq!(snapshot.roots[1].origin, ProcessOrigin::Desktop);
         assert!(!session.refresh(Some(&workspace)).unwrap());
+    }
+
+    #[test]
+    fn a_host_failure_keeps_the_previous_host_roots_and_reports_staleness() {
+        let workspace = WorkspaceId::new("workspace-1");
+        let host = Arc::new(HostFixture {
+            snapshot: ProcessSnapshot {
+                sampled_at_ms: 10,
+                roots: vec![root(ProcessOrigin::Host, 1, ProcessKind::Terminal)],
+            },
+            terminated: Default::default(),
+            fail: Default::default(),
+        });
+        let local = Arc::new(LocalFixture {
+            snapshot: ProcessSnapshot {
+                sampled_at_ms: 20,
+                roots: vec![root(ProcessOrigin::Desktop, 2, ProcessKind::Desktop)],
+            },
+            terminated: Default::default(),
+        });
+        let mut session = ProcessSession::new(host.clone(), Some(local));
+        session.refresh(Some(&workspace)).unwrap();
+        assert!(session.host_error().is_none());
+
+        host.fail.store(true, std::sync::atomic::Ordering::Release);
+        session.refresh(Some(&workspace)).unwrap();
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.roots.len(), 2);
+        assert!(
+            snapshot
+                .roots
+                .iter()
+                .any(|root| root.origin == ProcessOrigin::Host && root.pid == 1)
+        );
+        assert_eq!(session.host_error(), Some("host unavailable"));
     }
 
     #[test]
@@ -277,6 +338,7 @@ mod tests {
         assert!(session.refresh(Some(&workspace)).unwrap());
         assert_eq!(session.snapshot().roots.len(), 1);
         assert_eq!(session.snapshot().roots[0].origin, ProcessOrigin::Desktop);
+        assert_eq!(session.host_error(), Some("host unavailable"));
     }
 
     #[test]
@@ -285,6 +347,7 @@ mod tests {
         let host = Arc::new(HostFixture {
             snapshot: ProcessSnapshot::default(),
             terminated: Default::default(),
+            fail: Default::default(),
         });
         let local = Arc::new(LocalFixture {
             snapshot: ProcessSnapshot::default(),

@@ -12,6 +12,7 @@ pub(crate) struct ResourceManagerFeature {
     worker: ClientWorker<DocumentClient>,
     pub(super) snapshot: ProcessSnapshot,
     pub(super) message: String,
+    pub(super) terminate_error: Option<String>,
     pub(super) pending_terminate: Option<ProcessRootId>,
     busy: bool,
     scheduled: bool,
