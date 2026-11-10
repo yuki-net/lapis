@@ -94,6 +94,7 @@ pub(crate) struct DesktopRoot {
     factory: crate::app::WindowFactory,
     persist_task: Option<gpui::Task<()>>,
     persist_signature: Option<PersistSignature>,
+    workbench_publish_signature: Option<desktop_client::ConversationViewState>,
     #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
     #[cfg(not(target_family = "wasm"))]
@@ -557,6 +558,7 @@ impl DesktopRoot {
             factory,
             persist_task: None,
             persist_signature: None,
+            workbench_publish_signature: None,
             #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
             #[cfg(not(target_family = "wasm"))]
@@ -848,6 +850,8 @@ impl DesktopRoot {
             workspace: None,
             ..view
         };
+        // 適用したHostの表示をそのまま送り返さない。
+        self.workbench_publish_signature = Some(workbench_publish_view(&layout));
         self.shell
             .update(cx, |shell, cx| shell.restore_view(layout, cx));
         self.sync_terminal_tab(cx);
@@ -1257,6 +1261,29 @@ impl DesktopRoot {
         let task = self.workbench.context_task().cloned();
         self.workbench.prepare_task_switch(task.as_ref(), &layout);
         self.workbench.persisted_view(&mut layout);
+        // 表示の反映は500msの保存debounceから分離し、変更があれば同じフレームで通知する。
+        let workbench = workbench_publish_view(&layout);
+        if self.workbench_publish_signature.as_ref() != Some(&workbench)
+            && self.workbench.context_task().is_some()
+            && !self.group.read(cx).closing
+            && !self.group.read(cx).synchronization_required
+            && self.task_context_resolution != TaskContextResolution::Pending
+        {
+            self.workbench_publish_signature = Some(workbench.clone());
+            let published = self.worker.submit(
+                cx,
+                move |client| client.publish_workbench(workbench),
+                |root, result, _| {
+                    if let Err(error) = result {
+                        root.workbench_publish_signature = None;
+                        eprintln!("WorkbenchをHostへ通知できません: {error}");
+                    }
+                },
+            );
+            if published.is_err() {
+                self.workbench_publish_signature = None;
+            }
+        }
         let versions = self
             .group
             .read(cx)
@@ -1877,6 +1904,18 @@ fn terminal_context_target<'a>(
 }
 
 /// 表示中の選択を保存できるのは、そのViewが保存先Taskを参照している場合だけ。
+/// 共有状態として通知するWorkbench部分だけを取り出す。Cursorやdraftは保存経路に任せる。
+fn workbench_publish_view(
+    layout: &desktop_client::ConversationViewState,
+) -> desktop_client::ConversationViewState {
+    desktop_client::ConversationViewState {
+        layout: layout.layout.clone(),
+        show_panel_controls: layout.show_panel_controls,
+        workbench: layout.workbench.clone(),
+        workspace: None,
+    }
+}
+
 fn execution_for_context(
     view_task: Option<&editor_core::ConversationId>,
     context_task: Option<&editor_core::ConversationId>,
@@ -1895,6 +1934,32 @@ mod tests {
     use super::*;
     use desktop_client::ConversationViewState;
     use editor_core::{ConversationId, ExecutionId};
+
+    #[test]
+    fn workbench_publication_ignores_client_private_workspace_details() {
+        let private = ConversationViewState {
+            workspace: Some(desktop_client::SharedWorkspaceView {
+                workspace_id: editor_core::WorkspaceId::new("workspace-1"),
+                open_documents: Vec::new(),
+                active_path: None,
+                active_document_id: None,
+            }),
+            ..Default::default()
+        };
+        let changed_layout = ConversationViewState {
+            show_panel_controls: false,
+            ..private.clone()
+        };
+
+        assert_eq!(
+            workbench_publish_view(&private),
+            workbench_publish_view(&ConversationViewState::default())
+        );
+        assert_ne!(
+            workbench_publish_view(&private),
+            workbench_publish_view(&changed_layout)
+        );
+    }
 
     #[test]
     fn unresolved_task_context_preserves_execution_until_the_view_is_confirmed() {

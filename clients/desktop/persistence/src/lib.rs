@@ -9,7 +9,7 @@ use std::{
 use ::workspace::WorkspaceError;
 use desktop_client::{
     ConversationRecord, ConversationRepository, ConversationState, ConversationViewState, Project,
-    WorkbenchSync, WorkbenchWatch, ZoneLayoutViewState,
+    WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch, WorkspaceSnapshot, ZoneLayoutViewState,
 };
 use editor_core::{ConversationId, WorkspaceId};
 use serde::{Deserialize, Serialize};
@@ -264,6 +264,35 @@ impl HostConversationRepository {
             workspace,
         }
     }
+
+    fn shared_view(
+        &self,
+        view: &ConversationViewState,
+        workspace: &WorkspaceSnapshot,
+    ) -> Option<ConversationViewState> {
+        let shared = workspace.to_shared(self.workspace.clone()).ok()?;
+        Some(ConversationViewState {
+            layout: view.layout.clone(),
+            show_panel_controls: view.show_panel_controls,
+            workbench: view.workbench.clone(),
+            workspace: Some(shared),
+        })
+    }
+
+    /// 同じ内容の再送でrevisionを進めず、Hostの購読者を不要に起床させない。
+    fn publish(&self, view: ConversationViewState) -> Result<(), WorkspaceError> {
+        let mut sync = self
+            .sync
+            .lock()
+            .map_err(|_| WorkspaceError::new("Workbench同期のlockに失敗しました"))?;
+        if sync.confirmed().and_then(|state| state.view.as_ref()) == Some(&view) {
+            return Ok(());
+        }
+        match sync.save(view) {
+            Ok(WorkbenchSyncResult::Updated(_)) | Ok(WorkbenchSyncResult::Conflict(_)) => Ok(()),
+            Err(error) => Err(WorkspaceError::new(error)),
+        }
+    }
 }
 
 /// Hostの正本を取り直し、変化があればUIへ公開する。lock異常だけを中断条件にする。
@@ -296,32 +325,31 @@ impl ConversationRepository for HostConversationRepository {
         records: &[ConversationRecord],
         active: &ConversationId,
     ) -> Result<(), WorkspaceError> {
-        self.local.save(expected, projects, records, active)?;
-        let Some(record) = records
+        let record = records
             .iter()
             .find(|record| &record.id == active)
-            .or_else(|| records.first())
-        else {
-            return Ok(());
-        };
-        let Ok(workspace) = record.workspace.to_shared(self.workspace.clone()) else {
-            return Ok(());
-        };
-        let view = ConversationViewState {
-            layout: record.view.layout.clone(),
-            show_panel_controls: record.view.show_panel_controls,
-            workbench: record.view.workbench.clone(),
-            workspace: Some(workspace),
-        };
-        match self.sync.lock() {
-            Ok(mut sync) => {
-                if let Err(error) = sync.save(view) {
-                    eprintln!("WorkbenchをHostへ保存できません: {error}");
-                }
+            .or_else(|| records.first());
+        if let Some(record) = record
+            && let Some(view) = self.shared_view(&record.view, &record.workspace)
+        {
+            // 反映を保存より先に行い、ディスク保存の完了を他Clientへ待たせない。
+            if let Err(error) = self.publish(view) {
+                eprintln!("WorkbenchをHostへ通知できません: {error}");
             }
-            Err(error) => eprintln!("Workbench同期のlockに失敗しました: {error}"),
         }
+        self.local.save(expected, projects, records, active)?;
         Ok(())
+    }
+
+    fn publish_workbench(
+        &self,
+        view: &ConversationViewState,
+        workspace: &WorkspaceSnapshot,
+    ) -> Result<(), WorkspaceError> {
+        match self.shared_view(view, workspace) {
+            Some(view) => self.publish(view),
+            None => Ok(()),
+        }
     }
 
     fn accept_workbench_remote(&self) -> Result<Option<ConversationViewState>, WorkspaceError> {
@@ -778,6 +806,110 @@ mod tests {
         assert_eq!(state.revision, 1);
         let view = state.view.as_ref().unwrap();
         assert_eq!(view.workspace.as_ref().unwrap().workspace_id, workspace);
+    }
+
+    #[test]
+    fn workbench_changes_reach_the_host_before_local_persistence() {
+        let directory = tempfile::tempdir().unwrap();
+        let local_path = directory.path().join("conversations.json");
+        let local = Arc::new(LocalConversationRepository::new(local_path.clone()));
+        let workbench = Arc::new(SharedWorkbench::default());
+        let workspace = WorkspaceId::new("workspace-1");
+        let repository = HostConversationRepository::new(
+            local,
+            workbench.clone(),
+            workspace.clone(),
+            WorkbenchWatch::new(),
+        );
+        let record = conversation_record(directory.path());
+        let mut view = record.view.clone();
+        view.show_panel_controls = false;
+        let mut subscriber = workbench.subscribe(&workspace).unwrap();
+
+        repository
+            .publish_workbench(&view, &record.workspace)
+            .unwrap();
+
+        assert_eq!(
+            subscriber
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap(),
+            Some(1),
+            "ローカル保存前に他のClientへ通知されません"
+        );
+        assert!(
+            !local_path.exists(),
+            "通知だけの経路でローカル保存が発生しています"
+        );
+        let state = workbench.state.lock().unwrap();
+        assert_eq!(state.revision, 1);
+        assert_eq!(
+            state.view.as_ref().map(|view| view.show_panel_controls),
+            Some(false)
+        );
+
+        // 同じ表示の再通知はrevisionを進めない。
+        drop(state);
+        repository
+            .publish_workbench(&view, &record.workspace)
+            .unwrap();
+        assert_eq!(workbench.state.lock().unwrap().revision, 1);
+    }
+
+    struct ObservingLocal {
+        workbench: Arc<SharedWorkbench>,
+        revision_during_save: Mutex<Option<u64>>,
+    }
+
+    impl ConversationRepository for ObservingLocal {
+        fn load(&self) -> Result<ConversationState, WorkspaceError> {
+            Ok(Default::default())
+        }
+
+        fn save(
+            &self,
+            _: &ConversationState,
+            _: &[Project],
+            _: &[ConversationRecord],
+            _: &ConversationId,
+        ) -> Result<(), WorkspaceError> {
+            *self.revision_during_save.lock().unwrap() =
+                Some(self.workbench.state.lock().unwrap().revision);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn repository_save_notifies_the_host_before_writing_local_state() {
+        let directory = tempfile::tempdir().unwrap();
+        let workbench = Arc::new(SharedWorkbench::default());
+        let local = Arc::new(ObservingLocal {
+            workbench: workbench.clone(),
+            revision_during_save: Mutex::new(None),
+        });
+        let workspace = WorkspaceId::new("workspace-1");
+        let repository = HostConversationRepository::new(
+            local.clone(),
+            workbench,
+            workspace,
+            WorkbenchWatch::new(),
+        );
+        let record = conversation_record(directory.path());
+
+        repository
+            .save(
+                &Default::default(),
+                &[],
+                std::slice::from_ref(&record),
+                &record.id,
+            )
+            .unwrap();
+
+        assert_eq!(
+            *local.revision_during_save.lock().unwrap(),
+            Some(1),
+            "ローカル保存の開始前にHostへ通知されていません"
+        );
     }
 
     #[test]

@@ -83,6 +83,16 @@ pub trait ConversationRepository: Send + Sync {
         active: &ConversationId,
     ) -> Result<(), WorkspaceError>;
 
+    /// Workbenchの表示変更を、ローカル保存を待たずに共有先へ通知する。
+    /// 共有先を持たないRepositoryは何もしない。
+    fn publish_workbench(
+        &self,
+        _view: &ConversationViewState,
+        _workspace: &WorkspaceSnapshot,
+    ) -> Result<(), WorkspaceError> {
+        Ok(())
+    }
+
     /// 競合中のWorkbenchをHostの状態で置き換え、UIへ適用するレイアウトを返す。
     /// 競合を扱わないRepositoryはNoneを返す。
     fn accept_workbench_remote(&self) -> Result<Option<ConversationViewState>, WorkspaceError> {
@@ -393,6 +403,25 @@ impl ConversationSession {
             .find(|record| record.id == self.active)
             .map(|record| record.view.clone())
             .unwrap_or_default()
+    }
+
+    /// Workbenchの表示変更をローカル保存と分離して通知する。
+    /// 記録の永続化は呼ばず、次のdebounce保存が同じ値を改めて保存する。
+    pub fn publish_workbench(
+        &self,
+        editor: &EditorSession,
+        view: ConversationViewState,
+    ) -> Result<(), WorkspaceError> {
+        let workspace = editor.snapshot();
+        if let Some(record) = self.active_record()
+            && let Some(environment) = &record.environment
+            && environment.root(record.source_role) != workspace.root.as_deref()
+        {
+            return Err(WorkspaceError::new(
+                "Taskの操作対象が変わっています。ProjectのTaskを選び直してください",
+            ));
+        }
+        self.repository.publish_workbench(&view, &workspace)
     }
 
     pub fn restore_active(

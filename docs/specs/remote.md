@@ -68,6 +68,7 @@ Client は定期ポーリングで状態を取りに行かず、Host のイベ�
 - 外部ファイル変更は Host の Workspace 監視から `files.changed`、Task の変更は `task.changed` として publish する。どちらも変化の通知だけを運び、状態の正本は各 snapshot とする。
 - 購読は `DocumentConnection::subscribe` / `TaskConnection::subscribe` のように Adapter が通知 channel を返す。購読できない接続では初回取得だけを行う。
 - 通知の欠落・購読の切断時は Snapshot と revision で再同期し、購読を張り直す。再接続待ちの短い backoff はタイマーで持ってよいが、通常時の定期 refresh は行わない。
+- Workbench の表示変更はローカル保存の debounce を待たずに Host へ通知し、同じ Workspace の購読者へ反映する。ディスク保存は従来どおり debounce し、反映と永続化を分離する。
 - 未確定の操作（編集中・送信中）がある間は取得結果を保留し、完了時に 1 回だけ反映する。未保存の編集を通知で上書きしない。
 
 ## Workbench のタブ参照
