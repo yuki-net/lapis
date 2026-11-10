@@ -20,6 +20,16 @@ pub enum SyntaxTheme {
     Lapis,
 }
 
+/// ターミナルのカーソル形状。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TerminalCaretShape {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobalSettings {
     pub version: u32,
@@ -35,6 +45,12 @@ pub struct GlobalSettings {
     /// ターミナルのフォントサイズ（px）。省略時は 13。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_font_size: Option<u8>,
+    /// 行送り（フォントサイズに対する百分率）。省略時は 125。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_line_height_percent: Option<u8>,
+    /// カーソル形状。省略時は Block。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_caret_shape: Option<TerminalCaretShape>,
 }
 
 fn default_theme() -> String {
@@ -50,6 +66,8 @@ impl Default for GlobalSettings {
             syntax_theme: None,
             terminal_font_family: None,
             terminal_font_size: None,
+            terminal_line_height_percent: None,
+            terminal_caret_shape: None,
         }
     }
 }
@@ -95,15 +113,23 @@ mod tests {
             serde_json::from_str(r#"{"version":1,"locale":"ja-JP"}"#).unwrap();
         assert_eq!(settings.terminal_font_family, None);
         assert_eq!(settings.terminal_font_size, None);
+        assert_eq!(settings.terminal_line_height_percent, None);
+        assert_eq!(settings.terminal_caret_shape, None);
 
         let selected = GlobalSettings {
             terminal_font_family: Some("Menlo".to_owned()),
             terminal_font_size: Some(15),
+            terminal_line_height_percent: Some(140),
+            terminal_caret_shape: Some(TerminalCaretShape::Bar),
             ..settings
         };
         let loaded: GlobalSettings =
             serde_json::from_str(&serde_json::to_string(&selected).unwrap()).unwrap();
         assert_eq!(loaded, selected);
+        assert_eq!(
+            serde_json::to_value(&loaded).unwrap()["terminal_caret_shape"],
+            "bar"
+        );
     }
 
     #[test]

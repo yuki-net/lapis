@@ -77,10 +77,11 @@ pub use snapshot::{SnapshotReason, SnapshotRequest, SnapshotResponse, WorkspaceS
 pub use terminal::{
     TerminalCell, TerminalClaimRequest, TerminalColor, TerminalCommandResponse, TerminalCursor,
     TerminalDelta, TerminalInput, TerminalInputRequest, TerminalKey, TerminalKeyEvent,
-    TerminalModes, TerminalModifiers, TerminalReleaseRequest, TerminalResizeRequest,
-    TerminalRevision, TerminalRow, TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta,
-    TerminalShell, TerminalSize, TerminalSnapshot, TerminalStartRequest, TerminalStartResponse,
-    TerminalStatus, TerminalTerminateRequest,
+    TerminalListProfilesRequest, TerminalListProfilesResponse, TerminalModes, TerminalModifiers,
+    TerminalProfile, TerminalProfileId, TerminalProfiles, TerminalReleaseRequest,
+    TerminalResizeRequest, TerminalRevision, TerminalRow, TerminalRowUpdate, TerminalScreen,
+    TerminalScrollbackDelta, TerminalSize, TerminalSnapshot, TerminalStartRequest,
+    TerminalStartResponse, TerminalStatus, TerminalTerminateRequest,
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,

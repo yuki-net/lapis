@@ -48,7 +48,7 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
     .expect("bounded capabilities")
 }
 
-use ::terminal::TerminalBackend;
+use ::terminal::{TerminalBackend, TerminalProfiles};
 use backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };
@@ -74,6 +74,8 @@ struct HostInner {
     next_session: AtomicU64,
     state_directory: Option<PathBuf>,
     store: Option<Mutex<platform::WorkspaceStore>>,
+    /// Host が起動を許可する Terminal profile。
+    terminal_profiles: TerminalProfiles,
 }
 
 impl HostInner {
@@ -87,6 +89,34 @@ impl HostInner {
             .register(root)
             .map_err(|_| BackendServiceError::Unavailable)?;
         WorkspaceId::try_new(record.id).map_err(|_| BackendServiceError::Unavailable)
+    }
+}
+
+/// Host の Terminal profile 設定を読む。無い場合は OS 既定を使う。
+fn load_terminal_profiles(directory: Option<&Path>) -> TerminalProfiles {
+    let Some(directory) = directory else {
+        return platform::default_terminal_profiles();
+    };
+    let path = directory.join("terminal-profiles.json");
+    let Ok(bytes) = std::fs::read(&path) else {
+        return platform::default_terminal_profiles();
+    };
+    match serde_json::from_slice::<TerminalProfiles>(&bytes) {
+        Ok(profiles) if !profiles.profiles.is_empty() => profiles,
+        Ok(_) => {
+            eprintln!(
+                "Terminal profile設定が空のため、Terminalを起動できません: {}",
+                path.display()
+            );
+            TerminalProfiles::default()
+        }
+        Err(error) => {
+            eprintln!(
+                "Terminal profile設定を読めないため、Terminalを起動できません: {}: {error}",
+                path.display()
+            );
+            TerminalProfiles::default()
+        }
     }
 }
 
@@ -139,6 +169,7 @@ impl BackendHost {
             }
             None => None,
         };
+        let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
         let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
@@ -146,6 +177,7 @@ impl BackendHost {
                 next_session: AtomicU64::new(1),
                 state_directory,
                 store,
+                terminal_profiles,
             }),
         };
         if let Some(store) = &host.inner.store {
@@ -204,7 +236,9 @@ impl BackendHost {
             root.clone(),
             Arc::new(LocalWorkspaceRepository),
         )
-        .with_terminal(Arc::new(LocalTerminalBackend::default()))
+        .with_terminal(Arc::new(LocalTerminalBackend::with_profiles(
+            self.inner.terminal_profiles.clone(),
+        )))
         .with_git(Arc::new(LocalGitBackend::user_default()))
         .with_tasks(Arc::new(LocalTaskBackend::user_default()));
         if let Some(directory) = &self.inner.state_directory {
@@ -283,5 +317,37 @@ impl BackendHost {
     }
     pub fn terminals(&self) -> Arc<dyn TerminalBackend> {
         BackendClient::from(self.clone()).terminals()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_profiles_fall_back_only_when_the_setting_is_absent() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(
+            !load_terminal_profiles(Some(directory.path()))
+                .profiles
+                .is_empty()
+        );
+
+        let path = directory.path().join("terminal-profiles.json");
+        std::fs::write(
+            &path,
+            r#"{"profiles":[{"id":"custom","name":"Custom","program":"/bin/custom"}],"default":"custom"}"#,
+        )
+        .unwrap();
+        let profiles = load_terminal_profiles(Some(directory.path()));
+        assert_eq!(profiles.profiles.len(), 1);
+        assert_eq!(profiles.profiles[0].id.as_str(), "custom");
+
+        std::fs::write(&path, "not json").unwrap();
+        assert!(
+            load_terminal_profiles(Some(directory.path()))
+                .profiles
+                .is_empty()
+        );
     }
 }

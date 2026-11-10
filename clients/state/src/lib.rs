@@ -100,19 +100,27 @@ impl SettingsSession {
         Ok(())
     }
 
-    /// ターミナルのフォント family とサイズを保存する。`None` は OS 既定へ戻す。
-    pub fn set_terminal_font(
+    /// ターミナルの表示設定を保存する。`None` は既定値へ戻す。
+    pub fn set_terminal_appearance(
         &self,
         family: Option<String>,
         size: Option<u8>,
+        line_height_percent: Option<u8>,
+        caret_shape: Option<settings::TerminalCaretShape>,
     ) -> Result<(), SettingsError> {
         let _writer = self.writer.lock().expect("settings writer lock failed");
         let mut settings = self.settings();
-        if settings.terminal_font_family == family && settings.terminal_font_size == size {
+        if settings.terminal_font_family == family
+            && settings.terminal_font_size == size
+            && settings.terminal_line_height_percent == line_height_percent
+            && settings.terminal_caret_shape == caret_shape
+        {
             return Ok(());
         }
         settings.terminal_font_family = family;
         settings.terminal_font_size = size;
+        settings.terminal_line_height_percent = line_height_percent;
+        settings.terminal_caret_shape = caret_shape;
         self.repository.save(&settings)?;
         *self.settings.lock().expect("settings state lock failed") = settings;
         Ok(())
@@ -253,17 +261,20 @@ impl TerminalSession {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
+        self.start_profile(cwd, columns, rows, None)
     }
 
-    pub fn start_with_shell(
+    /// Host が許可した profile で Terminal を開始する。
+    pub fn start_profile(
         &mut self,
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: terminal::TerminalShell,
+        profile: Option<terminal::TerminalProfileId>,
     ) -> Result<TerminalId, TerminalError> {
-        let id = self.backend.start_with_shell(cwd, columns, rows, shell)?;
+        let id = self
+            .backend
+            .start_profile(cwd, columns, rows, profile.as_ref())?;
         if let Ok(snapshot) = self.backend.attach(cwd, &id) {
             self.terminals.push(snapshot);
             return Ok(id);
@@ -276,6 +287,11 @@ impl TerminalSession {
             screen: terminal::TerminalScreen::empty(TerminalSize::new(columns, rows)),
         });
         Ok(id)
+    }
+
+    /// Host が許可する profile 一覧。
+    pub fn profiles(&self, cwd: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+        self.backend.profiles(cwd)
     }
 
     pub fn discover(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {

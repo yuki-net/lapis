@@ -2,11 +2,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SessionId, TerminalId, WorkspaceId, WorkspaceRelativePath};
 
-pub use ::terminal::TerminalShell;
 pub use ::terminal::{
     TerminalCell, TerminalColor, TerminalCursor, TerminalDelta, TerminalInput, TerminalKey,
-    TerminalKeyEvent, TerminalModes, TerminalModifiers, TerminalRevision, TerminalRow,
-    TerminalRowUpdate, TerminalScreen, TerminalScrollbackDelta, TerminalSize,
+    TerminalKeyEvent, TerminalModes, TerminalModifiers, TerminalProfile, TerminalProfileId,
+    TerminalProfiles, TerminalRevision, TerminalRow, TerminalRowUpdate, TerminalScreen,
+    TerminalScrollbackDelta, TerminalSize,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,9 +44,22 @@ pub struct TerminalStartRequest {
     pub cwd: Option<WorkspaceRelativePath>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
-    #[serde(default)]
-    pub shell: TerminalShell,
+    /// Host が許可した profile。`None` は Host の既定 profile。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<TerminalProfileId>,
     pub size: TerminalSize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Host が起動を許可する Terminal profile を取得する。
+pub struct TerminalListProfilesRequest {
+    pub workspace_id: WorkspaceId,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Host が許可する Terminal profile 一覧。
+pub struct TerminalListProfilesResponse {
+    pub profiles: TerminalProfiles,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -16,8 +16,8 @@ use crate::{
 };
 use client_api::{
     ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
-    SnapshotRequest, WorkbenchGetRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
-    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
+    SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceConnectRequest,
+    WorkspaceId as ApiWorkspaceId, WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
 };
 use client_core::browser::{WebClientConnectOptions, connect_web_client};
 use document::{
@@ -48,7 +48,8 @@ use state::{
 };
 use transport::{Command, event_pump, fetch_tree, preload, preload_workbench, pump, request};
 
-pub const ROOT: &str = r"C:\Lapis Host";
+/// Web は Host の OS に依存しない仮想 root を使う。
+pub const ROOT: &str = "/Lapis Host";
 const UNAVAILABLE: &str = "Webではこの機能に接続していません";
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
@@ -176,12 +177,24 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
         _ => Vec::new(),
     };
+    let profiles = match request(
+        &connection,
+        RequestBody::TerminalListProfiles(TerminalListProfilesRequest {
+            workspace_id: api_workspace.clone(),
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::TerminalListProfiles(response)) => response.profiles,
+        _ => terminal::TerminalProfiles::default(),
+    };
     let replica = Rc::new(RefCell::new(Replica::new(
         workspace.clone(),
         entries,
         connection
             .session_id()
             .map(|session| SessionId::new(session.as_str())),
+        profiles,
     )));
     {
         let mut replica = replica.borrow_mut();
@@ -1005,16 +1018,17 @@ impl LanguageServerBackend for WebBackend {
 
 impl TerminalBackend for WebBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
+        self.start_profile(cwd, columns, rows, None)
     }
 
-    fn start_with_shell(
+    fn start_profile(
         &self,
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: terminal::TerminalShell,
+        profile: Option<&terminal::TerminalProfileId>,
     ) -> Result<TerminalId, TerminalError> {
+        let profile = profile.cloned();
         self.with(|state| {
             let mut replica = state.replica.borrow_mut();
             let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
@@ -1033,11 +1047,16 @@ impl TerminalBackend for WebBackend {
                 cwd: Some(cwd.to_owned()),
                 columns,
                 rows,
-                shell,
+                profile,
             });
             local
         })
         .map_err(TerminalError::new)
+    }
+
+    fn profiles(&self, _cwd: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+        self.with(|state| state.replica.borrow().profiles.clone())
+            .map_err(TerminalError::new)
     }
 
     fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {

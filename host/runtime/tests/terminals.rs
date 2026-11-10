@@ -288,7 +288,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
             workspace_id: first_workspace.clone(),
             cwd: None,
             command: Some("cargo test".to_owned()),
-            shell: Default::default(),
+            profile: None,
             size: TerminalSize {
                 columns: 80,
                 rows: 24,
@@ -307,7 +307,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
             workspace_id: first_workspace.clone(),
             cwd: None,
             command: None,
-            shell: Default::default(),
+            profile: None,
             size: TerminalSize {
                 columns: 0,
                 rows: 24,
@@ -326,7 +326,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
             workspace_id: first_workspace.clone(),
             cwd: None,
             command: None,
-            shell: Default::default(),
+            profile: None,
             size: TerminalSize {
                 columns: 80,
                 rows: 24,
@@ -436,7 +436,7 @@ fn terminal_lifecycle_polls_events_and_restores_from_snapshot() {
             workspace_id: first_workspace.clone(),
             cwd: None,
             command: None,
-            shell: Default::default(),
+            profile: None,
             size: TerminalSize {
                 columns: 100,
                 rows: 30,

@@ -14,9 +14,11 @@ pub(crate) enum Change {
     Theme(String),
     Syntax(SyntaxTheme),
     Locale(LocaleId),
-    TerminalFont {
+    TerminalAppearance {
         family: Option<String>,
         size: Option<u8>,
+        line_height_percent: Option<u8>,
+        caret_shape: Option<settings::TerminalCaretShape>,
     },
 }
 
@@ -26,9 +28,16 @@ impl Change {
             Self::Theme(id) => values.theme = id.clone(),
             Self::Syntax(id) => values.syntax_theme = Some(*id),
             Self::Locale(id) => values.locale = id.clone(),
-            Self::TerminalFont { family, size } => {
+            Self::TerminalAppearance {
+                family,
+                size,
+                line_height_percent,
+                caret_shape,
+            } => {
                 values.terminal_font_family = family.clone();
                 values.terminal_font_size = *size;
+                values.terminal_line_height_percent = *line_height_percent;
+                values.terminal_caret_shape = *caret_shape;
             }
         }
     }
@@ -38,7 +47,17 @@ impl Change {
             Self::Theme(id) => session.set_theme(id.clone()),
             Self::Syntax(id) => session.set_syntax_theme(*id),
             Self::Locale(id) => session.set_locale(id.clone()),
-            Self::TerminalFont { family, size } => session.set_terminal_font(family.clone(), *size),
+            Self::TerminalAppearance {
+                family,
+                size,
+                line_height_percent,
+                caret_shape,
+            } => session.set_terminal_appearance(
+                family.clone(),
+                *size,
+                *line_height_percent,
+                *caret_shape,
+            ),
         }
     }
 }

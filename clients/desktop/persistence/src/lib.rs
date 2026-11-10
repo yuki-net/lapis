@@ -391,6 +391,8 @@ mod tests {
             syntax_theme: Some(settings::SyntaxTheme::Zed),
             terminal_font_family: Some("Menlo".to_owned()),
             terminal_font_size: Some(15),
+            terminal_line_height_percent: Some(140),
+            terminal_caret_shape: Some(settings::TerminalCaretShape::Bar),
         };
 
         repository.save(&settings).unwrap();

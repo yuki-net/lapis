@@ -37,6 +37,8 @@ Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の�
 
 `--state-directory` を指定したHostは、秘密鍵と証明書を `<state>/identity` に保存して再利用するため、再起動しても同じ証明書で接続できます。未指定の場合はメモリ内だけで保持するため、再起動後は新しい公開証明書とペアリングが必要です。保存済みの同一性を読めない場合は作り直し、その場合だけ証明書が変わります。credentialは状態ディレクトリの `credentials.sqlite3` に保存し、Host再起動後に復元します。Remote credentialの期限は1日です。状態ディレクトリを指定したHostは登録済みWorkspaceを再起動後に復元します。見つからないフォルダの登録情報は削除しません。旧形式には登録一覧がないため、既存Workspaceは次に開いたとき一覧へ記録し、従来のWorkbench状態を引き続き使います。Desktopは「ファイル → Hostに接続…」または `cargo run -p lapis -- --host <招待.jsonまたは保存済みprofile.host>` で接続します。取り込んだ証明書とcredentialはWindowsのユーザー単位DPAPIで保護して保存し、以後はprofileから接続します。同じHostへ接続済みなら、使用済みの招待を開いても保存済みprofileを使います。別のHost（証明書が違う）の招待は流用せず、認証・証明書の不一致時に自動で信頼し直しません。
 
+`--state-directory` の `terminal-profiles.json` で、Client が起動できる Terminal profile を制限できます。形式は `{"profiles":[{"id":"bash","name":"bash","program":"/bin/bash","args":["-l"],"env":{"TERM":"xterm-256color"}}],"default":"bash"}` です。未指定なら OS ごとの既定 profile（Windows: PowerShell / cmd、macOS・Linux: login shell と bash / zsh / fish / pwsh）を使います。Host は `terminal.list_profiles` でこの一覧だけを公開し、一覧にない ID の `terminal.start` を拒否します。
+
 Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立processで起動し、loopback QUICで接続します。同じユーザーのstate directoryで一つのHostを共有し、複数のフォルダを登録できます。所有者credentialは匿名pipeで渡し、DPAPIで保護した `hosts/local-v1.host` に保存します。Local所有者の鍵はHostの寿命に紐付き、Remoteの招待には配布しません。通信失敗だけで既存Hostを終了・置換しません。Desktopを閉じてもHostのDocument・Terminalは残ります。Host自体の終了後は実行状態を復元しません。
 
 `lapis.exe`（Desktop Client）と `lapis-host.exe`（Host）は明確に分離されたbinaryです。Desktopは自身をHostとして起動せず、既定では同じ出力ディレクトリから `lapis-host.exe` を解決して起動します。`--local-host-executable <path>` を指定した場合はDesktopのComposition Rootがそのファイルを解決してLocal接続へ注入します。Hot Reload launcherはこの指定でdxの一時出力先とHostを分離します。

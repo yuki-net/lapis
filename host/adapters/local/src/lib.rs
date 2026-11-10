@@ -14,7 +14,7 @@ pub use local_git::LocalGitBackend;
 pub use local_lsp::LocalLspBackend;
 pub use local_search::LocalWorkspaceSearchBackend;
 pub use local_tasks::{LocalTaskBackend, run_task_worker};
-pub use local_terminal::LocalTerminalBackend;
+pub use local_terminal::{LocalTerminalBackend, default_profiles as default_terminal_profiles};
 pub use local_workbench::LocalWorkbenchStore;
 pub use local_workspace::LocalWorkspaceRepository;
 pub use local_workspace_store::{WorkspaceRecord, WorkspaceStore, WorkspaceStoreError};
@@ -262,17 +262,24 @@ impl<T: TerminalBackend> TerminalBackend for LoopbackBackend<T> {
         self.inner.start(cwd, columns, rows)
     }
 
-    fn start_with_shell(
+    fn start_profile(
         &self,
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: terminal::TerminalShell,
+        profile: Option<&terminal::TerminalProfileId>,
     ) -> Result<TerminalId, TerminalError> {
         if !self.gate.is_connected() {
             return Err(TerminalError::new("loopback workspace is disconnected"));
         }
-        self.inner.start_with_shell(cwd, columns, rows, shell)
+        self.inner.start_profile(cwd, columns, rows, profile)
+    }
+
+    fn profiles(&self, cwd: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+        if !self.gate.is_connected() {
+            return Err(TerminalError::new("loopback workspace is disconnected"));
+        }
+        self.inner.profiles(cwd)
     }
 
     fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
