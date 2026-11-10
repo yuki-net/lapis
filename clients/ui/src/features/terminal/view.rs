@@ -155,9 +155,8 @@ impl Render for TerminalFeature {
                         let tab_id = gpui::ElementId::named_usize("terminal-tab", index);
                         tab_button(tab_id, format!("{} − {status:?}", index + 1), selected, cx)
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.selected = Some(id.clone());
+                                this.select_terminal(id.clone(), cx);
                                 crate::gpui_compat::focus(window, &this.focus, cx);
-                                cx.notify();
                             }))
                     }))
                     .child(
