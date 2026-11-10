@@ -41,6 +41,12 @@ pub enum EventBody {
     DocumentReplaced { document: DocumentSnapshot },
     #[serde(rename = "document.closed")]
     DocumentClosed { document_id: DocumentId },
+    #[serde(rename = "document.owner")]
+    DocumentOwner {
+        document_id: DocumentId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        owner: Option<crate::SessionId>,
+    },
     #[serde(rename = "terminal.delta")]
     TerminalDelta {
         terminal_id: TerminalId,

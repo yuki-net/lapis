@@ -40,12 +40,13 @@ pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCa
 pub use connection::ConnectionState;
 pub use credential_id::{CredentialId, InvalidCredentialId};
 pub use document::{
-    DocumentCloseRequest, DocumentCloseResponse, DocumentCreateRequest, DocumentCreateResponse,
-    DocumentDiscardRequest, DocumentDiscardResponse, DocumentEditRequest, DocumentEditResponse,
-    DocumentEncoding, DocumentExternalChange, DocumentHistoryRequest, DocumentHistoryResponse,
-    DocumentInspectRequest, DocumentOpenRequest, DocumentOpenResponse, DocumentRelocateRequest,
-    DocumentSaveAsRequest, DocumentSaveRequest, DocumentSaveResponse, DocumentSnapshot,
-    DocumentTextEdit, DocumentTransaction, DocumentUntitledRequest, InvalidDocumentTextEdit,
+    DocumentClaimRequest, DocumentCloseRequest, DocumentCloseResponse, DocumentCommandResponse,
+    DocumentCreateRequest, DocumentCreateResponse, DocumentDiscardRequest, DocumentDiscardResponse,
+    DocumentEditRequest, DocumentEditResponse, DocumentEncoding, DocumentExternalChange,
+    DocumentHistoryRequest, DocumentHistoryResponse, DocumentInspectRequest, DocumentOpenRequest,
+    DocumentOpenResponse, DocumentReleaseRequest, DocumentRelocateRequest, DocumentSaveAsRequest,
+    DocumentSaveRequest, DocumentSaveResponse, DocumentSnapshot, DocumentTextEdit,
+    DocumentTransaction, DocumentUntitledRequest, InvalidDocumentTextEdit,
     InvalidDocumentTransaction,
 };
 pub use envelope::{EventEnvelope, RequestEnvelope, ResponseEnvelope};

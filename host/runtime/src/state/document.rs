@@ -14,6 +14,7 @@ impl BackendState {
             path: None,
             document: Document::new(),
             attached_sessions: HashSet::from([session.session_id.clone()]),
+            owner: None,
         };
         let snapshot = resource.snapshot(&workspace.summary.workspace_id);
         workspace.documents.insert(document_id, resource);
@@ -170,6 +171,13 @@ impl BackendState {
         let workspace = self.workspace_mut(session)?;
         let workspace_id = workspace.summary.workspace_id.clone();
         let resource = workspace.require_attached_document_mut(session, &request.document_id)?;
+        if resource
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != &session.session_id)
+        {
+            return Err(BackendStateError::DocumentNotOwner);
+        }
         require_revision(
             &request.document_id,
             request.base_revision,
@@ -329,6 +337,49 @@ impl BackendState {
         ))
     }
 
+    pub(super) fn document_claim(
+        &mut self,
+        session: &BackendSession,
+        request: client_api::DocumentClaimRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let document = workspace.require_attached_document_mut(session, &request.document_id)?;
+        document.owner = Some(session.session_id.clone());
+        let event = workspace.publish(EventBody::DocumentOwner {
+            document_id: request.document_id,
+            owner: Some(session.session_id.clone()),
+        })?;
+        Ok((
+            ResponseBody::DocumentClaim(client_api::DocumentCommandResponse::default()),
+            vec![event],
+        ))
+    }
+
+    pub(super) fn document_release(
+        &mut self,
+        session: &BackendSession,
+        request: client_api::DocumentReleaseRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        let workspace = self.workspace_mut(session)?;
+        let document = workspace.require_attached_document_mut(session, &request.document_id)?;
+        if document
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != &session.session_id)
+        {
+            return Err(BackendStateError::DocumentNotOwner);
+        }
+        document.owner = None;
+        let event = workspace.publish(EventBody::DocumentOwner {
+            document_id: request.document_id,
+            owner: None,
+        })?;
+        Ok((
+            ResponseBody::DocumentRelease(client_api::DocumentCommandResponse::default()),
+            vec![event],
+        ))
+    }
+
     pub(super) fn document_edit(
         &mut self,
         session: &BackendSession,
@@ -336,6 +387,13 @@ impl BackendState {
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
         let document = workspace.require_attached_document_mut(session, &request.document_id)?;
+        if document
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != &session.session_id)
+        {
+            return Err(BackendStateError::DocumentNotOwner);
+        }
         require_revision(
             &request.document_id,
             request.base_revision,
@@ -417,6 +475,13 @@ impl BackendState {
         let workspace = self.workspace_mut(session)?;
         let workspace_id = workspace.summary.workspace_id.clone();
         let document = workspace.require_attached_document_mut(session, &document_id)?;
+        if document
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner != &session.session_id)
+        {
+            return Err(BackendStateError::DocumentNotOwner);
+        }
         require_revision(&document_id, base_revision, document.revision())?;
         let changed = if undo {
             document.document.undo()

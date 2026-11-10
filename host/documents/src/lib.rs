@@ -110,6 +110,8 @@ pub struct DocumentResource {
     pub path: Option<WorkspaceRelativePath>,
     pub document: Document,
     pub attached_sessions: HashSet<SessionId>,
+    /// 編集を許可する Session。`None` は未所有。
+    pub owner: Option<SessionId>,
 }
 
 impl DocumentResource {
@@ -119,6 +121,7 @@ impl DocumentResource {
             path: Some(path),
             document,
             attached_sessions: HashSet::new(),
+            owner: None,
         }
     }
 
@@ -138,6 +141,7 @@ impl DocumentResource {
             can_undo: self.document.can_undo(),
             can_redo: self.document.can_redo(),
             external_change: client_api::DocumentExternalChange::Unchanged,
+            owner: self.owner.clone(),
         }
     }
 }
