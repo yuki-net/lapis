@@ -503,7 +503,10 @@ mod tests {
     fn process_alive(pid: u32) -> bool {
         let mut system = System::new();
         system.refresh_processes(ProcessesToUpdate::All);
-        system.process(Pid::from_u32(pid)).is_some()
+        system
+            .process(Pid::from_u32(pid))
+            // 親が wait するまでの zombie は実行中ではない。
+            .is_some_and(|process| process.status() != sysinfo::ProcessStatus::Zombie)
     }
 
     fn wait_until(mut condition: impl FnMut() -> bool) -> bool {
@@ -592,8 +595,8 @@ mod tests {
             .map(|node| node.pid)
             .collect::<Vec<_>>();
         registry.terminate(Some(&workspace), &root_id).unwrap();
+        assert!(wait_until(|| child.try_wait().unwrap().is_some()));
         assert!(wait_until(|| pids.iter().all(|pid| !process_alive(*pid))));
-        assert!(child.try_wait().unwrap().is_some());
     }
 
     #[test]
