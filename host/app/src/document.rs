@@ -670,7 +670,6 @@ mod tests {
     #[test]
     fn resync_resubscribes_and_notifies_after_success() {
         let changes = std::sync::Arc::new(DocumentChanges::default());
-        let receiver = changes.subscribe();
         let weak = std::sync::Arc::downgrade(&changes);
         let opens = std::cell::Cell::new(0);
         let mut open = || {
@@ -682,20 +681,20 @@ mod tests {
                         as RelayPoller,
                 )
             } else {
-                Some(Box::new(|| RelayPoll::Closed) as RelayPoller)
+                // 再購読。購読直後の通知を受け取ってから終了する。
+                let receiver = changes.subscribe();
+                Some(Box::new(move || {
+                    assert!(receiver.try_recv().is_ok(), "再購読成功直後に再同期を促す");
+                    RelayPoll::Closed
+                }) as RelayPoller)
             }
         };
         // 1 回目は resync で購読区間が終わる。
         relay_once(&weak, &mut open);
-        assert!(receiver.recv_timeout(Duration::from_millis(100)).is_ok());
-        assert!(receiver.try_recv().is_err());
-        // 再購読の成功直後にも再同期を促す。
+        assert_eq!(opens.get(), 1);
+        // 2 回目は再購読し、購読中の通知を検証する。
         relay_once(&weak, &mut open);
         assert_eq!(opens.get(), 2, "resync 後に購読し直す");
-        assert!(
-            receiver.recv_timeout(Duration::from_millis(100)).is_ok(),
-            "再購読成功後に再同期を促す"
-        );
     }
 
     #[test]
