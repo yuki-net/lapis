@@ -9,14 +9,14 @@
 - Client由来のpathをそのままOSへ渡さず、Workspaceと検証済みの相対pathから解決し、親参照・symlink等による範囲外アクセスを拒否します。
 - OSのpathを相対pathへ変換するときは、表現できない名前を別の文字や区切りに置き換えずエラーとします。
 - Local所有者だけが持つ `host.manage` は、フォルダの登録とWorkspace間のDocument移動を許可します。登録時のみ利用者が指定した絶対pathを渡し、Hostが実在・正規化を検証します。通常のresource操作は相対pathとIDを使い、Remote招待にはこの管理権限を付与しません。所有者も各sessionの通常操作は接続Workspaceに限定します。
-- Host所有者が明示的に発行したユーザー用招待には `workspace.switch` と `workspace.register` を付与でき、登録済みWorkspaceの一覧・切替と新しいフォルダの登録を許可します。これらはWorkspace間の文書移動やHost内部path取得を許可せず、通常のWorkspace限定招待には付与しません。各接続で操作できるWorkspaceは引き続き一つに限定します。
+- Host所有者が明示的に発行したユーザー用招待には `workspace.switch` と `workspace.register` を付与でき、登録済みWorkspaceの一覧・切替と新しいフォルダの登録を許可します。これらはWorkspace間の文書移動やHost内部path取得を許可せず、通常のWorkspace限定招待には付与しません。`workspace.switch` を持つcredentialは特定Workspaceに固定せず、接続ごとに一つを選びます。通常のWorkspace限定credentialはpairing先へ固定します。
 - Document・Terminalなどのresource identityをWorkspaceとsessionのattachmentへ関連付けます。同じWorkspaceを許可されたClientはsnapshotから再アタッチできます。別Workspaceや未認証sessionからの利用は拒否します。
 - 認証情報、ファイル内容、Terminalの入出力を不用意にログへ記録しません。
 
 ## Server側で実装済みの制御
 
 - `server.rs`・`quic.rs` と `tls.rs`: Remoteが有効化されていなければlistenしません。WebSocketとQUICはTLS 1.3のみを許可し、TLS early dataを無効にしています。認証・認可・イベント配信は同じSession処理を使用します。
-- `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・Workspace・許可capability・期限に結び付き、失効させると関連sessionも無効になります。Local所有者credentialのみHost内の別Workspaceへ認証できますが、Client bindingは維持します。
+- `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・許可capability・期限に結び付き、失効させると関連sessionも無効になります。`workspace.switch` を持たないcredentialはWorkspaceにも固定し、`workspace.switch` を持つcredentialは接続ごとにWorkspaceを選べます。Client bindingは維持します。Workspaceを指定しなかった場合は固定先、無ければHostが解決するprimary Workspaceを使います。未登録のWorkspace、固定先との不一致、期限切れ、別Hostのcredentialは区別したerror codeで拒否します。
 - `auth.rs`: 認証済みsessionの有効性と、requestが要求するWorkspace・capabilityを検証します。
 - 購読イベントを送る前にもsessionの失効・期限を確認します。失効したClientへ新しいDocumentやTerminalの内容を配信しません。
 
@@ -36,7 +36,9 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 ## Clientの回復
 
 - `sync_client.rs` は機能workerから呼び出し、再接続では保存済みの証明書・credentialを検証し、Workspace接続とsnapshot取得でattachmentを復元します。送信済み更新要求は自動再送しません。期限を過ぎた待機要求は実行しません。
-- Workspace を指定していない profile は、認証で Workspace を要求せず、Host が返す Workspace へ接続します。Host が返さない場合は `workspace.list` の先頭を使います。
+- Workspace を指定していない profile は、認証で Workspace を要求せず、Host が返す Workspace へ接続します。Host が返さない場合は resolver の primary Workspace、最後に `workspace.list` の先頭を使います。
+- Host は認証応答で永続化した `host_id` を返せます。Web / Desktop は保存済み credential の `host_id` と照合し、別 Host への誤接続を区別したエラーにします。
+- Web は接続後に Host ID と Workspace ID を表示し、`workspace.switch` が付与されていれば Workspace を切り替えられます。切替は同じ credential で再接続し、Workspace ごとに credential を複製しません。
 - イベント購読のqueue上限を超えた場合は購読を切断し、snapshotから回復します。
 
 認証拒否、protocol不一致、証明書不一致を単なる一時切断として自動的に信頼し直しません。

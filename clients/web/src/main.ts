@@ -1,4 +1,4 @@
-import init, { is_ready, start } from "./generated/wasm/lapis_ui.js";
+import init, { connectionInfo, is_ready, start } from "./generated/wasm/lapis_ui.js";
 
 const root = document.querySelector<HTMLElement>("#app");
 if (root === null) {
@@ -75,11 +75,12 @@ async function launch(
 ) {
   const clientId = localStorage.getItem(STORAGE.clientId) ?? createClientId();
   localStorage.setItem(STORAGE.clientId, clientId);
-  const credentialKey = url !== null && workspace !== null ? `${url}|${workspace}` : "";
+  // 切り替え可能な credential は Workspace に固定されないため、Host 単位で保存する。
+  const credentialKey = url ?? "";
   const credential = credentialKey === "" ? null : localStorage.getItem(credentialKey);
-  if (url !== null && workspace !== null) {
+  if (url !== null) {
     localStorage.setItem(STORAGE.url, url);
-    localStorage.setItem(STORAGE.workspace, workspace);
+    localStorage.setItem(STORAGE.workspace, workspace ?? "");
   }
 
   await init();
@@ -100,6 +101,60 @@ async function launch(
   }
   root!.hidden = true;
   document.body.dataset.lapis = "ready";
+  showConnectionInfo(url);
+}
+
+type ConnectionInfo = {
+  host_id?: string | null;
+  workspace_id: string;
+  can_switch: boolean;
+  workspaces: Array<{ id: string; name: string }>;
+};
+
+function showConnectionInfo(url: string | null) {
+  const element = document.querySelector<HTMLElement>("#connection-info");
+  if (element === null || url === null) {
+    return;
+  }
+  const raw = connectionInfo();
+  if (raw === undefined || raw === null) {
+    return;
+  }
+  let info: ConnectionInfo;
+  try {
+    info = JSON.parse(raw) as ConnectionInfo;
+  } catch {
+    return;
+  }
+  element.replaceChildren();
+  const identity = document.createElement("span");
+  identity.className = "connection-identity";
+  identity.textContent = `Host ${info.host_id ?? "未永続化"} / Workspace ${info.workspace_id}`;
+  element.append(identity);
+
+  if (info.can_switch && info.workspaces.length > 0) {
+    const label = document.createElement("label");
+    label.className = "connection-switch";
+    label.append(document.createTextNode("Workspace を切り替え"));
+    const select = document.createElement("select");
+    for (const workspace of info.workspaces) {
+      const option = document.createElement("option");
+      option.value = workspace.id;
+      option.textContent = `${workspace.name} (${workspace.id})`;
+      option.selected = workspace.id === info.workspace_id;
+      select.append(option);
+    }
+    select.disabled = info.workspaces.length < 2;
+    select.addEventListener("change", () => {
+      const params = new URLSearchParams(location.search);
+      params.delete("token");
+      params.set("workspace", select.value);
+      location.search = params.toString();
+    });
+    label.append(select);
+    element.append(label);
+  }
+  element.hidden = false;
 }
 
 async function connect(url: string, workspace: string, token: string, backend: string) {
@@ -111,7 +166,7 @@ async function connect(url: string, workspace: string, token: string, backend: s
       throw error;
     }
     clearOidcToken(url);
-    if (token === "" && !hasCredential(url, workspace)) {
+    if (token === "" && !hasCredential(url)) {
       throw error;
     }
     await launch(backend, url, workspace, token === "" ? null : token, null);
@@ -186,9 +241,9 @@ function clearOidcToken(hostUrl: string) {
   }
 }
 
-function hasCredential(url: string, workspace: string): boolean {
+function hasCredential(url: string): boolean {
   try {
-    return localStorage.getItem(`${url}|${workspace}`) !== null;
+    return localStorage.getItem(url) !== null;
   } catch {
     return false;
   }
@@ -343,7 +398,7 @@ async function boot() {
 
     if (
       url !== "" &&
-      (token !== "" || hasIdToken || hasCredential(url, workspace))
+      (token !== "" || hasIdToken || hasCredential(url))
     ) {
       try {
         await connect(url, workspace, token, backend);

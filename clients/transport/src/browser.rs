@@ -5,9 +5,10 @@ use std::{
 
 use crate::ClientCore;
 use client_api::{
-    AuthenticateRequest, CURRENT_PROTOCOL, CapabilityId, CapabilitySet, ClientId, ClientKind,
-    ClientMessage, CredentialId, EventEnvelope, HelloRequest, OidcRequest, PairRequest,
-    ProtocolRange, RequestBody, ResponseBody, ServerMessage, WorkspaceId,
+    AuthenticateRequest, CREDENTIAL_EXPIRED, CURRENT_PROTOCOL, CapabilityId, CapabilitySet,
+    ClientId, ClientKind, ClientMessage, CredentialId, EventEnvelope, HOST_MISMATCH, HelloRequest,
+    OidcRequest, PairRequest, ProtocolRange, RequestBody, ResponseBody, ServerMessage,
+    WORKSPACE_MISMATCH, WORKSPACE_UNAVAILABLE, WorkspaceId,
 };
 use futures_channel::{mpsc, oneshot};
 use futures_util::future::{Either, select};
@@ -263,6 +264,18 @@ fn failure_handler(
 pub struct StoredCredential {
     pub id: String,
     pub secret: String,
+    /// 発行元 Host。次回接続時に別 Host を早期に拒否する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
+}
+
+/// 認証まで完了した Web 接続。Host/Workspace の識別子を UI へ渡す。
+pub struct WebConnection {
+    pub connection: BrowserConnection,
+    pub credential: Option<String>,
+    pub workspace_id: Option<WorkspaceId>,
+    pub host_id: Option<String>,
+    pub capabilities: CapabilitySet,
 }
 
 /// WebSocket経由のClient接続設定。
@@ -285,7 +298,7 @@ pub struct WebClientConnectOptions<'a> {
 /// 返り値の `Some` はpairing直後のcredential JSON。
 pub async fn connect_web_client(
     options: WebClientConnectOptions<'_>,
-) -> Result<(BrowserConnection, Option<String>, Option<WorkspaceId>), String> {
+) -> Result<WebConnection, String> {
     let WebClientConnectOptions {
         url,
         workspace,
@@ -321,7 +334,8 @@ pub async fn connect_web_client(
                         AuthenticateRequest::new(hello.clone(), workspace, &id, &secret)
                     }
                     None => AuthenticateRequest::new_auto(hello.clone(), &id, &secret),
-                };
+                }
+                .with_host_id(stored.host_id);
                 secret.zeroize();
                 ClientMessage::Authenticate(request)
             }
@@ -352,8 +366,15 @@ pub async fn connect_web_client(
             }
             Err(error) => return Err(error),
         };
-    let (credential, selected_workspace) = credential_from_response(response)?;
-    Ok((connection, credential, selected_workspace))
+    let (credential, selected_workspace, host_id, capabilities) =
+        credential_from_response(response)?;
+    Ok(WebConnection {
+        connection,
+        credential,
+        workspace_id: selected_workspace,
+        host_id,
+        capabilities,
+    })
 }
 
 fn client_hello(
@@ -380,10 +401,20 @@ fn client_hello(
 
 fn credential_from_response(
     response: ServerMessage,
-) -> Result<(Option<String>, Option<WorkspaceId>), String> {
+) -> Result<
+    (
+        Option<String>,
+        Option<WorkspaceId>,
+        Option<String>,
+        CapabilitySet,
+    ),
+    String,
+> {
     match response {
         ServerMessage::Paired(mut paired) => {
             let workspace_id = paired.hello.workspace_id.clone();
+            let host_id = paired.hello.host_id.clone();
+            let capabilities = paired.hello.granted_capabilities.clone();
             let id = paired
                 .credential_id()
                 .map_err(|_| "credential IDが不正です".to_owned())?;
@@ -393,6 +424,7 @@ fn credential_from_response(
             let stored = StoredCredential {
                 id: id.as_str().to_owned(),
                 secret: encode_hex(&secret),
+                host_id: host_id.clone(),
             };
             Ok((
                 Some(
@@ -400,9 +432,16 @@ fn credential_from_response(
                         .map_err(|_| "credentialを保存できません".to_owned())?,
                 ),
                 workspace_id,
+                host_id,
+                capabilities,
             ))
         }
-        ServerMessage::Authenticated(hello) => Ok((None, hello.workspace_id)),
+        ServerMessage::Authenticated(hello) => Ok((
+            None,
+            hello.workspace_id,
+            hello.host_id,
+            hello.granted_capabilities,
+        )),
         _ => Err("認証応答が不正です".to_owned()),
     }
 }
@@ -436,6 +475,20 @@ fn decode_hex(value: &str) -> Result<[u8; 32], String> {
     Ok(output)
 }
 
+fn authentication_error(code: &str) -> String {
+    match code {
+        CREDENTIAL_EXPIRED => {
+            "credentialの有効期限が切れています。pairing tokenで再接続してください".to_owned()
+        }
+        WORKSPACE_MISMATCH => {
+            "指定したWorkspaceは、このcredentialの接続先ではありません".to_owned()
+        }
+        WORKSPACE_UNAVAILABLE => "指定したWorkspaceはHostに登録されていません".to_owned(),
+        HOST_MISMATCH => "保存しているcredentialは別のHostのものです".to_owned(),
+        other => format!("認証が拒否されました: {other}"),
+    }
+}
+
 fn handle_message(shared: &mut Shared, message: ServerMessage) -> Result<(), String> {
     if !shared.authenticated {
         if let ServerMessage::AuthRequired(required) = &message {
@@ -453,7 +506,7 @@ fn handle_message(shared: &mut Shared, message: ServerMessage) -> Result<(), Str
             ServerMessage::Paired(response) if shared.pairing => &response.hello,
             ServerMessage::Authenticated(hello) if !shared.pairing => hello,
             ServerMessage::Error(error) => {
-                return Err(format!("認証が拒否されました: {}", error.code.as_str()));
+                return Err(authentication_error(error.code.as_str()));
             }
             _ => return Err("認証応答が不正です".into()),
         };

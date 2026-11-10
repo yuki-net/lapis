@@ -161,3 +161,45 @@ body[data-lapis="ready"] .loading {
   font-size: 12px;
   text-align: center;
 }
+
+#connection-info {
+  position: fixed;
+  right: 12px;
+  bottom: 12px;
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 7px 10px;
+  border: 1px solid #2a2e38;
+  border-radius: 8px;
+  background: rgba(17, 19, 24, 0.92);
+  color: #8d96a8;
+  font-size: 12px;
+}
+
+#connection-info[hidden] {
+  display: none;
+}
+
+.connection-identity {
+  overflow-wrap: anywhere;
+}
+
+.connection-switch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.connection-switch select {
+  max-width: 260px;
+  padding: 3px 6px;
+  border: 1px solid #2a2e38;
+  border-radius: 5px;
+  background: #1a1d24;
+  color: #d9dee8;
+  font: inherit;
+}

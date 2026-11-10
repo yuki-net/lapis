@@ -80,9 +80,12 @@ impl PairRequest {
 /// credential による認証要求。
 pub struct AuthenticateRequest {
     pub hello: HelloRequest,
-    /// 未指定の場合は Host が最初の Workspace を選ぶ。
+    /// 未指定の場合は固定先、または Host の primary Workspace を使う。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_id: Option<WorkspaceId>,
+    /// Client が保存している Host ID。別 Host の credential を早期に拒否する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_id: Option<String>,
     credential_id: String,
     secret: SecretHex,
 }
@@ -97,6 +100,7 @@ impl AuthenticateRequest {
         Self {
             hello,
             workspace_id: Some(workspace_id),
+            host_id: None,
             credential_id: credential_id.as_str().to_owned(),
             secret: SecretHex::encode(secret),
         }
@@ -110,9 +114,16 @@ impl AuthenticateRequest {
         Self {
             hello,
             workspace_id: None,
+            host_id: None,
             credential_id: credential_id.as_str().to_owned(),
             secret: SecretHex::encode(secret),
         }
+    }
+
+    /// 保存済み credential が発行された Host を表明する。
+    pub fn with_host_id(mut self, host_id: Option<String>) -> Self {
+        self.host_id = host_id;
+        self
     }
 
     pub fn credential_id(&self) -> Result<CredentialId, InvalidCredentialId> {

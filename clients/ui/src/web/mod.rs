@@ -41,6 +41,12 @@ pub fn is_ready() -> bool {
     READY.with(Cell::get)
 }
 
+/// 接続中の Host/Workspace 識別子と切り替え候補を JSON で返す。
+#[wasm_bindgen::prelude::wasm_bindgen(js_name = connectionInfo)]
+pub fn connection_info() -> Option<String> {
+    desktop_client::web_host::connection_info().and_then(|info| serde_json::to_string(&info).ok())
+}
+
 /// Hostの設定が渡された場合はHostへ接続し、無ければメモリー上のWorkspaceで起動する。
 /// pairingで新しいcredentialが発行された場合だけ、保存用に返す。
 #[wasm_bindgen::prelude::wasm_bindgen]

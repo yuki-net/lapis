@@ -17,7 +17,7 @@ use crate::{
 use client_api::{
     ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
     SnapshotRequest, WorkbenchGetRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
-    WorkspaceListRequest, WorkspaceRelativePath,
+    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
 };
 use client_core::browser::{WebClientConnectOptions, connect_web_client};
 use document::{
@@ -72,9 +72,27 @@ thread_local! {
 
 struct BackendState {
     workspace: WorkspaceId,
+    host_id: Option<String>,
+    can_switch: bool,
+    workspaces: Vec<WorkspaceSummary>,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
     changes_rx: Option<mpsc::UnboundedReceiver<()>>,
+}
+
+/// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
+#[derive(serde::Serialize)]
+pub struct ConnectionInfo {
+    pub host_id: Option<String>,
+    pub workspace_id: String,
+    pub can_switch: bool,
+    pub workspaces: Vec<WorkspaceChoice>,
+}
+
+#[derive(serde::Serialize)]
+pub struct WorkspaceChoice {
+    pub id: String,
+    pub name: String,
 }
 
 /// Host接続の設定。ページのクエリかlocalStorageから渡される。
@@ -97,38 +115,45 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
                 .map_err(|_| "Workspace IDが不正です")?,
         )
     };
-    let (connection, fresh_credential, selected_workspace) =
-        connect_web_client(WebClientConnectOptions {
-            url: &config.url,
-            workspace: requested_workspace.clone(),
-            client_id: &config.client_id,
-            client_name: "lapis-web",
-            client_kind: ClientKind::Desktop,
-            token: config.token.as_deref(),
-            credential: config.credential.as_deref(),
-            id_token: config.id_token.as_deref(),
-            capabilities: WEB_CAPABILITIES,
-        })
-        .await?;
-    let mut connection = Rc::new(connection);
-    let api_workspace = match selected_workspace.or(requested_workspace) {
+    let connected = connect_web_client(WebClientConnectOptions {
+        url: &config.url,
+        workspace: requested_workspace.clone(),
+        client_id: &config.client_id,
+        client_name: "lapis-web",
+        client_kind: ClientKind::Desktop,
+        token: config.token.as_deref(),
+        credential: config.credential.as_deref(),
+        id_token: config.id_token.as_deref(),
+        capabilities: WEB_CAPABILITIES,
+    })
+    .await?;
+    let mut connection = Rc::new(connected.connection);
+    let ResponseBody::WorkspaceList(workspace_list) = request(
+        &connection,
+        RequestBody::WorkspaceList(WorkspaceListRequest::default()),
+    )
+    .await?
+    else {
+        return Err("Workspace一覧を取得できません".to_owned());
+    };
+    let api_workspace = match connected.workspace_id.or(requested_workspace) {
         Some(workspace) => workspace,
         None => {
             // credential が Workspace に固定されていない場合は Host の一覧から選ぶ。
-            let ResponseBody::WorkspaceList(list) = request(
-                &connection,
-                RequestBody::WorkspaceList(WorkspaceListRequest::default()),
-            )
-            .await?
-            else {
-                return Err("Workspace一覧を取得できません".to_owned());
-            };
-            list.workspaces
+            workspace_list
+                .workspaces
                 .first()
                 .map(|workspace| workspace.workspace_id.clone())
                 .ok_or_else(|| "HostにWorkspaceが登録されていません".to_owned())?
         }
     };
+    let can_switch = connected
+        .capabilities
+        .iter()
+        .any(|capability| capability.as_str() == client_api::capability::WORKSPACES_SWITCH);
+    let host_id = connected.host_id.clone();
+    let fresh_credential = connected.credential.clone();
+    let workspaces = workspace_list.workspaces;
     let workspace = WorkspaceId::new(api_workspace.as_str());
     let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
     request(
@@ -192,6 +217,9 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             workspace,
+            host_id,
+            can_switch,
+            workspaces,
             replica: replica.clone(),
             commands,
             changes_rx: Some(changes_rx),
@@ -212,6 +240,27 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
 
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
     ApiWorkspaceId::try_from(id).expect("workspace id is valid")
+}
+
+/// 接続中の Host/Workspace 識別子と切り替え候補を返す。
+pub fn connection_info() -> Option<ConnectionInfo> {
+    BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref()?;
+        Some(ConnectionInfo {
+            host_id: state.host_id.clone(),
+            workspace_id: state.workspace.as_str().to_owned(),
+            can_switch: state.can_switch,
+            workspaces: state
+                .workspaces
+                .iter()
+                .map(|workspace| WorkspaceChoice {
+                    id: workspace.workspace_id.as_str().to_owned(),
+                    name: workspace.name.clone(),
+                })
+                .collect(),
+        })
+    })
 }
 
 /// 起動時に開くHost上のファイル。

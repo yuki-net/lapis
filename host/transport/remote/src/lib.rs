@@ -23,7 +23,7 @@ mod wire;
 
 pub use auth::{
     AccessError, AuthConfig, AuthConfigError, AuthError, AuthPolicy, CredentialLifetime,
-    PairingLifetime, RemoteAuth, StoredCredential,
+    PairingLifetime, RemoteAuth, StoredCredential, WorkspaceResolver,
 };
 pub use authorization::{AuthorizationError, SessionGrant};
 pub use backend_handler::BackendRemoteHandler;
