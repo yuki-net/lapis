@@ -1,6 +1,7 @@
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicU64, Ordering},
+    mpsc,
 };
 
 use editor_core::WorkspaceId;
@@ -21,6 +22,7 @@ pub struct WorkbenchSync {
 pub struct WorkbenchWatch {
     revision: Arc<AtomicU64>,
     view: Arc<Mutex<Option<ConversationViewState>>>,
+    listeners: Arc<Mutex<Vec<mpsc::Sender<u64>>>>,
 }
 
 impl WorkbenchWatch {
@@ -28,6 +30,7 @@ impl WorkbenchWatch {
         Self {
             revision: Arc::new(AtomicU64::new(u64::MAX)),
             view: Arc::new(Mutex::new(None)),
+            listeners: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -35,10 +38,22 @@ impl WorkbenchWatch {
         self.revision.load(Ordering::Acquire)
     }
 
+    /// 新しいrevisionの通知を受け取る。UIはblocking受信をworker threadへ任せる。
+    pub fn subscribe(&self) -> mpsc::Receiver<u64> {
+        let (sender, receiver) = mpsc::channel();
+        if let Ok(mut listeners) = self.listeners.lock() {
+            listeners.push(sender);
+        }
+        receiver
+    }
+
     pub fn publish(&self, revision: u64, view: ConversationViewState) {
         if let Ok(mut slot) = self.view.lock() {
             *slot = Some(view);
             self.revision.store(revision, Ordering::Release);
+            if let Ok(mut listeners) = self.listeners.lock() {
+                listeners.retain(|listener| listener.send(revision).is_ok());
+            }
         }
     }
 
@@ -149,7 +164,59 @@ impl WorkbenchSync {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use workbench::{WorkbenchSubscription, WorkbenchUpdate};
+    use std::time::Duration;
+    use workbench::{
+        TabRef, WorkbenchSubscription, WorkbenchUpdate, ZoneLayoutViewState, ZonePanelViewState,
+        ZoneViewState,
+    };
+
+    fn tabs_view(tabs: &[&str]) -> ConversationViewState {
+        let tabs = tabs
+            .iter()
+            .map(|id| TabRef::Document {
+                id: editor_core::DocumentId::new(*id),
+            })
+            .collect::<Vec<_>>();
+        ConversationViewState {
+            layout: Some(ZoneLayoutViewState {
+                version: workbench::ZONE_LAYOUT_VERSION,
+                zones: vec![ZoneViewState {
+                    position: "main".to_owned(),
+                    open: true,
+                    extent_ratio: 1.0,
+                    layout: None,
+                    panels: vec![ZonePanelViewState {
+                        id: "panel".to_owned(),
+                        active_tab: tabs.first().cloned(),
+                        tabs,
+                        pinned_tabs: Vec::new(),
+                        open: true,
+                    }],
+                }],
+                bottom_span_left: false,
+                bottom_span_right: false,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn tab_ids(view: &ConversationViewState) -> Vec<&str> {
+        view.layout
+            .as_ref()
+            .and_then(|layout| layout.zones.first())
+            .and_then(|zone| zone.panels.first())
+            .map(|panel| {
+                panel
+                    .tabs
+                    .iter()
+                    .map(|tab| match tab {
+                        TabRef::Document { id } => id.as_str(),
+                        _ => "",
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 
     #[test]
     fn watch_exposes_only_unseen_views() {
@@ -166,6 +233,70 @@ mod tests {
         let (revision, view) = watch.take_if_changed(2).unwrap();
         assert_eq!(revision, 3);
         assert!(!view.show_panel_controls);
+    }
+
+    #[test]
+    fn watchers_are_notified_of_new_revisions_without_polling() {
+        let watch = WorkbenchWatch::new();
+        let first = watch.subscribe();
+        let second = watch.subscribe();
+        watch.publish(4, ConversationViewState::default());
+        assert_eq!(
+            first.recv_timeout(Duration::from_secs(1)).unwrap(),
+            4,
+            "最初の購読者へ通知されません"
+        );
+        assert_eq!(
+            second.recv_timeout(Duration::from_secs(1)).unwrap(),
+            4,
+            "二番目の購読者へ通知されません"
+        );
+        drop(first);
+        watch.publish(5, ConversationViewState::default());
+        assert_eq!(
+            second.recv_timeout(Duration::from_secs(1)).unwrap(),
+            5,
+            "切断した購読者が残りの通知を妨げています"
+        );
+    }
+
+    #[test]
+    fn remote_tab_changes_replace_the_confirmed_view_and_retain_pending_local_changes() {
+        let store = Arc::new(Store::default());
+        let workspace = WorkspaceId::new("workspace");
+        let mut remote = WorkbenchSync::new(store.clone());
+        remote.open(workspace.clone()).unwrap();
+        let mut local = WorkbenchSync::new(store.clone());
+        local.open(workspace).unwrap();
+
+        // 別Clientのタブ追加・移動を取り込む。
+        assert!(matches!(
+            remote.save(tabs_view(&["doc-a", "doc-b"])).unwrap(),
+            WorkbenchSyncResult::Updated(_)
+        ));
+        let applied = local.refresh().unwrap().unwrap();
+        assert_eq!(tab_ids(applied.view.as_ref().unwrap()), ["doc-a", "doc-b"]);
+
+        // ローカルの未確定変更は上書きせず、競合として保持する。
+        *store.fail.lock().unwrap() = true;
+        let pending = tabs_view(&["doc-local"]);
+        assert!(local.save(pending.clone()).is_err());
+        *store.fail.lock().unwrap() = false;
+        assert!(matches!(
+            remote.save(tabs_view(&["doc-b", "doc-c"])).unwrap(),
+            WorkbenchSyncResult::Updated(_)
+        ));
+        assert!(local.refresh().unwrap().is_none());
+        assert_eq!(local.pending(), Some(&pending));
+        assert_eq!(
+            tab_ids(local.conflict().unwrap().view.as_ref().unwrap()),
+            ["doc-b", "doc-c"]
+        );
+
+        // リモートを採用すると削除と移動が反映される。
+        let accepted = local.accept_remote().unwrap();
+        assert_eq!(tab_ids(accepted.view.as_ref().unwrap()), ["doc-b", "doc-c"]);
+        assert!(local.pending().is_none());
     }
 
     #[derive(Default)]

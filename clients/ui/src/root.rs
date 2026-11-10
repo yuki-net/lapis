@@ -96,6 +96,10 @@ pub(crate) struct DesktopRoot {
     persist_signature: Option<PersistSignature>,
     #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
+    #[cfg(not(target_family = "wasm"))]
+    workbench_watch: Option<desktop_client::WorkbenchWatch>,
+    #[cfg(not(target_family = "wasm"))]
+    workbench_revision: u64,
     workbench: WorkbenchState,
     task_context_gate: crate::client_adapter::ResponseGate,
     task_context_resolution: TaskContextResolution,
@@ -125,6 +129,11 @@ impl DesktopRoot {
         let factory = crate::app::WindowFactory::new(&session, &services);
         #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
+        #[cfg(not(target_family = "wasm"))]
+        let workbench_revision = workbench_watch
+            .as_ref()
+            .map(desktop_client::WorkbenchWatch::revision)
+            .unwrap_or_default();
         let conversation_id = services.conversation.active_id().clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale;
@@ -384,9 +393,19 @@ impl DesktopRoot {
                         root.native_smoke_requested = false;
                         crate::window_host::run_native_smoke(root, window, cx);
                     }
+                    #[cfg(not(target_family = "wasm"))]
+                    root.apply_remote_workbench(cx);
                 }
-                EditorEvent::Idle => root.synchronize_group(cx),
-                EditorEvent::Status(message) => root.set_status(message.clone(), cx),
+                EditorEvent::Idle => {
+                    root.synchronize_group(cx);
+                    #[cfg(not(target_family = "wasm"))]
+                    root.apply_remote_workbench(cx);
+                }
+                EditorEvent::Status(message) => {
+                    root.set_status(message.clone(), cx);
+                    #[cfg(not(target_family = "wasm"))]
+                    root.apply_remote_workbench(cx);
+                }
                 EditorEvent::WorkspaceSearch(query) => {
                     root.search
                         .update(cx, |search, cx| search.start(query.clone(), cx));
@@ -488,45 +507,22 @@ impl DesktopRoot {
         }));
         crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
         #[cfg(not(target_family = "wasm"))]
-        if let Some(watch) = workbench_watch {
-            let worker = worker.clone();
+        if let Some(watch) = workbench_watch.clone() {
             cx.spawn(async move |root, cx| {
-                let mut last = watch.revision();
                 loop {
-                    crate::timer::Timer::after(std::time::Duration::from_millis(800)).await;
-                    let Some((revision, view)) = watch.take_if_changed(last) else {
-                        continue;
-                    };
-                    let Some(shared) = view.workspace.clone() else {
-                        continue;
-                    };
-                    let layout = desktop_client::ConversationViewState {
-                        workspace: None,
-                        ..view
-                    };
-                    let worker = worker.clone();
-                    let applied = root
-                        .update(cx, |root, cx| {
-                            if root.editor.read(cx).has_in_flight() {
-                                return false;
-                            }
-                            root.shell
-                                .update(cx, |shell, cx| shell.restore_view(layout, cx));
-                            root.sync_terminal_tab(cx);
-                            let _ = worker.submit(
-                                cx,
-                                move |client| client.restore_workbench(shared),
-                                |root, result, cx| {
-                                    if let Ok(snapshot) = result {
-                                        root.apply_snapshot(&snapshot, cx);
-                                    }
-                                },
-                            );
-                            true
-                        })
-                        .unwrap_or(false);
-                    if applied {
-                        last = revision;
+                    // 通知の取りこぼしを避けるため、確認より先に購読を登録する。
+                    let receiver = watch.subscribe();
+                    if root
+                        .update(cx, |root, cx| root.apply_remote_workbench(cx))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let notified = cx
+                        .background_executor()
+                        .spawn(async move { receiver.recv().is_ok() });
+                    if !notified.await {
+                        return;
                     }
                 }
             })
@@ -561,6 +557,10 @@ impl DesktopRoot {
             persist_signature: None,
             #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
+            #[cfg(not(target_family = "wasm"))]
+            workbench_watch,
+            #[cfg(not(target_family = "wasm"))]
+            workbench_revision,
             workbench: WorkbenchState::default(),
             task_context: None,
             task_context_gate: Default::default(),
@@ -823,6 +823,44 @@ impl DesktopRoot {
         };
         self.terminal
             .update(cx, |terminal, cx| terminal.show_resource(id, cx));
+    }
+
+    /// HostのWorkbench変更を、未確定の入力を待ってからUIへ反映する。
+    #[cfg(not(target_family = "wasm"))]
+    fn apply_remote_workbench(&mut self, cx: &mut Context<Self>) {
+        let Some(watch) = self.workbench_watch.clone() else {
+            return;
+        };
+        let Some((revision, view)) = watch.take_if_changed(self.workbench_revision) else {
+            return;
+        };
+        if self.editor.read(cx).has_in_flight() {
+            // 完了時のIdleで再試行する。revisionは進めず変更を保持する。
+            return;
+        }
+        self.workbench_revision = revision;
+        let Some(shared) = view.workspace.clone() else {
+            return;
+        };
+        let layout = desktop_client::ConversationViewState {
+            workspace: None,
+            ..view
+        };
+        self.shell
+            .update(cx, |shell, cx| shell.restore_view(layout, cx));
+        self.sync_terminal_tab(cx);
+        let worker = self.worker.clone();
+        let _ = worker.submit(
+            cx,
+            move |client| client.restore_workbench(shared),
+            |root, result, cx| {
+                if let Ok(snapshot) = result {
+                    root.apply_snapshot(&snapshot, cx);
+                }
+                // 反映中に届いた次の変更を、完了後すぐに適用する。
+                root.apply_remote_workbench(cx);
+            },
+        );
     }
 
     /// 一覧のTask選択は共通APIへ渡し、作業環境を変える操作だけWindow数で制限する。
