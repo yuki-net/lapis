@@ -34,7 +34,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 
 - ID は `contracts/domain/editor-core` に集約する（`ProjectId` / `WorkspaceId` / `ConversationId` / `DocumentId` / `TaskId` / `ExecutionId`）。複数機能が同じ ID を参照するため、機能別 crate へ分散させない。
 - 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `terminal` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
-- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `GlobalSettingsRepository`）は、実装ではなく利用側の domain crate に置く。実装は `host/adapters/*` と `host/extensions/*` が持つ。
+- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側の domain crate に置く。実装は `host/adapters/*` と `host/extensions/*` が持つ。
 - 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
 
 ### `host/application` を独立させない
@@ -72,6 +72,12 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 送信応答が失われた後に再取得した正本が未確定値と完全に一致し、確定済みrevisionの直後である場合は、その値を確定する。それ以外の新しい正本は競合として保持し、未確定値を上書きしない。
 - 重なる Workspace grant から同じ canonical path を別の Document として開く操作は競合として拒否する。別 Workspace の内容を暗黙に共有して認可範囲を広げない。
 - Terminal の購読欠落は snapshot と sequence で回復する。一時的な poll・通信失敗を実行終了とみなさず、出力の置換 snapshot と追記イベントを区別する。
+
+## 設定の所有境界
+
+- 設定値の所有者は `User` / `Host` / `ProjectShared` / `ProjectLocal` のスコープで表し、項目ごとに保存を許すスコープは `contracts/domain/settings` の定義データが決める。優先順位・保存形式・UI の組み立て規則は [設定のスコープと所有者](settings.md) を正本とする。
+- 共有 state と解決済みの実効値は `clients/state` が所有する。Feature は解決結果だけを読み、Feature ごとに設定 cache を作らない。
+- 設定の保存は Feature の描画・入力処理から直接行わず、`SettingsCoordinator` の worker へ渡す。
 
 ## Desktop の更新境界
 
