@@ -166,6 +166,13 @@ impl DocumentClient {
         self.editor.file_dialog().choose_workspace_path()
     }
 
+    /// Workbenchの表示変更を、debounceされたローカル保存を待たずに共有先へ通知する。
+    pub(crate) fn publish_workbench(&mut self, view: ConversationViewState) -> Result<(), String> {
+        self.conversation
+            .publish_workbench(&self.editor, view)
+            .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn persist_view(&mut self, view: PersistedView) -> Result<(), String> {
         let epoch = self.edit_chain.epoch();
         let recovered = self.edit_chain.apply(epoch, || Ok(())).is_err();
