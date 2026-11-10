@@ -209,10 +209,13 @@ impl HostDocuments {
 fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChanges>) {
     std::thread::spawn(move || {
         loop {
-            let Some(changes) = changes.upgrade() else {
+            // 受信待ちの間に強参照を保持しない。破棄済みなら即座に終了する。
+            if changes.upgrade().is_none() {
                 return;
-            };
+            }
             if let Ok(receiver) = client.subscribe() {
+                // 購読開始前の変更を回収する。購読後に行うことで取りこぼしを防ぐ。
+                publish_changes(&changes);
                 while let Ok(event) = receiver.recv() {
                     match event.body {
                         wire::EventBody::DocumentEdited { .. }
@@ -221,9 +224,9 @@ fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChan
                         | wire::EventBody::DocumentClosed { .. }
                         | wire::EventBody::DocumentOwner { .. }
                         | wire::EventBody::WorkspaceChanged { .. }
-                        | wire::EventBody::FilesChanged { .. } => changes.publish(),
+                        | wire::EventBody::FilesChanged { .. } => publish_changes(&changes),
                         wire::EventBody::SnapshotRequired { .. } => {
-                            changes.publish();
+                            publish_changes(&changes);
                             break;
                         }
                         _ => {}
@@ -231,11 +234,17 @@ fn forward_document_events(client: Client, changes: std::sync::Weak<DocumentChan
                 }
             }
             // 切断・購読失敗時は購読先の変化を取りこぼしている可能性がある。
-            changes.publish();
-            drop(changes);
+            publish_changes(&changes);
             std::thread::sleep(Duration::from_secs(2));
         }
     });
+}
+
+/// 破棄済みなら何もしない。強参照は通知の間だけ保持する。
+fn publish_changes(changes: &std::sync::Weak<DocumentChanges>) {
+    if let Some(changes) = changes.upgrade() {
+        changes.publish();
+    }
 }
 
 impl DocumentConnection for HostDocuments {
@@ -516,4 +525,44 @@ fn relative(root: &Path, path: &Path) -> Result<wire::WorkspaceRelativePath, Doc
             .map_err(|_| DocumentError::io("保存先は Workspace 内に指定してください"))?,
     )
     .map_err(|error| DocumentError::io(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn publish_notifies_all_subscribers_and_coalesces_when_full() {
+        let changes = DocumentChanges::default();
+        let first = changes.subscribe();
+        let second = changes.subscribe();
+        changes.publish();
+        assert!(first.recv_timeout(Duration::from_millis(100)).is_ok());
+        assert!(second.recv_timeout(Duration::from_millis(100)).is_ok());
+        // 満杯の購読は 1 件にまとめ、切断扱いにしない。
+        changes.publish();
+        changes.publish();
+        assert!(first.recv_timeout(Duration::from_millis(100)).is_ok());
+        changes.publish();
+        assert!(first.recv_timeout(Duration::from_millis(100)).is_ok());
+    }
+
+    #[test]
+    fn publish_via_weak_does_not_retain_the_sink() {
+        let changes = std::sync::Arc::new(DocumentChanges::default());
+        let weak = std::sync::Arc::downgrade(&changes);
+        publish_changes(&weak);
+        assert_eq!(std::sync::Arc::strong_count(&changes), 1);
+        drop(changes);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn dropped_subscribers_are_removed_on_publish() {
+        let changes = DocumentChanges::default();
+        let receiver = changes.subscribe();
+        drop(receiver);
+        changes.publish();
+        assert!(changes.senders.lock().unwrap().is_empty());
+    }
 }
