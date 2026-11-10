@@ -6,12 +6,10 @@ use crate::{
 use gpui::{
     App, Context, Pixels, Render, ScrollHandle, Window, canvas, div, point, prelude::*, px,
 };
-use terminal::{TerminalCell, TerminalColor, TerminalId, TerminalRow, TerminalShell};
+use terminal::{TerminalCell, TerminalColor, TerminalCursor, TerminalId, TerminalRow};
 
 /// セル幅を決めるサンプル文字。
 const CELL_SAMPLE: char = 'M';
-/// 行高とセルの高さの比率。フォントサイズに対する行送り。
-const LINE_HEIGHT_RATIO: f32 = 1.25;
 /// レイアウト幅から列数を決めるときの最小列数。
 const MIN_COLUMNS: u16 = 20;
 /// レイアウト幅から行数を決めるときの最小行数。
@@ -107,6 +105,7 @@ impl Render for TerminalFeature {
             .unwrap_or_default();
 
         let cursor = screen_for_cursor;
+        let caret_shape = self.caret_shape;
         let entity = cx.entity();
         let focus = self.focus.clone();
         // 表示領域に合わせて PTY のサイズを追従させる。layout 確定後の次フレームで反映する。
@@ -237,17 +236,13 @@ impl Render for TerminalFeature {
                                         && cursor.is_some_and(|cursor| cursor.visible)
                                     {
                                         let cursor = cursor.expect("cursor is visible");
-                                        let cursor_y =
-                                            px(f32::from(cursor.row) * row_height.to_f64() as f32);
                                         window.paint_quad(gpui::fill(
-                                            gpui::Bounds::new(
-                                                bounds.origin
-                                                    + gpui::point(
-                                                        px(f32::from(cursor.column)
-                                                            * cell_width.to_f64() as f32),
-                                                        cursor_y,
-                                                    ),
-                                                gpui::size(cell_width, row_height),
+                                            caret_bounds(
+                                                bounds.origin,
+                                                cursor,
+                                                cell_width,
+                                                row_height,
+                                                caret_shape,
                                             ),
                                             theme::colors(cx).editor_caret,
                                         ));
@@ -295,42 +290,38 @@ impl TerminalFeature {
                 crate::gpui_compat::focus(window, &this.focus, cx);
             },
         ));
-        // Web では接続先 Host の OS が分からないため、OS 固有のシェル候補は出さない。
-        let platforms: &[(&'static str, &'static str, TerminalShell)] =
-            if cfg!(target_family = "wasm") {
-                &[]
-            } else if cfg!(windows) {
-                &[
-                    (
-                        "terminal.menu.powershell",
-                        "PowerShell を開く",
-                        TerminalShell::PowerShell,
-                    ),
-                    ("terminal.menu.cmd", "cmd を開く", TerminalShell::Cmd),
-                ]
-            } else {
-                &[
-                    (
-                        "terminal.menu.pwsh",
-                        "pwsh を開く",
-                        TerminalShell::PowerShell,
-                    ),
-                    ("terminal.menu.bash", "bash を開く", TerminalShell::Bash),
-                    ("terminal.menu.zsh", "zsh を開く", TerminalShell::Zsh),
-                    ("terminal.menu.fish", "fish を開く", TerminalShell::Fish),
-                ]
-            };
-        for &(id, label, shell) in platforms {
-            entries.push(menu_entry(
-                id,
-                label,
-                true,
-                false,
-                cx,
-                move |this, window, cx| {
-                    this.start_shell(shell, cx);
+        // 起動できる profile は Host が決める。Web も接続先 Host の一覧を使う。
+        for profile in &self.profiles.profiles {
+            let id = profile.id.clone();
+            let label = format!("{} を開く", profile.name);
+            let menu_id =
+                gpui::SharedString::from(format!("terminal.profile.{}", profile.id.as_str()));
+            let listener = cx.listener(
+                move |this: &mut TerminalFeature,
+                      _: &gpui::ClickEvent,
+                      window: &mut Window,
+                      cx: &mut Context<TerminalFeature>| {
+                    this.context_menu = None;
+                    this.start_profile(Some(id.clone()), cx);
                     crate::gpui_compat::focus(window, &this.focus, cx);
+                    cx.notify();
                 },
+            );
+            entries.push(MenuEntry::new(
+                MenuItemSpec {
+                    id: menu_id,
+                    label: label.into(),
+                    shortcut: None,
+                    icon: None,
+                    enabled: true,
+                    selected: self.profiles.default.as_ref() == Some(&profile.id),
+                    indent: 1,
+                    tree: None,
+                    submenu: false,
+                    separator_before: false,
+                },
+                cx,
+                move |row| row.on_click(listener).into_any_element(),
             ));
         }
         entries.push(menu_entry(
@@ -537,7 +528,7 @@ impl TerminalFeature {
             .unwrap_or(px(self.font_size * 0.6));
         TerminalMetrics {
             cell_width,
-            row_height: px(self.font_size * LINE_HEIGHT_RATIO),
+            row_height: px(self.font_size * f32::from(self.line_height_percent) / 100.0),
             font_family,
         }
     }
@@ -622,6 +613,33 @@ fn visible_row_range(
         .saturating_add(OVERSCAN_ROWS)
         .min(total_rows);
     first..last
+}
+
+/// カーソル形状ごとの描画範囲。bar は幅、underline は下端の高さを変える。
+fn caret_bounds(
+    origin: gpui::Point<Pixels>,
+    cursor: TerminalCursor,
+    cell_width: Pixels,
+    row_height: Pixels,
+    shape: settings::TerminalCaretShape,
+) -> gpui::Bounds<Pixels> {
+    let x = px(origin.x.to_f64() as f32 + f32::from(cursor.column) * cell_width.to_f64() as f32);
+    let y = px(origin.y.to_f64() as f32 + f32::from(cursor.row) * row_height.to_f64() as f32);
+    let (width, height, y) = match shape {
+        settings::TerminalCaretShape::Block => (cell_width, row_height, y),
+        settings::TerminalCaretShape::Bar => (
+            px(f32::max(1.0, cell_width.to_f64() as f32 * 0.12)),
+            row_height,
+            y,
+        ),
+        settings::TerminalCaretShape::Underline => (
+            cell_width,
+            px(f32::max(1.0, row_height.to_f64() as f32 * 0.1)),
+            px(y.to_f64() as f32 + row_height.to_f64() as f32
+                - f32::max(1.0, row_height.to_f64() as f32 * 0.1)),
+        ),
+    };
+    gpui::Bounds::new(gpui::point(x, y), gpui::size(width, height))
 }
 
 fn render_row(
@@ -755,6 +773,51 @@ mod tests {
         ] {
             assert_eq!(visible_row_range(total, visible, first), expected);
         }
+    }
+
+    #[test]
+    fn caret_shape_changes_only_the_painted_rectangle() {
+        let cursor = TerminalCursor {
+            row: 2,
+            column: 3,
+            visible: true,
+        };
+        let origin = gpui::point(px(10.0), px(20.0));
+        let cell_width = px(8.0);
+        let row_height = px(20.0);
+
+        let block = caret_bounds(
+            origin,
+            cursor,
+            cell_width,
+            row_height,
+            settings::TerminalCaretShape::Block,
+        );
+        let bar = caret_bounds(
+            origin,
+            cursor,
+            cell_width,
+            row_height,
+            settings::TerminalCaretShape::Bar,
+        );
+        let underline = caret_bounds(
+            origin,
+            cursor,
+            cell_width,
+            row_height,
+            settings::TerminalCaretShape::Underline,
+        );
+
+        assert_eq!(block.origin, gpui::point(px(34.0), px(60.0)));
+        assert_eq!(block.size, gpui::size(cell_width, row_height));
+        assert!(bar.size.width < cell_width);
+        assert_eq!(bar.size.height, row_height);
+        assert_eq!(underline.size.width, cell_width);
+        assert!(underline.size.height < row_height);
+        assert_eq!(
+            underline.origin.y + underline.size.height,
+            block.origin.y + row_height
+        );
     }
 
     fn output(id: &str, revision: u64) -> Option<(TerminalId, u64)> {

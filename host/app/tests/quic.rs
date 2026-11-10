@@ -112,7 +112,7 @@ impl Fixture {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd() {
-    use terminal::{TerminalShell, TerminalStatus as ModelStatus};
+    use terminal::{TerminalProfileId, TerminalStatus as ModelStatus};
     let fixture = Fixture::new().await;
     std::fs::create_dir(fixture._root.path().join("sub")).unwrap();
     std::fs::write(
@@ -127,13 +127,9 @@ async fn desktop_ports_discover_and_reattach_the_same_live_terminal_with_its_cwd
         let first = host::BackendClient::remote(virtual_root.clone(), first).unwrap();
         let second = host::BackendClient::remote(virtual_root.clone(), second).unwrap();
         let terminals = first.terminals();
-        let shell = if cfg!(windows) {
-            TerminalShell::Cmd
-        } else {
-            TerminalShell::Default
-        };
+        let profile = cfg!(windows).then(|| TerminalProfileId::new("cmd"));
         let id = terminals
-            .start_with_shell(&virtual_root.join("sub"), 80, 24, shell)
+            .start_profile(&virtual_root.join("sub"), 80, 24, profile.as_ref())
             .unwrap();
         let observer = second.terminals();
         let found = observer
@@ -1302,7 +1298,7 @@ fn quic_and_embedded_clients_share_live_pty_across_disconnect() {
                 workspace_id: fixture.workspace.clone(),
                 cwd: None,
                 command: None,
-                shell: Default::default(),
+                profile: None,
                 size: TerminalSize {
                     columns: 80,
                     rows: 24,

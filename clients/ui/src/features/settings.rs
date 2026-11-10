@@ -73,25 +73,64 @@ impl SettingsFeature {
     }
 
     fn select_terminal_font(&mut self, family: &'static str, cx: &mut Context<Self>) {
-        let size = self.values.terminal_font_size;
-        self.coordinator.update(cx, |coordinator, cx| {
-            coordinator.change(
-                Change::TerminalFont {
-                    family: Some(family.to_owned()),
-                    size,
-                },
-                cx,
-            )
-        });
+        self.change_terminal_appearance(
+            Some(family.to_owned()),
+            self.values.terminal_font_size,
+            self.values.terminal_line_height_percent,
+            self.values.terminal_caret_shape,
+            cx,
+        );
     }
 
     fn select_terminal_size(&mut self, size: u8, cx: &mut Context<Self>) {
-        let family = self.values.terminal_font_family.clone();
+        self.change_terminal_appearance(
+            self.values.terminal_font_family.clone(),
+            Some(size),
+            self.values.terminal_line_height_percent,
+            self.values.terminal_caret_shape,
+            cx,
+        );
+    }
+
+    fn select_terminal_line_height(&mut self, percent: u8, cx: &mut Context<Self>) {
+        self.change_terminal_appearance(
+            self.values.terminal_font_family.clone(),
+            self.values.terminal_font_size,
+            Some(percent),
+            self.values.terminal_caret_shape,
+            cx,
+        );
+    }
+
+    fn select_terminal_caret(
+        &mut self,
+        shape: settings::TerminalCaretShape,
+        cx: &mut Context<Self>,
+    ) {
+        self.change_terminal_appearance(
+            self.values.terminal_font_family.clone(),
+            self.values.terminal_font_size,
+            self.values.terminal_line_height_percent,
+            Some(shape),
+            cx,
+        );
+    }
+
+    fn change_terminal_appearance(
+        &mut self,
+        family: Option<String>,
+        size: Option<u8>,
+        line_height_percent: Option<u8>,
+        caret_shape: Option<settings::TerminalCaretShape>,
+        cx: &mut Context<Self>,
+    ) {
         self.coordinator.update(cx, |coordinator, cx| {
             coordinator.change(
-                Change::TerminalFont {
+                Change::TerminalAppearance {
                     family,
-                    size: Some(size),
+                    size,
+                    line_height_percent,
+                    caret_shape,
                 },
                 cx,
             )
@@ -110,6 +149,11 @@ impl SettingsFeature {
             .values
             .terminal_font_size
             .unwrap_or_else(super::terminal::default_font_size);
+        let current_line_height = self
+            .values
+            .terminal_line_height_percent
+            .unwrap_or_else(super::terminal::default_line_height_percent);
+        let current_caret = self.values.terminal_caret_shape.unwrap_or_default();
         let workspace_info = self
             .root
             .as_deref()
@@ -221,6 +265,50 @@ impl SettingsFeature {
                                         .on_click(
                                             cx.listener(move |this, _, _, cx| {
                                                 this.select_terminal_size(size, cx)
+                                            }),
+                                        )
+                                    }),
+                                ))
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_tertiary)
+                                        .child(self.t("settings.terminal-line-height")),
+                                )
+                                .child(
+                                    div().flex().flex_wrap().gap_2().children(
+                                        super::terminal::line_height_choices().iter().map(
+                                            |&percent| {
+                                                let selected = current_line_height == percent;
+                                                crate::components::action_button(
+                                                    format!("{percent}%"),
+                                                    selected,
+                                                    cx,
+                                                )
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.select_terminal_line_height(percent, cx)
+                                                }))
+                                            },
+                                        ),
+                                    ),
+                                )
+                                .child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_tertiary)
+                                        .child(self.t("settings.terminal-caret")),
+                                )
+                                .child(div().flex().flex_wrap().gap_2().children(
+                                    super::terminal::caret_shape_choices().iter().map(|&shape| {
+                                        let selected = current_caret == shape;
+                                        crate::components::action_button(
+                                            self.terminal_caret_label(shape),
+                                            selected,
+                                            cx,
+                                        )
+                                        .on_click(
+                                            cx.listener(move |this, _, _, cx| {
+                                                this.select_terminal_caret(shape, cx)
                                             }),
                                         )
                                     }),
@@ -349,6 +437,14 @@ impl SettingsFeature {
                         ),
                 ),
         )
+    }
+
+    fn terminal_caret_label(&self, shape: settings::TerminalCaretShape) -> String {
+        self.t(match shape {
+            settings::TerminalCaretShape::Block => "settings.terminal-caret.block",
+            settings::TerminalCaretShape::Bar => "settings.terminal-caret.bar",
+            settings::TerminalCaretShape::Underline => "settings.terminal-caret.underline",
+        })
     }
 
     fn render_locale_button(

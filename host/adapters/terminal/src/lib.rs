@@ -14,11 +14,54 @@ use std::{
 
 use terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-    TerminalSize,
+    TerminalProfile, TerminalProfileId, TerminalProfiles, TerminalSize,
 };
 
 mod terminal_engine;
 use terminal_engine::{TerminalEngine, normalized_size};
+
+/// OS ごとの既定 profile。Host はこれを設定として差し替えられる。
+pub fn default_profiles() -> TerminalProfiles {
+    #[cfg(windows)]
+    {
+        TerminalProfiles::new(
+            vec![
+                TerminalProfile::new("powershell", "PowerShell", "powershell.exe")
+                    .with_args(["-NoLogo"]),
+                TerminalProfile::new("cmd", "Command Prompt", "cmd.exe").with_args(["/D"]),
+            ],
+            Some(TerminalProfileId::new("powershell")),
+        )
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let login = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_owned());
+        TerminalProfiles::new(
+            vec![
+                TerminalProfile::new("login-shell", "Login Shell", login),
+                TerminalProfile::new("zsh", "zsh", "zsh"),
+                TerminalProfile::new("bash", "bash", "bash"),
+                TerminalProfile::new("fish", "fish", "fish"),
+                TerminalProfile::new("pwsh", "PowerShell", "pwsh"),
+            ],
+            Some(TerminalProfileId::new("login-shell")),
+        )
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
+    {
+        let login = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned());
+        TerminalProfiles::new(
+            vec![
+                TerminalProfile::new("login-shell", "Login Shell", login),
+                TerminalProfile::new("bash", "bash", "bash"),
+                TerminalProfile::new("zsh", "zsh", "zsh"),
+                TerminalProfile::new("fish", "fish", "fish"),
+                TerminalProfile::new("pwsh", "PowerShell", "pwsh"),
+            ],
+            Some(TerminalProfileId::new("login-shell")),
+        )
+    }
+}
 
 struct LiveTerminal {
     master: Box<dyn portable_pty::MasterPty + Send>,
@@ -35,13 +78,29 @@ enum RawTerminalEvent {
     Failed(String),
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct LocalTerminalBackend {
     terminals: Arc<Mutex<HashMap<String, LiveTerminal>>>,
     next_id: Arc<AtomicU64>,
+    profiles: Arc<TerminalProfiles>,
+}
+
+impl Default for LocalTerminalBackend {
+    fn default() -> Self {
+        Self::with_profiles(default_profiles())
+    }
 }
 
 impl LocalTerminalBackend {
+    /// Host 設定で許可された profile だけを起動できる backend を作る。
+    pub fn with_profiles(profiles: TerminalProfiles) -> Self {
+        Self {
+            terminals: Arc::new(Mutex::new(HashMap::new())),
+            next_id: Arc::new(AtomicU64::new(0)),
+            profiles: Arc::new(profiles),
+        }
+    }
+
     fn lock(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, HashMap<String, LiveTerminal>>, TerminalError> {
@@ -82,55 +141,30 @@ fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminal
 
 impl TerminalBackend for LocalTerminalBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
+        self.start_profile(cwd, columns, rows, None)
     }
 
-    fn start_with_shell(
+    fn start_profile(
         &self,
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: terminal::TerminalShell,
+        profile: Option<&TerminalProfileId>,
     ) -> Result<TerminalId, TerminalError> {
-        use terminal::TerminalShell;
         let size = normalized_size(TerminalSize::new(columns, rows));
-        let cwd = shell_directory(cwd, shell)?;
-        let mut command = match shell {
-            #[cfg(windows)]
-            TerminalShell::Default | TerminalShell::PowerShell => {
-                let mut command = portable_pty::CommandBuilder::new("powershell.exe");
-                command.arg("-NoLogo");
-                command
-            }
-            #[cfg(windows)]
-            TerminalShell::Cmd => {
-                let mut command = portable_pty::CommandBuilder::new("cmd.exe");
-                command.arg("/D");
-                command
-            }
-            #[cfg(windows)]
-            TerminalShell::Bash | TerminalShell::Zsh | TerminalShell::Fish => {
-                return Err(TerminalError::new(
-                    "bash / zsh / fish は Windows Host では利用できません",
-                ));
-            }
-            #[cfg(not(windows))]
-            TerminalShell::Default => portable_pty::CommandBuilder::new(
-                std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned()),
-            ),
-            #[cfg(not(windows))]
-            TerminalShell::PowerShell => portable_pty::CommandBuilder::new("pwsh"),
-            #[cfg(not(windows))]
-            TerminalShell::Bash => portable_pty::CommandBuilder::new("bash"),
-            #[cfg(not(windows))]
-            TerminalShell::Zsh => portable_pty::CommandBuilder::new("zsh"),
-            #[cfg(not(windows))]
-            TerminalShell::Fish => portable_pty::CommandBuilder::new("fish"),
-            #[cfg(not(windows))]
-            TerminalShell::Cmd => {
-                return Err(TerminalError::new("cmdはWindows Hostでのみ利用できます"));
-            }
-        };
+        let profile = self
+            .profiles
+            .resolve(profile)?
+            .ok_or_else(|| TerminalError::new("利用できるTerminal profileがありません"))?
+            .clone();
+        let cwd = shell_directory(cwd, &profile.program)?;
+        let mut command = portable_pty::CommandBuilder::new(&profile.program);
+        for argument in &profile.args {
+            command.arg(argument);
+        }
+        for (key, value) in &profile.env {
+            command.env(key, value);
+        }
         command.cwd(cwd);
         let pty_system = portable_pty::native_pty_system();
         let pair = pty_system
@@ -177,6 +211,10 @@ impl TerminalBackend for LocalTerminalBackend {
             },
         );
         Ok(id)
+    }
+
+    fn profiles(&self, _cwd: &Path) -> Result<TerminalProfiles, TerminalError> {
+        Ok((*self.profiles).clone())
     }
 
     fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
@@ -264,7 +302,7 @@ impl TerminalBackend for LocalTerminalBackend {
     }
 }
 
-fn shell_directory(cwd: &Path, shell: terminal::TerminalShell) -> Result<PathBuf, TerminalError> {
+fn shell_directory(cwd: &Path, program: &str) -> Result<PathBuf, TerminalError> {
     #[cfg(windows)]
     if let Some(std::path::Component::Prefix(prefix)) = cwd.components().next() {
         use std::path::Prefix;
@@ -275,7 +313,9 @@ fn shell_directory(cwd: &Path, shell: terminal::TerminalShell) -> Result<PathBuf
                 return Ok(path);
             }
             Prefix::UNC(_, _) | Prefix::VerbatimUNC(_, _)
-                if shell == terminal::TerminalShell::Cmd =>
+                if Path::new(program)
+                    .file_stem()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("cmd")) =>
             {
                 return Err(TerminalError::new(
                     "cmdはUNC作業フォルダを使用できません。PowerShellを選択してください",
@@ -284,7 +324,7 @@ fn shell_directory(cwd: &Path, shell: terminal::TerminalShell) -> Result<PathBuf
             _ => {}
         }
     }
-    let _ = shell;
+    let _ = program;
     Ok(cwd.to_owned())
 }
 
@@ -293,6 +333,20 @@ mod tests {
     use super::*;
     use std::time::{Duration, Instant};
     use terminal::TerminalScreen;
+
+    #[test]
+    fn default_profiles_are_platform_specific_and_have_a_default() {
+        let profiles = default_profiles();
+        assert!(!profiles.profiles.is_empty());
+        let default = profiles.default.as_ref().expect("default profile is set");
+        assert!(
+            profiles
+                .profiles
+                .iter()
+                .any(|profile| &profile.id == default),
+            "default profile must be published"
+        );
+    }
 
     #[test]
     fn terminal_reader_preserves_vt_utf8_boundaries_and_arbitrary_bytes() {

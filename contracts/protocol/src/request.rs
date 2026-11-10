@@ -3,8 +3,9 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest, DocumentHistoryRequest,
     DocumentOpenRequest, DocumentSaveRequest, FileTreeRequest, SnapshotRequest,
-    TerminalInputRequest, TerminalResizeRequest, TerminalStartRequest, TerminalTerminateRequest,
-    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId, WorkspaceListRequest, capability,
+    TerminalInputRequest, TerminalListProfilesRequest, TerminalResizeRequest, TerminalStartRequest,
+    TerminalTerminateRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
+    WorkspaceListRequest, capability,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +64,8 @@ pub enum RequestBody {
     DocumentRelease(crate::DocumentReleaseRequest),
     #[serde(rename = "terminal.start")]
     TerminalStart(TerminalStartRequest),
+    #[serde(rename = "terminal.list_profiles")]
+    TerminalListProfiles(TerminalListProfilesRequest),
     #[serde(rename = "terminal.input")]
     TerminalInput(TerminalInputRequest),
     #[serde(rename = "terminal.resize")]
@@ -106,6 +109,7 @@ impl RequestBody {
             Self::DocumentClaim(_) => "document.claim",
             Self::DocumentRelease(_) => "document.release",
             Self::TerminalStart(_) => "terminal.start",
+            Self::TerminalListProfiles(_) => "terminal.list_profiles",
             Self::TerminalInput(_) => "terminal.input",
             Self::TerminalResize(_) => "terminal.resize",
             Self::TerminalTerminate(_) => "terminal.terminate",
@@ -139,7 +143,7 @@ impl RequestBody {
             | Self::DocumentRedo(_)
             | Self::DocumentClaim(_)
             | Self::DocumentRelease(_) => capability::DOCUMENTS_WRITE,
-            Self::TerminalStart(_) => capability::TERMINAL_START,
+            Self::TerminalStart(_) | Self::TerminalListProfiles(_) => capability::TERMINAL_START,
             Self::TerminalInput(_)
             | Self::TerminalResize(_)
             | Self::TerminalTerminate(_)
@@ -169,6 +173,7 @@ impl RequestBody {
             Self::DocumentOpen(request) => Some(&request.workspace_id),
             Self::DocumentCreate(request) => Some(&request.workspace_id),
             Self::TerminalStart(request) => Some(&request.workspace_id),
+            Self::TerminalListProfiles(request) => Some(&request.workspace_id),
             Self::SnapshotResync(request) => Some(&request.workspace_id),
             Self::DocumentEdit(_)
             | Self::DocumentSave(_)
@@ -230,7 +235,7 @@ mod tests {
             workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
             cwd: None,
             command: None,
-            shell: Default::default(),
+            profile: None,
             size: TerminalSize {
                 columns: 80,
                 rows: 24,

@@ -327,7 +327,7 @@ pub async fn bridge_smoke(
             workspace_id: workspace.clone(),
             cwd: None,
             command: None,
-            shell: Default::default(),
+            profile: None,
             size: client_api::TerminalSize {
                 columns: 80,
                 rows: 24,

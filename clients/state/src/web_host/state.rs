@@ -25,6 +25,7 @@ pub(super) struct Replica {
     pub(super) by_path: HashMap<PathBuf, DocumentId>,
     pub(super) terminals: HashMap<String, TerminalState>,
     pub(super) workbench: WorkbenchReplica,
+    pub(super) profiles: terminal::TerminalProfiles,
     pub(super) next: u64,
     pub(super) next_terminal: u64,
     pub(super) initial: Option<PathBuf>,
@@ -37,6 +38,7 @@ impl Replica {
         workspace: WorkspaceId,
         entries: Vec<FileEntry>,
         session: Option<SessionId>,
+        profiles: terminal::TerminalProfiles,
     ) -> Self {
         Self {
             workspace,
@@ -45,6 +47,7 @@ impl Replica {
             by_path: HashMap::new(),
             terminals: HashMap::new(),
             workbench: WorkbenchReplica::default(),
+            profiles,
             next: 1,
             next_terminal: 1,
             initial: None,

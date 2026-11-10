@@ -2,13 +2,14 @@ use crate::BackendClient;
 use crate::client::Client;
 use ::terminal::{
     MAX_SCROLLBACK_LINES, TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput,
-    TerminalRevision, TerminalSnapshot, TerminalStatus as ModelTerminalStatus,
+    TerminalProfileId, TerminalProfiles, TerminalRevision, TerminalSnapshot,
+    TerminalStatus as ModelTerminalStatus,
 };
 use backend_state::BackendEventReceiver;
 use client_api::{
     EventBody, RequestBody, ResponseBody, SnapshotReason, SnapshotRequest, TerminalInputRequest,
-    TerminalResizeRequest, TerminalSize, TerminalStartRequest, TerminalStatus,
-    TerminalTerminateRequest, WorkspaceConnectRequest,
+    TerminalListProfilesRequest, TerminalResizeRequest, TerminalSize, TerminalStartRequest,
+    TerminalStatus, TerminalTerminateRequest, WorkspaceConnectRequest,
 };
 use std::{
     collections::{HashMap, VecDeque},
@@ -379,15 +380,15 @@ impl HostTerminals {
 
 impl TerminalBackend for HostTerminals {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        self.start_with_shell(cwd, columns, rows, terminal::TerminalShell::Default)
+        self.start_profile(cwd, columns, rows, None)
     }
 
-    fn start_with_shell(
+    fn start_profile(
         &self,
         cwd: &Path,
         columns: u16,
         rows: u16,
-        shell: terminal::TerminalShell,
+        profile: Option<&TerminalProfileId>,
     ) -> Result<TerminalId, TerminalError> {
         let (client, relative_cwd) = self.host.connect_directory(cwd).map_err(error)?;
         let receiver = client.subscribe().map_err(error)?;
@@ -396,7 +397,7 @@ impl TerminalBackend for HostTerminals {
                 workspace_id: client.workspace_id().clone(),
                 cwd: relative_cwd,
                 command: None,
-                shell,
+                profile: profile.cloned(),
                 size: TerminalSize { columns, rows },
             }))
             .map_err(error)?;
@@ -425,6 +426,21 @@ impl TerminalBackend for HostTerminals {
             .map_err(error)?
             .insert(id.as_str().to_owned(), attachment);
         Ok(id)
+    }
+
+    fn profiles(&self, cwd: &Path) -> Result<TerminalProfiles, TerminalError> {
+        let (client, _) = self.host.connect_directory(cwd).map_err(error)?;
+        let ResponseBody::TerminalListProfiles(response) = client
+            .request(RequestBody::TerminalListProfiles(
+                TerminalListProfilesRequest {
+                    workspace_id: client.workspace_id().clone(),
+                },
+            ))
+            .map_err(error)?
+        else {
+            return Err(error("terminal profile list rejected"));
+        };
+        Ok(response.profiles)
     }
 
     fn list(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {

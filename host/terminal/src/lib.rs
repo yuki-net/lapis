@@ -8,8 +8,9 @@ use std::{
 };
 
 use client_api::{
-    EventBody, SessionId, SnapshotReason, TerminalId, TerminalInput, TerminalSize,
-    TerminalSnapshot, TerminalStartRequest, TerminalStatus, WorkspaceId, WorkspaceRelativePath,
+    EventBody, SessionId, SnapshotReason, TerminalId, TerminalInput, TerminalProfiles,
+    TerminalSize, TerminalSnapshot, TerminalStartRequest, TerminalStatus, WorkspaceId,
+    WorkspaceRelativePath,
 };
 use terminal::{
     TerminalBackend, TerminalDelta, TerminalEvent, TerminalId as BackendTerminalId, TerminalScreen,
@@ -25,6 +26,7 @@ pub enum TerminalStateError {
     NotRunning,
     NotOwner,
     InvalidSize,
+    UnknownProfile,
     Backend(terminal::TerminalError),
 }
 
@@ -37,6 +39,9 @@ impl fmt::Display for TerminalStateError {
             Self::NotRunning => formatter.write_str("terminal is not running"),
             Self::NotOwner => formatter.write_str("terminal is owned by another session"),
             Self::InvalidSize => formatter.write_str("terminal size must be greater than zero"),
+            Self::UnknownProfile => {
+                formatter.write_str("terminal profile is not allowed by the Host")
+            }
             Self::Backend(error) => error.fmt(formatter),
         }
     }
@@ -89,6 +94,15 @@ impl TerminalRegistry {
         self
     }
 
+    /// Host が許可する profile 一覧を返す。
+    pub fn profiles(&self, cwd: &Path) -> Result<TerminalProfiles, TerminalStateError> {
+        let backend = self
+            .backend
+            .as_ref()
+            .ok_or(TerminalStateError::Unsupported)?;
+        Ok(backend.profiles(cwd)?)
+    }
+
     pub fn start(
         &mut self,
         terminal_id: TerminalId,
@@ -103,7 +117,16 @@ impl TerminalRegistry {
             .backend
             .as_ref()
             .ok_or(TerminalStateError::Unsupported)?;
-        let backend_id = backend.start_with_shell(cwd, size.columns, size.rows, request.shell)?;
+        let allowed = backend.profiles(cwd)?;
+        let profile = allowed
+            .resolve(request.profile.as_ref())
+            .map_err(|_| TerminalStateError::UnknownProfile)?;
+        let backend_id = backend.start_profile(
+            cwd,
+            size.columns,
+            size.rows,
+            profile.map(|profile| &profile.id),
+        )?;
         let mut resource =
             TerminalResource::new(terminal_id.clone(), backend_id, workspace_id.clone(), size);
         resource.cwd_path = cwd.to_owned();
@@ -497,8 +520,8 @@ mod tests {
     };
     use terminal::{
         TerminalCell, TerminalError, TerminalEvent, TerminalInput, TerminalKey, TerminalKeyEvent,
-        TerminalModifiers, TerminalRow, TerminalRowUpdate, TerminalShell,
-        TerminalSnapshot as SourceSnapshot, TerminalStatus as SourceStatus,
+        TerminalModifiers, TerminalRow, TerminalRowUpdate, TerminalSnapshot as SourceSnapshot,
+        TerminalStatus as SourceStatus,
     };
 
     #[derive(Default)]
@@ -507,6 +530,8 @@ mod tests {
         fail_input: AtomicBool,
         input_calls: AtomicUsize,
         events: Mutex<BTreeMap<String, Result<Vec<TerminalEvent>, TerminalError>>>,
+        profiles: Mutex<terminal::TerminalProfiles>,
+        started_profiles: Mutex<Vec<Option<String>>>,
     }
 
     impl TerminalBackend for ScriptedSource {
@@ -515,6 +540,24 @@ mod tests {
                 "source-{}",
                 self.next.fetch_add(1, Ordering::SeqCst) + 1
             )))
+        }
+
+        fn start_profile(
+            &self,
+            cwd: &Path,
+            columns: u16,
+            rows: u16,
+            profile: Option<&terminal::TerminalProfileId>,
+        ) -> Result<BackendTerminalId, TerminalError> {
+            self.started_profiles
+                .lock()
+                .unwrap()
+                .push(profile.map(|profile| profile.as_str().to_owned()));
+            self.start(cwd, columns, rows)
+        }
+
+        fn profiles(&self, _: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+            Ok(self.profiles.lock().unwrap().clone())
         }
 
         fn input(&self, _: &BackendTerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
@@ -596,7 +639,7 @@ mod tests {
                     workspace_id: workspace.clone(),
                     cwd: None,
                     command: None,
-                    shell: TerminalShell::Default,
+                    profile: None,
                     size: TerminalSize {
                         columns: 80,
                         rows: 24,
@@ -605,6 +648,62 @@ mod tests {
             )
             .unwrap();
         (registry, workspace, session, terminal)
+    }
+
+    #[test]
+    fn start_rejects_profiles_outside_the_host_catalog() {
+        let backend = Arc::new(ScriptedSource::default());
+        *backend.profiles.lock().unwrap() = terminal::TerminalProfiles::new(
+            vec![
+                terminal::TerminalProfile::new("default", "Default", "sh"),
+                terminal::TerminalProfile::new("bash", "bash", "bash"),
+            ],
+            Some(terminal::TerminalProfileId::new("default")),
+        );
+        let workspace = WorkspaceId::try_new("workspace").unwrap();
+        let session = SessionId::try_new("session").unwrap();
+        let mut registry = TerminalRegistry::new(Some(backend.clone()));
+        let request = |profile: Option<&str>| TerminalStartRequest {
+            workspace_id: workspace.clone(),
+            cwd: None,
+            command: None,
+            profile: profile.map(terminal::TerminalProfileId::new),
+            size: TerminalSize::new(80, 24),
+        };
+
+        let Err(TerminalStateError::UnknownProfile) = registry.start(
+            TerminalId::try_new("unknown").unwrap(),
+            &session,
+            &workspace,
+            Path::new("."),
+            &request(Some("missing")),
+        ) else {
+            panic!("unknown profile must be rejected before the backend starts");
+        };
+        assert!(backend.started_profiles.lock().unwrap().is_empty());
+
+        registry
+            .start(
+                TerminalId::try_new("allowed").unwrap(),
+                &session,
+                &workspace,
+                Path::new("."),
+                &request(Some("bash")),
+            )
+            .unwrap();
+        registry
+            .start(
+                TerminalId::try_new("default").unwrap(),
+                &session,
+                &workspace,
+                Path::new("."),
+                &request(None),
+            )
+            .unwrap();
+        assert_eq!(
+            *backend.started_profiles.lock().unwrap(),
+            vec![Some("bash".to_owned()), Some("default".to_owned())]
+        );
     }
 
     #[test]
@@ -786,7 +885,7 @@ mod tests {
                         workspace_id: workspace.clone(),
                         cwd: None,
                         command: None,
-                        shell: TerminalShell::Default,
+                        profile: None,
                         size: TerminalSize::new(80, 24),
                     },
                 )

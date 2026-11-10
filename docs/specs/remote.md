@@ -63,7 +63,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 
 Workbench に保存するタブは `TabRef` で参照先だけを保持する。Document は `DocumentId`、
 Terminal は Host の `TerminalId`、その他の View は `ViewInstanceId` を識別子とする。
-復元した Client は参照先の Resource に再アタッチし、Terminal では新しい shell を開始しない。
+復元した Client は参照先の Resource に再アタッチし、Terminal では新しい profile を開始しない。
 保存済みの旧形式（文字列の View ID）は読み込み時に `TabRef` へ変換する。
 
 ## Terminal の同期契約
@@ -81,6 +81,11 @@ Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
   `terminal.release` または接続断で解放する。操作権の変更は `terminal.owner` で通知する。
 - Client から Host へは `TerminalInput::Text`、`Key`、`Paste` を送り、PTY bytes
   への変換と bracketed paste の処理は Host の Terminal Engine 境界で行う。
+- Host は `terminal.list_profiles` で起動可能な `TerminalProfile`（program、args、env）を
+  公開し、`terminal.start` は raw shell ではなく profile ID を受け取る。 Client は一覧に
+  ない profile ID を実行できず、未指定時は Host の既定 profile を使う。 Local も Remote も
+  同じ Host Runtime と Engine を通るため、IME の確定 text、bracketed paste、scrollback の
+  上限と差分再同期は同じ契約になる。
 - attach、表示、focus、別 Client の接続では PTY size を変更しない。Client の
   panel 幅に追従した resize など、明示的な resize 操作だけが canonical size と
   Engine size を更新し、全 Client に通知する。

@@ -247,7 +247,7 @@ mod tests {
             workspace_id: WorkspaceId::try_new("workspace-1").unwrap(),
             cwd: None,
             command: None,
-            shell: Default::default(),
+            profile: None,
             size: client_api::TerminalSize {
                 columns: 80,
                 rows: 24,

@@ -1,6 +1,6 @@
 //! Hostが所有するTerminal状態とClientへ公開する共通Model。
 
-use std::{fmt, path::PathBuf};
+use std::{collections::BTreeMap, fmt, path::PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -30,17 +30,93 @@ pub enum TerminalStatus {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TerminalShell {
-    /// Host の既定 shell。
-    #[default]
-    Default,
-    PowerShell,
-    Cmd,
-    Bash,
-    Zsh,
-    Fish,
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+/// Host が公開する Terminal profile の識別子。
+pub struct TerminalProfileId(String);
+
+impl TerminalProfileId {
+    pub fn new(value: impl Into<String>) -> Self {
+        Self(value.into())
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// Host が起動を許可する Terminal profile。
+pub struct TerminalProfile {
+    pub id: TerminalProfileId,
+    pub name: String,
+    pub program: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+}
+
+impl TerminalProfile {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, program: impl Into<String>) -> Self {
+        Self {
+            id: TerminalProfileId::new(id),
+            name: name.into(),
+            program: program.into(),
+            args: Vec::new(),
+            env: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_args(mut self, args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.args = args.into_iter().map(Into::into).collect();
+        self
+    }
+
+    pub fn with_env(
+        mut self,
+        env: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.env = env
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// Host が公開する profile 一覧と既定 profile。
+pub struct TerminalProfiles {
+    pub profiles: Vec<TerminalProfile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<TerminalProfileId>,
+}
+
+impl TerminalProfiles {
+    pub fn new(profiles: Vec<TerminalProfile>, default: Option<TerminalProfileId>) -> Self {
+        Self { profiles, default }
+    }
+
+    pub fn find(&self, id: &TerminalProfileId) -> Option<&TerminalProfile> {
+        self.profiles.iter().find(|profile| &profile.id == id)
+    }
+
+    /// 要求された profile を解決する。未指定なら既定 profile。
+    pub fn resolve(
+        &self,
+        requested: Option<&TerminalProfileId>,
+    ) -> Result<Option<&TerminalProfile>, TerminalError> {
+        match requested {
+            Some(id) => self.find(id).map(Some).ok_or_else(|| {
+                TerminalError::new(format!(
+                    "Terminal profile が見つかりません: {}",
+                    id.as_str()
+                ))
+            }),
+            None => Ok(self.default.as_ref().and_then(|id| self.find(id))),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -424,17 +500,22 @@ pub trait TerminalBackend: Send + Sync {
         columns: u16,
         rows: u16,
     ) -> Result<TerminalId, TerminalError>;
-    fn start_with_shell(
+    /// 指定された profile で Terminal を開始する。`None` は Host の既定 profile。
+    fn start_profile(
         &self,
         cwd: &std::path::Path,
         columns: u16,
         rows: u16,
-        shell: TerminalShell,
+        profile: Option<&TerminalProfileId>,
     ) -> Result<TerminalId, TerminalError> {
-        if shell != TerminalShell::Default {
-            return Err(TerminalError::new("この接続ではshellを指定できません"));
+        if profile.is_some() {
+            return Err(TerminalError::new("この接続ではprofileを指定できません"));
         }
         self.start(cwd, columns, rows)
+    }
+    /// Host が許可する profile 一覧。未対応の backend は空。
+    fn profiles(&self, _cwd: &std::path::Path) -> Result<TerminalProfiles, TerminalError> {
+        Ok(TerminalProfiles::default())
     }
     fn list(&self, _cwd: &std::path::Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
         Err(TerminalError::new(
@@ -495,6 +576,47 @@ pub trait TerminalBackend: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profiles_resolve_only_ids_that_the_host_published() {
+        let profiles = TerminalProfiles::new(
+            vec![
+                TerminalProfile::new("default", "Default", "sh"),
+                TerminalProfile::new("zsh", "zsh", "zsh").with_args(["-l"]),
+            ],
+            Some(TerminalProfileId::new("default")),
+        );
+        assert_eq!(
+            profiles
+                .resolve(None)
+                .unwrap()
+                .map(|profile| profile.id.as_str()),
+            Some("default")
+        );
+        assert_eq!(
+            profiles
+                .resolve(Some(&TerminalProfileId::new("zsh")))
+                .unwrap()
+                .unwrap()
+                .args,
+            vec!["-l"]
+        );
+        assert!(
+            profiles
+                .resolve(Some(&TerminalProfileId::new("missing")))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn terminal_profile_serializes_env_and_args() {
+        let profile = TerminalProfile::new("shell", "Shell", "/bin/sh")
+            .with_args(["-l", "-i"])
+            .with_env([("TERM", "xterm-256color")]);
+        let loaded: TerminalProfile =
+            serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        assert_eq!(loaded, profile);
+    }
 
     #[test]
     fn terminal_snapshot_round_trips_the_renderer_model() {

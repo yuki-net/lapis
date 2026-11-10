@@ -24,6 +24,23 @@ pub(crate) fn default_font_size() -> u8 {
     13
 }
 
+/// 行送りの既定値（フォントサイズに対する百分率）。
+pub(crate) fn default_line_height_percent() -> u8 {
+    125
+}
+
+pub(crate) fn line_height_choices() -> &'static [u8] {
+    &[100, 110, 120, 125, 140, 150]
+}
+
+pub(crate) fn caret_shape_choices() -> &'static [settings::TerminalCaretShape] {
+    &[
+        settings::TerminalCaretShape::Block,
+        settings::TerminalCaretShape::Bar,
+        settings::TerminalCaretShape::Underline,
+    ]
+}
+
 /// 設定 UI に出す等幅フォントの候補。
 pub(crate) fn font_choices() -> &'static [&'static str] {
     #[cfg(windows)]

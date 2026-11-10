@@ -13,10 +13,11 @@ use client_api::{
     EventBody, EventEnvelope, FORBIDDEN, FileTreeEntry, FileTreeKind, FileTreeResponse, INTERNAL,
     INVALID_PATH, INVALID_REQUEST, NOT_FOUND, ProtocolError, RequestBody, RequestEnvelope,
     ResponseBody, ResponseEnvelope, Revision, SessionId, SnapshotResponse, TerminalClaimRequest,
-    TerminalCommandResponse, TerminalId, TerminalInputRequest, TerminalReleaseRequest,
-    TerminalResizeRequest, TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest,
-    UNSUPPORTED, WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId,
-    WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
+    TerminalCommandResponse, TerminalId, TerminalInputRequest, TerminalListProfilesRequest,
+    TerminalListProfilesResponse, TerminalReleaseRequest, TerminalResizeRequest,
+    TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest, UNSUPPORTED,
+    WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId, WorkspaceListResponse,
+    WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
 use document_state::{DocumentRegistry, DocumentResource};
 use text::TextEdit;
@@ -665,6 +666,9 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.terminal_start(session, request)
             }
+            RequestBody::TerminalListProfiles(request) => {
+                self.terminal_list_profiles(session, request)
+            }
             RequestBody::TerminalInput(request) => {
                 self.require_connected(session)?;
                 self.terminal_input(session, request)
@@ -910,7 +914,8 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         | BackendStateError::TerminalNotRunning
         | BackendStateError::TerminalNotOwner
         | BackendStateError::InvalidWorkbench
-        | BackendStateError::InvalidTerminalSize => INVALID_REQUEST,
+        | BackendStateError::InvalidTerminalSize
+        | BackendStateError::TerminalProfileDenied => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,
         BackendStateError::CounterOverflow
         | BackendStateError::Terminal(_)

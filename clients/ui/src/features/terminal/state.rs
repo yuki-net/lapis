@@ -185,6 +185,10 @@ pub(crate) struct TerminalFeature {
     /// 描画に使うフォント設定。設定 UI から変更できるようにする。
     pub(super) font_family: gpui::SharedString,
     pub(super) font_size: f32,
+    pub(super) line_height_percent: u8,
+    pub(super) caret_shape: settings::TerminalCaretShape,
+    /// Host が許可する Terminal profile。メニューに表示する。
+    pub(super) profiles: terminal::TerminalProfiles,
     pub(super) last_metrics: Option<super::view::TerminalMetrics>,
     pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
     /// Terminal出力の表示状態。
@@ -219,8 +223,8 @@ impl TerminalFeature {
         self.owners = owners;
     }
 
-    /// 設定の変更を描画へ反映する。フォントが変わると列数・行数も変わる。
-    fn apply_terminal_font(
+    /// 設定の変更を描画へ反映する。フォントや行送りが変わると列数・行数も変わる。
+    fn apply_terminal_appearance(
         &mut self,
         values: &settings::GlobalSettings,
         cx: &mut gpui::Context<Self>,
@@ -233,11 +237,21 @@ impl TerminalFeature {
         let size = values
             .terminal_font_size
             .unwrap_or_else(super::default_font_size) as f32;
-        if self.font_family == family && self.font_size == size {
+        let line_height_percent = values
+            .terminal_line_height_percent
+            .unwrap_or_else(super::default_line_height_percent);
+        let caret_shape = values.terminal_caret_shape.unwrap_or_default();
+        if self.font_family == family
+            && self.font_size == size
+            && self.line_height_percent == line_height_percent
+            && self.caret_shape == caret_shape
+        {
             return;
         }
         self.font_family = family;
         self.font_size = size;
+        self.line_height_percent = line_height_percent;
+        self.caret_shape = caret_shape;
         self.last_metrics = None;
         self.last_size = None;
         cx.notify();
@@ -317,8 +331,16 @@ impl TerminalFeature {
             .as_ref()
             .and_then(|values| values.terminal_font_size)
             .unwrap_or_else(super::default_font_size) as f32;
+        let line_height_percent = values
+            .as_ref()
+            .and_then(|values| values.terminal_line_height_percent)
+            .unwrap_or_else(super::default_line_height_percent);
+        let caret_shape = values
+            .as_ref()
+            .and_then(|values| values.terminal_caret_shape)
+            .unwrap_or_default();
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
-        let feature = Self {
+        let mut feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
             terminals,
             owners: HashMap::new(),
@@ -340,6 +362,9 @@ impl TerminalFeature {
             context_anchor: None,
             font_family,
             font_size,
+            line_height_percent,
+            caret_shape,
+            profiles: terminal::TerminalProfiles::default(),
             last_metrics: None,
             last_size: None,
             visible_output: None, // None = 未処理
@@ -353,7 +378,7 @@ impl TerminalFeature {
         if let Some(coordinator) = coordinator {
             cx.observe(&coordinator, |feature, coordinator, cx| {
                 let values = coordinator.read(cx).values.clone();
-                feature.apply_terminal_font(&values, cx);
+                feature.apply_terminal_appearance(&values, cx);
             })
             .detach();
         }
@@ -369,8 +394,33 @@ impl TerminalFeature {
             })
             .detach();
         }
+        feature.load_profiles(cx);
         feature
     }
+
+    /// Host が許可する profile を worker 経由で取得する。UI thread を止めない。
+    fn load_profiles(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(root) = self.root.clone() else {
+            self.profiles = terminal::TerminalProfiles::default();
+            return;
+        };
+        let load_root = root.clone();
+        let _ = self.worker.submit(
+            cx,
+            move |sessions| Ok(sessions.session.profiles(&load_root)),
+            move |feature, result, cx| {
+                if feature.root.as_deref() != Some(root.as_path()) {
+                    return;
+                }
+                match result {
+                    Ok(Ok(profiles)) => feature.profiles = profiles,
+                    Ok(Err(_)) | Err(_) => feature.profiles = terminal::TerminalProfiles::default(),
+                }
+                cx.notify();
+            },
+        );
+    }
+
     pub(crate) fn set_context(
         &mut self,
         root: Option<std::path::PathBuf>,
@@ -448,15 +498,16 @@ impl TerminalFeature {
         self.root = root;
         self.conversation = conversation;
         self.terminals.clear();
+        self.load_profiles(cx);
         cx.notify();
     }
     pub(crate) fn start(&mut self, cx: &mut gpui::Context<Self>) {
-        self.start_shell(terminal::TerminalShell::Default, cx);
+        self.start_profile(None, cx);
     }
 
-    pub(super) fn start_shell(
+    pub(super) fn start_profile(
         &mut self,
-        shell: terminal::TerminalShell,
+        profile: Option<terminal::TerminalProfileId>,
         cx: &mut gpui::Context<Self>,
     ) {
         let Some(root) = self.root.clone() else {
@@ -467,7 +518,7 @@ impl TerminalFeature {
             cx,
             move |sessions| {
                 let (result, terminals) = sessions
-                    .action(|session| session.start_with_shell(&root, 120, 30, shell).map(|_| ()));
+                    .action(|session| session.start_profile(&root, 120, 30, profile).map(|_| ()));
                 Ok((
                     result,
                     sessions.version(),

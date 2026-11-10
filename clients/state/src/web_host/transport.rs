@@ -63,7 +63,7 @@ pub(super) enum Command {
         cwd: Option<PathBuf>,
         columns: u16,
         rows: u16,
-        shell: terminal::TerminalShell,
+        profile: Option<terminal::TerminalProfileId>,
     },
     TerminalInput {
         local: TerminalId,
@@ -641,7 +641,7 @@ async fn handle(
             cwd,
             columns,
             rows,
-            shell,
+            profile,
         } => {
             let workspace_id = replica.borrow().workspace.clone();
             let cwd = match cwd.as_deref() {
@@ -661,7 +661,7 @@ async fn handle(
                     workspace_id: api_workspace(&workspace_id),
                     cwd,
                     command: None,
-                    shell,
+                    profile,
                     size: TerminalSize { columns, rows },
                 }),
             )

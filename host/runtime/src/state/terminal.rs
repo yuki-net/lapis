@@ -3,6 +3,21 @@
 use super::*;
 
 impl BackendState {
+    pub(super) fn terminal_list_profiles(
+        &mut self,
+        session: &BackendSession,
+        request: TerminalListProfilesRequest,
+    ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
+        self.require_workspace(session, &request.workspace_id)?;
+        self.require_connected(session)?;
+        let workspace = self.workspace(session)?;
+        let profiles = workspace.terminals.profiles(workspace.resolver.root())?;
+        Ok((
+            ResponseBody::TerminalListProfiles(TerminalListProfilesResponse { profiles }),
+            Vec::new(),
+        ))
+    }
+
     pub(super) fn terminal_start(
         &mut self,
         session: &BackendSession,

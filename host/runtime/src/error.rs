@@ -20,6 +20,7 @@ pub enum BackendStateError {
     TerminalNotRunning,
     TerminalNotOwner,
     InvalidTerminalSize,
+    TerminalProfileDenied,
     InvalidWorkbench,
     RevisionConflict(RevisionConflict),
     Path(PathSecurityError),
@@ -47,6 +48,9 @@ impl fmt::Display for BackendStateError {
             Self::TerminalNotOwner => formatter.write_str("terminal is owned by another session"),
             Self::InvalidTerminalSize => {
                 formatter.write_str("terminal size must be greater than zero")
+            }
+            Self::TerminalProfileDenied => {
+                formatter.write_str("terminal profile is not allowed by the Host")
             }
             Self::InvalidWorkbench => formatter.write_str("invalid workbench state"),
             Self::RevisionConflict(_) => formatter.write_str("document revision conflicts"),
@@ -97,6 +101,7 @@ impl From<terminal_state::TerminalStateError> for BackendStateError {
             terminal_state::TerminalStateError::NotRunning => Self::TerminalNotRunning,
             terminal_state::TerminalStateError::NotOwner => Self::TerminalNotOwner,
             terminal_state::TerminalStateError::InvalidSize => Self::InvalidTerminalSize,
+            terminal_state::TerminalStateError::UnknownProfile => Self::TerminalProfileDenied,
             terminal_state::TerminalStateError::Backend(error) => Self::Terminal(error),
         }
     }

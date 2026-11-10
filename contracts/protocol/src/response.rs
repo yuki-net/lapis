@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentHistoryResponse,
     DocumentOpenResponse, DocumentSaveResponse, FileTreeResponse, ProtocolError, SnapshotResponse,
-    TerminalCommandResponse, TerminalStartResponse, WorkspaceCloseResponse,
-    WorkspaceConnectResponse, WorkspaceListResponse,
+    TerminalCommandResponse, TerminalListProfilesResponse, TerminalStartResponse,
+    WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceListResponse,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,6 +63,8 @@ pub enum ResponseBody {
     DocumentRelease(crate::DocumentCommandResponse),
     #[serde(rename = "terminal.start")]
     TerminalStart(TerminalStartResponse),
+    #[serde(rename = "terminal.list_profiles")]
+    TerminalListProfiles(TerminalListProfilesResponse),
     #[serde(rename = "terminal.input")]
     TerminalInput(TerminalCommandResponse),
     #[serde(rename = "terminal.resize")]
@@ -108,6 +110,7 @@ impl ResponseBody {
             Self::DocumentClaim(_) => Some("document.claim"),
             Self::DocumentRelease(_) => Some("document.release"),
             Self::TerminalStart(_) => Some("terminal.start"),
+            Self::TerminalListProfiles(_) => Some("terminal.list_profiles"),
             Self::TerminalInput(_) => Some("terminal.input"),
             Self::TerminalResize(_) => Some("terminal.resize"),
             Self::TerminalTerminate(_) => Some("terminal.terminate"),
