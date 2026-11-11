@@ -50,8 +50,13 @@ pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod web_cache;
 #[cfg(target_arch = "wasm32")]
 pub mod web_host;
+#[cfg(any(target_arch = "wasm32", test))]
+#[path = "web_host/state.rs"]
+mod web_replica;
 #[cfg(any(target_arch = "wasm32", test))]
 mod web_switch;
 

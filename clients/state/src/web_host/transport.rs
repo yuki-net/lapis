@@ -21,18 +21,16 @@ use document::{ExternalChange, FileFingerprint};
 use editor_core::{DocumentId, SessionId};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
-use terminal::{TerminalEvent, TerminalId};
+use terminal::TerminalEvent;
 use workbench::{WorkbenchUpdate, WorkbenchWritePlan};
 use workspace::{FileEntry, FileEntryKind};
 
 use crate::web_switch::Command;
 
-use super::{
-    MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace,
-    state::{
-        DocumentState, Replica, TerminalState, diff_chars, document_from_snapshot, local_id,
-        model_terminal_snapshot, owner_of, versioned_workbench,
-    },
+use super::{MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace};
+use crate::web_replica::{
+    DocumentState, Replica, diff_chars, document_from_snapshot, local_id, model_terminal_snapshot,
+    owner_of, versioned_workbench,
 };
 
 pub(super) async fn request(
@@ -219,15 +217,21 @@ pub(super) async fn pump(
     }
 }
 
+pub(super) fn notify_changes(changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>) {
+    changes
+        .borrow_mut()
+        .retain(|changes| changes.unbounded_send(()).is_ok());
+}
+
 pub(super) async fn event_pump(
     connection: Rc<BrowserConnection>,
     mut events: mpsc::Receiver<EventEnvelope>,
     replica: Rc<RefCell<Replica>>,
-    changes: mpsc::UnboundedSender<()>,
+    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 ) {
     while let Some(event) = events.next().await {
         // 画面や状態の変化を UI に知らせる。UI は通知で terminal の poll を呼ぶ。
-        let _ = changes.unbounded_send(());
+        notify_changes(&changes);
         match event.body {
             EventBody::TerminalDelta { terminal_id, delta } => {
                 if let Some(state) = replica
@@ -313,16 +317,17 @@ pub(super) async fn event_pump(
                 }
             }
             EventBody::SnapshotRequired { .. } => {
-                // イベントを取りこぼした。全 Terminal を Host の Snapshot で置き換える。
-                sync_terminals(&connection, &replica).await;
+                // イベントを取りこぼした。Host の Snapshot で複製を取り直す。
+                sync_snapshot(&connection, &replica).await;
+                notify_changes(&changes);
             }
             _ => {}
         }
     }
 }
 
-/// `snapshot.required` の後で、Terminal の cache と表示用イベントを最新へ置き換える。
-async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell<Replica>>) {
+/// `snapshot.required` の後で、保持している複製を Host の Snapshot へ合わせる。
+async fn sync_snapshot(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell<Replica>>) {
     let workspace = api_workspace(&replica.borrow().workspace);
     let Ok(ResponseBody::SnapshotResync(response)) = request(
         connection,
@@ -341,37 +346,7 @@ async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell
     if api_workspace(&replica.workspace) != workspace {
         return;
     }
-    for terminal in response.snapshot.terminals {
-        if let Some(state) = replica
-            .terminals
-            .values_mut()
-            .find(|state| state.host.as_ref() == Some(&terminal.terminal_id))
-        {
-            let local = state
-                .snapshot
-                .as_ref()
-                .map(|snapshot| snapshot.id.clone())
-                .unwrap_or_else(|| TerminalId::new(terminal.terminal_id.as_str()));
-            let snapshot = model_terminal_snapshot(&local, &terminal);
-            state.snapshot = Some(snapshot.clone());
-            state.events.clear();
-            state.events.push(TerminalEvent::Snapshot(snapshot));
-            state.finished = false;
-            continue;
-        }
-        let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-        replica.next_terminal += 1;
-        let snapshot = model_terminal_snapshot(&local, &terminal);
-        replica.terminals.insert(
-            local.as_str().to_owned(),
-            TerminalState {
-                host: Some(terminal.terminal_id.clone()),
-                snapshot: Some(snapshot.clone()),
-                events: vec![TerminalEvent::Snapshot(snapshot)],
-                finished: false,
-            },
-        );
-    }
+    crate::web_cache::apply_snapshot(&mut replica, &response.snapshot);
 }
 
 async fn handle(
