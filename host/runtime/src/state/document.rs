@@ -1,5 +1,7 @@
 //! Document の request 処理。
 
+use crate::PathSecurityError;
+
 use super::*;
 
 impl BackendState {
@@ -522,21 +524,27 @@ pub(super) fn document_snapshot(
     let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
     let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-    if missing_root && resource.path.is_some() {
-        snapshot.external_change = client_api::DocumentExternalChange::Deleted;
+    let fingerprint = if missing_root {
+        None
     } else if let Some(path) = &resource.path {
-        let absolute = workspace.resolver.resolve_scoped_path(path)?;
-        // 読み取りできない path は外部削除として扱う。1つの文書の失敗で
-        // Workspace 全体の Snapshot と他の Terminal の復旧を止めない。
-        let Some(fingerprint) = workspace.files.fingerprint(&absolute).ok().flatten() else {
-            snapshot.external_change = client_api::DocumentExternalChange::Deleted;
-            return Ok(snapshot);
-        };
-        snapshot.external_change = match resource.document.external_change(Some(&fingerprint)) {
-            ::document::ExternalChange::Unchanged => client_api::DocumentExternalChange::Unchanged,
-            ::document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
-            ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
-        };
-    }
+        match workspace.resolver.resolve_scoped_path(path) {
+            Ok(absolute) => workspace.files.metadata(&absolute).ok().flatten(),
+            Err(error) if matches!(&error, PathSecurityError::WorkspaceEscape) => {
+                return Err(error.into());
+            }
+            // Workspace 内でも親ディレクトリの置換などで解決できない path は、
+            // その文書だけ読取不能として扱い、Snapshot 全体を失敗させない。
+            Err(_) => None,
+        }
+    } else {
+        None
+    };
+    snapshot.external_change = match resource.document.external_change_metadata(
+        fingerprint.map(|metadata| (metadata.byte_len, metadata.modified_nanos)),
+    ) {
+        ::document::ExternalChange::Unchanged => client_api::DocumentExternalChange::Unchanged,
+        ::document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
+        ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
+    };
     Ok(snapshot)
 }

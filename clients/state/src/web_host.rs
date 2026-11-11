@@ -15,10 +15,10 @@ use crate::{
     ConversationRecord, Project, WorkspaceDialog, WorkspaceStateRepository, WorkspaceViewState,
 };
 use client_api::{
-    ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
-    SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceCloseRequest,
-    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceListRequest,
-    WorkspaceRelativePath, WorkspaceSummary,
+    ClientKind, DocumentInspectRequest, RequestBody, ResponseBody, Revision as ApiRevision,
+    SnapshotReason, SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest,
+    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
+    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
@@ -533,6 +533,7 @@ async fn resync_workspace(
             return Err(format!("Workspace復帰後の再同期に失敗しました: {error}"));
         }
     }
+    attach_cached_documents(connection, replica).await?;
     match request(
         connection,
         RequestBody::WorkbenchGet(WorkbenchGetRequest {
@@ -542,17 +543,73 @@ async fn resync_workspace(
     .await
     {
         Ok(ResponseBody::WorkbenchGet(snapshot)) => {
-            if &replica.workspace == workspace
-                && let Some(state) = versioned_workbench(snapshot)
-            {
-                let _ = replica.workbench.refresh(state);
+            if &replica.workspace == workspace {
+                let state = versioned_workbench(snapshot)
+                    .ok_or_else(|| "Workspace復帰後のWorkbench状態が不正です".to_owned())?;
+                replica.workbench.refresh(state).map_err(|error| {
+                    format!("Workspace復帰後のWorkbench再同期に失敗しました: {error}")
+                })?;
             }
         }
-        Ok(_) => {}
+        Ok(_) => return Err("Workspace復帰後のWorkbench応答が不正です".to_owned()),
         Err(error) => {
-            web_sys::console::warn_1(
-                &format!("Workspace復帰後のWorkbench再同期に失敗しました: {error}").into(),
-            );
+            return Err(format!(
+                "Workspace復帰後のWorkbench再同期に失敗しました: {error}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 保持していた Document を Host へ再アタッチする。
+///
+/// Workspace を離れると attachment は解除される。snapshot.resync は attachment を
+/// 作らないため、復帰後に編集・保存できるよう document.inspect で確立する。
+async fn attach_cached_documents(
+    connection: &BrowserConnection,
+    replica: &mut Replica,
+) -> Result<(), String> {
+    let hosts = replica
+        .documents
+        .values()
+        .filter_map(|state| state.host.clone())
+        .collect::<Vec<_>>();
+    for host in hosts {
+        match request(
+            connection,
+            RequestBody::DocumentInspect(DocumentInspectRequest {
+                document_id: host.clone(),
+            }),
+        )
+        .await
+        {
+            Ok(ResponseBody::DocumentInspect(response)) => {
+                if let Some(state) = replica
+                    .documents
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&host))
+                {
+                    let _ = crate::web_cache::apply_inspection(state, &response.document, true);
+                }
+            }
+            // Host から消えた Document は外部削除として残し、切替自体は継続する。
+            Err(error) if error == client_api::NOT_FOUND => {
+                if let Some(state) = replica
+                    .documents
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&host))
+                {
+                    state.external_change = ExternalChange::Deleted;
+                }
+            }
+            Ok(_) => {
+                return Err("Workspace復帰後のDocument再アタッチ応答が不正です".to_owned());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Workspace復帰後のDocument再アタッチに失敗しました: {error}"
+                ));
+            }
         }
     }
     Ok(())

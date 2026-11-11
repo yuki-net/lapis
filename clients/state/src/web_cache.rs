@@ -155,24 +155,33 @@ pub(crate) fn apply_inspection(
 ) -> bool {
     let owner = owner_of(snapshot);
     if preserve_local && state.document.content_for_save() != state.acked {
-        let mut changed = state.external_change != ExternalChange::Modified;
-        state.external_change = ExternalChange::Modified;
+        // Host の本文が編集基準から動いている場合だけ競合として補正する。
+        let conflict = snapshot.revision != state.host_revision || snapshot.content != state.acked;
+        let external_change =
+            if conflict && snapshot.external_change == DocumentExternalChange::Unchanged {
+                ExternalChange::Modified
+            } else {
+                model_external_change(snapshot.external_change)
+            };
+        let mut changed = state.external_change != external_change;
+        state.external_change = external_change;
         changed |= state.owner != owner;
         state.owner = owner;
         // acked と host_revision はローカル編集の基準なので更新しない。
         return changed;
     }
     let document = document_from_snapshot(snapshot, state.path.clone());
+    let external_change = model_external_change(snapshot.external_change);
     let changed = state.document != document
         || state.acked != snapshot.content
         || state.host_revision != snapshot.revision
         || state.owner != owner
-        || state.external_change != ExternalChange::Modified;
+        || state.external_change != external_change;
     state.document = document;
     state.acked = snapshot.content.clone();
     state.host_revision = snapshot.revision;
     state.loaded = true;
-    state.external_change = ExternalChange::Modified;
+    state.external_change = external_change;
     state.owner = owner;
     changed
 }
@@ -555,7 +564,21 @@ mod tests {
         assert_eq!(state.document.content_for_save(), "remote");
         assert_eq!(state.acked, "remote");
         assert_eq!(state.host_revision, ApiRevision::new(2));
-        assert_eq!(state.external_change, ExternalChange::Modified);
+        assert_eq!(state.external_change, ExternalChange::Unchanged);
+    }
+
+    #[test]
+    fn inspection_preserves_host_deleted_state() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        let state = replica.documents.values_mut().next().unwrap();
+        let mut remote = wire_document("before");
+        remote.revision = ApiRevision::new(1);
+        remote.external_change = DocumentExternalChange::Deleted;
+
+        assert!(apply_inspection(state, &remote, true));
+
+        assert_eq!(state.external_change, ExternalChange::Deleted);
     }
 
     #[test]
@@ -577,7 +600,7 @@ mod tests {
         assert_eq!(state.document.content_for_save(), "remote");
         assert_eq!(state.acked, "remote");
         assert_eq!(state.host_revision, ApiRevision::new(2));
-        assert_eq!(state.external_change, ExternalChange::Modified);
+        assert_eq!(state.external_change, ExternalChange::Unchanged);
     }
 
     #[test]

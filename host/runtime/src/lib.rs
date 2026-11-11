@@ -15,6 +15,6 @@ pub use service::{BackendService, BackendServiceError};
 pub use state::{BackendSession, BackendState, WorkspaceRegistration};
 pub use workbench_state::{WorkbenchPersistence, WorkbenchStateError, WorkbenchStoreResult};
 pub use workspace_state::{
-    PathSecurityError, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend,
+    FileMetadata, PathSecurityError, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend,
     WorkspacePathResolver,
 };
