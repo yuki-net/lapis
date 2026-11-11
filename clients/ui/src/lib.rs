@@ -35,7 +35,7 @@ pub(crate) mod time {
     pub(crate) use web_time::{Duration, Instant, SystemTime};
 }
 
-pub use app::{ConnectionIdentity, DesktopServices, InitialView};
+pub use app::{ConnectionIdentity, DesktopServices, InitialView, WorkspaceOption};
 #[cfg(not(target_family = "wasm"))]
 pub use desktop::run;
 #[cfg(target_family = "wasm")]

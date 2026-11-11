@@ -369,6 +369,61 @@ mod tests {
         shell.read_with(visual, |shell, _| assert!(!shell.shell.workspace_menu_open));
     }
     #[gpui::test]
+    fn workspace_menu_lists_switch_candidates_only_when_the_connection_allows_it(
+        cx: &mut TestAppContext,
+    ) {
+        let (shell, visual) = setup(cx);
+        let switched = std::rc::Rc::new(std::cell::RefCell::new(None));
+        let observed = switched.clone();
+        let _subscription = visual.update(|_, cx| {
+            cx.subscribe(&shell, move |_, command, _| {
+                if let UiCommand::SwitchWorkspace(workspace) = command {
+                    *observed.borrow_mut() = Some(workspace.clone());
+                }
+            })
+        });
+        let connection = |can_switch| crate::app::ConnectionIdentity {
+            host_name: Some("Host".into()),
+            workspace_name: Some("A".into()),
+            workspace_id: Some("a".into()),
+            can_switch,
+            workspaces: vec![
+                crate::WorkspaceOption {
+                    id: "a".into(),
+                    name: "A".into(),
+                },
+                crate::WorkspaceOption {
+                    id: "b".into(),
+                    name: "B".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        shell.update(visual, |shell, _| {
+            shell.session.connection = Some(connection(false));
+        });
+        draw(visual);
+        let trigger = visual.debug_bounds("workspace-menu-trigger").unwrap();
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        assert!(
+            visual.debug_bounds("workspace-menu-switch-0").is_none(),
+            "切替できない接続では候補を表示しない"
+        );
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        shell.update(visual, |shell, _| {
+            shell.session.connection = Some(connection(true));
+        });
+        draw(visual);
+        visual.simulate_click(trigger.center(), Modifiers::none());
+        draw(visual);
+        let target = visual.debug_bounds("workspace-menu-switch-1").unwrap();
+        visual.simulate_click(target.center(), Modifiers::none());
+        assert_eq!(*switched.borrow(), Some("b".to_owned()));
+        shell.read_with(visual, |shell, _| assert!(!shell.shell.workspace_menu_open));
+    }
+
+    #[gpui::test]
     fn settings_menu_lists_settings_keymap_and_plugins(cx: &mut TestAppContext) {
         let (_, visual) = setup(cx);
         draw(visual);

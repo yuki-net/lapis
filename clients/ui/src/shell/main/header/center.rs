@@ -108,6 +108,42 @@ impl Shell {
                     .into_any_element()
             }));
         }
+        if let Some(connection) = self
+            .session
+            .connection
+            .as_ref()
+            .filter(|connection| connection.can_switch)
+        {
+            let heading = spec(
+                "workspace-switch-title".into(),
+                "Workspace を切り替え".into(),
+                Some(IconName::Plug),
+                false,
+                true,
+            );
+            entries.push(MenuEntry::new(heading, cx, |row| row.into_any_element()));
+            for (index, workspace) in connection.workspaces.iter().enumerate() {
+                let current = self.session.workspace_id.as_deref() == Some(workspace.id.as_str());
+                let mut item = spec(
+                    format!("workspace-switch-{index}"),
+                    workspace.name.clone(),
+                    Some(IconName::Plug),
+                    !current,
+                    false,
+                );
+                item.selected = current;
+                let id = workspace.id.clone();
+                entries.push(MenuEntry::new(item, cx, |row| {
+                    let id = id.clone();
+                    row.debug_selector(move || format!("workspace-menu-switch-{index}"))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.close_workspace_menu(cx);
+                            cx.emit(UiCommand::SwitchWorkspace(id.clone()));
+                        }))
+                        .into_any_element()
+                }));
+            }
+        }
         entries.push(MenuEntry::new(open, cx, |row| {
             row.debug_selector(|| "workspace-menu-open".into())
                 .on_click(cx.listener(|this, _, window, cx| {

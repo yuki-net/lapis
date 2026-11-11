@@ -76,14 +76,7 @@ pub async fn start(
     })
     .await
     .map_err(|error| JsValue::from_str(&error))?;
-    let backend = Arc::new(desktop_client::web_host::WebBackend);
-    launch(
-        backend,
-        desktop_client::web_host::ROOT,
-        desktop_client::web_host::initial_path(),
-        backend_preference,
-    )
-    .map_err(|error| JsValue::from_str(&error))?;
+    launch_host(backend_preference).map_err(|error| JsValue::from_str(&error))?;
     Ok(credential)
 }
 
@@ -113,6 +106,23 @@ fn requested_task() -> Option<editor_core::ConversationId> {
     let hash = web_sys::window()?.location().hash().ok()?;
     let id = hash.strip_prefix("#/t/")?;
     (!id.is_empty()).then(|| editor_core::ConversationId::new(id))
+}
+
+/// 切替後の接続情報をページへ渡し、URL と保存済みの選択を更新させる。
+pub(crate) fn notify_workspace_switched(info: &desktop_client::web_host::ConnectionInfo) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(detail) = serde_json::to_string(info) else {
+        return;
+    };
+    let init = web_sys::CustomEventInit::new();
+    init.set_detail(&JsValue::from_str(&detail));
+    if let Ok(event) =
+        web_sys::CustomEvent::new_with_event_init_dict("lapis:workspace-switched", &init)
+    {
+        let _ = window.dispatch_event(&event);
+    }
 }
 
 /// 選択中の Task を URL fragment へ反映するようページへ通知する。
@@ -170,12 +180,42 @@ where
         .open_workspace(PathBuf::from(root))
         .map_err(|error| error.to_string())?;
     let conversation = ConversationSession::new(backend.clone(), session.snapshot());
-    let restored = desktop_client::web_host::restore_snapshot(PathBuf::from(root));
-    if let Some(snapshot) = restored {
+    if let Some(path) = initial {
+        let _ = session.open_path(path);
+    }
+    let settings = SettingsSession::load(backend.clone()).map_err(|error| error.to_string())?;
+    let services = DesktopServices::new(
+        TaskSession::new(backend.clone()),
+        GitSession::new(backend.clone()),
+        LspSession::new(backend.clone()),
+        TerminalSession::new(backend.clone()),
+        WorkspaceSearchSession::new(backend.clone()),
+        conversation,
+        settings,
+    );
+    run(session, services, backend_preference);
+    Ok(())
+}
+
+/// Host へ接続済みの状態から UI の Session 一式を組み立てる。
+pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String> {
+    let backend = Arc::new(desktop_client::web_host::WebBackend);
+    let root = PathBuf::from(desktop_client::web_host::ROOT);
+    let mut session = EditorSession::new_empty(
+        backend.clone(),
+        backend.clone(),
+        backend.clone(),
+        backend.clone(),
+    );
+    session
+        .open_workspace(root.clone())
+        .map_err(|error| error.to_string())?;
+    let conversation = ConversationSession::new(backend.clone(), session.snapshot());
+    if let Some(snapshot) = desktop_client::web_host::restore_snapshot(root) {
         session
             .restore_snapshot(snapshot)
             .map_err(|error| error.to_string())?;
-    } else if let Some(path) = initial {
+    } else if let Some(path) = desktop_client::web_host::initial_path() {
         let _ = session.open_path(path);
     }
     let settings = SettingsSession::load(backend.clone()).map_err(|error| error.to_string())?;
@@ -188,18 +228,37 @@ where
         conversation,
         settings,
     );
-    // 表示用の Workspace 名は既存の ConnectionInfo をそのまま使う。
+    // 表示用の Workspace 名と切替候補は既存の ConnectionInfo をそのまま使う。
     if let Some(info) = desktop_client::web_host::connection_info() {
         services = services.with_connection_identity(crate::ConnectionIdentity {
             host_name: Some(info.host_name),
             host_id: info.host_id,
             workspace_name: Some(info.workspace_name),
             workspace_id: Some(info.workspace_id),
+            can_switch: info.can_switch,
+            workspaces: info
+                .workspaces
+                .into_iter()
+                .map(|workspace| crate::WorkspaceOption {
+                    id: workspace.id,
+                    name: workspace.name,
+                })
+                .collect(),
         });
     }
     if let Some(task) = requested_task() {
         services = services.with_initial_task(task);
     }
+    Ok((session, services))
+}
+
+fn launch_host(backend_preference: &str) -> Result<(), String> {
+    let (session, services) = host_sessions()?;
+    run(session, services, backend_preference);
+    Ok(())
+}
+
+fn run(session: EditorSession, services: DesktopServices, backend_preference: &str) {
     let handle = crate::run_web(
         session,
         services,
@@ -212,5 +271,4 @@ where
         || READY.with(|ready| ready.set(true)),
     );
     APPLICATION.with(|application| *application.borrow_mut() = Some(handle));
-    Ok(())
 }

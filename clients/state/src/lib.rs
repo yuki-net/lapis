@@ -52,6 +52,8 @@ pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(target_arch = "wasm32")]
 pub mod web_host;
+#[cfg(any(target_arch = "wasm32", test))]
+mod web_switch;
 
 /// 設定値を UI に公開し、変更を所有者ごとの保存先へ永続化するアプリケーション境界。
 #[derive(Clone)]

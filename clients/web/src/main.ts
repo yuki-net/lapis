@@ -19,13 +19,14 @@ const LEGACY_WARNING =
   "旧形式の URL に含まれる接続先・token は使用しません。接続先を選ぶか、保存済みの接続から開き直してください。";
 // web-bridge の既定待受ポート。サーバ側の DEFAULT_LISTEN と揃える。
 const DEFAULT_BRIDGE_PORT = 4757;
+// 接続中の Host URL。アプリ内で Workspace を切り替えたときの registry 更新に使う。
+let connectedUrl: string | null = null;
 
 type ConnectionInfo = {
   host_name: string;
   host_id?: string | null;
   workspace_name: string;
   workspace_id: string;
-  identity: string;
   can_switch: boolean;
   workspaces: Array<{ id: string; name: string }>;
 };
@@ -633,6 +634,7 @@ async function launch(
     document.title = APP_NAME;
     return;
   }
+  connectedUrl = url;
   const info = readConnectionInfo();
   if (info !== null) {
     applyConnectedInfo(url, info, taskId);
@@ -650,49 +652,19 @@ function applyConnectedInfo(url: string, info: ConnectionInfo, taskId: string | 
     `${path}${location.search}${taskId === null ? "" : `#/t/${encodeURIComponent(taskId)}`}`,
   );
   document.title = windowTitle(info);
-  showConnectionInfo(info, url);
 }
 
-function showConnectionInfo(info: ConnectionInfo, url: string) {
-  const element = document.querySelector<HTMLElement>("#connection-info");
-  if (element === null) {
+// アプリ内で Workspace を切り替えたとき、ページを遷移せず URL と保存済み選択を追従させる。
+function applySwitchedInfo(info: ConnectionInfo) {
+  if (connectedUrl === null) {
     return;
   }
-  element.replaceChildren();
-  const identity = document.createElement("span");
-  identity.className = "connection-identity";
-  identity.textContent = info.identity;
-  element.append(identity);
-
-  const choices = workspaceChoices(info);
-  if (info.can_switch && choices.length > 0) {
-    const label = document.createElement("label");
-    label.className = "connection-switch";
-    label.append(document.createTextNode("Workspace を切り替え"));
-    const select = document.createElement("select");
-    for (const workspace of choices) {
-      const option = document.createElement("option");
-      option.value = workspace.id;
-      option.textContent = `${workspace.name} (${workspace.id})`;
-      option.selected = workspace.id === info.workspace_id;
-      select.append(option);
-    }
-    select.disabled = choices.length < 2;
-    select.addEventListener("change", () => {
-      const workspace = choices.find((choice) => choice.id === select.value);
-      if (workspace === undefined) {
-        return;
-      }
-      const registry = loadRegistry();
-      const path = pathFromSegments([info.host_name, workspace.name]);
-      rememberSelection(registry, path, url, workspace.id);
-      saveRegistry(registry);
-      location.assign(`${path}${location.search}`);
-    });
-    label.append(select);
-    element.append(label);
-  }
-  element.hidden = false;
+  const { path, registry } = saveConnection(info, connectedUrl);
+  rememberSelection(registry, path, connectedUrl, info.workspace_id);
+  saveRegistry(registry);
+  // Task の fragment は切り替え後もそのまま残す。
+  history.replaceState(null, "", `${path}${location.search}${location.hash}`);
+  document.title = windowTitle(info);
 }
 
 async function connect(
@@ -1157,6 +1129,18 @@ window.addEventListener("lapis:task-selected", (event) => {
   const detail = (event as CustomEvent<unknown>).detail;
   if (typeof detail === "string" && detail !== "") {
     setTaskFragment(detail);
+  }
+});
+
+window.addEventListener("lapis:workspace-switched", (event) => {
+  const detail = (event as CustomEvent<unknown>).detail;
+  if (typeof detail !== "string") {
+    return;
+  }
+  try {
+    applySwitchedInfo(JSON.parse(detail) as ConnectionInfo);
+  } catch {
+    // 不正な通知では URL と保存済み選択を変更しない。
   }
 });
 

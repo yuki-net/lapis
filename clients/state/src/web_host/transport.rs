@@ -1,7 +1,7 @@
 //! WebSocket 接続の要求・イベント処理と、ローカル複製への反映。
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -21,9 +21,11 @@ use document::{ExternalChange, FileFingerprint};
 use editor_core::{DocumentId, SessionId};
 use futures_channel::mpsc;
 use futures_util::StreamExt;
-use terminal::{TerminalEvent, TerminalId, TerminalInput};
-use workbench::{ConversationViewState, WorkbenchUpdate, WorkbenchWritePlan};
+use terminal::{TerminalEvent, TerminalId};
+use workbench::{WorkbenchUpdate, WorkbenchWritePlan};
 use workspace::{FileEntry, FileEntryKind};
+
+use crate::web_switch::Command;
 
 use super::{
     MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace,
@@ -32,62 +34,6 @@ use super::{
         model_terminal_snapshot, owner_of, versioned_workbench,
     },
 };
-
-pub(super) enum Command {
-    Open {
-        local: DocumentId,
-    },
-    Sync {
-        local: DocumentId,
-    },
-    Save {
-        local: DocumentId,
-    },
-    Claim {
-        local: DocumentId,
-    },
-    Release {
-        local: DocumentId,
-    },
-    Reload {
-        local: DocumentId,
-    },
-    Discard {
-        local: DocumentId,
-    },
-    Close {
-        local: DocumentId,
-    },
-    StartTerminal {
-        local: TerminalId,
-        cwd: Option<PathBuf>,
-        columns: u16,
-        rows: u16,
-        profile: Option<terminal::TerminalProfileId>,
-    },
-    TerminalInput {
-        local: TerminalId,
-        input: TerminalInput,
-    },
-    TerminalResize {
-        local: TerminalId,
-        columns: u16,
-        rows: u16,
-    },
-    TerminalTerminate {
-        local: TerminalId,
-    },
-    TerminalClaim {
-        local: TerminalId,
-    },
-    TerminalRelease {
-        local: TerminalId,
-    },
-    SaveWorkbench {
-        view: ConversationViewState,
-    },
-    RetryWorkbenchLocal,
-}
 
 pub(super) async fn request(
     connection: &BrowserConnection,
@@ -355,11 +301,12 @@ pub(super) async fn event_pump(
                 if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
                     &connection,
                     RequestBody::WorkbenchGet(WorkbenchGetRequest {
-                        workspace_id: workspace,
+                        workspace_id: workspace.clone(),
                     }),
                 )
                 .await
                     && let Ok(mut replica) = replica.try_borrow_mut()
+                    && api_workspace(&replica.workspace) == workspace
                     && let Some(state) = versioned_workbench(snapshot)
                 {
                     let _ = replica.workbench.refresh(state);
@@ -380,7 +327,7 @@ async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell
     let Ok(ResponseBody::SnapshotResync(response)) = request(
         connection,
         RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: workspace,
+            workspace_id: workspace.clone(),
             reason: SnapshotReason::EventGap,
         }),
     )
@@ -391,6 +338,9 @@ async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell
     let Ok(mut replica) = replica.try_borrow_mut() else {
         return;
     };
+    if api_workspace(&replica.workspace) != workspace {
+        return;
+    }
     for terminal in response.snapshot.terminals {
         if let Some(state) = replica
             .terminals
@@ -429,7 +379,14 @@ async fn handle(
     replica: &Rc<RefCell<Replica>>,
     command: Command,
 ) -> Result<(), String> {
+    // 送信待ちを流し終えた後は、変更系Commandを成功扱いで捨てず呼び出し元へ返す。
+    if super::DRAINING.with(Cell::get) && command.is_mutation() {
+        return Err(crate::web_switch::SWITCHING_MESSAGE.into());
+    }
     match command {
+        Command::Barrier { done } => {
+            let _ = done.send(());
+        }
         Command::Open { local } => {
             let (relative, workspace) = {
                 let replica = replica.borrow();
@@ -643,6 +600,10 @@ async fn handle(
             rows,
             profile,
         } => {
+            // 切替で消えた旧WorkspaceのTerminalを新Workspaceに作らない。
+            if !replica.borrow().terminals.contains_key(local.as_str()) {
+                return Err("Terminalがありません".into());
+            }
             let workspace_id = replica.borrow().workspace.clone();
             let cwd = match cwd.as_deref() {
                 Some(path) => match path.strip_prefix(ROOT) {
