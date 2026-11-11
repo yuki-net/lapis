@@ -48,8 +48,8 @@ struct RegistryState {
 struct RootState {
     spec: ProcessRootSpec,
     started_at_ms: u64,
-    /// 登録時に確定した OS 起動時刻（秒）。確定できない root は登録しない。
-    started_at_secs: u64,
+    /// 登録時に確定した OS のプロセス開始識別子。時計変更の影響を受けない。
+    identity: u128,
     state: ProcessState,
     exited_at: Option<Instant>,
     cpu_centipercent: u32,
@@ -127,7 +127,9 @@ impl LocalProcessRegistry {
                     ProcessOrigin::Desktop => "Desktop".to_owned(),
                 },
             })
-            .expect("self process must be registrable");
+            // 自身の開始識別子を取得できない環境でも Host / Desktop の起動を止めない。
+            // 自身の root は終了対象にしないため、未登録でも安全側に倒れる。
+            .ok();
 
         let (stop, receiver) = mpsc::channel();
         let sampler_state = registry.inner.clone();
@@ -180,14 +182,17 @@ impl ProcessRegistry for LocalProcessRegistry {
                 "process pid must be greater than zero",
             ));
         }
-        // 最初のサンプル前でも PID 再利用を判定できるよう、登録時に開始時刻を確定する。
+        // 最初のサンプル前でも PID 再利用を判定できるよう、登録時に開始識別子を確定する。
         // 確定できない root は所有対象にしない（別プロセスを誤って管理しないため）。
-        let started_at_secs = process_start_time(spec.pid).ok_or_else(|| {
+        let identity = process_identity(spec.pid).ok_or_else(|| {
             ProcessError::new(
                 ProcessErrorKind::Io,
                 "process identity could not be verified",
             )
         })?;
+        let started_at_ms = process_start_time(spec.pid)
+            .map(|seconds| seconds.saturating_mul(1_000))
+            .unwrap_or_else(now_ms);
         let mut state = self
             .inner
             .lock()
@@ -203,8 +208,8 @@ impl ProcessRegistry for LocalProcessRegistry {
             root_id.clone(),
             RootState {
                 spec,
-                started_at_ms: started_at_secs.saturating_mul(1_000),
-                started_at_secs,
+                started_at_ms,
+                identity,
                 state: ProcessState::Running,
                 exited_at: None,
                 cpu_centipercent: 0,
@@ -247,7 +252,7 @@ impl ProcessRegistry for LocalProcessRegistry {
         workspace: Option<&WorkspaceId>,
         root_id: &ProcessRootId,
     ) -> Result<(), ProcessError> {
-        let (pid, started_at_secs) = {
+        let (pid, identity) = {
             let state = self.inner.lock().map_err(|_| {
                 ProcessError::new(ProcessErrorKind::Io, "process registry unavailable")
             })?;
@@ -269,9 +274,9 @@ impl ProcessRegistry for LocalProcessRegistry {
             if root.state == ProcessState::Exited {
                 return Ok(());
             }
-            (root.spec.pid, root.started_at_secs)
+            (root.spec.pid, root.identity)
         };
-        terminate_tree(pid, started_at_secs)?;
+        terminate_tree(pid, identity)?;
         if let Ok(mut state) = self.inner.lock()
             && let Some(root) = state.roots.get_mut(root_id)
         {
@@ -294,12 +299,11 @@ fn sample(state: &Mutex<RegistryState>, system: &mut System) {
     let children = children_by_parent(system);
     let mut remove = Vec::new();
     for root in state.roots.values_mut() {
-        let Some(process) = system.process(Pid::from_u32(root.spec.pid)) else {
+        if system.process(Pid::from_u32(root.spec.pid)).is_none() {
             mark_exited(root);
             continue;
-        };
-        let started_at_secs = process.start_time();
-        if root.started_at_secs != started_at_secs {
+        }
+        if process_identity(root.spec.pid) != Some(root.identity) {
             // PID が再利用された。別プロセスを所有ツリーとして扱わない。
             mark_exited(root);
             continue;
@@ -399,14 +403,14 @@ fn collect_tree(
     (nodes, cpu_centipercent, memory)
 }
 
-fn terminate_tree(pid: u32, started_at_secs: u64) -> Result<(), ProcessError> {
+fn terminate_tree(pid: u32, identity: u128) -> Result<(), ProcessError> {
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All);
-    let Some(root) = system.process(Pid::from_u32(pid)) else {
+    if system.process(Pid::from_u32(pid)).is_none() {
         return Ok(());
-    };
-    // 所有した時点の開始時刻と一致しない PID は再利用された別プロセス。
-    if root.start_time() != started_at_secs {
+    }
+    // 所有した時点の開始識別子と一致しない PID は再利用された別プロセス。
+    if process_identity(pid) != Some(identity) {
         return Ok(());
     }
     // Windows は git_action と同じ taskkill /T で子孫を含めて止める。
@@ -467,6 +471,50 @@ fn process_start_time(pid: u32) -> Option<u64> {
         .process(pid)
         .map(|process| process.start_time())
         .filter(|started| *started > 0)
+}
+
+/// PID 再利用を判定するための開始識別子。時計変更の影響を受けない値を使う。
+#[cfg(target_os = "linux")]
+fn process_identity(pid: u32) -> Option<u128> {
+    // /proc/<pid>/stat の 22 番目（starttime、boot からの clock ticks）。
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let rest = &stat[stat.rfind(')')? + 1..];
+    let starttime = rest.split_whitespace().nth(19)?.parse::<u64>().ok()?;
+    Some(starttime as u128)
+}
+
+#[cfg(windows)]
+fn process_identity(pid: u32) -> Option<u128> {
+    use windows_sys::Win32::Foundation::{CloseHandle, FILETIME};
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if handle.is_null() {
+        return None;
+    }
+    let mut creation = FILETIME {
+        dwLowDateTime: 0,
+        dwHighDateTime: 0,
+    };
+    let mut exit = creation;
+    let mut kernel = creation;
+    let mut user = creation;
+    let ok = unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) };
+    unsafe {
+        CloseHandle(handle);
+    }
+    if ok == 0 {
+        return None;
+    }
+    Some(((creation.dwHighDateTime as u128) << 32) | creation.dwLowDateTime as u128)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn process_identity(pid: u32) -> Option<u128> {
+    // 対応 OS の creation time はプロセス生成時に記録され、壁時計の変更では変わらない。
+    process_start_time(pid).map(u128::from)
 }
 
 #[cfg(test)]
@@ -615,9 +663,16 @@ mod tests {
     #[test]
     fn termination_refuses_a_reused_pid_identity() {
         let pid = std::process::id();
-        let started = process_start_time(pid).expect("current process start time");
-        terminate_tree(pid, started.saturating_add(1)).unwrap();
+        let identity = process_identity(pid).expect("current process identity");
+        terminate_tree(pid, identity.saturating_add(1)).unwrap();
         assert!(process_alive(pid));
+    }
+
+    #[test]
+    fn process_identity_is_stable_for_the_current_process() {
+        let pid = std::process::id();
+        let identity = process_identity(pid).expect("current process identity");
+        assert_eq!(process_identity(pid), Some(identity));
     }
 
     #[test]

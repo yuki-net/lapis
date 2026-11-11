@@ -18,6 +18,8 @@ pub struct ProcessSession {
     snapshot: ProcessSnapshot,
     /// Host の取得に失敗した理由。直前の Host 一覧を表示している間だけ保持する。
     host_error: Option<String>,
+    /// `snapshot` の Host root を取得できた Workspace。別 Workspace の stale を防ぐ。
+    host_workspace: Option<WorkspaceId>,
 }
 
 impl Clone for ProcessSession {
@@ -27,6 +29,7 @@ impl Clone for ProcessSession {
             local: self.local.clone(),
             snapshot: self.snapshot.clone(),
             host_error: self.host_error.clone(),
+            host_workspace: self.host_workspace.clone(),
         }
     }
 }
@@ -38,6 +41,7 @@ impl ProcessSession {
             local,
             snapshot: ProcessSnapshot::default(),
             host_error: None,
+            host_workspace: None,
         }
     }
 
@@ -60,17 +64,24 @@ impl ProcessSession {
         let mut host_error = None;
         let host = match workspace {
             Some(workspace) => match self.host.snapshot(workspace) {
-                Ok(snapshot) => Some(snapshot),
-                // 接続断をプロセス終了と誤認しない。Host の直前値を stale として保持する。
+                Ok(snapshot) => {
+                    self.host_workspace = Some(workspace.clone());
+                    Some(snapshot)
+                }
+                // 接続断をプロセス終了と誤認しない。同じ Workspace の直前値だけを stale として保持する。
                 Err(error) if self.local.is_some() => {
                     host_error = Some(error.to_string());
+                    let same_workspace = self.host_workspace.as_ref() == Some(workspace);
                     Some(ProcessSnapshot {
                         sampled_at_ms: self.snapshot.sampled_at_ms,
-                        roots: self
-                            .snapshot
-                            .roots_for(ProcessOrigin::Host)
-                            .cloned()
-                            .collect(),
+                        roots: if same_workspace {
+                            self.snapshot
+                                .roots_for(ProcessOrigin::Host)
+                                .cloned()
+                                .collect()
+                        } else {
+                            Vec::new()
+                        },
                     })
                 }
                 Err(error) => return Err(error),
@@ -311,6 +322,47 @@ mod tests {
                 .roots
                 .iter()
                 .any(|root| root.origin == ProcessOrigin::Host && root.pid == 1)
+        );
+        assert_eq!(session.host_error(), Some("host unavailable"));
+    }
+
+    #[test]
+    fn a_workspace_switch_drops_stale_host_roots() {
+        let first = WorkspaceId::new("workspace-1");
+        let second = WorkspaceId::new("workspace-2");
+        let host = Arc::new(HostFixture {
+            snapshot: ProcessSnapshot {
+                sampled_at_ms: 10,
+                roots: vec![root(ProcessOrigin::Host, 1, ProcessKind::Terminal)],
+            },
+            terminated: Default::default(),
+            fail: Default::default(),
+        });
+        let local = Arc::new(LocalFixture {
+            snapshot: ProcessSnapshot {
+                sampled_at_ms: 20,
+                roots: vec![root(ProcessOrigin::Desktop, 2, ProcessKind::Desktop)],
+            },
+            terminated: Default::default(),
+        });
+        let mut session = ProcessSession::new(host.clone(), Some(local));
+        session.refresh(Some(&first)).unwrap();
+        assert!(
+            session
+                .snapshot()
+                .roots
+                .iter()
+                .any(|root| root.origin == ProcessOrigin::Host)
+        );
+
+        host.fail.store(true, std::sync::atomic::Ordering::Release);
+        session.refresh(Some(&second)).unwrap();
+        assert!(
+            session
+                .snapshot()
+                .roots
+                .iter()
+                .all(|root| root.origin != ProcessOrigin::Host)
         );
         assert_eq!(session.host_error(), Some("host unavailable"));
     }

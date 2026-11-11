@@ -6,6 +6,7 @@ use super::{ResourceManagerFeature, ResourceRow, format_memory, kind_label, rows
 
 impl Render for ResourceManagerFeature {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.note_rendered(cx);
         let sampled = self.state.snapshot.roots.len();
         let mut content = div()
             .id("resource-manager")

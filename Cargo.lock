@@ -4707,6 +4707,7 @@ dependencies = [
  "editor-core",
  "process",
  "sysinfo",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
