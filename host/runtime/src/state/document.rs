@@ -526,10 +526,13 @@ pub(super) fn document_snapshot(
         snapshot.external_change = client_api::DocumentExternalChange::Deleted;
     } else if let Some(path) = &resource.path {
         let absolute = workspace.resolver.resolve_scoped_path(path)?;
-        snapshot.external_change = match resource
-            .document
-            .external_change(workspace.files.fingerprint(&absolute)?.as_ref())
-        {
+        // 読み取りできない path は外部削除として扱う。1つの文書の失敗で
+        // Workspace 全体の Snapshot と他の Terminal の復旧を止めない。
+        let Some(fingerprint) = workspace.files.fingerprint(&absolute).ok().flatten() else {
+            snapshot.external_change = client_api::DocumentExternalChange::Deleted;
+            return Ok(snapshot);
+        };
+        snapshot.external_change = match resource.document.external_change(Some(&fingerprint)) {
             ::document::ExternalChange::Unchanged => client_api::DocumentExternalChange::Unchanged,
             ::document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
             ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,

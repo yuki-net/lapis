@@ -545,6 +545,71 @@ fn snapshot_resync_reports_external_change_with_unsent_document_content() {
 }
 
 #[test]
+fn snapshot_resync_survives_a_document_path_replaced_by_a_directory() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("broken.ts"), "broken").unwrap();
+    fs::write(root.path().join("healthy.ts"), "healthy").unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    for (request, path) in [(2, "broken.ts"), (3, "healthy.ts")] {
+        assert!(matches!(
+            dispatch(
+                &service,
+                &session,
+                request,
+                RequestBody::DocumentOpen(DocumentOpenRequest {
+                    workspace_id: workspace_id.clone(),
+                    path: WorkspaceRelativePath::parse(path).unwrap(),
+                }),
+            ),
+            ResponseBody::DocumentOpen(_)
+        ));
+    }
+
+    // 開いている file をディレクトリへ置き換えると fingerprint の読み取りが失敗する。
+    fs::remove_file(root.path().join("broken.ts")).unwrap();
+    fs::create_dir(root.path().join("broken.ts")).unwrap();
+
+    let ResponseBody::SnapshotResync(snapshot) = dispatch(
+        &service,
+        &session,
+        4,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id,
+            reason: SnapshotReason::Reconnect,
+        }),
+    ) else {
+        panic!("expected snapshot");
+    };
+    assert_eq!(snapshot.snapshot.documents.len(), 2);
+    let broken = snapshot
+        .snapshot
+        .documents
+        .iter()
+        .find(|document| {
+            document
+                .path
+                .as_ref()
+                .is_some_and(|path| path.as_str() == "broken.ts")
+        })
+        .expect("expected broken document");
+    let healthy = snapshot
+        .snapshot
+        .documents
+        .iter()
+        .find(|document| {
+            document
+                .path
+                .as_ref()
+                .is_some_and(|path| path.as_str() == "healthy.ts")
+        })
+        .expect("expected healthy document");
+    assert_eq!(broken.external_change, DocumentExternalChange::Deleted);
+    assert_eq!(healthy.external_change, DocumentExternalChange::Unchanged);
+}
+
+#[test]
 fn slow_event_subscriber_is_dropped_without_blocking_backend_state() {
     let root = tempfile::tempdir().unwrap();
     let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
