@@ -332,6 +332,11 @@ impl Document {
         }
     }
 
+    /// 保存済みのファイル fingerprint を持つか。
+    pub fn has_saved_fingerprint(&self) -> bool {
+        self.saved_fingerprint.is_some()
+    }
+
     /// 内容を読まずに取得したメタデータで外部変更を判定する。
     pub fn external_change_metadata(&self, actual: Option<(u64, Option<u128>)>) -> ExternalChange {
         match (&self.saved_fingerprint, actual) {

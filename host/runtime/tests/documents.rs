@@ -8,7 +8,7 @@ use std::{
 };
 
 use backend_state::{
-    BackendService, BackendSession, BackendState, WorkspaceEntry, WorkspaceEntryKind,
+    BackendService, BackendSession, BackendState, FileMetadata, WorkspaceEntry, WorkspaceEntryKind,
     WorkspaceFileBackend, WorkspaceRegistration,
 };
 use client_api::{
@@ -83,6 +83,22 @@ impl WorkspaceFileBackend for TestFiles {
             .collect::<Result<Vec<_>, DocumentError>>()?;
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(entries)
+    }
+
+    fn metadata(&self, path: &Path) -> Result<Option<FileMetadata>, DocumentError> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(Some(FileMetadata {
+                byte_len: metadata.len(),
+                modified_nanos: metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos()),
+            })),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(DocumentError::io(error.to_string())),
+        }
     }
 }
 
@@ -607,7 +623,7 @@ fn snapshot_resync_survives_a_document_parent_replaced_by_a_file() {
                 .is_some_and(|path| path.as_str() == "healthy.ts")
         })
         .expect("expected healthy document");
-    assert_eq!(broken.external_change, DocumentExternalChange::Deleted);
+    assert_eq!(broken.external_change, DocumentExternalChange::Modified);
     assert_eq!(healthy.external_change, DocumentExternalChange::Unchanged);
 }
 

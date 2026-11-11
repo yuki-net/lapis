@@ -524,24 +524,45 @@ pub(super) fn document_snapshot(
     let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
     let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
         .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-    let fingerprint = if missing_root {
-        None
+    let actual = if missing_root {
+        Ok(None)
     } else if let Some(path) = &resource.path {
         match workspace.resolver.resolve_scoped_path(path) {
-            Ok(absolute) => workspace.files.metadata(&absolute).ok().flatten(),
+            Ok(absolute) => workspace
+                .files
+                .metadata(&absolute)
+                .map_err(|error| error.to_string()),
             Err(error) if matches!(&error, PathSecurityError::WorkspaceEscape) => {
                 return Err(error.into());
             }
             // Workspace 内でも親ディレクトリの置換などで解決できない path は、
             // その文書だけ読取不能として扱い、Snapshot 全体を失敗させない。
-            Err(_) => None,
+            Err(error) => Err(error.to_string()),
         }
     } else {
-        None
+        Ok(None)
     };
-    snapshot.external_change = match resource.document.external_change_metadata(
-        fingerprint.map(|metadata| (metadata.byte_len, metadata.modified_nanos)),
-    ) {
+    let external_change = match actual {
+        Ok(metadata) => resource.document.external_change_metadata(
+            metadata.map(|metadata| (metadata.byte_len, metadata.modified_nanos)),
+        ),
+        Err(error) => {
+            // 読み取りエラーは削除と区別できるよう記録し、復旧自体は継続する。
+            eprintln!(
+                "Documentの外部変更を確認できません: {}: {error}",
+                resource
+                    .path
+                    .as_ref()
+                    .map_or_else(|| "<untitled>".to_owned(), |path| path.as_str().to_owned())
+            );
+            if resource.document.has_saved_fingerprint() {
+                ::document::ExternalChange::Modified
+            } else {
+                ::document::ExternalChange::Unchanged
+            }
+        }
+    };
+    snapshot.external_change = match external_change {
         ::document::ExternalChange::Unchanged => client_api::DocumentExternalChange::Unchanged,
         ::document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
         ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
