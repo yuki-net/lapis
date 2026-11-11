@@ -229,21 +229,20 @@ impl TerminalFeature {
     /// 設定の変更を描画へ反映する。フォントや行送りが変わると列数・行数も変わる。
     fn apply_terminal_appearance(
         &mut self,
-        values: &settings::GlobalSettings,
+        values: &settings::ResolvedSettings,
         cx: &mut gpui::Context<Self>,
     ) {
         let family: gpui::SharedString = values
-            .terminal_font_family
-            .clone()
+            .terminal_font_family()
             .unwrap_or_else(|| super::default_font_family().to_owned())
             .into();
         let size = values
-            .terminal_font_size
+            .terminal_font_size()
             .unwrap_or_else(super::default_font_size) as f32;
         let line_height_percent = values
-            .terminal_line_height_percent
+            .terminal_line_height_percent()
             .unwrap_or_else(super::default_line_height_percent);
-        let caret_shape = values.terminal_caret_shape.unwrap_or_default();
+        let caret_shape = values.terminal_caret_shape().unwrap_or_default();
         if self.font_family == family
             && self.font_size == size
             && self.line_height_percent == line_height_percent
@@ -327,20 +326,20 @@ impl TerminalFeature {
             .map(|coordinator| coordinator.read(cx).values.clone());
         let font_family: gpui::SharedString = values
             .as_ref()
-            .and_then(|values| values.terminal_font_family.clone())
+            .and_then(|values| values.terminal_font_family())
             .unwrap_or_else(|| super::default_font_family().to_owned())
             .into();
         let font_size = values
             .as_ref()
-            .and_then(|values| values.terminal_font_size)
+            .and_then(|values| values.terminal_font_size())
             .unwrap_or_else(super::default_font_size) as f32;
         let line_height_percent = values
             .as_ref()
-            .and_then(|values| values.terminal_line_height_percent)
+            .and_then(|values| values.terminal_line_height_percent())
             .unwrap_or_else(super::default_line_height_percent);
         let caret_shape = values
             .as_ref()
-            .and_then(|values| values.terminal_caret_shape)
+            .and_then(|values| values.terminal_caret_shape())
             .unwrap_or_default();
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
         let mut feature = Self {

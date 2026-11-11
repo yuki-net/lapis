@@ -22,7 +22,7 @@ use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, W
 use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
-use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use settings::{SettingsDocument, SettingsError, SettingsRepository, SettingsScope};
 use task::{TaskConnection, TaskControl, TaskError, TaskSnapshot, TaskStart};
 use terminal::{TerminalBackend, TerminalError, TerminalEvent, TerminalId};
 use workspace::{
@@ -38,7 +38,7 @@ pub(super) struct PrototypeBackend {
     files: Arc<Mutex<BTreeMap<PathBuf, Vec<u8>>>>,
     documents: Arc<Mutex<HashMap<DocumentId, Document>>>,
     snapshot: Arc<Mutex<Option<WorkspaceSnapshot>>>,
-    settings: Arc<Mutex<GlobalSettings>>,
+    settings: Arc<Mutex<SettingsDocument>>,
     conversations: Arc<Mutex<ConversationState>>,
     next_document: Arc<Mutex<u64>>,
 }
@@ -49,7 +49,7 @@ impl PrototypeBackend {
             files: Arc::new(Mutex::new(BTreeMap::new())),
             documents: Arc::new(Mutex::new(HashMap::new())),
             snapshot: Arc::new(Mutex::new(None)),
-            settings: Arc::new(Mutex::new(GlobalSettings::default())),
+            settings: Arc::new(Mutex::new(SettingsDocument::empty(SettingsScope::User))),
             conversations: Arc::new(Mutex::new(ConversationState::default())),
             next_document: Arc::new(Mutex::new(1)),
         };
@@ -352,11 +352,11 @@ impl WorkspaceStateRepository for PrototypeBackend {
     }
 }
 
-impl GlobalSettingsRepository for PrototypeBackend {
-    fn load(&self) -> Result<GlobalSettings, SettingsError> {
+impl SettingsRepository for PrototypeBackend {
+    fn load(&self) -> Result<SettingsDocument, SettingsError> {
         Ok(self.settings.lock().unwrap().clone())
     }
-    fn save(&self, settings: &GlobalSettings) -> Result<(), SettingsError> {
+    fn save(&self, settings: &SettingsDocument) -> Result<(), SettingsError> {
         *self.settings.lock().unwrap() = settings.clone();
         Ok(())
     }

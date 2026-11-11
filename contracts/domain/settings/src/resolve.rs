@@ -1,0 +1,232 @@
+//! スコープをまたいだ実効値の解決。
+
+use std::collections::BTreeMap;
+
+use localization::LocaleId;
+
+use crate::definition::{
+    DefinitionCatalog, SettingKey, TERMINAL_CARET_SHAPE, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE,
+    TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME, UI_THEME,
+};
+use crate::document::SettingsDocument;
+use crate::scope::{SettingsContext, SettingsScope};
+use crate::syntax::{SyntaxTheme, TerminalCaretShape};
+use crate::value::SettingValue;
+
+/// 1項目の解決結果。値が無い場合は `value` も `origin` も空になる。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedSetting {
+    value: Option<SettingValue>,
+    origin: Option<SettingsScope>,
+}
+
+impl ResolvedSetting {
+    pub fn value(&self) -> Option<&SettingValue> {
+        self.value.as_ref()
+    }
+
+    /// 値を保存しているスコープ。既定値のときは `None`。
+    pub fn origin(&self) -> Option<&SettingsScope> {
+        self.origin.as_ref()
+    }
+}
+
+/// コンテキストに対する実効値一式。UI はこの型だけを読む。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedSettings {
+    context: SettingsContext,
+    settings: BTreeMap<SettingKey, ResolvedSetting>,
+}
+
+impl ResolvedSettings {
+    /// 参照可能な文書だけを対象に、優先順位の高いスコープで上書きしながら解決する。
+    pub fn resolve(
+        context: &SettingsContext,
+        catalog: &'static DefinitionCatalog,
+        documents: &[&SettingsDocument],
+    ) -> Self {
+        let scopes = context.scopes();
+        let mut settings = BTreeMap::new();
+        for definition in catalog.settings() {
+            let mut resolved = ResolvedSetting {
+                value: definition.default.clone(),
+                origin: None,
+            };
+            for scope in &scopes {
+                let Some(document) = documents.iter().find(|document| document.scope() == scope)
+                else {
+                    continue;
+                };
+                if let Some(value) = document.get(definition.key) {
+                    resolved = ResolvedSetting {
+                        value: Some(value.clone()),
+                        origin: Some(scope.clone()),
+                    };
+                }
+            }
+            settings.insert(definition.key, resolved);
+        }
+        Self {
+            context: context.clone(),
+            settings,
+        }
+    }
+
+    pub fn context(&self) -> &SettingsContext {
+        &self.context
+    }
+
+    pub fn setting(&self, key: SettingKey) -> Option<&ResolvedSetting> {
+        self.settings.get(&key)
+    }
+
+    pub fn value(&self, key: SettingKey) -> Option<&SettingValue> {
+        self.setting(key).and_then(ResolvedSetting::value)
+    }
+
+    pub fn origin(&self, key: SettingKey) -> Option<&SettingsScope> {
+        self.setting(key).and_then(ResolvedSetting::origin)
+    }
+
+    pub fn text(&self, key: SettingKey) -> Option<&str> {
+        self.value(key).and_then(SettingValue::as_text)
+    }
+
+    pub fn integer(&self, key: SettingKey) -> Option<i64> {
+        self.value(key).and_then(SettingValue::as_integer)
+    }
+
+    /// 保存前の値を一時的に上書きする。楽観更新の表示に使う。
+    pub fn overlay(&mut self, scope: SettingsScope, key: SettingKey, value: SettingValue) {
+        self.settings.insert(
+            key,
+            ResolvedSetting {
+                value: Some(value),
+                origin: Some(scope),
+            },
+        );
+    }
+
+    pub fn theme(&self) -> &str {
+        self.text(UI_THEME).unwrap_or("lapis.dark")
+    }
+
+    pub fn locale(&self) -> LocaleId {
+        LocaleId::new(self.text(UI_LOCALE).unwrap_or("en-US"))
+    }
+
+    pub fn syntax_theme(&self) -> Option<SyntaxTheme> {
+        self.text(UI_SYNTAX_THEME).and_then(SyntaxTheme::from_id)
+    }
+
+    pub fn terminal_font_family(&self) -> Option<String> {
+        self.text(TERMINAL_FONT_FAMILY).map(ToOwned::to_owned)
+    }
+
+    pub fn terminal_font_size(&self) -> Option<u8> {
+        self.u8_setting(TERMINAL_FONT_SIZE)
+    }
+
+    pub fn terminal_line_height_percent(&self) -> Option<u8> {
+        self.u8_setting(TERMINAL_LINE_HEIGHT)
+    }
+
+    pub fn terminal_caret_shape(&self) -> Option<TerminalCaretShape> {
+        self.text(TERMINAL_CARET_SHAPE)
+            .and_then(TerminalCaretShape::from_id)
+    }
+
+    fn u8_setting(&self, key: SettingKey) -> Option<u8> {
+        self.integer(key).and_then(|value| u8::try_from(value).ok())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::catalog::catalog;
+    use crate::scope::{HostId, ProjectId};
+
+    fn document(scope: SettingsScope, values: &[(SettingKey, SettingValue)]) -> SettingsDocument {
+        let mut document = SettingsDocument::empty(scope);
+        for (key, value) in values {
+            document.insert(*key, value.clone());
+        }
+        document
+    }
+
+    #[test]
+    fn deeper_scopes_override_user_values() {
+        let context = SettingsContext::new()
+            .with_host(HostId::new("host-a"))
+            .with_project(ProjectId::new("lapis"));
+        let user = document(
+            SettingsScope::User,
+            &[
+                (UI_THEME, SettingValue::text("lapis.dark")),
+                (TERMINAL_FONT_SIZE, SettingValue::integer(13)),
+            ],
+        );
+        let host = document(
+            SettingsScope::Host {
+                id: HostId::new("host-a"),
+            },
+            &[(TERMINAL_FONT_SIZE, SettingValue::integer(15))],
+        );
+        let local = document(
+            SettingsScope::ProjectLocal {
+                id: ProjectId::new("lapis"),
+            },
+            &[(TERMINAL_FONT_SIZE, SettingValue::integer(17))],
+        );
+        let resolved = ResolvedSettings::resolve(&context, catalog(), &[&user, &host, &local]);
+        assert_eq!(resolved.terminal_font_size(), Some(17));
+        assert_eq!(
+            resolved.origin(TERMINAL_FONT_SIZE),
+            Some(&SettingsScope::ProjectLocal {
+                id: ProjectId::new("lapis")
+            })
+        );
+        assert_eq!(resolved.theme(), "lapis.dark");
+        assert_eq!(resolved.origin(UI_THEME), Some(&SettingsScope::User));
+    }
+
+    #[test]
+    fn definitions_supply_defaults_without_an_origin() {
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[]);
+        assert_eq!(resolved.theme(), "lapis.dark");
+        assert_eq!(resolved.origin(UI_THEME), None);
+        assert_eq!(resolved.locale().as_str(), "en-US");
+        assert_eq!(resolved.syntax_theme(), Some(SyntaxTheme::Lapis));
+        assert_eq!(resolved.terminal_font_family(), None);
+        assert_eq!(resolved.terminal_caret_shape(), None);
+    }
+
+    #[test]
+    fn documents_outside_the_context_are_ignored() {
+        let context = SettingsContext::new();
+        let shared = document(
+            SettingsScope::ProjectShared {
+                id: ProjectId::new("lapis"),
+            },
+            &[(TERMINAL_FONT_SIZE, SettingValue::integer(20))],
+        );
+        let resolved = ResolvedSettings::resolve(&context, catalog(), &[&shared]);
+        assert_eq!(resolved.terminal_font_size(), None);
+    }
+
+    #[test]
+    fn overlay_wins_until_the_saved_value_arrives() {
+        let user = document(
+            SettingsScope::User,
+            &[(TERMINAL_FONT_SIZE, SettingValue::integer(13))],
+        );
+        let mut resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[&user]);
+        resolved.overlay(
+            SettingsScope::User,
+            TERMINAL_FONT_SIZE,
+            SettingValue::integer(18),
+        );
+        assert_eq!(resolved.terminal_font_size(), Some(18));
+    }
+}

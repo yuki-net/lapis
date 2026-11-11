@@ -13,7 +13,10 @@ use desktop_client::{
 };
 use editor_core::{ConversationId, WorkspaceId};
 use serde::{Deserialize, Serialize};
-use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use settings::{
+    DOCUMENT_VERSION, LEGACY_DOCUMENT_VERSION, LegacyGlobalSettings, SettingsDocument,
+    SettingsError, SettingsRepository, SettingsScope,
+};
 use std::sync::{Arc, Mutex};
 use workbench::WorkbenchConnection;
 
@@ -26,13 +29,35 @@ pub struct LocalConversationRepository {
 }
 
 #[derive(Clone)]
-pub struct LocalGlobalSettingsRepository {
+pub struct LocalUserSettingsRepository {
+    /// 現在の保存先。
     path: PathBuf,
+    /// 旧形式の保存先。存在すれば読み替えの入力にする。
+    legacy_path: Option<PathBuf>,
 }
 
-impl LocalGlobalSettingsRepository {
+impl LocalUserSettingsRepository {
     pub fn new(path: PathBuf) -> Self {
-        Self { path }
+        Self {
+            path,
+            legacy_path: None,
+        }
+    }
+
+    /// 旧形式のファイルも読み替え対象にする。
+    pub fn with_legacy(path: PathBuf, legacy_path: PathBuf) -> Self {
+        Self {
+            path,
+            legacy_path: Some(legacy_path),
+        }
+    }
+
+    /// 状態ディレクトリからユーザー設定の保存先を組み立てる。
+    pub fn in_directory(directory: &Path) -> Self {
+        Self::with_legacy(
+            directory.join("settings.json"),
+            directory.join("settings-v1.json"),
+        )
     }
 
     pub fn user_default() -> Self {
@@ -40,29 +65,68 @@ impl LocalGlobalSettingsRepository {
             .map(PathBuf::from)
             .unwrap_or_else(env::temp_dir)
             .join("Lapis");
-        Self::new(base.join("settings-v1.json"))
+        Self::in_directory(&base)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// version を見て、現在形式か旧形式かを振り分ける。
+    fn decode(&self, bytes: &[u8]) -> Result<SettingsDocument, SettingsError> {
+        let version = serde_json::from_slice::<serde_json::Value>(bytes)
+            .map_err(|error| SettingsError::new(error.to_string()))?
+            .get("version")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(u64::from(LEGACY_DOCUMENT_VERSION));
+        let document = match u32::try_from(version).ok() {
+            Some(DOCUMENT_VERSION) => serde_json::from_slice::<SettingsDocument>(bytes)
+                .map_err(|error| SettingsError::new(error.to_string()))?,
+            Some(LEGACY_DOCUMENT_VERSION) => {
+                let legacy: LegacyGlobalSettings = serde_json::from_slice(bytes)
+                    .map_err(|error| SettingsError::new(error.to_string()))?;
+                SettingsDocument::from_legacy(legacy)
+            }
+            _ => {
+                return Err(SettingsError::new(format!(
+                    "未対応の設定ファイルversionです: {version}"
+                )));
+            }
+        };
+        if document.scope() != &SettingsScope::User {
+            return Err(SettingsError::new(
+                "ユーザー設定ファイルのスコープが一致しません",
+            ));
+        }
+        Ok(document)
     }
 }
 
-impl GlobalSettingsRepository for LocalGlobalSettingsRepository {
-    fn load(&self) -> Result<GlobalSettings, SettingsError> {
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(GlobalSettings::default());
+impl SettingsRepository for LocalUserSettingsRepository {
+    fn load(&self) -> Result<SettingsDocument, SettingsError> {
+        let read = |path: &Path| -> Result<Option<Vec<u8>>, SettingsError> {
+            match fs::read(path) {
+                Ok(bytes) => Ok(Some(bytes)),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(SettingsError::new(error.to_string())),
             }
-            Err(error) => return Err(SettingsError::new(error.to_string())),
         };
-        let settings: GlobalSettings = serde_json::from_slice(&bytes)
-            .map_err(|error| SettingsError::new(error.to_string()))?;
-        if settings.version != 1 {
-            return Err(SettingsError::new("Unsupported global settings version"));
+        // 現在形式を優先し、無ければ旧形式から移行する。
+        let bytes = match read(&self.path)? {
+            Some(bytes) => Some(bytes),
+            None => match &self.legacy_path {
+                Some(path) => read(path)?,
+                None => None,
+            },
+        };
+        match bytes {
+            Some(bytes) => self.decode(&bytes),
+            None => Ok(SettingsDocument::empty(SettingsScope::User)),
         }
-        Ok(settings)
     }
 
-    fn save(&self, settings: &GlobalSettings) -> Result<(), SettingsError> {
-        atomic_json_write(&self.path, settings)
+    fn save(&self, document: &SettingsDocument) -> Result<(), SettingsError> {
+        atomic_json_write(&self.path, document)
             .map_err(|error| SettingsError::new(error.to_string()))
     }
 }
@@ -401,68 +465,76 @@ mod tests {
     };
     use editor_core::DocumentId;
     use editor_core::ExecutionId;
-    use localization::LocaleId;
-    use settings::GlobalSettingsRepository;
     use terminal::TerminalStatus;
     use workbench::VersionedViewState;
 
     use super::*;
 
     #[test]
-    fn global_settings_repository_round_trips_locale() {
+    fn user_settings_repository_round_trips_values() {
         let directory = tempfile::tempdir().unwrap();
-        let repository = LocalGlobalSettingsRepository::new(directory.path().join("settings.json"));
-        let settings = GlobalSettings {
-            version: 1,
-            locale: LocaleId::new("ja-JP"),
-            theme: "lapis.white".to_owned(),
-            syntax_theme: Some(settings::SyntaxTheme::Zed),
-            terminal_font_family: Some("Menlo".to_owned()),
-            terminal_font_size: Some(15),
-            terminal_line_height_percent: Some(140),
-            terminal_caret_shape: Some(settings::TerminalCaretShape::Bar),
-        };
+        let repository = LocalUserSettingsRepository::in_directory(directory.path());
+        let mut document = SettingsDocument::empty(SettingsScope::User);
+        document.insert(settings::UI_LOCALE, settings::SettingValue::text("ja-JP"));
+        document.insert(
+            settings::UI_THEME,
+            settings::SettingValue::text("lapis.white"),
+        );
+        document.insert(
+            settings::UI_SYNTAX_THEME,
+            settings::SettingValue::text("intellij-classic"),
+        );
+        document.insert(
+            settings::TERMINAL_FONT_SIZE,
+            settings::SettingValue::integer(15),
+        );
 
-        repository.save(&settings).unwrap();
+        repository.save(&document).unwrap();
 
-        assert_eq!(repository.load().unwrap(), settings);
+        assert_eq!(repository.load().unwrap(), document);
+        assert!(directory.path().join("settings.json").is_file());
     }
 
     #[test]
-    fn syntax_family_survives_ui_changes_and_restart() {
+    fn legacy_settings_file_is_read_and_rewritten_in_the_new_format() {
         use desktop_client::SettingsSession;
         use settings::SyntaxTheme;
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings-v1.json");
         fs::write(
-            &path,
-            r#"{"version":1,"locale":"ja-JP","theme":"lapis.dark","syntax_theme":"zed.one-dark"}"#,
+            directory.path().join("settings-v1.json"),
+            r#"{"version":1,"locale":"ja-JP","theme":"lapis.dark","syntax_theme":"zed.one-dark","terminal_font_size":15}"#,
         )
         .unwrap();
-        let session = SettingsSession::load(std::sync::Arc::new(
-            LocalGlobalSettingsRepository::new(path.clone()),
-        ))
-        .unwrap();
-        assert_eq!(session.settings().syntax_theme, Some(SyntaxTheme::Zed));
-        session.set_theme("lapis.white".into()).unwrap();
-        let restarted = SettingsSession::load(std::sync::Arc::new(
-            LocalGlobalSettingsRepository::new(path.clone()),
-        ))
-        .unwrap();
-        assert_eq!(restarted.settings().theme, "lapis.white");
-        assert_eq!(restarted.settings().syntax_theme, Some(SyntaxTheme::Zed));
-        let stored: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-        assert_eq!(stored["syntax_theme"], "zed");
+        let repository =
+            || std::sync::Arc::new(LocalUserSettingsRepository::in_directory(directory.path()));
 
-        for family in [SyntaxTheme::Intellij, SyntaxTheme::IntellijClassic] {
-            session.set_syntax_theme(family).unwrap();
-            let restarted = SettingsSession::load(std::sync::Arc::new(
-                LocalGlobalSettingsRepository::new(directory.path().join("settings-v1.json")),
-            ))
-            .unwrap();
-            assert_eq!(restarted.settings().syntax_theme, Some(family));
-            assert_eq!(restarted.settings().theme, "lapis.white");
-        }
+        let session = SettingsSession::load(repository()).unwrap();
+        assert_eq!(session.settings().syntax_theme(), Some(SyntaxTheme::Zed));
+        assert_eq!(session.settings().locale().as_str(), "ja-JP");
+        assert_eq!(session.settings().terminal_font_size(), Some(15));
+
+        session.set_theme("lapis.white".into()).unwrap();
+        let restarted = SettingsSession::load(repository()).unwrap();
+        assert_eq!(restarted.settings().theme(), "lapis.white");
+        assert_eq!(restarted.settings().syntax_theme(), Some(SyntaxTheme::Zed));
+
+        let stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.path().join("settings.json")).unwrap())
+                .unwrap();
+        assert_eq!(stored["version"], 2);
+        assert_eq!(stored["scope"]["kind"], "user");
+        assert_eq!(stored["values"]["ui.syntax-theme"], "zed");
+        // 旧ファイルは残したまま読み替える。
+        assert!(directory.path().join("settings-v1.json").is_file());
+    }
+
+    #[test]
+    fn unknown_version_is_rejected_instead_of_silently_reset() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.json");
+        fs::write(&path, r#"{"version":9,"locale":"ja-JP"}"#).unwrap();
+        let repository = LocalUserSettingsRepository::new(path);
+        assert!(repository.load().is_err());
     }
 
     #[test]

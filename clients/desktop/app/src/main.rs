@@ -11,7 +11,7 @@ use desktop_client::{
 };
 use host::BackendHost;
 use persistence::{
-    HostConversationRepository, LocalConversationRepository, LocalGlobalSettingsRepository,
+    HostConversationRepository, LocalConversationRepository, LocalUserSettingsRepository,
     LocalWorkspaceStateRepository,
 };
 use platform::{ConnectionGate, LocalLspBackend, LocalWorkspaceSearchBackend, LoopbackBackend};
@@ -127,12 +127,12 @@ fn main() {
     {
         eprintln!("Project/Taskの復元に失敗しました: {error}");
     }
-    let settings_session = SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
-        startup.directory.join("settings-v1.json"),
-    )))
+    let settings_session = SettingsSession::load(Arc::new(
+        LocalUserSettingsRepository::in_directory(&startup.directory),
+    ))
     .unwrap_or_else(|error| {
         eprintln!("Global settings load failed: {error}");
-        SettingsSession::load(Arc::new(LocalGlobalSettingsRepository::new(
+        SettingsSession::load(Arc::new(LocalUserSettingsRepository::new(
             std::env::temp_dir().join("lapis-settings-fallback.json"),
         )))
         .expect("temporary global settings must be available")

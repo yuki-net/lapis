@@ -144,7 +144,7 @@ impl DesktopRoot {
             .unwrap_or_default();
         let conversation_id = services.conversation.active_id().clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
-        let initial_locale = services.settings.settings().locale;
+        let initial_locale = services.settings.settings().locale();
         if services.terminal.terminals().is_empty() {
             let summaries = services
                 .conversation
@@ -292,11 +292,12 @@ impl DesktopRoot {
             cx.observe(&group, |root, _, cx| root.synchronize_group(cx)),
             cx.subscribe(
                 &settings,
-                |root, _, values: &settings::GlobalSettings, cx| {
+                |root, _, values: &settings::ResolvedSettings, cx| {
+                    let locale = values.locale();
                     root.shell
-                        .update(cx, |shell, cx| shell.set_locale(values.locale.clone(), cx));
+                        .update(cx, |shell, cx| shell.set_locale(locale.clone(), cx));
                     root.group.update(cx, |group, cx| {
-                        group.locale = values.locale.clone();
+                        group.locale = locale;
                         cx.notify();
                     });
                     cx.refresh_windows();
