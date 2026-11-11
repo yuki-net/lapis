@@ -25,7 +25,7 @@ use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
 };
 use editor_core::{DocumentId, SessionId, WorkspaceId};
-use futures_channel::mpsc;
+use futures_channel::{mpsc, oneshot};
 use git::{GitConnection, GitDiffSnapshot, GitError, GitErrorKind, GitSnapshot, WorktreeSnapshot};
 use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
@@ -58,8 +58,10 @@ const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
 
 thread_local! {
     static BACKEND: RefCell<Option<BackendState>> = const { RefCell::new(None) };
-    /// 切替中は旧Workspace向けのCommandや別の切替要求を適用しない。
+    /// 同時に複数の切替を開始しない。
     static SWITCHING: Cell<bool> = const { Cell::new(false) };
+    /// 送信待ちのCommandを流し終えた後、Workbenchの保存だけを止める。
+    static DRAINING: Cell<bool> = const { Cell::new(false) };
 }
 
 struct BackendState {
@@ -268,13 +270,14 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
 pub async fn switch_workspace(workspace_id: &str) -> Result<(), String> {
     let requested =
         ApiWorkspaceId::try_new(workspace_id.to_owned()).map_err(|_| "Workspace IDが不正です")?;
-    let (connection, current, can_switch) = BACKEND.with(|backend| {
+    let (connection, current, can_switch, commands) = BACKEND.with(|backend| {
         let backend = backend.borrow();
         let state = backend.as_ref().ok_or("Hostに接続していません")?;
         Ok::<_, String>((
             state.connection.clone(),
             state.workspace.clone(),
             state.can_switch,
+            state.commands.clone(),
         ))
     })?;
     if !can_switch {
@@ -286,7 +289,19 @@ pub async fn switch_workspace(workspace_id: &str) -> Result<(), String> {
     if SWITCHING.with(|switching| switching.replace(true)) {
         return Err("Workspaceを切り替えています".to_owned());
     }
+    // 切替前の編集・保存要求を旧 Workspace へ送り切ってから attachment を閉じる。
+    let (done, drained) = oneshot::channel();
+    if commands.unbounded_send(Command::Barrier { done }).is_err() {
+        SWITCHING.with(|switching| switching.set(false));
+        return Err("Workspace切替の待機を開始できません".to_owned());
+    }
+    if drained.await.is_err() {
+        SWITCHING.with(|switching| switching.set(false));
+        return Err("Workspace切替の待機に失敗しました".to_owned());
+    }
+    DRAINING.with(|draining| draining.set(true));
     let result = switch_workspace_inner(&connection, &current, &requested).await;
+    DRAINING.with(|draining| draining.set(false));
     SWITCHING.with(|switching| switching.set(false));
     result
 }
@@ -318,23 +333,31 @@ async fn switch_workspace_inner(
             root_name: response.identity.root_name,
         },
         Ok(ResponseBody::Error(error)) => {
-            restore_connection(connection, &current_api).await;
-            return Err(error.code.as_str().to_owned());
+            return Err(fail_switch(
+                connection,
+                &current_api,
+                requested,
+                error.code.as_str().to_owned(),
+            )
+            .await);
         }
         Ok(_) => {
-            restore_connection(connection, &current_api).await;
-            return Err("Workspace identityを取得できません".to_owned());
+            return Err(fail_switch(
+                connection,
+                &current_api,
+                requested,
+                "Workspace identityを取得できません".to_owned(),
+            )
+            .await);
         }
         Err(error) => {
-            restore_connection(connection, &current_api).await;
-            return Err(error);
+            return Err(fail_switch(connection, &current_api, requested, error).await);
         }
     };
     let entries = match fetch_tree(connection, requested).await {
         Ok(entries) => entries,
         Err(error) => {
-            restore_connection(connection, &current_api).await;
-            return Err(error);
+            return Err(fail_switch(connection, &current_api, requested, error).await);
         }
     };
     let terminals = match request(
@@ -418,15 +441,50 @@ async fn switch_workspace_inner(
     Ok(())
 }
 
-/// 切替先への接続に失敗したとき、元の Workspace の attachment を戻す。
-async fn restore_connection(connection: &BrowserConnection, workspace: &ApiWorkspaceId) {
+/// 切替先への接続に失敗したとき、開いたままの切替先を閉じて元の Workspace へ戻す。
+async fn restore_connection(
+    connection: &BrowserConnection,
+    current: &ApiWorkspaceId,
+    attempted: &ApiWorkspaceId,
+) -> Result<(), String> {
     let _ = request(
         connection,
-        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
-            workspace_id: workspace.clone(),
+        RequestBody::WorkspaceClose(WorkspaceCloseRequest {
+            workspace_id: attempted.clone(),
         }),
     )
     .await;
+    match request(
+        connection,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: current.clone(),
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::WorkspaceConnect(_)) => Ok(()),
+        Ok(ResponseBody::Error(error)) => Err(error.code.as_str().to_owned()),
+        Ok(_) => Err("元のWorkspaceへ再接続できません".to_owned()),
+        Err(error) => Err(error),
+    }
+}
+
+/// 切替失敗を呼び出し元へ返す。復帰にも失敗した場合は古い複製での操作を止める。
+async fn fail_switch(
+    connection: &BrowserConnection,
+    current: &ApiWorkspaceId,
+    attempted: &ApiWorkspaceId,
+    error: String,
+) -> String {
+    match restore_connection(connection, current, attempted).await {
+        Ok(()) => error,
+        Err(recovery) => {
+            BACKEND.with(|backend| *backend.borrow_mut() = None);
+            format!(
+                "{error}（元のWorkspaceへ戻れませんでした: {recovery}。ページを再読み込みしてください）"
+            )
+        }
+    }
 }
 
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {

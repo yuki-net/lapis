@@ -19,7 +19,7 @@ use client_api::{
 use client_core::{AsyncHostConnection, browser::BrowserConnection};
 use document::{ExternalChange, FileFingerprint};
 use editor_core::{DocumentId, SessionId};
-use futures_channel::mpsc;
+use futures_channel::{mpsc, oneshot};
 use futures_util::StreamExt;
 use terminal::{TerminalEvent, TerminalId, TerminalInput};
 use workbench::{ConversationViewState, WorkbenchUpdate, WorkbenchWritePlan};
@@ -87,6 +87,10 @@ pub(super) enum Command {
         view: ConversationViewState,
     },
     RetryWorkbenchLocal,
+    /// ここまでに積まれたCommandの処理完了を待つ。
+    Barrier {
+        done: oneshot::Sender<()>,
+    },
 }
 
 pub(super) async fn request(
@@ -433,11 +437,19 @@ async fn handle(
     replica: &Rc<RefCell<Replica>>,
     command: Command,
 ) -> Result<(), String> {
-    // 切替中に旧 Workspace 向けの要求を新 Workspace へ送らない。
-    if super::SWITCHING.with(Cell::get) {
-        return Ok(());
+    // 送信待ちを流し終えた後に旧 Workspace の表示を新 Workspace へ書き込まない。
+    if super::DRAINING.with(Cell::get)
+        && matches!(
+            &command,
+            Command::SaveWorkbench { .. } | Command::RetryWorkbenchLocal
+        )
+    {
+        return Err("Workspace切替中です".into());
     }
     match command {
+        Command::Barrier { done } => {
+            let _ = done.send(());
+        }
         Command::Open { local } => {
             let (relative, workspace) = {
                 let replica = replica.borrow();
@@ -651,6 +663,10 @@ async fn handle(
             rows,
             profile,
         } => {
+            // 切替で消えた旧WorkspaceのTerminalを新Workspaceに作らない。
+            if !replica.borrow().terminals.contains_key(local.as_str()) {
+                return Err("Terminalがありません".into());
+            }
             let workspace_id = replica.borrow().workspace.clone();
             let cwd = match cwd.as_deref() {
                 Some(path) => match path.strip_prefix(ROOT) {

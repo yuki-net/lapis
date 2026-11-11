@@ -1754,9 +1754,6 @@ impl DesktopRoot {
                     cx.spawn_in(window, async move |_, cx| {
                         match desktop_client::web_host::switch_workspace(&workspace).await {
                             Ok(()) => {
-                                if let Some(info) = desktop_client::web_host::connection_info() {
-                                    crate::web::notify_workspace_switched(&info);
-                                }
                                 // ブラウザーのWindowは閉じると再生成できないため、
                                 // 同じWindowのRootを新しいWorkspaceのSessionで組み直す。
                                 let outcome = handle.update(cx, |root, window, cx| {
@@ -1775,13 +1772,27 @@ impl DesktopRoot {
                                     Ok(Err(error)) => Some(error),
                                     Err(error) => Some(error.to_string()),
                                 };
-                                if let Some(error) = error {
-                                    let _ = handle.update(cx, |root, _, cx| {
-                                        root.set_status(
-                                            format!("Workspaceを開けません: {error}"),
-                                            cx,
+                                match error {
+                                    // 画面の再構築が成功してから URL と保存済み選択を追従させる。
+                                    None => {
+                                        if let Some(info) =
+                                            desktop_client::web_host::connection_info()
+                                        {
+                                            crate::web::notify_workspace_switched(&info);
+                                        }
+                                    }
+                                    Some(error) => {
+                                        // 画面を作れない場合は、再接続でattachmentと表示を揃える。
+                                        web_sys::console::error_1(
+                                            &format!(
+                                                "Workspace切替後のUIを組み立てられません: {error}"
+                                            )
+                                            .into(),
                                         );
-                                    });
+                                        if let Some(window) = web_sys::window() {
+                                            let _ = window.location().reload();
+                                        }
+                                    }
                                 }
                             }
                             Err(error) => {
