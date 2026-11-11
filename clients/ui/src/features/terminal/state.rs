@@ -1629,7 +1629,23 @@ mod tests {
                 TerminalStatus::Running,
                 TerminalSize::new(80, 24),
             );
-            snapshot.screen.rows = (0..24).map(|_| model_row(80, "hello world")).collect();
+            // ASCII 行と、セル境界と glyph advance がずれやすい日本語行を混在させる。
+            snapshot.screen.rows = (0..24)
+                .map(|index| {
+                    if index % 2 == 0 {
+                        model_row(80, "hello world")
+                    } else {
+                        let mut row = model_row(80, "こんにちは世界");
+                        for (column, cell) in row.cells.iter_mut().enumerate() {
+                            if column < 7 && !cell.text.is_empty() {
+                                // ワイド文字は 2 セル分を占有する。
+                                cell.width = 2;
+                            }
+                        }
+                        row
+                    }
+                })
+                .collect();
             feature.terminals.push(snapshot);
             feature
         });

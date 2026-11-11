@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ops::Range;
+use std::rc::Rc;
 
 use gpui::{
     App, Bounds, Element, ElementId, Entity, GlobalElementId, Hsla, InspectorElementId, LayoutId,
@@ -11,10 +12,12 @@ use terminal::{TerminalCell, TerminalColor, TerminalRow};
 use super::TerminalFeature;
 use super::view::TerminalMetrics;
 
-/// キャッシュする shaped line の上限。超えたら丸ごと捨てて作り直す。
-const MAX_CACHED_LINES: usize = 4_096;
+/// キャッシュする shaped line の総数。超えたら丸ごと捨てて作り直す。
+const MAX_CACHED_SHAPED_LINES: usize = 8_192;
 /// 下線の太さ。従来の `underline()` と同じ見た目に寄せる。
 const UNDERLINE_THICKNESS: Pixels = px(1.0);
+/// セル境界と glyph 位置の一致判定に使う許容差。
+const CELL_ALIGNMENT_TOLERANCE: f32 = 0.01;
 
 /// 端末のセル描画に使う既定色。テーマ変更はキーに含まれるので自動で再 shape される。
 #[derive(Clone, Copy)]
@@ -34,9 +37,29 @@ pub(super) struct TerminalElement {
 }
 
 struct TerminalLine {
-    shaped: ShapedLine,
+    layout: Rc<TerminalLineLayout>,
     origin: Point<Pixels>,
     backgrounds: Vec<PaintQuad>,
+}
+
+/// 行の描画方法。セル境界と glyph 位置が揃う行は 1 本の shaped line で描く。
+enum TerminalLineLayout {
+    Whole(Box<ShapedLine>),
+    Cells(Vec<CellLine>),
+}
+
+struct CellLine {
+    shaped: ShapedLine,
+    column: u32,
+}
+
+impl TerminalLineLayout {
+    fn shaped_line_count(&self) -> usize {
+        match self {
+            Self::Whole(_) => 1,
+            Self::Cells(cells) => cells.len(),
+        }
+    }
 }
 
 pub(crate) struct TerminalPrepaint {
@@ -119,14 +142,14 @@ impl Element for TerminalElement {
                     continue;
                 };
                 let key = line_key(row, &metrics, colors);
-                let shaped = cache.shaped(window, &metrics, key);
+                let layout = cache.layout(window, &metrics, key);
                 let origin = point(
                     left,
                     top + px(offset as f32 * metrics.row_height.to_f64() as f32),
                 );
                 let backgrounds = background_quads(row, origin, &metrics, colors);
                 lines.push(TerminalLine {
-                    shaped,
+                    layout,
                     origin,
                     backgrounds,
                 });
@@ -147,52 +170,66 @@ impl Element for TerminalElement {
         cx: &mut App,
     ) {
         let row_height = self.metrics.row_height;
+        let cell_width = f32::from(self.metrics.cell_width);
         for line in &mut prepaint.lines {
             for background in line.backgrounds.drain(..) {
                 window.paint_quad(background);
             }
-            crate::gpui_compat::paint_line(&line.shaped, line.origin, row_height, window, cx);
+            match &*line.layout {
+                TerminalLineLayout::Whole(shaped) => {
+                    crate::gpui_compat::paint_line(shaped, line.origin, row_height, window, cx);
+                }
+                TerminalLineLayout::Cells(cells) => {
+                    for cell in cells {
+                        let origin = point(
+                            line.origin.x + px(cell.column as f32 * cell_width),
+                            line.origin.y,
+                        );
+                        crate::gpui_compat::paint_line(
+                            &cell.shaped,
+                            origin,
+                            row_height,
+                            window,
+                            cx,
+                        );
+                    }
+                }
+            }
         }
     }
 }
 
-/// 行の内容（テキスト + スタイル + フォント）から shaped line を引き当てるキャッシュ。
+/// 行内容のキャッシュ。セル境界と glyph 位置が揃う行だけ 1 本の shaped line にする。
 #[derive(Default)]
 pub(super) struct TerminalLineCache {
-    lines: HashMap<TerminalLineKey, ShapedLine>,
+    layouts: HashMap<TerminalLineKey, Rc<TerminalLineLayout>>,
+    shaped_lines: usize,
 }
 
 impl TerminalLineCache {
     /// フォント設定の変更など、キーに含めていない条件が変わったときに捨てる。
     pub(super) fn clear(&mut self) {
-        self.lines.clear();
+        self.layouts.clear();
+        self.shaped_lines = 0;
     }
 
-    fn shaped(
+    fn layout(
         &mut self,
         window: &Window,
         metrics: &TerminalMetrics,
         key: TerminalLineKey,
-    ) -> ShapedLine {
-        if let Some(line) = self.lines.get(&key) {
-            return line.clone();
+    ) -> Rc<TerminalLineLayout> {
+        if let Some(layout) = self.layouts.get(&key) {
+            return layout.clone();
         }
-        let runs = key
-            .runs
-            .iter()
-            .map(|run| run.to_text_run(metrics))
-            .collect::<Vec<_>>();
-        let shaped = window.text_system().shape_line(
-            SharedString::from(key.text.clone()),
-            metrics.font_size,
-            &runs,
-            None,
-        );
-        if self.lines.len() >= MAX_CACHED_LINES {
-            self.lines.clear();
+        let layout = Rc::new(build_layout(window, metrics, &key));
+        let added = layout.shaped_line_count();
+        if self.shaped_lines + added > MAX_CACHED_SHAPED_LINES {
+            self.clear();
         }
-        self.lines.insert(key, shaped.clone());
-        shaped
+        self.shaped_lines += added;
+        self.layouts.insert(key, layout.clone());
+        layout
     }
 }
 
@@ -200,8 +237,48 @@ impl TerminalLineCache {
 struct TerminalLineKey {
     font_family: SharedString,
     font_size_bits: u32,
+    /// セル境界の計算に使う幅。変わると配置も変わるのでキーに含める。
+    cell_width_bits: u32,
     text: String,
-    runs: Vec<TerminalRun>,
+    cells: Vec<TerminalCellKey>,
+}
+
+impl TerminalLineKey {
+    /// 隣接する同じスタイルのセルを 1 つの run にまとめる。
+    fn runs(&self) -> Vec<TerminalRun> {
+        let mut runs: Vec<TerminalRun> = Vec::new();
+        for cell in &self.cells {
+            let run = cell.run();
+            match runs.last_mut() {
+                Some(last) if last.same_style(&run) => last.len += run.len,
+                _ => runs.push(run),
+            }
+        }
+        runs
+    }
+}
+
+/// セル 1 つ分の表示情報。文字列は `TerminalLineKey::text` の byte 範囲で参照する。
+#[derive(PartialEq, Eq, Hash)]
+struct TerminalCellKey {
+    byte_len: usize,
+    width: u8,
+    color: u32,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl TerminalCellKey {
+    fn run(&self) -> TerminalRun {
+        TerminalRun {
+            len: self.byte_len,
+            color: self.color,
+            bold: self.bold,
+            italic: self.italic,
+            underline: self.underline,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -245,6 +322,70 @@ impl TerminalRun {
     }
 }
 
+/// 行全体を shape し、セル境界と一致するなら 1 本の line で描く。
+/// 一致しない行（ワイド文字やフォールバック glyph など）はセル単位に分けて
+/// セル幅の位置へ描き、背景 quad やカーソルとずれないようにする。
+fn build_layout(
+    window: &Window,
+    metrics: &TerminalMetrics,
+    key: &TerminalLineKey,
+) -> TerminalLineLayout {
+    let runs = key
+        .runs()
+        .iter()
+        .map(|run| run.to_text_run(metrics))
+        .collect::<Vec<_>>();
+    let shaped = window.text_system().shape_line(
+        SharedString::from(key.text.clone()),
+        metrics.font_size,
+        &runs,
+        None,
+    );
+    if boundaries_aligned(&shaped, &key.cells, metrics.cell_width) {
+        return TerminalLineLayout::Whole(Box::new(shaped));
+    }
+
+    let mut cells = Vec::new();
+    let mut column = 0u32;
+    let mut byte = 0usize;
+    for cell in &key.cells {
+        let text = &key.text[byte..byte + cell.byte_len];
+        // 空白だけのセルは描く文字がない。下線は見えるので残す。
+        if text != " " || cell.underline {
+            let run = cell.run().to_text_run(metrics);
+            let shaped = window.text_system().shape_line(
+                SharedString::from(text.to_owned()),
+                metrics.font_size,
+                &[run],
+                None,
+            );
+            cells.push(CellLine { shaped, column });
+        }
+        byte += cell.byte_len;
+        column += u32::from(cell.width);
+    }
+    TerminalLineLayout::Cells(cells)
+}
+
+/// 各行のセル開始位置・終端が、glyph の advance と一致するか確認する。
+fn boundaries_aligned(shaped: &ShapedLine, cells: &[TerminalCellKey], cell_width: Pixels) -> bool {
+    let cell_width = f32::from(cell_width);
+    let mut byte = 0usize;
+    let mut column = 0u32;
+    for cell in cells {
+        let expected = column as f32 * cell_width;
+        let actual = f32::from(shaped.x_for_index(byte));
+        if (actual - expected).abs() > CELL_ALIGNMENT_TOLERANCE {
+            return false;
+        }
+        byte += cell.byte_len;
+        column += u32::from(cell.width);
+    }
+    let expected = column as f32 * cell_width;
+    let actual = f32::from(shaped.x_for_index(byte));
+    (actual - expected).abs() <= CELL_ALIGNMENT_TOLERANCE
+}
+
 /// 行の表示内容をキーにする。空白セルも含めて従来と同じ文字列・スタイルを作る。
 fn line_key(
     row: &TerminalRow,
@@ -252,7 +393,7 @@ fn line_key(
     colors: TerminalColors,
 ) -> TerminalLineKey {
     let mut text = String::new();
-    let mut runs: Vec<TerminalRun> = Vec::new();
+    let mut cells = Vec::with_capacity(row.cells.len());
     for cell in &row.cells {
         // ワイド文字の spacer (width 0) は前のセルが文字を持つ。
         if cell.width == 0 {
@@ -264,23 +405,21 @@ fn line_key(
             cell.text.as_str()
         };
         text.push_str(piece);
-        let run = TerminalRun {
-            len: piece.len(),
+        cells.push(TerminalCellKey {
+            byte_len: piece.len(),
+            width: cell.width,
             color: u32::from(foreground(cell, colors)),
             bold: cell.bold,
             italic: cell.italic,
             underline: cell.underline,
-        };
-        match runs.last_mut() {
-            Some(last) if last.same_style(&run) => last.len += run.len,
-            _ => runs.push(run),
-        }
+        });
     }
     TerminalLineKey {
         font_family: metrics.font_family.clone(),
         font_size_bits: f32::from(metrics.font_size).to_bits(),
+        cell_width_bits: f32::from(metrics.cell_width).to_bits(),
         text,
-        runs,
+        cells,
     }
 }
 
@@ -442,6 +581,47 @@ mod tests {
         }
     }
 
+    struct NoopView;
+
+    impl gpui::Render for NoopView {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    #[gpui::test]
+    fn glyph_advance_mismatch_falls_back_to_cell_layout(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+
+        let window = cx.add_window(|_, _| NoopView);
+        cx.update_window(window.into(), |_, window, _| {
+            let mut row = TerminalRow::empty(2);
+            row.cells[0].text = "a".to_owned();
+            row.cells[1].text = "a".to_owned();
+            let mut metrics = metrics();
+            let runs = line_key(&row, &metrics, colors()).runs();
+            let run = runs[0].to_text_run(&metrics);
+            let shaped =
+                window
+                    .text_system()
+                    .shape_line("aa".into(), metrics.font_size, &[run], None);
+            metrics.cell_width = shaped.x_for_index(1);
+
+            let aligned = build_layout(window, &metrics, &line_key(&row, &metrics, colors()));
+            assert!(matches!(aligned, TerminalLineLayout::Whole(_)));
+
+            // glyph の advance がセル幅と一致しない場合はセル単位の配置にする。
+            metrics.cell_width = px(f32::from(metrics.cell_width) / 3.0);
+            let fallback = build_layout(window, &metrics, &line_key(&row, &metrics, colors()));
+            assert!(matches!(fallback, TerminalLineLayout::Cells(_)));
+        })
+        .unwrap();
+    }
+
     #[test]
     fn wide_character_spacers_are_skipped_and_equal_styles_merge() {
         let mut row = TerminalRow::empty(4);
@@ -455,17 +635,35 @@ mod tests {
 
         let key = line_key(&row, &metrics(), colors());
         assert_eq!(key.text, "あxy");
-        assert_eq!(key.runs.len(), 2);
-        assert_eq!(key.runs[0].len, 4);
-        assert!(key.runs[0].same_style(&TerminalRun {
+        assert_eq!(key.cells.len(), 3);
+        assert_eq!(key.cells[0].width, 2);
+        let runs = key.runs();
+        assert_eq!(runs.len(), 2);
+        assert_eq!(runs[0].len, 4);
+        assert!(runs[0].same_style(&TerminalRun {
             len: 0,
             color: u32::from(colors().foreground),
             bold: false,
             italic: false,
             underline: false,
         }));
-        assert_eq!(key.runs[1].len, 1);
-        assert!(key.runs[1].bold);
+        assert_eq!(runs[1].len, 1);
+        assert!(runs[1].bold);
+    }
+
+    #[test]
+    fn line_key_includes_cell_widths_and_metrics() {
+        let mut row = TerminalRow::empty(2);
+        row.cells[0].text = "a".to_owned();
+        let narrow = line_key(&row, &metrics(), colors());
+
+        row.cells[0].width = 2;
+        let wide = line_key(&row, &metrics(), colors());
+        assert!(narrow != wide);
+
+        let mut other_metrics = metrics();
+        other_metrics.cell_width = px(9.0);
+        assert!(narrow != line_key(&row, &other_metrics, colors()));
     }
 
     #[test]
