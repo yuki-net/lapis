@@ -203,10 +203,11 @@ fn default_state_directory() -> Result<PathBuf, Error> {
 }
 
 fn select_state_directory(preferred: &Path, legacy: &Path) -> Result<PathBuf, Error> {
-    const FILES: [&str; 3] = [
+    const FILES: [&str; 4] = [
         "session-v1.txt",
         "conversations-v1.json",
         "settings-v1.json",
+        "settings.json",
     ];
     let has_state = |directory: &Path| -> Result<bool, std::io::Error> {
         for name in FILES {
@@ -341,19 +342,18 @@ mod tests {
             let startup = Startup::open(&arguments).unwrap().unwrap();
             assert_eq!(startup.directory, *directory);
             assert_eq!(startup.connector_directory, *directory);
-            let settings = persistence::LocalGlobalSettingsRepository::new(
-                startup.directory.join("settings-v1.json"),
-            );
+            let settings =
+                persistence::LocalUserSettingsRepository::in_directory(&startup.directory);
             let settings =
                 desktop_client::SettingsSession::load(std::sync::Arc::new(settings)).unwrap();
             if directory == &first {
                 settings.set_theme("lapis.white".into()).unwrap();
             } else {
-                assert_eq!(settings.settings().theme, "lapis.dark");
+                assert_eq!(settings.settings().theme(), "lapis.dark");
             }
         }
-        assert!(first.join("settings-v1.json").is_file());
-        assert!(!second.join("settings-v1.json").exists());
+        assert!(first.join("settings.json").is_file());
+        assert!(!second.join("settings.json").exists());
     }
 
     #[test]

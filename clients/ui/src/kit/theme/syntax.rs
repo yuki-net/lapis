@@ -85,6 +85,7 @@ static PRESETS: [Preset; 10] = [
     },
 ];
 
+#[cfg(test)]
 pub(crate) const FAMILIES: [(SyntaxTheme, &str); 5] = [
     (SyntaxTheme::Lapis, "Lapis"),
     (SyntaxTheme::VsCode, "VS Code"),

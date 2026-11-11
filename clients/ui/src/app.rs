@@ -230,7 +230,7 @@ pub(crate) fn open_desktop_window(
     initial: InitialView,
     cx: &mut App,
 ) {
-    let locale_id = services.settings.settings().locale.clone();
+    let locale_id = services.settings.settings().locale();
     let workspace_name = services
         .connection
         .as_ref()

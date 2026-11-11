@@ -16,8 +16,8 @@ use client_api::{
     TerminalCommandResponse, TerminalId, TerminalInputRequest, TerminalListProfilesRequest,
     TerminalListProfilesResponse, TerminalReleaseRequest, TerminalResizeRequest,
     TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest, UNSUPPORTED,
-    WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId, WorkspaceListResponse,
-    WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
+    WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId, WorkspaceIdentitySnapshot,
+    WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
 use document_state::{DocumentRegistry, DocumentResource};
 use text::TextEdit;
@@ -853,6 +853,16 @@ impl BackendState {
     }
 }
 
+/// Workspace root のディレクトリ名。root 自体が名前を持たない場合も空にしない。
+fn root_name(root: &std::path::Path) -> String {
+    root.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| root.to_string_lossy().trim().to_owned())
+}
+
 /// 溜まった通知を1回にまとめる。監視が切れた場合も再同期を促す。
 fn take_changed(slot: &mut Option<std::sync::mpsc::Receiver<()>>) -> bool {
     let Some(receiver) = slot.take() else {
@@ -880,6 +890,7 @@ fn take_changed(slot: &mut Option<std::sync::mpsc::Receiver<()>>) -> bool {
 struct WorkspaceState {
     workbench: workbench::VersionedViewState,
     summary: WorkspaceSummary,
+    identity: WorkspaceIdentitySnapshot,
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
     documents: DocumentRegistry,
@@ -909,6 +920,11 @@ impl WorkspaceState {
             Some(timeout) => DocumentRegistry::new().with_owner_idle_timeout(timeout),
             None => DocumentRegistry::new(),
         };
+        let identity = WorkspaceIdentitySnapshot {
+            workspace_id: registration.workspace_id.clone(),
+            name: registration.name.clone(),
+            root_name: root_name(&registration.root),
+        };
         let mut terminals = TerminalRegistry::new(registration.terminal);
         if let Some(processes) = registration.processes.clone() {
             terminals = terminals.with_processes(
@@ -922,6 +938,7 @@ impl WorkspaceState {
                 workspace_id: registration.workspace_id.clone(),
                 name: registration.name,
             },
+            identity,
             resolver: WorkspacePathResolver::new(registration.root)?,
             files: registration.files,
             documents,
@@ -1022,8 +1039,15 @@ fn canonical_document_path(
 
 #[cfg(test)]
 mod tests {
-    use super::take_changed;
+    use super::{root_name, take_changed};
     use std::sync::mpsc;
+
+    #[test]
+    fn root_name_uses_the_last_directory_and_never_becomes_empty() {
+        assert_eq!(root_name(std::path::Path::new("repo")), "repo");
+        assert_eq!(root_name(std::path::Path::new("nested/repo")), "repo");
+        assert_eq!(root_name(std::path::Path::new("/")), "/");
+    }
 
     #[test]
     fn take_changed_coalesces_notifications_and_keeps_the_receiver() {

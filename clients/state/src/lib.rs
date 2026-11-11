@@ -19,7 +19,10 @@ use lsp::{
     CompletionItem, DefinitionTarget, Diagnostic, LanguageServerBackend, LspError, LspPosition,
 };
 use serde::{Deserialize, Serialize};
-use settings::{GlobalSettings, GlobalSettingsRepository, SettingsError};
+use settings::{
+    DefinitionCatalog, ResolvedSettings, SettingKey, SettingValue, SettingsContext, SettingsError,
+    SettingsRepository, SettingsScope,
+};
 use task::{TaskControl, TaskError, TaskMode};
 use terminal::{
     TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSize,
@@ -27,87 +30,129 @@ use terminal::{
 };
 #[cfg(test)]
 use terminal::{TerminalDelta, TerminalRow, TerminalRowUpdate, TerminalScreen};
-use workspace::{FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceSearchBackend};
+use workspace::{
+    FileEntry, SearchError, SearchHit, WorkspaceError, WorkspaceIdentity, WorkspaceSearchBackend,
+};
 
 mod connection_display;
 mod extensions;
 mod process;
+mod settings_store;
 mod view_state;
 mod workbench_sync;
 pub use connection_display::{
-    connection_label, host_label, host_name_from_url, short_workspace_label, window_title,
-    workspace_label,
+    connected_workspace_name, connection_label, host_label, host_name_from_url,
+    short_workspace_label, window_title, workspace_label,
 };
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use process::ProcessSession;
+pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(target_arch = "wasm32")]
 pub mod web_host;
 
-/// グローバル設定を UI に公開し、変更を永続化するアプリケーション境界。
+/// 設定値を UI に公開し、変更を所有者ごとの保存先へ永続化するアプリケーション境界。
 #[derive(Clone)]
 pub struct SettingsSession {
-    repository: Arc<dyn GlobalSettingsRepository>,
-    settings: Arc<std::sync::Mutex<GlobalSettings>>,
-    writer: Arc<std::sync::Mutex<()>>,
+    model: Arc<SettingsModel>,
+    scope: SettingsScope,
 }
 
 impl SettingsSession {
-    pub fn load(repository: Arc<dyn GlobalSettingsRepository>) -> Result<Self, SettingsError> {
-        let settings = repository.load()?;
+    /// ユーザースコープだけを持つ Session を作る。
+    pub fn load(repository: Arc<dyn SettingsRepository>) -> Result<Self, SettingsError> {
+        Self::for_scope(SettingsContext::default(), SettingsScope::User, repository)
+    }
+
+    /// 解決コンテキストと、既定の書き込み先スコープを指定して Session を作る。
+    pub fn for_scope(
+        context: SettingsContext,
+        scope: SettingsScope,
+        repository: Arc<dyn SettingsRepository>,
+    ) -> Result<Self, SettingsError> {
+        let model = SettingsModel::new(context);
+        model.attach(scope.clone(), repository)?;
         Ok(Self {
-            repository,
-            settings: Arc::new(std::sync::Mutex::new(settings)),
-            writer: Arc::new(std::sync::Mutex::new(())),
+            model: Arc::new(model),
+            scope,
         })
     }
 
-    pub fn settings(&self) -> GlobalSettings {
-        self.settings
-            .lock()
-            .expect("settings state lock failed")
-            .clone()
+    /// 追加のスコープ（Host / Project）を解決対象に加える。
+    pub fn attach(
+        &self,
+        scope: SettingsScope,
+        repository: Arc<dyn SettingsRepository>,
+    ) -> Result<(), SettingsError> {
+        self.model.attach(scope, repository)
+    }
+
+    /// 現在のコンテキストに対する実効値。
+    pub fn settings(&self) -> ResolvedSettings {
+        self.model.resolved()
+    }
+
+    pub fn catalog(&self) -> &'static DefinitionCatalog {
+        settings::catalog()
+    }
+
+    pub fn scope(&self) -> &SettingsScope {
+        &self.scope
+    }
+
+    /// 指定スコープへ保存する。
+    pub fn set_in(
+        &self,
+        scope: SettingsScope,
+        key: SettingKey,
+        value: SettingValue,
+    ) -> Result<(), SettingsError> {
+        self.model.set(scope, key, value)
+    }
+
+    /// 複数の設定を1回の保存でまとめて更新する。`None` は既定値へ戻す。
+    pub fn update(
+        &self,
+        changes: &[(SettingKey, Option<SettingValue>)],
+    ) -> Result<(), SettingsError> {
+        self.model.update(self.scope.clone(), changes)
+    }
+
+    pub fn set(&self, key: SettingKey, value: SettingValue) -> Result<(), SettingsError> {
+        self.model.set(self.scope.clone(), key, value)
+    }
+
+    pub fn clear(&self, key: SettingKey) -> Result<(), SettingsError> {
+        self.model.clear(self.scope.clone(), key)
+    }
+
+    /// 設定変更の購読を開始する。
+    pub fn subscribe(&self) -> SettingsWatch {
+        self.model.subscribe()
     }
 
     pub fn set_locale(&self, locale: LocaleId) -> Result<(), SettingsError> {
-        let _writer = self.writer.lock().expect("settings writer lock failed");
-        let mut settings = self.settings();
-        if settings.locale == locale {
-            return Ok(());
-        }
-        settings.locale = locale;
-        self.repository.save(&settings)?;
-        *self.settings.lock().expect("settings state lock failed") = settings;
-        Ok(())
+        self.set(settings::UI_LOCALE, SettingValue::text(locale.as_str()))
     }
 
     pub fn set_theme(&self, theme: String) -> Result<(), SettingsError> {
-        let _writer = self.writer.lock().expect("settings writer lock failed");
-        let mut settings = self.settings();
-        if settings.theme == theme {
-            return Ok(());
-        }
-        settings.theme = theme;
-        self.repository.save(&settings)?;
-        *self.settings.lock().expect("settings state lock failed") = settings;
-        Ok(())
+        self.set(settings::UI_THEME, SettingValue::text(theme))
     }
 
-    pub fn set_syntax_theme(&self, theme: settings::SyntaxTheme) -> Result<(), SettingsError> {
-        let _writer = self.writer.lock().expect("settings writer lock failed");
-        let mut settings = self.settings();
-        if settings.syntax_theme.as_ref() == Some(&theme) {
-            return Ok(());
+    /// 構文配色を保存する。`None` は既定値へ戻す。
+    pub fn set_syntax_theme(
+        &self,
+        theme: Option<settings::SyntaxTheme>,
+    ) -> Result<(), SettingsError> {
+        match theme {
+            Some(theme) => self.set(settings::UI_SYNTAX_THEME, SettingValue::text(theme.as_id())),
+            None => self.clear(settings::UI_SYNTAX_THEME),
         }
-        settings.syntax_theme = Some(theme);
-        self.repository.save(&settings)?;
-        *self.settings.lock().expect("settings state lock failed") = settings;
-        Ok(())
     }
 
-    /// ターミナルの表示設定を保存する。`None` は既定値へ戻す。
+    /// ターミナルの表示設定をまとめて保存する。`None` は既定値へ戻す。
     pub fn set_terminal_appearance(
         &self,
         family: Option<String>,
@@ -115,22 +160,24 @@ impl SettingsSession {
         line_height_percent: Option<u8>,
         caret_shape: Option<settings::TerminalCaretShape>,
     ) -> Result<(), SettingsError> {
-        let _writer = self.writer.lock().expect("settings writer lock failed");
-        let mut settings = self.settings();
-        if settings.terminal_font_family == family
-            && settings.terminal_font_size == size
-            && settings.terminal_line_height_percent == line_height_percent
-            && settings.terminal_caret_shape == caret_shape
-        {
-            return Ok(());
-        }
-        settings.terminal_font_family = family;
-        settings.terminal_font_size = size;
-        settings.terminal_line_height_percent = line_height_percent;
-        settings.terminal_caret_shape = caret_shape;
-        self.repository.save(&settings)?;
-        *self.settings.lock().expect("settings state lock failed") = settings;
-        Ok(())
+        self.update(&[
+            (
+                settings::TERMINAL_FONT_FAMILY,
+                family.map(SettingValue::text),
+            ),
+            (
+                settings::TERMINAL_FONT_SIZE,
+                size.map(|value| SettingValue::integer(i64::from(value))),
+            ),
+            (
+                settings::TERMINAL_LINE_HEIGHT,
+                line_height_percent.map(|value| SettingValue::integer(i64::from(value))),
+            ),
+            (
+                settings::TERMINAL_CARET_SHAPE,
+                caret_shape.map(|shape| SettingValue::text(shape.as_id())),
+            ),
+        ])
     }
 }
 
@@ -1031,6 +1078,30 @@ impl std::fmt::Display for DocumentCloseFailure {
 
 impl std::error::Error for DocumentCloseFailure {}
 
+/// Host の identity から Workspace の表示名を決める。
+///
+/// identity を取得できなかった場合は `None` を返す。Remote の root は Host の
+/// 実ディレクトリではなく profile の label から作る仮想パスなので、取得失敗時に
+/// root から名前を推測すると接続先と無関係な名前を表示してしまう。
+fn workspace_display_name(
+    identity: Result<Option<WorkspaceIdentity>, WorkspaceError>,
+    root: &Path,
+) -> Option<String> {
+    match identity {
+        Ok(Some(identity)) => Some(identity.display_name().trim().to_owned()),
+        // identity を返さない接続先だけ root のディレクトリ名へ退避する。
+        Ok(None) => Some(
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or_default()
+                .to_owned(),
+        ),
+        Err(_) => None,
+    }
+}
+
 /// UIからDocumentと外部I/Oを分離する、複数文書Workspace編集セッション。
 pub struct EditorSession {
     documents: Vec<OpenDocument>,
@@ -1456,12 +1527,15 @@ impl EditorSession {
             .workspace(&root)
             .map_err(|error| WorkspaceError::new(error.to_string()))?;
         let tree = self.repository.list_tree(&root)?;
+        let identity = self.repository.identity(&root);
         self.detach_documents();
-        self.workspace_name = root
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("Workspace")
-            .to_owned();
+        if self.workspace_root.as_deref() != Some(root.as_path()) {
+            // 別の Workspace へ移るときは前の名前を引き継がない。
+            self.workspace_name.clear();
+        }
+        if let Some(name) = workspace_display_name(identity, &root) {
+            self.workspace_name = name;
+        }
         self.workspace_root = Some(root);
         self.workspace_restore_root = None;
         self.workspace_id = Some(workspace_id);
@@ -1945,15 +2019,17 @@ impl EditorSession {
                 .document_connection
                 .workspace(&root)
                 .map_err(|error| WorkspaceError::new(error.to_string()))
-                .and_then(|id| self.repository.list_tree(&root).map(|tree| (id, tree)));
+                .and_then(|id| {
+                    let identity = self.repository.identity(&root);
+                    self.repository
+                        .list_tree(&root)
+                        .map(|tree| (id, tree, identity))
+                });
             match workspace {
-                Ok((id, tree)) => {
+                Ok((id, tree, identity)) => {
                     self.workspace_id = Some(id);
-                    self.workspace_name = root
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .unwrap_or("Workspace")
-                        .to_owned();
+                    self.workspace_name =
+                        workspace_display_name(identity, &root).unwrap_or_default();
                     self.file_tree = tree;
                     self.workspace_root = Some(root);
                 }
@@ -2109,56 +2185,17 @@ mod tests {
         assert_eq!(view.workbench, WorkbenchViewState::default());
     }
 
-    #[test]
-    fn settings_read_cache_does_not_wait_for_persistence_io() {
-        struct SlowSettings {
-            started: mpsc::Sender<()>,
-            release: Mutex<mpsc::Receiver<()>>,
-        }
-        impl GlobalSettingsRepository for SlowSettings {
-            fn load(&self) -> Result<GlobalSettings, SettingsError> {
-                Ok(GlobalSettings::default())
-            }
-            fn save(&self, _: &GlobalSettings) -> Result<(), SettingsError> {
-                self.started.send(()).unwrap();
-                self.release.lock().unwrap().recv().unwrap();
-                Ok(())
-            }
-        }
-        let (started, receiver) = mpsc::channel();
-        let (release, released) = mpsc::channel();
-        let session = SettingsSession::load(Arc::new(SlowSettings {
-            started,
-            release: Mutex::new(released),
-        }))
-        .unwrap();
-        let writer_session = session.clone();
-        let writer = thread::spawn(move || writer_session.set_theme("new-theme".into()));
-        receiver
-            .recv_timeout(std::time::Duration::from_secs(2))
-            .unwrap();
-        let (ready, read) = mpsc::channel();
-        let reader_session = session.clone();
-        let reader = thread::spawn(move || ready.send(reader_session.settings()).unwrap());
-        let cached = read.recv_timeout(std::time::Duration::from_secs(2));
-        release.send(()).unwrap();
-        writer.join().unwrap().unwrap();
-        reader.join().unwrap();
-        assert_eq!(cached.unwrap(), GlobalSettings::default());
-        assert_eq!(session.settings().theme, "new-theme");
-    }
-
     #[derive(Default)]
     struct MemoryRepository(Mutex<HashMap<PathBuf, FileData>>);
 
-    struct FailingSettingsRepository(Mutex<GlobalSettings>);
+    struct FailingSettingsRepository(Mutex<settings::SettingsDocument>);
 
-    impl GlobalSettingsRepository for FailingSettingsRepository {
-        fn load(&self) -> Result<GlobalSettings, SettingsError> {
+    impl SettingsRepository for FailingSettingsRepository {
+        fn load(&self) -> Result<settings::SettingsDocument, SettingsError> {
             Ok(self.0.lock().unwrap().clone())
         }
 
-        fn save(&self, _: &GlobalSettings) -> Result<(), SettingsError> {
+        fn save(&self, _: &settings::SettingsDocument) -> Result<(), SettingsError> {
             Err(SettingsError::new("settings storage unavailable"))
         }
     }
@@ -2672,18 +2709,67 @@ mod tests {
     #[test]
     fn setting_theme_rolls_back_when_persistence_fails() {
         let repository = Arc::new(FailingSettingsRepository(Mutex::new(
-            GlobalSettings::default(),
+            settings::SettingsDocument::empty(SettingsScope::User),
         )));
         let settings = SettingsSession::load(repository).unwrap();
 
         assert!(settings.set_theme("lapis.white".to_owned()).is_err());
-        assert_eq!(settings.settings().theme, "lapis.dark");
+        assert_eq!(settings.settings().theme(), "lapis.dark");
         assert!(
             settings
-                .set_syntax_theme(settings::SyntaxTheme::Zed)
+                .set_syntax_theme(Some(settings::SyntaxTheme::Zed))
                 .is_err()
         );
-        assert_eq!(settings.settings().syntax_theme, None);
+        assert_eq!(
+            settings.settings().syntax_theme(),
+            Some(settings::SyntaxTheme::Lapis)
+        );
+    }
+
+    #[test]
+    fn terminal_appearance_is_saved_in_one_update() {
+        #[derive(Default)]
+        struct CountingSettingsRepository {
+            document: Mutex<Option<settings::SettingsDocument>>,
+            saves: std::sync::atomic::AtomicUsize,
+        }
+
+        impl SettingsRepository for CountingSettingsRepository {
+            fn load(&self) -> Result<settings::SettingsDocument, SettingsError> {
+                Ok(self
+                    .document
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| settings::SettingsDocument::empty(SettingsScope::User)))
+            }
+
+            fn save(&self, document: &settings::SettingsDocument) -> Result<(), SettingsError> {
+                self.saves.fetch_add(1, Ordering::SeqCst);
+                *self.document.lock().unwrap() = Some(document.clone());
+                Ok(())
+            }
+        }
+
+        let repository = Arc::new(CountingSettingsRepository::default());
+        let settings = SettingsSession::load(repository.clone()).unwrap();
+        settings
+            .set_terminal_appearance(
+                Some("Menlo".into()),
+                Some(15),
+                Some(140),
+                Some(settings::TerminalCaretShape::Bar),
+            )
+            .unwrap();
+        assert_eq!(repository.saves.load(Ordering::SeqCst), 1);
+        let values = settings.settings();
+        assert_eq!(values.terminal_font_family().as_deref(), Some("Menlo"));
+        assert_eq!(values.terminal_font_size(), Some(15));
+        assert_eq!(values.terminal_line_height_percent(), Some(140));
+        assert_eq!(
+            values.terminal_caret_shape(),
+            Some(settings::TerminalCaretShape::Bar)
+        );
     }
 
     fn insert_file(repository: &MemoryRepository, path: PathBuf, content: &str) {
@@ -2707,6 +2793,123 @@ mod tests {
             state,
             documents,
         )
+    }
+
+    /// Web / Remote の接続経路を模す。表示名は Host の connect 応答だけで決まり、
+    /// 切替候補の一覧を持たない。
+    #[derive(Default)]
+    struct IdentityRepository {
+        identity: Mutex<Option<WorkspaceIdentity>>,
+        unavailable: std::sync::atomic::AtomicBool,
+    }
+
+    impl IdentityRepository {
+        fn with_identity(identity: WorkspaceIdentity) -> Self {
+            Self {
+                identity: Mutex::new(Some(identity)),
+                unavailable: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        fn fail(&self, fail: bool) {
+            self.unavailable
+                .store(fail, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl WorkspaceRepository for IdentityRepository {
+        fn create_directory(&self, _: &Path, _: &str) -> Result<(), WorkspaceError> {
+            Err(WorkspaceError::new("Unsupported"))
+        }
+
+        fn list_tree(&self, _: &Path) -> Result<Vec<FileEntry>, WorkspaceError> {
+            Ok(Vec::new())
+        }
+
+        fn identity(&self, _: &Path) -> Result<Option<WorkspaceIdentity>, WorkspaceError> {
+            if self.unavailable.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(WorkspaceError::new("workspace.connect failed"));
+            }
+            Ok(self.identity.lock().unwrap().clone())
+        }
+    }
+
+    fn identity_session(repository: Arc<IdentityRepository>) -> EditorSession {
+        EditorSession::new(
+            repository,
+            Arc::new(FixedDialog {
+                workspace: None,
+                save: None,
+            }),
+            Arc::new(MemoryState::default()),
+            Arc::new(MemoryDocuments::new(Arc::new(MemoryRepository::default()))),
+        )
+    }
+
+    fn repo_identity(name: &str, root_name: &str) -> WorkspaceIdentity {
+        WorkspaceIdentity {
+            id: WorkspaceId::new("workspace-1"),
+            name: name.to_owned(),
+            root_name: root_name.to_owned(),
+        }
+    }
+
+    #[test]
+    fn connected_workspace_name_comes_from_the_host_identity_without_switch_candidates() {
+        let repository = Arc::new(IdentityRepository::with_identity(repo_identity(
+            "repo", "checkout",
+        )));
+        let mut editor = identity_session(repository);
+        // Remote の root は profile の label から作る仮想パスで、切替候補は空。
+        let root = PathBuf::from("remote/lapis-checkout");
+
+        editor.open_workspace(root).unwrap();
+
+        assert_eq!(editor.workspace_name(), "repo");
+        assert_eq!(
+            workspace_label(
+                Some(editor.workspace_name()),
+                editor.workspace_id().map(WorkspaceId::as_str)
+            ),
+            "Workspace repo (test-workspace)"
+        );
+    }
+
+    #[test]
+    fn identity_failure_does_not_replace_the_workspace_name_with_the_root_name() {
+        let repository = Arc::new(IdentityRepository::with_identity(repo_identity(
+            "repo", "checkout",
+        )));
+        repository.fail(true);
+        let mut editor = identity_session(repository);
+
+        editor
+            .open_workspace(PathBuf::from("remote/lapis-checkout"))
+            .unwrap();
+
+        assert_eq!(editor.workspace_name(), "");
+        assert_eq!(
+            workspace_label(
+                Some(editor.workspace_name()),
+                editor.workspace_id().map(WorkspaceId::as_str)
+            ),
+            "Workspace test-workspace"
+        );
+    }
+
+    #[test]
+    fn identity_failure_keeps_the_name_already_known_for_the_workspace() {
+        let repository = Arc::new(IdentityRepository::with_identity(repo_identity(
+            "repo", "checkout",
+        )));
+        let mut editor = identity_session(repository.clone());
+        let root = PathBuf::from("remote/lapis-checkout");
+        editor.open_workspace(root.clone()).unwrap();
+        repository.fail(true);
+
+        editor.open_workspace(root).unwrap();
+
+        assert_eq!(editor.workspace_name(), "repo");
     }
     #[test]
     fn new_empty_starts_without_workspace_or_document() {

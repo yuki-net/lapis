@@ -57,7 +57,7 @@ data class ProtocolRange(
 }
 
 /** Rust `CURRENT_PROTOCOL` と揃える。 */
-val CURRENT_PROTOCOL = ProtocolRange(0, 10, 10)
+val CURRENT_PROTOCOL = ProtocolRange(0, 11, 11)
 
 @Serializable
 data class ClientHello(

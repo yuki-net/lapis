@@ -32,9 +32,19 @@ pub struct WorkspaceConnectRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-/// 接続した Workspace の概要。
+/// 接続した Workspace の identity。切り替え候補の一覧とは独立して Host が返す。
+pub struct WorkspaceIdentitySnapshot {
+    pub workspace_id: WorkspaceId,
+    pub name: String,
+    /// Workspace root のディレクトリ名。name が空の場合の表示に使う。
+    pub root_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+/// 接続した Workspace の概要と identity。
 pub struct WorkspaceConnectResponse {
     pub workspace: WorkspaceSummary,
+    pub identity: WorkspaceIdentitySnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,4 +57,36 @@ pub struct WorkspaceCloseRequest {
 /// 切断した Workspace。
 pub struct WorkspaceCloseResponse {
     pub workspace_id: WorkspaceId,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connect_response_carries_identity_without_a_candidate_list() {
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let response = WorkspaceConnectResponse {
+            workspace: WorkspaceSummary {
+                workspace_id: workspace_id.clone(),
+                name: "repo".to_owned(),
+            },
+            identity: WorkspaceIdentitySnapshot {
+                workspace_id,
+                name: "repo".to_owned(),
+                root_name: "checkout".to_owned(),
+            },
+        };
+
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert_eq!(
+            json,
+            r#"{"workspace":{"workspace_id":"workspace-1","name":"repo"},"identity":{"workspace_id":"workspace-1","name":"repo","root_name":"checkout"}}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<WorkspaceConnectResponse>(&json).unwrap(),
+            response
+        );
+    }
 }

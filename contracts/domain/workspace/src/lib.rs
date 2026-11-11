@@ -56,6 +56,27 @@ pub struct Workspace {
     pub lifecycle: WorkspaceLifecycle,
 }
 
+/// Host が保持する Workspace の identity。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceIdentity {
+    pub id: WorkspaceId,
+    pub name: String,
+    /// Workspace root のディレクトリ名。name が空の場合の表示に使う。
+    pub root_name: String,
+}
+
+impl WorkspaceIdentity {
+    /// 表示に使う名前。Workspace 名が空なら root のディレクトリ名を使う。
+    pub fn display_name(&self) -> &str {
+        let name = self.name.trim();
+        if name.is_empty() {
+            self.root_name.trim()
+        } else {
+            name
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FileEntryKind {
     Directory,
@@ -128,6 +149,15 @@ impl Error for WorkspaceError {}
 pub trait WorkspaceRepository: Send + Sync {
     fn create_directory(&self, root: &Path, name: &str) -> Result<(), WorkspaceError>;
     fn list_tree(&self, root: &Path) -> Result<Vec<FileEntry>, WorkspaceError>;
+
+    /// Host が保持する Workspace の identity を返す。
+    ///
+    /// 実装がない接続先では `None`。呼び出し側は root のディレクトリ名へ退避する。
+    /// `Err` は取得失敗であり、root から名前を推測して表示してはならない。
+    fn identity(&self, root: &Path) -> Result<Option<WorkspaceIdentity>, WorkspaceError> {
+        let _ = root;
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -151,5 +181,15 @@ mod tests {
             workspace.location,
             WorkspaceLocation::Worktree { .. }
         ));
+    }
+
+    #[test]
+    fn identity_display_name_uses_the_root_name_when_the_name_is_empty() {
+        let identity = WorkspaceIdentity {
+            id: WorkspaceId::new("workspace-1"),
+            name: " ".to_owned(),
+            root_name: "checkout".to_owned(),
+        };
+        assert_eq!(identity.display_name(), "checkout");
     }
 }
