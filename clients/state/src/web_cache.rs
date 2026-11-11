@@ -14,7 +14,8 @@ use editor_core::WorkspaceId;
 use terminal::TerminalId;
 
 use crate::web_replica::{
-    Replica, TerminalState, document_from_snapshot, model_terminal_snapshot, owner_of,
+    DocumentState, Replica, TerminalState, document_from_snapshot, model_terminal_snapshot,
+    owner_of,
 };
 
 /// 切替で離れた Workspace の複製。
@@ -72,18 +73,29 @@ impl WorkspaceCache {
     }
 }
 
-/// `snapshot.resync` の結果を保持済みの複製へ反映し、表示の更新が必要なら true を返す。
+/// `snapshot.resync` で生じた変更の種類。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct SnapshotDelta {
+    /// `poll` や再描画で表示を更新する必要がある。
+    pub(crate) display: bool,
+    /// Editor が購読している文書状態に変更がある。
+    pub(crate) documents: bool,
+}
+
+/// `snapshot.resync` の結果を保持済みの複製へ反映する。
 ///
 /// 文書は Host の内容へ置き換え、Terminal は snapshot を次の `poll` で返す。
-pub(crate) fn apply_snapshot(replica: &mut Replica, snapshot: &WorkspaceSnapshot) -> bool {
-    let mut changed = false;
+pub(crate) fn apply_snapshot(replica: &mut Replica, snapshot: &WorkspaceSnapshot) -> SnapshotDelta {
+    let mut delta = SnapshotDelta::default();
     for document in &snapshot.documents {
-        changed |= apply_document(replica, document);
+        let changed = apply_document(replica, document);
+        delta.display |= changed;
+        delta.documents |= changed;
     }
     for terminal in &snapshot.terminals {
-        changed |= apply_terminal(replica, terminal);
+        delta.display |= apply_terminal(replica, terminal);
     }
-    changed
+    delta
 }
 
 fn apply_document(replica: &mut Replica, snapshot: &DocumentSnapshot) -> bool {
@@ -94,12 +106,27 @@ fn apply_document(replica: &mut Replica, snapshot: &DocumentSnapshot) -> bool {
     else {
         return false;
     };
+    let owner = owner_of(snapshot);
     // 未送信のローカル変更がある場合は、snapshot で上書きしない。
     if state.document.content_for_save() != state.acked {
-        return false;
+        // Host 側の revision と owner がローカル編集の基準から動いていれば、
+        // 上書きせずに競合として記録する。ローカル本文は復旧できるよう保持する。
+        let conflict = snapshot.revision != state.host_revision || snapshot.content != state.acked;
+        let mut changed = false;
+        if conflict {
+            let external_change = match snapshot.external_change {
+                DocumentExternalChange::Unchanged => ExternalChange::Modified,
+                change => model_external_change(change),
+            };
+            changed |= state.external_change != external_change;
+            state.external_change = external_change;
+        }
+        changed |= state.owner != owner;
+        state.owner = owner;
+        // host_revision と acked はローカル編集の基準なので、競合中は更新しない。
+        return changed;
     }
     let document = document_from_snapshot(snapshot, state.path.clone());
-    let owner = owner_of(snapshot);
     let changed = state.document != document
         || state.host_revision != snapshot.revision
         || state.owner != owner;
@@ -108,6 +135,39 @@ fn apply_document(replica: &mut Replica, snapshot: &DocumentSnapshot) -> bool {
     state.host_revision = snapshot.revision;
     state.loaded = true;
     state.external_change = model_external_change(snapshot.external_change);
+    state.owner = owner;
+    changed
+}
+
+/// `document.inspect` の結果を状態へ反映する。
+///
+/// `preserve_local` が true で未送信のローカル変更がある場合は本文を保持し、
+/// Host 側の変更を外部変更（競合）として記録する。false の場合は Host を正本とする。
+pub(crate) fn apply_inspection(
+    state: &mut DocumentState,
+    snapshot: &DocumentSnapshot,
+    preserve_local: bool,
+) -> bool {
+    let owner = owner_of(snapshot);
+    if preserve_local && state.document.content_for_save() != state.acked {
+        let mut changed = state.external_change != ExternalChange::Modified;
+        state.external_change = ExternalChange::Modified;
+        changed |= state.owner != owner;
+        state.owner = owner;
+        // acked と host_revision はローカル編集の基準なので更新しない。
+        return changed;
+    }
+    let document = document_from_snapshot(snapshot, state.path.clone());
+    let changed = state.document != document
+        || state.acked != snapshot.content
+        || state.host_revision != snapshot.revision
+        || state.owner != owner
+        || state.external_change != ExternalChange::Modified;
+    state.document = document;
+    state.acked = snapshot.content.clone();
+    state.host_revision = snapshot.revision;
+    state.loaded = true;
+    state.external_change = ExternalChange::Modified;
     state.owner = owner;
     changed
 }
@@ -176,7 +236,7 @@ mod tests {
 
     use client_api::{
         DocumentEncoding, DocumentId as ApiDocumentId, EventSequence, Revision as ApiRevision,
-        TerminalId as ApiTerminalId, TerminalSnapshot, TerminalStatus,
+        SessionId as ApiSessionId, TerminalId as ApiTerminalId, TerminalSnapshot, TerminalStatus,
         WorkspaceId as ApiWorkspaceId, WorkspaceSummary,
     };
     use document::{Document, Encoding, Revision};
@@ -304,7 +364,8 @@ mod tests {
             &snapshot(vec![wire_document("after")], vec![terminal]),
         );
 
-        assert!(changed);
+        assert!(changed.display);
+        assert!(changed.documents);
         let state =
             cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
         assert_eq!(state.document.content_for_save(), "after");
@@ -329,12 +390,14 @@ mod tests {
         let workspace = workspace("workspace-a");
         let mut replica = cached(&workspace, "text").replica;
 
-        assert!(apply_snapshot(
-            &mut replica,
-            &snapshot(Vec::new(), vec![wire_terminal(2)])
-        ));
+        let delta = apply_snapshot(&mut replica, &snapshot(Vec::new(), vec![wire_terminal(2)]));
 
         // 離れている間に始まった Terminal も、戻ったときの resync で見える。
+        assert!(delta.display);
+        assert!(
+            !delta.documents,
+            "Terminal だけの変更で Editor を再同期しない"
+        );
         assert_eq!(replica.terminals.len(), 1);
         let state = replica.terminals.values().next().unwrap();
         assert_eq!(
@@ -349,7 +412,7 @@ mod tests {
     }
 
     #[test]
-    fn resync_keeps_unsent_local_changes() {
+    fn resync_keeps_unsent_local_changes_and_records_conflict() {
         let workspace = workspace("workspace-a");
         let mut replica = cached(&workspace, "before").replica;
         {
@@ -363,15 +426,104 @@ mod tests {
             );
         }
 
-        apply_snapshot(
+        let delta = apply_snapshot(
             &mut replica,
             &snapshot(vec![wire_document("remote")], Vec::new()),
         );
 
+        assert!(delta.documents, "競合した文書は Editor にも通知する");
         let state =
             cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
+        // Host の本文で上書きせず、未送信のローカル編集を復旧できる形で残す。
         assert_eq!(state.document.content_for_save(), "local edit");
         assert_eq!(state.acked, "before");
+        // 古い revision を保存の基準として保持し、競合を外部変更として記録する。
+        assert_eq!(state.host_revision, ApiRevision::new(1));
+        assert_eq!(state.external_change, ExternalChange::Modified);
+    }
+
+    #[test]
+    fn resync_records_the_host_owner_for_unsent_local_changes() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        {
+            let state = replica.documents.values_mut().next().unwrap();
+            state.document = Document::from_snapshot(
+                state.path.clone(),
+                "local edit".to_owned(),
+                Encoding::Utf8,
+                Revision::new(2),
+                true,
+            );
+        }
+        let mut remote = wire_document("remote");
+        remote.owner = Some(ApiSessionId::try_new("session-2").unwrap());
+
+        apply_snapshot(&mut replica, &snapshot(vec![remote], Vec::new()));
+
+        let state =
+            cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
+        // Host 側で編集権が移っていても、ローカル編集を失わずに owner を記録する。
+        assert_eq!(state.document.content_for_save(), "local edit");
+        assert_eq!(state.owner, Some(SessionId::new("session-2")));
+        assert_eq!(state.external_change, ExternalChange::Modified);
+    }
+
+    #[test]
+    fn inspection_preserves_unsent_local_changes_and_records_conflict() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        let state = replica.documents.values_mut().next().unwrap();
+        state.document = Document::from_snapshot(
+            state.path.clone(),
+            "local edit".to_owned(),
+            Encoding::Utf8,
+            Revision::new(2),
+            true,
+        );
+
+        assert!(apply_inspection(state, &wire_document("remote"), true));
+
+        assert_eq!(state.document.content_for_save(), "local edit");
+        assert_eq!(state.acked, "before");
+        assert_eq!(state.host_revision, ApiRevision::new(1));
+        assert_eq!(state.external_change, ExternalChange::Modified);
+    }
+
+    #[test]
+    fn inspection_replaces_a_clean_document_with_host_content() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        let state = replica.documents.values_mut().next().unwrap();
+
+        assert!(apply_inspection(state, &wire_document("remote"), true));
+
+        assert_eq!(state.document.content_for_save(), "remote");
+        assert_eq!(state.acked, "remote");
+        assert_eq!(state.host_revision, ApiRevision::new(2));
+        assert_eq!(state.external_change, ExternalChange::Modified);
+    }
+
+    #[test]
+    fn forced_inspection_replaces_unsent_local_changes() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        let state = replica.documents.values_mut().next().unwrap();
+        state.document = Document::from_snapshot(
+            state.path.clone(),
+            "local edit".to_owned(),
+            Encoding::Utf8,
+            Revision::new(2),
+            true,
+        );
+
+        assert!(apply_inspection(state, &wire_document("remote"), false));
+
+        // reload / discard は Host を正本としてローカル編集を置き換える。
+        assert_eq!(state.document.content_for_save(), "remote");
+        assert_eq!(state.acked, "remote");
+        assert_eq!(state.host_revision, ApiRevision::new(2));
+        assert_eq!(state.external_change, ExternalChange::Modified);
     }
 
     #[test]

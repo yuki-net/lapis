@@ -168,6 +168,24 @@ impl DesktopRoot {
         });
         let editor =
             cx.new(|cx| Editor::new_with_subscription(worker.clone(), document_connection, cx));
+        // Web の DocumentConnection は同期購読を持たないため、Host からの
+        // 文書変更通知で Editor に再同期を要求する。
+        #[cfg(target_family = "wasm")]
+        if let Some(mut documents) = desktop_client::web_host::document_changes() {
+            let editor = editor.downgrade();
+            cx.spawn(async move |_, cx| {
+                use futures_util::StreamExt;
+                while documents.next().await.is_some() {
+                    if editor
+                        .update(cx, |editor, cx| editor.request_sync(cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         let files = cx.new(|_| FilesFeature::new());
         let git = cx.new(|cx| GitFeature::new(services.git, cx));
         let changes = cx.new(|cx| ChangesFeature::new(git.clone(), cx));

@@ -88,6 +88,8 @@ struct BackendState {
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
     changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    /// Editor 向けの文書変更通知。Terminal 向けの `changes` とは分ける。
+    document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 }
 
 /// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
@@ -250,6 +252,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
     let changes = Rc::new(RefCell::new(Vec::new()));
+    let document_changes = Rc::new(RefCell::new(Vec::new()));
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             connection: connection.clone(),
@@ -262,6 +265,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             replica: replica.clone(),
             commands,
             changes: changes.clone(),
+            document_changes: document_changes.clone(),
         })
     });
     wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
@@ -271,6 +275,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             events,
             replica.clone(),
             changes,
+            document_changes,
         ));
     }
     preload(&connection, &replica).await?;
@@ -384,7 +389,11 @@ async fn switch_workspace_inner(
         let mut replica = cached.replica;
         // 復元した複製を先に最新化してから設置する。切替中に旧 Workspace の
         // 読み取りが新しい複製の同じ local ID を参照しないようにする。
-        resync_workspace(connection, &mut replica, &workspace).await;
+        if let Err(error) = resync_workspace(connection, &mut replica, &workspace).await {
+            // 再同期できない複製は設置せず、保持へ戻して元の Workspace へ復旧する。
+            cache_workspace(CachedWorkspace { replica });
+            return Err(fail_switch(connection, &current_api, Some(requested), error).await);
+        }
         install_workspace(current, workspace, workspace_identity, replica, true)?;
         return Ok(());
     }
@@ -501,7 +510,7 @@ async fn resync_workspace(
     connection: &BrowserConnection,
     replica: &mut Replica,
     workspace: &WorkspaceId,
-) {
+) -> Result<(), String> {
     let workspace_api = api_workspace(workspace);
     match request(
         connection,
@@ -514,14 +523,14 @@ async fn resync_workspace(
     {
         Ok(ResponseBody::SnapshotResync(response)) => {
             if &replica.workspace == workspace {
-                crate::web_cache::apply_snapshot(replica, &response.snapshot);
+                let _ = crate::web_cache::apply_snapshot(replica, &response.snapshot);
             }
         }
-        Ok(_) => {}
+        Ok(_) => {
+            return Err("Workspace復帰後の再同期応答が不正です".to_owned());
+        }
         Err(error) => {
-            web_sys::console::warn_1(
-                &format!("Workspace復帰後のTerminal再同期に失敗しました: {error}").into(),
-            );
+            return Err(format!("Workspace復帰後の再同期に失敗しました: {error}"));
         }
     }
     match request(
@@ -546,6 +555,7 @@ async fn resync_workspace(
             );
         }
     }
+    Ok(())
 }
 
 /// 複製を保持へ移す。上限を超えた分は古いものから破棄する。
@@ -737,6 +747,19 @@ pub fn initial_path() -> Option<PathBuf> {
             .borrow()
             .as_ref()
             .and_then(|state| state.replica.borrow().initial.clone())
+    })
+}
+
+/// Editor が Host の文書変更通知を購読する。
+///
+/// Root の再構築でも同じ接続から購読し直せるよう、購読を都度追加する。
+pub fn document_changes() -> Option<mpsc::UnboundedReceiver<()>> {
+    BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref()?;
+        let (sender, receiver) = mpsc::unbounded();
+        state.document_changes.borrow_mut().push(sender);
+        Some(receiver)
     })
 }
 
