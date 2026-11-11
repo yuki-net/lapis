@@ -209,9 +209,13 @@ pub(super) async fn pump(
     connection: Rc<BrowserConnection>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     replica: Rc<RefCell<Replica>>,
+    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 ) {
     while let Some(command) = commands.next().await {
-        if let Err(error) = handle(&connection, &replica, command).await {
+        if let Err(error) =
+            handle(&connection, &replica, &changes, &document_changes, command).await
+        {
             web_sys::console::warn_1(&format!("Host同期: {error}").into());
         }
     }
@@ -241,51 +245,36 @@ pub(super) async fn event_pump(
         notify_changes(&changes);
         match event.body {
             EventBody::TerminalDelta { terminal_id, delta } => {
-                if let Some(state) = replica
+                replica
                     .borrow_mut()
-                    .terminals
-                    .values_mut()
-                    .find(|state| state.host.as_ref() == Some(&terminal_id))
-                {
-                    state.events.push(TerminalEvent::Delta(delta));
-                }
+                    .apply_terminal_event(&terminal_id, TerminalEvent::Delta(delta));
             }
             EventBody::TerminalStatus {
                 terminal_id,
                 status,
             } => {
-                if let Some(state) = replica
-                    .borrow_mut()
-                    .terminals
-                    .values_mut()
-                    .find(|state| state.host.as_ref() == Some(&terminal_id))
-                {
-                    match status {
-                        WireTerminalStatus::Exited | WireTerminalStatus::Terminated => {
-                            state.events.push(TerminalEvent::Exited { code: None });
-                            state.finished = true;
-                        }
-                        WireTerminalStatus::Failed => {
-                            state
-                                .events
-                                .push(TerminalEvent::Failed("Terminalが失敗しました".into()));
-                            state.finished = true;
-                        }
-                        _ => {}
+                let event = match status {
+                    WireTerminalStatus::Exited | WireTerminalStatus::Terminated => {
+                        Some(TerminalEvent::Exited { code: None })
                     }
+                    WireTerminalStatus::Failed => {
+                        Some(TerminalEvent::Failed("Terminalが失敗しました".into()))
+                    }
+                    _ => None,
+                };
+                if let Some(event) = event {
+                    replica
+                        .borrow_mut()
+                        .apply_terminal_event(&terminal_id, event);
                 }
             }
             EventBody::TerminalOwner { terminal_id, owner } => {
-                if let Some(state) = replica
-                    .borrow_mut()
-                    .terminals
-                    .values_mut()
-                    .find(|state| state.host.as_ref() == Some(&terminal_id))
-                {
-                    state.events.push(TerminalEvent::Owner {
+                replica.borrow_mut().apply_terminal_event(
+                    &terminal_id,
+                    TerminalEvent::Owner {
                         owner: owner.map(|owner| owner.as_str().to_owned()),
-                    });
-                }
+                    },
+                );
             }
             EventBody::DocumentOwner { document_id, owner } => {
                 if let Some(state) = replica
@@ -342,7 +331,7 @@ pub(super) async fn event_pump(
 
 /// `snapshot.required` の後で、保持している複製を Host の Snapshot へ合わせる。
 async fn sync_snapshot(
-    connection: &Rc<BrowserConnection>,
+    connection: &BrowserConnection,
     replica: &Rc<RefCell<Replica>>,
 ) -> crate::web_cache::SnapshotDelta {
     let workspace = api_workspace(&replica.borrow().workspace);
@@ -369,6 +358,8 @@ async fn sync_snapshot(
 async fn handle(
     connection: &BrowserConnection,
     replica: &Rc<RefCell<Replica>>,
+    changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
+    document_changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
     command: Command,
 ) -> Result<(), String> {
     // 送信待ちを流し終えた後は、変更系Commandを成功扱いで捨てず呼び出し元へ返す。
@@ -623,12 +614,13 @@ async fn handle(
                 return Err("TerminalStart応答が不正です".into());
             };
             let mut replica = replica.borrow_mut();
-            if let Some(state) = replica.terminals.get_mut(local.as_str()) {
-                state.host = Some(response.terminal.terminal_id.clone());
+            if replica.terminals.contains_key(local.as_str()) {
                 let snapshot = model_terminal_snapshot(&local, &response.terminal);
-                state.snapshot = Some(snapshot.clone());
-                state.events.push(TerminalEvent::Snapshot(snapshot));
+                replica.connect_terminal(&local, response.terminal.terminal_id, snapshot);
             }
+            // 応答前のイベントを保留していた場合も、対応付け後の snapshot を UI に届ける。
+            drop(replica);
+            notify_changes(changes);
         }
         Command::TerminalInput { local, input } => {
             let host = {
@@ -723,6 +715,16 @@ async fn handle(
                     RequestBody::TerminalRelease(TerminalReleaseRequest { terminal_id: host }),
                 )
                 .await;
+            }
+        }
+        // delta 欠番や開始応答前の取りこぼしを、Host の現在の snapshot で回復する。
+        Command::ResyncTerminals => {
+            let delta = sync_snapshot(connection, replica).await;
+            if delta.display {
+                notify_changes(changes);
+            }
+            if delta.documents {
+                notify_documents(document_changes);
             }
         }
         Command::SaveWorkbench { view } => {

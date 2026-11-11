@@ -268,7 +268,13 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             document_changes: document_changes.clone(),
         })
     });
-    wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
+    wasm_bindgen_futures::spawn_local(pump(
+        connection.clone(),
+        receiver,
+        replica.clone(),
+        changes.clone(),
+        document_changes.clone(),
+    ));
     if let Some(events) = events {
         wasm_bindgen_futures::spawn_local(event_pump(
             connection.clone(),
@@ -1721,16 +1727,20 @@ impl TerminalBackend for WebBackend {
     fn attach(&self, _: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
         let snapshot = self
             .with(|state| {
-                state
+                let snapshot = state
                     .replica
                     .borrow()
                     .terminals
                     .get(id.as_str())
                     .and_then(|state| state.snapshot.clone())
-                    .ok_or_else(|| "Terminalがありません".to_owned())
+                    .ok_or_else(|| TerminalError::new("Terminalがありません"))?;
+                // キャッシュだけを返さず、Host の現在の snapshot を取得し直す。
+                // delta 欠番や開始応答前の取りこぼしはこの snapshot で回復する。
+                let _ = state.commands.unbounded_send(Command::ResyncTerminals);
+                Ok::<_, TerminalError>(snapshot)
             })
-            .map_err(TerminalError::new)?;
-        snapshot.map_err(TerminalError::new)
+            .map_err(TerminalError::new)??;
+        Ok(snapshot)
     }
 
     fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {

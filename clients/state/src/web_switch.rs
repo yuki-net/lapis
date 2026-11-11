@@ -67,6 +67,8 @@ pub(crate) enum Command {
     TerminalRelease {
         local: TerminalId,
     },
+    /// Terminal の取りこぼしを Host の snapshot から復旧する。
+    ResyncTerminals,
     SaveWorkbench {
         view: ConversationViewState,
     },
@@ -212,6 +214,12 @@ mod tests {
     #[test]
     fn open_is_still_a_read() {
         assert!(!Command::Open { local: document() }.is_mutation());
+    }
+
+    #[test]
+    fn terminal_resync_is_a_read() {
+        // 切替中でも Host の snapshot 取得は止めない。
+        assert!(!Command::ResyncTerminals.is_mutation());
     }
 
     #[test]
