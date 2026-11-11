@@ -59,6 +59,13 @@ pub(crate) const EXTRA_COMMANDS: &[&str] = &[
     crate::features::id::COMMAND_TOGGLE_DEVTOOL,
 ];
 
+/// 接続先の Workspace 切替候補。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceOption {
+    pub id: String,
+    pub name: String,
+}
+
 /// 接続中の Host を UI に示すための表示情報。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ConnectionIdentity {
@@ -67,6 +74,10 @@ pub struct ConnectionIdentity {
     /// Web のように Host 側の Workspace 名を UI が持つ場合だけ入れる。
     pub workspace_name: Option<String>,
     pub workspace_id: Option<String>,
+    /// この接続で Workspace を切り替えられるか。
+    pub can_switch: bool,
+    /// 切り替え候補。`workspace.list` の応答をそのまま使う。
+    pub workspaces: Vec<WorkspaceOption>,
 }
 
 pub struct DesktopServices {

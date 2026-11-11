@@ -17,6 +17,7 @@ pub(crate) enum UiCommand {
     CloneRepository,
     NewWindow,
     ConnectHost,
+    SwitchWorkspace(String),
     CloseWindow,
     #[cfg_attr(target_family = "wasm", allow(dead_code))]
     MoveTab(crate::shell::DraggedPanelTab, crate::shell::PanelId),

@@ -4,7 +4,7 @@
 //! Hostが拒否した場合は正本を取得し直し、次のsnapshotでUIへ反映する。
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     ops::Range,
     path::{Path, PathBuf},
     rc::Rc,
@@ -16,10 +16,11 @@ use crate::{
 };
 use client_api::{
     ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
-    SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceConnectRequest,
-    WorkspaceId as ApiWorkspaceId, WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
+    SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceCloseRequest,
+    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceListRequest,
+    WorkspaceRelativePath, WorkspaceSummary,
 };
-use client_core::browser::{WebClientConnectOptions, connect_web_client};
+use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, Encoding, ExternalChange, Revision,
 };
@@ -57,9 +58,12 @@ const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
 
 thread_local! {
     static BACKEND: RefCell<Option<BackendState>> = const { RefCell::new(None) };
+    /// 切替中は旧Workspace向けのCommandや別の切替要求を適用しない。
+    static SWITCHING: Cell<bool> = const { Cell::new(false) };
 }
 
 struct BackendState {
+    connection: Rc<BrowserConnection>,
     workspace: WorkspaceId,
     workspace_identity: WorkspaceIdentity,
     host_name: String,
@@ -78,8 +82,6 @@ pub struct ConnectionInfo {
     pub host_id: Option<String>,
     pub workspace_name: String,
     pub workspace_id: String,
-    /// Web と Desktop で共通の表示文言。
-    pub identity: String,
     pub can_switch: bool,
     pub workspaces: Vec<WorkspaceChoice>,
 }
@@ -233,6 +235,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     let (changes, changes_rx) = mpsc::unbounded();
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
+            connection: connection.clone(),
             workspace,
             workspace_identity,
             host_name,
@@ -257,6 +260,175 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     Ok(fresh_credential)
 }
 
+/// 同一接続のまま別の Workspace へ切り替える。
+///
+/// 接続中の Workspace は `workspace.close` で attachment だけを解除し、
+/// 同じ Session のまま `workspace.connect` で切り替え先へ接続する。
+/// ページ遷移や再接続は行わない。
+pub async fn switch_workspace(workspace_id: &str) -> Result<(), String> {
+    let requested =
+        ApiWorkspaceId::try_new(workspace_id.to_owned()).map_err(|_| "Workspace IDが不正です")?;
+    let (connection, current, can_switch) = BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref().ok_or("Hostに接続していません")?;
+        Ok::<_, String>((
+            state.connection.clone(),
+            state.workspace.clone(),
+            state.can_switch,
+        ))
+    })?;
+    if !can_switch {
+        return Err("この接続ではWorkspaceを切り替えられません".to_owned());
+    }
+    if current.as_str() == requested.as_str() {
+        return Ok(());
+    }
+    if SWITCHING.with(|switching| switching.replace(true)) {
+        return Err("Workspaceを切り替えています".to_owned());
+    }
+    let result = switch_workspace_inner(&connection, &current, &requested).await;
+    SWITCHING.with(|switching| switching.set(false));
+    result
+}
+
+async fn switch_workspace_inner(
+    connection: &BrowserConnection,
+    current: &WorkspaceId,
+    requested: &ApiWorkspaceId,
+) -> Result<(), String> {
+    let current_api = api_workspace(current);
+    request(
+        connection,
+        RequestBody::WorkspaceClose(WorkspaceCloseRequest {
+            workspace_id: current_api.clone(),
+        }),
+    )
+    .await?;
+    let workspace_identity = match request(
+        connection,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: requested.clone(),
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::WorkspaceConnect(response)) => WorkspaceIdentity {
+            id: WorkspaceId::new(requested.as_str()),
+            name: response.identity.name,
+            root_name: response.identity.root_name,
+        },
+        Ok(ResponseBody::Error(error)) => {
+            restore_connection(connection, &current_api).await;
+            return Err(error.code.as_str().to_owned());
+        }
+        Ok(_) => {
+            restore_connection(connection, &current_api).await;
+            return Err("Workspace identityを取得できません".to_owned());
+        }
+        Err(error) => {
+            restore_connection(connection, &current_api).await;
+            return Err(error);
+        }
+    };
+    let entries = match fetch_tree(connection, requested).await {
+        Ok(entries) => entries,
+        Err(error) => {
+            restore_connection(connection, &current_api).await;
+            return Err(error);
+        }
+    };
+    let terminals = match request(
+        connection,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id: requested.clone(),
+            reason: SnapshotReason::Reconnect,
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
+        _ => Vec::new(),
+    };
+    let profiles = match request(
+        connection,
+        RequestBody::TerminalListProfiles(TerminalListProfilesRequest {
+            workspace_id: requested.clone(),
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::TerminalListProfiles(response)) => response.profiles,
+        _ => terminal::TerminalProfiles::default(),
+    };
+    let workbench = match request(
+        connection,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: requested.clone(),
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::WorkbenchGet(snapshot)) => versioned_workbench(snapshot),
+        _ => None,
+    };
+    let workspace = WorkspaceId::new(requested.as_str());
+    let replica = BACKEND
+        .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
+        .ok_or("Hostに接続していません")?;
+    {
+        let mut replica = replica.borrow_mut();
+        replica.workspace = workspace.clone();
+        replica.entries = entries;
+        replica.documents.clear();
+        replica.by_path.clear();
+        replica.terminals.clear();
+        replica.workbench = workbench::WorkbenchReplica::default();
+        if let Some(state) = workbench {
+            let _ = replica.workbench.open(state);
+        }
+        replica.profiles = profiles;
+        replica.initial = None;
+        for terminal in terminals {
+            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
+            replica.next_terminal += 1;
+            let snapshot = model_terminal_snapshot(&local, &terminal);
+            replica.terminals.insert(
+                local.as_str().to_owned(),
+                TerminalState {
+                    host: Some(terminal.terminal_id.clone()),
+                    snapshot: Some(snapshot.clone()),
+                    events: vec![TerminalEvent::Snapshot(snapshot)],
+                    finished: false,
+                },
+            );
+        }
+    }
+    preload_workbench(connection, &replica, requested).await;
+    BACKEND.with(|backend| {
+        if let Some(state) = backend.borrow_mut().as_mut() {
+            state.workspace = workspace;
+            state.workspace_identity = workspace_identity;
+        }
+    });
+    if let Err(error) = preload(connection, &replica).await {
+        web_sys::console::warn_1(
+            &format!("Workspace切替後の初期ファイルを開けません: {error}").into(),
+        );
+    }
+    Ok(())
+}
+
+/// 切替先への接続に失敗したとき、元の Workspace の attachment を戻す。
+async fn restore_connection(connection: &BrowserConnection, workspace: &ApiWorkspaceId) {
+    let _ = request(
+        connection,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: workspace.clone(),
+        }),
+    )
+    .await;
+}
+
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
     ApiWorkspaceId::try_from(id).expect("workspace id is valid")
 }
@@ -273,18 +445,11 @@ pub fn connection_info() -> Option<ConnectionInfo> {
         } else {
             connected_name.to_owned()
         };
-        let identity = crate::connection_label(
-            Some(&state.host_name),
-            state.host_id.as_deref(),
-            Some(&workspace_name),
-            Some(&workspace_id),
-        );
         Some(ConnectionInfo {
             host_name: state.host_name.clone(),
             host_id: state.host_id.clone(),
             workspace_name,
             workspace_id,
-            identity,
             can_switch: state.can_switch,
             workspaces: state
                 .workspaces

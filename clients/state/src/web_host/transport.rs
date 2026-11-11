@@ -1,7 +1,7 @@
 //! WebSocket 接続の要求・イベント処理と、ローカル複製への反映。
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     path::{Path, PathBuf},
     rc::Rc,
 };
@@ -355,11 +355,12 @@ pub(super) async fn event_pump(
                 if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
                     &connection,
                     RequestBody::WorkbenchGet(WorkbenchGetRequest {
-                        workspace_id: workspace,
+                        workspace_id: workspace.clone(),
                     }),
                 )
                 .await
                     && let Ok(mut replica) = replica.try_borrow_mut()
+                    && api_workspace(&replica.workspace) == workspace
                     && let Some(state) = versioned_workbench(snapshot)
                 {
                     let _ = replica.workbench.refresh(state);
@@ -380,7 +381,7 @@ async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell
     let Ok(ResponseBody::SnapshotResync(response)) = request(
         connection,
         RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: workspace,
+            workspace_id: workspace.clone(),
             reason: SnapshotReason::EventGap,
         }),
     )
@@ -391,6 +392,9 @@ async fn sync_terminals(connection: &Rc<BrowserConnection>, replica: &Rc<RefCell
     let Ok(mut replica) = replica.try_borrow_mut() else {
         return;
     };
+    if api_workspace(&replica.workspace) != workspace {
+        return;
+    }
     for terminal in response.snapshot.terminals {
         if let Some(state) = replica
             .terminals
@@ -429,6 +433,10 @@ async fn handle(
     replica: &Rc<RefCell<Replica>>,
     command: Command,
 ) -> Result<(), String> {
+    // 切替中に旧 Workspace 向けの要求を新 Workspace へ送らない。
+    if super::SWITCHING.with(Cell::get) {
+        return Ok(());
+    }
     match command {
         Command::Open { local } => {
             let (relative, workspace) = {

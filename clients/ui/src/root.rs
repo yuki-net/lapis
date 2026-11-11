@@ -1744,6 +1744,61 @@ impl DesktopRoot {
             }),
             UiCommand::CloneRepository => self.set_status("Clone from Git は準備中です".into(), cx),
 
+            UiCommand::SwitchWorkspace(workspace) => {
+                #[cfg(target_family = "wasm")]
+                {
+                    let Some(handle) = window.window_handle().downcast::<Self>() else {
+                        return;
+                    };
+                    self.set_status("Workspaceを切り替えています…".into(), cx);
+                    cx.spawn_in(window, async move |_, cx| {
+                        match desktop_client::web_host::switch_workspace(&workspace).await {
+                            Ok(()) => {
+                                if let Some(info) = desktop_client::web_host::connection_info() {
+                                    crate::web::notify_workspace_switched(&info);
+                                }
+                                // ブラウザーのWindowは閉じると再生成できないため、
+                                // 同じWindowのRootを新しいWorkspaceのSessionで組み直す。
+                                let outcome = handle.update(cx, |root, window, cx| {
+                                    let (session, services) = crate::web::host_sessions()?;
+                                    *root = DesktopRoot::new(
+                                        session,
+                                        services,
+                                        InitialView::default(),
+                                        window,
+                                        cx,
+                                    );
+                                    Ok::<_, String>(())
+                                });
+                                let error = match outcome {
+                                    Ok(Ok(())) => None,
+                                    Ok(Err(error)) => Some(error),
+                                    Err(error) => Some(error.to_string()),
+                                };
+                                if let Some(error) = error {
+                                    let _ = handle.update(cx, |root, _, cx| {
+                                        root.set_status(
+                                            format!("Workspaceを開けません: {error}"),
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                            Err(error) => {
+                                let _ = handle.update(cx, |root, _, cx| {
+                                    root.set_status(
+                                        format!("Workspaceを切り替えられません: {error}"),
+                                        cx,
+                                    );
+                                });
+                            }
+                        }
+                    })
+                    .detach();
+                }
+                #[cfg(not(target_family = "wasm"))]
+                let _ = workspace;
+            }
             UiCommand::ConnectHost => {
                 let factory = self.factory.clone();
                 let admitted = self.worker.submit(

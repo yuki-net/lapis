@@ -418,7 +418,7 @@ pub async fn bridge_smoke(
     let snapshot = client_core::AsyncHostConnection::request(
         &reconnected,
         RequestBody::SnapshotResync(client_api::SnapshotRequest {
-            workspace_id: workspace,
+            workspace_id: workspace.clone(),
             reason: client_api::SnapshotReason::Reconnect,
         }),
     )
@@ -462,6 +462,65 @@ pub async fn bridge_smoke(
     .map_err(|e| JsValue::from_str(&e))?;
     if !matches!(terminated, ResponseBody::TerminalTerminate(_)) {
         return Err(JsValue::from_str("terminal cleanup failed"));
+    }
+    // 同じ接続のまま close -> connect で別 Workspace へ切り替える。
+    let closed = client_core::AsyncHostConnection::request(
+        &reconnected,
+        RequestBody::WorkspaceClose(client_api::WorkspaceCloseRequest {
+            workspace_id: workspace.clone(),
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(closed, ResponseBody::WorkspaceClose(_)) {
+        return Err(JsValue::from_str("workspace close failed"));
+    }
+    let switched = client_core::AsyncHostConnection::request(
+        &reconnected,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: other_workspace.clone(),
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(switched, ResponseBody::WorkspaceConnect(_)) {
+        return Err(JsValue::from_str("in-place workspace switch failed"));
+    }
+    let denied = client_core::AsyncHostConnection::request(
+        &reconnected,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: workspace.clone(),
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(denied, ResponseBody::Error(ref error) if error.code.as_str() == client_api::FORBIDDEN)
+    {
+        return Err(JsValue::from_str(
+            "connected workspace was switched without close",
+        ));
+    }
+    let closed = client_core::AsyncHostConnection::request(
+        &reconnected,
+        RequestBody::WorkspaceClose(client_api::WorkspaceCloseRequest {
+            workspace_id: other_workspace,
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(closed, ResponseBody::WorkspaceClose(_)) {
+        return Err(JsValue::from_str("switched workspace close failed"));
+    }
+    let back = client_core::AsyncHostConnection::request(
+        &reconnected,
+        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+            workspace_id: workspace,
+        }),
+    )
+    .await
+    .map_err(|e| JsValue::from_str(&e))?;
+    if !matches!(back, ResponseBody::WorkspaceConnect(_)) {
+        return Err(JsValue::from_str("switching back failed"));
     }
     Ok("ok".to_owned())
 }
