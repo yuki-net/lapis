@@ -17,6 +17,8 @@ const STORAGE = {
 };
 const LEGACY_WARNING =
   "旧形式の URL に含まれる接続先・token は使用しません。接続先を選ぶか、保存済みの接続から開き直してください。";
+// web-bridge の既定待受ポート。サーバ側の DEFAULT_LISTEN と揃える。
+const DEFAULT_BRIDGE_PORT = 4757;
 
 type ConnectionInfo = {
   host_name: string;
@@ -723,7 +725,7 @@ async function launchDemo(backend: string) {
 function defaultBridgeUrl(): string {
   // 同梱起動ではページと bridge が同じホストで動くため、bridge の既定ポートを使う。
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.hostname || "127.0.0.1"}:4757/remote`;
+  return `${scheme}//${location.hostname || "127.0.0.1"}:${DEFAULT_BRIDGE_PORT}/remote`;
 }
 
 function bridgeOrigin(hostUrl: string): string | null {
@@ -810,7 +812,7 @@ function showLogin(
       <label>
         <span>Host URL</span>
         <input name="url" type="url" required autocomplete="url"
-          placeholder="ws://127.0.0.1:4757/remote"
+          placeholder="ws://127.0.0.1:${DEFAULT_BRIDGE_PORT}/remote"
           value="${escapeHtml(defaultUrl)}" />
       </label>
       <label>
