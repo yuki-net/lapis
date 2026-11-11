@@ -257,6 +257,11 @@ impl TerminalRegistry {
         ))
     }
 
+    /// Terminal backend の変更通知を受け取る。通知は backend の契約どおり 1 度だけ取得できる。
+    pub fn take_changes(&self) -> Option<futures_channel::mpsc::UnboundedReceiver<()>> {
+        self.backend.as_ref()?.changes()
+    }
+
     pub fn poll(&mut self) -> Result<Vec<EventBody>, TerminalStateError> {
         let Some(backend) = self.backend.as_ref() else {
             return Ok(Vec::new());

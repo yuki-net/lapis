@@ -728,6 +728,7 @@ dependencies = [
  "document",
  "document-state",
  "editor-core",
+ "futures",
  "process",
  "serde",
  "serde_json",
@@ -4735,6 +4736,7 @@ dependencies = [
 name = "local-terminal"
 version = "0.1.0"
 dependencies = [
+ "futures-channel",
  "portable-pty",
  "terminal",
  "wezterm-surface",
@@ -8313,6 +8315,7 @@ version = "0.1.0"
 dependencies = [
  "client-api",
  "editor-core",
+ "futures-channel",
  "process",
  "terminal",
 ]

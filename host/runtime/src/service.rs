@@ -17,7 +17,11 @@ use crate::{
     WorkspaceRegistration, state::PublishedEvent,
 };
 
-const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(25);
+/// Terminal 出力は backend の変更通知で即座に起床するため、この間隔は
+/// Terminal 以外の時間駆動処理（Terminal owner の無操作解放、Document owner の解放、
+/// 外部変更の取り込み）を従来と同じ頻度で回すためのフォールバック。
+/// 通知に対応しない backend や通知の取りこぼしも 25ms 以内に回収する。
+const FALLBACK_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const SUBSCRIBER_QUEUE_CAPACITY: usize = 256;
 
 #[derive(Clone)]
@@ -84,9 +88,10 @@ impl BackendService {
                 });
             });
         state.start_git_updates(git_publish.clone());
+        let notifier = sender.clone();
         let thread = thread::Builder::new()
             .name("lapis-backend-state".to_owned())
-            .spawn(move || run_worker(state, receiver, git_publish))
+            .spawn(move || run_worker(state, receiver, notifier, git_publish))
             .map_err(BackendServiceError::ThreadSpawn)?;
         Ok(Self {
             inner: Arc::new(ServiceInner {
@@ -488,6 +493,8 @@ enum Command {
         respond: mpsc::SyncSender<Result<BackendEventReceiver, BackendStateError>>,
     },
     Disconnect(SessionId),
+    /// Terminal backend の出力到着による起床要求。状態は変えず、末尾の poll だけを走らせる。
+    TerminalChanged,
     Shutdown,
 }
 
@@ -509,11 +516,15 @@ impl BackendEventSink for ChannelEventSink {
 fn run_worker(
     mut state: BackendState,
     receiver: mpsc::Receiver<Command>,
+    notifier: mpsc::SyncSender<Command>,
     git_publish: Arc<dyn Fn(WorkspaceId, String, git::GitSnapshot) + Send + Sync>,
 ) {
     let mut subscribers = HashMap::<SessionId, Subscriber>::new();
+    for changes in state.take_terminal_changes() {
+        spawn_terminal_notifier(changes, &notifier);
+    }
     loop {
-        match receiver.recv_timeout(TERMINAL_POLL_INTERVAL) {
+        match receiver.recv_timeout(FALLBACK_POLL_INTERVAL) {
             Ok(Command::CommitWorkbench {
                 workspace_id,
                 expected,
@@ -608,9 +619,16 @@ fn run_worker(
                 registration,
                 respond,
             }) => {
+                let terminal_changes = registration
+                    .terminal
+                    .as_ref()
+                    .and_then(|terminal| terminal.changes());
                 let result = state.register_workspace(registration);
                 if result.is_ok() {
                     state.start_git_updates(git_publish.clone());
+                    if let Some(changes) = terminal_changes {
+                        spawn_terminal_notifier(changes, &notifier);
+                    }
                 }
                 let _ = respond.send(result);
             }
@@ -667,6 +685,7 @@ fn run_worker(
                 subscribers.remove(&session_id);
                 publish_events(&mut subscribers, events);
             }
+            Ok(Command::TerminalChanged) => {}
             Ok(Command::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
             Err(mpsc::RecvTimeoutError::Timeout) => {}
         }
@@ -678,6 +697,34 @@ fn run_worker(
         }
         if let Ok(events) = state.poll_external_changes() {
             publish_events(&mut subscribers, events);
+        }
+    }
+}
+
+/// Terminal backend の変更通知を Runtime のコマンドキューへ橋渡しする。
+fn spawn_terminal_notifier(
+    changes: futures::channel::mpsc::UnboundedReceiver<()>,
+    notifier: &mpsc::SyncSender<Command>,
+) {
+    let notifier = notifier.clone();
+    let _ = thread::Builder::new()
+        .name("lapis-terminal-notify".to_owned())
+        .spawn(move || forward_terminal_changes(changes, notifier));
+}
+
+/// 通知はコマンドキューに空きがある時だけ積む。満杯なら捨てるが、処理待ちの
+/// コマンドがいずれ末尾の poll を走らせるため Terminal 出力は失われない。
+fn forward_terminal_changes(
+    changes: futures::channel::mpsc::UnboundedReceiver<()>,
+    notifier: mpsc::SyncSender<Command>,
+) {
+    use futures::StreamExt;
+
+    let mut changes = changes;
+    while futures::executor::block_on(changes.next()).is_some() {
+        match notifier.try_send(Command::TerminalChanged) {
+            Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
+            Err(mpsc::TrySendError::Disconnected(_)) => break,
         }
     }
 }
@@ -729,5 +776,45 @@ impl Error for BackendServiceError {
             Self::State(error) => Some(error),
             Self::Unavailable | Self::Rejected(_) | Self::Connection(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Command, Duration, forward_terminal_changes, mpsc, thread};
+    use futures::channel::mpsc::unbounded;
+
+    #[test]
+    fn terminal_change_notifications_wake_the_worker_queue() {
+        let (notifier, receiver) = mpsc::sync_channel(1);
+        let (changes, notifications) = unbounded();
+        let forwarder = thread::spawn(move || forward_terminal_changes(notifications, notifier));
+
+        changes.unbounded_send(()).unwrap();
+
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(2)),
+            Ok(Command::TerminalChanged)
+        ));
+        drop(changes);
+        forwarder.join().unwrap();
+    }
+
+    #[test]
+    fn terminal_change_notifications_do_not_block_a_full_worker_queue() {
+        let (notifier, receiver) = mpsc::sync_channel(1);
+        let (changes, notifications) = unbounded();
+        let forwarder = thread::spawn(move || forward_terminal_changes(notifications, notifier));
+
+        changes.unbounded_send(()).unwrap();
+        assert!(matches!(
+            receiver.recv_timeout(Duration::from_secs(2)),
+            Ok(Command::TerminalChanged)
+        ));
+        // キューを埋めた後の通知は捨てられ、通知側のスレッドを塞がない。
+        changes.unbounded_send(()).unwrap();
+        changes.unbounded_send(()).unwrap();
+        drop(changes);
+        forwarder.join().unwrap();
     }
 }

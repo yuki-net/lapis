@@ -6,6 +6,7 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+futures-channel = "0.3"
 terminal = { path = "../../../contracts/domain/terminal" }
 portable-pty.workspace = true
 wezterm-term.workspace = true
