@@ -19,11 +19,13 @@ use client_api::{
 use client_core::{AsyncHostConnection, browser::BrowserConnection};
 use document::{ExternalChange, FileFingerprint};
 use editor_core::{DocumentId, SessionId};
-use futures_channel::{mpsc, oneshot};
+use futures_channel::mpsc;
 use futures_util::StreamExt;
-use terminal::{TerminalEvent, TerminalId, TerminalInput};
-use workbench::{ConversationViewState, WorkbenchUpdate, WorkbenchWritePlan};
+use terminal::{TerminalEvent, TerminalId};
+use workbench::{WorkbenchUpdate, WorkbenchWritePlan};
 use workspace::{FileEntry, FileEntryKind};
+
+use crate::web_switch::Command;
 
 use super::{
     MAX_PRELOAD_BYTES, MAX_TREE_ENTRIES, ROOT, api_workspace,
@@ -32,66 +34,6 @@ use super::{
         model_terminal_snapshot, owner_of, versioned_workbench,
     },
 };
-
-pub(super) enum Command {
-    Open {
-        local: DocumentId,
-    },
-    Sync {
-        local: DocumentId,
-    },
-    Save {
-        local: DocumentId,
-    },
-    Claim {
-        local: DocumentId,
-    },
-    Release {
-        local: DocumentId,
-    },
-    Reload {
-        local: DocumentId,
-    },
-    Discard {
-        local: DocumentId,
-    },
-    Close {
-        local: DocumentId,
-    },
-    StartTerminal {
-        local: TerminalId,
-        cwd: Option<PathBuf>,
-        columns: u16,
-        rows: u16,
-        profile: Option<terminal::TerminalProfileId>,
-    },
-    TerminalInput {
-        local: TerminalId,
-        input: TerminalInput,
-    },
-    TerminalResize {
-        local: TerminalId,
-        columns: u16,
-        rows: u16,
-    },
-    TerminalTerminate {
-        local: TerminalId,
-    },
-    TerminalClaim {
-        local: TerminalId,
-    },
-    TerminalRelease {
-        local: TerminalId,
-    },
-    SaveWorkbench {
-        view: ConversationViewState,
-    },
-    RetryWorkbenchLocal,
-    /// ここまでに積まれたCommandの処理完了を待つ。
-    Barrier {
-        done: oneshot::Sender<()>,
-    },
-}
 
 pub(super) async fn request(
     connection: &BrowserConnection,
@@ -437,14 +379,9 @@ async fn handle(
     replica: &Rc<RefCell<Replica>>,
     command: Command,
 ) -> Result<(), String> {
-    // 送信待ちを流し終えた後に旧 Workspace の表示を新 Workspace へ書き込まない。
-    if super::DRAINING.with(Cell::get)
-        && matches!(
-            &command,
-            Command::SaveWorkbench { .. } | Command::RetryWorkbenchLocal
-        )
-    {
-        return Err("Workspace切替中です".into());
+    // 送信待ちを流し終えた後は、変更系Commandを成功扱いで捨てず呼び出し元へ返す。
+    if super::DRAINING.with(Cell::get) && command.is_mutation() {
+        return Err(crate::web_switch::SWITCHING_MESSAGE.into());
     }
     match command {
         Command::Barrier { done } => {

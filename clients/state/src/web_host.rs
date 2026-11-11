@@ -44,11 +44,12 @@ use workspace::{
 mod state;
 mod transport;
 
+use crate::web_switch::{self, Command, Operation};
 use state::{
     DocumentState, Replica, TerminalState, cache_of, local_id, model_terminal_snapshot,
     versioned_workbench,
 };
-use transport::{Command, event_pump, fetch_tree, preload, preload_workbench, pump, request};
+use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
 
 /// Web は Host の OS に依存しない仮想 root を使う。
 pub const ROOT: &str = "/Lapis Host";
@@ -60,8 +61,16 @@ thread_local! {
     static BACKEND: RefCell<Option<BackendState>> = const { RefCell::new(None) };
     /// 同時に複数の切替を開始しない。
     static SWITCHING: Cell<bool> = const { Cell::new(false) };
-    /// 送信待ちのCommandを流し終えた後、Workbenchの保存だけを止める。
+    /// 送信待ちのCommandを流し終えた後、変更系Commandを止める。
     static DRAINING: Cell<bool> = const { Cell::new(false) };
+    /// Root の再構築が終わるまで保持する切替前の複製。失敗時に元へ戻す。
+    static PREVIOUS: RefCell<Option<PreviousWorkspace>> = const { RefCell::new(None) };
+}
+
+struct PreviousWorkspace {
+    workspace: WorkspaceId,
+    workspace_identity: WorkspaceIdentity,
+    replica: Replica,
 }
 
 struct BackendState {
@@ -289,6 +298,10 @@ pub async fn switch_workspace(workspace_id: &str) -> Result<(), String> {
     if SWITCHING.with(|switching| switching.replace(true)) {
         return Err("Workspaceを切り替えています".to_owned());
     }
+    // 前回の切替が残した復帰用の複製があれば、新しい切替には使わない。
+    PREVIOUS.with(|previous| {
+        previous.borrow_mut().take();
+    });
     // 切替前の編集・保存要求を旧 Workspace へ送り切ってから attachment を閉じる。
     let (done, drained) = oneshot::channel();
     if commands.unbounded_send(Command::Barrier { done }).is_err() {
@@ -336,7 +349,7 @@ async fn switch_workspace_inner(
             return Err(fail_switch(
                 connection,
                 &current_api,
-                requested,
+                None,
                 error.code.as_str().to_owned(),
             )
             .await);
@@ -345,19 +358,19 @@ async fn switch_workspace_inner(
             return Err(fail_switch(
                 connection,
                 &current_api,
-                requested,
+                None,
                 "Workspace identityを取得できません".to_owned(),
             )
             .await);
         }
         Err(error) => {
-            return Err(fail_switch(connection, &current_api, requested, error).await);
+            return Err(fail_switch(connection, &current_api, None, error).await);
         }
     };
     let entries = match fetch_tree(connection, requested).await {
         Ok(entries) => entries,
         Err(error) => {
-            return Err(fail_switch(connection, &current_api, requested, error).await);
+            return Err(fail_switch(connection, &current_api, Some(requested), error).await);
         }
     };
     let terminals = match request(
@@ -398,41 +411,53 @@ async fn switch_workspace_inner(
     let replica = BACKEND
         .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
         .ok_or("Hostに接続していません")?;
-    {
-        let mut replica = replica.borrow_mut();
-        replica.workspace = workspace.clone();
-        replica.entries = entries;
-        replica.documents.clear();
-        replica.by_path.clear();
-        replica.terminals.clear();
-        replica.workbench = workbench::WorkbenchReplica::default();
-        if let Some(state) = workbench {
-            let _ = replica.workbench.open(state);
-        }
-        replica.profiles = profiles;
-        replica.initial = None;
-        for terminal in terminals {
-            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-            replica.next_terminal += 1;
-            let snapshot = model_terminal_snapshot(&local, &terminal);
-            replica.terminals.insert(
-                local.as_str().to_owned(),
-                TerminalState {
-                    host: Some(terminal.terminal_id.clone()),
-                    snapshot: Some(snapshot.clone()),
-                    events: vec![TerminalEvent::Snapshot(snapshot)],
-                    finished: false,
-                },
-            );
-        }
+    // 表示中の Root を組み直せなかった場合に戻せるよう、切替前の複製を残す。
+    let (next, next_terminal, session) = {
+        let replica = replica.borrow();
+        (replica.next, replica.next_terminal, replica.session.clone())
+    };
+    let mut next_replica = Replica::new(workspace.clone(), entries, session, profiles);
+    next_replica.next = next;
+    next_replica.next_terminal = next_terminal;
+    next_replica.workbench = workbench::WorkbenchReplica::default();
+    if let Some(state) = workbench {
+        let _ = next_replica.workbench.open(state);
     }
-    preload_workbench(connection, &replica, requested).await;
-    BACKEND.with(|backend| {
-        if let Some(state) = backend.borrow_mut().as_mut() {
-            state.workspace = workspace;
-            state.workspace_identity = workspace_identity;
-        }
+    for terminal in terminals {
+        let local = TerminalId::new(format!("web-terminal-{}", next_replica.next_terminal));
+        next_replica.next_terminal += 1;
+        let snapshot = model_terminal_snapshot(&local, &terminal);
+        next_replica.terminals.insert(
+            local.as_str().to_owned(),
+            TerminalState {
+                host: Some(terminal.terminal_id.clone()),
+                snapshot: Some(snapshot.clone()),
+                events: vec![TerminalEvent::Snapshot(snapshot)],
+                finished: false,
+            },
+        );
+    }
+    let previous_replica = {
+        let mut replica = replica.borrow_mut();
+        std::mem::replace(&mut *replica, next_replica)
+    };
+    let previous_identity = BACKEND
+        .with(|backend| {
+            backend.borrow_mut().as_mut().map(|state| {
+                let identity = std::mem::replace(&mut state.workspace_identity, workspace_identity);
+                state.workspace = workspace;
+                identity
+            })
+        })
+        .ok_or("Hostに接続していません")?;
+    PREVIOUS.with(|previous| {
+        *previous.borrow_mut() = Some(PreviousWorkspace {
+            workspace: current.clone(),
+            workspace_identity: previous_identity,
+            replica: previous_replica,
+        });
     });
+    preload_workbench(connection, &replica, requested).await;
     if let Err(error) = preload(connection, &replica).await {
         web_sys::console::warn_1(
             &format!("Workspace切替後の初期ファイルを開けません: {error}").into(),
@@ -442,38 +467,37 @@ async fn switch_workspace_inner(
 }
 
 /// 切替先への接続に失敗したとき、開いたままの切替先を閉じて元の Workspace へ戻す。
+///
+/// `attempted` は接続に成功した切替先だけを渡す。接続自体に失敗した場合は
+/// 切替先が開いていないため、閉じずに元の Workspace へ接続し直す。
 async fn restore_connection(
     connection: &BrowserConnection,
     current: &ApiWorkspaceId,
-    attempted: &ApiWorkspaceId,
+    attempted: Option<&ApiWorkspaceId>,
 ) -> Result<(), String> {
-    let _ = request(
-        connection,
-        RequestBody::WorkspaceClose(WorkspaceCloseRequest {
-            workspace_id: attempted.clone(),
-        }),
-    )
-    .await;
-    match request(
-        connection,
-        RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
-            workspace_id: current.clone(),
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::WorkspaceConnect(_)) => Ok(()),
-        Ok(ResponseBody::Error(error)) => Err(error.code.as_str().to_owned()),
-        Ok(_) => Err("元のWorkspaceへ再接続できません".to_owned()),
-        Err(error) => Err(error),
+    for step in web_switch::rollback_steps(current, attempted) {
+        let body = request(connection, web_switch::attachment_request(&step))
+            .await
+            .map_err(|error| match &step {
+                web_switch::AttachmentStep::Close(_) => {
+                    format!("接続中のWorkspaceを閉じられません: {error}")
+                }
+                web_switch::AttachmentStep::Connect(_) => {
+                    format!("元のWorkspaceへ接続できません: {error}")
+                }
+            })?;
+        if matches!(step, web_switch::AttachmentStep::Connect(_)) {
+            web_switch::ensure_connected(body)?;
+        }
     }
+    Ok(())
 }
 
 /// 切替失敗を呼び出し元へ返す。復帰にも失敗した場合は古い複製での操作を止める。
 async fn fail_switch(
     connection: &BrowserConnection,
     current: &ApiWorkspaceId,
-    attempted: &ApiWorkspaceId,
+    attempted: Option<&ApiWorkspaceId>,
     error: String,
 ) -> String {
     match restore_connection(connection, current, attempted).await {
@@ -485,6 +509,75 @@ async fn fail_switch(
             )
         }
     }
+}
+
+/// Root の再構築が成功したので、切替前の複製を破棄する。
+pub fn finish_workspace_switch() {
+    PREVIOUS.with(|previous| {
+        previous.borrow_mut().take();
+    });
+}
+
+/// Root の再構築に失敗したとき、attachment と複製を元の Workspace へ戻す。
+pub async fn rollback_workspace_switch() -> Result<(), String> {
+    let (connection, current, commands) = BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref().ok_or("Hostに接続していません")?;
+        Ok::<_, String>((
+            state.connection.clone(),
+            state.workspace.clone(),
+            state.commands.clone(),
+        ))
+    })?;
+    let previous = PREVIOUS
+        .with(|previous| {
+            previous
+                .borrow()
+                .as_ref()
+                .map(|previous| previous.workspace.clone())
+        })
+        .ok_or("切替前のWorkspaceがありません")?;
+    if SWITCHING.with(|switching| switching.replace(true)) {
+        return Err("Workspaceを切り替えています".to_owned());
+    }
+    let (done, drained) = oneshot::channel();
+    if commands.unbounded_send(Command::Barrier { done }).is_err() {
+        SWITCHING.with(|switching| switching.set(false));
+        return Err("Workspace切替の待機を開始できません".to_owned());
+    }
+    if drained.await.is_err() {
+        SWITCHING.with(|switching| switching.set(false));
+        return Err("Workspace切替の待機に失敗しました".to_owned());
+    }
+    DRAINING.with(|draining| draining.set(true));
+    let result = rollback_workspace_inner(&connection, &api_workspace(&current), &previous).await;
+    DRAINING.with(|draining| draining.set(false));
+    SWITCHING.with(|switching| switching.set(false));
+    result
+}
+
+async fn rollback_workspace_inner(
+    connection: &BrowserConnection,
+    current: &ApiWorkspaceId,
+    previous: &WorkspaceId,
+) -> Result<(), String> {
+    let previous_api = api_workspace(previous);
+    // 切替先に接続中なので、先に閉じてから元の Workspace へ戻す。
+    restore_connection(connection, &previous_api, Some(current)).await?;
+    let previous = PREVIOUS
+        .with(|previous| previous.borrow_mut().take())
+        .ok_or("切替前のWorkspace状態がありません")?;
+    let replica = BACKEND
+        .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
+        .ok_or("Hostに接続していません")?;
+    *replica.borrow_mut() = previous.replica;
+    BACKEND.with(|backend| {
+        if let Some(state) = backend.borrow_mut().as_mut() {
+            state.workspace = previous.workspace;
+            state.workspace_identity = previous.workspace_identity;
+        }
+    });
+    Ok(())
 }
 
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
@@ -535,6 +628,12 @@ pub fn initial_path() -> Option<PathBuf> {
 #[derive(Clone, Copy)]
 pub struct WebBackend;
 
+/// 切替中に未保存の変更を失わせないため、変更系の要求を呼び出し元へ返す。
+fn ensure_mutation_allowed() -> Result<(), DocumentError> {
+    web_switch::ensure_allowed(SWITCHING.with(Cell::get), Operation::Mutation)
+        .map_err(DocumentError::io)
+}
+
 impl WebBackend {
     fn with<T>(self, operation: impl FnOnce(&mut BackendState) -> T) -> Result<T, String> {
         BACKEND.with(|backend| {
@@ -557,6 +656,7 @@ impl DocumentConnection for WebBackend {
 
     fn create(&self, _: Option<&Path>) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let local = local_id(&mut replica);
@@ -579,9 +679,9 @@ impl DocumentConnection for WebBackend {
                 session.as_ref(),
             );
             replica.documents.insert(local, state);
-            cache
+            Ok(cache)
         })
-        .map_err(DocumentError::io)
+        .map_err(DocumentError::io)?
     }
 
     fn open(&self, path: &Path) -> Result<DocumentCache, DocumentError> {
@@ -655,6 +755,7 @@ impl DocumentConnection for WebBackend {
 
     fn claim(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica
                 .session
@@ -685,6 +786,7 @@ impl DocumentConnection for WebBackend {
 
     fn release(&self, id: &DocumentId) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let document = replica
@@ -722,6 +824,7 @@ impl DocumentConnection for WebBackend {
         replacement: &str,
     ) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let document = replica
@@ -762,6 +865,7 @@ impl DocumentConnection for WebBackend {
         undo: bool,
     ) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let document = replica
@@ -800,6 +904,7 @@ impl DocumentConnection for WebBackend {
         _path: Option<PathBuf>,
     ) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let document = replica
@@ -828,6 +933,7 @@ impl DocumentConnection for WebBackend {
 
     fn reload(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let document = replica
@@ -856,6 +962,7 @@ impl DocumentConnection for WebBackend {
 
     fn discard(&self, id: &DocumentId, revision: Revision) -> Result<DocumentCache, DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             let session = replica.session.clone();
             let document = replica
@@ -884,6 +991,7 @@ impl DocumentConnection for WebBackend {
 
     fn close(&self, id: &DocumentId) -> Result<(), DocumentError> {
         self.with(|state| {
+            ensure_mutation_allowed()?;
             let mut replica = state.replica.borrow_mut();
             if let Some(document) = replica.documents.get(id)
                 && let Some(path) = document.path.clone()
@@ -1109,6 +1217,8 @@ impl crate::ConversationRepository for WebBackend {
         active: &editor_core::ConversationId,
     ) -> Result<(), WorkspaceError> {
         self.with(|state| {
+            web_switch::ensure_allowed(SWITCHING.with(Cell::get), Operation::Mutation)
+                .map_err(WorkspaceError::new)?;
             let record = records
                 .iter()
                 .find(|record| &record.id == active)
@@ -1157,6 +1267,8 @@ impl crate::ConversationRepository for WebBackend {
 
     fn retry_workbench_local(&self) -> Result<(), WorkspaceError> {
         self.with(|state| {
+            web_switch::ensure_allowed(SWITCHING.with(Cell::get), Operation::Mutation)
+                .map_err(WorkspaceError::new)?;
             state
                 .commands
                 .unbounded_send(Command::RetryWorkbenchLocal)

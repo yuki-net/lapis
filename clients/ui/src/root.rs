@@ -1775,6 +1775,7 @@ impl DesktopRoot {
                                 match error {
                                     // 画面の再構築が成功してから URL と保存済み選択を追従させる。
                                     None => {
+                                        desktop_client::web_host::finish_workspace_switch();
                                         if let Some(info) =
                                             desktop_client::web_host::connection_info()
                                         {
@@ -1782,15 +1783,31 @@ impl DesktopRoot {
                                         }
                                     }
                                     Some(error) => {
-                                        // 画面を作れない場合は、再接続でattachmentと表示を揃える。
-                                        web_sys::console::error_1(
-                                            &format!(
-                                                "Workspace切替後のUIを組み立てられません: {error}"
-                                            )
-                                            .into(),
-                                        );
-                                        if let Some(window) = web_sys::window() {
-                                            let _ = window.location().reload();
+                                        // 画面を作れない場合は、attachmentと複製を元へ戻す。
+                                        match desktop_client::web_host::rollback_workspace_switch()
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                let _ = handle.update(cx, |root, _, cx| {
+                                                    root.set_status(
+                                                        format!(
+                                                            "Workspaceを開けません: {error}（元のWorkspaceへ戻しました）"
+                                                        ),
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                            Err(recovery) => {
+                                                web_sys::console::error_1(
+                                                    &format!(
+                                                        "Workspace切替後のUIを組み立てられず、元のWorkspaceへも戻せません: {error} / {recovery}"
+                                                    )
+                                                    .into(),
+                                                );
+                                                if let Some(window) = web_sys::window() {
+                                                    let _ = window.location().reload();
+                                                }
+                                            }
                                         }
                                     }
                                 }
