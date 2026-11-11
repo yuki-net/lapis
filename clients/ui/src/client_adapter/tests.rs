@@ -90,6 +90,7 @@ impl Fixture {
 
             edit_chain: EditChain::default(),
             git: port,
+            process: desktop_client::ProcessSession::unavailable(),
             snapshot_sequence: 0,
             document_owners: HashMap::new(),
         }

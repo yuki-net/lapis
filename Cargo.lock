@@ -728,6 +728,7 @@ dependencies = [
  "document",
  "document-state",
  "editor-core",
+ "process",
  "serde",
  "serde_json",
  "task",
@@ -1200,6 +1201,7 @@ dependencies = [
  "document",
  "editor-core",
  "git-contract",
+ "process",
  "serde",
  "serde_json",
  "task",
@@ -1831,6 +1833,7 @@ dependencies = [
  "git-contract",
  "localization",
  "lsp",
+ "process",
  "project",
  "serde",
  "serde_json",
@@ -1868,6 +1871,7 @@ dependencies = [
  "language",
  "localization",
  "lsp",
+ "process",
  "raw-window-handle",
  "serde",
  "serde_json",
@@ -3845,7 +3849,9 @@ dependencies = [
  "getrandom 0.3.4",
  "git-contract",
  "libc",
+ "local-process",
  "platform",
+ "process",
  "rcgen",
  "remote",
  "rustls",
@@ -4478,8 +4484,10 @@ dependencies = [
  "editor-core",
  "getrandom 0.3.4",
  "host",
+ "local-process",
  "persistence",
  "platform",
+ "process",
  "remote",
  "rfd",
  "settings",
@@ -4687,8 +4695,18 @@ dependencies = [
  "document",
  "futures-channel",
  "lsp",
+ "process",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "local-process"
+version = "0.1.0"
+dependencies = [
+ "editor-core",
+ "process",
+ "sysinfo",
 ]
 
 [[package]]
@@ -4706,6 +4724,7 @@ dependencies = [
  "editor-core",
  "local-fs",
  "notify",
+ "process",
  "serde",
  "serde_json",
  "task-runner",
@@ -6306,6 +6325,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "process"
+version = "0.1.0"
+dependencies = [
+ "editor-core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -8283,6 +8311,8 @@ name = "terminal-state"
 version = "0.1.0"
 dependencies = [
  "client-api",
+ "editor-core",
+ "process",
  "terminal",
 ]
 

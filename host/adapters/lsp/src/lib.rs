@@ -34,9 +34,17 @@ struct LspProcess {
 pub struct LocalLspBackend {
     process: Mutex<Option<LspProcess>>,
     diagnostics_notifier: Arc<Mutex<Option<UnboundedSender<()>>>>,
+    /// rust-analyzer を Resource Manager の所有ツリーとして登録する。
+    processes: Option<Arc<dyn process::ProcessRegistry>>,
 }
 
 impl LocalLspBackend {
+    /// 起動した Language Server を Resource Manager へ登録する。
+    pub fn with_processes(mut self, processes: Arc<dyn process::ProcessRegistry>) -> Self {
+        self.processes = Some(processes);
+        self
+    }
+
     fn with_process<T>(
         &self,
         operation: impl FnOnce(&mut LspProcess) -> Result<T, LspError>,
@@ -92,6 +100,15 @@ impl LanguageServerBackend for LocalLspBackend {
             .current_dir(workspace)
             .spawn()
             .map_err(|error| LspError::new(format!("rust-analyzer start failed: {error}")))?;
+        if let Some(processes) = &self.processes {
+            let _ = processes.register(process::ProcessRootSpec {
+                workspace: None,
+                kind: process::ProcessKind::LanguageServer,
+                owner: process::ProcessOwner::language_server(),
+                pid: child.id(),
+                label: "rust-analyzer".to_owned(),
+            });
+        }
         let writer = child
             .stdin
             .take()

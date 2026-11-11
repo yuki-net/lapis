@@ -15,6 +15,7 @@ use crate::{
         id,
         preview::PreviewFeature,
         problems::{ProblemsEvent, ProblemsFeature},
+        resource_manager::ResourceManagerFeature,
         search::SearchFeature,
         settings::SettingsFeature,
         tasks::TasksFeature,
@@ -161,6 +162,7 @@ impl DesktopRoot {
             lsp: services.lsp,
             edit_chain: EditChain::default(),
             git: services.git.backend(),
+            process: services.process.clone(),
             snapshot_sequence: 0,
             document_owners: Default::default(),
         });
@@ -173,6 +175,7 @@ impl DesktopRoot {
         let terminal = cx
             .new(|cx| TerminalFeature::new(services.terminal, terminal_root, conversation_id, cx));
         let problems = cx.new(|cx| ProblemsFeature::new(worker.clone(), cx));
+        let resources = cx.new(|cx| ResourceManagerFeature::new(worker.clone(), cx));
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
@@ -231,6 +234,7 @@ impl DesktopRoot {
             (id::VIEW_ASSISTANT.into(), tasks.clone().into()),
             (id::VIEW_TERMINAL.into(), terminal.clone().into()),
             (id::VIEW_PROBLEMS.into(), problems.clone().into()),
+            (id::VIEW_RESOURCES.into(), resources.clone().into()),
             (id::VIEW_SEARCH.into(), search.clone().into()),
             (id::VIEW_PROJECT_TASKS.into(), conversation.clone().into()),
             (id::VIEW_PREVIEW.into(), preview.clone().into()),

@@ -1,0 +1,11 @@
+[package]
+name = "local-process"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+process = { path = "../../../contracts/domain/process" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+sysinfo.workspace = true

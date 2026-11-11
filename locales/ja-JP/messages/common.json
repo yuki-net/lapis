@@ -10,6 +10,7 @@
   "view.assistant": "AI アシスタント",
   "view.terminal": "ターミナル",
   "view.problems": "問題",
+  "view.resources": "プロセス",
   "view.notifications": "通知",
   "notification.empty": "通知はありません",
   "notification.unread": "未読",

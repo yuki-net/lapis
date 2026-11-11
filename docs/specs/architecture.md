@@ -73,6 +73,15 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 重なる Workspace grant から同じ canonical path を別の Document として開く操作は競合として拒否する。別 Workspace の内容を暗黙に共有して認可範囲を広げない。
 - Terminal の購読欠落は snapshot と sequence で回復する。一時的な poll・通信失敗を実行終了とみなさず、出力の置換 snapshot と追記イベントを区別する。
 
+## Resource Manager（管理下プロセスの計測）
+
+- 対象は Host / Desktop が自ら spawn した root PID と、その PID から辿れる子孫だけとする。OS 全体の一覧や、Lapis 外で起動された同名プロセスを列挙・終了しない。
+- Host と Desktop はそれぞれプロセスレジストリをローカルに持つ。Host のレジストリは Host 自身と Host が起動した Terminal / Task Run などの root を、Desktop のレジストリは Desktop 自身と Desktop が起動した Language Server などの root を所有する。Remote Host から Desktop 側の root は操作できない。
+- Task / Execution のモデルと OS Process は独立させ、レジストリは root ごとに Workspace と所有元（Terminal / Task Run / Language Server 等）を保持する。Terminal 内の Agent CLI は Terminal の子孫として扱う。
+- 計測は 1 秒間隔で行い、root ごとに直近 60 サンプル（60 秒分）を保持する。CPU は 100 分の 1 パーセント、メモリは byte の整数として wire に載せる。終了した root は状態確認のため 60 秒残してから削除する。
+- 終了操作は接続中の Workspace に属する root だけを対象とし、root とその子孫を OS のプロセスツリー単位で終了する。Host / Desktop 自身は終了対象にしない。所有外の root ID は存在の有無を区別せず拒否する。
+- `workspace.execute` の `Processes` / `TerminateProcess` を使い、Local / Remote で同じ意味にする。読み取りは `workspace.process.read`、終了は `workspace.process.control` を要求する。
+
 ## 設定の所有境界
 
 - 設定値の所有者は `User` / `Host` / `ProjectShared` / `ProjectLocal` のスコープで表し、項目ごとに保存を許すスコープは `contracts/domain/settings` の定義データが決める。優先順位・保存形式・UI の組み立て規則は [設定のスコープと所有者](settings.md) を正本とする。

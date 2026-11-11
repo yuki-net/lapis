@@ -7,6 +7,7 @@ pub(crate) mod files;
 pub(crate) mod git;
 pub(crate) mod preview;
 pub(crate) mod problems;
+pub(crate) mod resource_manager;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod settings_coordinator;
@@ -27,6 +28,7 @@ pub mod id {
     pub const FEATURE_ASSISTANT: &str = "bundled.assistant";
     pub const FEATURE_TERMINAL: &str = "bundled.terminal";
     pub const FEATURE_PROBLEMS: &str = "bundled.problems";
+    pub const FEATURE_RESOURCES: &str = "bundled.resource-manager";
     pub const FEATURE_OUTPUT: &str = "bundled.output";
     pub const FEATURE_RUST: &str = "bundled.language.rust";
     pub const FEATURE_MARKDOWN: &str = "bundled.language.markdown";
@@ -71,6 +73,7 @@ pub mod id {
     pub const VIEW_ASSISTANT: &str = "lapis.view.assistant";
     pub const VIEW_TERMINAL: &str = "lapis.view.terminal";
     pub const VIEW_PROBLEMS: &str = "lapis.view.problems";
+    pub const VIEW_RESOURCES: &str = "lapis.view.resources";
     pub const VIEW_OUTPUT: &str = "lapis.view.output";
     pub const VIEW_COMMAND_SEARCH: &str = "lapis.view.command-search";
     pub const VIEW_SETTINGS: &str = "lapis.view.settings";
@@ -177,6 +180,7 @@ pub fn bundled_registry() -> FeatureRegistry {
         terminal::descriptor(),
         problems::descriptor(),
         problems::output_descriptor(),
+        resource_manager::descriptor(),
         editor::rust_descriptor(),
         preview::markdown_descriptor(),
     ];
@@ -299,6 +303,7 @@ mod tests {
             id::VIEW_PREVIEW,
             id::VIEW_PROBLEMS,
             id::VIEW_OUTPUT,
+            id::VIEW_RESOURCES,
             id::VIEW_SETTINGS,
         ] {
             assert_eq!(

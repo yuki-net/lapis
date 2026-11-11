@@ -300,6 +300,11 @@ impl TerminalBackend for LocalTerminalBackend {
         terminal.exited = true;
         Ok(())
     }
+
+    fn process_id(&self, id: &TerminalId) -> Option<u32> {
+        let terminals = self.lock().ok()?;
+        terminals.get(id.as_str())?.child.process_id()
+    }
 }
 
 fn shell_directory(cwd: &Path, program: &str) -> Result<PathBuf, TerminalError> {

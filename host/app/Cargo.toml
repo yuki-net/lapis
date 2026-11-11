@@ -16,10 +16,12 @@ document = { path = "../../contracts/domain/document" }
 git = { package = "git-contract", path = "../../extensions/git/contract" }
 futures-channel = "0.3"
 task = { path = "../../contracts/domain/task" }
+process = { path = "../../contracts/domain/process" }
 editor-core = { path = "../../contracts/domain/editor-core" }
 backend-state = { path = "../runtime" }
 client-api = { path = "../../contracts/protocol" }
 platform = { path = "../adapters/local" }
+local-process = { path = "../adapters/process" }
 terminal = { path = "../../contracts/domain/terminal" }
 remote = { path = "../transport/remote" }
 wire = { path = "../../contracts/transport/wire" }

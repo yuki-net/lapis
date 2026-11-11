@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use desktop_client::{
     ConversationRepository, ConversationSession, EditorSession, GitSession, LspSession,
-    SettingsSession, TaskSession, TerminalSession, WorkspaceSearchSession,
+    ProcessSession, SettingsSession, TaskSession, TerminalSession, WorkspaceSearchSession,
 };
 use host::BackendHost;
 use persistence::{
@@ -175,13 +175,15 @@ fn main() {
         eprintln!("Task restore failed: {error}");
     }
     let git_session = GitSession::new(host.git());
+    let local_processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Desktop);
+    let lsp_backend = LocalLspBackend::default().with_processes(local_processes.clone());
     let lsp_session = if use_loopback {
         LspSession::new(Arc::new(LoopbackBackend::new(
-            Arc::new(LocalLspBackend::default()),
+            Arc::new(lsp_backend),
             connection.clone(),
         )))
     } else {
-        LspSession::new(Arc::new(LocalLspBackend::default()))
+        LspSession::new(Arc::new(lsp_backend))
     };
     let mut terminal_session = TerminalSession::new(host.terminals());
     let search_session = if use_loopback {
@@ -232,6 +234,10 @@ fn main() {
         settings_session,
     )
     .with_workbench_watch(workbench_watch)
+    .with_process_session(ProcessSession::new(host.processes(), {
+        let local: Arc<dyn process::ProcessRegistry> = local_processes;
+        Some(local)
+    }))
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
     if let Some(connection) = connection_identity {
         desktop_services = desktop_services.with_connection_identity(connection);

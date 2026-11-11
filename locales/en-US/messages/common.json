@@ -10,6 +10,7 @@
   "view.assistant": "AI Assistant",
   "view.terminal": "Terminal",
   "view.problems": "Problems",
+  "view.resources": "Processes",
   "view.notifications": "Notifications",
   "notification.empty": "No notifications",
   "notification.unread": "Unread",

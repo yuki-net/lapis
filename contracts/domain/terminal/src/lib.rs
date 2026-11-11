@@ -550,6 +550,13 @@ pub trait TerminalBackend: Send + Sync {
     }
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError>;
     fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError>;
+    /// OS の root PID。Resource Manager へ所有ツリーを登録するために使う。
+    ///
+    /// 別プロセス上の backend など、PID を観測できない実装は `None` を返す。
+    fn process_id(&self, id: &TerminalId) -> Option<u32> {
+        let _ = id;
+        None
+    }
     /// 入力できる操作権を取得する。他の Session が所有中なら奪う。
     fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
         let _ = id;

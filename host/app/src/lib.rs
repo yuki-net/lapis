@@ -42,6 +42,8 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             "workspace.tasks.read",
             "workspace.tasks.start",
             "workspace.tasks.control",
+            "workspace.process.read",
+            "workspace.process.control",
         ]
         .map(|name| CapabilityId::try_new(name).expect("built-in capability")),
     )
@@ -76,6 +78,8 @@ struct HostInner {
     store: Option<Mutex<platform::WorkspaceStore>>,
     /// Host が起動を許可する Terminal profile。
     terminal_profiles: TerminalProfiles,
+    /// Host 自身と Host が spawn したプロセスのレジストリ。
+    processes: Arc<dyn process::ProcessRegistry>,
 }
 
 impl HostInner {
@@ -170,6 +174,7 @@ impl BackendHost {
             None => None,
         };
         let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
+        let processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Host);
         let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
@@ -178,6 +183,7 @@ impl BackendHost {
                 state_directory,
                 store,
                 terminal_profiles,
+                processes,
             }),
         };
         if let Some(store) = &host.inner.store {
@@ -240,7 +246,11 @@ impl BackendHost {
             self.inner.terminal_profiles.clone(),
         )))
         .with_git(Arc::new(LocalGitBackend::user_default()))
-        .with_tasks(Arc::new(LocalTaskBackend::user_default()));
+        .with_tasks(Arc::new(LocalTaskBackend::user_default().with_processes(
+            self.inner.processes.clone(),
+            editor_core::WorkspaceId::new(workspace_id.as_str()),
+        )))
+        .with_processes(self.inner.processes.clone());
         if let Some(directory) = &self.inner.state_directory {
             let path = directory
                 .join("workbench")
@@ -317,6 +327,9 @@ impl BackendHost {
     }
     pub fn terminals(&self) -> Arc<dyn TerminalBackend> {
         BackendClient::from(self.clone()).terminals()
+    }
+    pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
+        BackendClient::from(self.clone()).processes()
     }
 }
 

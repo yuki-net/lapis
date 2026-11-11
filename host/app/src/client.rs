@@ -166,6 +166,9 @@ impl BackendClient {
     pub fn terminals(&self) -> Arc<dyn terminal::TerminalBackend> {
         Arc::new(crate::terminal::HostTerminals::new(self.clone()))
     }
+    pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
+        Arc::new(crate::features::HostProcesses::new(self.clone()))
+    }
 
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
         match &self.source {

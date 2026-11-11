@@ -27,6 +27,9 @@ pub struct LocalTaskBackend {
     root: PathBuf,
     codex_executable: PathBuf,
     watch: Arc<Mutex<Option<TaskWatch>>>,
+    /// Task worker を Resource Manager の所有ツリーとして登録する。
+    processes: Option<Arc<dyn process::ProcessRegistry>>,
+    workspace_id: Option<editor_core::WorkspaceId>,
 }
 
 struct TaskWatch {
@@ -46,7 +49,20 @@ impl LocalTaskBackend {
             root,
             codex_executable,
             watch: Arc::new(Mutex::new(None)),
+            processes: None,
+            workspace_id: None,
         }
+    }
+
+    /// Task worker の起動を Resource Manager へ登録する。
+    pub fn with_processes(
+        mut self,
+        processes: Arc<dyn process::ProcessRegistry>,
+        workspace_id: editor_core::WorkspaceId,
+    ) -> Self {
+        self.processes = Some(processes);
+        self.workspace_id = Some(workspace_id);
+        self
     }
 
     pub fn user_default() -> Self {
@@ -143,9 +159,18 @@ impl TaskBackend for LocalTaskBackend {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         configure_detached_process(&mut command);
-        command.spawn().map_err(|error| {
+        let child = command.spawn().map_err(|error| {
             TaskError::new(format!("Task worker を起動できませんでした: {error}"))
         })?;
+        if let (Some(processes), Some(workspace)) = (&self.processes, &self.workspace_id) {
+            let _ = processes.register(process::ProcessRootSpec {
+                workspace: Some(workspace.clone()),
+                kind: process::ProcessKind::TaskRun,
+                owner: process::ProcessOwner::task_run(record.execution.id.as_str()),
+                pid: child.id(),
+                label: record.task.title.clone(),
+            });
+        }
         Ok(())
     }
 
