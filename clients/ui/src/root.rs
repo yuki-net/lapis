@@ -288,6 +288,11 @@ impl DesktopRoot {
         if let Some(id) = shell.read(cx).active_terminal_resource() {
             terminal.update(cx, |terminal, cx| terminal.show_resource(id, cx));
         }
+        // 起動時からターミナルタブが見えていれば、既定 profile の自動起動を促す。
+        terminal.update(cx, |terminal, cx| {
+            let visible = shell.read(cx).shell.terminal_tab_visible();
+            terminal.sync_tab_presence(visible, cx);
+        });
         let group = cx.new(|_| {
             crate::window_host::WindowGroup::new(
                 window,
@@ -510,6 +515,8 @@ impl DesktopRoot {
             cx.observe(&shell, |root, _, cx| {
                 root.record_window_layout(cx);
                 root.sync_preview(cx);
+                // ターミナルタブが見えたら既定 profile の自動起動を1回促す。
+                root.sync_terminal_auto_start(cx);
                 root.schedule_persist(cx);
             }),
             cx.observe(&terminal, |root, _, cx| root.schedule_persist(cx)),
@@ -888,16 +895,29 @@ impl DesktopRoot {
             .update(cx, |shell, cx| shell.open_terminal_tab(id.clone(), cx));
         self.terminal
             .update(cx, |terminal, cx| terminal.show_resource(id, cx));
+        self.sync_terminal_auto_start(cx);
         cx.notify();
+    }
+
+    /// ターミナルタブが見えているとき、既定 profile の自動起動を1回だけ促す。
+    ///
+    /// Feature 側で冪等なので、タブが表示されるたびに呼んでよい。
+    fn sync_terminal_auto_start(&mut self, cx: &mut Context<Self>) {
+        let visible = self.shell.read(cx).shell.terminal_tab_visible();
+        self.terminal
+            .update(cx, |terminal, cx| terminal.sync_tab_presence(visible, cx));
     }
 
     /// 復元したLayoutのうち、表示中のTerminalタブをHostの既存PTYへ再接続する。
     fn sync_terminal_tab(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.shell.read(cx).active_terminal_resource() else {
+            // 参照先が無いタブでも、表示されていれば既定 profile の自動起動を行う。
+            self.sync_terminal_auto_start(cx);
             return;
         };
         self.terminal
             .update(cx, |terminal, cx| terminal.show_resource(id, cx));
+        self.sync_terminal_auto_start(cx);
     }
 
     /// HostのWorkbench変更を、未確定の入力を待ってからUIへ反映する。
@@ -1681,6 +1701,14 @@ impl DesktopRoot {
             UiCommand::ActivateTerminal(id) => {
                 self.activate_terminal(id, cx);
                 self.schedule_persist(cx);
+            }
+            UiCommand::TerminalTabClosed => {
+                // 別のターミナルタブが残っていれば、その表示に任せる。
+                if !self.shell.read(cx).shell.terminal_tab_exists() {
+                    self.terminal
+                        .update(cx, |terminal, cx| terminal.close_session(cx));
+                    self.schedule_persist(cx);
+                }
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::SelectTask(id) => self.select_task(id, cx),

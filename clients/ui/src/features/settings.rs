@@ -16,6 +16,7 @@ use settings::{
 pub(crate) struct SettingsFeature {
     coordinator: gpui::Entity<SettingsCoordinator>,
     _subscription: gpui::Subscription,
+    _catalogs: Vec<gpui::Subscription>,
     values: ResolvedSettings,
     root: Option<PathBuf>,
     locale: Localizer,
@@ -39,9 +40,13 @@ impl SettingsFeature {
             cx.emit(this.values.clone());
             cx.notify();
         });
+        // Terminal Feature が Host の profile 一覧を公開したら選択肢を作り直す。
+        let catalogs =
+            vec![cx.observe_global::<super::terminal::TerminalProfileCatalog>(|_, cx| cx.notify())];
         Self {
             coordinator,
             _subscription: subscription,
+            _catalogs: catalogs,
             values,
             root: None,
             locale,
@@ -217,7 +222,7 @@ impl SettingsFeature {
     /// 1項目は定義データだけで決まる。値の保存キーも定義から取る。
     fn render_field(&self, definition: &SettingDefinition, cx: &mut Context<Self>) -> gpui::Div {
         let key = definition.key;
-        let current = self.effective_value(definition);
+        let current = self.effective_value(definition, cx);
         let origin = match self.values.origin(key) {
             Some(scope) => self.t(scope_label(scope)),
             None => self.t("settings.scope.default"),
@@ -290,7 +295,11 @@ impl SettingsFeature {
     }
 
     /// 未保存の項目は、UI が持つ実行時の既定値を選択状態として見せる。
-    fn effective_value(&self, definition: &SettingDefinition) -> Option<SettingValue> {
+    fn effective_value(
+        &self,
+        definition: &SettingDefinition,
+        cx: &gpui::App,
+    ) -> Option<SettingValue> {
         if let Some(value) = self.values.value(definition.key) {
             return Some(value.clone());
         }
@@ -310,6 +319,10 @@ impl SettingsFeature {
         if definition.key == settings::TERMINAL_CARET_SHAPE {
             let default = settings::TerminalCaretShape::default();
             return Some(SettingValue::text(default.as_id()));
+        }
+        if definition.key == settings::TERMINAL_DEFAULT_PROFILE {
+            // 未保存なら Host の既定 profile を選択状態として見せる。
+            return host_terminal_default_profile(cx).map(SettingValue::text);
         }
         None
     }
@@ -351,6 +364,14 @@ impl SettingsFeature {
                     )
                 })
                 .collect(),
+            OptionSource::TerminalProfiles => {
+                let catalog = super::terminal::profile_catalog(cx);
+                catalog
+                    .profiles
+                    .into_iter()
+                    .map(|(id, name)| (SettingValue::text(id), name))
+                    .collect()
+            }
         }
     }
 
@@ -399,6 +420,11 @@ fn default_page() -> &'static str {
     settings::catalog()
         .first_page()
         .map_or("appearance.theme", |page| page.id)
+}
+
+/// Host が既定として公開している Terminal profile ID。未取得なら `None`。
+fn host_terminal_default_profile(cx: &gpui::App) -> Option<String> {
+    super::terminal::profile_catalog(cx).default
 }
 
 fn scope_label(scope: &SettingsScope) -> &'static str {
@@ -545,5 +571,61 @@ mod tests {
         assert_eq!(leaf, catalog.pages().len());
         assert!(catalog.first_page().is_some());
         let _ = cx;
+    }
+
+    /// Host が公開した profile が Settings の候補になることを、描画と同じ経路で確かめる。
+    #[gpui::test]
+    fn default_terminal_profile_options_come_from_the_published_catalog(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            crate::features::terminal::publish_profile_catalog(
+                &terminal::TerminalProfiles::new(
+                    vec![
+                        terminal::TerminalProfile::new(
+                            "powershell",
+                            "PowerShell",
+                            "powershell.exe",
+                        ),
+                        terminal::TerminalProfile::new("cmd", "Command Prompt", "cmd.exe"),
+                    ],
+                    Some(terminal::TerminalProfileId::new("powershell")),
+                ),
+                cx,
+            );
+        });
+        let feature = cx.update(|cx| cx.new(SettingsFeature::new));
+        let definition = settings::catalog()
+            .definition(settings::TERMINAL_DEFAULT_PROFILE)
+            .expect("定義がある");
+        feature.update(cx, |feature, cx| {
+            let options = feature.options(definition, cx);
+            let values = options
+                .iter()
+                .map(|(value, label)| {
+                    (
+                        value.as_text().unwrap_or_default().to_owned(),
+                        label.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                values,
+                vec![
+                    ("powershell".to_owned(), "PowerShell".to_owned()),
+                    ("cmd".to_owned(), "Command Prompt".to_owned()),
+                ]
+            );
+            // 未保存の既定値は Host の既定 profile を選択状態にする。
+            assert_eq!(
+                feature
+                    .effective_value(definition, cx)
+                    .and_then(|value| value.as_text().map(ToOwned::to_owned)),
+                Some("powershell".to_owned())
+            );
+        });
     }
 }

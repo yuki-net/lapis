@@ -24,6 +24,7 @@ pub const TERMINAL_FONT_FAMILY: SettingKey = SettingKey::new("terminal.font-fami
 pub const TERMINAL_FONT_SIZE: SettingKey = SettingKey::new("terminal.font-size");
 pub const TERMINAL_LINE_HEIGHT: SettingKey = SettingKey::new("terminal.line-height-percent");
 pub const TERMINAL_CARET_SHAPE: SettingKey = SettingKey::new("terminal.caret-shape");
+pub const TERMINAL_DEFAULT_PROFILE: SettingKey = SettingKey::new("terminal.default-profile");
 
 /// 選択候補の供給元。値そのものではなく、UI が所有する一覧を指す。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +41,8 @@ pub enum OptionSource {
     TerminalFontSizes,
     /// ターミナルの行送り。
     TerminalLineHeights,
+    /// Host が公開するターミナル profile。
+    TerminalProfiles,
 }
 
 /// 設定値の入力方法。

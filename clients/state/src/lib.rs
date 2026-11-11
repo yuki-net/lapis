@@ -523,8 +523,46 @@ impl TerminalSession {
         Ok(())
     }
 
+    /// Tab を閉じたときの終了。実行中なら PTY を終了し、状態からも取り除く。
+    ///
+    /// 終了に失敗しても表示は取り除く。閉じたタブを復活させず、利用者へ
+    /// エラーだけを返すためである。Workspace の detach とは別操作で、
+    /// こちらは `terminate` を伴う。
+    pub fn terminate_and_forget(&mut self, id: &TerminalId) -> Result<(), TerminalError> {
+        let terminal = self
+            .terminals
+            .iter()
+            .find(|terminal| terminal.id == *id)
+            .cloned();
+        let outcome = match terminal.as_ref().map(|terminal| terminal.status) {
+            Some(TerminalStatus::Running) => self.backend.terminate(id),
+            // 復元直後の未接続 Terminal は、終了の前に再接続して Host の PTY を掴む。
+            Some(TerminalStatus::Disconnected) => {
+                let cwd = terminal.as_ref().map(|terminal| terminal.cwd.clone());
+                if let Some(cwd) = cwd
+                    && let Err(error) = self.backend.attach(&cwd, id)
+                {
+                    Err(error)
+                } else {
+                    self.backend.terminate(id)
+                }
+            }
+            // 既に終了・失敗した Terminal は PTY を重ねて終了しない。
+            _ => Ok(()),
+        };
+        self.terminals.retain(|terminal| terminal.id != *id);
+        self.owners.remove(id.as_str());
+        outcome
+    }
+
     pub fn backend(&self) -> Arc<dyn TerminalBackend> {
         self.backend.clone()
+    }
+
+    /// テストで状態を直接組み立てるための可変参照。
+    #[cfg(test)]
+    pub fn terminals_mut_for_tests(&mut self) -> &mut Vec<TerminalSnapshot> {
+        &mut self.terminals
     }
 }
 
@@ -3341,6 +3379,54 @@ mod tests {
         );
         assert_eq!(session.terminals()[0].revision, 7);
         assert_eq!(session.terminals()[0].status, TerminalStatus::Running);
+    }
+
+    #[test]
+    fn closing_a_terminal_terminates_the_pty_and_drops_it_from_the_session() {
+        struct Counting {
+            next: std::sync::atomic::AtomicUsize,
+            terminated: Mutex<Vec<TerminalId>>,
+        }
+        impl TerminalBackend for Counting {
+            fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+                Ok(TerminalId::new(format!(
+                    "terminal-{}",
+                    self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                )))
+            }
+            fn input(&self, _: &TerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
+                Ok(())
+            }
+            fn resize(&self, _: &TerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+                Ok(())
+            }
+            fn poll(&self, _: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+                Ok(Vec::new())
+            }
+            fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
+                self.terminated.lock().unwrap().push(id.clone());
+                Ok(())
+            }
+        }
+
+        let backend = Arc::new(Counting {
+            next: std::sync::atomic::AtomicUsize::new(0),
+            terminated: Mutex::new(Vec::new()),
+        });
+        let mut session = TerminalSession::new(backend.clone());
+        let first = session.start(Path::new("workspace"), 80, 24).unwrap();
+        let second = session.start(Path::new("workspace"), 80, 24).unwrap();
+
+        session.terminate_and_forget(&first).unwrap();
+        assert_eq!(*backend.terminated.lock().unwrap(), vec![first.clone()]);
+        assert_eq!(session.terminals().len(), 1);
+        assert_eq!(session.terminals()[0].id, second);
+
+        // 既に終了・切断済みの Terminal は PTY を重ねて終了しない。
+        session.terminals_mut_for_tests()[0].status = TerminalStatus::Exited;
+        session.terminate_and_forget(&second).unwrap();
+        assert_eq!(*backend.terminated.lock().unwrap(), vec![first]);
+        assert!(session.terminals().is_empty());
     }
 
     #[test]

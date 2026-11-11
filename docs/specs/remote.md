@@ -103,6 +103,8 @@ Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
   panel 幅に追従した resize など、明示的な resize 操作だけが canonical size と
   Engine size を更新し、全 Client に通知する。
 - Client の切断、Window の close、画面の切替は Terminal process を終了させない。
+  Terminal タブを閉じる操作だけが `terminal.terminate` を送り、Host の PTY も終了させる。
+  Client はこのとき表示中の Terminal を cache から除き、再アタッチの対象に戻さない。
 
 この契約により、Desktop は GPUI Renderer、将来の Mobile は native Renderer として
 同じ Model を描画できる。Agent Session、ACP、Chat UI、provider 固有の handoff は

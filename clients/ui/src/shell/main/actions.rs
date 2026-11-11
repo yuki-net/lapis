@@ -145,6 +145,9 @@ impl Shell {
     }
 
     /// 起動済みのHost Terminalをタブとして開く。既存のTerminal Viewタブは同じ位置で置き換える。
+    ///
+    /// パネル内のセッションタブ列は持たないため、既に Terminal View のタブが
+    /// あれば新しいタブを増やさず、そのタブの参照先だけを現在のセッションへ替える。
     pub(crate) fn open_terminal_tab(&mut self, id: TerminalId, cx: &mut Context<Self>) {
         let tab = PanelTab::terminal(id);
         if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
@@ -153,13 +156,18 @@ impl Shell {
             cx.notify();
             return;
         }
-        let generic = self.shell.layout.placements().into_iter().find(|(tab, _)| {
-            tab.terminal_id().is_none()
-                && tab
-                    .view_id()
-                    .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL)
-        });
-        if let Some((old, panel_id)) = generic
+        let existing_terminal =
+            self.shell
+                .layout
+                .placements()
+                .into_iter()
+                .find(|(candidate, _)| {
+                    candidate
+                        .view_id()
+                        .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL)
+                });
+        if let Some((old, panel_id)) = existing_terminal
+            && !self.shell.layout.tab_is_pinned(&old)
             && self.shell.layout.replace_tab(&panel_id, &old, tab.clone())
         {
             self.focus_terminal_tab(&panel_id, &tab);
@@ -314,6 +322,9 @@ impl Shell {
             return;
         }
         let PanelTab::Document(document_id) = tab else {
+            let terminal_tab = tab
+                .view_id()
+                .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL);
             if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.shell
                     .layout
@@ -321,6 +332,11 @@ impl Shell {
                 self.schedule_empty_close(panel_id, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
+            }
+            if terminal_tab {
+                // ターミナルタブを閉じたら Session を終了する。パネルや Zone を
+                // 閉じるだけの操作とは別で、こちらは PTY を止める。
+                cx.emit(UiCommand::TerminalTabClosed);
             }
             self.refresh_feature_activation(cx);
             cx.notify();
@@ -338,7 +354,12 @@ impl Shell {
         cx.notify();
     }
 
+    /// タブをまとめて閉じた後に呼ぶ。`tabs` は実際に閉じたタブだけが渡される。
+    ///
+    /// この経路はタブの Close 操作だけが使う（Window 終了は `close_tools` を
+    /// 空のまま渡す）。ターミナルタブが消えたときだけ Feature へ終了を伝える。
     pub(crate) fn close_tools_after_batch(&mut self, tabs: &[PanelTab], cx: &mut Context<Self>) {
+        let mut closed_terminal = false;
         for tab in tabs {
             if !matches!(tab, PanelTab::Tool { .. }) || self.shell.layout.tab_is_pinned(tab) {
                 continue;
@@ -350,7 +371,13 @@ impl Shell {
                 self.schedule_empty_close(panel_id, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
+                closed_terminal |= tab
+                    .view_id()
+                    .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL);
             }
+        }
+        if closed_terminal {
+            cx.emit(UiCommand::TerminalTabClosed);
         }
         self.refresh_feature_activation(cx);
         cx.notify();

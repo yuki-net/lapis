@@ -5,8 +5,9 @@ use std::collections::BTreeMap;
 use localization::LocaleId;
 
 use crate::definition::{
-    DefinitionCatalog, SettingKey, TERMINAL_CARET_SHAPE, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE,
-    TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME, UI_THEME,
+    DefinitionCatalog, SettingKey, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
+    TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
+    UI_THEME,
 };
 use crate::document::SettingsDocument;
 use crate::scope::{SettingsContext, SettingsScope};
@@ -136,6 +137,13 @@ impl ResolvedSettings {
             .and_then(TerminalCaretShape::from_id)
     }
 
+    /// 設定で選ばれた既定 Terminal profile。未設定なら Host の既定を使う。
+    pub fn terminal_default_profile(&self) -> Option<String> {
+        self.text(TERMINAL_DEFAULT_PROFILE)
+            .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
     fn u8_setting(&self, key: SettingKey) -> Option<u8> {
         self.integer(key).and_then(|value| u8::try_from(value).ok())
     }
@@ -228,5 +236,27 @@ mod tests {
             SettingValue::integer(18),
         );
         assert_eq!(resolved.terminal_font_size(), Some(18));
+    }
+
+    #[test]
+    fn terminal_default_profile_is_empty_until_it_is_chosen() {
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[]);
+        assert_eq!(resolved.terminal_default_profile(), None);
+        let user = document(
+            SettingsScope::User,
+            &[(TERMINAL_DEFAULT_PROFILE, SettingValue::text(""))],
+        );
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[&user]);
+        assert_eq!(
+            resolved.terminal_default_profile(),
+            None,
+            "空文字は未設定として扱う"
+        );
+        let user = document(
+            SettingsScope::User,
+            &[(TERMINAL_DEFAULT_PROFILE, SettingValue::text("cmd"))],
+        );
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[&user]);
+        assert_eq!(resolved.terminal_default_profile().as_deref(), Some("cmd"));
     }
 }

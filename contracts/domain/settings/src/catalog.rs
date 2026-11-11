@@ -4,8 +4,9 @@ use std::sync::OnceLock;
 
 use crate::definition::{
     DefinitionCatalog, OptionSource, SettingCategory, SettingControl, SettingDefinition,
-    SettingGroup, SettingPage, TERMINAL_CARET_SHAPE, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE,
-    TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME, UI_THEME,
+    SettingGroup, SettingPage, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
+    TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
+    UI_THEME,
 };
 use crate::scope::ScopeKind;
 use crate::syntax::{SyntaxTheme, TerminalCaretShape};
@@ -50,11 +51,18 @@ fn categories() -> Vec<SettingCategory> {
         SettingCategory {
             id: "terminal",
             label: "settings.category.terminal",
-            groups: &[SettingGroup {
-                id: "terminal.presentation",
-                label: "settings.group.terminal.presentation",
-                pages: &["terminal.font"],
-            }],
+            groups: &[
+                SettingGroup {
+                    id: "terminal.presentation",
+                    label: "settings.group.terminal.presentation",
+                    pages: &["terminal.font"],
+                },
+                SettingGroup {
+                    id: "terminal.launch",
+                    label: "settings.group.terminal.startup",
+                    pages: &["terminal.startup"],
+                },
+            ],
         },
         SettingCategory {
             id: "language",
@@ -90,6 +98,13 @@ fn pages() -> Vec<SettingPage> {
             group: "terminal.presentation",
             label: "settings.page.terminal.font",
             description: None,
+        },
+        SettingPage {
+            id: "terminal.startup",
+            category: "terminal",
+            group: "terminal.launch",
+            label: "settings.page.terminal.startup",
+            description: Some("settings.page.terminal.startup.description"),
         },
         SettingPage {
             id: "language.locale",
@@ -159,6 +174,16 @@ fn settings() -> Vec<SettingDefinition> {
             label: "settings.field.terminal-caret",
             description: None,
             control: SettingControl::Choice(OptionSource::Values(caret_options())),
+            value_kind: ValueKind::Text,
+            scopes: ALL_SCOPES,
+            default: None,
+        },
+        SettingDefinition {
+            key: TERMINAL_DEFAULT_PROFILE,
+            page: "terminal.startup",
+            label: "settings.field.terminal-default-profile",
+            description: Some("settings.field.terminal-default-profile.description"),
+            control: SettingControl::Choice(OptionSource::TerminalProfiles),
             value_kind: ValueKind::Text,
             scopes: ALL_SCOPES,
             default: None,
@@ -257,6 +282,7 @@ mod tests {
             (TERMINAL_FONT_SIZE, ValueKind::Integer),
             (TERMINAL_LINE_HEIGHT, ValueKind::Integer),
             (TERMINAL_CARET_SHAPE, ValueKind::Text),
+            (TERMINAL_DEFAULT_PROFILE, ValueKind::Text),
         ] {
             let definition = catalog().definition(key).expect("定義がある");
             assert_eq!(definition.value_kind, kind);
@@ -275,5 +301,22 @@ mod tests {
         assert!(scopes(UI_THEME).contains(&ScopeKind::Host));
         assert!(!scopes(UI_THEME).contains(&ScopeKind::ProjectLocal));
         assert_eq!(scopes(TERMINAL_FONT_SIZE), ALL_SCOPES);
+    }
+
+    #[test]
+    fn default_terminal_profile_is_a_project_overridable_choice() {
+        let definition = catalog()
+            .definition(TERMINAL_DEFAULT_PROFILE)
+            .expect("既定 Terminal profile の定義がある");
+        assert_eq!(
+            definition.control,
+            SettingControl::Choice(OptionSource::TerminalProfiles),
+            "候補は Host が公開する profile から供給する"
+        );
+        assert_eq!(definition.page, "terminal.startup");
+        assert_eq!(
+            catalog().page("terminal.startup").map(|page| page.category),
+            Some("terminal")
+        );
     }
 }

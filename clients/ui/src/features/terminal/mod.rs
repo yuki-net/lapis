@@ -10,6 +10,40 @@ mod view;
 
 pub(crate) use state::{TerminalFeature, TerminalFeatureEvent};
 
+/// 設定 UI が既定プロファイルを選ぶための、Host が公開した profile 一覧。
+///
+/// Terminal Feature が Host から取得した内容をここへ写し、Settings は
+/// Feature の entity に依存せずこの一覧だけを読む。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TerminalProfileCatalog {
+    pub(crate) profiles: Vec<(String, String)>,
+    pub(crate) default: Option<String>,
+}
+
+impl gpui::Global for TerminalProfileCatalog {}
+
+/// 公開済みの profile 一覧。未取得なら空。
+pub(crate) fn profile_catalog(cx: &gpui::App) -> TerminalProfileCatalog {
+    cx.try_global::<TerminalProfileCatalog>()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Host から取得した profile 一覧を Settings へ公開する。
+pub(super) fn publish_profile_catalog(profiles: &terminal::TerminalProfiles, cx: &mut gpui::App) {
+    let catalog = TerminalProfileCatalog {
+        profiles: profiles
+            .profiles
+            .iter()
+            .map(|profile| (profile.id.as_str().to_owned(), profile.name.clone()))
+            .collect(),
+        default: profiles.default.as_ref().map(|id| id.as_str().to_owned()),
+    };
+    if cx.try_global::<TerminalProfileCatalog>() != Some(&catalog) {
+        cx.set_global(catalog);
+    }
+}
+
 /// OS ごとの既定等幅フォント。
 pub(crate) fn default_font_family() -> &'static str {
     #[cfg(windows)]

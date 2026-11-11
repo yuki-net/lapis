@@ -206,6 +206,25 @@ impl ShellState {
         !self.hidden_views.contains(&tab.instance_id())
     }
 
+    /// ターミナルタブが Layout 上に1つでも存在するか。タブを閉じた判定に使う。
+    pub(crate) fn terminal_tab_exists(&self) -> bool {
+        self.layout.placements().into_iter().any(|(tab, _)| {
+            tab.view_id()
+                .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
+        })
+    }
+
+    /// ターミナルタブが実際に画面へ出ているか。自動起動の判定に使う。
+    pub(crate) fn terminal_tab_visible(&self) -> bool {
+        self.layout.visible_panels().any(|panel| {
+            panel.tabs.iter().any(|tab| {
+                tab.view_id()
+                    .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
+                    && self.view_visible(tab)
+            })
+        })
+    }
+
     pub(crate) fn visible_active<'a>(&self, panel: &'a PanelHost) -> Option<&'a PanelTab> {
         panel
             .active
@@ -522,6 +541,27 @@ mod tests {
                 .find_tab(&PanelTab::tool(id::VIEW_FILES))
                 .is_some()
         );
+    }
+
+    #[test]
+    fn terminal_tab_presence_distinguishes_hidden_panels_from_closed_tabs() {
+        let mut state = ShellState::default();
+        let terminal = PanelTab::tool(id::VIEW_TERMINAL);
+        let panel = state
+            .layout
+            .open_tab(ZonePosition::Bottom, terminal.clone())
+            .unwrap();
+        // タブがあるので自動起動の対象になる。
+        assert!(state.terminal_tab_exists());
+        assert!(state.terminal_tab_visible());
+        // Zone を閉じてもタブは残る。detach 相当で、終了の対象ではない。
+        state.layout.set_zone_open(ZonePosition::Bottom, false);
+        assert!(state.terminal_tab_exists());
+        assert!(!state.terminal_tab_visible());
+        // タブを消したら、セッション終了の対象になる。
+        state.layout.remove_tab(&panel, &terminal, Instant::now());
+        assert!(!state.terminal_tab_exists());
+        assert!(!state.terminal_tab_visible());
     }
 
     #[test]
