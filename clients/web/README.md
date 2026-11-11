@@ -55,7 +55,7 @@ WebGPU が使えない環境では `?backend=webgl` を付けてください。
 ## Tailscaleで開く
 
 ```powershell
-cargo run -p lapis-web -- --dev --listen 0.0.0.0:4747 --dist clients/web/dist
+cargo run -p lapis-web -- --dev --host --dist clients/web/dist
 ```
 
 `http://TAILSCALE_IP:4747/` を開きます。Host と web-bridge も tailnet から到達できるように起動してください。OIDC を使わない場合は pairing token が必要です。Tailscale ACL で端末を制限してください。

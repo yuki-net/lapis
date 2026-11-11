@@ -75,6 +75,10 @@ impl Options {
         while let Some(argument) = values.next() {
             match argument.as_str() {
                 "--dev" => options.dev = true,
+                "--host" => {
+                    // Vite と同じく、指定なしで全インターフェースを待ち受ける。
+                    options.listen = SocketAddr::from(([0, 0, 0, 0], options.listen.port()));
+                }
                 "--listen" => {
                     let value = values.next().ok_or("--listen に値がありません")?;
                     options.listen = value
@@ -96,7 +100,7 @@ impl Options {
 }
 
 fn usage() -> String {
-    "usage: lapis-web [--dev] [--listen <addr>] [--dist <directory>] [--root <directory>]"
+    "usage: lapis-web [--dev] [--host] [--listen <addr>] [--dist <directory>] [--root <directory>]"
         .to_owned()
 }
 
@@ -363,5 +367,11 @@ mod tests {
         let html = "<html><body><main></main></body></html>";
         assert!(inject_reload(html, true).contains("/__reload.js"));
         assert_eq!(inject_reload(html, false), html);
+    }
+
+    #[test]
+    fn host_flag_binds_all_interfaces_on_the_same_port() {
+        let options = Options::parse(&["--host".to_owned()]).unwrap();
+        assert_eq!(options.listen.to_string(), "0.0.0.0:4747");
     }
 }
