@@ -16,15 +16,6 @@ use workbench::{ConversationViewState, WorkbenchReplica, WorkbenchWritePlan};
 
 use crate::connection::BrowserConnection;
 
-const CAPABILITIES: &[&str] = &[
-    "workspace.list",
-    "workspace.connect",
-    "workspace.sync",
-    "workspace.workbench.write",
-    "workspace.documents.read",
-    "workspace.documents.write",
-];
-
 #[wasm_bindgen]
 pub struct WebSession {
     connection: Rc<BrowserConnection>,
@@ -57,7 +48,7 @@ impl WebSession {
                 token: token.as_deref(),
                 credential: credential.as_deref(),
                 id_token: None,
-                capabilities: CAPABILITIES,
+                capabilities: client_core::web_capabilities::CAPABILITIES,
             },
         )
         .await

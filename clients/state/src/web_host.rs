@@ -54,19 +54,6 @@ pub const ROOT: &str = "/Lapis Host";
 const UNAVAILABLE: &str = "Webではこの機能に接続していません";
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
-const WEB_CAPABILITIES: &[&str] = &[
-    "workspace.list",
-    "workspace.connect",
-    "workspace.switch",
-    "workspace.sync",
-    "workspace.workbench.write",
-    "workspace.documents.read",
-    "workspace.documents.write",
-    "workspace.files.read",
-    "workspace.files.write",
-    "workspace.terminal.start",
-    "workspace.terminal.control",
-];
 
 thread_local! {
     static BACKEND: RefCell<Option<BackendState>> = const { RefCell::new(None) };
@@ -133,7 +120,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         token: config.token.as_deref(),
         credential: config.credential.as_deref(),
         id_token: config.id_token.as_deref(),
-        capabilities: WEB_CAPABILITIES,
+        capabilities: client_core::web_capabilities::CAPABILITIES,
     })
     .await?;
     let mut connection = Rc::new(connected.connection);
