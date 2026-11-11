@@ -1,5 +1,5 @@
 use crate::{
-    client_adapter::ClientWorker,
+    client_adapter::{ClientWorker, DocumentClient},
     extension_ui::{ActivationCondition, FeatureDescriptor, UiContribution, UiSlot, ViewId},
     features::id,
 };
@@ -8,16 +8,12 @@ use process::{ProcessKind, ProcessOrigin, ProcessRoot, ProcessRootId, ProcessSna
 mod state;
 mod view;
 
-pub(crate) use state::ProcessWorker;
-
 pub(crate) struct ResourceManagerFeature {
-    worker: ClientWorker<state::ProcessWorker>,
-    workspace: Option<editor_core::WorkspaceId>,
+    worker: ClientWorker<DocumentClient>,
     pub(super) state: ProcessPanelState,
     busy: bool,
     scheduled: bool,
     refresh_generation: u64,
-    last_visible: Option<web_time::Instant>,
 }
 
 /// Resource Manager パネルの表示状態。worker や GPUI に依存せず更新できる。

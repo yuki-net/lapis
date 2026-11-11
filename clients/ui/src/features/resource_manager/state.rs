@@ -1,92 +1,23 @@
 use std::time::Duration;
 
-use desktop_client::ProcessSession;
-use editor_core::WorkspaceId;
 use gpui::Context;
-use process::{ProcessOrigin, ProcessRootId, ProcessSnapshot};
+use process::{ProcessOrigin, ProcessRootId};
 
-use crate::client_adapter::ClientWorker;
+use crate::client_adapter::{ClientWorker, DocumentClient};
 
 use super::{ProcessPanelState, ResourceManagerFeature};
 
-/// Resource Manager 専用 worker。Document の編集・保存と同じ worker を占有しない。
-pub(crate) struct ProcessWorker {
-    session: ProcessSession,
-    workspace: Option<WorkspaceId>,
-}
-
-impl ProcessWorker {
-    pub(crate) fn new(session: ProcessSession, workspace: Option<WorkspaceId>) -> Self {
-        Self { session, workspace }
-    }
-
-    pub(super) fn set_workspace(&mut self, workspace: Option<WorkspaceId>) {
-        self.workspace = workspace;
-    }
-
-    fn refresh(&mut self) -> Result<(ProcessSnapshot, Option<String>), String> {
-        self.session
-            .refresh(self.workspace.as_ref())
-            .map_err(|error| error.to_string())?;
-        Ok((
-            self.session.snapshot().clone(),
-            self.session.host_error().map(ToOwned::to_owned),
-        ))
-    }
-
-    fn terminate(&mut self, origin: ProcessOrigin, root_id: &ProcessRootId) -> Result<(), String> {
-        self.session
-            .terminate(self.workspace.as_ref(), origin, root_id)
-            .map_err(|error| error.to_string())
-    }
-}
-
 impl ResourceManagerFeature {
-    pub(crate) fn new(
-        worker: ClientWorker<ProcessWorker>,
-        workspace: Option<WorkspaceId>,
-        _cx: &mut Context<Self>,
-    ) -> Self {
-        Self {
+    pub(crate) fn new(worker: ClientWorker<DocumentClient>, cx: &mut Context<Self>) -> Self {
+        let mut feature = Self {
             worker,
-            workspace,
             state: ProcessPanelState::default(),
             busy: false,
             scheduled: false,
             refresh_generation: 0,
-            last_visible: None,
-        }
-        // 初回取得はパネルが描画されたときに行う。非表示のまま要求を出さない。
-    }
-
-    /// パネルが描画されたことを記録し、停止していたポーリングを再開する。
-    pub(super) fn note_rendered(&mut self, cx: &mut Context<Self>) {
-        self.last_visible = Some(web_time::Instant::now());
-        if !self.busy && !self.scheduled {
-            self.refresh(cx);
-        }
-    }
-
-    fn recently_visible(&self) -> bool {
-        self.last_visible
-            .is_some_and(|at| at.elapsed() < Duration::from_secs(5))
-    }
-
-    /// Workspace の切替を専用 worker へ同期し、一覧を取り直す。
-    pub(crate) fn set_workspace(&mut self, workspace: Option<WorkspaceId>, cx: &mut Context<Self>) {
-        if self.workspace == workspace {
-            return;
-        }
-        self.workspace = workspace.clone();
-        self.refresh_generation = self.refresh_generation.wrapping_add(1);
-        self.state = ProcessPanelState::default();
-        let _ = self.worker.request(move |worker| {
-            worker.set_workspace(workspace);
-            Ok(())
-        });
-        if self.recently_visible() {
-            self.refresh(cx);
-        }
+        };
+        feature.refresh(cx);
+        feature
     }
 
     fn schedule(&mut self, cx: &mut Context<Self>) {
@@ -98,9 +29,7 @@ impl ResourceManagerFeature {
             crate::timer::Timer::after(Duration::from_secs(2)).await;
             let _ = this.update(cx, |feature, cx| {
                 feature.scheduled = false;
-                if feature.recently_visible() {
-                    feature.refresh(cx);
-                }
+                feature.refresh(cx);
             });
         })
         .detach();
@@ -117,11 +46,20 @@ impl ResourceManagerFeature {
         let generation = self.refresh_generation;
         let admitted = self.worker.submit(
             cx,
-            |worker| worker.refresh(),
+            |client| {
+                let workspace = client.editor.workspace_id().cloned();
+                client
+                    .process
+                    .refresh(workspace.as_ref())
+                    .map_err(|error| error.to_string())?;
+                Ok((
+                    client.process.snapshot().clone(),
+                    client.process.host_error().map(ToOwned::to_owned),
+                ))
+            },
             move |feature, result, cx| {
                 if generation != feature.refresh_generation {
                     feature.busy = false;
-                    feature.schedule(cx);
                     return;
                 }
                 feature.busy = false;
@@ -162,7 +100,14 @@ impl ResourceManagerFeature {
             .unwrap_or(ProcessOrigin::Host);
         let admitted = self.worker.submit(
             cx,
-            move |worker| worker.terminate(origin, &root_id),
+            move |client| {
+                let workspace = client.editor.workspace_id().cloned();
+                client
+                    .process
+                    .terminate(workspace.as_ref(), origin, &root_id)
+                    .map_err(|error| error.to_string())?;
+                Ok(())
+            },
             |feature, result, cx| {
                 feature.state.termination_finished(result);
                 feature.refresh(cx);

@@ -15,7 +15,7 @@ use crate::{
         id,
         preview::PreviewFeature,
         problems::{ProblemsEvent, ProblemsFeature},
-        resource_manager::{ProcessWorker, ResourceManagerFeature},
+        resource_manager::ResourceManagerFeature,
         search::SearchFeature,
         settings::SettingsFeature,
         tasks::TasksFeature,
@@ -77,7 +77,6 @@ pub(crate) struct DesktopRoot {
     tasks: Entity<TasksFeature>,
     terminal: Entity<TerminalFeature>,
     problems: Entity<ProblemsFeature>,
-    resources: Entity<ResourceManagerFeature>,
     search: Entity<SearchFeature>,
     conversation: Entity<ConversationFeature>,
     preview: Entity<PreviewFeature>,
@@ -157,20 +156,16 @@ impl DesktopRoot {
             services.terminal.restore_summaries(&summaries);
         }
         let document_connection = Some(session.document_connection());
-        let initial_workspace = session.workspace_id().cloned();
         let worker = ClientWorker::new(DocumentClient {
             editor: session,
             conversation: services.conversation,
             lsp: services.lsp,
             edit_chain: EditChain::default(),
             git: services.git.backend(),
+            process: services.process.clone(),
             snapshot_sequence: 0,
             document_owners: Default::default(),
         });
-        let process_worker = ClientWorker::new(ProcessWorker::new(
-            services.process.clone(),
-            initial_workspace.clone(),
-        ));
         let editor =
             cx.new(|cx| Editor::new_with_subscription(worker.clone(), document_connection, cx));
         let files = cx.new(|_| FilesFeature::new());
@@ -180,8 +175,7 @@ impl DesktopRoot {
         let terminal = cx
             .new(|cx| TerminalFeature::new(services.terminal, terminal_root, conversation_id, cx));
         let problems = cx.new(|cx| ProblemsFeature::new(worker.clone(), cx));
-        let resources =
-            cx.new(|cx| ResourceManagerFeature::new(process_worker, initial_workspace, cx));
+        let resources = cx.new(|cx| ResourceManagerFeature::new(worker.clone(), cx));
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
@@ -562,7 +556,6 @@ impl DesktopRoot {
             tasks,
             terminal,
             problems,
-            resources,
             search,
             conversation,
             preview,
@@ -668,9 +661,6 @@ impl DesktopRoot {
                     .map(|root| root.display().to_string())
                     .unwrap_or_default()
             ));
-        });
-        self.resources.update(cx, |resources, cx| {
-            resources.set_workspace(snapshot.workspace.clone(), cx)
         });
         let selected = self
             .workbench
