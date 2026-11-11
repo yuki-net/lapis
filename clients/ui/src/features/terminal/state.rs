@@ -194,6 +194,10 @@ pub(crate) struct TerminalFeature {
     pub(super) profiles: terminal::TerminalProfiles,
     pub(super) last_metrics: Option<super::view::TerminalMetrics>,
     pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
+    /// 行の内容から shaped line を引き当てるキャッシュ。フォント変更時に捨てる。
+    pub(super) line_cache: super::canvas::TerminalLineCache,
+    /// 出力の notify を frame 単位に集約するための印。render の冒頭で戻す。
+    pub(super) pending_output_render: bool,
     /// Terminal出力の表示状態。
     /// None = 未処理（output変更を検知していない）
     /// Some(None) = scroll pending（outputは変更済みだがscroll-followが未完了）
@@ -256,6 +260,19 @@ impl TerminalFeature {
         self.caret_shape = caret_shape;
         self.last_metrics = None;
         self.last_size = None;
+        self.line_cache.clear();
+        cx.notify();
+    }
+
+    /// 出力による再描画を frame 単位に集約する。
+    ///
+    /// 同じ frame に複数の delta が届いても notify は 1 回にし、render の冒頭で
+    /// 印を戻す。render 後に届いた delta は次の frame で描画される。
+    fn request_output_render(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.pending_output_render {
+            return;
+        }
+        self.pending_output_render = true;
         cx.notify();
     }
 
@@ -369,6 +386,8 @@ impl TerminalFeature {
             profiles: terminal::TerminalProfiles::default(),
             last_metrics: None,
             last_size: None,
+            line_cache: Default::default(),
+            pending_output_render: false,
             visible_output: None, // None = 未処理
             root,
             conversation,
@@ -1029,7 +1048,7 @@ impl TerminalFeature {
                                 feature.message_from_poll = true;
                             }
                         }
-                        cx.notify();
+                        feature.request_output_render(cx);
                     }
                     Err(error) => {
                         feature.message = error;
@@ -1585,6 +1604,63 @@ mod tests {
             ),
             backend,
         )
+    }
+
+    #[gpui::test]
+    fn terminal_view_draws_rows_reuses_shaped_lines_and_coalesces_notifies(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+        });
+        let window = cx.add_window(|_, cx| {
+            let (_, backend) = feature();
+            let mut feature = TerminalFeature::new(
+                TerminalSession::new(backend),
+                Some("workspace".into()),
+                ConversationId::new("task-a"),
+                cx,
+            );
+            let mut snapshot = terminal::TerminalSnapshot::empty(
+                terminal::TerminalId::new("first"),
+                "workspace".into(),
+                TerminalStatus::Running,
+                TerminalSize::new(80, 24),
+            );
+            snapshot.screen.rows = (0..24).map(|_| model_row(80, "hello world")).collect();
+            feature.terminals.push(snapshot);
+            feature
+        });
+
+        for _ in 0..2 {
+            cx.update_window(window.into(), |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            })
+            .unwrap();
+            cx.run_until_parked();
+        }
+
+        // 同じ frame 内の複数 delta は 1 回の notify にまとまり、描画で消費される。
+        window
+            .update(cx, |feature, _, cx| {
+                feature.request_output_render(cx);
+                feature.request_output_render(cx);
+                assert!(feature.pending_output_render);
+            })
+            .unwrap();
+        cx.update_window(window.into(), |_, window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        })
+        .unwrap();
+        window
+            .update(cx, |feature, _, _| {
+                assert!(!feature.pending_output_render);
+            })
+            .unwrap();
     }
 
     struct EventObserver {

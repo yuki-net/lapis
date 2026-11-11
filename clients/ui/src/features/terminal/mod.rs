@@ -3,6 +3,7 @@ use crate::{
     features::id,
 };
 
+mod canvas;
 mod input;
 mod state;
 mod view;

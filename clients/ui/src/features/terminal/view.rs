@@ -1,4 +1,5 @@
 use super::TerminalFeature;
+use super::canvas::{TerminalColors, TerminalElement};
 use crate::{
     components::{Menu, MenuEntry, MenuItemSpec, ScrollAxis, scroll_viewport},
     theme,
@@ -6,7 +7,7 @@ use crate::{
 use gpui::{
     App, Context, Pixels, Render, ScrollHandle, Window, canvas, div, point, prelude::*, px,
 };
-use terminal::{TerminalCell, TerminalColor, TerminalCursor, TerminalId, TerminalRow};
+use terminal::{TerminalCursor, TerminalId};
 
 /// セル幅を決めるサンプル文字。
 const CELL_SAMPLE: char = 'M';
@@ -19,6 +20,8 @@ const OVERSCAN_ROWS: usize = 2;
 
 impl Render for TerminalFeature {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // この frame の描画で出力の変更を消費したことにする。
+        self.pending_output_render = false;
         let active = self.active_id();
         let metrics = self.metrics(window);
         // visible_outputの更新に必要な値だけを先に取得
@@ -61,8 +64,6 @@ impl Render for TerminalFeature {
             });
         }
 
-        let screen_ref = self.active_screen();
-
         let visible_range = if total_rows > 0 {
             let handle = self.scroll.handle();
             let height = handle.bounds().size.height;
@@ -74,7 +75,7 @@ impl Render for TerminalFeature {
                     ((-offset.y).to_f64() / metrics.row_height.to_f64()).floor() as usize;
                 visible_row_range(total_rows, visible_rows, first_visible)
             } else {
-                let fallback_visible = screen_ref.map(|s| s.rows.len()).unwrap_or(24);
+                let fallback_visible = self.active_screen().map(|s| s.rows.len()).unwrap_or(24);
                 (total_rows.saturating_sub(fallback_visible))..total_rows
             }
         } else {
@@ -88,25 +89,19 @@ impl Render for TerminalFeature {
             px(0.0)
         };
 
-        let rows: Vec<TerminalRow> = screen_ref
-            .map(|screen| {
-                let scrollback_len = screen.scrollback.len();
-                let mut rows = Vec::with_capacity(visible_range.len());
-
-                for i in visible_range.clone() {
-                    if i < scrollback_len {
-                        rows.push(screen.scrollback[i].clone());
-                    } else if i >= scrollback_len && i < scrollback_len + screen.rows.len() {
-                        rows.push(screen.rows[i - scrollback_len].clone());
-                    }
-                }
-                rows
-            })
-            .unwrap_or_default();
-
         let cursor = screen_for_cursor;
         let caret_shape = self.caret_shape;
         let entity = cx.entity();
+        let colors = theme::colors(cx);
+        let terminal_element = TerminalElement {
+            feature: entity.clone(),
+            metrics: metrics.clone(),
+            range: visible_range.clone(),
+            colors: TerminalColors {
+                foreground: colors.text_primary,
+                background: colors.background_primary,
+            },
+        };
         let focus = self.focus.clone();
         // 表示領域に合わせて PTY のサイズを追従させる。layout 確定後の次フレームで反映する。
         self.last_metrics = Some(metrics.clone());
@@ -215,10 +210,7 @@ impl Render for TerminalFeature {
                         .when(top_spacer_height > px(0.0), |el| {
                             el.child(div().h(top_spacer_height))
                         })
-                        .children(
-                            rows.into_iter()
-                                .map(|row| render_row(row, cell_width, row_height, cx)),
-                        )
+                        .child(terminal_element)
                         .when(bottom_spacer_height > px(0.0), |el| {
                             el.child(div().h(bottom_spacer_height))
                         })
@@ -510,6 +502,7 @@ pub(super) struct TerminalMetrics {
     pub cell_width: Pixels,
     pub row_height: Pixels,
     pub font_family: gpui::SharedString,
+    pub font_size: Pixels,
 }
 
 impl TerminalFeature {
@@ -529,6 +522,7 @@ impl TerminalFeature {
             cell_width,
             row_height: px(self.font_size * f32::from(self.line_height_percent) / 100.0),
             font_family,
+            font_size,
         }
     }
 
@@ -639,123 +633,6 @@ fn caret_bounds(
         ),
     };
     gpui::Bounds::new(gpui::point(x, y), gpui::size(width, height))
-}
-
-fn render_row(
-    row: TerminalRow,
-    cell_width: Pixels,
-    row_height: Pixels,
-    cx: &gpui::App,
-) -> impl IntoElement {
-    div().flex().h(row_height).children(
-        row.cells
-            .into_iter()
-            .map(|cell| render_cell(cell, cell_width, row_height, cx)),
-    )
-}
-
-fn render_cell(
-    cell: TerminalCell,
-    cell_width: Pixels,
-    row_height: Pixels,
-    cx: &gpui::App,
-) -> impl IntoElement {
-    let default_foreground = theme::colors(cx).text_primary;
-    let mut foreground = color(cell.foreground, default_foreground);
-    // 既定の背景は透明にし、パネルの背景を見せる。
-    let mut background = match cell.background {
-        TerminalColor::Default => None,
-        explicit => Some(color(explicit, default_foreground)),
-    };
-    if cell.inverse {
-        let swapped = background.unwrap_or_else(|| theme::colors(cx).background_primary);
-        background = Some(foreground);
-        foreground = swapped;
-    }
-    if cell.dim {
-        foreground = dim_color(foreground);
-    }
-    let mut view = div()
-        .flex_none()
-        .w(px(cell_width.to_f64() as f32 * f32::from(cell.width)))
-        .h(row_height)
-        .whitespace_nowrap()
-        .text_color(foreground)
-        .when_some(background, |view, background| view.bg(background))
-        .child(if cell.text.is_empty() {
-            " ".to_owned()
-        } else {
-            cell.text
-        });
-    if cell.bold {
-        view = view.font_weight(gpui::FontWeight::BOLD);
-    }
-    if cell.italic {
-        view = view.italic();
-    }
-    if cell.underline {
-        view = view.underline();
-    }
-    view
-}
-
-fn dim_color(color: gpui::Rgba) -> gpui::Rgba {
-    gpui::Rgba {
-        r: color.r * 0.66,
-        g: color.g * 0.66,
-        b: color.b * 0.66,
-        a: color.a,
-    }
-}
-
-fn color(color: TerminalColor, default: gpui::Rgba) -> gpui::Rgba {
-    match color {
-        TerminalColor::Default => default,
-        TerminalColor::Rgb { red, green, blue } => rgba(red, green, blue),
-        TerminalColor::Indexed(index) => {
-            let (red, green, blue) = indexed_color(index);
-            rgba(red, green, blue)
-        }
-    }
-}
-
-fn rgba(red: u8, green: u8, blue: u8) -> gpui::Rgba {
-    gpui::rgba((u32::from(red) << 24) | (u32::from(green) << 16) | (u32::from(blue) << 8) | 0xff)
-}
-
-fn indexed_color(index: u8) -> (u8, u8, u8) {
-    const BASIC: [(u8, u8, u8); 16] = [
-        (0, 0, 0),
-        (205, 49, 49),
-        (13, 188, 121),
-        (229, 229, 16),
-        (36, 114, 200),
-        (188, 63, 188),
-        (17, 168, 205),
-        (229, 229, 229),
-        (102, 102, 102),
-        (241, 76, 76),
-        (35, 209, 139),
-        (245, 245, 67),
-        (59, 142, 234),
-        (214, 112, 214),
-        (41, 184, 219),
-        (255, 255, 255),
-    ];
-    if let Some(color) = BASIC.get(index as usize) {
-        return *color;
-    }
-    if (16..=231).contains(&index) {
-        let value = index - 16;
-        let component = |value: u8| if value == 0 { 0 } else { 55 + 40 * value };
-        return (
-            component(value / 36),
-            component((value / 6) % 6),
-            component(value % 6),
-        );
-    }
-    let gray = 8 + 10 * (index.saturating_sub(232));
-    (gray, gray, gray)
 }
 
 #[cfg(test)]
