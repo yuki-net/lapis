@@ -19,8 +19,8 @@ class TestPathRouting(unittest.TestCase):
     """path routingロジックのテスト。"""
 
     def test_client_persistence_and_locales_select_rust_core(self):
-        for path in ("clients/state/src/lib.rs", "clients/desktop/persistence/src/lib.rs"):
-            self.assertEqual(jobs_for_paths([path]), {"desktop", "rust_core"})
+        self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
+        self.assertEqual(jobs_for_paths(["clients/desktop/persistence/src/lib.rs"]), {"desktop", "rust_core"})
         self.assertEqual(jobs_for_paths(["locales/ja-JP/messages/common.json"]), {"repository", "rust_core", "desktop"})
 
     def test_ci_workflow_uses_final_check_names_and_no_release_validation(self):
@@ -46,6 +46,27 @@ class TestPathRouting(unittest.TestCase):
 
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
+
+    def test_ui_path_runs_desktop_and_web(self):
+        """clients/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
+        for path in ("clients/ui/src/shell/layout.rs", "clients/ui/assets/themes/dark.json"):
+            self.assertEqual(jobs_for_paths([path]), {"desktop", "web"}, path)
+
+    def test_state_path_runs_web_for_wasm_build(self):
+        """clients/state は wasm ビルドの依存に入るため Web ジョブも実行する。"""
+        self.assertEqual(jobs_for_paths(["clients/state/src/lib.rs"]), {"desktop", "rust_core", "web"})
+
+    def test_wasm_build_dependency_paths_run_web(self):
+        """desktop-ui の wasm 依存 crate の変更で Web ジョブが選ばれる。"""
+        for path in (
+            "clients/ui/src/lib.rs",
+            "clients/state/src/lib.rs",
+            "clients/transport/src/lib.rs",
+            "contracts/protocol/src/lib.rs",
+            "contracts/transport/wire/src/lib.rs",
+            "contracts/domain/document/src/lib.rs",
+        ):
+            self.assertIn("web", jobs_for_paths([path]), path)
 
     def test_host_internal_path_runs_only_host(self):
         self.assertEqual(jobs_for_paths(["host/app/src/main.rs"]), {"host"})

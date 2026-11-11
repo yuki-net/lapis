@@ -16,9 +16,11 @@ PATH_RULES = [
     (["scripts/stop_dev_host.ps1", "scripts/test_dev_commands.py", "scripts/test_dev_session.py", "scripts/dev-session/", ".run/"], {"repository", "dev_windows"}),
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
-    (["clients/state/", "clients/desktop/persistence/"], {"desktop", "rust_core"}),
+    # clients/state と clients/ui は Web の wasm ビルド（desktop-ui）でもコンパイルされる。
+    (["clients/state/"], {"desktop", "rust_core", "web"}),
+    (["clients/desktop/persistence/"], {"desktop", "rust_core"}),
     (["clients/desktop/"], {"desktop"}),
-    (["clients/ui/"], {"desktop"}),
+    (["clients/ui/"], {"desktop", "web"}),
     (["vendor/gpui/"], {"desktop"}),
     (["patches/gpui-"], {"desktop"}),
     
