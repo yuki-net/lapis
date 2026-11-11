@@ -594,3 +594,104 @@ fn wait_for_event(
         }
     }
 }
+
+/// changes() の receiver を runtime が取得したかを観測するための最小 backend。
+struct ChangeTrackingBackend {
+    changes: Mutex<Option<futures::channel::mpsc::UnboundedReceiver<()>>>,
+}
+
+impl ChangeTrackingBackend {
+    fn new() -> Self {
+        let (_sender, receiver) = futures::channel::mpsc::unbounded();
+        Self {
+            changes: Mutex::new(Some(receiver)),
+        }
+    }
+
+    fn is_consumed(&self) -> bool {
+        self.changes
+            .lock()
+            .expect("change receiver slot is not poisoned")
+            .is_none()
+    }
+}
+
+impl TerminalBackend for ChangeTrackingBackend {
+    fn start(&self, _: &Path, _: u16, _: u16) -> Result<BackendTerminalId, TerminalError> {
+        Err(TerminalError::new("terminal start is not used"))
+    }
+
+    fn input(&self, _: &BackendTerminalId, _: &TerminalInput) -> Result<(), TerminalError> {
+        Ok(())
+    }
+
+    fn resize(&self, _: &BackendTerminalId, _: u16, _: u16) -> Result<(), TerminalError> {
+        Ok(())
+    }
+
+    fn poll(&self, _: &BackendTerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+        Ok(Vec::new())
+    }
+
+    fn terminate(&self, _: &BackendTerminalId) -> Result<(), TerminalError> {
+        Ok(())
+    }
+
+    fn changes(&self) -> Option<futures::channel::mpsc::UnboundedReceiver<()>> {
+        self.changes
+            .lock()
+            .expect("change receiver slot is not poisoned")
+            .take()
+    }
+}
+
+#[test]
+fn runtime_takes_change_notifications_from_initial_workspaces() {
+    let backend = Arc::new(ChangeTrackingBackend::new());
+    let root = tempfile::tempdir().unwrap();
+    let state = BackendState::new([WorkspaceRegistration::new(
+        WorkspaceId::try_new("workspace-initial-notify").unwrap(),
+        "Initial",
+        root.path().to_owned(),
+        Arc::new(EmptyFiles),
+    )
+    .with_terminal(backend.clone())])
+    .unwrap();
+
+    let service = BackendService::start(state).unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !backend.is_consumed() {
+        assert!(
+            Instant::now() < deadline,
+            "起動済み Workspace の Terminal 通知も Runtime が受け取る"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    drop(service);
+}
+
+#[test]
+fn runtime_takes_change_notifications_from_registered_workspaces() {
+    let backend = Arc::new(ChangeTrackingBackend::new());
+    let root = tempfile::tempdir().unwrap();
+    let service = BackendService::start(BackendState::new([]).unwrap()).unwrap();
+
+    service
+        .register_workspace(
+            WorkspaceRegistration::new(
+                WorkspaceId::try_new("workspace-registered-notify").unwrap(),
+                "Registered",
+                root.path().to_owned(),
+                Arc::new(EmptyFiles),
+            )
+            .with_terminal(backend.clone()),
+        )
+        .unwrap();
+
+    assert!(
+        backend.is_consumed(),
+        "登録時に Terminal 通知も Runtime が受け取る"
+    );
+    drop(service);
+}

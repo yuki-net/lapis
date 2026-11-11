@@ -12,6 +12,7 @@ use std::{
     thread,
 };
 
+use futures_channel::mpsc as futures_mpsc;
 use terminal::{
     TerminalBackend, TerminalDelta, TerminalError, TerminalEvent, TerminalId, TerminalInput,
     TerminalProfile, TerminalProfileId, TerminalProfiles, TerminalSize,
@@ -83,6 +84,32 @@ pub struct LocalTerminalBackend {
     terminals: Arc<Mutex<HashMap<String, LiveTerminal>>>,
     next_id: Arc<AtomicU64>,
     profiles: Arc<TerminalProfiles>,
+    changes: ChangeNotifier,
+}
+
+/// PTY reader から Runtime への起床通知。receiver は 1 度だけ渡す。
+#[derive(Clone)]
+struct ChangeNotifier {
+    sender: futures_mpsc::UnboundedSender<()>,
+    receiver: Arc<Mutex<Option<futures_mpsc::UnboundedReceiver<()>>>>,
+}
+
+impl ChangeNotifier {
+    fn new() -> Self {
+        let (sender, receiver) = futures_mpsc::unbounded();
+        Self {
+            sender,
+            receiver: Arc::new(Mutex::new(Some(receiver))),
+        }
+    }
+
+    fn notify(&self) {
+        let _ = self.sender.unbounded_send(());
+    }
+
+    fn take(&self) -> Option<futures_mpsc::UnboundedReceiver<()>> {
+        self.receiver.lock().ok()?.take()
+    }
 }
 
 impl Default for LocalTerminalBackend {
@@ -98,6 +125,7 @@ impl LocalTerminalBackend {
             terminals: Arc::new(Mutex::new(HashMap::new())),
             next_id: Arc::new(AtomicU64::new(0)),
             profiles: Arc::new(profiles),
+            changes: ChangeNotifier::new(),
         }
     }
 
@@ -110,7 +138,11 @@ impl LocalTerminalBackend {
     }
 }
 
-fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminalEvent>) {
+fn read_terminal_stream<R: Read>(
+    mut reader: R,
+    sender: mpsc::Sender<RawTerminalEvent>,
+    notify: impl Fn(),
+) {
     let mut buffer = [0; 4096];
     loop {
         match reader.read(&mut buffer) {
@@ -122,6 +154,7 @@ fn read_terminal_stream<R: Read>(mut reader: R, sender: mpsc::Sender<RawTerminal
                 {
                     break;
                 }
+                notify();
             }
             Err(error)
                 if matches!(
@@ -190,9 +223,12 @@ impl TerminalBackend for LocalTerminalBackend {
         let (sender, receiver) = mpsc::channel();
         let reader_finished = Arc::new(AtomicBool::new(false));
         let reader_finished_for_thread = reader_finished.clone();
+        let changes = self.changes.clone();
         thread::spawn(move || {
-            read_terminal_stream(reader, sender);
+            // 出力の到着と reader 終了（PTY の EOF / 失敗）で Runtime を起床させる。
+            read_terminal_stream(reader, sender, || changes.notify());
             reader_finished_for_thread.store(true, Ordering::Release);
+            changes.notify();
         });
         let id = TerminalId::new(format!(
             "terminal-{}",
@@ -305,6 +341,10 @@ impl TerminalBackend for LocalTerminalBackend {
         let terminals = self.lock().ok()?;
         terminals.get(id.as_str())?.child.process_id()
     }
+
+    fn changes(&self) -> Option<futures_mpsc::UnboundedReceiver<()>> {
+        self.changes.take()
+    }
 }
 
 fn shell_directory(cwd: &Path, program: &str) -> Result<PathBuf, TerminalError> {
@@ -385,6 +425,7 @@ mod tests {
                 ],
             },
             sender,
+            || {},
         );
 
         let mut output = Vec::new();
@@ -397,8 +438,57 @@ mod tests {
     }
 
     #[test]
+    fn reader_notifies_for_each_received_chunk() {
+        struct FixedReader {
+            data: Vec<u8>,
+        }
+
+        impl Read for FixedReader {
+            fn read(&mut self, target: &mut [u8]) -> std::io::Result<usize> {
+                if self.data.is_empty() {
+                    return Ok(0);
+                }
+                let length = self.data.len().min(target.len());
+                target[..length].copy_from_slice(&self.data[..length]);
+                self.data.drain(..length);
+                Ok(length)
+            }
+        }
+
+        let (sender, _receiver) = mpsc::channel();
+        let notifications = std::cell::Cell::new(0);
+        read_terminal_stream(
+            FixedReader {
+                data: b"echo\n".to_vec(),
+            },
+            sender,
+            || notifications.set(notifications.get() + 1),
+        );
+
+        assert_eq!(
+            notifications.get(),
+            1,
+            "受信した chunk ごとに Runtime へ起床通知を送る"
+        );
+    }
+
+    #[test]
+    fn change_receiver_is_only_handed_out_once() {
+        let backend = LocalTerminalBackend::default();
+
+        assert!(backend.changes().is_some());
+        assert!(
+            backend.changes().is_none(),
+            "変更通知の receiver は 1 度だけ取得できる"
+        );
+    }
+
+    #[test]
     fn terminal_pty_accepts_input_and_returns_output() {
         let backend = LocalTerminalBackend::default();
+        let mut changes = backend
+            .changes()
+            .expect("local terminal must publish change notifications");
         let id = backend.start(Path::new("."), 100, 30).unwrap();
         let resize = backend.resize_delta(&id, 120, 32).unwrap();
         let mut screen = TerminalScreen::empty(resize.size);
@@ -426,6 +516,19 @@ mod tests {
                 break;
             }
             thread::sleep(Duration::from_millis(50));
+        }
+        let notified = Instant::now() + Duration::from_secs(1);
+        loop {
+            match changes.try_recv() {
+                Ok(()) => break,
+                Err(error) if !error.is_empty() => {
+                    panic!("terminal change stream closed unexpectedly");
+                }
+                Err(_) if Instant::now() >= notified => {
+                    panic!("terminal output did not notify the runtime");
+                }
+                Err(_) => thread::sleep(Duration::from_millis(10)),
+            }
         }
         backend.terminate(&id).unwrap();
         assert!(

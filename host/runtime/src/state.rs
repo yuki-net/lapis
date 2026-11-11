@@ -806,6 +806,16 @@ impl BackendState {
         .map_err(|_| BackendStateError::CounterOverflow)
     }
 
+    /// Terminal 出力の到着通知を受け取る。Workspace ごとに 1 度だけ取得する。
+    pub(crate) fn take_terminal_changes(
+        &mut self,
+    ) -> Vec<futures::channel::mpsc::UnboundedReceiver<()>> {
+        self.workspaces
+            .values()
+            .filter_map(|workspace| workspace.terminals.take_changes())
+            .collect()
+    }
+
     pub(crate) fn poll_terminals(&mut self) -> Result<Vec<PublishedEvent>, BackendStateError> {
         let mut published = Vec::new();
         for workspace in self.workspaces.values_mut() {
