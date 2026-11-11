@@ -13,16 +13,20 @@ use client_api::{
     WorkspaceListRequest,
 };
 
-const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":12,"maximum_minor":12},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
-const AUTHENTICATE: &str = r#"{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":12,"maximum_minor":12},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"#;
-const OIDC: &str = r#"{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":12,"maximum_minor":12},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"#;
+const CLIENT_HELLO: &str = r#"{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"#;
+const AUTHENTICATE: &str = r#"{"type":"auth.authenticate","payload":{"hello":{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","credential_id":"0123456789abcdef0123456789abcdef","secret":"abababababababababababababababababababababababababababababababab"}}"#;
+const OIDC: &str = r#"{"type":"auth.oidc","payload":{"hello":{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]},"workspace_id":"workspace-1","id_token":"test-token"}}"#;
 const AUTH_REQUIRED: &str = r#"{"type":"auth.required","payload":{"methods":["token","oidc"],"oidc":{"issuer":"https://idp.example","client_id":"lapis","scopes":["openid","profile"]}}}"#;
 const REQUEST_ENVELOPE: &str = r#"{"request_id":"request-1","type":"workspace.list","payload":{}}"#;
 const EVENT_ENVELOPE: &str =
     r#"{"event_sequence":7,"type":"workspace.changed","payload":{"workspace_id":"workspace-1"}}"#;
 const PROTOCOL_ERROR: &str =
     r#"{"type":"error","payload":{"code":"invalid_request","retryable":false}}"#;
-const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":12},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#;
+const PAIRED_RESPONSE: &str = r#"{"type":"auth.paired","payload":{"hello":{"protocol":{"major":0,"minor":13},"session_id":"session-1","granted_capabilities":[]},"credential_id":"0123456789abcdef0123456789abcdef","secret":"cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"}}"#;
+/// view state 共有の wire 形式。Mobile はこの機能を持たないため Rust 側だけで固定する。
+const VIEW_SUBSCRIBE: &str = r#"{"request_id":"request-2","type":"workspace.view.subscribe","payload":{"workspace_id":"workspace-1"}}"#;
+const VIEW_UPDATE: &str = r#"{"request_id":"request-3","type":"workspace.view.update","payload":{"workspace_id":"workspace-1","view":{"open_documents":[],"active_path":null,"active_document_id":null}}}"#;
+const VIEW_CHANGED: &str = r#"{"event_sequence":8,"type":"workspace.view_changed","payload":{"workspace_id":"workspace-1","revision":3,"view":{"open_documents":[{"document_id":"document-1","path":"src/main.rs","cursor_char":4,"selection_start":0,"selection_end":0,"scroll_x":0.0,"scroll_y":12.5}],"active_path":"src/main.rs","active_document_id":"document-1"}}}"#;
 
 const MOBILE_TEST_PATH: &str = "../../clients/mobile/sharedUi/src/commonTest/kotlin/dev/lapis/mobile/protocol/ProtocolSerializationTest.kt";
 
@@ -118,6 +122,56 @@ fn event_envelope_matches_mobile_fixture() {
     };
     let json = serde_json::to_string(&event).unwrap();
     assert_eq!(json, EVENT_ENVELOPE);
+}
+
+#[test]
+fn view_state_messages_match_the_documented_wire_shape() {
+    let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+
+    let subscribe = RequestEnvelope {
+        request_id: RequestId::try_new("request-2").unwrap(),
+        body: RequestBody::WorkspaceViewSubscribe(client_api::WorkspaceViewSubscribeRequest {
+            workspace_id: workspace_id.clone(),
+        }),
+    };
+    assert_eq!(serde_json::to_string(&subscribe).unwrap(), VIEW_SUBSCRIBE);
+
+    let update = RequestEnvelope {
+        request_id: RequestId::try_new("request-3").unwrap(),
+        body: RequestBody::WorkspaceViewUpdate(client_api::WorkspaceViewUpdateRequest {
+            workspace_id: workspace_id.clone(),
+            view: client_api::WorkspaceView {
+                open_documents: Vec::new(),
+                active_path: None,
+                active_document_id: None,
+            },
+        }),
+    };
+    assert_eq!(serde_json::to_string(&update).unwrap(), VIEW_UPDATE);
+
+    let path = client_api::WorkspaceRelativePath::parse("src/main.rs").unwrap();
+    let document_id = editor_core::DocumentId::new("document-1");
+    let event = EventEnvelope {
+        event_sequence: EventSequence::new(8),
+        body: EventBody::WorkspaceViewChanged {
+            workspace_id,
+            revision: 3,
+            view: client_api::WorkspaceView {
+                open_documents: vec![client_api::WorkspaceDocumentView {
+                    document_id: Some(document_id.clone()),
+                    path: Some(path.clone()),
+                    cursor_char: 4,
+                    selection_start: 0,
+                    selection_end: 0,
+                    scroll_x: 0.0,
+                    scroll_y: 12.5,
+                }],
+                active_path: Some(path),
+                active_document_id: Some(document_id),
+            },
+        },
+    };
+    assert_eq!(serde_json::to_string(&event).unwrap(), VIEW_CHANGED);
 }
 
 #[test]

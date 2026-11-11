@@ -70,6 +70,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 旧ClientがWorkbench更新で文書表示状態を省略した場合、Hostは保存済みの文書状態を保持する。新Clientは変更しない値も含めて明示し、`null`を指定した場合だけ文書状態を消去する。
 - WorkbenchのClient側状態遷移は同期・非同期の通信方式で共通とする。送信失敗、処理の中断、競合、不正な更新応答では未確定値を保持し、競合時のHost状態と分けて扱う。Hostの状態を採用して未確定値を破棄する操作と、ローカル値の再送は明示的に行う。
 - 送信応答が失われた後に再取得した正本が未確定値と完全に一致し、確定済みrevisionの直後である場合は、その値を確定する。それ以外の新しい正本は競合として保持し、未確定値を上書きしない。
+- Workspace を開いている Client 間で共有する view state（開いている Document と表示位置）は、Workbench の revision 付き更新とは別の Session 単位 channel とする。Host の Workspace 状態が正本で、同時更新を直列化して last-writer-wins で置き換え、マージはしない。参加した Client は snapshot を取り、以後は置き換え用の最新値を受ける。参加者がいない間は event を発行せず、Workspace を閉じた Session へは配らない。
 - 重なる Workspace grant から同じ canonical path を別の Document として開く操作は競合として拒否する。別 Workspace の内容を暗黙に共有して認可範囲を広げない。
 - Terminal の購読欠落は snapshot と sequence で回復する。一時的な poll・通信失敗を実行終了とみなさず、出力の置換 snapshot と追記イベントを区別する。
 

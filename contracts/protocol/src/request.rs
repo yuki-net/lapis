@@ -8,7 +8,7 @@ use crate::{
     WorkspaceListRequest, capability,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 /// Client から Host への要求。tag は method 名。
 pub enum RequestBody {
@@ -42,6 +42,12 @@ pub enum RequestBody {
     WorkspaceConnect(WorkspaceConnectRequest),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseRequest),
+    #[serde(rename = "workspace.view.subscribe")]
+    WorkspaceViewSubscribe(crate::WorkspaceViewSubscribeRequest),
+    #[serde(rename = "workspace.view.unsubscribe")]
+    WorkspaceViewUnsubscribe(crate::WorkspaceViewUnsubscribeRequest),
+    #[serde(rename = "workspace.view.update")]
+    WorkspaceViewUpdate(crate::WorkspaceViewUpdateRequest),
     #[serde(rename = "files.tree")]
     FileTree(FileTreeRequest),
     #[serde(rename = "document.open")]
@@ -98,6 +104,9 @@ impl RequestBody {
             Self::WorkspaceList(_) => "workspace.list",
             Self::WorkspaceConnect(_) => "workspace.connect",
             Self::WorkspaceClose(_) => "workspace.close",
+            Self::WorkspaceViewSubscribe(_) => "workspace.view.subscribe",
+            Self::WorkspaceViewUnsubscribe(_) => "workspace.view.unsubscribe",
+            Self::WorkspaceViewUpdate(_) => "workspace.view.update",
             Self::FileTree(_) => "files.tree",
             Self::DocumentOpen(_) => "document.open",
             Self::DocumentCreate(_) => "document.create",
@@ -134,6 +143,10 @@ impl RequestBody {
             Self::WorkspaceExecute(request) => request.operation.required_capability(),
             Self::WorkspaceList(_) => capability::WORKSPACES,
             Self::WorkspaceConnect(_) | Self::WorkspaceClose(_) => capability::WORKSPACES_CONNECT,
+            Self::WorkspaceViewSubscribe(_) | Self::WorkspaceViewUnsubscribe(_) => {
+                capability::WORKSPACE_SYNC
+            }
+            Self::WorkspaceViewUpdate(_) => capability::WORKBENCH_WRITE,
             Self::FileTree(_) => capability::FILES_READ,
             Self::DocumentOpen(_) | Self::DocumentClose(_) => capability::DOCUMENTS_READ,
             Self::DocumentCreate(_)
@@ -169,6 +182,9 @@ impl RequestBody {
             Self::WorkspaceList(_) => None,
             Self::WorkspaceConnect(request) => Some(&request.workspace_id),
             Self::WorkspaceClose(request) => Some(&request.workspace_id),
+            Self::WorkspaceViewSubscribe(request) => Some(&request.workspace_id),
+            Self::WorkspaceViewUnsubscribe(request) => Some(&request.workspace_id),
+            Self::WorkspaceViewUpdate(request) => Some(&request.workspace_id),
             Self::FileTree(request) => Some(&request.workspace_id),
             Self::DocumentOpen(request) => Some(&request.workspace_id),
             Self::DocumentCreate(request) => Some(&request.workspace_id),
@@ -250,6 +266,37 @@ mod tests {
             terminate.required_capability(),
             capability::TERMINAL_CONTROL
         );
+    }
+
+    #[test]
+    fn view_state_sharing_separates_subscription_from_updates() {
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let subscribe = RequestBody::WorkspaceViewSubscribe(crate::WorkspaceViewSubscribeRequest {
+            workspace_id: workspace_id.clone(),
+        });
+        let unsubscribe =
+            RequestBody::WorkspaceViewUnsubscribe(crate::WorkspaceViewUnsubscribeRequest {
+                workspace_id: workspace_id.clone(),
+            });
+        let update = RequestBody::WorkspaceViewUpdate(crate::WorkspaceViewUpdateRequest {
+            workspace_id: workspace_id.clone(),
+            view: crate::WorkspaceView {
+                open_documents: Vec::new(),
+                active_path: None,
+                active_document_id: None,
+            },
+        });
+
+        assert_eq!(subscribe.method(), "workspace.view.subscribe");
+        assert_eq!(unsubscribe.method(), "workspace.view.unsubscribe");
+        assert_eq!(update.method(), "workspace.view.update");
+        assert_eq!(subscribe.required_capability(), capability::WORKSPACE_SYNC);
+        assert_eq!(
+            unsubscribe.required_capability(),
+            capability::WORKSPACE_SYNC
+        );
+        assert_eq!(update.required_capability(), capability::WORKBENCH_WRITE);
+        assert_eq!(update.workspace_id(), Some(&workspace_id));
     }
 
     #[test]

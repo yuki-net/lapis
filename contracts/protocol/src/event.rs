@@ -5,7 +5,7 @@ use crate::{
     TerminalId, TerminalStatus, WorkspaceId,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 /// Host から Client へ送る状態変化。
 pub enum EventBody {
@@ -13,6 +13,13 @@ pub enum EventBody {
     WorkbenchChanged {
         workspace_id: WorkspaceId,
         revision: u64,
+    },
+    /// 購読中の view state の置き換え。差分ではなく、最後に受理した値そのもの。
+    #[serde(rename = "workspace.view_changed")]
+    WorkspaceViewChanged {
+        workspace_id: WorkspaceId,
+        revision: u64,
+        view: workbench::WorkspaceView,
     },
     #[serde(rename = "workspace.changed")]
     WorkspaceChanged { workspace_id: WorkspaceId },
