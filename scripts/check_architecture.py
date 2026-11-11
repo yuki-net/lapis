@@ -126,7 +126,6 @@ def layer(manifest, root):
 DUPLICATE_TYPE_ALLOWLIST = {
     "OidcConfig": {"remote", "web-bridge"},
     "OidcError": {"remote", "web-bridge"},
-    "Revision": {"document", "protocol"},
     "TerminalSnapshot": {"protocol", "terminal"},
     "TerminalStatus": {"protocol", "terminal"},
 }

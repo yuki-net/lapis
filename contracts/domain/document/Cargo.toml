@@ -8,4 +8,5 @@ license.workspace = true
 [dependencies]
 editor-core = { path = "../editor-core" }
 text = { path = "../text" }
+serde.workspace = true
 
