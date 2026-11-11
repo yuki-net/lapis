@@ -112,15 +112,18 @@ fn apply_document(replica: &mut Replica, snapshot: &DocumentSnapshot) -> bool {
         // Host 側の revision と owner がローカル編集の基準から動いていれば、
         // 上書きせずに競合として記録する。ローカル本文は復旧できるよう保持する。
         let conflict = snapshot.revision != state.host_revision || snapshot.content != state.acked;
-        let mut changed = false;
-        if conflict {
-            let external_change = match snapshot.external_change {
+        // 競合していなくても、外部変更の状態は Snapshot から復旧する。
+        // 競合している場合は Host の本文で置き換えていないことを Modified で示す。
+        let external_change = if conflict {
+            match snapshot.external_change {
                 DocumentExternalChange::Unchanged => ExternalChange::Modified,
                 change => model_external_change(change),
-            };
-            changed |= state.external_change != external_change;
-            state.external_change = external_change;
-        }
+            }
+        } else {
+            model_external_change(snapshot.external_change)
+        };
+        let mut changed = state.external_change != external_change;
+        state.external_change = external_change;
         changed |= state.owner != owner;
         state.owner = owner;
         // host_revision と acked はローカル編集の基準なので、競合中は更新しない。
@@ -428,6 +431,36 @@ mod tests {
         let state =
             cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
         assert_eq!(state.document.content_for_save(), "text");
+        assert_eq!(state.host_revision, ApiRevision::new(1));
+        assert_eq!(state.external_change, ExternalChange::Modified);
+    }
+
+    #[test]
+    fn resync_restores_external_change_for_unsent_local_changes() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        {
+            let state = replica.documents.values_mut().next().unwrap();
+            state.document = Document::from_snapshot(
+                state.path.clone(),
+                "local edit".to_owned(),
+                Encoding::Utf8,
+                Revision::new(2),
+                true,
+            );
+        }
+        let mut remote = wire_document("before");
+        remote.revision = ApiRevision::new(1);
+        remote.external_change = DocumentExternalChange::Modified;
+
+        let delta = apply_snapshot(&mut replica, &snapshot(vec![remote], Vec::new()));
+
+        assert!(delta.documents);
+        let state =
+            cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
+        // 本文と revision が編集基準と同じでも、外部変更の状態は Snapshot から反映する。
+        assert_eq!(state.document.content_for_save(), "local edit");
+        assert_eq!(state.acked, "before");
         assert_eq!(state.host_revision, ApiRevision::new(1));
         assert_eq!(state.external_change, ExternalChange::Modified);
     }

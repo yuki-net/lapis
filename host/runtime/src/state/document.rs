@@ -34,33 +34,20 @@ impl BackendState {
         document_id: DocumentId,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
+        {
+            let resource = workspace
+                .documents
+                .get_mut(&document_id)
+                .ok_or(BackendStateError::DocumentNotFound)?;
+            resource
+                .attached_sessions
+                .insert(session.session_id.clone());
+        }
         let resource = workspace
             .documents
-            .get_mut(&document_id)
+            .get(&document_id)
             .ok_or(BackendStateError::DocumentNotFound)?;
-        resource
-            .attached_sessions
-            .insert(session.session_id.clone());
-        let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
-        let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-        if missing_root && resource.path.is_some() {
-            snapshot.external_change = client_api::DocumentExternalChange::Deleted;
-        } else if let Some(path) = &resource.path {
-            let absolute = workspace.resolver.resolve_scoped_path(path)?;
-            snapshot.external_change = match resource
-                .document
-                .external_change(workspace.files.fingerprint(&absolute)?.as_ref())
-            {
-                ::document::ExternalChange::Unchanged => {
-                    client_api::DocumentExternalChange::Unchanged
-                }
-                ::document::ExternalChange::Modified => {
-                    client_api::DocumentExternalChange::Modified
-                }
-                ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
-            };
-        }
+        let snapshot = document_snapshot(workspace, resource)?;
         Ok((
             ResponseBody::DocumentInspect(DocumentHistoryResponse { document: snapshot }),
             Vec::new(),
@@ -525,4 +512,28 @@ impl BackendState {
             Vec::new(),
         ))
     }
+}
+
+/// Document の Snapshot を作り、実ファイルとの差分を外部変更として反映する。
+pub(super) fn document_snapshot(
+    workspace: &WorkspaceState,
+    resource: &DocumentResource,
+) -> Result<client_api::DocumentSnapshot, BackendStateError> {
+    let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
+    let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+    if missing_root && resource.path.is_some() {
+        snapshot.external_change = client_api::DocumentExternalChange::Deleted;
+    } else if let Some(path) = &resource.path {
+        let absolute = workspace.resolver.resolve_scoped_path(path)?;
+        snapshot.external_change = match resource
+            .document
+            .external_change(workspace.files.fingerprint(&absolute)?.as_ref())
+        {
+            ::document::ExternalChange::Unchanged => client_api::DocumentExternalChange::Unchanged,
+            ::document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
+            ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
+        };
+    }
+    Ok(snapshot)
 }

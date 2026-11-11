@@ -13,10 +13,10 @@ use backend_state::{
 };
 use client_api::{
     DocumentClaimRequest, DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest,
-    DocumentEncoding, DocumentHistoryRequest, DocumentOpenRequest, DocumentSaveRequest,
-    DocumentTextEdit, DocumentTransaction, EventBody, FileTreeRequest, REVISION_CONFLICT,
-    RequestBody, RequestEnvelope, RequestId, ResponseBody, Revision, SessionId, SnapshotReason,
-    SnapshotRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
+    DocumentEncoding, DocumentExternalChange, DocumentHistoryRequest, DocumentOpenRequest,
+    DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody, FileTreeRequest,
+    REVISION_CONFLICT, RequestBody, RequestEnvelope, RequestId, ResponseBody, Revision, SessionId,
+    SnapshotReason, SnapshotRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
     WorkspaceRelativePath,
 };
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
@@ -482,6 +482,66 @@ fn history_without_a_change_does_not_advance_revision_or_publish_an_event() {
     };
     assert_eq!(undone.document.revision, Revision::new(1));
     assert!(events.recv_timeout(Duration::from_millis(20)).is_err());
+}
+
+#[test]
+fn snapshot_resync_reports_external_change_with_unsent_document_content() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("file.ts"), "before").unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    let ResponseBody::DocumentOpen(opened) = dispatch(
+        &service,
+        &session,
+        2,
+        RequestBody::DocumentOpen(DocumentOpenRequest {
+            workspace_id: workspace_id.clone(),
+            path: WorkspaceRelativePath::parse("file.ts").unwrap(),
+        }),
+    ) else {
+        panic!("expected opened document");
+    };
+    assert_eq!(
+        opened.document.external_change,
+        DocumentExternalChange::Unchanged
+    );
+
+    let transaction =
+        DocumentTransaction::try_new(vec![DocumentTextEdit::try_new(6, 6, " local").unwrap()])
+            .unwrap();
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            3,
+            RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id: opened.document.document_id,
+                base_revision: Revision::new(1),
+                transaction,
+            }),
+        ),
+        ResponseBody::DocumentEdit(_)
+    ));
+
+    // Host の Document は未保存のまま、実ファイルだけが外部で変わる。
+    fs::write(root.path().join("file.ts"), "after").unwrap();
+
+    let ResponseBody::SnapshotResync(snapshot) = dispatch(
+        &service,
+        &session,
+        4,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id,
+            reason: SnapshotReason::Reconnect,
+        }),
+    ) else {
+        panic!("expected snapshot");
+    };
+    let document = &snapshot.snapshot.documents[0];
+    assert_eq!(document.content, "before local");
+    assert!(document.dirty);
+    assert_eq!(document.external_change, DocumentExternalChange::Modified);
 }
 
 #[test]

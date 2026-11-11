@@ -718,8 +718,8 @@ impl BackendState {
         let documents = workspace
             .documents
             .values()
-            .map(|document| document.snapshot(&workspace.summary.workspace_id))
-            .collect::<Vec<_>>();
+            .map(|document| document::document_snapshot(workspace, document))
+            .collect::<Result<Vec<_>, _>>()?;
         let terminals = workspace
             .terminals
             .snapshots_for_session(&session.session_id, &workspace.summary.workspace_id);
