@@ -4504,6 +4504,7 @@ dependencies = [
  "axum",
  "futures-util",
  "notify",
+ "sysinfo",
  "tokio",
  "tower-http 0.7.1",
  "winresource",
