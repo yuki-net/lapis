@@ -127,14 +127,16 @@ fn apply_document(replica: &mut Replica, snapshot: &DocumentSnapshot) -> bool {
         return changed;
     }
     let document = document_from_snapshot(snapshot, state.path.clone());
+    let external_change = model_external_change(snapshot.external_change);
     let changed = state.document != document
         || state.host_revision != snapshot.revision
-        || state.owner != owner;
+        || state.owner != owner
+        || state.external_change != external_change;
     state.document = document;
     state.acked = snapshot.content.clone();
     state.host_revision = snapshot.revision;
     state.loaded = true;
-    state.external_change = model_external_change(snapshot.external_change);
+    state.external_change = external_change;
     state.owner = owner;
     changed
 }
@@ -409,6 +411,25 @@ mod tests {
             "web-terminal-4"
         );
         assert_eq!(replica.next_terminal, 5);
+    }
+
+    #[test]
+    fn resync_notifies_when_only_the_external_change_differs() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "text").replica;
+        let mut remote = wire_document("text");
+        remote.revision = ApiRevision::new(1);
+        remote.external_change = DocumentExternalChange::Modified;
+
+        let delta = apply_snapshot(&mut replica, &snapshot(vec![remote], Vec::new()));
+
+        // 本文・revision・owner が同じでも、外部変更の状態は Editor に通知する。
+        assert!(delta.documents);
+        let state =
+            cached_document(&replica, &ApiDocumentId::try_new("document-1").unwrap()).unwrap();
+        assert_eq!(state.document.content_for_save(), "text");
+        assert_eq!(state.host_revision, ApiRevision::new(1));
+        assert_eq!(state.external_change, ExternalChange::Modified);
     }
 
     #[test]
