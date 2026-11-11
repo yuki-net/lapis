@@ -306,10 +306,10 @@ fn rejected_optimistic_input_can_be_recovered_without_overwriting_the_shared_doc
 fn recovered_document_survives_view_state_persistence_failure() {
     struct FailingState;
     impl WorkspaceStateRepository for FailingState {
-        fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+        fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError> {
             Ok(None)
         }
-        fn save(&self, _: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+        fn save(&self, _: &WorkspaceViewState) -> Result<(), WorkspaceError> {
             Err(WorkspaceError::new("disk full"))
         }
     }
@@ -733,7 +733,7 @@ fn persisted_draft_without_live_id_never_overwrites_an_existing_canonical_resour
         documents.clone(),
     );
     editor
-        .restore_snapshot(WorkspaceSnapshot {
+        .restore_snapshot(WorkspaceViewState {
             root: None,
             open_documents: vec![DocumentViewState {
                 path: path.clone(),
@@ -783,7 +783,7 @@ fn restore_missing_file_recovers_draft_as_canonical_untitled_and_persists_it() {
         documents.clone(),
     );
     editor
-        .restore_snapshot(WorkspaceSnapshot {
+        .restore_snapshot(WorkspaceViewState {
             root: None,
             open_documents: vec![DocumentViewState {
                 document_id: Some(DocumentId::new("previous-runtime-id")),
@@ -836,7 +836,7 @@ fn restore_revision_conflict_preserves_both_concurrent_content_and_backup_draft(
         documents.clone(),
     );
     editor
-        .restore_snapshot(WorkspaceSnapshot {
+        .restore_snapshot(WorkspaceViewState {
             root: None,
             open_documents: vec![DocumentViewState {
                 document_id: Some(DocumentId::new("previous-runtime-id")),
@@ -991,7 +991,7 @@ fn failed_workspace_restore_retains_saved_root_without_authorizing_operations() 
             state.clone(), connection.clone(),
         );
         let root = PathBuf::from("temporarily-offline");
-        editor.restore_snapshot(WorkspaceSnapshot {
+        editor.restore_snapshot(WorkspaceViewState {
             root: Some(root.clone()),
             open_documents: vec![DocumentViewState {
                 draft_content: Some("recovered input".into()),
@@ -1031,7 +1031,7 @@ fn explicit_workspace_close_clears_a_root_retained_after_restore_failure() {
     let mut editor = EditorSession::new_empty(
         repository, Arc::new(FixedDialog { workspace: None, save: None }), state.clone(), connection,
     );
-    editor.restore_snapshot(WorkspaceSnapshot {
+    editor.restore_snapshot(WorkspaceViewState {
         root: Some(PathBuf::from("offline")), ..Default::default()
     }).unwrap();
     editor.persist().unwrap();

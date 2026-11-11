@@ -1,7 +1,7 @@
 use super::*;
 use desktop_client::{
-    ConversationRepository, WorkspaceDialog, WorkspaceRepository, WorkspaceSnapshot,
-    WorkspaceStateRepository,
+    ConversationRepository, WorkspaceDialog, WorkspaceRepository, WorkspaceStateRepository,
+    WorkspaceViewState,
 };
 use document::{Document, DocumentConnection, DocumentError, ExternalChange, Revision};
 use std::{
@@ -201,10 +201,10 @@ impl WorkspaceDialog for Fixture {
     }
 }
 impl WorkspaceStateRepository for Fixture {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+    fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError> {
         Ok(None)
     }
-    fn save(&self, _: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+    fn save(&self, _: &WorkspaceViewState) -> Result<(), WorkspaceError> {
         Ok(())
     }
 }

@@ -47,7 +47,7 @@ pub use connection_display::{
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use process::ProcessSession;
 pub use settings_store::{SettingsModel, SettingsWatch};
-pub use view_state::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
+pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(target_arch = "wasm32")]
@@ -1201,8 +1201,8 @@ impl EditorSession {
         &self.workspace_name
     }
 
-    pub fn snapshot(&self) -> WorkspaceSnapshot {
-        WorkspaceSnapshot {
+    pub fn snapshot(&self) -> WorkspaceViewState {
+        WorkspaceViewState {
             root: self
                 .workspace_root
                 .clone()
@@ -2005,7 +2005,7 @@ impl EditorSession {
         Ok(())
     }
 
-    pub fn restore_snapshot(&mut self, snapshot: WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+    pub fn restore_snapshot(&mut self, snapshot: WorkspaceViewState) -> Result<(), WorkspaceError> {
         self.workspace_restore_root = snapshot.root.clone();
         self.detach_documents();
         self.documents.clear();
@@ -2265,17 +2265,17 @@ mod tests {
 
     #[derive(Default)]
     struct MemoryState {
-        snapshot: Mutex<Option<WorkspaceSnapshot>>,
+        snapshot: Mutex<Option<WorkspaceViewState>>,
         saves: std::sync::atomic::AtomicUsize,
         fail: std::sync::atomic::AtomicBool,
     }
 
     impl WorkspaceStateRepository for MemoryState {
-        fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+        fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError> {
             Ok(self.snapshot.lock().unwrap().clone())
         }
 
-        fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+        fn save(&self, snapshot: &WorkspaceViewState) -> Result<(), WorkspaceError> {
             if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
                 return Err(WorkspaceError::new("disk full"));
             }

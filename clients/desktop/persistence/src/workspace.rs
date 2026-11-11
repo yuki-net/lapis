@@ -5,7 +5,7 @@ use std::{
 };
 
 use ::workspace::WorkspaceError;
-use desktop_client::{DocumentViewState, WorkspaceSnapshot, WorkspaceStateRepository};
+use desktop_client::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 use editor_core::DocumentId;
 
 pub struct LocalWorkspaceStateRepository {
@@ -26,7 +26,7 @@ impl LocalWorkspaceStateRepository {
 }
 
 impl WorkspaceStateRepository for LocalWorkspaceStateRepository {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+    fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError> {
         let mut input = match fs::File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -39,7 +39,7 @@ impl WorkspaceStateRepository for LocalWorkspaceStateRepository {
         parse_snapshot(&text).map(Some)
     }
 
-    fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+    fn save(&self, snapshot: &WorkspaceViewState) -> Result<(), WorkspaceError> {
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent).map_err(|error| WorkspaceError::new(error.to_string()))?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)
@@ -55,7 +55,7 @@ impl WorkspaceStateRepository for LocalWorkspaceStateRepository {
     }
 }
 
-fn format_snapshot(snapshot: &WorkspaceSnapshot) -> String {
+fn format_snapshot(snapshot: &WorkspaceViewState) -> String {
     let mut lines = vec!["LAPIS_SESSION_V1".to_owned()];
     if let Some(root) = &snapshot.root {
         lines.push(format!(
@@ -99,12 +99,12 @@ fn format_snapshot(snapshot: &WorkspaceSnapshot) -> String {
     lines.join("\n")
 }
 
-fn parse_snapshot(text: &str) -> Result<WorkspaceSnapshot, WorkspaceError> {
+fn parse_snapshot(text: &str) -> Result<WorkspaceViewState, WorkspaceError> {
     let mut lines = text.lines();
     if lines.next() != Some("LAPIS_SESSION_V1") {
         return Err(WorkspaceError::new("未対応のWorkspace復元形式です"));
     }
-    let mut snapshot = WorkspaceSnapshot::default();
+    let mut snapshot = WorkspaceViewState::default();
     for line in lines {
         let fields = line.split('\t').collect::<Vec<_>>();
         match fields.as_slice() {
@@ -211,7 +211,7 @@ mod tests {
     fn snapshot_round_trip_preserves_unicode_draft_and_view() {
         let directory = tempfile::tempdir().unwrap();
         let state = LocalWorkspaceStateRepository::new(directory.path().join("session.txt"));
-        let snapshot = WorkspaceSnapshot {
+        let snapshot = WorkspaceViewState {
             root: Some(PathBuf::from("C:/作業/lapis")),
             active_path: Some(PathBuf::from("C:/作業/lapis/メモ.md")),
             active_document_id: None,
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn session_v1_format_remains_byte_compatible() {
-        let snapshot = WorkspaceSnapshot {
+        let snapshot = WorkspaceViewState {
             root: Some(PathBuf::from("repo")),
             active_path: Some(PathBuf::from("a.txt")),
             active_document_id: None,
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn session_v1_preserves_absent_and_empty_drafts() {
-        let snapshot = WorkspaceSnapshot {
+        let snapshot = WorkspaceViewState {
             open_documents: vec![
                 DocumentViewState {
                     path: PathBuf::from("saved.txt"),
@@ -266,7 +266,7 @@ mod tests {
                     ..DocumentViewState::default()
                 },
             ],
-            ..WorkspaceSnapshot::default()
+            ..WorkspaceViewState::default()
         };
         assert_eq!(
             parse_snapshot(&format_snapshot(&snapshot)).unwrap(),
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn snapshot_preserves_active_untitled_identity_with_legacy_session_support() {
         let id = DocumentId::new("recovered-😀");
-        let snapshot = WorkspaceSnapshot {
+        let snapshot = WorkspaceViewState {
             active_document_id: Some(id.clone()),
             open_documents: vec![DocumentViewState {
                 document_id: Some(id),
@@ -291,8 +291,8 @@ mod tests {
             snapshot
         );
         let legacy = r#"{"root":null,"open_documents":[],"active_path":null}"#;
-        let restored: WorkspaceSnapshot = serde_json::from_str(legacy).unwrap();
-        assert_eq!(restored, WorkspaceSnapshot::default());
+        let restored: WorkspaceViewState = serde_json::from_str(legacy).unwrap();
+        assert_eq!(restored, WorkspaceViewState::default());
     }
 
     #[test]

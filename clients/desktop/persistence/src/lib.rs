@@ -9,7 +9,7 @@ use std::{
 use ::workspace::WorkspaceError;
 use desktop_client::{
     ConversationRecord, ConversationRepository, ConversationState, ConversationViewState, Project,
-    WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch, WorkspaceSnapshot, ZoneLayoutViewState,
+    WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch, WorkspaceViewState, ZoneLayoutViewState,
 };
 use editor_core::{ConversationId, WorkspaceId};
 use serde::{Deserialize, Serialize};
@@ -332,7 +332,7 @@ impl HostConversationRepository {
     fn shared_view(
         &self,
         view: &ConversationViewState,
-        workspace: &WorkspaceSnapshot,
+        workspace: &WorkspaceViewState,
     ) -> Option<ConversationViewState> {
         let shared = workspace.to_shared(self.workspace.clone()).ok()?;
         // Hostの共有状態にはClient固有のアクティブタブを残さない。
@@ -408,7 +408,7 @@ impl ConversationRepository for HostConversationRepository {
     fn publish_workbench(
         &self,
         view: &ConversationViewState,
-        workspace: &WorkspaceSnapshot,
+        workspace: &WorkspaceViewState,
     ) -> Result<(), WorkspaceError> {
         match self.shared_view(view, workspace) {
             Some(view) => self.publish(view),
@@ -461,7 +461,7 @@ fn atomic_json_write(path: &Path, value: &impl Serialize) -> Result<(), Workspac
 #[cfg(test)]
 mod tests {
     use desktop_client::{
-        ConversationViewState, DocumentViewState, RestoredTerminal, WorkspaceSnapshot,
+        ConversationViewState, DocumentViewState, RestoredTerminal, WorkspaceViewState,
     };
     use editor_core::DocumentId;
     use editor_core::ExecutionId;
@@ -546,7 +546,7 @@ mod tests {
         let records = vec![ConversationRecord {
             id: active.clone(),
             title: "調査 😀".to_owned(),
-            workspace: WorkspaceSnapshot {
+            workspace: WorkspaceViewState {
                 root: Some(PathBuf::from("C:/作業/lapis")),
                 active_path: Some(PathBuf::from("C:/作業/lapis/メモ.md")),
                 active_document_id: None,
@@ -833,7 +833,7 @@ mod tests {
         ConversationRecord {
             id: ConversationId::new("conversation-1"),
             title: "Web".to_owned(),
-            workspace: WorkspaceSnapshot {
+            workspace: WorkspaceViewState {
                 root: Some(root.to_owned()),
                 open_documents: Vec::new(),
                 active_path: None,

@@ -259,9 +259,10 @@ fn failure_handler(
     }) as Box<dyn FnMut(Event)>)
 }
 
-/// ページが保存するcredential。
+/// ページが保存する credential。secret そのものを含む。
+/// Host が永続化する digest だけの `StoredCredential` とは別の概念。
 #[derive(serde::Deserialize, serde::Serialize)]
-pub struct StoredCredential {
+pub struct SavedCredential {
     pub id: String,
     pub secret: String,
     /// 発行元 Host。次回接続時に別 Host を早期に拒否する。
@@ -324,7 +325,7 @@ pub async fn connect_web_client(
     } else {
         match credential {
             Some(credential) => {
-                let stored: StoredCredential = serde_json::from_str(credential)
+                let stored: SavedCredential = serde_json::from_str(credential)
                     .map_err(|_| "credentialの形式が不正です".to_owned())?;
                 let id = CredentialId::parse(stored.id)
                     .map_err(|_| "credential IDが不正です".to_owned())?;
@@ -421,7 +422,7 @@ fn credential_from_response(
             let secret = paired
                 .take_secret()
                 .map_err(|_| "credential secretが不正です".to_owned())?;
-            let stored = StoredCredential {
+            let stored = SavedCredential {
                 id: id.as_str().to_owned(),
                 secret: encode_hex(&secret),
                 host_id: host_id.clone(),

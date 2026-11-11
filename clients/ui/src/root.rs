@@ -2139,7 +2139,7 @@ mod tests {
         let record = |task: ConversationId, resource: &str| ConversationRecord {
             title: task.as_str().into(),
             id: task,
-            workspace: desktop_client::WorkspaceSnapshot::default(),
+            workspace: desktop_client::WorkspaceViewState::default(),
             view: Default::default(),
             selected_execution: None,
             terminals: vec![RestoredTerminal {

@@ -12,7 +12,7 @@ use std::{
 
 use desktop_client::{
     ConversationRecord, ConversationRepository, ConversationState, WorkspaceDialog,
-    WorkspaceSnapshot, WorkspaceStateRepository,
+    WorkspaceStateRepository, WorkspaceViewState,
 };
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, FileData, FileFingerprint, Revision,
@@ -37,7 +37,7 @@ const UNAVAILABLE: &str = "Webではこの機能に接続していません";
 pub(super) struct PrototypeBackend {
     files: Arc<Mutex<BTreeMap<PathBuf, Vec<u8>>>>,
     documents: Arc<Mutex<HashMap<DocumentId, Document>>>,
-    snapshot: Arc<Mutex<Option<WorkspaceSnapshot>>>,
+    snapshot: Arc<Mutex<Option<WorkspaceViewState>>>,
     settings: Arc<Mutex<SettingsDocument>>,
     conversations: Arc<Mutex<ConversationState>>,
     next_document: Arc<Mutex<u64>>,
@@ -343,10 +343,10 @@ impl WorkspaceDialog for PrototypeBackend {
 }
 
 impl WorkspaceStateRepository for PrototypeBackend {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+    fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError> {
         Ok(self.snapshot.lock().unwrap().clone())
     }
-    fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+    fn save(&self, snapshot: &WorkspaceViewState) -> Result<(), WorkspaceError> {
         *self.snapshot.lock().unwrap() = Some(snapshot.clone());
         Ok(())
     }

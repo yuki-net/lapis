@@ -37,7 +37,7 @@ pub(crate) struct ClientSnapshot {
     pub conversation: ConversationId,
     pub view: ConversationViewState,
     pub edit_epoch: EditEpoch,
-    pub workspace_view: desktop_client::WorkspaceSnapshot,
+    pub workspace_view: desktop_client::WorkspaceViewState,
 }
 
 pub(crate) struct DocumentCloseReport {
@@ -80,7 +80,7 @@ impl DocumentClient {
             .workspace_root()
             .map(ToOwned::to_owned)
             .ok_or("Workspaceがありません")?;
-        let snapshot = desktop_client::WorkspaceSnapshot::from_shared(&shared, &workspace, root)
+        let snapshot = desktop_client::WorkspaceViewState::from_shared(&shared, &workspace, root)
             .map_err(|error| error.to_string())?;
         self.editor
             .restore_snapshot(snapshot)
