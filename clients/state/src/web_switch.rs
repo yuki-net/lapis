@@ -15,6 +15,8 @@ use terminal::{TerminalId, TerminalInput};
 use workbench::ConversationViewState;
 
 /// 送信待ちのCommand。
+/// Workbench保存のCommandだけが大きいが、送信待ちは短命なのでBox化はしない。
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
     Open {
         local: DocumentId,
