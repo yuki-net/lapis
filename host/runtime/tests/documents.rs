@@ -8,15 +8,15 @@ use std::{
 };
 
 use backend_state::{
-    BackendService, BackendSession, BackendState, WorkspaceEntry, WorkspaceEntryKind,
+    BackendService, BackendSession, BackendState, FileMetadata, WorkspaceEntry, WorkspaceEntryKind,
     WorkspaceFileBackend, WorkspaceRegistration,
 };
 use client_api::{
     DocumentClaimRequest, DocumentCloseRequest, DocumentCreateRequest, DocumentEditRequest,
-    DocumentEncoding, DocumentHistoryRequest, DocumentOpenRequest, DocumentSaveRequest,
-    DocumentTextEdit, DocumentTransaction, EventBody, FileTreeRequest, REVISION_CONFLICT,
-    RequestBody, RequestEnvelope, RequestId, ResponseBody, Revision, SessionId, SnapshotReason,
-    SnapshotRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
+    DocumentEncoding, DocumentExternalChange, DocumentHistoryRequest, DocumentOpenRequest,
+    DocumentSaveRequest, DocumentTextEdit, DocumentTransaction, EventBody, FileTreeRequest,
+    REVISION_CONFLICT, RequestBody, RequestEnvelope, RequestId, ResponseBody, Revision, SessionId,
+    SnapshotReason, SnapshotRequest, WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId,
     WorkspaceRelativePath,
 };
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
@@ -83,6 +83,22 @@ impl WorkspaceFileBackend for TestFiles {
             .collect::<Result<Vec<_>, DocumentError>>()?;
         entries.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(entries)
+    }
+
+    fn metadata(&self, path: &Path) -> Result<Option<FileMetadata>, DocumentError> {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(Some(FileMetadata {
+                byte_len: metadata.len(),
+                modified_nanos: metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos()),
+            })),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(DocumentError::io(error.to_string())),
+        }
     }
 }
 
@@ -482,6 +498,315 @@ fn history_without_a_change_does_not_advance_revision_or_publish_an_event() {
     };
     assert_eq!(undone.document.revision, Revision::new(1));
     assert!(events.recv_timeout(Duration::from_millis(20)).is_err());
+}
+
+#[test]
+fn snapshot_resync_reports_external_change_with_unsent_document_content() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("file.ts"), "before").unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    let ResponseBody::DocumentOpen(opened) = dispatch(
+        &service,
+        &session,
+        2,
+        RequestBody::DocumentOpen(DocumentOpenRequest {
+            workspace_id: workspace_id.clone(),
+            path: WorkspaceRelativePath::parse("file.ts").unwrap(),
+        }),
+    ) else {
+        panic!("expected opened document");
+    };
+    assert_eq!(
+        opened.document.external_change,
+        DocumentExternalChange::Unchanged
+    );
+
+    let transaction =
+        DocumentTransaction::try_new(vec![DocumentTextEdit::try_new(6, 6, " local").unwrap()])
+            .unwrap();
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            3,
+            RequestBody::DocumentEdit(DocumentEditRequest {
+                document_id: opened.document.document_id,
+                base_revision: Revision::new(1),
+                transaction,
+            }),
+        ),
+        ResponseBody::DocumentEdit(_)
+    ));
+
+    // Host の Document は未保存のまま、実ファイルだけが外部で変わる。
+    fs::write(root.path().join("file.ts"), "after").unwrap();
+
+    let ResponseBody::SnapshotResync(snapshot) = dispatch(
+        &service,
+        &session,
+        4,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id,
+            reason: SnapshotReason::Reconnect,
+        }),
+    ) else {
+        panic!("expected snapshot");
+    };
+    let document = &snapshot.snapshot.documents[0];
+    assert_eq!(document.content, "before local");
+    assert!(document.dirty);
+    assert_eq!(document.external_change, DocumentExternalChange::Modified);
+}
+
+#[test]
+fn snapshot_resync_survives_a_document_parent_replaced_by_a_file() {
+    let root = tempfile::tempdir().unwrap();
+    fs::create_dir(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src/file.ts"), "broken").unwrap();
+    fs::write(root.path().join("healthy.ts"), "healthy").unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    for (request, path) in [(2, "src/file.ts"), (3, "healthy.ts")] {
+        assert!(matches!(
+            dispatch(
+                &service,
+                &session,
+                request,
+                RequestBody::DocumentOpen(DocumentOpenRequest {
+                    workspace_id: workspace_id.clone(),
+                    path: WorkspaceRelativePath::parse(path).unwrap(),
+                }),
+            ),
+            ResponseBody::DocumentOpen(_)
+        ));
+    }
+
+    // 開いている file の親ディレクトリを通常ファイルへ置き換える。
+    fs::remove_file(root.path().join("src/file.ts")).unwrap();
+    fs::remove_dir(root.path().join("src")).unwrap();
+    fs::write(root.path().join("src"), "not a directory").unwrap();
+
+    let ResponseBody::SnapshotResync(snapshot) = dispatch(
+        &service,
+        &session,
+        4,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id,
+            reason: SnapshotReason::Reconnect,
+        }),
+    ) else {
+        panic!("expected snapshot");
+    };
+    assert_eq!(snapshot.snapshot.documents.len(), 2);
+    let broken = snapshot
+        .snapshot
+        .documents
+        .iter()
+        .find(|document| {
+            document
+                .path
+                .as_ref()
+                .is_some_and(|path| path.as_str() == "src/file.ts")
+        })
+        .expect("expected broken document");
+    let healthy = snapshot
+        .snapshot
+        .documents
+        .iter()
+        .find(|document| {
+            document
+                .path
+                .as_ref()
+                .is_some_and(|path| path.as_str() == "healthy.ts")
+        })
+        .expect("expected healthy document");
+    assert_eq!(broken.external_change, DocumentExternalChange::Modified);
+    assert_eq!(healthy.external_change, DocumentExternalChange::Unchanged);
+}
+
+#[test]
+fn snapshot_resync_keeps_an_unsaved_draft_out_of_the_deleted_state() {
+    let root = tempfile::tempdir().unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            2,
+            RequestBody::DocumentCreate(DocumentCreateRequest {
+                workspace_id: workspace_id.clone(),
+                path: WorkspaceRelativePath::parse("draft.ts").unwrap(),
+                encoding: DocumentEncoding::Utf8,
+                content: "draft".to_owned(),
+            }),
+        ),
+        ResponseBody::DocumentCreate(_)
+    ));
+
+    let ResponseBody::SnapshotResync(snapshot) = dispatch(
+        &service,
+        &session,
+        3,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id,
+            reason: SnapshotReason::Reconnect,
+        }),
+    ) else {
+        panic!("expected snapshot");
+    };
+    let draft = &snapshot.snapshot.documents[0];
+    assert!(draft.dirty);
+    assert_eq!(draft.external_change, DocumentExternalChange::Unchanged);
+}
+
+#[test]
+fn reconnect_snapshot_requires_document_inspect_to_reattach() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("file.ts"), "text").unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    let ResponseBody::DocumentOpen(opened) = dispatch(
+        &service,
+        &session,
+        2,
+        RequestBody::DocumentOpen(DocumentOpenRequest {
+            workspace_id: workspace_id.clone(),
+            path: WorkspaceRelativePath::parse("file.ts").unwrap(),
+        }),
+    ) else {
+        panic!("expected opened document");
+    };
+    let document_id = opened.document.document_id;
+
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            3,
+            RequestBody::WorkspaceClose(WorkspaceCloseRequest {
+                workspace_id: workspace_id.clone(),
+            }),
+        ),
+        ResponseBody::WorkspaceClose(_)
+    ));
+    connect(&service, &session, workspace_id.clone(), 4);
+
+    let edit = || {
+        let transaction =
+            DocumentTransaction::try_new(vec![DocumentTextEdit::try_new(4, 4, "!").unwrap()])
+                .unwrap();
+        RequestBody::DocumentEdit(DocumentEditRequest {
+            document_id: document_id.clone(),
+            base_revision: Revision::new(1),
+            transaction,
+        })
+    };
+
+    // snapshot.resync は attachment を作らないため、そのままでは編集できない。
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            5,
+            RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: workspace_id.clone(),
+                reason: SnapshotReason::Reconnect,
+            }),
+        ),
+        ResponseBody::SnapshotResync(_)
+    ));
+    assert!(matches!(
+        dispatch(&service, &session, 6, edit()),
+        ResponseBody::Error(ref error) if error.code.as_str() == "forbidden"
+    ));
+
+    // document.inspect で再アタッチすると編集できる。
+    assert!(matches!(
+        dispatch(
+            &service,
+            &session,
+            7,
+            RequestBody::DocumentInspect(client_api::DocumentInspectRequest {
+                document_id: document_id.clone(),
+            }),
+        ),
+        ResponseBody::DocumentInspect(_)
+    ));
+    assert!(matches!(
+        dispatch(&service, &session, 8, edit()),
+        ResponseBody::DocumentEdit(_)
+    ));
+}
+
+#[test]
+fn snapshot_resync_survives_a_document_path_replaced_by_a_directory() {
+    let root = tempfile::tempdir().unwrap();
+    fs::write(root.path().join("broken.ts"), "broken").unwrap();
+    fs::write(root.path().join("healthy.ts"), "healthy").unwrap();
+    let (service, session, workspace_id) = service(root.path(), "workspace-1", "session-1");
+    connect(&service, &session, workspace_id.clone(), 1);
+
+    for (request, path) in [(2, "broken.ts"), (3, "healthy.ts")] {
+        assert!(matches!(
+            dispatch(
+                &service,
+                &session,
+                request,
+                RequestBody::DocumentOpen(DocumentOpenRequest {
+                    workspace_id: workspace_id.clone(),
+                    path: WorkspaceRelativePath::parse(path).unwrap(),
+                }),
+            ),
+            ResponseBody::DocumentOpen(_)
+        ));
+    }
+
+    // 開いている file をディレクトリへ置き換えると fingerprint の読み取りが失敗する。
+    fs::remove_file(root.path().join("broken.ts")).unwrap();
+    fs::create_dir(root.path().join("broken.ts")).unwrap();
+
+    let ResponseBody::SnapshotResync(snapshot) = dispatch(
+        &service,
+        &session,
+        4,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id,
+            reason: SnapshotReason::Reconnect,
+        }),
+    ) else {
+        panic!("expected snapshot");
+    };
+    assert_eq!(snapshot.snapshot.documents.len(), 2);
+    let broken = snapshot
+        .snapshot
+        .documents
+        .iter()
+        .find(|document| {
+            document
+                .path
+                .as_ref()
+                .is_some_and(|path| path.as_str() == "broken.ts")
+        })
+        .expect("expected broken document");
+    let healthy = snapshot
+        .snapshot
+        .documents
+        .iter()
+        .find(|document| {
+            document
+                .path
+                .as_ref()
+                .is_some_and(|path| path.as_str() == "healthy.ts")
+        })
+        .expect("expected healthy document");
+    assert_eq!(broken.external_change, DocumentExternalChange::Deleted);
+    assert_eq!(healthy.external_change, DocumentExternalChange::Unchanged);
 }
 
 #[test]

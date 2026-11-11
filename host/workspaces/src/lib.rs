@@ -4,4 +4,4 @@ mod path;
 mod ports;
 
 pub use path::{PathSecurityError, WorkspacePathResolver};
-pub use ports::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
+pub use ports::{FileMetadata, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};

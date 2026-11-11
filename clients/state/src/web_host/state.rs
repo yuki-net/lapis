@@ -1,4 +1,5 @@
 //! Web transport が保持するローカル複製と、wire DTO から UI モデルへの変換。
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 
 use std::{
     collections::HashMap,
@@ -16,25 +17,26 @@ use terminal::{TerminalEvent, TerminalId, TerminalSnapshot, TerminalStatus};
 use workbench::{VersionedViewState, WorkbenchReplica};
 use workspace::FileEntry;
 
-use super::ROOT;
+/// Web は Host の OS に依存しない仮想 root を使う。
+pub const ROOT: &str = "/Lapis Host";
 
-pub(super) struct Replica {
-    pub(super) workspace: WorkspaceId,
-    pub(super) entries: Vec<FileEntry>,
-    pub(super) documents: HashMap<DocumentId, DocumentState>,
-    pub(super) by_path: HashMap<PathBuf, DocumentId>,
-    pub(super) terminals: HashMap<String, TerminalState>,
-    pub(super) workbench: WorkbenchReplica,
-    pub(super) profiles: terminal::TerminalProfiles,
-    pub(super) next: u64,
-    pub(super) next_terminal: u64,
-    pub(super) initial: Option<PathBuf>,
+pub(crate) struct Replica {
+    pub(crate) workspace: WorkspaceId,
+    pub(crate) entries: Vec<FileEntry>,
+    pub(crate) documents: HashMap<DocumentId, DocumentState>,
+    pub(crate) by_path: HashMap<PathBuf, DocumentId>,
+    pub(crate) terminals: HashMap<String, TerminalState>,
+    pub(crate) workbench: WorkbenchReplica,
+    pub(crate) profiles: terminal::TerminalProfiles,
+    pub(crate) next: u64,
+    pub(crate) next_terminal: u64,
+    pub(crate) initial: Option<PathBuf>,
     /// この接続の Session。Host の owner と比較して編集可否を決める。
-    pub(super) session: Option<SessionId>,
+    pub(crate) session: Option<SessionId>,
 }
 
 impl Replica {
-    pub(super) fn new(
+    pub(crate) fn new(
         workspace: WorkspaceId,
         entries: Vec<FileEntry>,
         session: Option<SessionId>,
@@ -56,7 +58,7 @@ impl Replica {
     }
 }
 
-pub(super) fn cache_of(
+pub(crate) fn cache_of(
     local: &DocumentId,
     document: &Document,
     external_change: ExternalChange,
@@ -78,14 +80,14 @@ pub(super) fn cache_of(
 }
 
 /// wire の owner を UI 側の Session に変換する。
-pub(super) fn owner_of(snapshot: &DocumentSnapshot) -> Option<SessionId> {
+pub(crate) fn owner_of(snapshot: &DocumentSnapshot) -> Option<SessionId> {
     snapshot
         .owner
         .as_ref()
         .map(|owner| SessionId::new(owner.as_str()))
 }
 
-pub(super) fn versioned_workbench(snapshot: WorkbenchSnapshot) -> Option<VersionedViewState> {
+pub(crate) fn versioned_workbench(snapshot: WorkbenchSnapshot) -> Option<VersionedViewState> {
     let state = VersionedViewState {
         revision: snapshot.revision,
         view: serde_json::from_value(snapshot.view).ok(),
@@ -93,32 +95,32 @@ pub(super) fn versioned_workbench(snapshot: WorkbenchSnapshot) -> Option<Version
     state.is_consistent().then_some(state)
 }
 
-pub(super) struct DocumentState {
-    pub(super) host: Option<ApiDocumentId>,
-    pub(super) path: Option<PathBuf>,
-    pub(super) document: Document,
-    pub(super) acked: String,
-    pub(super) host_revision: ApiRevision,
-    pub(super) loaded: bool,
-    pub(super) external_change: ExternalChange,
+pub(crate) struct DocumentState {
+    pub(crate) host: Option<ApiDocumentId>,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) document: Document,
+    pub(crate) acked: String,
+    pub(crate) host_revision: ApiRevision,
+    pub(crate) loaded: bool,
+    pub(crate) external_change: ExternalChange,
     /// Host が通知した編集権の所有者。
-    pub(super) owner: Option<SessionId>,
+    pub(crate) owner: Option<SessionId>,
 }
 
-pub(super) struct TerminalState {
-    pub(super) host: Option<ApiTerminalId>,
-    pub(super) snapshot: Option<TerminalSnapshot>,
-    pub(super) events: Vec<TerminalEvent>,
-    pub(super) finished: bool,
+pub(crate) struct TerminalState {
+    pub(crate) host: Option<ApiTerminalId>,
+    pub(crate) snapshot: Option<TerminalSnapshot>,
+    pub(crate) events: Vec<TerminalEvent>,
+    pub(crate) finished: bool,
 }
 
-pub(super) fn local_id(replica: &mut Replica) -> DocumentId {
+pub(crate) fn local_id(replica: &mut Replica) -> DocumentId {
     let id = DocumentId::new(format!("web-{}", replica.next));
     replica.next += 1;
     id
 }
 
-pub(super) fn document_from_snapshot(
+pub(crate) fn document_from_snapshot(
     snapshot: &DocumentSnapshot,
     path: Option<PathBuf>,
 ) -> Document {
@@ -136,7 +138,7 @@ pub(super) fn document_from_snapshot(
     )
 }
 
-pub(super) fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatus {
+pub(crate) fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatus {
     match status {
         WireTerminalStatus::Running => TerminalStatus::Running,
         WireTerminalStatus::Exited | WireTerminalStatus::Terminated => TerminalStatus::Exited,
@@ -145,7 +147,7 @@ pub(super) fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatu
     }
 }
 
-pub(super) fn model_terminal_snapshot(
+pub(crate) fn model_terminal_snapshot(
     local: &TerminalId,
     snapshot: &WireTerminalSnapshot,
 ) -> TerminalSnapshot {
@@ -162,7 +164,7 @@ pub(super) fn model_terminal_snapshot(
     }
 }
 
-pub(super) fn diff_chars(previous: &str, next: &str) -> (u64, u64, String) {
+pub(crate) fn diff_chars(previous: &str, next: &str) -> (u64, u64, String) {
     let previous_chars: Vec<char> = previous.chars().collect();
     let next_chars: Vec<char> = next.chars().collect();
     let mut start = 0;

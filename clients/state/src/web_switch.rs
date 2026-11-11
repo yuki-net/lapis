@@ -169,6 +169,9 @@ pub(crate) fn ensure_connected(body: ResponseBody) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::web_cache::{CachedWorkspace, WorkspaceCache};
+    use crate::web_replica::Replica;
+    use editor_core::WorkspaceId;
 
     fn id(value: &str) -> ApiWorkspaceId {
         ApiWorkspaceId::try_new(value.to_owned()).unwrap()
@@ -176,6 +179,17 @@ mod tests {
 
     fn document() -> DocumentId {
         DocumentId::new("web-1")
+    }
+
+    fn cached(workspace: &str) -> CachedWorkspace {
+        CachedWorkspace {
+            replica: Replica::new(
+                WorkspaceId::new(workspace),
+                Vec::new(),
+                None,
+                Default::default(),
+            ),
+        }
     }
 
     #[test]
@@ -229,6 +243,29 @@ mod tests {
         assert_eq!(
             rollback_steps(&current, None),
             vec![AttachmentStep::Connect(current)]
+        );
+    }
+
+    #[test]
+    fn failed_cached_resync_returns_the_cache_and_restores_the_attachment() {
+        let current = id("current");
+        let target = id("target");
+        let workspace = WorkspaceId::new("target");
+        let mut cache = WorkspaceCache::new(4);
+        cache.insert(cached("target"));
+
+        // 復帰時に取り出した複製の再同期が失敗した場合を想定する。
+        let restored = cache.take(&workspace).expect("保持済み複製を取り出せる");
+        // 設置せずに保持へ戻す。次の切替で同じ表示状態から再試行できる。
+        assert!(cache.insert(restored).is_none());
+        assert!(cache.take(&workspace).is_some());
+        // 接続は切替先を閉じてから元の Workspace へ戻す。
+        assert_eq!(
+            rollback_steps(&current, Some(&target)),
+            vec![
+                AttachmentStep::Close(target),
+                AttachmentStep::Connect(current),
+            ]
         );
     }
 }

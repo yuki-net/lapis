@@ -15,10 +15,10 @@ use crate::{
     ConversationRecord, Project, WorkspaceDialog, WorkspaceStateRepository, WorkspaceViewState,
 };
 use client_api::{
-    ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
-    SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceCloseRequest,
-    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceListRequest,
-    WorkspaceRelativePath, WorkspaceSummary,
+    ClientKind, DocumentInspectRequest, RequestBody, ResponseBody, Revision as ApiRevision,
+    SnapshotReason, SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest,
+    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
+    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
@@ -41,18 +41,18 @@ use workspace::{
     WorkspaceSearchBackend,
 };
 
-mod state;
 mod transport;
 
-use crate::web_switch::{self, Command, Operation};
-use state::{
+pub use crate::web_replica::ROOT;
+
+use crate::web_cache::{CachedWorkspace, WorkspaceCache};
+use crate::web_replica::{
     DocumentState, Replica, TerminalState, cache_of, local_id, model_terminal_snapshot,
     versioned_workbench,
 };
+use crate::web_switch::{self, Command, Operation};
 use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
 
-/// Web は Host の OS に依存しない仮想 root を使う。
-pub const ROOT: &str = "/Lapis Host";
 const UNAVAILABLE: &str = "Webではこの機能に接続していません";
 const MAX_TREE_ENTRIES: usize = 5000;
 const MAX_PRELOAD_BYTES: usize = 2 * 1024 * 1024;
@@ -65,12 +65,16 @@ thread_local! {
     static DRAINING: Cell<bool> = const { Cell::new(false) };
     /// Root の再構築が終わるまで保持する切替前の複製。失敗時に元へ戻す。
     static PREVIOUS: RefCell<Option<PreviousWorkspace>> = const { RefCell::new(None) };
+    /// ページの生存中だけ保持する Workspace ごとの複製。永続化はしない。
+    static CACHE: RefCell<WorkspaceCache> = const { RefCell::new(WorkspaceCache::new(0)) };
 }
 
 struct PreviousWorkspace {
     workspace: WorkspaceId,
     workspace_identity: WorkspaceIdentity,
     replica: Replica,
+    /// 切替先が保持済みの複製から復元されたか。rollback で切替先を保持へ戻す。
+    target_was_cached: bool,
 }
 
 struct BackendState {
@@ -83,7 +87,9 @@ struct BackendState {
     workspaces: Vec<WorkspaceSummary>,
     replica: Rc<RefCell<Replica>>,
     commands: mpsc::UnboundedSender<Command>,
-    changes_rx: Option<mpsc::UnboundedReceiver<()>>,
+    changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    /// Editor 向けの文書変更通知。Terminal 向けの `changes` とは分ける。
+    document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 }
 
 /// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
@@ -163,6 +169,8 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     let host_id = connected.host_id.clone();
     let fresh_credential = connected.credential.clone();
     let workspaces = workspace_list.workspaces;
+    // 保持の上限は、接続先が持つ Workspace の数とする。active は含めない。
+    CACHE.with(|cache| *cache.borrow_mut() = WorkspaceCache::new(workspaces.len()));
     let workspace = WorkspaceId::new(api_workspace.as_str());
     let events = Rc::get_mut(&mut connection).and_then(|connection| connection.take_events());
     let workspace_identity = match request(
@@ -243,7 +251,8 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     }
     preload_workbench(&connection, &replica, &api_workspace).await;
     let (commands, receiver) = mpsc::unbounded();
-    let (changes, changes_rx) = mpsc::unbounded();
+    let changes = Rc::new(RefCell::new(Vec::new()));
+    let document_changes = Rc::new(RefCell::new(Vec::new()));
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             connection: connection.clone(),
@@ -255,7 +264,8 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             workspaces,
             replica: replica.clone(),
             commands,
-            changes_rx: Some(changes_rx),
+            changes: changes.clone(),
+            document_changes: document_changes.clone(),
         })
     });
     wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
@@ -265,6 +275,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             events,
             replica.clone(),
             changes,
+            document_changes,
         ));
     }
     preload(&connection, &replica).await?;
@@ -298,9 +309,13 @@ pub async fn switch_workspace(workspace_id: &str) -> Result<(), String> {
     if SWITCHING.with(|switching| switching.replace(true)) {
         return Err("Workspaceを切り替えています".to_owned());
     }
-    // 前回の切替が残した復帰用の複製があれば、新しい切替には使わない。
+    // 前回の切替が残した複製も、次の切替を始める前に保持へ移す。
     PREVIOUS.with(|previous| {
-        previous.borrow_mut().take();
+        if let Some(previous) = previous.borrow_mut().take() {
+            cache_workspace(CachedWorkspace {
+                replica: previous.replica,
+            });
+        }
     });
     // 切替前の編集・保存要求を旧 Workspace へ送り切ってから attachment を閉じる。
     let (done, drained) = oneshot::channel();
@@ -367,6 +382,22 @@ async fn switch_workspace_inner(
             return Err(fail_switch(connection, &current_api, None, error).await);
         }
     };
+    let workspace = WorkspaceId::new(requested.as_str());
+
+    // 保持済みの複製があれば表示状態をそのまま復元し、離れていた間の差分だけを取り直す。
+    if let Some(cached) = CACHE.with(|cache| cache.borrow_mut().take(&workspace)) {
+        let mut replica = cached.replica;
+        // 復元した複製を先に最新化してから設置する。切替中に旧 Workspace の
+        // 読み取りが新しい複製の同じ local ID を参照しないようにする。
+        if let Err(error) = resync_workspace(connection, &mut replica, &workspace).await {
+            // 再同期できない複製は設置せず、保持へ戻して元の Workspace へ復旧する。
+            cache_workspace(CachedWorkspace { replica });
+            return Err(fail_switch(connection, &current_api, Some(requested), error).await);
+        }
+        install_workspace(current, workspace, workspace_identity, replica, true)?;
+        return Ok(());
+    }
+
     let entries = match fetch_tree(connection, requested).await {
         Ok(entries) => entries,
         Err(error) => {
@@ -407,7 +438,6 @@ async fn switch_workspace_inner(
         Ok(ResponseBody::WorkbenchGet(snapshot)) => versioned_workbench(snapshot),
         _ => None,
     };
-    let workspace = WorkspaceId::new(requested.as_str());
     let replica = BACKEND
         .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
         .ok_or("Hostに接続していません")?;
@@ -437,26 +467,7 @@ async fn switch_workspace_inner(
             },
         );
     }
-    let previous_replica = {
-        let mut replica = replica.borrow_mut();
-        std::mem::replace(&mut *replica, next_replica)
-    };
-    let previous_identity = BACKEND
-        .with(|backend| {
-            backend.borrow_mut().as_mut().map(|state| {
-                let identity = std::mem::replace(&mut state.workspace_identity, workspace_identity);
-                state.workspace = workspace;
-                identity
-            })
-        })
-        .ok_or("Hostに接続していません")?;
-    PREVIOUS.with(|previous| {
-        *previous.borrow_mut() = Some(PreviousWorkspace {
-            workspace: current.clone(),
-            workspace_identity: previous_identity,
-            replica: previous_replica,
-        });
-    });
+    let replica = install_workspace(current, workspace, workspace_identity, next_replica, false)?;
     preload_workbench(connection, &replica, requested).await;
     if let Err(error) = preload(connection, &replica).await {
         web_sys::console::warn_1(
@@ -464,6 +475,159 @@ async fn switch_workspace_inner(
         );
     }
     Ok(())
+}
+
+/// 切替先の複製を Backend へ設置し、切替前の複製を rollback 用に退避する。
+fn install_workspace(
+    current: &WorkspaceId,
+    workspace: WorkspaceId,
+    workspace_identity: WorkspaceIdentity,
+    next_replica: Replica,
+    target_was_cached: bool,
+) -> Result<Rc<RefCell<Replica>>, String> {
+    let (replica, previous_identity, previous_replica) = BACKEND.with(|backend| {
+        let mut backend = backend.borrow_mut();
+        let state = backend.as_mut().ok_or("Hostに接続していません")?;
+        let previous_replica = std::mem::replace(&mut *state.replica.borrow_mut(), next_replica);
+        let previous_identity =
+            std::mem::replace(&mut state.workspace_identity, workspace_identity);
+        state.workspace = workspace;
+        Ok::<_, String>((state.replica.clone(), previous_identity, previous_replica))
+    })?;
+    PREVIOUS.with(|previous| {
+        *previous.borrow_mut() = Some(PreviousWorkspace {
+            workspace: current.clone(),
+            workspace_identity: previous_identity,
+            replica: previous_replica,
+            target_was_cached,
+        });
+    });
+    Ok(replica)
+}
+
+/// 保持から復元した Workspace を、既存の再同期機構で差分だけ最新にする。
+async fn resync_workspace(
+    connection: &BrowserConnection,
+    replica: &mut Replica,
+    workspace: &WorkspaceId,
+) -> Result<(), String> {
+    let workspace_api = api_workspace(workspace);
+    match request(
+        connection,
+        RequestBody::SnapshotResync(SnapshotRequest {
+            workspace_id: workspace_api.clone(),
+            reason: SnapshotReason::Reconnect,
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::SnapshotResync(response)) => {
+            if &replica.workspace == workspace {
+                let _ = crate::web_cache::apply_snapshot(replica, &response.snapshot);
+            }
+        }
+        Ok(_) => {
+            return Err("Workspace復帰後の再同期応答が不正です".to_owned());
+        }
+        Err(error) => {
+            return Err(format!("Workspace復帰後の再同期に失敗しました: {error}"));
+        }
+    }
+    attach_cached_documents(connection, replica).await?;
+    match request(
+        connection,
+        RequestBody::WorkbenchGet(WorkbenchGetRequest {
+            workspace_id: workspace_api,
+        }),
+    )
+    .await
+    {
+        Ok(ResponseBody::WorkbenchGet(snapshot)) => {
+            if &replica.workspace == workspace {
+                let state = versioned_workbench(snapshot)
+                    .ok_or_else(|| "Workspace復帰後のWorkbench状態が不正です".to_owned())?;
+                replica.workbench.refresh(state).map_err(|error| {
+                    format!("Workspace復帰後のWorkbench再同期に失敗しました: {error}")
+                })?;
+            }
+        }
+        Ok(_) => return Err("Workspace復帰後のWorkbench応答が不正です".to_owned()),
+        Err(error) => {
+            return Err(format!(
+                "Workspace復帰後のWorkbench再同期に失敗しました: {error}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 保持していた Document を Host へ再アタッチする。
+///
+/// Workspace を離れると attachment は解除される。snapshot.resync は attachment を
+/// 作らないため、復帰後に編集・保存できるよう document.inspect で確立する。
+async fn attach_cached_documents(
+    connection: &BrowserConnection,
+    replica: &mut Replica,
+) -> Result<(), String> {
+    let hosts = replica
+        .documents
+        .values()
+        .filter_map(|state| state.host.clone())
+        .collect::<Vec<_>>();
+    for host in hosts {
+        match request(
+            connection,
+            RequestBody::DocumentInspect(DocumentInspectRequest {
+                document_id: host.clone(),
+            }),
+        )
+        .await
+        {
+            Ok(ResponseBody::DocumentInspect(response)) => {
+                if let Some(state) = replica
+                    .documents
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&host))
+                {
+                    let _ = crate::web_cache::apply_inspection(state, &response.document, true);
+                }
+            }
+            // Host から消えた Document は外部削除として残し、切替自体は継続する。
+            Err(error) if error == client_api::NOT_FOUND => {
+                if let Some(state) = replica
+                    .documents
+                    .values_mut()
+                    .find(|state| state.host.as_ref() == Some(&host))
+                {
+                    state.external_change = ExternalChange::Deleted;
+                }
+            }
+            Ok(_) => {
+                return Err("Workspace復帰後のDocument再アタッチ応答が不正です".to_owned());
+            }
+            Err(error) => {
+                return Err(format!(
+                    "Workspace復帰後のDocument再アタッチに失敗しました: {error}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 複製を保持へ移す。上限を超えた分は古いものから破棄する。
+fn cache_workspace(cached: CachedWorkspace) {
+    CACHE.with(|cache| {
+        if let Some(evicted) = cache.borrow_mut().insert(cached) {
+            web_sys::console::log_1(
+                &format!(
+                    "Workspace状態の保持上限を超えたため破棄しました: {}",
+                    evicted.replica.workspace
+                )
+                .into(),
+            );
+        }
+    });
 }
 
 /// 切替先への接続に失敗したとき、開いたままの切替先を閉じて元の Workspace へ戻す。
@@ -511,11 +675,14 @@ async fn fail_switch(
     }
 }
 
-/// Root の再構築が成功したので、切替前の複製を破棄する。
+/// Root の再構築が成功したので、切替前の複製を保持へ移す。
 pub fn finish_workspace_switch() {
-    PREVIOUS.with(|previous| {
-        previous.borrow_mut().take();
-    });
+    let previous = PREVIOUS.with(|previous| previous.borrow_mut().take());
+    if let Some(previous) = previous {
+        cache_workspace(CachedWorkspace {
+            replica: previous.replica,
+        });
+    }
 }
 
 /// Root の再構築に失敗したとき、attachment と複製を元の Workspace へ戻す。
@@ -567,16 +734,32 @@ async fn rollback_workspace_inner(
     let previous = PREVIOUS
         .with(|previous| previous.borrow_mut().take())
         .ok_or("切替前のWorkspace状態がありません")?;
-    let replica = BACKEND
-        .with(|backend| backend.borrow().as_ref().map(|state| state.replica.clone()))
-        .ok_or("Hostに接続していません")?;
-    *replica.borrow_mut() = previous.replica;
-    BACKEND.with(|backend| {
-        if let Some(state) = backend.borrow_mut().as_mut() {
-            state.workspace = previous.workspace;
-            state.workspace_identity = previous.workspace_identity;
-        }
-    });
+    let PreviousWorkspace {
+        workspace: previous_workspace,
+        workspace_identity: previous_identity,
+        replica: previous_replica,
+        target_was_cached,
+    } = previous;
+    let target = BACKEND.with(|backend| {
+        let mut backend = backend.borrow_mut();
+        let state = backend.as_mut().ok_or("Hostに接続していません")?;
+        // 保持から復元した切替先は、rollback 後も次の復帰で使えるよう保持へ戻す。
+        let target = if target_was_cached {
+            Some(std::mem::replace(
+                &mut *state.replica.borrow_mut(),
+                previous_replica,
+            ))
+        } else {
+            *state.replica.borrow_mut() = previous_replica;
+            None
+        };
+        state.workspace = previous_workspace;
+        state.workspace_identity = previous_identity;
+        Ok::<_, String>(target)
+    })?;
+    if let Some(replica) = target {
+        cache_workspace(CachedWorkspace { replica });
+    }
     Ok(())
 }
 
@@ -621,6 +804,19 @@ pub fn initial_path() -> Option<PathBuf> {
             .borrow()
             .as_ref()
             .and_then(|state| state.replica.borrow().initial.clone())
+    })
+}
+
+/// Editor が Host の文書変更通知を購読する。
+///
+/// Root の再構築でも同じ接続から購読し直せるよう、購読を都度追加する。
+pub fn document_changes() -> Option<mpsc::UnboundedReceiver<()>> {
+    BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref()?;
+        let (sender, receiver) = mpsc::unbounded();
+        state.document_changes.borrow_mut().push(sender);
+        Some(receiver)
     })
 }
 
@@ -1483,7 +1679,13 @@ impl TerminalBackend for WebBackend {
     }
 
     fn changes(&self) -> Option<mpsc::UnboundedReceiver<()>> {
-        self.with(|state| state.changes_rx.take()).ok().flatten()
+        // Root の再構築でも同じ接続から購読し直せるよう、購読を都度追加する。
+        self.with(|state| {
+            let (sender, receiver) = mpsc::unbounded();
+            state.changes.borrow_mut().push(sender);
+            receiver
+        })
+        .ok()
     }
 
     fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {

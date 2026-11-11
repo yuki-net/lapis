@@ -1,5 +1,7 @@
 //! Document の request 処理。
 
+use crate::PathSecurityError;
+
 use super::*;
 
 impl BackendState {
@@ -34,33 +36,20 @@ impl BackendState {
         document_id: DocumentId,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         let workspace = self.workspace_mut(session)?;
+        {
+            let resource = workspace
+                .documents
+                .get_mut(&document_id)
+                .ok_or(BackendStateError::DocumentNotFound)?;
+            resource
+                .attached_sessions
+                .insert(session.session_id.clone());
+        }
         let resource = workspace
             .documents
-            .get_mut(&document_id)
+            .get(&document_id)
             .ok_or(BackendStateError::DocumentNotFound)?;
-        resource
-            .attached_sessions
-            .insert(session.session_id.clone());
-        let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
-        let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
-            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
-        if missing_root && resource.path.is_some() {
-            snapshot.external_change = client_api::DocumentExternalChange::Deleted;
-        } else if let Some(path) = &resource.path {
-            let absolute = workspace.resolver.resolve_scoped_path(path)?;
-            snapshot.external_change = match resource
-                .document
-                .external_change(workspace.files.fingerprint(&absolute)?.as_ref())
-            {
-                ::document::ExternalChange::Unchanged => {
-                    client_api::DocumentExternalChange::Unchanged
-                }
-                ::document::ExternalChange::Modified => {
-                    client_api::DocumentExternalChange::Modified
-                }
-                ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
-            };
-        }
+        let snapshot = document_snapshot(workspace, resource)?;
         Ok((
             ResponseBody::DocumentInspect(DocumentHistoryResponse { document: snapshot }),
             Vec::new(),
@@ -525,4 +514,58 @@ impl BackendState {
             Vec::new(),
         ))
     }
+}
+
+/// Document の Snapshot を作り、実ファイルとの差分を外部変更として反映する。
+pub(super) fn document_snapshot(
+    workspace: &WorkspaceState,
+    resource: &DocumentResource,
+) -> Result<client_api::DocumentSnapshot, BackendStateError> {
+    let mut snapshot = resource.snapshot(&workspace.summary.workspace_id);
+    let missing_root = std::fs::symlink_metadata(workspace.resolver.root())
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+    let actual = if missing_root {
+        Ok(None)
+    } else if let Some(path) = &resource.path {
+        match workspace.resolver.resolve_scoped_path(path) {
+            Ok(absolute) => workspace
+                .files
+                .metadata(&absolute)
+                .map_err(|error| error.to_string()),
+            Err(error) if matches!(&error, PathSecurityError::WorkspaceEscape) => {
+                return Err(error.into());
+            }
+            // Workspace 内でも親ディレクトリの置換などで解決できない path は、
+            // その文書だけ読取不能として扱い、Snapshot 全体を失敗させない。
+            Err(error) => Err(error.to_string()),
+        }
+    } else {
+        Ok(None)
+    };
+    let external_change = match actual {
+        Ok(metadata) => resource.document.external_change_metadata(
+            metadata.map(|metadata| (metadata.byte_len, metadata.modified_nanos)),
+        ),
+        Err(error) => {
+            // 読み取りエラーは削除と区別できるよう記録し、復旧自体は継続する。
+            eprintln!(
+                "Documentの外部変更を確認できません: {}: {error}",
+                resource
+                    .path
+                    .as_ref()
+                    .map_or_else(|| "<untitled>".to_owned(), |path| path.as_str().to_owned())
+            );
+            if resource.document.has_saved_fingerprint() {
+                ::document::ExternalChange::Modified
+            } else {
+                ::document::ExternalChange::Unchanged
+            }
+        }
+    };
+    snapshot.external_change = match external_change {
+        ::document::ExternalChange::Unchanged => client_api::DocumentExternalChange::Unchanged,
+        ::document::ExternalChange::Modified => client_api::DocumentExternalChange::Modified,
+        ::document::ExternalChange::Deleted => client_api::DocumentExternalChange::Deleted,
+    };
+    Ok(snapshot)
 }

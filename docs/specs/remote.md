@@ -38,7 +38,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 - `sync_client.rs` は機能workerから呼び出し、再接続では保存済みの証明書・credentialを検証し、Workspace接続とsnapshot取得でattachmentを復元します。送信済み更新要求は自動再送しません。期限を過ぎた待機要求は実行しません。
 - Workspace を指定していない profile は、認証で Workspace を要求せず、Host が返す Workspace へ接続します。Host が返さない場合は resolver の primary Workspace、最後に `workspace.list` の先頭を使います。
 - Host は認証応答で永続化した `host_id` を返せます。Web / Desktop は保存済み credential の `host_id` と照合し、別 Host への誤接続を区別したエラーにします。
-- Web と Desktop は接続後に Workspace 名を表示します。接続中 Workspace の名前と root ディレクトリ名は `workspace.connect` 応答の identity を正本とし、表示名の解決に `workspace.list` は使いません。`workspace.list` の用途は切替 UI の候補と、profile の Workspace が未解決のときの選択 fallback だけです。Web は `workspace.switch` が付与されていればアプリ内の Workspace メニューから切り替えられます。切替は同じ接続のまま `workspace.close` で attachment を解除してから `workspace.connect` を送り、ページ遷移・再接続はしません。Workspace ごとに credential を複製しません。
+- Web と Desktop は接続後に Workspace 名を表示します。接続中 Workspace の名前と root ディレクトリ名は `workspace.connect` 応答の identity を正本とし、表示名の解決に `workspace.list` は使いません。`workspace.list` の用途は切替 UI の候補と、profile の Workspace が未解決のときの選択 fallback だけです。Web は `workspace.switch` が付与されていればアプリ内の Workspace メニューから切り替えられます。切替は同じ接続のまま `workspace.close` で attachment を解除してから `workspace.connect` を送り、ページ遷移・再接続はしません。Workspace ごとに credential を複製しません。Web の state 層は、ページの生存中だけ Workspace ごとのクライアント複製を保持します。保持は接続中の Workspace 一覧数を上限とし、超えた分は古いものから破棄して次回は snapshot から復帰します。戻った Workspace は保持した複製を復元した後、`snapshot.resync`（Reconnect）と `workbench.get` で差分を再同期します。再同期に失敗した複製は設置せず保持へ戻し、切替先を閉じて元の Workspace へ接続し直します。保持の永続化はしません。
 - Desktop は `workspace.connect` の identity を取得できなかった場合、root のディレクトリ名から表示名を推測しません。Remote の root は Host の実ディレクトリではなく profile の label から構成する仮想パスであり、推測した名前は接続先と一致しないためです。既に分かっている名前は保持し、無ければ Workspace ID だけを表示します。
 - イベント購読のqueue上限を超えた場合は購読を切断し、snapshotから回復します。
 
@@ -53,7 +53,7 @@ Desktopは招待ファイルから証明書と一回限りのtokenを取り込�
 
 - 接続が失われても、実行Host上のTerminalやAgentが終了したとは推測しません。
 - 再接続では権限と実行状態を再確認し、古いClient cacheを最新のsnapshotに整合させます。
-- Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。
+- Documentの変更・保存はrevision等を使って競合を検出し、古い内容で黙って上書きしません。未送信の編集とHostの変更が競合した場合は、Hostの本文でローカル編集を置き換えず、外部変更として記録して復旧できる状態を保ちます。
 - Terminalの画面・mode・端末問い合わせへの応答はHostのTerminal Engineが所有します。ClientはSnapshot / Deltaのrevisionを検証し、欠落時には最新Snapshotへ再同期します。raw VT/ANSIやbyte offsetをClientへ公開しません。
 - Messageサイズ、request数、session数、timeoutなど、必要な資源上限を設けます。
 

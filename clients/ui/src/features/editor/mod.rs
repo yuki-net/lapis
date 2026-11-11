@@ -255,7 +255,7 @@ impl Editor {
     }
 
     /// 未確定の操作中は完了後に1回だけ同期する。
-    fn request_sync(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_sync(&mut self, cx: &mut Context<Self>) {
         if self.recovery {
             return;
         }

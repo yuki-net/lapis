@@ -8,7 +8,7 @@ use std::{
     time::UNIX_EPOCH,
 };
 
-use backend_state::{WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
+use backend_state::{FileMetadata, WorkspaceEntry, WorkspaceEntryKind, WorkspaceFileBackend};
 use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
 use notify::Watcher;
 use workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceRepository};
@@ -161,6 +161,23 @@ impl WorkspaceFileBackend for LocalWorkspaceRepository {
 
         children.sort_by(|left, right| left.name.cmp(&right.name));
         Ok(children)
+    }
+
+    fn metadata(&self, path: &Path) -> Result<Option<FileMetadata>, DocumentError> {
+        // 内容を読まず、外部変更の判定に必要な長さと更新時刻だけを取得する。
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => Ok(Some(FileMetadata {
+                byte_len: metadata.len(),
+                modified_nanos: metadata
+                    .modified()
+                    .ok()
+                    .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                    .map(|duration| duration.as_nanos()),
+            })),
+            Ok(_) => Ok(None),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(DocumentError::io(error.to_string())),
+        }
     }
 
     fn changes(&self) -> Option<mpsc::Receiver<()>> {

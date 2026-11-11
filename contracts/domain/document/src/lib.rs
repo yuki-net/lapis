@@ -331,6 +331,28 @@ impl Document {
             _ => ExternalChange::Unchanged,
         }
     }
+
+    /// 保存済みのファイル fingerprint を持つか。
+    pub fn has_saved_fingerprint(&self) -> bool {
+        self.saved_fingerprint.is_some()
+    }
+
+    /// 内容を読まずに取得したメタデータで外部変更を判定する。
+    pub fn external_change_metadata(&self, actual: Option<(u64, Option<u128>)>) -> ExternalChange {
+        match (&self.saved_fingerprint, actual) {
+            (Some(_), None) => ExternalChange::Deleted,
+            (Some(expected), Some((byte_len, modified_nanos))) => {
+                let modified = expected.modified_nanos != modified_nanos
+                    && (expected.modified_nanos.is_some() || modified_nanos.is_some());
+                if expected.byte_len != byte_len || modified {
+                    ExternalChange::Modified
+                } else {
+                    ExternalChange::Unchanged
+                }
+            }
+            (None, _) => ExternalChange::Unchanged,
+        }
+    }
 }
 
 impl Default for Document {
