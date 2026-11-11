@@ -568,6 +568,53 @@ mod tests {
     }
 
     #[test]
+    fn inspection_keeps_unsent_local_changes_with_host_unchanged() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        let state = replica.documents.values_mut().next().unwrap();
+        state.document = Document::from_snapshot(
+            state.path.clone(),
+            "local edit".to_owned(),
+            Encoding::Utf8,
+            Revision::new(2),
+            true,
+        );
+        let mut remote = wire_document("before");
+        remote.revision = ApiRevision::new(1);
+
+        assert!(!apply_inspection(state, &remote, true));
+
+        assert_eq!(state.document.content_for_save(), "local edit");
+        assert_eq!(state.acked, "before");
+        assert_eq!(state.host_revision, ApiRevision::new(1));
+        assert_eq!(state.external_change, ExternalChange::Unchanged);
+    }
+
+    #[test]
+    fn inspection_keeps_unsent_local_changes_with_host_deleted() {
+        let workspace = workspace("workspace-a");
+        let mut replica = cached(&workspace, "before").replica;
+        let state = replica.documents.values_mut().next().unwrap();
+        state.document = Document::from_snapshot(
+            state.path.clone(),
+            "local edit".to_owned(),
+            Encoding::Utf8,
+            Revision::new(2),
+            true,
+        );
+        let mut remote = wire_document("before");
+        remote.revision = ApiRevision::new(1);
+        remote.external_change = DocumentExternalChange::Deleted;
+
+        assert!(apply_inspection(state, &remote, true));
+
+        assert_eq!(state.document.content_for_save(), "local edit");
+        assert_eq!(state.acked, "before");
+        assert_eq!(state.host_revision, ApiRevision::new(1));
+        assert_eq!(state.external_change, ExternalChange::Deleted);
+    }
+
+    #[test]
     fn inspection_preserves_host_deleted_state() {
         let workspace = workspace("workspace-a");
         let mut replica = cached(&workspace, "before").replica;
