@@ -18,8 +18,10 @@ pub struct DocumentViewState {
     pub draft_content: Option<String>,
 }
 
+/// クライアントがローカルに保持する Workspace の画面状態。
+/// Host と同期する `client_api::WorkspaceSnapshot` とは別の概念。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct WorkspaceSnapshot {
+pub struct WorkspaceViewState {
     pub root: Option<PathBuf>,
     pub open_documents: Vec<DocumentViewState>,
     pub active_path: Option<PathBuf>,
@@ -27,7 +29,7 @@ pub struct WorkspaceSnapshot {
     pub active_document_id: Option<DocumentId>,
 }
 
-impl WorkspaceSnapshot {
+impl WorkspaceViewState {
     /// 既存のローカル保存値をHost共有用に変換する。失敗時も元の値は変更しない。
     pub fn to_shared(
         &self,
@@ -134,8 +136,8 @@ fn validate_root(root: &std::path::Path) -> Result<(), WorkspaceError> {
 }
 
 pub trait WorkspaceStateRepository: Send + Sync {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError>;
-    fn save(&self, snapshot: &WorkspaceSnapshot) -> Result<(), WorkspaceError>;
+    fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError>;
+    fn save(&self, snapshot: &WorkspaceViewState) -> Result<(), WorkspaceError>;
 }
 
 #[cfg(test)]
@@ -148,7 +150,7 @@ mod tests {
         let second_root = std::env::temp_dir().join("lapis-client-two");
         let workspace = WorkspaceId::new("workspace-1");
         let file = first_root.join("src").join("画面.rs");
-        let snapshot = WorkspaceSnapshot {
+        let snapshot = WorkspaceViewState {
             root: Some(first_root.clone()),
             open_documents: vec![
                 DocumentViewState {
@@ -176,7 +178,7 @@ mod tests {
         );
         assert!(shared.open_documents[1].path.is_none());
         let restored =
-            WorkspaceSnapshot::from_shared(&shared, &workspace, second_root.clone()).unwrap();
+            WorkspaceViewState::from_shared(&shared, &workspace, second_root.clone()).unwrap();
         assert_eq!(
             restored.open_documents[0].path,
             second_root.join("src").join("画面.rs")
@@ -199,7 +201,7 @@ mod tests {
     #[test]
     fn shared_workspace_rejects_foreign_paths_and_ids_without_changing_original() {
         let root = std::env::temp_dir().join("lapis-shared-root");
-        let snapshot = WorkspaceSnapshot {
+        let snapshot = WorkspaceViewState {
             root: Some(root),
             open_documents: vec![DocumentViewState {
                 path: std::env::temp_dir().join("other").join("draft.rs"),
@@ -211,13 +213,13 @@ mod tests {
         let original = snapshot.clone();
         assert!(snapshot.to_shared(WorkspaceId::new("workspace-1")).is_err());
         assert_eq!(snapshot, original);
-        let empty = WorkspaceSnapshot {
+        let empty = WorkspaceViewState {
             root: Some(std::env::temp_dir().join("other")),
             ..Default::default()
         };
         let shared = empty.to_shared(WorkspaceId::new("workspace-1")).unwrap();
         assert!(
-            WorkspaceSnapshot::from_shared(
+            WorkspaceViewState::from_shared(
                 &shared,
                 &WorkspaceId::new("workspace-2"),
                 std::env::temp_dir()
@@ -225,7 +227,7 @@ mod tests {
             .is_err()
         );
         assert!(
-            WorkspaceSnapshot::from_shared(
+            WorkspaceViewState::from_shared(
                 &shared,
                 &WorkspaceId::new("workspace-1"),
                 std::env::temp_dir().join("a").join("..").join("b"),

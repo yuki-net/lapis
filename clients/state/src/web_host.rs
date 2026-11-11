@@ -12,7 +12,7 @@ use std::{
 };
 
 use crate::{
-    ConversationRecord, Project, WorkspaceDialog, WorkspaceSnapshot, WorkspaceStateRepository,
+    ConversationRecord, Project, WorkspaceDialog, WorkspaceStateRepository, WorkspaceViewState,
 };
 use client_api::{
     ClientKind, RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason,
@@ -706,10 +706,10 @@ impl WorkspaceDialog for WebBackend {
 }
 
 impl WorkspaceStateRepository for WebBackend {
-    fn load(&self) -> Result<Option<WorkspaceSnapshot>, WorkspaceError> {
+    fn load(&self) -> Result<Option<WorkspaceViewState>, WorkspaceError> {
         Ok(None)
     }
-    fn save(&self, _: &WorkspaceSnapshot) -> Result<(), WorkspaceError> {
+    fn save(&self, _: &WorkspaceViewState) -> Result<(), WorkspaceError> {
         Ok(())
     }
 }
@@ -728,7 +728,7 @@ fn workspace_from_shared(
     shared: &workbench::SharedWorkspaceView,
     expected: &WorkspaceId,
     root: PathBuf,
-) -> Result<crate::WorkspaceSnapshot, WorkspaceError> {
+) -> Result<crate::WorkspaceViewState, WorkspaceError> {
     if &shared.workspace_id != expected {
         return Err(WorkspaceError::new("Workspace IDが一致しません"));
     }
@@ -750,7 +750,7 @@ fn workspace_from_shared(
             draft_content: view.draft_content.clone(),
         })
         .collect();
-    Ok(crate::WorkspaceSnapshot {
+    Ok(crate::WorkspaceViewState {
         root: Some(root),
         open_documents: documents,
         active_path: shared
@@ -762,7 +762,7 @@ fn workspace_from_shared(
 }
 
 fn shared_workspace(
-    snapshot: &crate::WorkspaceSnapshot,
+    snapshot: &crate::WorkspaceViewState,
     workspace_id: WorkspaceId,
 ) -> Result<workbench::SharedWorkspaceView, WorkspaceError> {
     // wasmにはOSのpath意味論が無いため、絶対path検証を通さず同じ変換だけを行う。
@@ -825,7 +825,7 @@ pub fn restore_view() -> Option<workbench::ConversationViewState> {
 }
 
 /// 接続時に取得したHostのWorkbenchから、UIへ復元する文書状態を作る。
-pub fn restore_snapshot(root: PathBuf) -> Option<crate::WorkspaceSnapshot> {
+pub fn restore_snapshot(root: PathBuf) -> Option<crate::WorkspaceViewState> {
     BACKEND.with(|backend| {
         let backend = backend.borrow();
         let state = backend.as_ref()?;

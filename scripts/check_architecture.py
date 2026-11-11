@@ -127,10 +127,8 @@ DUPLICATE_TYPE_ALLOWLIST = {
     "OidcConfig": {"remote", "web-bridge"},
     "OidcError": {"remote", "web-bridge"},
     "Revision": {"document", "protocol"},
-    "StoredCredential": {"auth", "transport"},
     "TerminalSnapshot": {"protocol", "terminal"},
     "TerminalStatus": {"protocol", "terminal"},
-    "WorkspaceSnapshot": {"protocol", "state"},
 }
 
 PUBLIC_TYPE = re.compile(r"^pub (?:struct|enum|trait) ([A-Za-z_][A-Za-z0-9_]*)", re.M)

@@ -42,7 +42,7 @@ fn remap_own_view_references(
 pub struct ConversationRecord {
     pub id: ConversationId,
     pub title: String,
-    pub workspace: WorkspaceSnapshot,
+    pub workspace: WorkspaceViewState,
     pub view: ConversationViewState,
     pub selected_execution: Option<ExecutionId>,
     pub terminals: Vec<RestoredTerminal>,
@@ -51,7 +51,7 @@ pub struct ConversationRecord {
     #[serde(default)]
     pub source_role: SourceRole,
     #[serde(default)]
-    pub other_workspace: Option<WorkspaceSnapshot>,
+    pub other_workspace: Option<WorkspaceViewState>,
     #[serde(default)]
     pub other_terminals: Vec<RestoredTerminal>,
     #[serde(default)]
@@ -62,7 +62,7 @@ pub struct ConversationRecord {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TaskSourceState {
-    pub workspace: WorkspaceSnapshot,
+    pub workspace: WorkspaceViewState,
     pub terminals: Vec<RestoredTerminal>,
     pub selected_execution: Option<ExecutionId>,
 }
@@ -88,7 +88,7 @@ pub trait ConversationRepository: Send + Sync {
     fn publish_workbench(
         &self,
         _view: &ConversationViewState,
-        _workspace: &WorkspaceSnapshot,
+        _workspace: &WorkspaceViewState,
     ) -> Result<(), WorkspaceError> {
         Ok(())
     }
@@ -118,7 +118,7 @@ pub struct ConversationSession {
 }
 
 impl ConversationSession {
-    pub fn new(repository: Arc<dyn ConversationRepository>, initial: WorkspaceSnapshot) -> Self {
+    pub fn new(repository: Arc<dyn ConversationRepository>, initial: WorkspaceViewState) -> Self {
         let loaded = repository.load();
         let mut load_error = loaded.as_ref().err().map(ToString::to_string);
         let persisted = loaded.as_ref().cloned().unwrap_or_default();
@@ -936,7 +936,7 @@ impl ConversationSession {
                 .position(|source| source.workspace.root.as_deref() == Some(root.as_path()))
                 .map(|index| record.parked_sources.remove(index))
                 .unwrap_or_else(|| TaskSourceState {
-                    workspace: WorkspaceSnapshot {
+                    workspace: WorkspaceViewState {
                         root: Some(root),
                         ..Default::default()
                     },
@@ -981,7 +981,7 @@ impl ConversationSession {
             let next = record
                 .other_workspace
                 .take()
-                .unwrap_or_else(|| WorkspaceSnapshot {
+                .unwrap_or_else(|| WorkspaceViewState {
                     root: Some(root.clone()),
                     ..Default::default()
                 });

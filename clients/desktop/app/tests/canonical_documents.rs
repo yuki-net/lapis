@@ -38,7 +38,7 @@ fn relative_file_requests_follow_the_current_root_and_reject_a_stale_source() {
 fn deleted_workspace_keeps_recovered_drafts_in_an_untitled_document() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("deleted.md");
-    let snapshot = desktop_client::WorkspaceSnapshot {
+    let snapshot = desktop_client::WorkspaceViewState {
         root: Some(root.path().to_owned()),
         open_documents: vec![desktop_client::DocumentViewState {
             path,
@@ -166,9 +166,12 @@ fn shared_workbench_document_view_restores_another_client_without_losing_edits()
         .unwrap()
         .workspace
         .unwrap();
-    let local =
-        desktop_client::WorkspaceSnapshot::from_shared(&shared, &workspace, root.path().to_owned())
-            .unwrap();
+    let local = desktop_client::WorkspaceViewState::from_shared(
+        &shared,
+        &workspace,
+        root.path().to_owned(),
+    )
+    .unwrap();
     let mut second = make_editor();
     second.restore_snapshot(local).unwrap();
     assert_eq!(second.active_document_id(), Some(&id));
@@ -180,15 +183,17 @@ fn shared_workbench_document_view_restores_another_client_without_losing_edits()
 }
 
 #[derive(Default)]
-struct ViewStore(std::sync::Mutex<Option<desktop_client::WorkspaceSnapshot>>);
+struct ViewStore(std::sync::Mutex<Option<desktop_client::WorkspaceViewState>>);
 
 impl desktop_client::WorkspaceStateRepository for ViewStore {
-    fn load(&self) -> Result<Option<desktop_client::WorkspaceSnapshot>, workspace::WorkspaceError> {
+    fn load(
+        &self,
+    ) -> Result<Option<desktop_client::WorkspaceViewState>, workspace::WorkspaceError> {
         Ok(self.0.lock().unwrap().clone())
     }
     fn save(
         &self,
-        snapshot: &desktop_client::WorkspaceSnapshot,
+        snapshot: &desktop_client::WorkspaceViewState,
     ) -> Result<(), workspace::WorkspaceError> {
         *self.0.lock().unwrap() = Some(snapshot.clone());
         Ok(())
