@@ -3,6 +3,8 @@
 //! Web の接続情報と Desktop のワークスペースメニューで同じ内容を出すため、
 //! 整形だけをここに置き、表示先ごとの組み立てを持たない。
 
+use workspace::WorkspaceIdentity;
+
 /// Host URL から利用者へ見せる Host 名を取り出す。
 ///
 /// URL として解釈できない値でも、空白を除いた元の文字列を表示に使う。
@@ -34,11 +36,22 @@ pub fn host_label(host_name: Option<&str>, host_id: Option<&str>) -> String {
     format!("Host {name} ({id})")
 }
 
-/// Workspace 名と ID を表示する。名前が無い場合は ID を名前として使う。
+/// Workspace 名と ID を表示する。
+///
+/// 名前が無い、または ID と同じ場合は ID を一度だけ出す。
 pub fn workspace_label(workspace_name: Option<&str>, workspace_id: Option<&str>) -> String {
     let id = non_empty(workspace_id).unwrap_or("未選択");
-    let name = non_empty(workspace_name).unwrap_or(id);
-    format!("Workspace {name} ({id})")
+    match non_empty(workspace_name) {
+        Some(name) if name != id => format!("Workspace {name} ({id})"),
+        _ => format!("Workspace {id}"),
+    }
+}
+
+/// 接続中 Workspace の表示名。Host の identity だけを使う。
+///
+/// 切り替え候補の一覧は切り替え UI 専用であり、接続表示の名前解決には使わない。
+pub fn connected_workspace_name(identity: &WorkspaceIdentity) -> &str {
+    identity.display_name()
 }
 
 /// Web と Desktop で共通の接続情報表示。
@@ -113,7 +126,11 @@ mod tests {
         );
         assert_eq!(
             workspace_label(None, Some("workspace-1")),
-            "Workspace workspace-1 (workspace-1)"
+            "Workspace workspace-1"
+        );
+        assert_eq!(
+            workspace_label(Some("workspace-1"), Some("workspace-1")),
+            "Workspace workspace-1"
         );
         assert_eq!(
             connection_label(
@@ -123,6 +140,59 @@ mod tests {
                 Some("workspace-1")
             ),
             "Host my-host (host-1) / Workspace repo (workspace-1)"
+        );
+    }
+
+    #[test]
+    fn connected_name_does_not_depend_on_switch_candidates() {
+        let candidates = Vec::<WorkspaceIdentity>::new();
+        let identity = WorkspaceIdentity {
+            id: editor_core::WorkspaceId::new("workspace-1"),
+            name: "repo".to_owned(),
+            root_name: "checkout".to_owned(),
+        };
+        assert!(candidates.is_empty());
+        assert_eq!(connected_workspace_name(&identity), "repo");
+        assert_eq!(
+            workspace_label(
+                Some(connected_workspace_name(&identity)),
+                Some("workspace-1")
+            ),
+            "Workspace repo (workspace-1)"
+        );
+    }
+
+    #[test]
+    fn connected_name_falls_back_to_the_root_name_when_the_name_is_empty() {
+        let identity = WorkspaceIdentity {
+            id: editor_core::WorkspaceId::new("workspace-1"),
+            name: "  ".to_owned(),
+            root_name: "checkout".to_owned(),
+        };
+        assert_eq!(connected_workspace_name(&identity), "checkout");
+        assert_eq!(
+            workspace_label(
+                Some(connected_workspace_name(&identity)),
+                Some("workspace-1")
+            ),
+            "Workspace checkout (workspace-1)"
+        );
+    }
+
+    #[test]
+    fn missing_names_do_not_repeat_the_workspace_id() {
+        let identity = WorkspaceIdentity {
+            id: editor_core::WorkspaceId::new("workspace-1"),
+            name: String::new(),
+            root_name: String::new(),
+        };
+        assert_eq!(connected_workspace_name(&identity), "");
+        assert_eq!(
+            workspace_label(
+                Some(connected_workspace_name(&identity)),
+                Some("workspace-1")
+            ),
+            "Workspace workspace-1"
         );
     }
 

@@ -1,7 +1,12 @@
 use crate::BackendClient;
 use crate::client::Client;
-use ::workspace::{FileEntry, FileEntryKind, WorkspaceError, WorkspaceRepository};
-use client_api::{FileTreeKind, FileTreeRequest, RequestBody, ResponseBody, WorkspaceRelativePath};
+use ::workspace::{
+    FileEntry, FileEntryKind, WorkspaceError, WorkspaceIdentity, WorkspaceRepository,
+};
+use client_api::{
+    FileTreeKind, FileTreeRequest, RequestBody, ResponseBody, WorkspaceConnectRequest,
+    WorkspaceRelativePath,
+};
 use std::path::Path;
 
 pub(super) struct HostWorkspaces {
@@ -81,6 +86,26 @@ impl WorkspaceRepository for HostWorkspaces {
         let mut entries = Vec::new();
         Self::collect(&client, &root, None, 0, &mut entries)?;
         Ok(entries)
+    }
+
+    fn identity(&self, root: &Path) -> Result<Option<WorkspaceIdentity>, WorkspaceError> {
+        let root = self.host.normalize_path(root).map_err(problem)?;
+        let client = self.host.connect(&root).map_err(problem)?;
+        let response = client
+            .request(RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: client.workspace_id().clone(),
+            }))
+            .map_err(problem)?;
+        let identity = match response {
+            ResponseBody::WorkspaceConnect(response) => response.identity,
+            ResponseBody::Error(error) => return Err(problem(error.code.as_str())),
+            _ => return Err(problem("Unexpected workspace identity response")),
+        };
+        Ok(Some(WorkspaceIdentity {
+            id: editor_core::WorkspaceId::from(identity.workspace_id),
+            name: identity.name,
+            root_name: identity.root_name,
+        }))
     }
 }
 fn problem(error: impl std::fmt::Display) -> WorkspaceError {
