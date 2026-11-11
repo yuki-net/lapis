@@ -5,13 +5,18 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use serde::{Deserialize, Serialize};
+
 pub use text::{Position, TextRange};
 mod connection;
 pub use connection::{DocumentCache, DocumentConnection, DocumentSubscription};
 use text::{TextBuffer, TextEdit, TextError};
 
 /// Document内で単調増加する変更世代。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+///
+/// wire では u64 として透過する。上限では飽和し、dirty 状態を保持し続ける。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct Revision(u64);
 
 impl Revision {
@@ -22,7 +27,7 @@ impl Revision {
         self.0
     }
 
-    fn next(self) -> Self {
+    pub const fn next(self) -> Self {
         Self(self.0.saturating_add(1))
     }
 }

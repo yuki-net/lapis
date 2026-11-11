@@ -593,7 +593,7 @@ fn model_status(status: TerminalStatus) -> ModelTerminalStatus {
         TerminalStatus::Exited | TerminalStatus::Terminated => ModelTerminalStatus::Exited,
         TerminalStatus::Failed => ModelTerminalStatus::Failed,
         TerminalStatus::Disconnected => ModelTerminalStatus::Disconnected,
-        TerminalStatus::Starting | TerminalStatus::Running => ModelTerminalStatus::Running,
+        TerminalStatus::Running => ModelTerminalStatus::Running,
     }
 }
 

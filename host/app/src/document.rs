@@ -166,7 +166,7 @@ impl HostDocuments {
                 wire::DocumentEncoding::Utf16Le => Encoding::Utf16Le,
                 wire::DocumentEncoding::Utf16Be => Encoding::Utf16Be,
             },
-            Revision::new(snapshot.revision.value()),
+            Revision::new(snapshot.revision.number()),
             snapshot.dirty,
         );
         self.resources

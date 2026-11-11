@@ -13,7 +13,6 @@ pub use ::terminal::{
 #[serde(rename_all = "snake_case")]
 /// Terminal の実行状態。
 pub enum TerminalStatus {
-    Starting,
     Running,
     Exited,
     Terminated,

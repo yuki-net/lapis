@@ -2075,6 +2075,7 @@ name = "document"
 version = "0.1.0"
 dependencies = [
  "editor-core",
+ "serde",
  "text",
 ]
 

@@ -131,14 +131,14 @@ pub(super) fn document_from_snapshot(
             DocumentEncoding::Utf16Le => Encoding::Utf16Le,
             DocumentEncoding::Utf16Be => Encoding::Utf16Be,
         },
-        Revision::new(snapshot.revision.value()),
+        Revision::new(snapshot.revision.number()),
         snapshot.dirty,
     )
 }
 
 pub(super) fn model_terminal_status(status: WireTerminalStatus) -> TerminalStatus {
     match status {
-        WireTerminalStatus::Starting | WireTerminalStatus::Running => TerminalStatus::Running,
+        WireTerminalStatus::Running => TerminalStatus::Running,
         WireTerminalStatus::Exited | WireTerminalStatus::Terminated => TerminalStatus::Exited,
         WireTerminalStatus::Failed => TerminalStatus::Failed,
         WireTerminalStatus::Disconnected => TerminalStatus::Disconnected,
