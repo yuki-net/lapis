@@ -28,19 +28,21 @@ Webの開発サーバーとBridgeのTCPポートをSSHで転送し、ブラウ�
 
 **Tailscaleで直接つなぐ**
 
-Bridgeをtailnetへ公開する場合は、明示的に `--allow-remote` を付け、ブラウザーが使うOriginを指定します。
+Bridgeをtailnetへ公開する場合は、明示的に `--allow-remote` を付けます。`--listen` を省くと `0.0.0.0:4757` で待ち受けます。
 
 ```powershell
-cargo run -p web-bridge -- --listen 0.0.0.0:4757 --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://100.64.0.1:4747
+cargo run -p web-bridge -- --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der
 ```
 
-Webの開発サーバーもtailnetで待ち受けます。
+Webの開発サーバーもtailnetで待ち受けます。`--host` を付けると `0.0.0.0:4747` になります。
 
 ```powershell
-cargo run -p lapis-web -- --dev --listen 0.0.0.0:4747 --dist clients/web/dist
+cargo run -p lapis-web -- --dev --host --dist clients/web/dist
 ```
 
 ページは `http://TAILSCALE_IP:4747/` を開き、一覧またはログインフォームから Host URL（`ws://TAILSCALE_IP:4757/remote`）・Workspace ID・pairing token を入力します。接続後の URL は `/<host>/<workspace>` になります。token をリンクで渡す場合は `#/invite?url=<bridge URL>&workspace=<ID>&token=<token>` の fragment 形式を使います。
+
+bridge は Origin がリクエストの Host と同じホスト名なら許可します。別名で開く場合やプロキシを挟む場合だけ `--origin` を指定してください。
 
 `--allow-remote` を付けると、tailnet内の端末からページとBridgeへ到達できます。Origin検証は認証ではないため、Hostへの接続に必要なcredentialやpairing tokenとは別に、Tailscale ACLで到達端末を制限してください。Windowsファイアウォールで該当ポートの受信許可も必要です。
 

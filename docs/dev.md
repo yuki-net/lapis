@@ -95,6 +95,14 @@ Web はプロトコルが異なる3つの process に分かれます。Desktop �
 
 bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4757`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。
 
+外部公開は `--host`（ページ）と `--allow-remote`（bridge）で行います。
+
+- `lapis-web --host` は `0.0.0.0:4747` で待ち受けます。
+- `web-bridge --allow-remote` は `0.0.0.0:4757` で待ち受けます。`--listen` を併用した場合は明示したアドレスを使います。
+- Host を `0.0.0.0` で起動した場合、bridge は接続情報の `0.0.0.0` をこのマシン自身として `127.0.0.1` に読み替えます。
+- bridge は Origin がリクエストの Host と同じホスト名なら許可するため、IP やホスト名が変わっても同じページから接続できます。
+- `--origin` を指定した場合は、その Origin も追加で許可します。
+
 `4787` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
 
 ## Web の UI を確認する

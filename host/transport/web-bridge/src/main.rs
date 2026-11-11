@@ -25,6 +25,7 @@ const CONNECTION_LOG_INTERVAL: Duration = Duration::from_secs(10);
 const CONNECTION_POLL: Duration = Duration::from_millis(100);
 /// 開発時に `.run` から引数を消せるよう、待受とOriginに既定値を持たせる。
 const DEFAULT_LISTEN: &str = "127.0.0.1:4757";
+const DEFAULT_PORT: u16 = 4757;
 const DEFAULT_ORIGIN: &str = "http://127.0.0.1:4747";
 const LISTEN_ENV: &str = "LAPIS_WEB_BRIDGE_LISTEN";
 const ORIGIN_ENV: &str = "LAPIS_WEB_BRIDGE_ORIGIN";
@@ -77,20 +78,34 @@ impl Target {
             }),
             Self::Connection { path } => {
                 let connection = wire::read_connection(path)?;
-                if !connection.address.ip().is_loopback() {
+                // 0.0.0.0 で待ち受けた Host は「このマシン自身」を指す。
+                let address = local_connect_address(connection.address);
+                if !address.ip().is_loopback() {
                     return Err(format!(
                         "接続情報のHostがloopbackではありません ({})",
                         path.display()
                     ));
                 }
                 Ok(Resolved {
-                    host: connection.address,
+                    host: address,
                     server_name: connection.server_name,
                     certificate: connection.certificate,
                     workspace_id: Some(connection.workspace_id),
                 })
             }
         }
+    }
+}
+
+/// Host が 0.0.0.0 / [::] で待ち受けている場合に、このマシン自身へ接続する。
+fn local_connect_address(address: SocketAddr) -> SocketAddr {
+    if !address.ip().is_unspecified() {
+        return address;
+    }
+    if address.is_ipv4() {
+        SocketAddr::from(([127, 0, 0, 1], address.port()))
+    } else {
+        SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], address.port()))
     }
 }
 
@@ -138,11 +153,14 @@ impl Options {
                 _ => return Err("unknown option".into()),
             }
         }
-        let listen = listen
-            .or_else(|| setting(LISTEN_ENV))
-            .unwrap_or_else(|| DEFAULT_LISTEN.to_owned())
-            .parse::<SocketAddr>()
-            .map_err(|error| format!("invalid listen address: {error}"))?;
+        // --allow-remote だけ指定した場合は全インターフェースで待ち受ける。
+        let listen = match (listen.or_else(|| setting(LISTEN_ENV)), allow_remote) {
+            (Some(value), _) => value,
+            (None, true) => format!("0.0.0.0:{}", DEFAULT_PORT),
+            (None, false) => DEFAULT_LISTEN.to_owned(),
+        }
+        .parse::<SocketAddr>()
+        .map_err(|error| format!("invalid listen address: {error}"))?;
         if !listen.ip().is_loopback() && !allow_remote {
             return Err("non-loopback listen requires --allow-remote".into());
         }
@@ -298,16 +316,58 @@ fn open_url(origin: &str) -> String {
     format!("{}/", origin.trim_end_matches('/'))
 }
 
+/// Origin は設定値か、実際に接続された Host と同じホスト名なら許可する。
+///
+/// ページと bridge はポートが異なるため、ホスト名だけを比較する。
+/// IP やホスト名が変わっても、同じマシンから開いた WebSocket だけを許可する。
+fn origin_allowed(configured: &str, origin: Option<&str>, host: Option<&str>) -> bool {
+    let Some(origin) = origin else {
+        return false;
+    };
+    if origin.eq_ignore_ascii_case(configured) {
+        return true;
+    }
+    let Some(scheme_end) = origin.find("://") else {
+        return false;
+    };
+    let scheme = &origin[..scheme_end];
+    if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
+        return false;
+    }
+    let Some(host) = host.map(str::trim).filter(|host| !host.is_empty()) else {
+        return false;
+    };
+    if host.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let origin_host = authority_host(&origin[scheme_end + 3..]);
+    let request_host = authority_host(host);
+    !origin_host.is_empty()
+        && !request_host.is_empty()
+        && origin_host.eq_ignore_ascii_case(request_host)
+}
+
+/// `host:port` / `[ipv6]:port` からポートを除いたホスト名を返す。
+fn authority_host(authority: &str) -> &str {
+    let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
+    if let Some(rest) = authority.strip_prefix('[') {
+        return rest.split_once(']').map_or(rest, |(host, _)| host);
+    }
+    authority.split(':').next().unwrap_or(authority)
+}
+
 async fn upgrade(
     State(bridge): State<Bridge>,
     headers: HeaderMap,
     socket: WebSocketUpgrade,
 ) -> Response {
-    if headers
+    let origin = headers
         .get(axum::http::header::ORIGIN)
-        .and_then(|value| value.to_str().ok())
-        != Some(bridge.origin.as_str())
-    {
+        .and_then(|value| value.to_str().ok());
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|value| value.to_str().ok());
+    if !origin_allowed(&bridge.origin, origin, host) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let socket = socket.protocols([wire::REMOTE_WEBSOCKET_PROTOCOL]);
@@ -805,5 +865,63 @@ mod tests {
         drop(socket);
         host_task.await.unwrap();
         task.abort();
+    }
+
+    #[test]
+    fn allow_remote_without_listen_binds_all_interfaces() {
+        let options = Options::parse(
+            ["--allow-remote", "--connection-info", "connection.json"]
+                .into_iter()
+                .map(std::ffi::OsString::from),
+        )
+        .unwrap();
+        assert_eq!(options.listen.to_string(), "0.0.0.0:4757");
+    }
+
+    #[test]
+    fn unspecified_host_addresses_are_treated_as_this_machine() {
+        assert_eq!(
+            local_connect_address("0.0.0.0:4787".parse().unwrap()).to_string(),
+            "127.0.0.1:4787"
+        );
+        assert_eq!(
+            local_connect_address("[::]:4787".parse().unwrap()).to_string(),
+            "[::1]:4787"
+        );
+        assert_eq!(
+            local_connect_address("127.0.0.1:4787".parse().unwrap()).to_string(),
+            "127.0.0.1:4787"
+        );
+    }
+
+    #[test]
+    fn origin_is_allowed_when_it_matches_the_connected_host() {
+        assert!(origin_allowed(
+            "http://127.0.0.1:4747",
+            Some("http://127.0.0.1:4747"),
+            Some("100.64.1.2:4757")
+        ));
+        // ページと bridge はポートが違うため、ホスト名だけで比較する。
+        assert!(origin_allowed(
+            "http://127.0.0.1:4747",
+            Some("http://100.64.1.2:4747"),
+            Some("100.64.1.2:4757")
+        ));
+        assert!(origin_allowed(
+            "http://127.0.0.1:4747",
+            Some("https://lapis.example"),
+            Some("lapis.example:4757")
+        ));
+        assert!(!origin_allowed(
+            "http://127.0.0.1:4747",
+            Some("http://evil.example:4747"),
+            Some("100.64.1.2:4757")
+        ));
+        assert!(!origin_allowed("http://127.0.0.1:4747", None, Some("x")));
+        assert!(!origin_allowed(
+            "http://127.0.0.1:4747",
+            Some("ftp://100.64.1.2"),
+            Some("100.64.1.2:4757")
+        ));
     }
 }
