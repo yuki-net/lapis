@@ -2,7 +2,7 @@
 
 use std::{
     convert::Infallible,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -165,12 +165,60 @@ async fn run(options: Options) -> Result<(), Box<dyn std::error::Error>> {
 
     let listener = TcpListener::bind(options.listen).await?;
     let address = listener.local_addr()?;
-    eprintln!("open http://{address}/");
+    print_addresses(address);
     if options.dev {
         eprintln!("web: watching {}", WATCHED_DIRECTORIES.join(", "));
     }
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// 接続に使える候補 URL を表示する。
+///
+/// loopback 以外で待ち受けている場合は、同じ PC のほかに LAN / Tailscale の
+/// アドレスも出す。認証や到達制限は上位レイヤーの責務。
+fn print_addresses(address: SocketAddr) {
+    if address.ip().is_loopback() {
+        eprintln!("open http://{address}/");
+        return;
+    }
+    eprintln!("open http://127.0.0.1:{}/", address.port());
+    for (label, ip) in interface_addresses() {
+        eprintln!("{label} http://{ip}:{}/", address.port());
+    }
+}
+
+/// ループバック以外の IPv4 アドレスを、表示用ラベルと一緒に返す。
+fn interface_addresses() -> Vec<(&'static str, IpAddr)> {
+    let networks = sysinfo::Networks::new_with_refreshed_list();
+    let mut hosts: Vec<(&'static str, IpAddr)> = Vec::new();
+    for (name, network) in networks.list() {
+        for network in network.ip_networks() {
+            let IpAddr::V4(ip) = network.addr else {
+                continue;
+            };
+            if ip.is_loopback() || ip.is_link_local() || ip.is_unspecified() {
+                continue;
+            }
+            let label = if is_tailscale(name, ip) {
+                "tailscale"
+            } else {
+                "network"
+            };
+            if !hosts.iter().any(|(_, existing)| *existing == network.addr) {
+                hosts.push((label, network.addr));
+            }
+        }
+    }
+    // LAN を先に、Tailscale を後に並べる。
+    hosts.sort_by_key(|(label, ip)| (u8::from(*label == "tailscale"), *ip));
+    hosts
+}
+
+/// Tailscale の CGNAT 範囲（100.64.0.0/10）か、名前が Tailscale の NIC か。
+fn is_tailscale(interface: &str, ip: Ipv4Addr) -> bool {
+    interface.to_ascii_lowercase().contains("tailscale")
+        || (ip.octets()[0] == 100 && (64..128).contains(&ip.octets()[1]))
 }
 
 async fn index(State(state): State<AppState>) -> Response {
@@ -373,5 +421,14 @@ mod tests {
     fn host_flag_binds_all_interfaces_on_the_same_port() {
         let options = Options::parse(&["--host".to_owned()]).unwrap();
         assert_eq!(options.listen.to_string(), "0.0.0.0:4747");
+    }
+
+    #[test]
+    fn tailscale_addresses_are_labeled_separately() {
+        assert!(is_tailscale("Ethernet", Ipv4Addr::new(100, 64, 1, 2)));
+        assert!(is_tailscale("Tailscale", Ipv4Addr::new(192, 168, 1, 2)));
+        assert!(!is_tailscale("Ethernet", Ipv4Addr::new(192, 168, 1, 2)));
+        // 100.128.0.0/10 は CGNAT の範囲外。
+        assert!(!is_tailscale("Ethernet", Ipv4Addr::new(100, 128, 1, 2)));
     }
 }
