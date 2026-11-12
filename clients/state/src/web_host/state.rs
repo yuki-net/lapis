@@ -123,6 +123,10 @@ fn push_terminal_event(state: &mut TerminalState, event: TerminalEvent) {
         &event,
         TerminalEvent::Exited { .. } | TerminalEvent::Failed(_)
     );
+    // UI に届けた owner を覚え、再同期の snapshot と比較できるようにする。
+    if let TerminalEvent::Owner { owner } = &event {
+        state.owner = owner.clone();
+    }
     state.events.push(event);
 }
 
@@ -178,8 +182,36 @@ pub(crate) struct DocumentState {
 pub(crate) struct TerminalState {
     pub(crate) host: Option<ApiTerminalId>,
     pub(crate) snapshot: Option<TerminalSnapshot>,
+    /// UI 向けに最後に積んだ操作 Session。
+    /// 再同期の snapshot と比べ、変わった場合だけ通知するために保持する。
+    pub(crate) owner: Option<String>,
     pub(crate) events: Vec<TerminalEvent>,
     pub(crate) finished: bool,
+}
+
+/// owner を更新し、UI が最後に知った値と変わった場合だけ通知イベントを積む。
+pub(crate) fn set_terminal_owner(state: &mut TerminalState, owner: Option<String>) -> bool {
+    if state.owner == owner {
+        return false;
+    }
+    push_terminal_event(state, TerminalEvent::Owner { owner });
+    true
+}
+
+/// Host snapshot の owner を状態へ反映し、UI への通知が必要かを返す。
+///
+/// `discarded_owner` は、置き換え前の `events` に未 poll の Owner があったか。
+/// その場合は値が同じでも UI へ届いていないため、通知し直す。
+pub(crate) fn resync_terminal_owner(
+    state: &mut TerminalState,
+    owner: Option<String>,
+    discarded_owner: bool,
+) -> bool {
+    if !discarded_owner && state.owner == owner {
+        return false;
+    }
+    push_terminal_event(state, TerminalEvent::Owner { owner });
+    true
 }
 
 pub(crate) fn local_id(replica: &mut Replica) -> DocumentId {
@@ -230,6 +262,27 @@ pub(crate) fn model_terminal_snapshot(
         revision: snapshot.revision,
         screen: snapshot.screen.clone(),
     }
+}
+
+/// Host snapshot から、接続直後に使うローカル Terminal 状態を作る。
+pub(crate) fn terminal_state(local: &TerminalId, snapshot: &WireTerminalSnapshot) -> TerminalState {
+    let modeled = model_terminal_snapshot(local, snapshot);
+    let mut state = TerminalState {
+        host: Some(snapshot.terminal_id.clone()),
+        snapshot: Some(modeled.clone()),
+        owner: None,
+        events: vec![TerminalEvent::Snapshot(modeled)],
+        finished: false,
+    };
+    // 初期 snapshot の owner も UI が知る必要がある。
+    set_terminal_owner(
+        &mut state,
+        snapshot
+            .owner
+            .as_ref()
+            .map(|owner| owner.as_str().to_owned()),
+    );
+    state
 }
 
 pub(crate) fn diff_chars(previous: &str, next: &str) -> (u64, u64, String) {
@@ -292,6 +345,7 @@ mod tests {
             TerminalState {
                 host: None,
                 snapshot: None,
+                owner: None,
                 events: Vec::new(),
                 finished: false,
             },
@@ -349,6 +403,12 @@ mod tests {
             screen,
             owner: None,
         }
+    }
+
+    fn owned_wire_snapshot(revision: u64, text: &str, owner: &str) -> WireTerminalSnapshot {
+        let mut snapshot = wire_snapshot(revision, text);
+        snapshot.owner = Some(client_api::SessionId::try_new(owner.to_owned()).unwrap());
+        snapshot
     }
 
     #[test]
@@ -489,6 +549,7 @@ mod tests {
                 TerminalState {
                     host: None,
                     snapshot: None,
+                    owner: None,
                     events: Vec::new(),
                     finished: false,
                 },
@@ -579,5 +640,27 @@ mod tests {
                 .plain_text()
                 .starts_with("prompt$ ")
         );
+    }
+
+    #[test]
+    fn resync_restores_the_owner_that_the_pending_limit_dropped() {
+        let backend = Arc::new(WebLikeBackend::new());
+        let mut session = TerminalSession::new(backend.clone());
+        let local = session.start(Path::new("repo"), 80, 24).unwrap();
+        let host = host("terminal-1");
+        // 保留が上限に達して terminal.owner を取りこぼしたまま、対応付けだけが済む。
+        backend.apply_start_response(&local, host.clone(), local_snapshot(&local, 0, ""));
+        assert!(session.refresh().unwrap());
+        assert_eq!(session.owner(&local), None);
+
+        // delta 欠番で attach に入り、再同期 snapshot から owner を復元する。
+        backend.deliver(&host, TerminalEvent::Delta(delta(3, "prompt$ ")));
+        assert!(session.refresh().unwrap());
+        assert_eq!(backend.resync_requests(), 1);
+        backend.apply_host_snapshot(owned_wire_snapshot(3, "prompt$ ", "session-b"));
+
+        // 画面差分が無くても、owner の復元だけで反映する。
+        assert!(session.refresh().unwrap());
+        assert_eq!(session.owner(&local), Some("session-b"));
     }
 }

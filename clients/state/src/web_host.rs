@@ -47,8 +47,7 @@ pub use crate::web_replica::ROOT;
 
 use crate::web_cache::{CachedWorkspace, WorkspaceCache};
 use crate::web_replica::{
-    DocumentState, Replica, TerminalState, cache_of, local_id, model_terminal_snapshot,
-    versioned_workbench,
+    DocumentState, Replica, TerminalState, cache_of, local_id, terminal_state, versioned_workbench,
 };
 use crate::web_switch::{self, Command, Operation};
 use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
@@ -226,16 +225,8 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         for terminal in terminals {
             let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
             replica.next_terminal += 1;
-            let snapshot = model_terminal_snapshot(&local, &terminal);
-            replica.terminals.insert(
-                local.as_str().to_owned(),
-                TerminalState {
-                    host: Some(terminal.terminal_id.clone()),
-                    snapshot: Some(snapshot.clone()),
-                    events: vec![TerminalEvent::Snapshot(snapshot)],
-                    finished: false,
-                },
-            );
+            let state = terminal_state(&local, &terminal);
+            replica.terminals.insert(local.as_str().to_owned(), state);
         }
     }
     if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
@@ -462,16 +453,10 @@ async fn switch_workspace_inner(
     for terminal in terminals {
         let local = TerminalId::new(format!("web-terminal-{}", next_replica.next_terminal));
         next_replica.next_terminal += 1;
-        let snapshot = model_terminal_snapshot(&local, &terminal);
-        next_replica.terminals.insert(
-            local.as_str().to_owned(),
-            TerminalState {
-                host: Some(terminal.terminal_id.clone()),
-                snapshot: Some(snapshot.clone()),
-                events: vec![TerminalEvent::Snapshot(snapshot)],
-                finished: false,
-            },
-        );
+        let state = terminal_state(&local, &terminal);
+        next_replica
+            .terminals
+            .insert(local.as_str().to_owned(), state);
     }
     let replica = install_workspace(current, workspace, workspace_identity, next_replica, false)?;
     preload_workbench(connection, &replica, requested).await;
@@ -1603,6 +1588,7 @@ impl TerminalBackend for WebBackend {
                 TerminalState {
                     host: None,
                     snapshot: None,
+                    owner: None,
                     events: Vec::new(),
                     finished: false,
                 },
