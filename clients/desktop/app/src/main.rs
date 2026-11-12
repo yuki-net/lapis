@@ -1,4 +1,5 @@
 mod connection;
+mod web_access;
 mod workspace_dialog;
 
 use std::path::{Path, PathBuf};
@@ -235,7 +236,10 @@ fn main() {
         let local: Arc<dyn process::ProcessRegistry> = local_processes;
         Some(local)
     }))
-    .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
+    .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()))
+    // 設定の接続ページは表示のたびに候補を集める。保存値にしないことで、
+    // Tailscale の IP 変更のようにアドレスが変わっても現在の接続情報へ追随する。
+    .with_web_access(|| Some(web_access::local_web_access()));
     if let Some(connection) = connection_identity {
         desktop_services = desktop_services.with_connection_identity(connection);
     }

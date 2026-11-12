@@ -32,6 +32,23 @@ use workspace::WorkspaceSearchBackend;
 use crate::{DesktopServices, InitialView};
 
 thread_local! {
+    /// このページが接続した Host URL。設定の接続ページが読み取る。
+    static CONNECTED_HOST_URL: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// ブラウザーで開いているページと、接続した Host URL から接続情報を作る。
+fn web_access() -> Option<desktop_client::WebAccess> {
+    let page = web_sys::window()?.location().href().ok();
+    let host = CONNECTED_HOST_URL.with(|url| url.borrow().clone());
+    let workspace = desktop_client::web_host::connection_info().map(|info| info.workspace_id);
+    Some(desktop_client::WebAccess::from_urls(
+        page.as_deref(),
+        host.as_deref(),
+        workspace,
+    ))
+}
+
+thread_local! {
     static APPLICATION: RefCell<Option<gpui_preview::ApplicationHandle>> = const { RefCell::new(None) };
     static READY: Cell<bool> = const { Cell::new(false) };
 }
@@ -66,6 +83,8 @@ pub async fn start(
     if url.trim().is_empty() {
         return start_without_host(backend_preference);
     }
+    // 設定の接続ページは、このページ自身と接続した Host URL を表示する。
+    CONNECTED_HOST_URL.with(|current| *current.borrow_mut() = Some(url.clone()));
     let credential = desktop_client::web_host::connect(desktop_client::web_host::HostConfig {
         url,
         workspace: workspace.unwrap_or_default(),
@@ -254,6 +273,7 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
 
 fn launch_host(backend_preference: &str) -> Result<(), String> {
     let (session, services) = host_sessions()?;
+    let services = services.with_web_access(|| web_access());
     run(session, services, backend_preference);
     Ok(())
 }
