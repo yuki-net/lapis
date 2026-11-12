@@ -30,6 +30,48 @@ pub struct WorkspaceViewState {
 }
 
 impl WorkspaceViewState {
+    /// Session 共有用の view を作る。Client 固有の絶対 path と未保存内容は含めない。
+    pub fn to_shared_view(&self) -> Result<workbench::WorkspaceView, WorkspaceError> {
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
+        validate_root(root)?;
+        let relative =
+            |path: &std::path::Path| -> Result<workspace::WorkspaceRelativePath, WorkspaceError> {
+                let path = path
+                    .strip_prefix(root)
+                    .map_err(|_| WorkspaceError::new("Workspace外のpathは共有できません"))?;
+                workspace::WorkspaceRelativePath::from_path(path)
+                    .map_err(|error| WorkspaceError::new(error.to_string()))
+            };
+        let documents = self
+            .open_documents
+            .iter()
+            .map(|view| {
+                Ok(workbench::WorkspaceDocumentView {
+                    document_id: view.document_id.clone(),
+                    path: (!view.path.as_os_str().is_empty())
+                        .then(|| relative(&view.path))
+                        .transpose()?,
+                    cursor_char: u64::try_from(view.cursor_char)
+                        .map_err(|_| WorkspaceError::new("カーソル位置が範囲外です"))?,
+                    selection_start: u64::try_from(view.selection_start)
+                        .map_err(|_| WorkspaceError::new("選択位置が範囲外です"))?,
+                    selection_end: u64::try_from(view.selection_end)
+                        .map_err(|_| WorkspaceError::new("選択位置が範囲外です"))?,
+                    scroll_x: view.scroll_x,
+                    scroll_y: view.scroll_y,
+                })
+            })
+            .collect::<Result<Vec<_>, WorkspaceError>>()?;
+        Ok(workbench::WorkspaceView {
+            open_documents: documents,
+            active_path: self.active_path.as_deref().map(relative).transpose()?,
+            active_document_id: self.active_document_id.clone(),
+        })
+    }
+
     /// 既存のローカル保存値をHost共有用に変換する。失敗時も元の値は変更しない。
     pub fn to_shared(
         &self,

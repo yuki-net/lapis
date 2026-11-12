@@ -10,7 +10,7 @@ impl Render for SearchFeature {
             .flex()
             .flex_col()
             .gap_1()
-            .p_2()
+            .py_2()
             .child(self.query.clone())
             .child(self.message.clone());
         if self.query.is_empty() {

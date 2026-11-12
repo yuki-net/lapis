@@ -131,8 +131,13 @@ class TestPathRouting(unittest.TestCase):
         self.assertIn("repository", jobs_for_paths(["scripts/check.py"]))
 
     def test_release_tooling_runs_repository(self):
-        for path in ("scripts/release/cli.py", "release/trusted-keys.json"):
-            self.assertEqual(jobs_for_paths([path]), {"repository"}, path)
+        self.assertEqual(jobs_for_paths(["scripts/release/cli.py"]), {"repository"})
+
+    def test_release_registry_runs_desktop_because_the_launcher_embeds_it(self):
+        self.assertEqual(jobs_for_paths(["release/trusted-keys.json"]), {"repository", "desktop"})
+
+    def test_launcher_runs_desktop_and_rust_core(self):
+        self.assertEqual(jobs_for_paths(["clients/desktop/launcher/src/main.rs"]), {"desktop", "rust_core"})
 
     def test_ci_workflow_runs_repository(self):
         self.assertIn("repository", jobs_for_paths([".github/workflows/ci.yml"]))

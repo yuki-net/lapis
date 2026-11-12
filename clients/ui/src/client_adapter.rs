@@ -16,6 +16,60 @@ pub(crate) struct DocumentClient {
     pub git: std::sync::Arc<dyn git::GitConnection>,
     pub snapshot_sequence: u64,
     pub document_owners: std::collections::HashMap<DocumentId, u64>,
+    /// Workspace の view state 共有。Web 側の統合は別 PR のため Desktop だけで持つ。
+    #[cfg(not(target_family = "wasm"))]
+    session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
+    /// 最後に共有したタブ構成。カーソル移動だけでは共有を進めない。
+    #[cfg(not(target_family = "wasm"))]
+    session_view_signature: Option<(Vec<DocumentId>, Option<DocumentId>)>,
+    /// snapshot を取り込み済みの Workspace。未取り込みの間は送信しない。
+    #[cfg(not(target_family = "wasm"))]
+    session_view_ready: Option<WorkspaceId>,
+    #[cfg(not(target_family = "wasm"))]
+    session_view_sequence: u64,
+}
+
+impl DocumentClient {
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn new(
+        editor: EditorSession,
+        conversation: ConversationSession,
+        lsp: LspSession,
+        git: std::sync::Arc<dyn git::GitConnection>,
+        session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
+    ) -> Self {
+        Self {
+            editor,
+            conversation,
+            lsp,
+            edit_chain: EditChain::default(),
+            git,
+            snapshot_sequence: 0,
+            document_owners: Default::default(),
+            session_view,
+            session_view_signature: None,
+            session_view_ready: None,
+            session_view_sequence: 0,
+        }
+    }
+
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn new(
+        editor: EditorSession,
+        conversation: ConversationSession,
+        lsp: LspSession,
+        git: std::sync::Arc<dyn git::GitConnection>,
+    ) -> Self {
+        Self {
+            editor,
+            conversation,
+            lsp,
+            edit_chain: EditChain::default(),
+            git,
+            snapshot_sequence: 0,
+            document_owners: Default::default(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -85,6 +139,96 @@ impl DocumentClient {
             .restore_snapshot(snapshot)
             .map_err(|error| error.to_string())?;
         Ok(self.reconcile_snapshot())
+    }
+
+    /// Workspace を閉じたときに購読を解除する。以後の delta は適用しない。
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn close_session_view(&mut self) {
+        if let Some(sync) = &self.session_view {
+            sync.close();
+        }
+        self.session_view_ready = None;
+        self.session_view_signature = None;
+    }
+
+    /// 1 回だけ共有 view を取り込み、適用できた snapshot を返す。
+    ///
+    /// Workspace を開いていれば購読を開始し、snapshot を現在の WorkspaceViewState に
+    /// 適用する。UI はこれを worker で呼び、結果を Editor の snapshot として受け取る。
+    /// snapshot が空（まだ誰も共有していない）の場合も購読済みとして扱い、以後の
+    /// ローカル変更を共有へ送れるようにする。
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn apply_session_view(&mut self) -> Result<Option<ClientSnapshot>, String> {
+        let Some(sync) = &self.session_view else {
+            return Ok(None);
+        };
+        let Some(workspace) = self.editor.workspace_id().cloned() else {
+            sync.close();
+            self.session_view_ready = None;
+            return Ok(None);
+        };
+        sync.open(&workspace)?;
+        let applied = sync
+            .watch()
+            .take_if_changed(&workspace, self.session_view_sequence);
+        let Some((sequence, _, view)) = applied else {
+            if self.session_view_ready.as_ref() != Some(&workspace) {
+                self.session_view_ready = Some(workspace);
+                return Ok(Some(self.reconcile_snapshot()));
+            }
+            return Ok(None);
+        };
+        self.session_view_sequence = sequence;
+        // 未保存の文書は共有側で閉じられていても破棄しない。タブ構成だけを合わせ、
+        // 未保存内容は apply_shared_view が末尾のタブとして残す。
+        self.editor
+            .apply_shared_view(&view)
+            .map_err(|error| error.to_string())?;
+        // 適用した構成をそのまま送り返さない。
+        self.session_view_signature = Some(self.editor.tab_signature());
+        self.session_view_ready = Some(workspace);
+        Ok(Some(self.reconcile_snapshot()))
+    }
+
+    /// スリープ復帰などで snapshot を取り直してから共有 view を適用する。
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn resync_session_view(&mut self) -> Result<Option<ClientSnapshot>, String> {
+        if let Some(sync) = &self.session_view
+            && self.editor.workspace_id().is_some()
+        {
+            sync.resync()?;
+        }
+        self.apply_session_view()
+    }
+
+    /// 自分のタブ開閉とアクティブ文書を共有へ送る。
+    ///
+    /// 共有するのはタブの構成とアクティブ文書だけで、カーソル位置やスクロールは送らない。
+    /// 直前に適用した共有値と同じタブ構成なら送らないため、自分の更新が event として
+    /// 戻ってきても再送や再適用のループにならない。
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn publish_session_view(&mut self) -> Result<(), String> {
+        let Some(sync) = &self.session_view else {
+            return Ok(());
+        };
+        let Some(workspace) = self.editor.workspace_id() else {
+            return Ok(());
+        };
+        if self.session_view_ready.as_ref() != Some(workspace) {
+            return Ok(());
+        }
+        let signature = self.editor.tab_signature();
+        if self.session_view_signature.as_ref() == Some(&signature) {
+            return Ok(());
+        }
+        let view = self
+            .editor
+            .snapshot()
+            .to_shared_view()
+            .map_err(|error| error.to_string())?;
+        sync.publish(view)?;
+        self.session_view_signature = Some(signature);
+        Ok(())
     }
 
     /// close済みIDは、表示状態保存や正本再取得の結果から独立して返す。

@@ -3,8 +3,9 @@
 配布 package・署名付き manifest・インストール layout・データ世代の正本。
 利用者・運用者向けの手順は [リリース手順](../releases.md) を参照する。
 
-現時点では launcher と更新 UX は実装していない（Issue #298 の範囲外）。ここに書くのは
-生成・配置・検証の契約と、後から変更できない layout の決定である。
+現時点では launcher 本体までを実装している。アプリ側の更新確認・download・世代切替の
+同意画面（更新 UX）は未実装である。ここに書くのは生成・配置・検証の契約と、後から
+変更できない layout・launcher の起動前提の決定である。
 
 ## 経路は 1 本
 
@@ -22,8 +23,10 @@ package (zip) + manifest.json (+ Ed25519 署名)
 別の manifest や別の読み込み処理を作らない。実装は `scripts/release/` に集約し、
 `publish.py` が入り口（ローカル / Releases）だけを分岐させる。
 
-`scripts/release/` は生成・配置・検証の tool である。client 側の更新処理は同じ manifest
-schema と検証規則を使うが、launcher 本体と更新 UX はこの Issue では実装しない。
+`scripts/release/` は生成・配置・検証の tool である。launcher（`clients/desktop/launcher/`）
+は同じ manifest schema と検証規則を使い、staging 済み package の適用と本体の起動だけを行う。
+manifest の取得・download・更新の同意画面といった変わりうる処理はアプリ側に置き、
+launcher には置かない。
 
 ## manifest schema v1
 
@@ -84,7 +87,7 @@ manifest の他の項目から推測しない。
 ## インストール layout
 
 per-user 配置とし、管理者権限を要求しない。初回は package を置いて launcher を起動する
-形で、インストーラのウィザードを持たない。launcher 本体は別 Issue。
+形で、インストーラのウィザードを持たない。launcher は `clients/desktop/launcher/`。
 
 ```
 <install root>/
@@ -131,6 +134,32 @@ per-user 配置とし、管理者権限を要求しない。初回は package �
 - layout の定数は `scripts/release/layout.py` を正とする。launcher はここを import する
   代わりに同じ値を使うが、version の探索や保持数を独自に決めない。
 
+## launcher
+
+`lapis-launcher.exe` は起動時に staging の適用と本体の起動だけを行う。ネットワーク・
+manifest の解釈・更新モードの設定を持たず、変更のたびに再配布が要る処理を置かない。
+
+1. `<install root>/staging/<version>/` を新しい順に見て、適用できる最初の 1 つを
+   `versions/<version>/` へ入れる。署名・SHA-256・展開内容の照合は `install` と同じ規則で
+   行い、一致しなければ pointer を変えない。
+2. `current.json` の version にある `lapis{,.exe}` を、受け取った引数で起動する。
+
+- install root は `--install-root`、環境変数 `LAPIS_INSTALL_ROOT`、`~/.lapis` の順に決める。
+  `--install-root` は本体へ渡さない。
+- 更新の失敗・staging の不在・staging の破損・`breaking: true` の候補は、起動を妨げない。
+  適用しなかった staging は削除せず残し、pointer の version で起動する。適用できた
+  staging は同じ package を再度展開しないよう片付ける。
+- `breaking: true` の適用は同意を伴う操作であり、launcher では行わない。同意画面と
+  data 世代の切替はアプリ側の範囲とする。
+- pointer の version と同じか古い候補は適用しない。比較は semver で行い、解釈できない
+  形式では一致しない限り適用する。
+- pointer が無い・壊れている・指す先の manifest が version と一致しない場合は、pointer を
+  作り直さず起動を止める。復旧は `activate` か `install` の手順で行う。
+- 適用中の排他は `<install root>/.layout.lock` で `install` と同じく root 単位とする。
+  取得できなければ今回の適用を見送り、起動は続ける。
+- 信頼済み公開鍵 registry は launcher に埋め込む。鍵の追加・失効は launcher の再配布を
+  伴うが、配布物に含めた公開鍵を信頼の起点にはしない。
+
 ## データ世代
 
 - DB / data は `<install root>/data/<generation>/` に置き、世代番号で分ける。
@@ -167,4 +196,7 @@ per-user 配置とし、管理者権限を要求しない。初回は package �
   の内容と一致する）を verify でも確認できる状態に保つ。
 - `python scripts/check.py repository architecture` が `scripts/release/test_release.py` を
   含めて実行する。Ed25519 は RFC 8032 7.1 のテストベクタで固定する。
+- launcher は `cargo test -p lapis-launcher` で、`scripts.release` が生成・署名した fixture
+  配布物を検証する。Python 側の正規化 bytes・署名・layout の規則と Rust 実装が食い違うと
+  落ちる。fixture を更新するときは `scripts.release` で作り直す。
 - Release を実際に作る検証を行わない。GitHub 側は fake remote と runner に差し替える。

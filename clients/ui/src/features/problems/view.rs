@@ -6,7 +6,7 @@ impl Render for ProblemsFeature {
             .flex()
             .flex_col()
             .gap_1()
-            .p_2()
+            .py_2()
             .child(self.message.clone())
             .children(self.state.diagnostics.iter().take(100).map(|diagnostic| {
                 div().child(format!(

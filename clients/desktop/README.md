@@ -23,6 +23,7 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 ## ディレクトリの責務
 
 - `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
+- `launcher/` は起動時に staging 済みの更新を適用してから本体を起動します。manifest の取得・download・更新の同意画面は持ちません（[配布と更新の内部契約](../../docs/specs/release.md)）。
 - `../state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
 - Local Host は Web 等の端末 credential と失効状態を Host の状態ディレクトリに保存します。Desktop bootstrap 用の credential は起動ごとに生成し、端末用の保存対象から除きます。
@@ -32,6 +33,10 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。
 - UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。
+
+- 更新の適用は `launcher/` が行います。起動時に `staging/<version>/` の検証済み package を `versions/<version>/` へ入れ、`current.json` を進めてから本体を起動します。失敗しても起動を止めず、`current.json` の version で立ち上げます。`breaking: true` の適用（data 世代の切替）は同意を伴うためアプリ側の範囲です。
+- `launcher/` は GPUI を読み込まず、署名検証・zip 展開・pointer の読み書きだけを持ちます。更新の検出・download・更新モードの設定を launcher に足さないでください（launcher 自身の更新は手動になるため）。
+- 信頼済み公開鍵は `release/trusted-keys.json` を build 時に埋め込みます。鍵の追加・失効は launcher の再配布を伴います。
 
 ## OIDC ログイン
 
@@ -130,6 +135,16 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 - 通常のPanel面へのDropは既存PanelへTabを移動する。Tab Drag中のPanel追加先はZoneの成長方向の末端だけとし、上限到達時には候補を表示しない。
 - 境界の通常Dragはサイズ変更。最後のTabが移動したPanelは閉じ、Windowの一時的な縮小だけではPanelやResourceを閉じない。
 - 同じWindowGroup内のDocumentはWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は受理しない。
+
+## Workspace の view state 共有
+
+同じ Workspace を開いている別 Client と、開いているタブの構成とアクティブ文書を共有します。契約の正本は [Workspace の view state 共有](../../docs/specs/remote.md#workspace-の-view-state-共有) です。
+
+- Workspace を開くと購読し、snapshot を現在の表示へ適用します。Workspace を閉じたときと終了時は購読を解除し、以後の変更を受け取りません。
+- 自分のタブ開閉とアクティブ文書の変更は 150ms の debounce で Host へ送ります。適用した値と同じタブ構成は送り返しません。
+- ウィンドウが再びアクティブになったとき（スリープやバックグラウンドから復帰）は snapshot を取り直して再同期します。
+- 共有するのはタブ構成と文書の更新状況だけで、パネル寸法・カーソル位置・スクロールは送らず、適用もしません。未保存の文書は共有側で閉じられていてもタブとして残します。
+- 既存の Workbench 同期と Task 共有の挙動は変わりません。
 
 ## Task とWorkbench Mode
 

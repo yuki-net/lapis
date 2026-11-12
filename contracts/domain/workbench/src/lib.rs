@@ -7,6 +7,10 @@ use workspace::WorkspaceRelativePath;
 
 mod replica;
 pub use replica::{WorkbenchReplica, WorkbenchWritePlan};
+mod session;
+pub use session::{
+    SessionViewConnection, SessionViewEvent, SessionViewEvents, SessionViewSnapshot,
+};
 
 /// 表示状態の正本と、競合時に保持された現在値。
 pub enum WorkbenchUpdate {

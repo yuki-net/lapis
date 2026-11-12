@@ -17,6 +17,7 @@ pub use profile::{
 mod document;
 pub use client::BackendClient;
 mod features;
+mod session_view;
 mod terminal;
 mod web_publisher;
 mod workbench;
@@ -152,6 +153,11 @@ impl BackendHost {
     }
     pub fn documents(&self) -> Arc<dyn ::document::DocumentConnection> {
         BackendClient::from(self.clone()).documents()
+    }
+    /// Workspace の view state を Session 間で共有する接続。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn session_view(&self) -> Arc<dyn ::workbench::SessionViewConnection> {
+        BackendClient::from(self.clone()).session_view()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
         Self::start_inner(None)

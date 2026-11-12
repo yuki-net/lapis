@@ -941,13 +941,27 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         self.require_active_session(grant)
             .map_err(AccessError::Authentication)?;
         if let Some(workspace_id) = request.workspace_id() {
-            grant
-                .require_workspace(workspace_id)
-                .map_err(AccessError::Authorization)?;
+            // Workspace へ接続する要求だけは、`workspace.switch` を持つ Session に
+            // 限り別 Workspace を許す。切替後の権限確認はセッション側で行う。
+            let switching = matches!(request, RequestBody::WorkspaceConnect(_))
+                && grant.require_workspace_switch().is_ok();
+            if !switching {
+                grant
+                    .require_workspace(workspace_id)
+                    .map_err(AccessError::Authorization)?;
+            }
         }
         grant
             .require_request(request)
             .map_err(AccessError::Authorization)
+    }
+
+    /// 切替が成功した後に、Session の接続先を新しい Workspace へ確定する。
+    pub fn commit_workspace_switch(&mut self, session_id: &SessionId, workspace_id: &WorkspaceId) {
+        // OIDC Session は失効確認で Workspace を照合するため、切替先へ合わせる。
+        if let Some(SessionOwner::Oidc(session)) = self.sessions.get_mut(session_id) {
+            session.workspace_id = workspace_id.clone();
+        }
     }
 
     fn require_enabled(&self) -> Result<(), AuthError> {
@@ -1304,6 +1318,57 @@ mod tests {
         ));
         assert!(auth.revoke(user.id()));
         assert!(auth.require_active_session(&grant).is_err());
+    }
+
+    #[test]
+    fn workspace_switch_needs_both_the_capability_and_a_closed_attachment() {
+        let mut auth = setup();
+        let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+        let connect = CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap();
+        let requested = CapabilitySet::try_new([switch.clone(), connect]).unwrap();
+        auth.policy = AuthPolicy::new(requested.clone());
+        auth.enable();
+        let (client, workspace) = ids();
+        let other = WorkspaceId::try_new("workspace-2").unwrap();
+
+        // 切替権限が無い Session は、別 Workspace への connect を認可されない。
+        let normal = auth.begin_pairing(workspace.clone()).unwrap();
+        let normal = auth.complete_pairing(&normal, &client, &requested).unwrap();
+        let normal = auth.authenticate(&normal, &client, &workspace).unwrap();
+        assert!(matches!(
+            auth.authorize_request(
+                &normal,
+                &RequestBody::WorkspaceConnect(client_api::WorkspaceConnectRequest {
+                    workspace_id: other.clone(),
+                })
+            ),
+            Err(AccessError::Authorization(
+                AuthorizationError::WorkspaceDenied
+            ))
+        ));
+
+        // 切替権限があれば、connect 自体は別 Workspace でも認可される。
+        let user = auth.begin_user_session_pairing(workspace.clone()).unwrap();
+        let user = auth.complete_pairing(&user, &client, &requested).unwrap();
+        let grant = auth.authenticate(&user, &client, &workspace).unwrap();
+        let switching = RequestBody::WorkspaceConnect(client_api::WorkspaceConnectRequest {
+            workspace_id: other.clone(),
+        });
+        assert!(auth.authorize_request(&grant, &switching).is_ok());
+
+        // 切替権限があっても、connect 以外は接続中の Workspace に限定したまま。
+        assert!(matches!(
+            auth.authorize_request(
+                &grant,
+                &RequestBody::FileTree(client_api::FileTreeRequest {
+                    workspace_id: other.clone(),
+                    path: None,
+                })
+            ),
+            Err(AccessError::Authorization(
+                AuthorizationError::WorkspaceDenied
+            ))
+        ));
     }
 
     #[test]

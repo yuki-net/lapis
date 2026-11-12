@@ -100,6 +100,7 @@ Task Manager などの表示名には exe に埋め込んだ Windows リソー�
 | --- | --- |
 | `lapis.exe` | `Lapis` |
 | `lapis-host.exe` | `Lapis Host` |
+| `lapis-launcher.exe` | `Lapis Launcher` |
 | `lapis-web-bridge.exe` | `Lapis Web Bridge` |
 
 埋め込む経路は2つある。
@@ -121,3 +122,4 @@ dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` 
 | Web のビルド | `cd clients\web; npm run build` |
 | Host と bridge の結合 | `cargo build -p host -p web-bridge` → `python clients/web/wasm/tests/bridge_smoke.py` |
 | launcher と Hot Reload | `python -m unittest discover -s scripts -p test_dev_session.py` |
+| 更新 launcher の適用と起動 | `cargo test -p lapis-launcher` |

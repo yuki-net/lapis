@@ -91,6 +91,7 @@ ALLOWED = {
     "desktop_client": {"desktop_client", "models", "protocol", "client_core"},
     "desktop_persistence": {"desktop_persistence", "desktop_client", "models"},
     "desktop_entry": {"desktop_entry", "ui", "desktop_client", "desktop_persistence", "host", "runtime", "application", "infrastructure", "transport", "models", "protocol"},
+    "desktop_launcher": {"desktop_launcher"},
     "client": {"client", "models", "protocol", "client_core"},
     "client_core": {"client_core", "models", "protocol"},
 }
@@ -114,6 +115,7 @@ def layer(manifest, root):
         ("host/app/", "host"), ("clients/ui/", "ui"),
         ("clients/state/", "desktop_client"),
         ("clients/desktop/persistence/", "desktop_persistence"),
+        ("clients/desktop/launcher/", "desktop_launcher"),
         ("clients/desktop/app/", "desktop_entry"), ("clients/", "client"),
     ]:
         if relative.startswith(prefix):

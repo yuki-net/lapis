@@ -1192,6 +1192,11 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("python -m scripts.release publish", self.workflow)
         self.assertIn("--execute", self.workflow)
 
+    def test_launcher_is_packaged_with_the_desktop_and_host(self):
+        # launcher は package 内の `lapis.exe` を起動するため、同じ package に含める。
+        self.assertIn("-p lapis-launcher", self.workflow)
+        self.assertIn("Copy-Item target/release/lapis-launcher.exe $input", self.workflow)
+
     def test_both_checkouts_use_the_input_tag_revision(self):
         self.assertEqual(
             self.workflow.count(

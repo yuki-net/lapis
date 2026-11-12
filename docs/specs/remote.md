@@ -18,6 +18,9 @@
 - `server.rs`・`quic.rs` と `tls.rs`: Remoteが有効化されていなければlistenしません。WebSocketとQUICはTLS 1.3のみを許可し、TLS early dataを無効にしています。認証・認可・イベント配信は同じSession処理を使用します。
 - `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・許可capability・期限に結び付き、失効させると関連sessionも無効になります。`workspace.switch` を持たないcredentialはWorkspaceにも固定し、`workspace.switch` を持つcredentialは接続ごとにWorkspaceを選べます。Client bindingは維持します。Workspaceを指定しなかった場合は固定先、無ければHostが解決するprimary Workspaceを使います。未登録のWorkspace、固定先との不一致、期限切れ、別Hostのcredentialは区別したerror codeで拒否します。
 - `auth.rs`: 認証済みsessionの有効性と、requestが要求するWorkspace・capabilityを検証します。
+  `workspace.connect` だけは `workspace.switch` を持つ Session に限り接続中と別の Workspace を
+  指定できます。切替が成功した時点で Session の接続先を移し、以後の要求は移った先で認可します。
+  `workspace.close` は attachment と購読だけを解除し、Session は維持します。
 - 購読イベントを送る前にもsessionの失効・期限を確認します。失効したClientへ新しいDocumentやTerminalの内容を配信しません。
 - 購読イベントでも、内容の読取りにcapabilityを要するものは権限のないsessionへ渡しません。配信自体を止めるとevent連番が欠落してClientが切断するため、同じ連番のまま内容だけを伏せた通知にします。
 
@@ -84,7 +87,8 @@ Terminal は Host の `TerminalId`、その他の View は `ViewInstanceId` を�
 
 Workspace を開いている Client 間で、開いている Document とその表示位置を自動共有する。
 真実は Host が Workspace 単位で保持し、Client は参加時の snapshot を取り、以後の変更を
-delta として受け取る。protocol 0.13 で追加した契約で、Client 側の統合は別 PR とする。
+delta として受け取る。protocol 0.13 で追加した契約で、Desktop の統合は Issue #290 の
+PR2、Web の統合は別 PR で行う。
 
 - `workspace.view.subscribe` は共有へ参加し、`WorkspaceViewSnapshot`（`revision` と
   `Option<WorkspaceView>`）を返す。まだ誰も共有していない Workspace は `view` が `null`。
@@ -95,6 +99,8 @@ delta として受け取る。protocol 0.13 で追加した契約で、Client �
   これは差分計算の結果ではなく置き換えるべき最新値であり、Client は丸ごと適用する。
 - `workspace.view.unsubscribe` は共有から抜ける。Workspace を閉じた Session は
   `workspace.close` で attachment と購読を解除し、以後の delta を受け取らない。
+  `workspace.close` は Session を終了させない。同じ接続のまま `workspace.connect` で
+  再接続・切替できる。Session の終了は接続断と失効だけが行う。
 - 共有に参加している Session が無い間は `workspace.view_changed` を publish しない。
   誰も見ていない更新で workspace の event 連番を消費しないため。
 - Host は Workspace を閉じても最後に受理した view state を保持し、次に参加した Client へ
@@ -118,6 +124,17 @@ delta として受け取る。protocol 0.13 で追加した契約で、Client �
   (`ConversationViewState.layout`) がすでに共有しており、この契約はそれを置き換えない。
   `for_shared_workbench` がアクティブタブを共有から外す挙動も変えない。Client 統合では
   両者を合成して表示する。
+- Desktop は Workspace を開いた時点で購読し、snapshot を `WorkspaceViewState` に適用して
+  以後の delta も反映する。Workspace を閉じたときと終了時に購読を解除する。
+- Desktop が共有へ送るのは開いているタブの並びとアクティブ文書だけで、カーソル位置・
+  選択・スクロールとパネル寸法は送らない。送信は 150ms の debounce を挟み、直前に
+  適用したタブ構成と同じ間は再送しない。
+- Desktop はウィンドウが再びアクティブになったとき（スリープ復帰やバックグラウンド復帰）
+  に snapshot を取り直して再同期する。受信の異常や event の欠落時も snapshot へ戻る。
+- 共有 view の適用ではタブの並びと選択中の文書だけを変更し、既に開いている文書の内容は
+  置き換えない。共有側で閉じられた未保存の文書は、データ損失を避けるためタブとして残す。
+- 共有するのはタブ構成と文書の更新状況だけで、レイアウト寸法やレスポンシブな状態は
+  各端末に委ねる（Issue #290 のコメント）。
 
 ## Terminal の同期契約
 

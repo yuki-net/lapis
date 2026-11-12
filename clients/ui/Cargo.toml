@@ -40,6 +40,8 @@ tracing-subscriber.workspace = true
 
 [dev-dependencies]
 gpui = { workspace = true, features = ["test-support"] }
+# 同梱フォントの family 名・グリフ被覆・等幅性を検証する。
+ttf-parser = "0.25"
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 gpui.workspace = true

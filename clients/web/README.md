@@ -41,6 +41,15 @@ OIDC が設定された Host では「OIDC でログイン」から IdP のロ�
 - Git、LSP、Search、Task は未接続です。
 - Host のイベント購読は Terminal のみで、他の Client の文書変更はこちらから操作したときに再取得されます。
 
+## フォント
+
+Web の GPUI は空の fontdb から起動し、ブラウザーや OS のフォントを引けません。使えるのは `clients/ui` が同梱して読み込むフォントだけです。
+
+- UI テキストは `clients/ui/assets/IBMPlexSans-*.ttf`。
+- Terminal は罫線・ブロック要素・点字を等幅で描く必要があるため、`clients/ui/assets/CascadiaMono-*.ttf` を同梱し、`clients/ui/src/bundled_font.rs` で読み込みます。Desktop (Windows) の既定と同じ family です。
+
+ブラウザーや OS のフォントに頼る chain は Web では成立しません。`monospace` のような総称名は解決できず、読み込んだ UI フォントへ落ちて等幅でなくなり、罫線・ブロック要素が豆腐 (□) になります。そのため Web の Terminal の family は同梱フォントへ固定します。同梱フォントが family 名・グリフ被覆・等幅性を満たすことは `clients/ui` のテストで検証します。
+
 ## 開発
 
 ```powershell

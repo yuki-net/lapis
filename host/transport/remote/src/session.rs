@@ -7,8 +7,8 @@ use std::{
 use client_api::{
     CREDENTIAL_EXPIRED, CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, HOST_MISMATCH, HelloResponse,
     INTERNAL, INVALID_REQUEST, PROTOCOL_ERROR, ProtocolError, ProtocolRange, RATE_LIMITED,
-    RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope, UNAUTHORIZED, WORKSPACE_MISMATCH,
-    WORKSPACE_UNAVAILABLE,
+    RequestBody, RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope, UNAUTHORIZED,
+    WORKSPACE_MISMATCH, WORKSPACE_UNAVAILABLE,
 };
 
 use crate::{
@@ -291,6 +291,12 @@ impl ConnectionSession {
             .grant
             .as_ref()
             .expect("authenticated branch must contain a grant");
+        // 接続中の Workspace 以外へ移る要求だけを切替として扱う。同じ Workspace への
+        // 接続し直しは切替権限を要さない。
+        let switching = matches!(
+            &request.body,
+            RequestBody::WorkspaceConnect(connect) if &connect.workspace_id != grant.workspace_id()
+        );
         let access = auth
             .lock()
             .map_err(|_| AccessError::Authentication(AuthError::CredentialUnavailable))
@@ -298,6 +304,7 @@ impl ConnectionSession {
         if let Err(error) = access {
             return access_rejected(&request, error);
         }
+        let grant = grant.clone();
 
         let response = match tokio::time::timeout(
             request_timeout,
@@ -311,9 +318,11 @@ impl ConnectionSession {
                 if let ResponseBody::Error(error) = &mut response.body {
                     error.retryable = true;
                 }
+                // Workspace 切替は runtime に適用済みか判別できない。grant を古いまま
+                // 使い続けると attachment と食い違うため、Session を閉じて再認証させる。
                 return SessionReply {
                     message: ServerMessage::Response(response),
-                    close: false,
+                    close: switching,
                 };
             }
         };
@@ -322,6 +331,16 @@ impl ConnectionSession {
                 message: ServerMessage::Response(error_response(&request, INTERNAL)),
                 close: false,
             };
+        }
+        // 切替が成功した場合だけ、以後の要求を新しい Workspace で認可する。
+        if switching
+            && matches!(response.body, ResponseBody::WorkspaceConnect(_))
+            && let RequestBody::WorkspaceConnect(connect) = &request.body
+        {
+            self.grant = Some(grant.with_workspace(connect.workspace_id.clone()));
+            if let Ok(mut auth) = auth.lock() {
+                auth.commit_workspace_switch(grant.session_id(), &connect.workspace_id);
+            }
         }
         SessionReply {
             message: ServerMessage::Response(response),
@@ -657,6 +676,60 @@ mod tests {
                 ServerMessage::Authenticated(_)
             ));
             reconnected.disconnect(&auth, &ListHandler);
+        });
+    }
+
+    #[test]
+    fn timed_out_workspace_switch_closes_the_session() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let switch = CapabilityId::try_new(capability::WORKSPACES_SWITCH).unwrap();
+            let connect = CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap();
+            let config = AuthConfig::new(
+                PairingLifetime::new(Duration::from_secs(30).as_secs()).unwrap(),
+                CredentialLifetime::new(Duration::from_secs(300).as_secs()).unwrap(),
+            );
+            let capabilities = CapabilitySet::try_new([switch, connect]).unwrap();
+            let mut auth = RemoteAuth::system(config, AuthPolicy::new(capabilities.clone()));
+            auth.enable();
+            let auth = Arc::new(Mutex::new(auth));
+            let workspace = WorkspaceId::try_new("workspace-1").unwrap();
+            let mut identity = hello();
+            identity.requested_capabilities = capabilities;
+            let token = auth
+                .lock()
+                .unwrap()
+                .begin_user_session_pairing(workspace)
+                .unwrap();
+            let mut session = ConnectionSession::new();
+            session
+                .receive(
+                    ClientMessage::Pair(PairRequest::new(identity, token.secret_bytes())),
+                    &auth,
+                    &ListHandler,
+                    Duration::from_secs(1),
+                )
+                .await;
+
+            let reply = session
+                .receive(
+                    ClientMessage::Request(RequestEnvelope {
+                        request_id: RequestId::try_new("switch").unwrap(),
+                        body: RequestBody::WorkspaceConnect(client_api::WorkspaceConnectRequest {
+                            workspace_id: WorkspaceId::try_new("workspace-2").unwrap(),
+                        }),
+                    }),
+                    &auth,
+                    &PendingHandler,
+                    Duration::from_millis(1),
+                )
+                .await;
+            // 切替の適用有無を判別できないため、grant を古いまま使い続けず接続を閉じる。
+            assert!(reply.close);
+            session.disconnect(&auth, &PendingHandler);
         });
     }
 
