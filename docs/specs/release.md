@@ -42,9 +42,9 @@ schema と検証規則を使うが、launcher 本体と更新 UX はこの Issue
 | `signature` | string | base64。下記の署名対象に Ed25519 署名した 64 byte |
 
 `assets.<platform>.source` は manifest と同じ directory からの相対パスとする。schema v1 は
-`https://` の asset 取得を実装していないため、URL を許可しない（生成・検証の両方で
-明示的に拒否する）。相対パスは manifest の隣にだけ解決し、`..`・絶対パス・backslash を
-拒否する。`sha256` は小文字 16 進 64 桁。
+`https://` の asset 取得を実装していないため URL を許可しない。`build` は常に package の
+file 名（相対パス）だけを書き、検証側も URL を明示的に拒否する。相対パスは manifest の隣に
+だけ解決し、`..`・絶対パス・backslash を拒否する。`sha256` は小文字 16 進 64 桁。
 
 `breaking` は「通常の version up で済むか」「data 世代を上げるか」の判断にだけ使う。
 manifest の他の項目から推測しない。
