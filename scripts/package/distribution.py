@@ -427,6 +427,13 @@ class ReleaseSource(DistributionSource):
         return self._local.read_manifest()
 
     def read(self, reference: str) -> bytes:
+        # manifest は Release 上の絶対 URL を指すため、download 済みの同名ファイルを優先する。
+        # tag と URL がずれていても、その Release から落とした asset だけを対象にする。
+        name = Path(urllib.parse.urlparse(reference).path).name
+        if name:
+            downloaded = Path(self._directory.name) / name
+            if downloaded.is_file():
+                return downloaded.read_bytes()
         return self._local.read(reference)
 
 

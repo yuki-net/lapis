@@ -355,6 +355,16 @@ class WorkflowTests(unittest.TestCase):
                 tool.packages_from_arguments([], [])
 
 
+    def test_release_source_reads_the_downloaded_asset_by_name(self):
+        """manifest が絶対 URL でも、Release から落とした同じ名前の asset を使う。"""
+        source = tool.ReleaseSource("v0.1.0")
+        self.addCleanup(source.close)
+        Path(source._directory.name, "lapis-0.1.0-windows-x86_64.zip").write_bytes(b"zip")
+        self.assertEqual(
+            source.read("https://example.invalid/lapis-0.1.0-windows-x86_64.zip"), b"zip"
+        )
+
+
 class CliTests(unittest.TestCase):
     def test_publish_and_verify_round_trip_from_command_line(self):
         with tempfile.TemporaryDirectory() as directory:

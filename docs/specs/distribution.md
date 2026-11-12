@@ -20,7 +20,7 @@ package の生成、manifest の署名、asset の SHA-256・size 検証は共�
 | --- | --- |
 | フォルダ | `--root local:<directory>` |
 | 静的配置 | `--root url:<base-url>` |
-| GitHub Releases | `--root release:<tag>` |
+| GitHub Releases | `--root release:<tag>`（`gh release download` で取得） |
 
 manifest は取得元を基準に相対パスを解決するため、同じフォルダをそのまま静的配置へ置けます。GitHub Releases では manifest と asset が同じ tag に入るので、相対パスでも解決します。
 
