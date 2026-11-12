@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import stat
 import sys
 from pathlib import Path
 
@@ -30,8 +29,6 @@ def generate(key_id: str, destination: Path) -> str:
     """seed を生成して destination に書き、公開鍵の base64 を返す。"""
     if not key_id:
         raise SigningKeyError("key_id が空")
-    if destination.exists():
-        raise SigningKeyError(f"鍵 file が既にある: {destination}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     seed = os.urandom(32)
     payload = {
@@ -40,13 +37,24 @@ def generate(key_id: str, destination: Path) -> str:
         "algorithm": "ed25519",
         "seed": base64.b64encode(seed).decode("ascii"),
     }
-    destination.write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    body = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    # 作成時点で 0600 を適用し、既存 file は上書きしない。umask に左右されないよう
+    # その後に chmod も行い、失敗は握りつぶさず呼び出し元へ返す。
     try:
-        destination.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-        pass
+        descriptor = os.open(
+            destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+    except FileExistsError as error:
+        raise SigningKeyError(f"鍵 file が既にある: {destination}") from error
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(destination, 0o600)
+    except BaseException:
+        destination.unlink(missing_ok=True)
+        raise
     return base64.b64encode(ed25519.public_key(seed)).decode("ascii")
 
 
@@ -114,6 +122,8 @@ def load_trusted_keys(path: Path) -> dict[str, str]:
             raise ManifestError(f"{key_id} の公開鍵が base64 でない: {error}") from error
         if len(raw) != 32:
             raise ManifestError(f"{key_id} の公開鍵は 32 byte")
+        if not ed25519.is_usable_public_key(raw):
+            raise ManifestError(f"{key_id} の公開鍵が恒等元・小位数点")
     return dict(keys)
 
 

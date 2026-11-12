@@ -11,6 +11,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -90,12 +91,34 @@ class Ed25519Tests(unittest.TestCase):
     def test_rejects_tampered_signature_and_bad_lengths(self):
         seed = bytes(range(32))
         public = ed25519.public_key(seed)
-        signature = bytearray(ed25519.sign(seed, b"payload"))
-        signature[0] ^= 1
-        self.assertFalse(ed25519.verify(public, b"payload", bytes(signature)))
-        self.assertFalse(ed25519.verify(public, b"other", bytes(signature)))
+        signature = ed25519.sign(seed, b"payload")
+        tampered = bytearray(signature)
+        tampered[0] ^= 1
+        self.assertFalse(ed25519.verify(public, b"payload", bytes(tampered)))
+        # 署名を変えず、message だけを変えた拒否ケース。
+        self.assertFalse(ed25519.verify(public, b"other", signature))
         self.assertFalse(ed25519.verify(public[:31], b"payload", signature))
         self.assertFalse(ed25519.verify(public, b"payload", signature[:63]))
+
+    def test_rejects_identity_and_small_order_public_keys(self):
+        for name, encoded in (
+            ("identity", b"\x01" + bytes(31)),
+            ("order-2", (ed25519.P - 1).to_bytes(32, "little")),
+        ):
+            with self.subTest(point=name):
+                self.assertFalse(ed25519.is_usable_public_key(encoded))
+                # R に同じ点、s=0 を置いた署名。両辺が恒等元・小位数点で一致してしまう。
+                forged = encoded + bytes(32)
+                self.assertFalse(ed25519.verify(encoded, b"any message", forged))
+                self.assertFalse(ed25519.verify(encoded, b"", forged))
+
+    def test_rejects_signature_whose_r_is_a_small_order_point(self):
+        public = ed25519.public_key(bytes(range(32)))
+        forged = b"\x01" + bytes(31) + bytes(32)
+        self.assertFalse(ed25519.verify(public, b"payload", forged))
+
+    def test_usable_public_key_accepts_a_real_key(self):
+        self.assertTrue(ed25519.is_usable_public_key(ed25519.public_key(bytes(32))))
 
 
 class ManifestTests(TempDirTest):
@@ -142,7 +165,16 @@ class ManifestTests(TempDirTest):
         self.assertTrue(parsed.breaking)
 
     def test_notes_url_must_be_a_url(self):
-        for notes in ("", "not a url", "/relative/path", "https://ok/../x"):
+        for notes in (
+            "",
+            "not a url",
+            "/relative/path",
+            "https://ok/../x",
+            "https://",
+            "http://",
+            "https:///path",
+            "ftp://example.invalid/x",
+        ):
             with self.subTest(notes=notes):
                 with self.assertRaises(manifest.ManifestError):
                     manifest.build(
@@ -154,6 +186,18 @@ class ManifestTests(TempDirTest):
                         generated_at="2026-11-12T00:00:00Z",
                         signing_key=bytes(32),
                     )
+
+    def test_schema_true_is_not_accepted_as_one(self):
+        result, _ = self.build_manifest()
+        result["schema"] = True
+        with self.assertRaises(manifest.ManifestError):
+            manifest.parse(manifest.dump(result))
+        result["schema"] = "1"
+        with self.assertRaises(manifest.ManifestError):
+            manifest.parse(manifest.dump(result))
+        result["schema"] = 2
+        with self.assertRaises(manifest.ManifestError):
+            manifest.parse(manifest.dump(result))
 
     def test_unknown_field_is_rejected(self):
         result, trusted = self.build_manifest()
@@ -177,14 +221,20 @@ class ManifestTests(TempDirTest):
         with self.assertRaises(manifest.ManifestError):
             manifest.verify_signature(result, {})
 
-    def test_asset_source_cannot_escape_manifest_directory(self):
-        for source in ("../lapis.zip", "/etc/passwd", "a\\b.zip", "https://ok/x.zip"):
+    def test_asset_source_is_a_relative_path_only(self):
+        for source in (
+            "../lapis.zip",
+            "/etc/passwd",
+            "a\\b.zip",
+            "https://ok/x.zip",
+            "http://ok/x.zip",
+            "C:/x.zip",
+            "",
+        ):
             with self.subTest(source=source):
-                if source.startswith("https://"):
-                    manifest.validate_source(source)
-                    continue
                 with self.assertRaises(manifest.ManifestError):
                     manifest.validate_source(source)
+        manifest.validate_source("lapis-0.2.0-windows-x86_64.zip")
 
     def test_package_sha256_mismatch_is_rejected(self):
         result, trusted = self.build_manifest()
@@ -218,6 +268,22 @@ class PackageTests(TempDirTest):
         empty.mkdir()
         with self.assertRaises(package.PackageError):
             package.build(empty, self.root / "empty.zip")
+
+    def test_reserved_root_names_are_rejected_when_building(self):
+        for reserved in (MANIFEST_NAME, layout.POINTER_NAME):
+            with self.subTest(reserved=reserved):
+                payload = self.root / f"reserved-{reserved}"
+                (payload / "bin").mkdir(parents=True)
+                (payload / "bin" / "lapis.exe").write_bytes(b"exe")
+                (payload / reserved).write_bytes(b"{}")
+                with self.assertRaises(package.PackageError):
+                    package.build(payload, self.root / "reserved.zip")
+        # 予約名は root 直下だけが対象。sub directory の同名 file は許す。
+        payload = self.root / "nested"
+        (payload / "bin").mkdir(parents=True)
+        (payload / "bin" / MANIFEST_NAME).write_bytes(b"{}")
+        archive = package.build(payload, self.root / "nested.zip")
+        self.assertTrue(archive.is_file())
 
     def test_package_name_rejects_path_elements(self):
         self.assertEqual(
@@ -377,6 +443,54 @@ class PublishTests(TempDirTest):
                         remote=self.FakeRemote(),
                     )
 
+    def test_execute_requires_tag_to_match_manifest_version(self):
+        artifacts, _ = self.artifacts()
+        uploads = []
+        for execute in (False, True):
+            with self.subTest(execute=execute):
+                with self.assertRaises(publish.PublishError):
+                    publish.publish_github_releases(
+                        artifacts,
+                        tag="v0.3.0",
+                        repo="example/lapis",
+                        remote=self.FakeRemote(),
+                        execute=execute,
+                        runner=uploads.append,
+                    )
+        # 不一致なら remote を読まず、upload もしない。
+        self.assertEqual(uploads, [])
+
+    def test_github_remote_reports_tag_and_release(self):
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "abc\trefs/tags/v0.2.0\n", "")
+
+        remote = publish.GhRemote("example/lapis")
+        with patch.object(publish.subprocess, "run", side_effect=fake_run):
+            self.assertTrue(remote.tag_exists("v0.2.0"))
+            self.assertTrue(remote.release_exists("v0.2.0"))
+        ls_remote = calls[0]
+        self.assertEqual(ls_remote[:3], ["git", "ls-remote", "--tags"])
+        # `owner/repo` の slug を Git にそのまま渡さない。
+        self.assertEqual(ls_remote[-2], "https://github.com/example/lapis")
+        self.assertEqual(ls_remote[-1], "refs/tags/v0.2.0")
+        self.assertIn("--repo", calls[1])
+        self.assertEqual(calls[1][calls[1].index("--repo") + 1], "example/lapis")
+
+    def test_github_remote_keeps_an_explicit_url(self):
+        for repo in ("https://github.com/example/lapis", "git@github.com:example/lapis"):
+            with self.subTest(repo=repo):
+                remote = publish.GhRemote(repo)
+                with patch.object(
+                    publish.subprocess,
+                    "run",
+                    return_value=subprocess.CompletedProcess([], 1, "", ""),
+                ) as run:
+                    self.assertFalse(remote.tag_exists("v0.2.0"))
+                self.assertEqual(run.call_args.args[0][-2], repo)
+
 
 class LayoutTests(TempDirTest):
     def distribution(self, version, breaking=False):
@@ -406,6 +520,29 @@ class LayoutTests(TempDirTest):
             ),
             0,
         )
+        return out, keys.load_trusted_keys(trusted)
+
+    def multi_platform_distribution(self, version):
+        key_path, trusted = self.key_file()
+        platforms = {}
+        for platform in ("linux-x86_64", "windows-x86_64"):
+            payload = self.root / f"payload-{platform}-{version}"
+            (payload / "bin").mkdir(parents=True)
+            (payload / "bin" / "lapis.exe").write_bytes(f"{platform}/{version}".encode())
+            platforms[platform] = payload
+        out = self.root / f"dist-multi-{version}"
+        arguments = ["build", "--version", version, "--out", str(out)]
+        for platform, payload in platforms.items():
+            arguments += ["--platform", f"{platform}={payload}"]
+        arguments += [
+            "--notes-url",
+            f"https://example.invalid/releases/v{version}",
+            "--key",
+            str(key_path),
+            "--generated-at",
+            "2026-11-12T00:00:00Z",
+        ]
+        self.assertEqual(self.run_cli(arguments), 0)
         return out, keys.load_trusted_keys(trusted)
 
     def test_two_versions_install_and_keep_previous(self):
@@ -558,6 +695,139 @@ class LayoutTests(TempDirTest):
             layout.activate(root, "0.9.0", platform="windows-x86_64", trusted_keys=trusted)
         self.assertEqual(layout.read_pointer(root), "0.2.0")
 
+    def test_install_keeps_every_platform_package_in_the_manifest(self):
+        root = self.root / "install"
+        distribution, trusted = self.multi_platform_distribution("0.2.0")
+        layout.install(
+            root,
+            distribution,
+            version="0.2.0",
+            platform="windows-x86_64",
+            trusted_keys=trusted,
+        )
+        installed = layout.version_dir(root, "0.2.0")
+        self.assertEqual(
+            sorted(path.name for path in installed.glob("*.zip")),
+            [
+                "lapis-0.2.0-linux-x86_64.zip",
+                "lapis-0.2.0-windows-x86_64.zip",
+            ],
+        )
+        # install 直後に全 package を要求する検証が通る。
+        self.assertEqual(verify.verify_install(root, trusted).version, "0.2.0")
+        # 展開済みなのは install で選んだ platform だけ。他 platform の activate は拒否する。
+        layout.activate(root, "0.2.0", platform="windows-x86_64", trusted_keys=trusted)
+        with self.assertRaises(layout.LayoutError):
+            layout.activate(
+                root, "0.2.0", platform="linux-x86_64", trusted_keys=trusted
+            )
+
+    def test_replace_keeps_the_previous_generation(self):
+        root = self.root / "install"
+        first, trusted = self.distribution("0.2.0")
+        second, _ = self.distribution("0.3.0")
+        layout.install(
+            root, first, version="0.2.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        layout.install(
+            root, second, version="0.3.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        # 現行 0.3.0 を入れ直しても、復旧先の 0.2.0 を削除しない。
+        layout.install(
+            root,
+            second,
+            version="0.3.0",
+            platform="windows-x86_64",
+            trusted_keys=trusted,
+            replace=True,
+        )
+        self.assertEqual(
+            sorted(path.name for path in layout.versions_dir(root).iterdir()),
+            ["0.2.0", "0.3.0"],
+        )
+        self.assertEqual(layout.read_pointer(root), "0.3.0")
+
+    def test_install_rejects_a_swapped_package_after_verification(self):
+        root = self.root / "install"
+        distribution, trusted = self.distribution("0.2.0")
+        archive = distribution / "lapis-0.2.0-windows-x86_64.zip"
+        original = archive.read_bytes()
+        # 最初の検証は差し替え前の package で通し、staged への複写中に元を差し替える。
+        real_copy = layout.shutil.copyfile
+        calls = []
+
+        def swapped_copy(source, destination, *args, **kwargs):
+            if not calls:
+                archive.write_bytes(original + b"tamper")
+            calls.append(source)
+            return real_copy(source, destination, *args, **kwargs)
+
+        with patch.object(layout.shutil, "copyfile", side_effect=swapped_copy):
+            with self.assertRaises(manifest.ManifestError):
+                layout.install(
+                    root,
+                    distribution,
+                    version="0.2.0",
+                    platform="windows-x86_64",
+                    trusted_keys=trusted,
+                )
+        self.assertIsNone(layout.read_pointer(root))
+        self.assertFalse(layout.version_dir(root, "0.2.0").exists())
+        # 失敗した staged を残さない。
+        self.assertEqual(
+            [path.name for path in layout.versions_dir(root).iterdir()], []
+        )
+
+    def test_activate_rejects_tampered_extracted_file(self):
+        root = self.root / "install"
+        first, trusted = self.distribution("0.2.0")
+        second, _ = self.distribution("0.3.0")
+        layout.install(
+            root, first, version="0.2.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        layout.install(
+            root, second, version="0.3.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        target = layout.version_dir(root, "0.2.0") / "bin" / "lapis.exe"
+        self.assertTrue(target.is_file())
+        target.write_bytes(b"tampered")
+        with self.assertRaises(layout.LayoutError):
+            layout.activate(root, "0.2.0", platform="windows-x86_64", trusted_keys=trusted)
+        self.assertEqual(layout.read_pointer(root), "0.3.0")
+        # 展開済み file を消しただけでも復旧先にしない。
+        target.unlink()
+        with self.assertRaises(layout.LayoutError):
+            layout.activate(root, "0.2.0", platform="windows-x86_64", trusted_keys=trusted)
+        self.assertEqual(layout.read_pointer(root), "0.3.0")
+
+    def test_verify_install_detects_tampered_extracted_file(self):
+        root = self.root / "install"
+        distribution, trusted = self.distribution("0.2.0")
+        layout.install(
+            root, distribution, version="0.2.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        (layout.version_dir(root, "0.2.0") / "bin" / "lapis.exe").write_bytes(b"tampered")
+        with self.assertRaises(layout.LayoutError):
+            verify.verify_install(root, trusted)
+        # 余分な file も package の内容と一致しないので拒否する。
+        (layout.version_dir(root, "0.2.0") / "extra.bin").write_bytes(b"extra")
+        with self.assertRaises(layout.LayoutError):
+            verify.verify_install(root, trusted)
+
+    def test_activate_recovers_a_corrupt_pointer(self):
+        root = self.root / "install"
+        distribution, trusted = self.distribution("0.2.0")
+        layout.install(
+            root, distribution, version="0.2.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        layout.pointer_path(root).write_text("{not json", encoding="utf-8")
+        with self.assertRaises(layout.LayoutError):
+            layout.read_pointer(root)
+        # pointer が壊れていても、検証できる version があれば activate で復旧できる。
+        layout.activate(root, "0.2.0", platform="windows-x86_64", trusted_keys=trusted)
+        self.assertEqual(layout.read_pointer(root), "0.2.0")
+        self.assertEqual(verify.verify_install(root, trusted).version, "0.2.0")
+
     def test_pointer_and_data_generation_are_separate_from_credentials(self):
         root = self.root / "install"
         self.assertEqual(layout.data_dir(root, "1"), root / "data" / "1")
@@ -590,6 +860,39 @@ class LayoutTests(TempDirTest):
                     handle.writestr(name, b"{}")
                 with self.assertRaises(layout.LayoutError):
                     layout._extract(archive, target)
+
+    def test_zip_member_with_backslash_is_rejected_before_normalization(self):
+        import zipfile
+
+        target = self.root / "extract"
+        target.mkdir()
+        archive = self.root / "backslash.zip"
+        with zipfile.ZipFile(archive, "w") as handle:
+            handle.writestr("foo/bar.txt", b"x")
+        # zipfile は member 名を `/` に正規化して読むため、元の名前の `\` を書き込む。
+        data = archive.read_bytes().replace(b"foo/bar.txt", b"foo\\bar.txt")
+        archive.write_bytes(data)
+        with zipfile.ZipFile(archive) as handle:
+            self.assertEqual(handle.infolist()[0].filename, "foo/bar.txt")
+            self.assertEqual(handle.infolist()[0].orig_filename, "foo\\bar.txt")
+        with self.assertRaises(layout.LayoutError):
+            layout._extract(archive, target)
+        self.assertFalse((target / "foo").exists())
+
+    def test_duplicate_member_names_are_rejected(self):
+        import warnings
+        import zipfile
+
+        target = self.root / "extract"
+        target.mkdir()
+        archive = self.root / "duplicate.zip"
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with zipfile.ZipFile(archive, "w") as handle:
+                handle.writestr("a.txt", b"1")
+                handle.writestr("a.txt", b"2")
+        with self.assertRaises(layout.LayoutError):
+            layout._extract(archive, target)
 
     def test_corrupt_pointer_is_not_silently_ignored(self):
         root = self.root / "install"
@@ -716,6 +1019,36 @@ class EndToEndTests(TempDirTest):
             )
         self.assertEqual(layout.read_pointer(self.root / "install"), "0.2.0")
 
+    def test_build_removes_its_temporary_directory(self):
+        key_path, _ = self.key_file()
+        payload = self._payload("0.2.0")
+        created = []
+        real_temporary_directory = tempfile.TemporaryDirectory
+
+        def tracking(*args, **kwargs):
+            handle = real_temporary_directory(*args, **kwargs)
+            created.append(Path(handle.name))
+            return handle
+
+        arguments = [
+            "build", "--version", "0.2.0",
+            "--platform", f"windows-x86_64={payload}",
+            "--out", str(self.root / "dist"),
+            "--notes-url", "https://example.invalid/releases/v0.2.0",
+            "--key", str(key_path),
+        ]
+        with patch.object(cli.tempfile, "TemporaryDirectory", side_effect=tracking):
+            self.assertEqual(self.run_cli(arguments), 0)
+            # scope 内で失敗しても一時 directory を残さない。
+            failing = list(arguments)
+            failing[failing.index("--notes-url") + 1] = "not a url"
+            failing[failing.index("--out") + 1] = str(self.root / "failed")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(self.run_cli(failing), 1)
+        self.assertEqual(len(created), 2)
+        for path in created:
+            self.assertFalse(path.exists(), path)
+
     def test_publish_cli_never_creates_a_release(self):
         key_path, trusted_path = self.key_file()
         payload = self._payload("0.2.0")
@@ -780,6 +1113,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("python -m scripts.release publish", self.workflow)
         self.assertIn("--execute", self.workflow)
 
+    def test_both_checkouts_use_the_input_tag_revision(self):
+        self.assertEqual(
+            self.workflow.count(
+                "ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}"
+            ),
+            2,
+        )
+        self.assertEqual(self.workflow.count("persist-credentials: false"), 2)
+
     def test_existing_workflows_still_gate_on_repository_checks(self):
         ci = (
             Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
@@ -804,6 +1146,49 @@ class SigningKeyTests(TempDirTest):
         keys.generate("test-key", path)
         with self.assertRaises(keys.SigningKeyError):
             keys.generate("test-key", path)
+
+    def test_key_file_is_created_private_and_exclusive(self):
+        path = self.root / "key.json"
+        keys.generate("test-key", path)
+        if os.name != "nt":
+            mode = path.stat().st_mode & 0o777
+            self.assertEqual(mode, 0o600)
+        # 既存 file を上書きしない（O_EXCL）。内容も変わらない。
+        before = path.read_bytes()
+        with self.assertRaises(keys.SigningKeyError):
+            keys.generate("test-key", path)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_key_permission_failure_is_not_swallowed(self):
+        path = self.root / "key.json"
+        with patch.object(keys.os, "chmod", side_effect=OSError("denied")):
+            with self.assertRaises(OSError):
+                keys.generate("test-key", path)
+        # 権限を保証できない file は残さない。
+        self.assertFalse(path.exists())
+        with self.assertRaises(keys.SigningKeyError):
+            keys.load_signing_key(str(path))
+
+    def test_trusted_registry_rejects_identity_and_small_order_keys(self):
+        for name, encoded in (
+            ("identity", b"\x01" + bytes(31)),
+            ("order-2", (ed25519.P - 1).to_bytes(32, "little")),
+        ):
+            with self.subTest(point=name):
+                registry = self.root / f"trusted-{name}.json"
+                registry.write_text(
+                    json.dumps(
+                        {
+                            "schema": 1,
+                            "keys": {
+                                "k": base64.b64encode(encoded).decode("ascii")
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.assertRaises(manifest.ManifestError):
+                    keys.load_trusted_keys(registry)
 
     def test_key_file_rejects_unknown_fields_and_bad_profiles(self):
         path = self.root / "key.json"

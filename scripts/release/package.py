@@ -11,6 +11,8 @@ import stat
 import zipfile
 from pathlib import Path
 
+from .layout import RESERVED_ROOT_NAMES
+
 FIXED_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 EXECUTABLE_SUFFIXES = {".exe", ".cmd", ".bat", ".sh", ""}
 NAME_PATTERN = re.compile(r"^[a-z0-9]+([._-][a-z0-9]+)*$")
@@ -32,7 +34,11 @@ def package_name(name: str, version: str, platform: str) -> str:
 
 
 def collect(input_dir: Path) -> list[Path]:
-    """input_dir 配下の通常 file を相対パス順で返す。"""
+    """input_dir 配下の通常 file を相対パス順で返す。
+
+    layout が予約している root 名（`current.json`、`manifest.json`）は含めない。
+    install 時に初めて失敗するのを避け、生成時点で拒否する。
+    """
     if not input_dir.is_dir():
         raise PackageError(f"入力 directory が無い: {input_dir}")
     files = []
@@ -40,6 +46,9 @@ def collect(input_dir: Path) -> list[Path]:
         if path.is_symlink():
             raise PackageError(f"symlink は package に含めない: {path}")
         if path.is_file():
+            relative = path.relative_to(input_dir).as_posix()
+            if relative.split("/")[0] in RESERVED_ROOT_NAMES:
+                raise PackageError(f"入力に layout の予約名がある: {relative!r}")
             files.append(path)
     if not files:
         raise PackageError(f"入力 directory が空: {input_dir}")

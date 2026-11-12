@@ -40,32 +40,33 @@ def _platforms(values: list[str]) -> dict[str, Path]:
 
 def build(args) -> int:
     key_id, seed = keys.load_signing_key(args.key)
-    work = Path(tempfile.mkdtemp(prefix="lapis-package-"))
-    packages = {}
-    for platform, directory in _platforms(args.platform).items():
-        packages[platform] = package.build(
-            directory,
-            work / package.package_name(args.name, args.version, platform),
-        )
-    generated_at = args.generated_at or dt.datetime.now(dt.timezone.utc).replace(
-        microsecond=0
-    ).isoformat().replace("+00:00", "Z")
-    manifest = manifest_module.build(
-        version=args.version,
-        packages=packages,
-        notes_url=args.notes_url,
-        breaking=args.breaking,
-        key_id=key_id,
-        generated_at=generated_at,
-        signing_key=seed,
-    )
     out = Path(args.out)
     if out.exists() and any(out.iterdir()):
         raise SystemExit(f"出力先が空でない: {out}")
-    out.mkdir(parents=True, exist_ok=True)
-    for result in packages.values():
-        (out / result.name).write_bytes(result.read_bytes())
-    (out / publish.MANIFEST_NAME).write_bytes(manifest_module.dump(manifest))
+    generated_at = args.generated_at or dt.datetime.now(dt.timezone.utc).replace(
+        microsecond=0
+    ).isoformat().replace("+00:00", "Z")
+    # 一時 directory には package の写しが残るため、成功・失敗のどちらでも消す。
+    with tempfile.TemporaryDirectory(prefix="lapis-package-") as work:
+        packages = {}
+        for platform, directory in _platforms(args.platform).items():
+            packages[platform] = package.build(
+                directory,
+                Path(work) / package.package_name(args.name, args.version, platform),
+            )
+        manifest = manifest_module.build(
+            version=args.version,
+            packages=packages,
+            notes_url=args.notes_url,
+            breaking=args.breaking,
+            key_id=key_id,
+            generated_at=generated_at,
+            signing_key=seed,
+        )
+        out.mkdir(parents=True, exist_ok=True)
+        for result in packages.values():
+            (out / result.name).write_bytes(result.read_bytes())
+        (out / publish.MANIFEST_NAME).write_bytes(manifest_module.dump(manifest))
     print(f"生成: {out}")
     for path in sorted(out.iterdir()):
         print(f"  {path.name}")

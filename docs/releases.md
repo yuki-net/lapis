@@ -62,7 +62,8 @@ python -m scripts.release publish --source dist --local /path/to/public/releases
 
 `dist/` と同じ形式（manifest + zip）がそのまま複写される。静的サーバーの場合は、この
 directory をそのまま公開する。`manifest.json` の `assets.<platform>.source` は相対パスの
-ままなので、manifest と同じ directory に package が並んでいる必要がある。
+ままで、manifest と同じ directory に package が並んでいる必要がある。schema v1 は
+`https://` の source を許可しない（未対応として生成・検証の両方で拒否する）。
 
 ### GitHub Releases
 
@@ -77,7 +78,9 @@ python -m scripts.release publish --source dist --github --tag v0.2.0 --execute
 ```
 
 `--execute` は remote に tag と Release が既にあることを確認してから
-`gh release upload --clobber` を実行する。どちらかが無ければ失敗する。
+`gh release upload --clobber` を実行する。どちらかが無ければ失敗する。tag は
+`v<manifest の version>` と一致していなければならない（別 version の成果物を既存
+Release へ上書きしない）。
 
 CI では tag を push すると `.github/workflows/release.yml` が Release を作成・更新する。
 初回の Release 作成は workflow から `--create` を付けて行うが、CLI は `gh release create`
@@ -94,11 +97,14 @@ python -m scripts.release install \
 ```
 
 `~/.lapis/versions/0.2.0/` に展開し、`~/.lapis/current.json` を 0.2.0 に更新する。
-現行 + 前版の 2 世代だけを残す。検証は次で行う。
+manifest が参照する全 platform の package も一緒に保存する。現行 + 前版の 2 世代だけを残す。
+検証は次で行う。
 
 ```sh
 python -m scripts.release verify --source ~/.lapis
 ```
+
+`verify` は保存済み ZIP に加えて、展開済みの実行 file も ZIP の内容と照合する。
 
 ## 5. 手動復旧
 
@@ -118,7 +124,8 @@ python -m scripts.release verify --source ~/.lapis
 4. 戻す方法を選ぶ。
 
    **前版の `versions/<version>/` が無事に残っている場合**は、再取得せず pointer だけを
-   戻す。`versions/<version>/` の manifest と package を検証してから pointer を書き換える。
+   戻す。`versions/<version>/` の manifest と package に加えて展開済み file も検証してから
+   pointer を書き換える。
 
    ```sh
    python -m scripts.release activate --root ~/.lapis --version 0.2.0 --platform windows-x86_64
@@ -137,14 +144,35 @@ python -m scripts.release verify --source ~/.lapis
    `install` は署名と SHA-256 を検証してから展開する。検証に失敗した package は
    pointer を書き換えない。同じ version が既にある場合は `--replace` を明示したときだけ
    入れ直す（検証と展開が終わってから置き換え、失敗時は元の directory を残す）。
-5. launcher を起動し、`current.json` の version で起動することを確認する。
+   同じ version を入れ直しても、前版の directory は保持数の範囲で残る。
+5. 復旧後の状態を確認する。launcher は未実装（[配布と更新の内部契約](specs/release.md)）
+   なので、現時点では次の 2 つで確認する。
+
+   ```sh
+   python -m scripts.release verify --source ~/.lapis
+   cat ~/.lapis/current.json
+   ```
+
+   期待する version が `current.json` にあり、`verify` が成功すれば復旧できている。
+   launcher の実装後は、launcher が `current.json` の version で起動することまで確認する
+   （将来この手順に追加する）。
 6. 壊れた version の directory は、原因確認が済むまで `versions/` の外へ退避して残す。
    保持数の整理は directory 名と manifest の `version` が一致するものだけを対象にするため、
    `0.3.0.broken` のような名前は自動削除されない。`data/` と `credentials/` はこの操作では
    触らない。
 
-`current.json` が壊れて JSON として読めない場合、`verify` は失敗する。`current.json` を
-手で書き換えず、正しい version を `install` で入れ直す。`current.json` を削除すると
+`current.json` が壊れて JSON として読めない場合、`verify` も `install` も
+`read_pointer` の失敗で停止する（破損を勝手に作り直さない）。検証できる version が
+`versions/` に残っているなら、`current.json` を手で書き換えずに `activate` で復旧する。
+
+```sh
+python -m scripts.release activate --root ~/.lapis --version 0.2.0 --platform windows-x86_64
+```
+
+`activate` は pointer を読まずに書き直すため、破損した `current.json` でも通る。ただし
+対象 version の manifest・package・展開済み file が検証できる場合だけ成功する。検証できる
+version が 1 つも残っていない場合は `activate` では復旧できないので、原因を確認したうえで
+`current.json` を削除または修正し、`install` で入れ直す。`current.json` を削除すると
 未導入状態として扱われ、`versions/` は残るが起動先が無くなる。
 
 ## 6. やってはいけないこと

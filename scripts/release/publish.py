@@ -44,6 +44,12 @@ class Remote(Protocol):
 class GhRemote:
     repo: str
 
+    def _git_url(self) -> str:
+        """`git ls-remote` に渡す URL。`owner/repo` の slug は Git が解決できない。"""
+        if "://" in self.repo or self.repo.startswith("git@"):
+            return self.repo
+        return f"https://github.com/{self.repo}"
+
     def release_exists(self, tag: str) -> bool:
         result = subprocess.run(
             ["gh", "release", "view", tag, "--repo", self.repo, "--json", "tagName"],
@@ -55,7 +61,14 @@ class GhRemote:
 
     def tag_exists(self, tag: str) -> bool:
         result = subprocess.run(
-            ["git", "ls-remote", "--tags", "--exit-code", self.repo, f"refs/tags/{tag}"],
+            [
+                "git",
+                "ls-remote",
+                "--tags",
+                "--exit-code",
+                self._git_url(),
+                f"refs/tags/{tag}",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -74,14 +87,20 @@ class Artifacts:
     directory: Path
     trusted_keys: dict[str, str]
 
-    def files(self) -> list[Path]:
-        """署名と SHA-256 を検証してから、配置する file を返す。"""
+    def verified(self):
+        """署名と SHA-256 を検証し、(manifest, payload) を返す。"""
         manifest_path = self.directory / MANIFEST_NAME
         if not manifest_path.is_file():
             raise PublishError(f"manifest が無い: {manifest_path}")
         raw = manifest_path.read_bytes()
         parsed, payload = manifest_module.parse(raw)
         manifest_module.verify_signature(payload, self.trusted_keys)
+        return parsed, payload
+
+    def verified_files(self):
+        """署名と SHA-256 を検証し、(manifest, 配置する file の一覧) を返す。"""
+        manifest_path = self.directory / MANIFEST_NAME
+        parsed, payload = self.verified()
         files = [manifest_path]
         for asset in parsed.assets.values():
             files.append(
@@ -89,6 +108,11 @@ class Artifacts:
                     parsed, payload, asset.platform, self.directory
                 )
             )
+        return parsed, files
+
+    def files(self) -> list[Path]:
+        """署名と SHA-256 を検証してから、配置する file を返す。"""
+        _, files = self.verified_files()
         return files
 
 
@@ -156,11 +180,18 @@ def publish_github_releases(
     `execute=True` では tag の存在を必須にする。Release が無い場合、`allow_create`
     が False なら失敗する。tag 駆動の CI だけが `allow_create=True` を渡し、既存 tag に
     対して `gh release create --verify-tag` を 1 回だけ実行する。tag 自体はどちらの
-    経路でも作成しない。
+    経路でも作成しない。tag は manifest の version と一致することを dry-run でも
+    確認する。別 version の成果物を既存 Release へ上書きしないためである。
     """
     if not tag.startswith("v") or len(tag) < 2 or ".." in tag:
         raise PublishError(f"tag は v で始まる version のみ: {tag!r}")
-    files = artifacts.files()
+    parsed, files = artifacts.verified_files()
+    # 公開先と配布物の対応を remote 操作の前に確認する。`--clobber` で別 version の
+    # 成果物を既存 tag の Release へ上書きしないため。
+    if tag != f"v{parsed.version}":
+        raise PublishError(
+            f"tag ({tag}) と manifest の version ({parsed.version}) が一致しない"
+        )
     if not execute:
         # dry-run では remote を読まないため、既存 Release があるか分からない。
         # どのみち実行しないので、作成を伴わない upload の形だけを示す。

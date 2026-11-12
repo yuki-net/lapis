@@ -50,6 +50,19 @@ def _point_equal(p, q) -> bool:
     )
 
 
+def _is_identity(point) -> bool:
+    return point[0] % P == 0 and (point[1] - point[2]) % P == 0
+
+
+def _has_small_order(point) -> bool:
+    """位数が 8 以下の点か。恒等元を含む。
+
+    Ed25519 の群の位数は 8L で、小位数点は位数 1/2/4/8 のいずれかである。8 倍して
+    恒等元になる点を公開鍵や `R` に使うと、s=0 などで任意の message が通る。
+    """
+    return _is_identity(_point_mul(8, point))
+
+
 def _recover_x(y: int, sign: int) -> int | None:
     if y >= P:
         return None
@@ -123,14 +136,29 @@ def sign(seed: bytes, message: bytes) -> bytes:
     return encoded_r + s.to_bytes(32, "little")
 
 
+def is_usable_public_key(public: bytes) -> bool:
+    """署名検証に使える公開鍵か。恒等元・小位数点は鍵として拒否する。"""
+    point = _decompress(public)
+    if point is None:
+        return False
+    return not _has_small_order(point)
+
+
 def verify(public: bytes, message: bytes, signature: bytes) -> bool:
-    """署名を検証する。形式不正も False を返す。"""
+    """署名を検証する。形式不正も False を返す。
+
+    恒等元・小位数点は公開鍵にも `R` にも使わせない。32 byte の値をそのまま受けると、
+    例えば `01` + `00` * 31 を公開鍵とし、同じ値を R、s=0 とした署名が任意の message で
+    通ってしまう（両辺が恒等元になる）。
+    """
     if len(public) != 32 or len(signature) != 64:
         return False
     point_a = _decompress(public)
     encoded_r = signature[:32]
     point_r = _decompress(encoded_r)
     if point_a is None or point_r is None:
+        return False
+    if _has_small_order(point_a) or _has_small_order(point_r):
         return False
     s = int.from_bytes(signature[32:], "little")
     if s >= L:

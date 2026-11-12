@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from . import ed25519
 
@@ -63,7 +64,10 @@ def validate_version(version: object) -> None:
 
 
 def validate_notes_url(notes_url: object) -> None:
-    if not isinstance(notes_url, str) or not notes_url.startswith(("https://", "http://")):
+    if not isinstance(notes_url, str):
+        raise ManifestError(f"notes_url が URL でない: {notes_url!r}")
+    parsed = urlsplit(notes_url)
+    if parsed.scheme not in ("https", "http") or not parsed.hostname:
         raise ManifestError(f"notes_url が URL でない: {notes_url!r}")
     if "/.." in notes_url or "\\" in notes_url:
         raise ManifestError(f"notes_url に不正な要素がある: {notes_url!r}")
@@ -149,6 +153,8 @@ def parse(raw: bytes) -> tuple[Manifest, dict[str, Any]]:
     missing = MANIFEST_FIELDS - set(manifest)
     if missing:
         raise ManifestError(f"field が足りない: {', '.join(sorted(missing))}")
+    if not isinstance(manifest["schema"], int) or isinstance(manifest["schema"], bool):
+        raise ManifestError(f"schema が整数でない: {manifest['schema']!r}")
     if manifest["schema"] != SCHEMA:
         raise ManifestError(f"未対応の schema: {manifest['schema']!r}")
     if not isinstance(manifest["breaking"], bool):
@@ -192,9 +198,15 @@ def parse(raw: bytes) -> tuple[Manifest, dict[str, Any]]:
 
 
 def validate_source(source: str) -> None:
-    """配布物の参照は相対パスか https URL だけを許す。"""
-    if source.startswith("https://"):
-        return
+    """配布物の参照は manifest と同じ directory からの相対パスだけを許す。
+
+    schema v1 は HTTPS の asset 取得を実装していない。許可だけして検証で必ず失敗する
+    状態を避けるため、schema v1 の範囲を相対パスに限定する。
+    """
+    if source.startswith("https://") or source.startswith("http://"):
+        raise ManifestError(
+            f"schema v1 は URL の source に対応していない: {source!r}"
+        )
     if source.startswith("/") or "\\" in source or ":" in source:
         raise ManifestError(f"source が相対パスでない: {source!r}")
     parts = source.split("/")
@@ -205,8 +217,6 @@ def validate_source(source: str) -> None:
 def resolve_source(asset: Asset, base_dir: Path) -> Path:
     """相対 source を manifest と同じ置き場所から解決する。"""
     validate_source(asset.source)
-    if asset.source.startswith("https://"):
-        raise ManifestError("https の source は URL 取得経路で解決する")
     path = (base_dir / asset.source).resolve()
     if base_dir.resolve() != path.parent:
         raise ManifestError(f"source が manifest の隣にない: {asset.source!r}")

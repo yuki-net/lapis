@@ -69,6 +69,34 @@ def _validate_name(value: str, label: str) -> None:
         raise LayoutError(f"{label} を directory 名に使えない: {value!r}")
 
 
+def member_name(member: zipfile.ZipInfo) -> str:
+    """ZIP member の名前を検証して返す。directory entry の末尾 `/` は除く。
+
+    `zipfile` は Windows で `\\` を `/` に正規化して `member.filename` に入れるため、
+    正規化前の `orig_filename` も併せて検査する。区切りや予約名の判定は展開と検証で
+    同じ規則を使う。
+    """
+    for raw in (member.orig_filename, member.filename):
+        _check_member_name(raw)
+    name = member.filename[:-1] if member.filename.endswith("/") else member.filename
+    if name.split("/")[0] in RESERVED_ROOT_NAMES:
+        raise LayoutError(f"package が layout の予約名を使っている: {name!r}")
+    return name
+
+
+def _check_member_name(raw: str) -> None:
+    name = raw[:-1] if raw.endswith("/") else raw
+    parts = name.split("/")
+    if (
+        not name
+        or name.startswith("/")
+        or "\\" in raw
+        or ":" in name
+        or any(part in ("", ".", "..") for part in parts)
+    ):
+        raise LayoutError(f"package に不正な path がある: {raw!r}")
+
+
 def read_pointer(root: Path) -> str | None:
     """現在 version を返す。pointer が無ければ None、壊れていれば例外。"""
     path = pointer_path(root)
@@ -126,16 +154,20 @@ def install(
     既に同名 version がある場合、`replace=False` では失敗する。手動復旧で同じ version を
     入れ直す場合だけ `replace=True` を明示する。置き換えは検証と展開が終わってから行い、
     失敗時は元の directory を残す。
-    """
-    from . import verify
 
-    verified = verify.verify_distribution(distribution, trusted_keys)
+    検証は複写後の staged directory に対して行い、展開もその検証済み package から行う。
+    元の distribution が検証後に差し替えられても、保存した package と展開内容が食い違わない。
+    manifest が参照する platform の package はすべて保持する。`verify_distribution` は
+    全 package を要求するため、選択した platform だけを残すと直後の検証が失敗する。
+    """
+    from . import verify as verify_module
+
+    verified = verify_module.verify_distribution(distribution, trusted_keys)
     if verified.version != version:
         raise LayoutError(
             f"manifest の version ({verified.version}) が指定 ({version}) と違う"
         )
-    package = verified.packages.get(platform)
-    if package is None:
+    if platform not in verified.packages:
         raise LayoutError(f"platform の package が無い: {platform!r}")
     target = version_dir(root, version)
     if target.exists() and not replace:
@@ -149,8 +181,27 @@ def install(
     backup: Path | None = None
     try:
         shutil.copyfile(distribution / MANIFEST_NAME, staged / MANIFEST_NAME)
-        shutil.copyfile(package, staged / package.name)
-        _extract(package, staged)
+        copied = {}
+        for name, path in verified.packages.items():
+            destination = staged / path.name
+            shutil.copyfile(path, destination)
+            copied[name] = destination
+        # 複写した staged を再検証する。以後の展開はこの検証済みコピーだけを使う。
+        staged_verified = verify_module.verify_distribution(staged, trusted_keys)
+        if staged_verified.version != version:
+            raise LayoutError(
+                f"複写した manifest の version ({staged_verified.version}) が違う"
+            )
+        staged_package = copied[platform]
+        _extract(staged_package, staged)
+        skip = {MANIFEST_NAME} | {path.name for path in copied.values()}
+        mismatched = verify_module.extracted_mismatches(
+            staged, staged_package, skip=skip
+        )
+        if mismatched:
+            raise LayoutError(
+                "展開結果が package と一致しない: " + "; ".join(mismatched)
+            )
         if target.exists():
             backup = Path(tempfile.mkdtemp(dir=versions_dir(root), prefix=".replace-"))
             backup.rmdir()
@@ -168,9 +219,39 @@ def install(
     if backup is not None:
         shutil.rmtree(backup, ignore_errors=True)
     write_pointer(root, version)
-    keep = [version] + ([previous] if previous else [])
-    _prune(root, keep=keep[:KEEP_VERSIONS])
+    _prune(root, keep=_retained_versions(root, version, previous))
     return target
+
+
+def _retained_versions(root: Path, current: str, previous: str | None) -> list[str]:
+    """残す version を KEEP_VERSIONS 件まで決める。
+
+    同じ version を再導入した場合（previous == current）、pointer から前版を知ることは
+    できない。その場合だけ導入済みの version を新しい順に補い、復旧先を消さない。
+    """
+    keep = [current]
+    if previous and previous != current:
+        keep.append(previous)
+    elif previous == current:
+        for name in _installed_versions_newest_first(root):
+            if len(keep) >= KEEP_VERSIONS:
+                break
+            if name not in keep:
+                keep.append(name)
+    return keep
+
+
+def _installed_versions_newest_first(root: Path) -> list[str]:
+    directory = versions_dir(root)
+    if not directory.is_dir():
+        return []
+    entries = [
+        entry
+        for entry in directory.iterdir()
+        if entry.is_dir() and _installed_version(entry) == entry.name
+    ]
+    entries.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+    return [entry.name for entry in entries]
 
 
 def activate(
@@ -179,14 +260,17 @@ def activate(
     """既に展開済みの version を検証して pointer だけを戻す。
 
     手動復旧で前版へ戻す経路。package の再取得や再展開をせず、壊れた version の
-    directory には触らない。
+    directory には触らない。保存済み manifest と package に加えて、展開済み file も
+    package の内容と照合する。実行 file だけが書き換わった version を復旧先にしない。
     """
-    from . import verify
+    from . import verify as verify_module
 
     target = version_dir(root, version)
     if not target.is_dir():
         raise LayoutError(f"version directory が無い: {target}")
-    verified = verify.verify_install_version(target, trusted_keys, platform=platform)
+    verified = verify_module.verify_install_version(
+        target, trusted_keys, platform=platform
+    )
     if verified.version != version:
         raise LayoutError(
             f"manifest の version ({verified.version}) が指定 ({version}) と違う"
@@ -197,22 +281,16 @@ def activate(
 
 
 def _extract(package: Path, destination: Path) -> None:
+    seen: set[str] = set()
     with zipfile.ZipFile(package) as archive:
         for member in archive.infolist():
-            name = member.filename
-            parts = name.split("/")
-            if (
-                name.startswith("/")
-                or "\\" in name
-                or ":" in name
-                or any(part in ("", ".", "..") for part in parts)
-            ):
-                raise LayoutError(f"package に不正な path がある: {name!r}")
-            if parts[0] in RESERVED_ROOT_NAMES:
-                raise LayoutError(f"package が layout の予約名を使っている: {name!r}")
+            name = member_name(member)
+            if name in seen:
+                raise LayoutError(f"package に重複した path がある: {name!r}")
+            seen.add(name)
             if member.is_dir():
                 continue
-            target = destination.joinpath(*parts)
+            target = destination.joinpath(*name.split("/"))
             target.parent.mkdir(parents=True, exist_ok=True)
             with archive.open(member) as source, target.open("wb") as sink:
                 shutil.copyfileobj(source, sink)
