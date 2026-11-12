@@ -148,6 +148,7 @@ pub enum AuthError {
     OidcUnavailable,
     DeviceApprovalRequired,
     DeviceRevoked,
+    PersistenceUnavailable,
 }
 
 impl fmt::Display for AuthError {
@@ -170,6 +171,9 @@ impl fmt::Display for AuthError {
             Self::OidcUnavailable => formatter.write_str("OIDC token is invalid or unavailable"),
             Self::DeviceApprovalRequired => formatter.write_str("device approval is required"),
             Self::DeviceRevoked => formatter.write_str("device has been revoked"),
+            Self::PersistenceUnavailable => {
+                formatter.write_str("authentication state could not be saved")
+            }
         }
     }
 }
@@ -295,6 +299,14 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         devices
     }
 
+    /// Session の端末 ID。失効済みの credential は返さない。
+    pub fn session_client_id(&self, session_id: &SessionId) -> Option<&str> {
+        match self.sessions.get(session_id)? {
+            SessionOwner::Credential(id) => Some(self.credentials.get(id)?.client_id.as_str()),
+            SessionOwner::Oidc(session) => Some(&session.client_id),
+        }
+    }
+
     /// 保存済み device をすべて返す。
     pub fn export_devices(&self) -> Vec<StoredDevice> {
         self.devices()
@@ -348,6 +360,16 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             SessionOwner::Oidc(session) => session.client_id != client_id,
         });
         true
+    }
+
+    /// 失効結果の返却前に保存する。失敗時は認証を停止し、成功を通知しない。
+    /// 永続化 I/O を含むため blocking worker で呼び出す。
+    pub fn revoke_device_and_persist(&mut self, device_id: &str) -> Result<bool, AuthError> {
+        let revoked = self.revoke_device(device_id);
+        if revoked {
+            self.persist_state()?;
+        }
+        Ok(revoked)
     }
 
     /// 明示的な pairing token で接続した Client を承認済み device として登録する。
@@ -461,6 +483,18 @@ struct OidcSession {
     expires_at: u64,
 }
 
+/// credential と端末状態を同一 transaction で保存する。
+pub trait AuthPersistence: Send + Sync {
+    fn save(
+        &self,
+        credentials: &[StoredCredential],
+        devices: &[StoredDevice],
+    ) -> Result<(), AuthPersistenceError>;
+}
+
+#[derive(Debug)]
+pub struct AuthPersistenceError;
+
 /// Pairing、credential、session grantのライフサイクルを所有する認証サービス。
 pub struct RemoteAuth<C = SystemClock, R = OsRandom> {
     clock: C,
@@ -475,6 +509,7 @@ pub struct RemoteAuth<C = SystemClock, R = OsRandom> {
     credentials: HashMap<CredentialId, CredentialRecord>,
     devices: HashMap<String, StoredDevice>,
     sessions: HashMap<SessionId, SessionOwner>,
+    persistence: Option<Arc<dyn AuthPersistence>>,
     _marker: PhantomData<fn() -> SessionGrant>,
 }
 
@@ -499,6 +534,7 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
             credentials: HashMap::new(),
             devices: HashMap::new(),
             sessions: HashMap::new(),
+            persistence: None,
             _marker: PhantomData,
         }
     }
@@ -512,6 +548,24 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
     /// 認証時に Workspace の既定値と存在確認を委譲する。
     pub fn set_workspace_resolver(&mut self, resolver: Arc<dyn WorkspaceResolver>) {
         self.resolver = Some(resolver);
+    }
+
+    /// 認証状態の保存先。設定時は認証処理から blocking worker 上で呼び出す。
+    pub fn set_persistence(&mut self, persistence: Arc<dyn AuthPersistence>) {
+        self.persistence = Some(persistence);
+    }
+
+    /// 呼出側は認証ロックを保持し、blocking worker で実行する。
+    pub fn persist_state(&mut self) -> Result<(), AuthError> {
+        if let Some(persistence) = &self.persistence
+            && persistence
+                .save(&self.export_credentials(), &self.export_devices())
+                .is_err()
+        {
+            self.disable();
+            return Err(AuthError::PersistenceUnavailable);
+        }
+        Ok(())
     }
 
     /// 接続先 Client へ提示する Host ID。
@@ -674,9 +728,18 @@ impl<C: Clock, R: RandomSource> RemoteAuth<C, R> {
         requested_capabilities: &CapabilitySet,
     ) -> Result<(CredentialHandle, SessionGrant), AuthError> {
         let credential = self.complete_pairing(token, &hello.client_id, requested_capabilities)?;
-        self.ensure_token_device(hello)?;
+        if let Err(error) = self.ensure_token_device(hello) {
+            self.revoke(credential.id());
+            return Err(error);
+        }
         match self.authenticate_auto(&credential, &hello.client_id) {
-            Ok(grant) => Ok((credential, grant)),
+            Ok(grant) => {
+                if let Err(error) = self.persist_state() {
+                    self.revoke(credential.id());
+                    return Err(error);
+                }
+                Ok((credential, grant))
+            }
             Err(error) => {
                 self.revoke(credential.id());
                 Err(error)
@@ -1481,6 +1544,159 @@ mod tests {
             .unwrap();
         assert_eq!(device.status, DeviceStatus::Approved);
         assert!(device.approved_at.is_some());
+    }
+
+    #[test]
+    fn revoking_a_token_device_invalidates_active_sessions_and_reconnect() {
+        let mut auth = setup();
+        auth.enable();
+        let (client, workspace) = ids();
+        let token = auth.begin_pairing(workspace.clone()).unwrap();
+        let credential = auth
+            .complete_pairing(&token, &client, &CapabilitySet::default())
+            .unwrap();
+        let session = auth.authenticate(&credential, &client, &workspace).unwrap();
+        let device = auth
+            .devices()
+            .into_iter()
+            .find(|device| device.client_id == client.as_str())
+            .unwrap();
+
+        assert!(auth.require_active_session(&session).is_ok());
+        assert!(auth.revoke_device(&device.id));
+        assert!(matches!(
+            auth.require_active_session(&session),
+            Err(AuthError::CredentialUnavailable)
+        ));
+        assert!(matches!(
+            auth.authenticate(&credential, &client, &workspace),
+            Err(AuthError::CredentialUnavailable)
+        ));
+    }
+
+    #[test]
+    fn rejected_pairing_does_not_leave_a_credential_for_a_revoked_device() {
+        let mut auth = setup();
+        let (_, workspace) = ids();
+        auth.set_workspace_resolver(Arc::new(TestResolver::new(
+            workspace.clone(),
+            vec![workspace.clone()],
+        )));
+        auth.enable();
+        let request = hello("revoked-web");
+        let token = auth.begin_user_session_pairing(workspace.clone()).unwrap();
+        auth.complete_pairing_and_authenticate(&token, &request, &CapabilitySet::default())
+            .unwrap();
+        let device = auth
+            .devices()
+            .into_iter()
+            .find(|device| device.client_id == "revoked-web")
+            .unwrap();
+        assert!(auth.revoke_device(&device.id));
+        let before = auth.export_credentials().len();
+        let token = auth.begin_user_session_pairing(workspace).unwrap();
+        assert!(matches!(
+            auth.complete_pairing_and_authenticate(&token, &request, &CapabilitySet::default()),
+            Err(AuthError::DeviceRevoked)
+        ));
+        assert_eq!(auth.export_credentials().len(), before);
+    }
+
+    #[test]
+    fn pairing_persists_before_returning_credential_and_failure_disables_auth() {
+        struct Store {
+            saved: std::sync::Mutex<Option<(Vec<StoredCredential>, Vec<StoredDevice>)>>,
+            fail: bool,
+        }
+        impl AuthPersistence for Store {
+            fn save(
+                &self,
+                credentials: &[StoredCredential],
+                devices: &[StoredDevice],
+            ) -> Result<(), AuthPersistenceError> {
+                if self.fail {
+                    return Err(AuthPersistenceError);
+                }
+                *self.saved.lock().unwrap() = Some((credentials.to_vec(), devices.to_vec()));
+                Ok(())
+            }
+        }
+        let (_, workspace) = ids();
+        let mut auth = setup();
+        auth.set_workspace_resolver(Arc::new(TestResolver::new(
+            workspace.clone(),
+            vec![workspace.clone()],
+        )));
+        auth.enable();
+        let store = Arc::new(Store {
+            saved: std::sync::Mutex::new(None),
+            fail: false,
+        });
+        auth.set_persistence(store.clone());
+        let token = auth.begin_user_session_pairing(workspace.clone()).unwrap();
+        let request = hello("persisted-web");
+        let (credential, _) = auth
+            .complete_pairing_and_authenticate(&token, &request, &CapabilitySet::default())
+            .unwrap();
+        let (credentials, devices) = store.saved.lock().unwrap().clone().unwrap();
+        assert!(
+            credentials
+                .iter()
+                .any(|item| item.id == credential.id().as_str())
+        );
+        assert!(devices.iter().any(|item| item.client_id == "persisted-web"));
+
+        let mut restored = setup();
+        restored.set_workspace_resolver(Arc::new(TestResolver::new(
+            workspace.clone(),
+            vec![workspace.clone()],
+        )));
+        restored.import_credentials(credentials);
+        restored.import_devices(devices);
+        restored.enable();
+        assert!(
+            restored
+                .authenticate_auto(&credential, &request.client_id)
+                .is_ok()
+        );
+
+        restored.set_persistence(store.clone());
+        let device_id = restored
+            .devices()
+            .into_iter()
+            .find(|device| device.client_id == "persisted-web")
+            .unwrap()
+            .id;
+        assert!(restored.revoke_device_and_persist(&device_id).unwrap());
+        let (credentials, devices) = store.saved.lock().unwrap().clone().unwrap();
+        let mut after_revocation = setup();
+        after_revocation.set_workspace_resolver(Arc::new(TestResolver::new(
+            workspace.clone(),
+            vec![workspace.clone()],
+        )));
+        after_revocation.import_credentials(credentials);
+        after_revocation.import_devices(devices);
+        after_revocation.enable();
+        assert!(
+            after_revocation
+                .authenticate_auto(&credential, &request.client_id)
+                .is_err()
+        );
+
+        restored.set_persistence(Arc::new(Store {
+            saved: std::sync::Mutex::new(None),
+            fail: true,
+        }));
+        let second = restored.begin_user_session_pairing(workspace).unwrap();
+        assert!(matches!(
+            restored.complete_pairing_and_authenticate(
+                &second,
+                &hello("other-web"),
+                &CapabilitySet::default()
+            ),
+            Err(AuthError::PersistenceUnavailable)
+        ));
+        assert!(!restored.is_enabled());
     }
 
     #[test]

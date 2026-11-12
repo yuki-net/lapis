@@ -25,6 +25,7 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
 - `../state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
+- Local Host は Web 等の端末 credential と失効状態を Host の状態ディレクトリに保存します。Desktop bootstrap 用の credential は起動ごとに生成し、端末用の保存対象から除きます。
 - `../ui/src/shell/` は Window・Panel・Tab・Layout、`../ui/src/features/` は個別機能の表示・入力・描画を担当します。
 - 左のProject / Taskで既存フォルダをProjectへ登録し、登録先からPrimaryを一つ、Subを任意で一つ選んで作業Taskを作成します。Git管理されていない既存ソースフォルダも選べます。
 - 作業Taskの選択・Primary/Sub・文書とPanelの復元参照はDesktopの保存状態です。既存のConversation IDを復元キーに再利用し、HostのAgent実行Task/Executionとは区別します。切替ではHostの文書・PTY・CLIを終了しません。Worktreeの作成・カスタマイズはGit操作として扱います。
@@ -50,6 +51,8 @@ Host が OIDC を設定している場合、Host の `invite-oidc` で作成し�
 WindowsのRustRoverでは `Run Host` と `Run Desktop`、`Run Desktop (Hot Reload)` のRun Configurationを使用できます。Run用のビルド先は `target/dev-build/` に分け、実行中の通常開発用binaryと競合しないようにします。Runごとに `target/dev-sessions/` に状態とbinaryを分け、WindowsのJob ObjectでそのRunが起動したprocessを管理します。StopはそのRunが起動したprocessを終了し、既存Hostへの接続や別Runには影響しません。`Run Host` は自分で Host を止めるまで動き続けます。Desktop の設定は `--state-directory target/dev-desktop/state` を共有するため Run を跨いで残り、同じ state を同時に使うと設定とレイアウトは後勝ち、会話は保存時に競合を検出します。残ったsessionのLocal Hostは、Desktopを終了後、ログの `Desktop session:` に表示された名前を指定して `powershell -NoProfile -File scripts/stop_dev_host.ps1 -Session <session名>` で停止できます。`--local-host-directory <directory>` を指定してそのRunがHostを起動した場合は、同じdirectoryを `-Session <session名> -LocalHostDirectory <directory>` に指定します。Hostを停止するとDocument・Terminalの実行状態は失われます。
 
 Web をブラウザーから使う手順は [開発時の起動](../../docs/dev.md) を参照してください。
+
+managed Host の Web 公開では、Host と同じディレクトリの `lapis-web-bridge` と `web/` の配信ファイルを使用します。開発ランチャーは bridge をビルドして Host と同じ session に配置し、`clients/web/dist` を参照します。Web の利用前に `clients/web` で `npm run build` が必要です。
 
 `cargo dev` は `target/debug/` のbinaryを使い、開発用の設定・会話・復元状態・Host接続情報を `target/dev-state/` に保存します。他のworktreeや通常起動の保存先とは共有しません。アプリとHostの処理は通常版と同じで、起動引数だけが異なります。明示的に同じファイルやRemote Hostを開いた場合、その実体の共有まで防ぐ仕組みではありません。新しい保存先に既存の個人設定を自動コピーしません。
 

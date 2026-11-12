@@ -134,7 +134,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         workspace: requested_workspace.clone(),
         client_id: &config.client_id,
         client_name: "lapis-web",
-        client_kind: ClientKind::Desktop,
+        client_kind: ClientKind::Web,
         token: config.token.as_deref(),
         credential: config.credential.as_deref(),
         id_token: config.id_token.as_deref(),

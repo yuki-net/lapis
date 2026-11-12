@@ -40,6 +40,7 @@ class DevSessionProcessTests(unittest.TestCase):
                 with self.subTest(scenario=scenario):
                     shutil.copyfile(valid, build_dir / "lapis.exe")
                     shutil.copyfile(valid, build_dir / "lapis-host.exe")
+                    shutil.copyfile(valid, build_dir / "lapis-web-bridge.exe")
                     if scenario == "session":
                         sessions.write_text("not a directory")
                     elif scenario == "missing_host":
@@ -95,7 +96,7 @@ fn main() {
     while !hosts.join("finish").exists() { thread::sleep(Duration::from_millis(50)); }
 }
 ''', encoding="utf-8")
-            for name in ("lapis.exe", "lapis-host.exe"):
+            for name in ("lapis.exe", "lapis-host.exe", "lapis-web-bridge.exe"):
                 subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
             # 起動待ちの期限には初回buildや依存取得を含めない。
             subprocess.run(
@@ -315,11 +316,12 @@ fn main() {
         fs::write("cargo-called", "yes").unwrap();
         assert_eq!(args, ["build", "--locked", "--target-dir", "target", "--target",
             "x86_64-pc-windows-msvc", "--profile", "hot-reload", "--package", "host",
-            "--bin", "lapis-host"]);
+            "--package", "web-bridge", "--bins"]);
         if env::var("LAPIS_TEST_SCENARIO").unwrap() == "build-failure" { process::exit(23); }
         let host = Path::new("target/x86_64-pc-windows-msvc/hot-reload/lapis-host.exe");
         fs::create_dir_all(host.parent().unwrap()).unwrap();
         fs::write(host, "fresh-host").unwrap();
+        fs::write(host.with_file_name("lapis-web-bridge.exe"), "fresh-bridge").unwrap();
         return;
     }
     assert_eq!(&args[..5], ["serve", "--platform", "windows", "--target", "x86_64-pc-windows-msvc"]);
@@ -333,6 +335,7 @@ fn main() {
     let app_args: Vec<_> = app_args.split_whitespace().collect();
     let index = app_args.iter().position(|arg| *arg == "--local-host-executable").unwrap();
     assert_eq!(fs::read_to_string(app_args[index + 1]).unwrap(), "fresh-host");
+    assert_eq!(fs::read_to_string(Path::new(app_args[index + 1]).with_file_name("lapis-web-bridge.exe")).unwrap(), "fresh-bridge");
     fs::write("dx-app-args", app_args.join("\n")).unwrap();
     fs::write("dx-called", "yes").unwrap();
     if env::var("LAPIS_TEST_SCENARIO").unwrap() == "hold" {
@@ -488,7 +491,7 @@ fn main() {
     fs::write("desktop-started", host.unwrap_or_default()).unwrap();
 }
 ''', encoding="utf-8")
-        for name in ("lapis.exe", "lapis-host.exe"):
+        for name in ("lapis.exe", "lapis-host.exe", "lapis-web-bridge.exe"):
             subprocess.run(["rustc", str(source), "-o", str(binary_dir / name)], check=True, capture_output=True)
         subprocess.run([
             "cargo", "build", "--locked", "--manifest-path", str(launcher / "Cargo.toml"),

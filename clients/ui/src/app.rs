@@ -92,6 +92,7 @@ pub struct DesktopServices {
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
     pub(crate) process: ProcessSession,
+    pub(crate) web_access: Option<std::sync::Arc<dyn desktop_client::web_access::WebAccess>>,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
 }
 
@@ -117,8 +118,16 @@ impl DesktopServices {
             conversation,
             settings,
             process: ProcessSession::unavailable(),
+            web_access: None,
             workbench_watch: None,
         }
+    }
+    pub fn with_web_access(
+        mut self,
+        web: std::sync::Arc<dyn desktop_client::web_access::WebAccess>,
+    ) -> Self {
+        self.web_access = Some(web);
+        self
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
         self.connection = Some(connection);

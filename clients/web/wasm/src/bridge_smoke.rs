@@ -59,7 +59,7 @@ pub async fn bridge_smoke(
         protocol: ProtocolRange::exact(CURRENT_PROTOCOL),
         client_id: ClientId::try_new("wasm-smoke").unwrap(),
         client_name: "wasm-smoke".into(),
-        client_kind: ClientKind::Desktop,
+        client_kind: ClientKind::Web,
         requested_capabilities: CapabilitySet::try_new([
             CapabilityId::try_new("workspace.list").unwrap(),
             CapabilityId::try_new("workspace.connect").unwrap(),

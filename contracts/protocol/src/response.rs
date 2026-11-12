@@ -19,6 +19,18 @@ pub enum ResponseBody {
     HostWorktree(String),
     #[serde(rename = "host.register_workspace")]
     HostRegister(crate::WorkspaceSummary),
+    #[serde(rename = "host.invite")]
+    HostInvite(crate::HostInviteResponse),
+    #[serde(rename = "host.devices.list")]
+    HostDeviceList(crate::HostDeviceListResponse),
+    #[serde(rename = "host.devices.revoke")]
+    HostDeviceRevoke(crate::HostDeviceRevokeResponse),
+    #[serde(rename = "host.web.status")]
+    HostWebStatus(crate::HostWebStatus),
+    #[serde(rename = "host.web.start")]
+    HostWebStart(crate::HostWebStatus),
+    #[serde(rename = "host.web.stop")]
+    HostWebStop(crate::HostWebStatus),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentCloseResponse),
     #[serde(rename = "files.create_directory")]
@@ -94,6 +106,12 @@ impl ResponseBody {
             Self::WorkbenchPut(_) => Some("workbench.put"),
             Self::HostWorktree(_) => Some("host.worktree_path"),
             Self::HostRegister(_) => Some("host.register_workspace"),
+            Self::HostInvite(_) => Some("host.invite"),
+            Self::HostDeviceList(_) => Some("host.devices.list"),
+            Self::HostDeviceRevoke(_) => Some("host.devices.revoke"),
+            Self::HostWebStatus(_) => Some("host.web.status"),
+            Self::HostWebStart(_) => Some("host.web.start"),
+            Self::HostWebStop(_) => Some("host.web.stop"),
             Self::DocumentRelocate(_) => Some("document.relocate"),
             Self::CreateDirectory(_) => Some("files.create_directory"),
             Self::DocumentInspect(_) => Some("document.inspect"),

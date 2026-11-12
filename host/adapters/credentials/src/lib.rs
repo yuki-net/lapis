@@ -271,7 +271,7 @@ fn write_credentials(
                 record.workspace_id.as_deref(),
                 capabilities,
                 &record.digest,
-                record.expires_at as i64,
+                record.expires_at.min(i64::MAX as u64) as i64,
             ])
             .map_err(CredentialStoreError::Sqlite)?;
     }
@@ -394,6 +394,15 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0], record("a"));
         assert_eq!(loaded[1], record("b"));
+    }
+
+    #[test]
+    fn distant_expiration_does_not_wrap_into_an_expired_value() {
+        let mut store = CredentialStore::open_in_memory().unwrap();
+        let mut credential = record("long-lived");
+        credential.expires_at = u64::MAX;
+        store.replace_all(&[credential]).unwrap();
+        assert_eq!(store.load().unwrap()[0].expires_at, i64::MAX as u64);
     }
 
     #[test]

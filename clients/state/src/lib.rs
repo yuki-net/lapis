@@ -46,6 +46,7 @@ pub use connection_display::{
 };
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use process::ProcessSession;
+pub mod web_access;
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};

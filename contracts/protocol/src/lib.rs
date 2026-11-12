@@ -20,6 +20,7 @@ mod error;
 mod event;
 mod files;
 mod handshake;
+mod host;
 mod ids;
 mod operations;
 mod remote_wire;
@@ -64,6 +65,11 @@ pub use files::{
     FileTreeResponse,
 };
 pub use handshake::{ClientKind, HelloRequest, HelloResponse};
+pub use host::{
+    HostDevice, HostDeviceListRequest, HostDeviceListResponse, HostDeviceRevokeRequest,
+    HostDeviceRevokeResponse, HostInviteRequest, HostInviteResponse, HostWebStartRequest,
+    HostWebStatus, HostWebStatusRequest, HostWebStopRequest,
+};
 pub use ids::{
     ClientId, DocumentId, InvalidResourceId, RequestId, SessionId, TerminalId, WorkspaceId,
 };

@@ -8,12 +8,14 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 
 接続状態は URL ではなくブラウザーの保存領域（`localStorage` / `sessionStorage`）に置きます。URL は開いている状態だけを表します。
 
-- `/` は保存済みの Host / Workspace 一覧です。初回は Host URL・Workspace ID・pairing token を入力するフォームが表示されます。
+- `/` は保存済みの Host / Workspace 一覧です。初回は Desktop で発行した招待リンクを開くか、画面に貼り付けます。
 - `/<host>/<workspace>` はその Workspace を開いた状態です。パスのセグメントは表示用ラベルで、接続先 URL と Workspace ID は保存済みの対応表から引きます。
+- 一覧の「このブラウザーから接続情報を削除」はローカルの credential と対応表を消します。Host 側の端末失効は Desktop の設定で行います。
 - `#/t/<task-id>` は選択する Task です。選択に合わせて `history.replaceState` で更新し、履歴は増やしません。
 - Workspace の切替はアプリ内の Workspace メニューから行います。同じ接続のまま `workspace.close` → `workspace.connect` を実行し、ページ遷移・再接続はしません。URL も `history.replaceState` で `/<host>/<workspace>` に追従し、`#/t/<task-id>` は保持します。`workspace.switch` がない接続では切替メニューを表示しません。
 - ページの生存中は Workspace ごとの表示状態を保持します。一度開いた Workspace に戻ると、保持した状態を復元してから `snapshot.resync` と Workbench の再取得で差分を反映します。保持は接続中の Workspace 一覧数を上限とし、超えた分は古いものから破棄して次回は snapshot から復帰します。`localStorage` へは保存しません。
 - 招待リンクは `#/invite?url=<bridge URL>&workspace=<ID>&token=<token>` の形で token を fragment だけに載せます。fragment はサーバーへ送られません。
+- 招待リンクは `#/invite?token=<token>` の形式です。Web は同じアドレスの `/remote` に接続し、Workspace は Host が決定します。token は fragment のみに置き、読み取り後にアドレスから消します。
 
 Host なしのデモ:
 
@@ -21,11 +23,11 @@ Host なしのデモ:
 http://127.0.0.1:4747/?demo=1
 ```
 
-ログインフォームの Host URL には bridge の既定（`ws://<hostname>:4757/remote`）があらかじめ入ります。OIDC が設定された Web bridge では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
+OIDC が設定された Host では「OIDC でログイン」から IdP のログインを開けます。取得した ID Token は `sessionStorage` に置き、再読み込み時の再接続に使います。
 
-旧形式の `?url=` / `?workspace=` / `?token=` は接続に使いません。読み込み時にアドレスバーから削除し、旧形式であることを画面に表示します。
+旧形式の `?url=` / `?workspace=` / `?token=` や、接続先と Workspace を含む fragment は接続に使いません。Desktop から新しい招待を発行してください。
 
-起動手順・ポート・ログインの詳細は [開発時の起動](../../docs/dev.md) を参照してください。ログインフォームの Host URL には **bridge** の WebSocket（`ws://127.0.0.1:4757/remote`）を入力します。Host の QUIC アドレスではありません。
+起動手順・ポート・ログインの詳細は [開発時の起動](../../docs/dev.md) を参照してください。
 
 - 接続すると Workspace のファイルツリーを Host から取得し、`README.md`（無ければ最初のファイル）を開きます。
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
@@ -46,21 +48,17 @@ cd clients/web
 npm ci
 ```
 
-`Run Web`（ページ側は `cargo run -p lapis-web -- --dev --dist clients/web/dist`）が `4747` で待ち受け、起動時に `npm run build` で `clients/web/dist` を作ります。Host と bridge を含めた起動手順・ポートの決め方は [開発時の起動](../../docs/dev.md) を参照してください。
+`npm run build` で `clients/web/dist` を作成してから、Desktop の Web 接続設定で公開します。`Run Web (Page)` は Host に接続しないデモの確認用です。起動手順は [開発時の起動](../../docs/dev.md) を参照してください。
 
 `npm run build` は Wasm を生成し、`dist` に HTML・JS・CSS・Wasm を揃えます。Node.js 24（`tsc` 用）と `wasm-bindgen-cli` 0.2.129 が必要です。型チェックだけを行う場合は `npm run typecheck` を使います。
 
-`lapis-web --dev` 中は `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` 配下の `.rs`、`clients/web/src`、`clients/web/index.html` を変更すると `npm run build` が走り、ブラウザーが再読み込みします（初回は数十秒、以降は増分で数秒）。`clients/web/src/generated` と `dist` は監視しません。再ビルドは開発サーバーだけの機能で、`npm run build` は1回だけ生成します。
+`lapis-web --dev` の監視と再読み込みは、Host に接続しないデモ用です。公開中の Web に変更を反映するには `npm run build` を再実行し、ブラウザーを再読み込みします。
 
 WebGPU が使えない環境では `?backend=webgl` を付けてください。
 
 ## Tailscaleで開く
 
-```powershell
-cargo run -p lapis-web -- --dev --host --dist clients/web/dist
-```
-
-`http://TAILSCALE_IP:4747/` を開きます。Host と web-bridge も tailnet から到達できるように起動してください。OIDC を使わない場合は pairing token が必要です。Tailscale ACL で端末を制限してください。
+Desktop の設定で Tailscale のアドレスを選んで公開し、コピーした招待リンクを別端末で開きます。Tailscale ACL で到達できる端末を制限してください。
 
 ## 結合検証（Host / Bridge）
 

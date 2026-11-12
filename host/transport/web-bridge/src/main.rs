@@ -8,13 +8,17 @@ use axum::{
     },
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, get_service},
 };
 use futures_util::{SinkExt, StreamExt};
 use quinn::crypto::rustls::QuicClientConfig;
 use rustls::pki_types::CertificateDer;
 use tokio::sync::Semaphore;
 use tokio_util::codec::LengthDelimitedCodec;
+use tower_http::{
+    services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
+};
 
 mod oidc;
 
@@ -35,6 +39,8 @@ struct Options {
     listen: SocketAddr,
     target: Target,
     origin: String,
+    dist: Option<PathBuf>,
+    managed: bool,
 }
 
 /// Hostへの接続先の決め方。
@@ -123,10 +129,16 @@ impl Options {
         let (mut listen, mut host, mut server_name, mut certificate, mut origin) =
             (None, None, None, None, None);
         let mut connection_info = None;
+        let mut dist = None;
         let mut allow_remote = false;
+        let mut managed = false;
         while let Some(flag) = args.next() {
             if flag.to_str() == Some("--allow-remote") {
                 allow_remote = true;
+                continue;
+            }
+            if flag.to_str() == Some("--managed") {
+                managed = true;
                 continue;
             }
             let value = args.next().ok_or("option requires a value")?;
@@ -147,6 +159,7 @@ impl Options {
                 }
                 Some("--certificate") => certificate = Some(PathBuf::from(value)),
                 Some("--connection-info") => connection_info = Some(PathBuf::from(value)),
+                Some("--dist") => dist = Some(PathBuf::from(value)),
                 Some("--origin") => {
                     origin = Some(value.into_string().map_err(|_| "invalid origin")?)
                 }
@@ -202,6 +215,8 @@ impl Options {
             listen,
             target,
             origin,
+            dist,
+            managed,
         })
     }
 }
@@ -213,6 +228,7 @@ struct Bridge {
     origin: String,
     slots: Arc<Semaphore>,
     oidc: Option<Arc<oidc::OidcBroker>>,
+    same_origin: bool,
 }
 
 #[tokio::main]
@@ -242,34 +258,80 @@ async fn main() -> Result<(), Error> {
     )?;
     // 起動時に証明書を検証しておく。壊れていればここで止まる。
     let _ = client_config(certificate)?;
+    if let Some(dist) = &options.dist
+        && !dist.join("index.html").is_file()
+    {
+        return Err("Web の index.html が見つかりません".into());
+    }
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
     let listen = listener.local_addr()?;
-    let open = open_url(&options.origin);
+    if options.managed {
+        use std::io::Write;
+        println!("ready={listen}");
+        std::io::stdout().flush()?;
+    }
+    let open = if options.dist.is_some() {
+        let address = if listen.ip().is_unspecified() {
+            SocketAddr::from(([127, 0, 0, 1], listen.port()))
+        } else {
+            listen
+        };
+        format!("http://{address}/")
+    } else {
+        open_url(&options.origin)
+    };
     let bridge = Bridge {
         endpoint,
         target: options.target,
         origin: options.origin,
         slots: Arc::new(Semaphore::new(128)),
         oidc: oidc.map(Arc::new),
+        same_origin: options.dist.is_some(),
     };
     eprintln!("web-bridge listening on {listen}");
     if let Some(workspace) = workspace_id.as_deref() {
         eprintln!("web-bridge workspace {workspace}");
     }
     eprintln!("open {open}");
-    axum::serve(
-        listener,
-        Router::new()
-            .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
-            .route("/auth/oidc/start", get(oidc::start))
-            .route("/auth/oidc/callback", get(oidc::callback))
-            .with_state(bridge),
-    )
-    .with_graceful_shutdown(async {
-        let _ = tokio::signal::ctrl_c().await;
-    })
-    .await?;
+    if options.managed {
+        std::thread::Builder::new()
+            .name("lapis-web-parent".into())
+            .spawn(move || {
+                let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+                // Host が消えた後は接続中 socket が残っていても公開を終了する。
+                std::process::exit(0);
+            })?;
+    }
+    axum::serve(listener, router(bridge, options.dist))
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await?;
     Ok(())
+}
+
+fn router(bridge: Bridge, dist: Option<PathBuf>) -> Router {
+    let mut router = Router::new()
+        .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
+        .route("/auth/oidc/start", get(oidc::start))
+        .route("/auth/oidc/callback", get(oidc::callback))
+        .with_state(bridge);
+    if let Some(dist) = dist {
+        let index = dist.join("index.html");
+        router = router
+            .route("/", get_service(ServeFile::new(index.clone())))
+            .route(
+                "/{host}/{workspace}",
+                get_service(ServeFile::new(index.clone())),
+            )
+            .route("/{host}/{workspace}/", get_service(ServeFile::new(index)))
+            .fallback_service(ServeDir::new(dist))
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::X_CONTENT_TYPE_OPTIONS,
+                axum::http::HeaderValue::from_static("nosniff"),
+            ));
+    }
+    router
 }
 
 fn client_config(certificate: Vec<u8>) -> Result<quinn::ClientConfig, Error> {
@@ -347,6 +409,39 @@ fn origin_allowed(configured: &str, origin: Option<&str>, host: Option<&str>) ->
         && origin_host.eq_ignore_ascii_case(request_host)
 }
 
+/// 同一入口ではスキームとポートを含む Origin を確認する。
+fn same_origin_allowed(origin: Option<&str>, host: Option<&str>) -> bool {
+    let (Some(origin), Some(host)) = (origin, host) else {
+        return false;
+    };
+    let Ok(origin_url) = url::Url::parse(origin) else {
+        return false;
+    };
+    if !matches!(origin_url.scheme(), "http" | "https")
+        || !origin_url.username().is_empty()
+        || origin_url.password().is_some()
+        || origin_url.path() != "/"
+        || origin_url.query().is_some()
+        || origin_url.fragment().is_some()
+    {
+        return false;
+    }
+    let Ok(host_url) = url::Url::parse(&format!("{}://{host}", origin_url.scheme())) else {
+        return false;
+    };
+    if !host_url.username().is_empty()
+        || host_url.password().is_some()
+        || host_url.path() != "/"
+        || host_url.query().is_some()
+        || host_url.fragment().is_some()
+    {
+        return false;
+    }
+    origin_url.host().is_some()
+        && origin_url.host() == host_url.host()
+        && origin_url.port_or_known_default() == host_url.port_or_known_default()
+}
+
 /// `host:port` / `[ipv6]:port` からポートを除いたホスト名を返す。
 fn authority_host(authority: &str) -> &str {
     let authority = authority.split(['/', '?', '#']).next().unwrap_or_default();
@@ -367,7 +462,12 @@ async fn upgrade(
     let host = headers
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok());
-    if !origin_allowed(&bridge.origin, origin, host) {
+    let allowed = if bridge.same_origin {
+        same_origin_allowed(origin, host)
+    } else {
+        origin_allowed(&bridge.origin, origin, host)
+    };
+    if !allowed {
         return StatusCode::FORBIDDEN.into_response();
     }
     let socket = socket.protocols([wire::REMOTE_WEBSOCKET_PROTOCOL]);
@@ -436,6 +536,92 @@ async fn forward(socket: WebSocket, bridge: Bridge) -> Result<(), Error> {
 mod tests {
     use super::*;
     use tokio_tungstenite::tungstenite::{Message as ClientMessage, client::IntoClientRequest};
+
+    #[test]
+    fn same_origin_checks_port_and_rejects_malformed_authorities() {
+        assert!(same_origin_allowed(
+            Some("http://127.0.0.1:4747"),
+            Some("127.0.0.1:4747")
+        ));
+        assert!(!same_origin_allowed(
+            Some("http://127.0.0.1:9999"),
+            Some("127.0.0.1:4747")
+        ));
+        assert!(!same_origin_allowed(
+            Some("http://attacker.example"),
+            Some("127.0.0.1:4747")
+        ));
+        assert!(!same_origin_allowed(
+            Some("http://127.0.0.1:4747/path"),
+            Some("127.0.0.1:4747")
+        ));
+        assert!(!same_origin_allowed(
+            Some("http://127.0.0.1:4747"),
+            Some("user@127.0.0.1:4747")
+        ));
+        assert!(!same_origin_allowed(None, Some("127.0.0.1:4747")));
+    }
+
+    #[tokio::test]
+    async fn web_assets_and_websocket_share_the_public_entry() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("index.html"), "web index").unwrap();
+        std::fs::write(directory.path().join("main.js"), "web script").unwrap();
+        let bridge = Bridge {
+            endpoint: quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap(),
+            target: Target::Connection {
+                path: directory.path().join("connection.json"),
+            },
+            origin: "http://127.0.0.1:4747".into(),
+            slots: Arc::new(Semaphore::new(2)),
+            oidc: None,
+            same_origin: true,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = router(bridge, Some(directory.path().to_owned()));
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        for path in ["/", "/host/workspace", "/host/workspace/"] {
+            let response = client
+                .get(format!("http://{address}{path}"))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.text().await.unwrap(), "web index");
+        }
+        assert_eq!(
+            client
+                .get(format!("http://{address}/main.js"))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "web script"
+        );
+        assert_eq!(
+            client
+                .get(format!("http://{address}/missing.js"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_ne!(
+            client
+                .get(format!("http://{address}/remote"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        server.abort();
+    }
 
     #[test]
     fn options_require_explicit_remote_listen_and_reject_bad_origins() {
@@ -685,6 +871,7 @@ mod tests {
             }
         });
         let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("index.html"), "web index").unwrap();
         let certificate_path = directory.path().join("host.der");
         std::fs::write(&certificate_path, &certificate).unwrap();
         let mut roots = rustls::RootCertStore::empty();
@@ -711,19 +898,23 @@ mod tests {
             origin: "http://localhost:5173".into(),
             slots: Arc::new(Semaphore::new(2)),
             oidc: None,
+            same_origin: true,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
+        let app = router(bridge, Some(directory.path().to_owned()));
         let task = tokio::spawn(async move {
-            axum::serve(
-                listener,
-                Router::new()
-                    .route(wire::REMOTE_WEBSOCKET_PATH, get(upgrade))
-                    .with_state(bridge),
-            )
-            .await
-            .unwrap();
+            axum::serve(listener, app).await.unwrap();
         });
+        assert_eq!(
+            reqwest::get(format!("http://{address}/"))
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "web index"
+        );
         let url = format!("ws://{address}/remote");
         let mut bad = url.as_str().into_client_request().unwrap();
         bad.headers_mut()
@@ -733,9 +924,24 @@ mod tests {
             wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
         );
         assert!(tokio_tungstenite::connect_async(bad).await.is_err());
+        let mut wrong_port = url.as_str().into_client_request().unwrap();
+        wrong_port.headers_mut().insert(
+            "origin",
+            format!(
+                "http://127.0.0.1:{}",
+                if address.port() == 1 { 2 } else { 1 }
+            )
+            .parse()
+            .unwrap(),
+        );
+        wrong_port.headers_mut().insert(
+            "sec-websocket-protocol",
+            wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
+        );
+        assert!(tokio_tungstenite::connect_async(wrong_port).await.is_err());
         let mut good = url.as_str().into_client_request().unwrap();
         good.headers_mut()
-            .insert("origin", "http://localhost:5173".parse().unwrap());
+            .insert("origin", format!("http://{address}").parse().unwrap());
         good.headers_mut().insert(
             "sec-websocket-protocol",
             wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
@@ -757,7 +963,7 @@ mod tests {
         wait_ready.await.unwrap();
         let mut good = url.as_str().into_client_request().unwrap();
         good.headers_mut()
-            .insert("origin", "http://localhost:5173".parse().unwrap());
+            .insert("origin", format!("http://{address}").parse().unwrap());
         good.headers_mut().insert(
             "sec-websocket-protocol",
             wire::REMOTE_WEBSOCKET_PROTOCOL.parse().unwrap(),
@@ -829,6 +1035,7 @@ mod tests {
             origin: "http://localhost:5173".into(),
             slots: Arc::new(Semaphore::new(1)),
             oidc: None,
+            same_origin: false,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();

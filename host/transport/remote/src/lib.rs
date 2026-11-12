@@ -22,8 +22,9 @@ mod tls;
 mod wire;
 
 pub use auth::{
-    AccessError, AuthConfig, AuthConfigError, AuthError, AuthPolicy, CredentialLifetime,
-    PairingLifetime, RemoteAuth, StoredCredential, WorkspaceResolver,
+    AccessError, AuthConfig, AuthConfigError, AuthError, AuthPersistence, AuthPersistenceError,
+    AuthPolicy, CredentialLifetime, PairingLifetime, RemoteAuth, StoredCredential, StoredDevice,
+    WorkspaceResolver,
 };
 pub use authorization::{AuthorizationError, SessionGrant};
 pub use backend_handler::BackendRemoteHandler;

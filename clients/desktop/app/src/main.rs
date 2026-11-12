@@ -1,4 +1,5 @@
 mod connection;
+mod web_access;
 mod workspace_dialog;
 
 use std::path::{Path, PathBuf};
@@ -236,6 +237,10 @@ fn main() {
         Some(local)
     }))
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
+    if !is_remote {
+        desktop_services =
+            desktop_services.with_web_access(Arc::new(web_access::LocalWebAccess(host.clone())));
+    }
     if let Some(connection) = connection_identity {
         desktop_services = desktop_services.with_connection_identity(connection);
     }

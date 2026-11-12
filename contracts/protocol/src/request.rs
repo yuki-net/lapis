@@ -20,6 +20,18 @@ pub enum RequestBody {
     HostWorktree(editor_core::TaskId),
     #[serde(rename = "host.register_workspace")]
     HostRegister(crate::HostRegisterRequest),
+    #[serde(rename = "host.invite")]
+    HostInvite(crate::HostInviteRequest),
+    #[serde(rename = "host.devices.list")]
+    HostDeviceList(crate::HostDeviceListRequest),
+    #[serde(rename = "host.devices.revoke")]
+    HostDeviceRevoke(crate::HostDeviceRevokeRequest),
+    #[serde(rename = "host.web.status")]
+    HostWebStatus(crate::HostWebStatusRequest),
+    #[serde(rename = "host.web.start")]
+    HostWebStart(crate::HostWebStartRequest),
+    #[serde(rename = "host.web.stop")]
+    HostWebStop(crate::HostWebStopRequest),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentRelocateRequest),
     #[serde(rename = "files.create_directory")]
@@ -93,6 +105,12 @@ impl RequestBody {
             Self::WorkbenchPut(_) => "workbench.put",
             Self::HostWorktree(_) => "host.worktree_path",
             Self::HostRegister(_) => "host.register_workspace",
+            Self::HostInvite(_) => "host.invite",
+            Self::HostDeviceList(_) => "host.devices.list",
+            Self::HostDeviceRevoke(_) => "host.devices.revoke",
+            Self::HostWebStatus(_) => "host.web.status",
+            Self::HostWebStart(_) => "host.web.start",
+            Self::HostWebStop(_) => "host.web.stop",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
@@ -133,7 +151,14 @@ impl RequestBody {
             Self::WorkbenchGet(_) => capability::WORKSPACE_SYNC,
             Self::WorkbenchPut(_) => capability::WORKBENCH_WRITE,
             Self::HostRegister(_) => capability::WORKSPACES_REGISTER,
-            Self::HostWorktree(_) | Self::DocumentRelocate(_) => capability::HOST_MANAGE,
+            Self::HostWorktree(_) | Self::HostInvite(_) | Self::DocumentRelocate(_) => {
+                capability::HOST_MANAGE
+            }
+            Self::HostDeviceList(_)
+            | Self::HostDeviceRevoke(_)
+            | Self::HostWebStatus(_)
+            | Self::HostWebStart(_)
+            | Self::HostWebStop(_) => capability::HOST_MANAGE,
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)
@@ -171,7 +196,15 @@ impl RequestBody {
         match self {
             Self::WorkbenchGet(request) => Some(&request.workspace_id),
             Self::WorkbenchPut(request) => Some(&request.workspace_id),
-            Self::HostRegister(_) | Self::HostWorktree(_) | Self::DocumentRelocate(_) => None,
+            Self::HostRegister(_)
+            | Self::HostWorktree(_)
+            | Self::HostInvite(_)
+            | Self::HostDeviceList(_)
+            | Self::HostDeviceRevoke(_)
+            | Self::HostWebStatus(_)
+            | Self::HostWebStart(_)
+            | Self::HostWebStop(_)
+            | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),
             Self::DocumentInspect(_)

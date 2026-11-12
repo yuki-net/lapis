@@ -1,12 +1,49 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use super::settings_coordinator::{Change, SettingsCoordinator};
+use crate::client_adapter::ClientWorker;
 use crate::{
     components::{Icon, IconName},
     localization::Localizer,
     theme,
 };
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use desktop_client::web_access::{HostDevice, HostWebStatus, WebAccess};
+#[cfg(any(not(target_family = "wasm"), test))]
+use gpui::App;
+use gpui::{Context, Global, Render, Window, div, prelude::*, px};
+
+struct WebAccessGlobal(Arc<dyn WebAccess>);
+impl Global for WebAccessGlobal {}
+
+#[cfg(any(not(target_family = "wasm"), test))]
+pub(crate) fn install_web_access(access: Arc<dyn WebAccess>, cx: &mut App) {
+    cx.set_global(WebAccessGlobal(access));
+}
+
+#[derive(Clone)]
+enum WebOperation {
+    Refresh,
+    Start(String),
+    Stop,
+    Invite,
+    Revoke(String),
+}
+
+struct WebResult {
+    status: HostWebStatus,
+    devices: Vec<HostDevice>,
+    invitation: Option<zeroize::Zeroizing<String>>,
+}
+
+struct WebState {
+    worker: ClientWorker<Arc<dyn WebAccess>>,
+    status: Option<HostWebStatus>,
+    devices: Vec<HostDevice>,
+    address: String,
+    busy: bool,
+    generation: u64,
+    message: String,
+}
 use settings::{
     Label, OptionSource, ResolvedSettings, SettingControl, SettingDefinition, SettingKey,
     SettingOption, SettingValue, SettingsScope,
@@ -22,6 +59,7 @@ pub(crate) struct SettingsFeature {
     locale: Localizer,
     message: String,
     page: &'static str,
+    web: Option<WebState>,
 }
 
 impl gpui::EventEmitter<ResolvedSettings> for SettingsFeature {}
@@ -43,6 +81,15 @@ impl SettingsFeature {
         // Terminal Feature が Host の profile 一覧を公開したら選択肢を作り直す。
         let catalogs =
             vec![cx.observe_global::<super::terminal::TerminalProfileCatalog>(|_, cx| cx.notify())];
+        let web = cx.try_global::<WebAccessGlobal>().map(|global| WebState {
+            worker: ClientWorker::new(global.0.clone()),
+            status: None,
+            devices: Vec::new(),
+            address: "127.0.0.1".into(),
+            busy: false,
+            generation: 0,
+            message: String::new(),
+        });
         Self {
             coordinator,
             _subscription: subscription,
@@ -52,12 +99,22 @@ impl SettingsFeature {
             locale,
             message: String::new(),
             page: default_page(),
+            web,
         }
     }
 
     pub(crate) fn set_workspace(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
         if self.root != root {
             self.root = root;
+            if let Some(web) = &mut self.web {
+                web.generation = web.generation.wrapping_add(1);
+                web.status = None;
+                web.devices.clear();
+                web.busy = false;
+            }
+            if self.page == "host.web" && self.root.is_some() {
+                self.web_request(WebOperation::Refresh, cx);
+            }
             cx.notify();
         }
     }
@@ -76,8 +133,271 @@ impl SettingsFeature {
     fn select_page(&mut self, page: &'static str, cx: &mut Context<Self>) {
         if self.page != page {
             self.page = page;
+            if page == "host.web" {
+                self.web_request(WebOperation::Refresh, cx);
+            }
             cx.notify();
         }
+    }
+
+    fn web_request(&mut self, operation: WebOperation, cx: &mut Context<Self>) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        let Some(web) = &mut self.web else { return };
+        if web.busy {
+            return;
+        }
+        web.busy = true;
+        web.message.clear();
+        let generation = web.generation;
+        let worker = web.worker.clone();
+        let admitted = worker.submit(
+            cx,
+            move |access| {
+                let invitation = match operation {
+                    WebOperation::Refresh => None,
+                    WebOperation::Start(address) => {
+                        access.start(&root, &address, 4747)?;
+                        None
+                    }
+                    WebOperation::Stop => {
+                        access.stop(&root)?;
+                        None
+                    }
+                    WebOperation::Invite => Some(access.invite(&root)?),
+                    WebOperation::Revoke(id) => {
+                        access.revoke(&root, &id)?;
+                        None
+                    }
+                };
+                Ok(WebResult {
+                    status: access.status(&root)?,
+                    devices: access.devices(&root)?,
+                    invitation,
+                })
+            },
+            move |this, result, cx| {
+                let copied = this.t("settings.web.copied");
+                let Some(web) = &mut this.web else { return };
+                if web.generation != generation {
+                    return;
+                }
+                web.busy = false;
+                match result {
+                    Ok(result) => {
+                        if let Some(url) = &result.status.url
+                            && let Some(address) = result
+                                .status
+                                .addresses
+                                .iter()
+                                .find(|address| url.starts_with(&format!("http://{address}:")))
+                        {
+                            web.address = address.clone();
+                        }
+                        if !result.status.addresses.contains(&web.address) {
+                            web.address =
+                                result.status.addresses.first().cloned().unwrap_or_default();
+                        }
+                        web.message = result.status.error.clone().unwrap_or_default();
+                        web.status = Some(result.status);
+                        web.devices = result.devices;
+                        if let Some(invitation) = result.invitation {
+                            cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                                invitation.to_string(),
+                            ));
+                            web.message = copied;
+                        }
+                    }
+                    Err(error) => web.message = error,
+                }
+                cx.notify();
+            },
+        );
+        if let Err(error) = admitted
+            && let Some(web) = &mut self.web
+        {
+            web.busy = false;
+            web.message = error;
+        }
+        cx.notify();
+    }
+
+    fn web_button(
+        &self,
+        id: &'static str,
+        label: &str,
+        operation: WebOperation,
+        enabled: bool,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div()
+            .id(id)
+            .debug_selector(|| id.into())
+            .px_3()
+            .py_2()
+            .rounded(px(6.0))
+            .bg(theme::colors(cx).background_tertiary)
+            .text_color(if enabled {
+                theme::colors(cx).text_primary
+            } else {
+                theme::colors(cx).text_tertiary
+            })
+            .child(self.t(label))
+            .when(enabled, |button| {
+                button.cursor_pointer().on_click(
+                    cx.listener(move |this, _, _, cx| this.web_request(operation.clone(), cx)),
+                )
+            })
+    }
+
+    fn render_web_page(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let Some(web) = &self.web else { return div() };
+        let available = self.root.is_some() && !web.busy;
+        let url = web.status.as_ref().and_then(|status| status.url.as_ref());
+        let addresses = web
+            .status
+            .as_ref()
+            .map(|status| status.addresses.as_slice())
+            .unwrap_or(&[]);
+        let mut content = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .child(self.t("settings.web.title")),
+            )
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::colors(cx).text_tertiary)
+                    .child(self.t("settings.web.description")),
+            )
+            .child(
+                div().text_size(px(12.0)).child(
+                    url.cloned()
+                        .unwrap_or_else(|| self.t("settings.web.stopped")),
+                ),
+            )
+            .children((self.root.is_none()).then(|| {
+                div()
+                    .text_color(theme::colors(cx).text_tertiary)
+                    .child(self.t("settings.no-workspace"))
+            }))
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .child(self.t("settings.web.address")),
+            )
+            .children(addresses.iter().enumerate().map(|(index, address)| {
+                let selected = *address == web.address;
+                let address = address.clone();
+                div()
+                    .id(("web-address", index))
+                    .px_3()
+                    .py_2()
+                    .rounded(px(6.0))
+                    .bg(if selected {
+                        theme::colors(cx).button_background_selected
+                    } else {
+                        theme::colors(cx).background_tertiary
+                    })
+                    .child(address.clone())
+                    .when(available && url.is_none(), |row| {
+                        row.cursor_pointer()
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if let Some(web) = &mut this.web {
+                                    web.address = address.clone();
+                                }
+                                cx.notify();
+                            }))
+                    })
+            }))
+            .child(
+                div()
+                    .flex()
+                    .gap_2()
+                    .child(self.web_button(
+                        "web-refresh",
+                        "settings.web.refresh",
+                        WebOperation::Refresh,
+                        available,
+                        cx,
+                    ))
+                    .child(self.web_button(
+                        "web-start",
+                        "settings.web.start",
+                        WebOperation::Start(web.address.clone()),
+                        available && url.is_none() && !web.address.is_empty(),
+                        cx,
+                    ))
+                    .child(self.web_button(
+                        "web-stop",
+                        "settings.web.stop",
+                        WebOperation::Stop,
+                        available && url.is_some(),
+                        cx,
+                    ))
+                    .child(self.web_button(
+                        "web-invite",
+                        "settings.web.invite",
+                        WebOperation::Invite,
+                        available && url.is_some(),
+                        cx,
+                    )),
+            )
+            .child(div().text_size(px(12.0)).child(web.message.clone()))
+            .child(
+                div()
+                    .text_size(px(14.0))
+                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .child(self.t("settings.web.devices")),
+            );
+        for (index, device) in web.devices.iter().enumerate() {
+            let id = device.id.clone();
+            let label = format!("{}  ·  {}  ·  {}", device.name, device.kind, device.status);
+            let can_revoke = available && !device.is_current && device.status != "revoked";
+            content = content.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap_3()
+                    .child(div().text_size(px(12.0)).child(label))
+                    .child(if device.is_current {
+                        div()
+                            .text_size(px(11.0))
+                            .child(self.t("settings.web.this-device"))
+                            .into_any_element()
+                    } else {
+                        div()
+                            .id(("web-revoke", index))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(6.0))
+                            .text_color(if can_revoke {
+                                theme::colors(cx).text_primary
+                            } else {
+                                theme::colors(cx).text_tertiary
+                            })
+                            .child(self.t("settings.web.revoke"))
+                            .when(can_revoke, |button| {
+                                button.cursor_pointer().on_click(cx.listener(
+                                    move |this, _, _, cx| {
+                                        this.web_request(WebOperation::Revoke(id.clone()), cx)
+                                    },
+                                ))
+                            })
+                            .into_any_element()
+                    }),
+            );
+        }
+        content
     }
 
     pub(super) fn render_settings_content(&self, cx: &mut Context<Self>) -> gpui::Div {
@@ -124,11 +444,37 @@ impl SettingsFeature {
         let catalog = settings::catalog();
         div()
             .id("main-settings-nav")
+            .debug_selector(|| "main-settings-nav".into())
             .w(px(220.0))
             .flex_shrink_0()
             .flex()
             .flex_col()
             .gap_1()
+            .when(self.web.is_some(), |nav| {
+                let selected = self.page == "host.web";
+                nav.child(
+                    div()
+                        .id("settings-host-web")
+                        .debug_selector(|| "settings-host-web".into())
+                        .px_5()
+                        .py_2()
+                        .rounded(px(6.0))
+                        .bg(if selected {
+                            theme::colors(cx).button_background_selected
+                        } else {
+                            theme::colors(cx).background_primary
+                        })
+                        .hover(|style| style.bg(theme::colors(cx).button_background_hover))
+                        .text_size(px(12.0))
+                        .text_color(if selected {
+                            theme::colors(cx).text_accent
+                        } else {
+                            theme::colors(cx).text_primary
+                        })
+                        .child(self.t("settings.web.title"))
+                        .on_click(cx.listener(|this, _, _, cx| this.select_page("host.web", cx))),
+                )
+            })
             .children(catalog.categories().iter().map(|category| {
                 div()
                     .flex()
@@ -188,6 +534,9 @@ impl SettingsFeature {
     }
 
     fn render_page(&self, cx: &mut Context<Self>) -> gpui::Div {
+        if self.page == "host.web" {
+            return self.render_web_page(cx);
+        }
         let catalog = settings::catalog();
         let page = catalog.page(self.page).or_else(|| catalog.first_page());
         let mut container = div().flex_1().min_w(px(0.0)).flex().flex_col().gap_4();
@@ -627,5 +976,138 @@ mod tests {
                 Some("powershell".to_owned())
             );
         });
+    }
+
+    #[derive(Default)]
+    struct TestWeb(std::sync::Mutex<Option<String>>);
+    impl WebAccess for TestWeb {
+        fn status(&self, _: &std::path::Path) -> Result<HostWebStatus, String> {
+            Ok(HostWebStatus {
+                url: self.0.lock().unwrap().clone(),
+                addresses: vec!["127.0.0.1".into()],
+                error: None,
+            })
+        }
+        fn start(&self, _: &std::path::Path, _: &str, _: u16) -> Result<HostWebStatus, String> {
+            *self.0.lock().unwrap() = Some("http://127.0.0.1:1234/".into());
+            self.status(std::path::Path::new("."))
+        }
+        fn stop(&self, _: &std::path::Path) -> Result<HostWebStatus, String> {
+            *self.0.lock().unwrap() = None;
+            self.status(std::path::Path::new("."))
+        }
+        fn invite(&self, _: &std::path::Path) -> Result<zeroize::Zeroizing<String>, String> {
+            Err("not used".into())
+        }
+        fn devices(&self, _: &std::path::Path) -> Result<Vec<HostDevice>, String> {
+            Ok(Vec::new())
+        }
+        fn revoke(&self, _: &std::path::Path, _: &str) -> Result<(), String> {
+            Err("not used".into())
+        }
+    }
+
+    #[gpui::test]
+    fn web_controls_refresh_after_start_and_stop(cx: &mut gpui::TestAppContext) {
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            SettingsCoordinator::init(
+                desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap(),
+                cx,
+            );
+            install_web_access(Arc::new(TestWeb::default()), cx);
+            let feature = cx.new(SettingsFeature::new);
+            feature.update(cx, |feature, cx| {
+                feature.set_workspace(Some(PathBuf::from("workspace")), cx);
+                feature.select_page("host.web", cx);
+            });
+            feature
+        });
+        let wait = |cx: &mut gpui::TestAppContext| {
+            let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(5);
+            while cx.update(|cx| feature.read(cx).web.as_ref().unwrap().busy) {
+                assert!(crate::time::Instant::now() < deadline);
+                cx.run_until_parked();
+                std::thread::yield_now();
+            }
+        };
+        wait(cx);
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.web_request(WebOperation::Start("127.0.0.1".into()), cx)
+            })
+        });
+        wait(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                feature
+                    .read(cx)
+                    .web
+                    .as_ref()
+                    .unwrap()
+                    .status
+                    .as_ref()
+                    .unwrap()
+                    .url
+                    .as_deref(),
+                Some("http://127.0.0.1:1234/")
+            )
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.web_request(WebOperation::Stop, cx)
+            })
+        });
+        wait(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                feature
+                    .read(cx)
+                    .web
+                    .as_ref()
+                    .unwrap()
+                    .status
+                    .as_ref()
+                    .unwrap()
+                    .url,
+                None
+            )
+        });
+    }
+
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn web_management_page_can_be_opened_from_settings_navigation(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            SettingsCoordinator::init(
+                desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap(),
+                cx,
+            );
+            install_web_access(Arc::new(TestWeb::default()), cx);
+        });
+        let (feature, visual) = cx.add_window_view(|_, cx| SettingsFeature::new(cx));
+        feature.read_with(visual, |feature, _| {
+            assert!(feature.web.is_some(), "Web service missing")
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        assert!(
+            visual.debug_bounds("main-settings-nav").is_some(),
+            "settings navigation missing"
+        );
+        let button = visual
+            .debug_bounds("settings-host-web")
+            .expect("Web navigation");
+        visual.simulate_click(button.center(), gpui::Modifiers::none());
+        feature.read_with(visual, |feature, _| assert_eq!(feature.page, "host.web"));
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        assert!(visual.debug_bounds("web-start").is_some());
+        assert!(visual.debug_bounds("web-invite").is_some());
     }
 }

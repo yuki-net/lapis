@@ -1847,6 +1847,7 @@ dependencies = [
  "web-sys",
  "workbench",
  "workspace",
+ "zeroize",
 ]
 
 [[package]]
@@ -1889,6 +1890,7 @@ dependencies = [
  "web-time",
  "windows 0.61.3",
  "workspace",
+ "zeroize",
 ]
 
 [[package]]
@@ -3860,6 +3862,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "sysinfo",
  "task",
  "tempfile",
  "terminal",
@@ -4497,6 +4500,7 @@ dependencies = [
  "tempfile",
  "winresource",
  "workspace",
+ "zeroize",
 ]
 
 [[package]]
@@ -9504,6 +9508,7 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tokio-util",
+ "tower-http 0.7.1",
  "url",
  "winresource",
  "wire",
