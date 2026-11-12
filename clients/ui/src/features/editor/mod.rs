@@ -106,8 +106,9 @@ pub(crate) struct Editor {
     edit_epoch: Option<crate::client_adapter::EditEpoch>,
     in_flight: usize,
     group_sync_pending: bool,
-    /// 入力中で適用できなかった共有 snapshot。Idle 後に共有の active を反映する。
-    shared_pending: Option<ClientSnapshot>,
+    /// 入力中で反映できなかった共有の active 文書。次の snapshot 受理で反映する。
+    /// snapshot 全体ではなく選択だけを持つことで、より新しい snapshot に追い越されない。
+    shared_active: Option<DocumentId>,
     sync_pending: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -126,6 +127,25 @@ pub(crate) struct Editor {
 }
 
 impl gpui::EventEmitter<EditorEvent> for Editor {}
+
+/// 入力中に保留した共有の active を、受理する snapshot へ反映する。
+///
+/// snapshot 全体を保留すると、入力完了時に届くより新しい snapshot に追い越されて
+/// `accept_snapshot` の sequence 検査で拒否され、共有の active が失われる。
+/// 選択だけを保留し、次に受理する snapshot の active を差し替える。
+fn apply_deferred_shared_active(
+    active: &mut Option<DocumentId>,
+    tabs: &[desktop_client::DocumentTab],
+    shared_active: &mut Option<DocumentId>,
+) {
+    let Some(id) = shared_active.take() else {
+        return;
+    };
+    // 共有側で閉じられた文書は選ばない。
+    if tabs.iter().any(|tab| tab.id == id) {
+        *active = Some(id);
+    }
+}
 
 impl Drop for Editor {
     fn drop(&mut self) {
@@ -179,7 +199,7 @@ impl Editor {
             edit_epoch: None,
             in_flight: 0,
             group_sync_pending: false,
-            shared_pending: None,
+            shared_active: None,
             sync_pending: false,
             selected_range: 0..0,
             selection_reversed: false,
@@ -441,45 +461,27 @@ impl Editor {
     ///
     /// 共有 view の適用ではタブ構成と選択中の文書が変わるため、`receive_snapshot`
     /// のように現在の文書を優先せず、snapshot の active をそのまま採用する。
-    /// 未確定の入力がある間は snapshot を保留し、Idle 後に同じ active を採用する。
+    /// 未確定の入力がある間は active だけを保留し、後の snapshot 受理で反映する。
+    /// snapshot 全体を保留すると、入力完了時の新しい snapshot に追い越されて
+    /// `accept_snapshot` に拒否され、共有の active が失われるため。
     pub(crate) fn receive_shared_snapshot(
         &mut self,
         snapshot: &ClientSnapshot,
         cx: &mut Context<Self>,
     ) {
         if self.has_pending() {
-            // Idle 後の再適用でも共有の active を失わないよう、保留中の snapshot を
-            // 保持する。ここでは本文を置き換えない。
-            self.shared_pending = Some(snapshot.clone());
+            // Idle 後の再適用でも共有の active を失わないよう、選択だけを保持する。
+            // 本文は置き換えない。
+            self.shared_active = snapshot.active.clone();
             self.group_sync_pending = true;
             return;
         }
-        self.shared_pending = None;
+        self.shared_active = None;
         self.group_sync_pending = false;
         self.edit_epoch = Some(snapshot.edit_epoch);
         let local = self.local_snapshot(snapshot);
         self.accept_snapshot(&local, true, cx);
         cx.notify();
-    }
-
-    /// 保留した共有 snapshot を取り出して適用する。無ければ `false`。
-    ///
-    /// Idle 後の `receive_snapshot` は現在の文書を優先するため、共有された active を
-    /// 反映できない。保留があるときはこちらを優先する。
-    pub(crate) fn take_pending_shared_snapshot(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(snapshot) = self.shared_pending.take() else {
-            return false;
-        };
-        if self.has_pending() {
-            // まだ入力中なら保留を戻す。
-            self.shared_pending = Some(snapshot);
-            return false;
-        }
-        self.edit_epoch = Some(snapshot.edit_epoch);
-        let local = self.local_snapshot(&snapshot);
-        self.accept_snapshot(&local, true, cx);
-        cx.notify();
-        true
     }
 
     /// Workspace切替を通常の入力・Closeと同じ待ち処理の境界で保護する。
@@ -544,6 +546,13 @@ impl Editor {
             return;
         }
         self.snapshot_sequence = snapshot.sequence;
+        let mut snapshot = snapshot.clone();
+        apply_deferred_shared_active(
+            &mut snapshot.active,
+            &snapshot.tabs,
+            &mut self.shared_active,
+        );
+        let snapshot = &snapshot;
         for view in &snapshot.workspace_view.open_documents {
             if let Some(id) = &view.document_id {
                 self.scroll_positions
@@ -1039,5 +1048,58 @@ impl Render for Editor {
                 )
                 .size_full(),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::apply_deferred_shared_active;
+    use editor_core::DocumentId;
+
+    fn tab(id: &str) -> desktop_client::DocumentTab {
+        desktop_client::DocumentTab {
+            id: DocumentId::new(id),
+            display_name: id.to_owned(),
+            path: None,
+            dirty: false,
+            external_change: document::ExternalChange::Unchanged,
+            encoding: document::Encoding::Utf8,
+            active: false,
+        }
+    }
+
+    /// 入力完了時に届いた新しい snapshot が共有の active を追い越しても、
+    /// 保留した選択を反映して共有の active を失わない。
+    #[test]
+    fn a_deferred_shared_active_survives_a_newer_snapshot() {
+        let tabs = [tab("a"), tab("b")];
+        // 入力中は B を保留したまま、snapshot は受理しない。
+        let mut shared = Some(DocumentId::new("b"));
+        // 入力完了後に届いた新しい snapshot は A を選んでいる。
+        let mut active = Some(DocumentId::new("a"));
+        apply_deferred_shared_active(&mut active, &tabs, &mut shared);
+        assert_eq!(active, Some(DocumentId::new("b")));
+        assert!(shared.is_none(), "反映した保留は消費する");
+    }
+
+    /// 共有側で閉じられた文書は選ばず、保留も捨てる。
+    #[test]
+    fn a_deferred_shared_active_ignores_a_closed_document() {
+        let tabs = [tab("a")];
+        let mut shared = Some(DocumentId::new("b"));
+        let mut active = Some(DocumentId::new("a"));
+        apply_deferred_shared_active(&mut active, &tabs, &mut shared);
+        assert_eq!(active, Some(DocumentId::new("a")));
+        assert!(shared.is_none(), "保留は消費する");
+    }
+
+    /// 保留が無ければ active を変えない。
+    #[test]
+    fn no_deferred_shared_active_keeps_the_snapshot_active() {
+        let tabs = [tab("a"), tab("b")];
+        let mut shared = None;
+        let mut active = Some(DocumentId::new("a"));
+        apply_deferred_shared_active(&mut active, &tabs, &mut shared);
+        assert_eq!(active, Some(DocumentId::new("a")));
     }
 }
