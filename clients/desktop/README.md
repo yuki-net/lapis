@@ -23,6 +23,7 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 ## ディレクトリの責務
 
 - `app/` は Desktop の起動・終了と依存注入を行う Composition Root。Backend の具体実装を組み立てるのはここに限定します。
+- `launcher/` は起動時に staging 済みの更新を適用してから本体を起動します。manifest の取得・download・更新の同意画面は持ちません（[配布と更新の内部契約](../../docs/specs/release.md)）。
 - `../state/` は Host の表示 cache・Client 操作・復元用表示状態を所有し、GPUI や具体的な OS 実装には依存しません。
 - `persistence/` は Desktop の Conversation・Window 表示状態・設定を保存します。Backend の実行資源を復元・再起動する責務は持ちません。
 - `../ui/src/shell/` は Window・Panel・Tab・Layout、`../ui/src/features/` は個別機能の表示・入力・描画を担当します。
@@ -31,6 +32,10 @@ UIの共通の意図は [Design](../../docs/DESIGN.md)、手動検証の扱い�
 - Project / Taskの保存状態が壊れている場合はエラーを表示して書き戻しを拒否します。従来の会話はrootごとのProjectへ移行し、Project未所属の下書きはTask外の復元項目として残します。
 - UI に Backend の正規状態や実行ロジックを移さず、機能横断的な `#[path]` 取り込みは禁止します。
 - 依存方向の詳細は [責務と依存方向](../../docs/specs/architecture.md) を参照してください。
+
+- 更新の適用は `launcher/` が行います。起動時に `staging/<version>/` の検証済み package を `versions/<version>/` へ入れ、`current.json` を進めてから本体を起動します。失敗しても起動を止めず、`current.json` の version で立ち上げます。`breaking: true` の適用（data 世代の切替）は同意を伴うためアプリ側の範囲です。
+- `launcher/` は GPUI を読み込まず、署名検証・zip 展開・pointer の読み書きだけを持ちます。更新の検出・download・更新モードの設定を launcher に足さないでください（launcher 自身の更新は手動になるため）。
+- 信頼済み公開鍵は `release/trusted-keys.json` を build 時に埋め込みます。鍵の追加・失効は launcher の再配布を伴います。
 
 ## OIDC ログイン
 

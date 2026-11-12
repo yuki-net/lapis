@@ -1,0 +1,15 @@
+{
+  "assets": {
+    "windows-x86_64": {
+      "sha256": "90ce57e07dedabb0a8b951a512e91da027ec264dc7d02d77c85b188b3c48a621",
+      "source": "lapis-0.1.0-alpha.1-windows-x86_64.zip"
+    }
+  },
+  "breaking": false,
+  "generated_at": "2026-11-12T00:00:00Z",
+  "key_id": "launcher-fixture",
+  "notes_url": "https://example.invalid/releases/v0.1.0-alpha.1",
+  "schema": 1,
+  "signature": "SA7zhwwnJ6FyWY247PgAnfim2M6aly4rJQDnYAuFdTOyozaNu0r9DcfH4edvPxaDwSQ40hciOJBaEEe6WEH3DA==",
+  "version": "0.1.0-alpha.1"
+}

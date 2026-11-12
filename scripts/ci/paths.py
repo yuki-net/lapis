@@ -19,6 +19,7 @@ PATH_RULES = [
     # clients/state と clients/ui は Web の wasm ビルド（desktop-ui）でもコンパイルされる。
     (["clients/state/"], {"desktop", "rust_core", "web"}),
     (["clients/desktop/persistence/"], {"desktop", "rust_core"}),
+    (["clients/desktop/launcher/"], {"desktop", "rust_core"}),
     (["clients/desktop/"], {"desktop"}),
     (["clients/ui/"], {"desktop", "web"}),
     (["vendor/gpui/"], {"desktop"}),
@@ -51,7 +52,8 @@ PATH_RULES = [
     
     # CI・scripts
     (["scripts/"], {"repository"}),
-    (["release/"], {"repository"}),
+    # launcher は release/trusted-keys.json を build 時に埋め込む。
+    (["release/"], {"repository", "desktop"}),
     
     # Cargo設定
     (["Cargo.toml"], {"repository", "rust_core", "host", "desktop"}),

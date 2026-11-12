@@ -1,0 +1,28 @@
+[package]
+name = "lapis-launcher"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "lapis-launcher"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+ed25519-dalek = "3"
+# zip の deflate は backend を選ばないため、ここで明示する。
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+semver = "1"
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+zip = { version = "9.5.1", default-features = false, features = ["deflate-flate2"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[build-dependencies]
+winresource.workspace = true

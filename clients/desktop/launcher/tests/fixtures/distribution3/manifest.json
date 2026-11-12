@@ -1,0 +1,15 @@
+{
+  "assets": {
+    "windows-x86_64": {
+      "sha256": "752e7d5dc895fa5cf56ac1f2865c924bbe7a4d981681dd709f02b44aab9d6130",
+      "source": "lapis-0.2.0-windows-x86_64.zip"
+    }
+  },
+  "breaking": false,
+  "generated_at": "2026-11-12T00:00:00Z",
+  "key_id": "launcher-fixture",
+  "notes_url": "https://example.invalid/releases/v0.2.0",
+  "schema": 1,
+  "signature": "IkteUY1XKjrs63KGGS6ZU+P+EfjzrAPYDcfOuE/hL1pOMcf9s4FCVxZ8CdX9KZDUB29m0Y64zAQpwg1l9EqdBw==",
+  "version": "0.2.0"
+}
