@@ -73,9 +73,10 @@ impl UpdateFeature {
         let controller = self.controller.clone();
         cx.spawn(async move |_, cx| {
             loop {
-                cx.background_executor()
-                    .spawn(async move { crate::timer::Timer::after(interval).await })
-                    .await;
+                // Timer を直接 await する。background_executor の spawn は wasm では
+                // Send を要求できず、UI thread の timer と混在できない。
+                crate::timer::Timer::after(interval).await;
+                let _ = cx;
                 controller.check();
             }
         })
