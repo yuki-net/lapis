@@ -117,22 +117,7 @@ python scripts/package/distribution.py verify --root local:dist\v0.2.0 --public-
 
 ## 手動復旧
 
-手順は [配布物の手動復旧](../recovery.md) を正本とします。署名鍵は不要で、配布物の `manifest.json` と `manifest.pub` を使います。
-
-1. launcher とアプリを終了する。Host が残っている場合は `scripts/stop_dev_host.ps1` かタスクトレイから止める。
-2. `%LOCALAPPDATA%\Lapis\install\current.json` を控える。壊れていれば削除してよい（次回起動時に選び直す）。
-3. 戻したい版の package（`lapis-<version>-<platform>.zip`）と、同じ版の `manifest.json` を入手する。
-4. `manifest.json` の `assets` から自分のプラットフォームの `sha256` と `size` を取り、zip の SHA-256 と byte 数が一致することを確認する。
-   ```powershell
-   (Get-FileHash -Algorithm SHA256 .\lapis-0.1.0-windows-x86_64.zip).Hash.ToLower()
-   (Get-Item .\lapis-0.1.0-windows-x86_64.zip).Length
-   ```
-   一致しなければその package は使わない。
-5. `%LOCALAPPDATA%\Lapis\install\versions\<version>\` を削除し、zip をそのパスへ展開する。zip の root がそのまま版ディレクトリの中身になる。
-6. `current.json` を `{"schema": 1, "version": "<version>", "generation": <N>, "activated_at": "<現在時刻>"}` に書き換える。`generation` は戻す版が使うデータ世代に合わせる。`data/` と `credentials/` は削除しない。
-7. launcher を起動し、バージョン表示が戻した版になっていることを確認する。
-
-データ世代を跨いで戻す場合は、旧世代の `data/generation-<N>/` が残っていることだけ確認します。無い場合は旧世代のデータは復元できず、新規 install と同じ状態になります。`credentials/` は世代の外にあるため、この操作で再登録は不要です。
+更新が壊れた場合に package を手で差し戻す手順は [配布物の手動復旧](../recovery.md) を正本とします。戻す版の package の SHA-256 を manifest と照合し、`versions/<version>/` と `current.json` を手で置き換えます。`data/` と `credentials/` は削除しません。
 
 ## 検証
 
