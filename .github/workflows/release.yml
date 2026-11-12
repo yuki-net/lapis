@@ -1,0 +1,120 @@
+name: Release
+
+# tag 駆動で package と署名付き manifest を作り、GitHub Releases へ配置する。
+# 生成と配置の経路は scripts/package/distribution.py の1本で、local 配置と共通。
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "既存の tag（workflow_dispatch で再配置する場合）"
+        required: true
+      breaking:
+        description: "データ世代が上がる破壊的変更か"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  release:
+    name: Package / Windows
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install packaging dependencies
+        run: python -m pip install -r scripts/package/requirements.txt
+
+      - name: Cache Cargo artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            ~/.cargo/git/checkouts/
+            target/
+          key: release-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            release-${{ runner.os }}-rust-${{ env.RUST_TOOLCHAIN }}-
+
+      - name: Build release binaries
+        run: cargo build --locked --release -p lapis -p host -p web-bridge -p lapis-web
+
+      - name: Resolve tag and version
+        id: version
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:GITHUB_REF_NAME }
+          if ($tag -notmatch '^v(?<version>[0-9]+\.[0-9]+\.[0-9]+)') {
+            throw "tag は v<version> 形式にしてください: $tag"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($Matches.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Restore signing key
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.LAPIS_RELEASE_SIGNING_KEY }}
+        run: |
+          if (-not $env:SIGNING_KEY) {
+            throw "secret LAPIS_RELEASE_SIGNING_KEY がありません。署名できないため配置しません"
+          }
+          $path = Join-Path $env:RUNNER_TEMP "signing.key"
+          Set-Content -Path $path -Value $env:SIGNING_KEY.Trim() -NoNewline
+          "key-path=$path" >> $env:GITHUB_OUTPUT
+        id: signing
+
+      - name: Publish package and manifest
+        shell: pwsh
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          KEY_PATH: ${{ steps.signing.outputs.key-path }}
+          BREAKING: ${{ inputs.breaking }}
+        run: |
+          $arguments = @(
+            "scripts/package/distribution.py", "publish",
+            "--version", $env:VERSION,
+            "--binaries", "target/release",
+            "--dest", "github:$env:TAG",
+            "--release-notes-url", "$env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/releases/tag/$env:TAG",
+            "--private-key", $env:KEY_PATH
+          )
+          if ($env:BREAKING -eq "true") { $arguments += "--breaking" }
+          python @arguments
+
+      - name: Remove signing key
+        if: always()
+        shell: pwsh
+        env:
+          KEY_PATH: ${{ steps.signing.outputs.key-path }}
+        run: |
+          if ($env:KEY_PATH) { Remove-Item -Path $env:KEY_PATH -Force -ErrorAction SilentlyContinue }

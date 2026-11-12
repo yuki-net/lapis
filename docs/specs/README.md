@@ -13,3 +13,4 @@
 - [責務と依存方向](architecture.md): 機能追加時の状態所有・配置判断と依存検査。
 - [設定のスコープと所有者](settings.md): 設定値の所有者・保存先・解決順と、設定 UI が定義データから画面を作る規則。
 - [認証とセッション](auth.md): Host/Client の認証方式、OIDC 検証、Session の所有と失効。
+- [配布と更新の土台](distribution.md): package と署名付き manifest の生成・配置、install layout、データ世代と credentials の置き場。

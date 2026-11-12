@@ -1,0 +1,2 @@
+# 配布物の生成・検証に使う。CI の repository job と手元の両方で必要。
+cryptography>=46,<47

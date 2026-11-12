@@ -155,3 +155,4 @@ dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` 
 | Web のビルド | `cd clients\web; npm run build` |
 | Host と bridge の結合 | `cargo build -p host -p web-bridge` → `python clients/web/wasm/tests/bridge_smoke.py` |
 | launcher と Hot Reload | `python -m unittest discover -s scripts -p test_dev_session.py` |
+| 配布 package と manifest | `python -m unittest scripts.test_distribution` |
