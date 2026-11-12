@@ -16,9 +16,9 @@ pub mod value;
 pub use catalog::catalog;
 pub use definition::{
     DefinitionCatalog, OptionSource, SettingCategory, SettingControl, SettingDefinition,
-    SettingGroup, SettingKey, SettingPage, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
-    TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
-    UI_THEME,
+    SettingGroup, SettingKey, SettingPage, SettingPageContent, TERMINAL_CARET_SHAPE,
+    TERMINAL_DEFAULT_PROFILE, TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT,
+    UI_LOCALE, UI_SYNTAX_THEME, UI_THEME,
 };
 pub use document::{
     DOCUMENT_VERSION, LEGACY_DOCUMENT_VERSION, LegacyGlobalSettings, SettingsDocument,

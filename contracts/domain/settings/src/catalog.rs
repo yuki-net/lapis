@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use crate::definition::{
     DefinitionCatalog, OptionSource, SettingCategory, SettingControl, SettingDefinition,
-    SettingGroup, SettingPage, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
+    SettingGroup, SettingPage, SettingPageContent, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
     TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
     UI_THEME,
 };
@@ -23,6 +23,9 @@ const ALL_SCOPES: &[ScopeKind] = &[
 ];
 
 static CATALOG: OnceLock<DefinitionCatalog> = OnceLock::new();
+
+/// 現在の Web 接続情報を表示するページ。保存値を持たない。
+pub const CONNECTION_WEB_PAGE: &str = "connection.web";
 
 /// 定義データはプロセスで1つだけ構築する。
 pub fn catalog() -> &'static DefinitionCatalog {
@@ -73,6 +76,17 @@ fn categories() -> Vec<SettingCategory> {
                 pages: &["language.locale"],
             }],
         },
+        // 接続先は保存値ではなく実行時の状態なので、カタログの葉として並べるが
+        // 項目は持たず、画面側が現在の接続情報を表示する。
+        SettingCategory {
+            id: "connection",
+            label: "settings.category.connection",
+            groups: &[SettingGroup {
+                id: "connection.local",
+                label: "settings.group.connection.web",
+                pages: &["connection.web"],
+            }],
+        },
     ]
 }
 
@@ -84,6 +98,7 @@ fn pages() -> Vec<SettingPage> {
             group: "appearance.colors",
             label: "settings.page.appearance.theme",
             description: Some("settings.page.appearance.theme.description"),
+            content: SettingPageContent::Settings,
         },
         SettingPage {
             id: "appearance.syntax",
@@ -91,6 +106,7 @@ fn pages() -> Vec<SettingPage> {
             group: "appearance.colors",
             label: "settings.page.appearance.syntax",
             description: Some("settings.page.appearance.syntax.description"),
+            content: SettingPageContent::Settings,
         },
         SettingPage {
             id: "terminal.font",
@@ -98,6 +114,7 @@ fn pages() -> Vec<SettingPage> {
             group: "terminal.presentation",
             label: "settings.page.terminal.font",
             description: None,
+            content: SettingPageContent::Settings,
         },
         SettingPage {
             id: "terminal.startup",
@@ -105,6 +122,7 @@ fn pages() -> Vec<SettingPage> {
             group: "terminal.launch",
             label: "settings.page.terminal.startup",
             description: Some("settings.page.terminal.startup.description"),
+            content: SettingPageContent::Settings,
         },
         SettingPage {
             id: "language.locale",
@@ -112,6 +130,15 @@ fn pages() -> Vec<SettingPage> {
             group: "language.display",
             label: "settings.page.language.locale",
             description: None,
+            content: SettingPageContent::Settings,
+        },
+        SettingPage {
+            id: "connection.web",
+            category: "connection",
+            group: "connection.local",
+            label: "settings.page.connection.web",
+            description: Some("settings.page.connection.web.description"),
+            content: SettingPageContent::Feature,
         },
     ]
 }
@@ -242,6 +269,26 @@ mod tests {
     }
 
     #[test]
+    fn every_leaf_page_is_reachable_from_the_navigation() {
+        let catalog = catalog();
+        let mut reachable = catalog
+            .categories()
+            .iter()
+            .flat_map(|category| category.groups.iter())
+            .flat_map(|group| group.pages.iter())
+            .copied()
+            .collect::<Vec<_>>();
+        reachable.sort_unstable();
+        let mut pages = catalog
+            .pages()
+            .iter()
+            .map(|page| page.id)
+            .collect::<Vec<_>>();
+        pages.sort_unstable();
+        assert_eq!(reachable, pages);
+    }
+
+    #[test]
     fn every_parent_row_is_classification_only() {
         let catalog = catalog();
         let page_ids = catalog
@@ -317,6 +364,27 @@ mod tests {
         assert_eq!(
             catalog().page("terminal.startup").map(|page| page.category),
             Some("terminal")
+        );
+    }
+
+    /// 接続ページは保存値を持たないが、ナビの葉として到達できる必要がある。
+    #[test]
+    fn connection_page_is_a_feature_leaf_without_settings() {
+        let catalog = catalog();
+        let page = catalog
+            .page(CONNECTION_WEB_PAGE)
+            .expect("接続ページの定義がある");
+        assert_eq!(page.content, SettingPageContent::Feature);
+        assert_eq!(page.category, "connection");
+        assert_eq!(page.group, "connection.local");
+        assert_eq!(catalog.settings_of(CONNECTION_WEB_PAGE).count(), 0);
+        assert!(
+            catalog
+                .categories()
+                .iter()
+                .flat_map(|category| category.groups.iter())
+                .any(|group| group.pages.contains(&CONNECTION_WEB_PAGE)),
+            "接続ページは分類ツリーの葉として並ぶ"
         );
     }
 }

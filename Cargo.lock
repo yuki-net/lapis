@@ -1845,6 +1845,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "wire",
  "workbench",
  "workspace",
 ]
@@ -4493,9 +4494,11 @@ dependencies = [
  "remote",
  "rfd",
  "settings",
+ "sysinfo",
  "task",
  "tempfile",
  "winresource",
+ "wire",
  "workspace",
 ]
 

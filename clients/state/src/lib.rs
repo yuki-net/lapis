@@ -39,6 +39,7 @@ mod extensions;
 mod process;
 mod settings_store;
 mod view_state;
+mod web_access;
 mod workbench_sync;
 pub use connection_display::{
     connected_workspace_name, connection_label, host_label, host_name_from_url,
@@ -48,6 +49,10 @@ pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_ex
 pub use process::ProcessSession;
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
+pub use web_access::{
+    WebAccess, WebAddress, WebAddressKind, address_kind_for, is_tailscale_interface,
+    split_host_port,
+};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(any(target_arch = "wasm32", test))]
