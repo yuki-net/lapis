@@ -470,11 +470,15 @@ mod tests {
             window.refresh();
             window.draw(cx).clear();
         });
-        let padding = f32::from(tokens::spacing::PANEL_CONTENT_X);
+        let padding = tokens::spacing::PANEL_CONTENT_X;
         let probe = visual.debug_bounds("panel-content-probe").unwrap();
-        assert_eq!(f32::from(probe.origin.x), padding, "probe={probe:?}");
+        assert_eq!(probe.origin.x, padding, "probe={probe:?}");
         view.read_with(visual, |view, _| {
             let max = crate::gpui_compat::max_offset(&view.state.handle());
+            // 左右の余白を差し引いた表示幅を内容幅から引いた値が最大スクロール量になる。
+            // 左余白だけでは右余白の有無を区別できないため、両方をこの値で検証する。
+            let expected = px(2000.0) - (px(320.0) - padding * 2.0);
+            assert_eq!(max.width, expected, "max={max:?}");
             assert!(
                 max.width > px(0.0),
                 "wide content must stay horizontally scrollable: {max:?}"
