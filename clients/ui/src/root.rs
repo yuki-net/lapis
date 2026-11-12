@@ -1119,6 +1119,21 @@ impl DesktopRoot {
         );
     }
 
+    /// 共有 view を Editor と WindowGroup にも反映する。
+    ///
+    /// Shell のタブ構成だけを更新すると、共有された active 文書が変わっても Editor の
+    /// 本文が前の文書のまま残る。Editor と WindowGroup にも同じ snapshot を渡し、
+    /// 選択中の文書と本文を一致させる。
+    fn apply_shared_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
+        self.apply_snapshot(snapshot, cx);
+        self.group
+            .update(cx, |group, cx| group.publish(snapshot.clone(), cx));
+        self.editor.update(cx, |editor, cx| {
+            editor.receive_shared_snapshot(snapshot, cx)
+        });
+        self.synchronize_group(cx);
+    }
+
     /// 他Clientが共有したタブ構成をUIへ反映する。
     ///
     /// 未確定の入力がある間は適用せず、Idleで再試行する。適用した値はそのまま
@@ -1144,7 +1159,7 @@ impl DesktopRoot {
                 root.session_view_applying = false;
                 let applied = match result {
                     Ok(Some(snapshot)) => {
-                        root.apply_snapshot(&snapshot, cx);
+                        root.apply_shared_snapshot(&snapshot, cx);
                         true
                     }
                     Ok(None) => false,
@@ -1231,7 +1246,7 @@ impl DesktopRoot {
             cx,
             |client| client.resync_session_view(),
             |root, result, cx| match result {
-                Ok(Some(snapshot)) => root.apply_snapshot(&snapshot, cx),
+                Ok(Some(snapshot)) => root.apply_shared_snapshot(&snapshot, cx),
                 Ok(None) => {}
                 Err(error) => eprintln!("Workspace view を再同期できません: {error}"),
             },

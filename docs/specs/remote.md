@@ -136,9 +136,11 @@ delta として受け取る。protocol 0.13 で追加した契約で、Desktop�
 - Desktop はウィンドウが再びアクティブになったとき（スリープ復帰やバックグラウンド復帰）
   に snapshot を取り直して再同期する。受信の異常や event の欠落時も snapshot へ戻る。
 - Web は Workspace へ接続した時点で購読し、snapshot と delta をタブ構成へ適用する。
-  送信は Desktop と同じく 150ms の debounce と直前のタブ構成との比較で抑え、
-  `revision` / 自己通知の `sequence` で自分の更新を再適用しない。`view` が `null` の
-  event は無視する。
+  送信は Desktop と同じく 150ms の debounce と直前のタブ構成との比較で抑える。
+  自分の更新は次の 2 段階で識別し、再適用しない。応答を受け取る前は、送信時に
+  `begin_local` で記録した値と event の `view` を照合する（Host が応答より先に
+  echo を配るため）。応答後は受理済みの `revision` で抑える。応答待ちが重なっても
+  取り違えないよう、記録は送信順に消費する。`view` が `null` の event は無視する。
 - Web はページがアクティブな間だけ live とする。タブのバックグラウンド復帰と再接続時は
   snapshot で再同期し、切断中は最後に受信した値のまま古い可能性を表示する。ページ終了時と
   Workspace を閉じたときは `workspace.view.unsubscribe` を送る。

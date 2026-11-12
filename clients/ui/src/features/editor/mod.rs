@@ -434,6 +434,26 @@ impl Editor {
         }
     }
 
+    /// 共有された active 文書を反映する。
+    ///
+    /// 共有 view の適用ではタブ構成と選択中の文書が変わるため、`receive_snapshot`
+    /// のように現在の文書を優先せず、snapshot の active をそのまま採用する。
+    /// 未確定の入力がある間は本文を置き換えない。
+    pub(crate) fn receive_shared_snapshot(
+        &mut self,
+        snapshot: &ClientSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        self.group_sync_pending = self.has_pending();
+        if self.has_pending() {
+            return;
+        }
+        self.edit_epoch = Some(snapshot.edit_epoch);
+        let local = self.local_snapshot(snapshot);
+        self.accept_snapshot(&local, true, cx);
+        cx.notify();
+    }
+
     /// Workspace切替を通常の入力・Closeと同じ待ち処理の境界で保護する。
     pub(crate) fn begin_context_transition(&mut self) -> bool {
         if !self.enabled || self.has_pending() || self.recovery {

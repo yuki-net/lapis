@@ -160,6 +160,11 @@ impl Client {
             .active_path()
             .map(|path| path.display().to_string())
     }
+
+    /// 選択中の文書の本文。共有された active 文書が本文まで切り替わるか確かめる。
+    fn active_text(&self) -> Option<String> {
+        self.editor.active_text().ok()
+    }
 }
 
 fn wait_until(mut condition: impl FnMut() -> bool) {
@@ -196,6 +201,8 @@ fn web_client_shares_tabs_with_a_desktop_client_on_the_same_workspace() {
     assert_eq!(other.tabs(), ["a.rs"]);
     // Web は document_id を共有しないため、アクティブ文書は path で一致させる。
     assert_eq!(other.active(), web.active());
+    // 共有されたアクティブ文書の本文まで切り替わる。
+    assert_eq!(other.active_text(), Some("fn a() {}".to_owned()));
 
     // 逆向きのタブ追加も Web に反映される。
     other.editor.open_path(root.join("b.rs")).unwrap();
@@ -205,6 +212,8 @@ fn web_client_shares_tabs_with_a_desktop_client_on_the_same_workspace() {
         web.tabs().len() == 2
     });
     assert_eq!(web.tabs(), ["a.rs", "b.rs"]);
+    // Web 側でもアクティブ文書の本文が追従する。
+    assert_eq!(web.active_text(), Some("fn b() {}".to_owned()));
 
     // Web 側のタブ削除も共有される。
     let id = web.editor.tabs()[1].id.clone();
