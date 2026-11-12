@@ -13,4 +13,6 @@
 # Junie の作業用プラン（共有する設定は .junie/AGENTS.md 等として追跡可能に残す）
 .junie/plans/
 
+# ローカル配置の出力先（publish --dest local:dist\<tag>）
+/dist/
 __pycache__/
