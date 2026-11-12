@@ -119,6 +119,8 @@ pub(crate) struct DesktopRoot {
     session_view_task: Option<gpui::Task<()>>,
     /// 接続中の Workspace の共有状態が古い可能性があるか。表示に出す。
     session_view_stale: bool,
+    /// Editor の処理中に見送った snapshot 再取得。Idle で実行する。
+    session_view_resync_pending: bool,
     #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
     #[cfg(not(target_family = "wasm"))]
@@ -486,6 +488,10 @@ impl DesktopRoot {
                     root.apply_remote_workbench(cx);
                     root.apply_remote_session_view(cx);
                     root.sync_session_view_stale(cx);
+                    // Editor の処理中に見送った再同期を、Idle で実行する。
+                    if root.session_view_resync_pending {
+                        root.resync_remote_session_view(cx);
+                    }
                 }
                 EditorEvent::Status(message) => {
                     root.set_status(message.clone(), cx);
@@ -714,6 +720,7 @@ impl DesktopRoot {
             session_view_applying: false,
             session_view_task: None,
             session_view_stale: false,
+            session_view_resync_pending: false,
             #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
             #[cfg(not(target_family = "wasm"))]
@@ -1138,6 +1145,7 @@ impl DesktopRoot {
     ///
     /// 保存の debounce とは分離し、タブ操作が続く間は最後の状態だけを送る。
     /// 再同期の要求より後にだけ送り、共有済みの状態を古い値で上書きしない。
+    /// タブ構成とアクティブ文書が変わっていない編集では待機を延長しない。
     pub(crate) fn schedule_session_view_publish(&mut self, cx: &mut Context<Self>) {
         if self.session_view.is_none()
             || self.group.read(cx).closing
@@ -1147,9 +1155,16 @@ impl DesktopRoot {
         {
             return;
         }
+        // 既に同じ構成の送信待ちがあるなら、カーソル移動や入力で待機を延ばさない。
+        // 送信自体は worker 側で直前の構成と比較して省略される。
+        if self.session_view_task.is_some() {
+            return;
+        }
         self.session_view_task = Some(cx.spawn(async move |this, cx| {
             crate::timer::Timer::after(std::time::Duration::from_millis(150)).await;
             let _ = this.update(cx, |root, cx| {
+                // 見送る場合も待機印を消す。残すと以後の予約がすべて止まる。
+                root.session_view_task = None;
                 if root.group.read(cx).closing
                     || root.group.read(cx).synchronization_required
                     || root.task_context_resolution == TaskContextResolution::Pending
@@ -1162,6 +1177,7 @@ impl DesktopRoot {
                     cx,
                     |client| client.publish_session_view(),
                     |_, result, _| {
+                        // 失敗したら署名を確定させず、次の変更で再送させる。
                         if let Err(error) = result {
                             eprintln!("Workspace view を共有できません: {error}");
                         }
@@ -1174,14 +1190,16 @@ impl DesktopRoot {
     /// バックグラウンド復帰や再接続で snapshot を取り直し、取りこぼしを再同期する。
     ///
     /// 継続中の debounce があれば取り消し、再同期した snapshot より先に古い値を
-    /// 送らないようにする。
+    /// 送らないようにする。Editor の処理中は保留し、Idle で実行する。
     fn resync_remote_session_view(&mut self, cx: &mut Context<Self>) {
-        if self.session_view.is_none()
-            || self.group.read(cx).closing
-            || self.editor.read(cx).has_in_flight()
-        {
+        if self.session_view.is_none() || self.group.read(cx).closing {
             return;
         }
+        if self.editor.read(cx).has_in_flight() {
+            self.session_view_resync_pending = true;
+            return;
+        }
+        self.session_view_resync_pending = false;
         self.session_view_task.take();
         let worker = self.worker.clone();
         let _ = worker.submit(
@@ -1212,7 +1230,9 @@ impl DesktopRoot {
         } else {
             ""
         };
-        self.set_status(message.to_owned(), cx);
+        // 通常の status とは別枠で出す。他のメッセージを上書きしない。
+        self.shell
+            .update(cx, |shell, cx| shell.set_warning(message.to_owned(), cx));
     }
 
     /// 一覧のTask選択は共通APIへ渡し、作業環境を変える操作だけWindow数で制限する。

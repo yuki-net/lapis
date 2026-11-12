@@ -141,6 +141,7 @@ fn web_client_shares_tabs_with_a_desktop_client_on_the_same_workspace() {
         other.tabs().len() == 1
     });
     assert_eq!(other.tabs(), ["a.rs"]);
+    // Web は document_id を共有しないため、アクティブ文書は path で一致させる。
     assert_eq!(other.active(), web.active());
 
     // 逆向きのタブ追加も Web に反映される。
@@ -178,13 +179,14 @@ fn web_client_does_not_reapply_its_own_update() {
     web.editor.open_workspace(root.clone()).unwrap();
     web.subscribe();
     web.editor.open_path(root.join("a.rs")).unwrap();
+    let before = web.applied;
     web.publish();
 
-    // 自分の送信が event として戻っても、適用対象は増えない。
+    // 自分の送信が event として戻っても、最初の適用で取り込まない。
     web.apply_pending();
-    let applied = web.applied;
+    assert_eq!(web.applied, before, "自分の更新を適用しました");
     web.apply_pending();
-    assert_eq!(web.applied, applied);
+    assert_eq!(web.applied, before);
     assert_eq!(web.tabs(), ["a.rs"]);
 }
 

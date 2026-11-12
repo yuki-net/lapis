@@ -194,10 +194,16 @@ impl DocumentClient {
         let Some(handle) = &self.session_view else {
             return Ok(None);
         };
-        // Desktop は開いた時点で購読を張る。Web は接続時に購読済みで、
-        // snapshot 待ちの間は何もしない。
-        #[cfg(not(target_family = "wasm"))]
-        handle.open(&workspace)?;
+        // 開いた Workspace が変わったら購読を張り直す。
+        if self.session_view_open.as_ref() != Some(&workspace) {
+            #[cfg(not(target_family = "wasm"))]
+            handle.open(&workspace)?;
+            // Web は接続層に snapshot の取り直しを要求する。応答は watch を
+            // 経由して届く。購読の完了前は送信しない（is_synced で判定）。
+            #[cfg(target_family = "wasm")]
+            desktop_client::web_host::resync_session_view();
+            self.session_view_reconciled = None;
+        }
         self.session_view_open = Some(workspace.clone());
         let watch = session_view_watch(handle);
         let applied = watch.take_if_changed(&workspace, self.session_view_sequence);
@@ -258,7 +264,9 @@ impl DocumentClient {
             return Ok(());
         }
         let signature = self.editor.tab_signature();
-        if self.session_view_signature.as_ref() == Some(&signature) {
+        // 署名が同じでも、前回の送信が接続層で失敗していれば送り直す。
+        let retry = session_view_watch(handle).is_stale();
+        if !retry && self.session_view_signature.as_ref() == Some(&signature) {
             return Ok(());
         }
         // Web も Desktop と同じくタブ構成とアクティブ文書だけを共有する。
@@ -274,9 +282,10 @@ impl DocumentClient {
         #[cfg(target_family = "wasm")]
         {
             let _ = handle;
-            // 応答と event の到着順に依存しないよう、送信より前に自分の値を記録する。
-            desktop_client::web_host::begin_local_session_view(&view);
-            desktop_client::web_host::publish_session_view(view);
+            // 送信に失敗したら署名を確定せず、次の機会に再送させる。
+            if !desktop_client::web_host::publish_session_view(view) {
+                return Err("Workspace view を共有できません".to_owned());
+            }
         }
         self.session_view_signature = Some(signature);
         Ok(())

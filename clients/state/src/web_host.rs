@@ -679,7 +679,11 @@ async fn fail_switch(
     error: String,
 ) -> String {
     match restore_connection(connection, current, attempted).await {
-        Ok(()) => error,
+        Ok(()) => {
+            // 旧 Workspace の購読を解除済みなので、戻った先で再開する。
+            resync_session_view();
+            error
+        }
         Err(recovery) => {
             BACKEND.with(|backend| *backend.borrow_mut() = None);
             format!(
@@ -774,6 +778,8 @@ async fn rollback_workspace_inner(
     if let Some(replica) = target {
         cache_workspace(CachedWorkspace { replica });
     }
+    // 復帰した Workspace の購読を再開する。切替時に解除済みのため。
+    resync_session_view();
     Ok(())
 }
 
@@ -862,24 +868,30 @@ pub fn resync_session_view() {
 }
 
 /// 自分のタブ構成を共有へ送る。null 相当の view は送らない。
-pub fn publish_session_view(view: workbench::WorkspaceView) {
-    BACKEND.with(|backend| {
-        let sent = match backend.borrow().as_ref() {
-            Some(state) => state
-                .commands
-                .unbounded_send(Command::PublishView { view: view.clone() })
-                .is_ok(),
-            None => false,
-        };
-        if !sent {
-            // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
-            SESSION_VIEW.with(|session| session.borrow().abort_local());
-            web_sys::console::warn_1(&"Workspace view を共有できません".into());
-        }
-    });
+/// キューへ渡せたときだけ `true` を返し、呼び出し側は成功時だけ署名を確定する。
+pub fn publish_session_view(view: workbench::WorkspaceView) -> bool {
+    SESSION_VIEW.with(|session| session.borrow().begin_local(&view));
+    if send_view(view) {
+        return true;
+    }
+    // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
+    SESSION_VIEW.with(|session| session.borrow().abort_local());
+    false
+}
+
+/// キューへ渡せたときだけ `true`。
+fn send_view(view: workbench::WorkspaceView) -> bool {
+    BACKEND.with(|backend| match backend.borrow().as_ref() {
+        Some(state) => state
+            .commands
+            .unbounded_send(Command::PublishView { view })
+            .is_ok(),
+        None => false,
+    })
 }
 
 /// 送信する view を先に記録し、自分の更新が event で戻っても再適用しない。
+/// `publish_session_view` が記録するため、通常は UI から直接呼ばない。
 pub fn begin_local_session_view(view: &workbench::WorkspaceView) {
     SESSION_VIEW.with(|session| session.borrow().begin_local(view));
 }

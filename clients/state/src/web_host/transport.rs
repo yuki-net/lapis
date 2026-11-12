@@ -320,13 +320,9 @@ pub(super) async fn event_pump(
                     .find(|(_, state)| state.host.as_ref() == Some(&document_id))
                     .map(|(local, _)| local.clone());
                 if let Some(local) = local {
-                    let preserve_local = replica
-                        .borrow()
-                        .documents
-                        .get(&local)
-                        .is_some_and(|state| state.document.content_for_save() != state.acked);
-                    if let Err(error) =
-                        refresh_document(&connection, &replica, &local, preserve_local).await
+                    // 取得中に入力された未保存の変更を失わないよう、常に保持判定を
+                    // 応答後の apply_inspection に任せる（未保存が無ければ保存内容を採用する）。
+                    if let Err(error) = refresh_document(&connection, &replica, &local, true).await
                     {
                         web_sys::console::warn_1(
                             &format!("保存後の文書を再取得できません: {error}").into(),
@@ -390,21 +386,39 @@ pub(super) async fn event_pump(
                         }),
                     )
                     .await;
-                    if let Ok(ResponseBody::WorkspaceViewSubscribe(snapshot)) = body {
-                        super::SESSION_VIEW.with(|session| {
-                            session.borrow_mut().subscribe_snapshot(
-                                state.clone(),
-                                snapshot.revision,
-                                snapshot.view,
-                            );
-                        });
-                        notify_session_view(&session_view_changes);
+                    // 応答待ちの間に Workspace が変わっていたら、古い snapshot を適用しない。
+                    let unchanged = super::SESSION_VIEW
+                        .with(|session| session.borrow().workspace().cloned())
+                        .as_ref()
+                        == Some(&state);
+                    if unchanged {
+                        match body {
+                            Ok(ResponseBody::WorkspaceViewSubscribe(snapshot)) => {
+                                super::SESSION_VIEW.with(|session| {
+                                    session.borrow_mut().subscribe_snapshot(
+                                        state,
+                                        snapshot.revision,
+                                        snapshot.view,
+                                    );
+                                });
+                                notify_session_view(&session_view_changes);
+                            }
+                            _ => {
+                                // 再同期できなかった。古い可能性を表示に出し続ける。
+                                super::SESSION_VIEW
+                                    .with(|session| session.borrow().watch().mark_stale());
+                                notify_session_view(&session_view_changes);
+                            }
+                        }
                     }
                 }
             }
             _ => {}
         }
     }
+    // 接続が切れて event が来なくなった。共有中のタブ構成は最新ではない可能性がある。
+    super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
+    notify_session_view(&session_view_changes);
 }
 
 /// `snapshot.required` の後で、保持している複製を Host の Snapshot へ合わせる。
@@ -829,12 +843,21 @@ async fn handle(
                 Ok(body) => body,
                 Err(error) => {
                     // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
-                    super::SESSION_VIEW.with(|session| session.borrow().abort_local());
+                    // stale にして UI が次の機会に送り直せるようにする。
+                    super::SESSION_VIEW.with(|session| {
+                        session.borrow().abort_local();
+                        session.borrow().watch().mark_stale();
+                    });
+                    notify_session_view(session_view_changes);
                     return Err(error);
                 }
             };
             let ResponseBody::WorkspaceViewUpdate(response) = body else {
-                super::SESSION_VIEW.with(|session| session.borrow().abort_local());
+                super::SESSION_VIEW.with(|session| {
+                    session.borrow().abort_local();
+                    session.borrow().watch().mark_stale();
+                });
+                notify_session_view(session_view_changes);
                 return Err("WorkspaceViewUpdate応答が不正です".into());
             };
             // 自分の送信は event で戻ってきても再適用しない。
@@ -844,13 +867,23 @@ async fn handle(
             let workspace = replica.borrow().workspace.clone();
             let body = request(
                 connection,
-                RequestBody::WorkspaceViewSubscribe(client_api::WorkspaceViewSubscribeRequest {
+                RequestBody::WorkspaceViewSubscribe(WorkspaceViewSubscribeRequest {
                     workspace_id: api_workspace(&workspace),
                 }),
             )
-            .await?;
-            let ResponseBody::WorkspaceViewSubscribe(snapshot) = body else {
-                return Err("WorkspaceViewSubscribe応答が不正です".into());
+            .await;
+            // 応答待ちの間に Workspace が変わっていたら、古い snapshot を適用しない。
+            if replica.borrow().workspace != workspace {
+                return Ok(());
+            }
+            let snapshot = match body {
+                Ok(ResponseBody::WorkspaceViewSubscribe(snapshot)) => snapshot,
+                _ => {
+                    // 再同期できなかった。切断中と同じく古い可能性を表示に出す。
+                    super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
+                    notify_session_view(session_view_changes);
+                    return Err("WorkspaceViewSubscribe応答が不正です".into());
+                }
             };
             super::SESSION_VIEW.with(|session| {
                 session.borrow_mut().subscribe_snapshot(

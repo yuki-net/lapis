@@ -43,7 +43,8 @@ impl WorkspaceViewState {
     /// タブ構成とアクティブ文書だけを共有する。
     ///
     /// カーソル・選択・スクロールは共有しない。共有範囲をタブ構成に限る Client
-    /// （Web）はこちらを使い、位置の値を送らない。
+    /// （Web）はこちらを使い、位置の値を送らない。文書の識別は Workspace 内の
+    /// 相対 path で行い、Client 固有の `document_id` は送らない。
     pub fn to_shared_tabs(&self) -> Result<workbench::WorkspaceView, WorkspaceError> {
         let root = self
             .root
@@ -53,11 +54,15 @@ impl WorkspaceViewState {
         let mut view = self.shared_view(root)?;
         for document in &mut view.open_documents {
             *document = workbench::WorkspaceDocumentView {
-                document_id: document.document_id.clone(),
+                // Web の document_id はこの Client の複製キーで、他 Client の ID と
+                // 対応しない。path で識別し、誤った文書を選ばないようにする。
+                document_id: None,
                 path: document.path.clone(),
                 ..Default::default()
             };
         }
+        // アクティブ文書も path で共有する。document_id は上と同じ理由で送らない。
+        view.active_document_id = None;
         Ok(view)
     }
 
@@ -278,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn shared_tabs_omit_cursor_selection_and_scroll_but_keep_order_and_active() {
+    fn shared_tabs_omit_local_ids_and_positions_but_keep_order_and_active_path() {
         let root = std::env::temp_dir().join("lapis-tabs-root");
         let file = root.join("src").join("main.rs");
         let snapshot = WorkspaceViewState {
@@ -303,17 +308,25 @@ mod tests {
             active_document_id: Some(DocumentId::new("document-1")),
         };
         let view = snapshot.to_shared_tabs().unwrap();
+        // タブの並びは保ち、Client 固有の document_id は送らない。
         assert_eq!(
             view.open_documents
                 .iter()
-                .map(|document| document.document_id.clone())
+                .map(|document| document.path.as_ref().map(|path| path.as_str()))
                 .collect::<Vec<_>>(),
-            vec![
-                Some(DocumentId::new("document-1")),
-                Some(DocumentId::new("document-2"))
-            ]
+            vec![Some("src/main.rs"), None]
         );
-        assert_eq!(view.active_document_id, Some(DocumentId::new("document-1")));
+        assert!(
+            view.open_documents
+                .iter()
+                .all(|document| document.document_id.is_none())
+        );
+        // アクティブ文書は path で伝え、document_id は送らない。
+        assert!(view.active_document_id.is_none());
+        assert_eq!(
+            view.active_path.as_ref().map(|path| path.as_str()),
+            Some("src/main.rs")
+        );
         // 位置は送らない。タブ構成とアクティブ文書だけを共有する。
         for document in &view.open_documents {
             assert_eq!(document.cursor_char, 0);

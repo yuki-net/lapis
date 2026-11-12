@@ -1797,6 +1797,15 @@ impl EditorSession {
             .as_ref()
             .and_then(|id| documents.iter().position(|open| &open.id == id));
         if active.is_none() {
+            // ID を共有しない Client（Web）のために、相対 path でも解決する。
+            active = view.active_path.as_ref().and_then(|path| {
+                let path = root.join(path.as_str());
+                documents
+                    .iter()
+                    .position(|open| open.document.path() == Some(path.as_path()))
+            });
+        }
+        if active.is_none() {
             active = self
                 .active
                 .and_then(|previous| slots.get(previous).and_then(Option::as_ref))

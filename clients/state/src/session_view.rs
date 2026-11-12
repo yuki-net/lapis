@@ -8,10 +8,13 @@
 //! 受信手段は platform で異なる（Desktop は背景 thread、Web は非同期の event pump）。
 //! 適用可否と通知順の判断はここで共有し、受信だけを各 platform が持つ。
 
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    mpsc,
+use std::{
+    collections::VecDeque,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc,
+    },
 };
 
 use editor_core::WorkspaceId;
@@ -75,6 +78,13 @@ impl SessionViewWatch {
         }
     }
 
+    /// 購読を解除したので、参加の完了を取り消す。再購読するまで送信させない。
+    pub fn mark_unsynced(&self) {
+        if let Ok(mut synced) = self.synced.lock() {
+            *synced = None;
+        }
+    }
+
     /// この Workspace の snapshot を一度でも受け取ったか。
     pub fn is_synced(&self, workspace: &WorkspaceId) -> bool {
         self.synced
@@ -125,24 +135,30 @@ impl SessionViewWatch {
 /// Workspace 単位の購読で共有された view の適用判定。
 ///
 /// `revision` は Host が受理した順で単調に増えるが、Workspace を切り替えると
-/// 巻き戻り得るため、Workspace と組で保持する。`atomic` なので、背景 thread と
-/// UI thread の双方から同じ規則で更新できる。
+/// 巻き戻り得るため、Workspace と組で保持する。
 pub struct SessionViewCursor {
     workspace: WorkspaceId,
     /// 適用済み、または自分が受理させた revision。これ以下は再適用しない。
     applied: AtomicU64,
-    /// 送信中、または受理させた自分の view。自分の更新が event として戻ってきた
-    /// 場合に再適用しないための照合値。送信より前に記録するので、応答と event の
-    /// 到着順に依存しない。
-    local: Mutex<Option<WorkspaceView>>,
+    /// 自分の送信が受理された revision。同じ revision の event は自分の更新の
+    /// 巡回なので内容を再適用しない。
+    local_revisions: Mutex<VecDeque<u64>>,
+    /// 送信したが、まだ応答を受け取っていない自分の view。Host は応答より先に
+    /// event を配り得るため、その event を revision ではなく値で照合する。
+    /// 応答を受けた時点で revision の記録へ移す。
+    pending: Mutex<VecDeque<WorkspaceView>>,
 }
+
+/// 自分の送信として覚えておく件数の上限。応答待ちが積み重なる目安。
+const MAX_LOCAL_ENTRIES: usize = 16;
 
 impl SessionViewCursor {
     pub fn new(workspace: WorkspaceId, revision: u64) -> Self {
         Self {
             workspace,
             applied: AtomicU64::new(revision),
-            local: Mutex::new(None),
+            local_revisions: Mutex::new(VecDeque::new()),
+            pending: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -154,24 +170,37 @@ impl SessionViewCursor {
         self.applied.load(Ordering::Acquire)
     }
 
-    /// これから送る自分の view を記録する。送信より前に呼ぶ。
+    /// これから送る自分の view を記録する。送信より前に呼ぶ。応答より先に自分の
+    /// 更新が event として届いても、値を照合して再適用しないため。
     pub fn begin_local(&self, view: &WorkspaceView) {
-        if let Ok(mut local) = self.local.lock() {
-            *local = Some(view.clone());
+        if let Ok(mut pending) = self.pending.lock() {
+            while pending.len() >= MAX_LOCAL_ENTRIES {
+                pending.pop_front();
+            }
+            pending.push_back(view.clone());
         }
     }
 
-    /// 送信が失敗したため、記録した自分の view を捨てる。
+    /// 直前の送信が失敗したため、その記録だけを捨てる。
     pub fn abort_local(&self) {
-        if let Ok(mut local) = self.local.lock() {
-            *local = None;
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.pop_back();
         }
     }
 
     /// 自分の送信が受理された revision を、適用済みとして扱う。
+    /// 応答の時点で pending から外し、同じ revision の event は再適用しない。
     pub fn accept_local(&self, revision: u64) {
         self.applied.fetch_max(revision, Ordering::AcqRel);
         self.abort_local();
+        if let Ok(mut revisions) = self.local_revisions.lock() {
+            while revisions.len() >= MAX_LOCAL_ENTRIES {
+                revisions.pop_front();
+            }
+            if !revisions.contains(&revision) {
+                revisions.push_back(revision);
+            }
+        }
     }
 
     /// event を適用対象として受け入れる。重複と巻き戻りは `None` で弾く。
@@ -187,16 +216,36 @@ impl SessionViewCursor {
         }
         self.applied.store(revision, Ordering::Release);
         let view = view?;
-        if self.is_local(&view) {
+        if self.is_local(revision, &view) {
             return None;
         }
         Some((revision, view))
     }
 
-    fn is_local(&self, view: &WorkspaceView) -> bool {
-        self.local
-            .lock()
-            .is_ok_and(|local| local.as_ref() == Some(view))
+    /// 自分の更新か。応答待ちの値と一致すれば自分の更新とみなし、記録を消費する。
+    /// 応答済みの revision と一致する場合も自分の更新。
+    fn is_local(&self, revision: u64, view: &WorkspaceView) -> bool {
+        let accepted = self.local_revisions.lock().is_ok_and(|mut revisions| {
+            match revisions.iter().position(|&own| own == revision) {
+                Some(index) => {
+                    revisions.remove(index);
+                    true
+                }
+                None => false,
+            }
+        });
+        if accepted {
+            return true;
+        }
+        self.pending.lock().is_ok_and(|mut pending| {
+            match pending.iter().position(|own| own == view) {
+                Some(index) => {
+                    pending.remove(index);
+                    true
+                }
+                None => false,
+            }
+        })
     }
 }
 
@@ -227,12 +276,20 @@ impl SessionViewReplica {
     }
 
     /// 購読応答の snapshot で参加を開始する。`view` が null でも参加は完了する。
+    /// 適用済みより古い snapshot は、再接続前の応答が遅れて届いた場合などに
+    /// 表示を巻き戻すため適用しない。
     pub fn subscribe_snapshot(
         &mut self,
         workspace: WorkspaceId,
         revision: u64,
         view: Option<WorkspaceView>,
     ) {
+        if let Some(cursor) = self.cursor.as_ref()
+            && cursor.workspace() == &workspace
+            && revision < cursor.applied()
+        {
+            return;
+        }
         if self.workspace() != Some(&workspace) {
             self.cursor = Some(SessionViewCursor::new(workspace.clone(), revision));
         } else if let Some(cursor) = &self.cursor {
@@ -264,8 +321,8 @@ impl SessionViewReplica {
         }
     }
 
-    /// 自分の送信を記録する。応答と event の到着順に依存せず、自分の更新を
-    /// 再適用しないために、送信より前に呼ぶ。
+    /// 送信する自分の view を記録する。応答より先に自分の更新が event として
+    /// 届いても再適用しないため、送信より前に呼ぶ。
     pub fn begin_local(&self, view: &WorkspaceView) {
         if let Some(cursor) = &self.cursor {
             cursor.begin_local(view);
@@ -289,6 +346,9 @@ impl SessionViewReplica {
     /// 購読を解除した状態へ戻す。表示は古い可能性があるものとして残す。
     pub fn reset(&mut self) {
         self.cursor = None;
+        // 再購読の snapshot を確認するまで送信させない。sync 済みの判定を消し、
+        // 次に開いた Workspace で購読前の値を上書きしないようにする。
+        self.watch.mark_unsynced();
         self.watch.mark_stale();
     }
 }
@@ -742,5 +802,59 @@ mod replica_tests {
             session.watch().take_if_changed(&workspace, 0).is_some(),
             "送信に失敗した値を他人の更新として捨てました"
         );
+    }
+
+    /// 応答を待たずに次の送信が積み重なっても、先の送信の event を捨てない。
+    #[test]
+    fn a_pending_send_is_kept_when_the_next_send_starts() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 0, None);
+        // A を送信し、応答前に B を送信する。
+        let first = view("document-a");
+        let second = view("document-b");
+        session.begin_local(&first);
+        session.begin_local(&second);
+        // 応答より先に A の event が戻っても、自分の更新として捨てる。
+        session.apply_event(&workspace, 1, Some(first.clone()));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_none(),
+            "先の送信を自分の更新として扱いませんでした"
+        );
+        // B の応答より先に B の event も捨てる。
+        session.apply_event(&workspace, 2, Some(second.clone()));
+        assert!(session.watch().take_if_changed(&workspace, 0).is_none());
+        // 他 Client の値は適用する。
+        session.apply_event(&workspace, 3, Some(view("document-c")));
+        assert!(session.watch().take_if_changed(&workspace, 0).is_some());
+    }
+
+    #[test]
+    fn an_older_snapshot_does_not_rewind_the_applied_view() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 2, Some(view("document-b")));
+        let (last, _, _) = session.watch().take_if_changed(&workspace, 0).unwrap();
+        // 再接続前の古い snapshot が遅れて届いても巻き戻さない。
+        session.subscribe_snapshot(workspace.clone(), 1, Some(view("document-a")));
+        assert!(session.watch().take_if_changed(&workspace, last).is_none());
+
+        // 新しい snapshot は適用する。
+        session.subscribe_snapshot(workspace.clone(), 3, Some(view("document-c")));
+        let (_, revision, _) = session.watch().take_if_changed(&workspace, last).unwrap();
+        assert_eq!(revision, 3);
+    }
+
+    #[test]
+    fn reset_requires_a_new_snapshot_before_publishing() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 1, Some(view("document-a")));
+        assert!(session.watch().is_synced(&workspace));
+        session.reset();
+        // 購読解除後は、再購読の snapshot を確認するまで送信しない。
+        assert!(!session.watch().is_synced(&workspace));
+        session.subscribe_snapshot(workspace.clone(), 2, None);
+        assert!(session.watch().is_synced(&workspace));
     }
 }
