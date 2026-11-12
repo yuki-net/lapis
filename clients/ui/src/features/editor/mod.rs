@@ -1073,6 +1073,11 @@ impl Render for Editor {
 #[cfg(test)]
 mod tests {
     use super::{DeferredSharedActive, Editor};
+
+    /// `EditorEvent::Idle` を数えるための購読先。
+    struct Observer {
+        _subscription: gpui::Subscription,
+    }
     use crate::client_adapter::{ClientSnapshot, ClientWorker};
     use editor_core::DocumentId;
     use gpui::prelude::*;
@@ -1233,7 +1238,129 @@ mod tests {
         assert_eq!(body(&editor, cx), "fn second() {}");
     }
 
-    /// 選択が受け付けられなかったときは、共有の active の保留を残す。
+    /// 実際の入力完了と `EditorEvent::Idle` を通しても、共有の active が反映される。
+    ///
+    /// worker の応答で `in_flight` が減り、`notify_idle` が `Idle` を出す経路を
+    /// そのまま通す。保留した共有の active は、その完了時の snapshot 受理で反映する。
+    #[gpui::test]
+    fn a_pending_input_completion_applies_the_shared_active(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let first = opened.tabs[0].id.clone();
+        let second = opened.tabs[1].id.clone();
+        show(&editor, &opened, cx);
+        let (idles, _observer) = subscribe_idle(&editor, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。本文はまだ置き換えない。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second.clone());
+        let completed = editor.update(cx, |editor, cx| {
+            let submitted = editor.submit(
+                false,
+                {
+                    let first = first.clone();
+                    move |client| {
+                        // 入力の応答はユーザーが表示していた文書を選んだ状態で返る。
+                        client.editor.activate_document(&first);
+                        Ok(())
+                    }
+                },
+                cx,
+            );
+            assert!(submitted, "入力を投入できる");
+            editor.receive_shared_snapshot(&shared, cx);
+            editor.has_pending()
+        });
+        assert!(completed, "入力中は共有の active を保留する");
+        assert_eq!(body(&editor, cx), "fn first() {}");
+
+        // 実際の応答を待つ。完了時に `Idle` が出る。
+        run_until_idle(cx, &idles);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(second),
+            "入力完了後も共有の active を反映する"
+        );
+        assert_eq!(body(&editor, cx), "fn second() {}");
+    }
+
+    /// 実際の入力完了と `Idle` を通しても、後からの明示的な選択が優先される。
+    #[gpui::test]
+    fn an_explicit_selection_survives_the_input_completion(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let first = opened.tabs[0].id.clone();
+        let second = opened.tabs[1].id.clone();
+        let third = opened.tabs[2].id.clone();
+        show(&editor, &opened, cx);
+        let (idles, _observer) = subscribe_idle(&editor, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second);
+        editor.update(cx, |editor, cx| {
+            let submitted = editor.submit(
+                false,
+                {
+                    let first = first.clone();
+                    move |client| {
+                        client.editor.activate_document(&first);
+                        Ok(())
+                    }
+                },
+                cx,
+            );
+            assert!(submitted, "入力を投入できる");
+            editor.receive_shared_snapshot(&shared, cx);
+            // 応答前にユーザーが 3 番目を明示的に選ぶ。
+            editor.activate(third.clone(), cx);
+        });
+
+        run_until_idle(cx, &idles);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(third),
+            "明示的な選択が共有の active に置き換わらない"
+        );
+        assert_eq!(body(&editor, cx), "fn third() {}");
+    }
+
+    /// `EditorEvent::Idle` の回数を数える購読と、購読を生かすための observer を返す。
+    fn subscribe_idle(
+        editor: &gpui::Entity<Editor>,
+        cx: &mut gpui::TestAppContext,
+    ) -> (std::rc::Rc<std::cell::Cell<usize>>, gpui::Entity<Observer>) {
+        let idles = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = idles.clone();
+        let editor = editor.clone();
+        let observer = cx.update(|cx| {
+            cx.new(|cx| {
+                let subscription = cx.subscribe(&editor, move |_: &mut Observer, _, event, _| {
+                    if matches!(event, super::EditorEvent::Idle) {
+                        counted.set(counted.get() + 1);
+                    }
+                });
+                Observer {
+                    _subscription: subscription,
+                }
+            })
+        });
+        (idles, observer)
+    }
+
+    /// worker の応答が返り、`Idle` が出るまで進める。
+    fn run_until_idle(cx: &mut gpui::TestAppContext, idles: &std::rc::Rc<std::cell::Cell<usize>>) {
+        let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(5);
+        while idles.get() == 0 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
+            assert!(crate::time::Instant::now() < deadline, "Idle が来ない");
+            std::thread::yield_now();
+        }
+    }
+
+    /// 選択が受け付けられなかったときは、共有の active の保留を残す。    /// 選択が受け付けられなかったときは、共有の active の保留を残す。
     ///
     /// 復旧待ちで `submit` が拒否する状況ではタブ選択自体が起きないため、
     /// 保留を捨てると復旧後の snapshot でも共有の active が反映されない。
