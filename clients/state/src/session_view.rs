@@ -184,6 +184,7 @@ impl SessionViewCursor {
     }
 
     /// 直前の送信が失敗したため、その記録だけを捨てる。
+    /// 失敗した送信は最後に積んだものなので末尾から消す。
     pub fn abort_local(&self) {
         if let Ok(mut pending) = self.pending.lock() {
             pending.pop_back();
@@ -198,10 +199,14 @@ impl SessionViewCursor {
     }
 
     /// 自分の送信が受理された revision を、適用済みとして扱う。
-    /// 応答の時点で pending から外し、同じ revision の event は再適用しない。
+    /// 応答は送信順に返るため、対応する記録は先頭から消す。末尾から消すと、
+    /// 応答待ちが重なったときに別の送信の記録を落とし、その echo を自分の更新と
+    /// 判定できずに再適用してしまう。
     pub fn accept_local(&self, revision: u64) {
         self.applied.fetch_max(revision, Ordering::AcqRel);
-        self.abort_local();
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.pop_front();
+        }
         if let Ok(mut revisions) = self.local_revisions.lock() {
             while revisions.len() >= MAX_LOCAL_ENTRIES {
                 revisions.pop_front();
@@ -810,6 +815,32 @@ mod replica_tests {
             session.watch().take_if_changed(&workspace, 0).is_some(),
             "送信に失敗した値を他人の更新として捨てました"
         );
+    }
+
+    /// 応答待ちが重なっても、各送信の echo を自分の更新として扱う。
+    /// 応答は送信順に返るため、pending は先頭から消費する必要がある。
+    #[test]
+    fn overlapping_sends_keep_their_own_echoes() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 0, None);
+        // A を送信し、応答前に B を送信する。
+        let first = view("document-a");
+        let second = view("document-b");
+        session.begin_local(&first);
+        session.begin_local(&second);
+        // A の応答が受理される。記録は先頭（A）から消える。
+        session.accept_local(1);
+        // A の echo と B の echo はどちらも自分の更新として捨てる。
+        session.apply_event(&workspace, 1, Some(first.clone()));
+        session.apply_event(&workspace, 2, Some(second.clone()));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_none(),
+            "応答待ちが重なった送信の echo を再適用しました"
+        );
+        // 他人の更新は適用する。
+        session.apply_event(&workspace, 3, Some(view("document-c")));
+        assert!(session.watch().take_if_changed(&workspace, 0).is_some());
     }
 
     /// 応答を待たずに次の送信が積み重なっても、先の送信の event を捨てない。
