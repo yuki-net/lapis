@@ -121,10 +121,11 @@ per-user 配置とし、管理者権限を要求しない。初回は package �
 
 ## GitHub Releases への配置制約
 
-- tag と Release の作成は人の操作とし、`scripts/release` から自動作成しない。
+- tag は人の操作で作り、`scripts/release` からは作成しない。
   `publish --github` は既定で `gh release upload --clobber` だけを行う。
 - `--execute` を付けない限り dry-run で、GitHub を読まず・書かない。実行時も tag と
-  Release の存在を確認し、無ければ失敗する。
+  Release の存在を確認し、無ければ失敗する。Release の作成は `--create` を明示したとき
+  だけ行う。
 - CI（`.github/workflows/release.yml`）は push 済み tag に対して、`--create` 付きで
   Release の作成または asset の差し替えを行う。作成時も `gh release create --verify-tag`
   を使い、tag を新規作成しない。

@@ -8,7 +8,8 @@
 
 - Python 3.10 以上。`scripts/release` は標準 library だけで動く。
 - 署名鍵 file は生成機だけに置く。repository へ commit しない。
-- tag と Release の作成は人の操作として行う。tool は tag / Release を作らない。
+- tag は人の操作で作る。この tool は tag を新規作成しない。Release の作成も人が行い、
+  tag push の CI だけが `--create` で作成を代行する。
 
 ## 1. 署名鍵
 
@@ -65,7 +66,7 @@ directory をそのまま公開する。`manifest.json` の `assets.<platform>.s
 
 ### GitHub Releases
 
-tag と Release を先に作り、asset を配置する。
+tag を先に作り、その tag に対して Release と asset を用意する。
 
 ```sh
 # dry-run。実行される command を確認するだけで、GitHub を読まず・書かない
@@ -114,10 +115,18 @@ python -m scripts.release verify --source ~/.lapis
 
 3. 戻したい version の配置物（manifest + zip）を用意する。手元の `dist/` でも、配置済みの
    ローカル folder でも、Release から download したものでもよい。形式は同じである。
-4. 対象 version の directory を退避してから配置し直す。
+4. 戻す方法を選ぶ。
+
+   **前版の `versions/<version>/` が無事に残っている場合**は、再取得せず pointer だけを
+   戻す。`versions/<version>/` の manifest と package を検証してから pointer を書き換える。
 
    ```sh
-   mv ~/.lapis/versions/0.3.0 ~/.lapis/versions/0.3.0.broken
+   python -m scripts.release activate --root ~/.lapis --version 0.2.0 --platform windows-x86_64
+   ```
+
+   **前版が無い、または壊れている場合**は、検証済みの配置物から入れ直す。
+
+   ```sh
    python -m scripts.release install \
      --source /path/to/verified-dist \
      --root ~/.lapis \
@@ -126,18 +135,13 @@ python -m scripts.release verify --source ~/.lapis
    ```
 
    `install` は署名と SHA-256 を検証してから展開する。検証に失敗した package は
-   pointer を書き換えない。同じ version を入れ直す場合は検証後に `--replace` を明示する
-   （`--replace` なしでは既存 directory を上書きしない）。
+   pointer を書き換えない。同じ version が既にある場合は `--replace` を明示したときだけ
+   入れ直す（検証と展開が終わってから置き換え、失敗時は元の directory を残す）。
 5. launcher を起動し、`current.json` の version で起動することを確認する。
-6. `~/.lapis/versions/0.3.0.broken` は原因確認が済むまで残す。`data/` と `credentials/` は
-   この操作では触らない。
-
-前版の directory が無事に残っている場合は、再取得せず pointer だけを戻せる。この経路も
-`versions/<version>/` の manifest と package を検証してから pointer を書き換える。
-
-```sh
-python -m scripts.release activate --root ~/.lapis --version 0.2.0 --platform windows-x86_64
-```
+6. 壊れた version の directory は、原因確認が済むまで `versions/` の外へ退避して残す。
+   保持数の整理は directory 名と manifest の `version` が一致するものだけを対象にするため、
+   `0.3.0.broken` のような名前は自動削除されない。`data/` と `credentials/` はこの操作では
+   触らない。
 
 `current.json` が壊れて JSON として読めない場合、`verify` は失敗する。`current.json` を
 手で書き換えず、正しい version を `install` で入れ直す。`current.json` を削除すると
