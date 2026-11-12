@@ -120,7 +120,9 @@ per-user 配置とし、管理者権限を要求しない。初回は package �
 - 検証は複写後の staged directory に対して行い、展開もその検証済み package から行う。
   展開後は展開済み file を package の内容と照合し、不一致なら pointer を更新しない。
 - `activate` も保存済み ZIP だけでなく展開済み file を照合する。実行 file だけを書き換えた
-  version は復旧先として使わない。
+  version は復旧先として使わない。install は選択した platform だけを展開するため、照合は
+  manifest の各 platform の package に対して行い、どれか 1 つでも展開内容と一致すれば
+  その platform の version として扱う。1 つも一致しなければ検証失敗とする。
 - layout の定数は `scripts/release/layout.py` を正とする。launcher はここを import する
   代わりに同じ値を使うが、version の探索や保持数を独自に決めない。
 
