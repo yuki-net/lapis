@@ -45,12 +45,17 @@ pub(super) fn publish_profile_catalog(profiles: &terminal::TerminalProfiles, cx:
 }
 
 /// OS ごとの既定等幅フォント。
+///
+/// Web はブラウザーや OS のフォントを引けず、同梱フォントだけが使える。
+/// `monospace` のような総称名は解決できないため、Web だけは同梱した family 名を返す。
 pub(crate) fn default_font_family() -> &'static str {
+    #[cfg(target_family = "wasm")]
+    const DEFAULT: &str = crate::bundled_font::FAMILY;
     #[cfg(windows)]
     const DEFAULT: &str = "Cascadia Mono";
     #[cfg(target_os = "macos")]
     const DEFAULT: &str = "Menlo";
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(target_family = "wasm", windows, target_os = "macos")))]
     const DEFAULT: &str = "monospace";
     DEFAULT
 }
@@ -69,12 +74,17 @@ pub(crate) fn line_height_choices() -> &'static [u8] {
 }
 
 /// 設定 UI に出す等幅フォントの候補。
+///
+/// Web は同梱フォントしか使えない。読み込んでいない family を候補に出すと
+/// 選んだ瞬間に別フォントへ落ちるため、Web は同梱 family だけを候補にする。
 pub(crate) fn font_choices() -> &'static [&'static str] {
+    #[cfg(target_family = "wasm")]
+    const FONTS: &[&str] = &[crate::bundled_font::FAMILY];
     #[cfg(windows)]
     const FONTS: &[&str] = &["Cascadia Mono", "Consolas", "Courier New"];
     #[cfg(target_os = "macos")]
     const FONTS: &[&str] = &["Menlo", "Monaco", "SF Mono", "Courier New"];
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(not(any(target_family = "wasm", windows, target_os = "macos")))]
     const FONTS: &[&str] = &[
         "monospace",
         "DejaVu Sans Mono",

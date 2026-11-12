@@ -1883,6 +1883,7 @@ dependencies = [
  "terminal",
  "tracing",
  "tracing-subscriber",
+ "ttf-parser 0.25.1",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
