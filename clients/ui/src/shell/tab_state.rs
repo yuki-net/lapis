@@ -30,7 +30,10 @@ pub(crate) enum PanelTab {
     Document(DocumentId),
     Tool {
         view: ViewId,
+        /// タブの個体。Resource ID とは独立し、同じ種類のタブを複数持てる。
         instance: ViewInstanceId,
+        /// Host Terminal を参照するタブの Resource。未起動のタブは None。
+        resource: Option<TerminalId>,
     },
 }
 
@@ -80,6 +83,7 @@ impl PanelTab {
         Self::Tool {
             instance: ViewInstanceId::shared_tool(&view),
             view,
+            resource: None,
         }
     }
 
@@ -90,26 +94,54 @@ impl PanelTab {
         Self::Tool {
             view: view.into(),
             instance: instance.into(),
+            resource: None,
         }
     }
 
-    /// Host Terminalを参照するタブ。InstanceにTerminalIdを保持し、再起動後も同じPTYへ戻す。
+    /// Host Terminal を参照するタブ。Instance はタブごとに独立し、同じ PTY へは
+    /// `resource` で戻す。再起動後も同じ PTY を復元できるよう両方を保存する。
     pub(crate) fn terminal(id: TerminalId) -> Self {
         Self::Tool {
             view: ViewId::new(crate::features::id::VIEW_TERMINAL),
             instance: ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{}", id.as_str())),
+            resource: Some(id),
+        }
+    }
+
+    /// 未起動の Terminal タブ。開くたびに独立した個体を作り、起動後に resource を結ぶ。
+    pub(crate) fn terminal_instance(instance: impl Into<ViewInstanceId>) -> Self {
+        Self::Tool {
+            view: ViewId::new(crate::features::id::VIEW_TERMINAL),
+            instance: instance.into(),
+            resource: None,
+        }
+    }
+
+    /// タブの参照先 Resource を差し替える。個体 ID は変えない。
+    pub(crate) fn with_terminal_resource(&self, id: Option<TerminalId>) -> Self {
+        match self {
+            Self::Tool { view, instance, .. } => Self::Tool {
+                view: view.clone(),
+                instance: instance.clone(),
+                resource: id,
+            },
+            Self::Document(_) => self.clone(),
         }
     }
 
     pub(crate) fn terminal_id(&self) -> Option<TerminalId> {
-        let Self::Tool { view, instance } = self else {
+        let Self::Tool { view, resource, .. } = self else {
             return None;
         };
         (view.as_str() == crate::features::id::VIEW_TERMINAL)
-            .then(|| instance.as_str().strip_prefix(TERMINAL_INSTANCE_PREFIX))
+            .then(|| resource.clone())
             .flatten()
-            .filter(|id| !id.is_empty())
-            .map(TerminalId::new)
+    }
+
+    /// Terminal タブかどうか。起動前で Resource が未確定でも判定できる。
+    pub(crate) fn is_terminal(&self) -> bool {
+        self.view_id()
+            .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
     }
 
     pub(crate) fn view_id(&self) -> Option<&ViewId> {

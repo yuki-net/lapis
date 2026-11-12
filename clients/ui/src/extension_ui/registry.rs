@@ -6,7 +6,7 @@ use language::LanguageId;
 
 use super::{
     ActivationCondition, ActivationEvent, CommandId, FeatureId, UiContribution, UiSlot, ViewId,
-    WorkspaceCapabilityId, ZonePosition,
+    ViewInstanceId, WorkspaceCapabilityId, ZonePosition,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub struct FeatureRegistry {
     active_commands: HashSet<CommandId>,
 }
 
-type ViewFactory = Rc<dyn Fn(&mut App) -> AnyView>;
+type ViewFactory = Rc<dyn Fn(&ViewInstanceId, &mut App) -> AnyView>;
 
 impl FeatureRegistry {
     pub(crate) fn register_shared_view(&mut self, view: ViewId, entity: AnyView) {
@@ -89,7 +89,6 @@ impl FeatureRegistry {
     }
 
     /// MultipleはFactoryが提供する独立Entityだけで描画する。
-    #[allow(dead_code)] // Plugin・Featureの登録入口。
     pub(crate) fn register_view_factory(&mut self, view: ViewId, factory: ViewFactory) {
         self.view_factories.insert(view, factory);
     }
@@ -117,9 +116,10 @@ impl FeatureRegistry {
             .find(|contribution| contribution.view.as_ref() == Some(view))
             .map(|contribution| contribution.instance_policy);
         let entity = match policy {
-            Some(super::ToolInstancePolicy::Multiple) => {
-                self.view_factories.get(view).map(|factory| factory(cx))
-            }
+            Some(super::ToolInstancePolicy::Multiple) => self
+                .view_factories
+                .get(view)
+                .map(|factory| factory(instance, cx)),
             Some(super::ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
             None => None,
         };
@@ -133,6 +133,16 @@ impl FeatureRegistry {
 
     pub(crate) fn instance_view(&self, instance: &super::ViewInstanceId) -> Option<&AnyView> {
         self.instances.get(instance).map(|(_, entity)| entity)
+    }
+
+    /// 個体IDから型付きの実体を取得する。Feature固有の接続をRootから行うために使う。
+    pub(crate) fn instance_entity<T: 'static>(
+        &self,
+        instance: &super::ViewInstanceId,
+    ) -> Option<gpui::Entity<T>> {
+        self.instances
+            .get(instance)
+            .and_then(|(_, view)| view.clone().downcast::<T>().ok())
     }
 
     pub(crate) fn close_view_instance(&mut self, instance: &super::ViewInstanceId) {
@@ -359,7 +369,7 @@ mod tests {
         let created = entities.clone();
         registry.register_view_factory(
             view.clone(),
-            Rc::new(move |cx| {
+            Rc::new(move |_: &super::super::ViewInstanceId, cx| {
                 let entity = cx.new(|_| InstanceCounter(0));
                 created.borrow_mut().push(entity.clone());
                 entity.into()

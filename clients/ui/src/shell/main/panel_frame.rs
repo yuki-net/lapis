@@ -42,7 +42,7 @@ impl Shell {
         let shell = cx.entity().downgrade();
         let active = self.shell.visible_active(panel);
         let (content, scroll_policy) = match active {
-            Some(PanelTab::Tool { view, instance }) => {
+            Some(PanelTab::Tool { view, instance, .. }) => {
                 let policy = self
                     .feature_registry
                     .zone_contributions(position)

@@ -135,46 +135,56 @@ impl Shell {
         view: ViewId,
         cx: &mut Context<Self>,
     ) {
-        let _ = self.shell.layout.move_tab_to_zone(
-            position,
-            PanelTab::tool(view),
-            crate::time::Instant::now(),
-        );
+        // Terminal はタブごとに独立したセッションを持つ。依頼された View が
+        // Terminal なら、共有タブではなく新しい個体を1つ開く。実体を作れない
+        // Shell（Window 外など）ではタブだけ増やさない。
+        let tab = if view.as_str() == id::VIEW_TERMINAL {
+            if !self
+                .feature_registry
+                .can_create_view(&view, crate::extension_ui::ToolInstancePolicy::Multiple)
+            {
+                return;
+            }
+            match self.shell.next_tool_instance(&view) {
+                Ok(instance) => PanelTab::terminal_instance(instance),
+                Err(_) => return,
+            }
+        } else {
+            PanelTab::tool(view)
+        };
+        let _ = self
+            .shell
+            .layout
+            .move_tab_to_zone(position, tab, crate::time::Instant::now());
         self.refresh_feature_activation(cx);
         cx.notify();
     }
 
-    /// 起動済みのHost Terminalをタブとして開く。既存のTerminal Viewタブは同じ位置で置き換える。
+    /// 参照先 Resource の Terminal タブを開く。
     ///
-    /// パネル内のセッションタブ列は持たないため、既に Terminal View のタブが
-    /// あれば新しいタブを増やさず、そのタブの参照先だけを現在のセッションへ替える。
+    /// 既に同じ Resource を参照するタブがあればそのタブを選ぶ。無ければ新しい
+    /// タブを1つ作り、そのセッションへ接続する。タブは1セッションなので、
+    /// 別の Resource を開くと別のタブになる。
     pub(crate) fn open_terminal_tab(&mut self, id: TerminalId, cx: &mut Context<Self>) {
-        let tab = PanelTab::terminal(id);
-        if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
-            self.focus_terminal_tab(&panel_id, &tab);
-            self.refresh_feature_activation(cx);
-            cx.notify();
-            return;
-        }
-        let existing_terminal =
-            self.shell
-                .layout
-                .placements()
-                .into_iter()
-                .find(|(candidate, _)| {
-                    candidate
-                        .view_id()
-                        .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL)
-                });
-        if let Some((old, panel_id)) = existing_terminal
-            && !self.shell.layout.tab_is_pinned(&old)
-            && self.shell.layout.replace_tab(&panel_id, &old, tab.clone())
+        if let Some((tab, panel_id)) = self
+            .shell
+            .layout
+            .placements()
+            .into_iter()
+            .find(|(tab, _)| tab.terminal_id().as_ref() == Some(&id))
         {
             self.focus_terminal_tab(&panel_id, &tab);
             self.refresh_feature_activation(cx);
             cx.notify();
             return;
         }
+        let Ok(instance) = self
+            .shell
+            .next_tool_instance(&ViewId::new(id::VIEW_TERMINAL))
+        else {
+            return;
+        };
+        let tab = PanelTab::terminal_instance(instance).with_terminal_resource(Some(id));
         if let Ok(panel_id) = self.shell.layout.move_tab_to_zone(
             ZonePosition::Bottom,
             tab.clone(),
@@ -312,7 +322,7 @@ impl Shell {
 
     pub(crate) fn close_tab_in_panel(
         &mut self,
-        _panel: PanelId,
+        panel: PanelId,
         _position: ZonePosition,
         tab: PanelTab,
         window: &mut Window,
@@ -322,9 +332,11 @@ impl Shell {
             return;
         }
         let PanelTab::Document(document_id) = tab else {
-            let terminal_tab = tab
-                .view_id()
-                .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL);
+            if tab.is_terminal() {
+                // ターミナルタブを閉じたら、そのタブの Session だけを終了する。
+                self.close_terminal_tab(&tab, &panel, cx);
+                return;
+            }
             if let Some(panel_id) = self.shell.layout.panel_for_tab(&tab) {
                 self.shell
                     .layout
@@ -332,11 +344,6 @@ impl Shell {
                 self.schedule_empty_close(panel_id, cx);
                 self.feature_registry
                     .close_view_instance(&tab.instance_id());
-            }
-            if terminal_tab {
-                // ターミナルタブを閉じたら Session を終了する。パネルや Zone を
-                // 閉じるだけの操作とは別で、こちらは PTY を止める。
-                cx.emit(UiCommand::TerminalTabClosed);
             }
             self.refresh_feature_activation(cx);
             cx.notify();
@@ -359,25 +366,23 @@ impl Shell {
     /// この経路はタブの Close 操作だけが使う（Window 終了は `close_tools` を
     /// 空のまま渡す）。ターミナルタブが消えたときだけ Feature へ終了を伝える。
     pub(crate) fn close_tools_after_batch(&mut self, tabs: &[PanelTab], cx: &mut Context<Self>) {
-        let mut closed_terminal = false;
         for tab in tabs {
             if !matches!(tab, PanelTab::Tool { .. }) || self.shell.layout.tab_is_pinned(tab) {
                 continue;
             }
-            if let Some(panel_id) = self.shell.layout.panel_for_tab(tab) {
-                self.shell
-                    .layout
-                    .remove_tab(&panel_id, tab, crate::time::Instant::now());
-                self.schedule_empty_close(panel_id, cx);
-                self.feature_registry
-                    .close_view_instance(&tab.instance_id());
-                closed_terminal |= tab
-                    .view_id()
-                    .is_some_and(|view| view.as_str() == id::VIEW_TERMINAL);
+            let Some(panel_id) = self.shell.layout.panel_for_tab(tab) else {
+                continue;
+            };
+            if tab.is_terminal() {
+                self.close_terminal_tab(tab, &panel_id, cx);
+                continue;
             }
-        }
-        if closed_terminal {
-            cx.emit(UiCommand::TerminalTabClosed);
+            self.shell
+                .layout
+                .remove_tab(&panel_id, tab, crate::time::Instant::now());
+            self.schedule_empty_close(panel_id, cx);
+            self.feature_registry
+                .close_view_instance(&tab.instance_id());
         }
         self.refresh_feature_activation(cx);
         cx.notify();
@@ -416,13 +421,23 @@ impl Shell {
         else {
             return;
         };
-        let tab = match instance_policy {
-            crate::extension_ui::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
-            crate::extension_ui::ToolInstancePolicy::Multiple => {
-                let Ok(instance) = self.shell.next_tool_instance(&view) else {
-                    return;
-                };
-                PanelTab::tool_instance(view.clone(), instance)
+        let terminal = view.as_str() == id::VIEW_TERMINAL;
+        // Terminal は Multiple 方針。起動済みの PTY へ戻すタブは参照先を持つが、
+        // picker から開くタブは新しい個体なので Resource は未確定でよい。
+        let tab = if terminal {
+            let Ok(instance) = self.shell.next_tool_instance(&view) else {
+                return;
+            };
+            PanelTab::terminal_instance(instance)
+        } else {
+            match instance_policy {
+                crate::extension_ui::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+                crate::extension_ui::ToolInstancePolicy::Multiple => {
+                    let Ok(instance) = self.shell.next_tool_instance(&view) else {
+                        return;
+                    };
+                    PanelTab::tool_instance(view.clone(), instance)
+                }
             }
         };
         if !self
