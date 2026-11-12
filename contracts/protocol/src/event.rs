@@ -15,11 +15,14 @@ pub enum EventBody {
         revision: u64,
     },
     /// 購読中の view state の置き換え。差分ではなく、最後に受理した値そのもの。
+    ///
+    /// 読取り権限を持たない Session へは、連番を保つために `view` を `None` にした
+    /// 内容なしの通知だけを配る。受け取った Client は `None` を適用しない。
     #[serde(rename = "workspace.view_changed")]
     WorkspaceViewChanged {
         workspace_id: WorkspaceId,
         revision: u64,
-        view: workbench::WorkspaceView,
+        view: Option<workbench::WorkspaceView>,
     },
     #[serde(rename = "workspace.changed")]
     WorkspaceChanged { workspace_id: WorkspaceId },

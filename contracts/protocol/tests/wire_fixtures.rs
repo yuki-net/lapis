@@ -156,7 +156,7 @@ fn view_state_messages_match_the_documented_wire_shape() {
         body: EventBody::WorkspaceViewChanged {
             workspace_id,
             revision: 3,
-            view: client_api::WorkspaceView {
+            view: Some(client_api::WorkspaceView {
                 open_documents: vec![client_api::WorkspaceDocumentView {
                     document_id: Some(document_id.clone()),
                     path: Some(path.clone()),
@@ -168,7 +168,7 @@ fn view_state_messages_match_the_documented_wire_shape() {
                 }],
                 active_path: Some(path),
                 active_document_id: Some(document_id),
-            },
+            }),
         },
     };
     assert_eq!(serde_json::to_string(&event).unwrap(), VIEW_CHANGED);

@@ -46,6 +46,11 @@ impl RemoteRequestHandler for BackendRemoteHandler {
         let can_read_git = grant.capabilities().contains(
             &client_api::CapabilityId::try_new("workspace.git.read").expect("valid capability"),
         );
+        // view state 共有の購読と同じく、読取りには workspace.sync を要求する。
+        let can_read_view = grant.capabilities().contains(
+            &client_api::CapabilityId::try_new(client_api::capability::WORKSPACE_SYNC)
+                .expect("valid capability"),
+        );
         let pending_subscriptions = self.pending_subscriptions.clone();
         Box::pin(async move {
             let receiver = opens_workspace.then(|| {
@@ -54,6 +59,7 @@ impl RemoteRequestHandler for BackendRemoteHandler {
                     Arc::new(TokioEventSink {
                         sender,
                         can_read_git,
+                        can_read_view,
                     }) as Arc<dyn BackendEventSink>,
                     receiver,
                 )
@@ -113,6 +119,7 @@ impl RemoteRequestHandler for BackendRemoteHandler {
 struct TokioEventSink {
     sender: tokio::sync::mpsc::Sender<EventEnvelope>,
     can_read_git: bool,
+    can_read_view: bool,
 }
 
 impl BackendEventSink for TokioEventSink {
@@ -124,6 +131,21 @@ impl BackendEventSink for TokioEventSink {
         {
             event.body = client_api::EventBody::WorkspaceChanged {
                 workspace_id: workspace_id.clone(),
+            };
+        }
+        // 配信自体を止めると event 連番が欠番になり Client が切断するため、
+        // 権限が無い Session にも連番を保ったまま内容だけを伏せた event を送る。
+        if !self.can_read_view
+            && let client_api::EventBody::WorkspaceViewChanged {
+                workspace_id,
+                revision,
+                ..
+            } = &event.body
+        {
+            event.body = client_api::EventBody::WorkspaceViewChanged {
+                workspace_id: workspace_id.clone(),
+                revision: *revision,
+                view: None,
             };
         }
         self.sender.try_send(event).is_ok()
@@ -153,7 +175,8 @@ mod tests {
     use client_api::{
         CapabilitySet, DocumentCreateRequest, DocumentEncoding, EventBody, RequestBody, RequestId,
         ResponseBody, SessionId, SnapshotReason, SnapshotRequest, WorkspaceConnectRequest,
-        WorkspaceId, WorkspaceRelativePath,
+        WorkspaceDocumentView, WorkspaceId, WorkspaceRelativePath, WorkspaceView,
+        WorkspaceViewSubscribeRequest, WorkspaceViewUpdateRequest,
     };
     use document::{DocumentError, DocumentRepository, FileData, FileFingerprint};
     use editor_core::{ConversationId, ExecutionId, TaskId};
@@ -534,6 +557,7 @@ mod tests {
         let sink = TokioEventSink {
             sender,
             can_read_git: false,
+            can_read_view: true,
         };
         let workspace_id = WorkspaceId::try_new("workspace").unwrap();
         let event = EventEnvelope {
@@ -559,6 +583,225 @@ mod tests {
         assert!(
             matches!(received.body, EventBody::WorkspaceChanged { workspace_id: id } if id == workspace_id)
         );
+    }
+
+    #[test]
+    fn view_events_are_redacted_without_workspace_sync_capability() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(2);
+        let workspace_id = WorkspaceId::try_new("workspace").unwrap();
+        let event = EventEnvelope {
+            event_sequence: client_api::EventSequence::new(8),
+            body: EventBody::WorkspaceViewChanged {
+                workspace_id: workspace_id.clone(),
+                revision: 3,
+                view: Some(shared_view()),
+            },
+        };
+
+        let redacting = TokioEventSink {
+            sender: sender.clone(),
+            can_read_git: true,
+            can_read_view: false,
+        };
+        assert!(redacting.try_send(event.clone()));
+        let received = receiver.try_recv().unwrap();
+        assert_eq!(received.event_sequence.value(), 8);
+        let EventBody::WorkspaceViewChanged {
+            workspace_id: id,
+            revision,
+            view,
+        } = received.body
+        else {
+            panic!("view event をそのまま配る")
+        };
+        assert_eq!(id, workspace_id);
+        assert_eq!(revision, 3);
+        assert!(view.is_none(), "権限のない Session には内容を伏せる");
+
+        let passing = TokioEventSink {
+            sender,
+            can_read_git: true,
+            can_read_view: true,
+        };
+        assert!(passing.try_send(event));
+        let received = receiver.try_recv().unwrap();
+        let EventBody::WorkspaceViewChanged { view, .. } = received.body else {
+            panic!("view event をそのまま配る")
+        };
+        assert_eq!(view, Some(shared_view()));
+    }
+
+    #[test]
+    fn view_state_content_reaches_only_sessions_with_workspace_sync() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::try_new("workspace-1").unwrap();
+        let state = BackendState::new([WorkspaceRegistration::new(
+            workspace_id.clone(),
+            "Workspace",
+            root.path().to_owned(),
+            Arc::new(EmptyFiles),
+        )])
+        .unwrap();
+        let handler = BackendRemoteHandler::new(BackendService::start(state).unwrap());
+        let viewer = session_grant(
+            "viewer",
+            &workspace_id,
+            &[
+                client_api::capability::WORKSPACES_CONNECT,
+                client_api::capability::WORKSPACE_SYNC,
+                client_api::capability::WORKBENCH_WRITE,
+            ],
+        );
+        // 共有を購読できない Session も接続でき、event の連番は同じものを受け取る。
+        let blind = session_grant(
+            "blind",
+            &workspace_id,
+            &[client_api::capability::WORKSPACES_CONNECT],
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
+        for (number, grant) in [(1_u64, viewer.clone()), (2, blind.clone())] {
+            let connected = runtime.block_on(handler.handle(
+                grant,
+                request(
+                    number,
+                    RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                        workspace_id: workspace_id.clone(),
+                    }),
+                ),
+            ));
+            assert!(matches!(connected.body, ResponseBody::WorkspaceConnect(_)));
+        }
+        let mut viewer_events = runtime
+            .block_on(handler.subscribe(viewer.clone()))
+            .unwrap()
+            .expect("Session へ event を配る");
+        let mut blind_events = runtime
+            .block_on(handler.subscribe(blind.clone()))
+            .unwrap()
+            .expect("Session へ event を配る");
+
+        let subscribed = runtime.block_on(handler.handle(
+            viewer.clone(),
+            request(
+                3,
+                RequestBody::WorkspaceViewSubscribe(WorkspaceViewSubscribeRequest {
+                    workspace_id: workspace_id.clone(),
+                }),
+            ),
+        ));
+        assert!(matches!(
+            subscribed.body,
+            ResponseBody::WorkspaceViewSubscribe(_)
+        ));
+
+        let mut blind_sequence = None;
+        for (number, revision) in [(4_u64, 1_u64), (5, 2)] {
+            let updated = runtime.block_on(handler.handle(
+                viewer.clone(),
+                request(
+                    number,
+                    RequestBody::WorkspaceViewUpdate(WorkspaceViewUpdateRequest {
+                        workspace_id: workspace_id.clone(),
+                        view: shared_view(),
+                    }),
+                ),
+            ));
+            assert!(matches!(updated.body, ResponseBody::WorkspaceViewUpdate(_)));
+
+            let viewer_event = next_view_event(&runtime, &mut viewer_events);
+            let blind_event = next_view_event(&runtime, &mut blind_events);
+            assert_eq!(blind_event.event_sequence, viewer_event.event_sequence);
+            if let Some(previous) = blind_sequence {
+                assert_eq!(blind_event.event_sequence.value(), previous + 1);
+            }
+            blind_sequence = Some(blind_event.event_sequence.value());
+
+            let EventBody::WorkspaceViewChanged {
+                revision: seen,
+                view,
+                ..
+            } = viewer_event.body
+            else {
+                unreachable!("next_view_event は view event に限定している")
+            };
+            assert_eq!(seen, revision);
+            assert_eq!(
+                view.expect("workspace.sync を持つ Session は内容を受け取る")
+                    .active_path,
+                Some(WorkspaceRelativePath::parse("src/secret.rs").unwrap())
+            );
+
+            let EventBody::WorkspaceViewChanged {
+                revision: seen,
+                view,
+                ..
+            } = blind_event.body
+            else {
+                unreachable!("next_view_event は view event に限定している")
+            };
+            assert_eq!(seen, revision);
+            assert!(
+                view.is_none(),
+                "workspace.sync を持たない Session に view の内容を配らない"
+            );
+        }
+        handler.disconnect(&viewer);
+        handler.disconnect(&blind);
+    }
+
+    fn session_grant(
+        session: &str,
+        workspace_id: &WorkspaceId,
+        capabilities: &[&str],
+    ) -> SessionGrant {
+        SessionGrant::from_authenticated(
+            SessionId::try_new(session).unwrap(),
+            workspace_id.clone(),
+            CapabilitySet::try_new(
+                capabilities
+                    .iter()
+                    .map(|value| CapabilityId::try_new(*value).unwrap()),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn shared_view() -> WorkspaceView {
+        WorkspaceView {
+            open_documents: vec![WorkspaceDocumentView {
+                document_id: None,
+                path: Some(WorkspaceRelativePath::parse("src/secret.rs").unwrap()),
+                cursor_char: 12,
+                selection_start: 0,
+                selection_end: 0,
+                scroll_x: 0.0,
+                scroll_y: 8.0,
+            }],
+            active_path: Some(WorkspaceRelativePath::parse("src/secret.rs").unwrap()),
+            active_document_id: None,
+        }
+    }
+
+    fn next_view_event(
+        runtime: &tokio::runtime::Runtime,
+        events: &mut RemoteEventReceiver,
+    ) -> EventEnvelope {
+        let event = runtime
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(1), events.recv())
+                    .await
+                    .expect("event が届かない")
+            })
+            .expect("event receiver が閉じた");
+        assert!(
+            matches!(event.body, EventBody::WorkspaceViewChanged { .. }),
+            "view event だけを配る"
+        );
+        event
     }
 
     fn request(number: u64, body: RequestBody) -> RequestEnvelope {

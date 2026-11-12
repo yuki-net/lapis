@@ -669,7 +669,7 @@ impl BackendState {
                     Some(view) => vec![workspace.publish(EventBody::WorkspaceViewChanged {
                         workspace_id: request.workspace_id,
                         revision: update.revision,
-                        view,
+                        view: Some(view),
                     })?],
                     None => Vec::new(),
                 };

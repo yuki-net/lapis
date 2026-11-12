@@ -2,7 +2,8 @@
 //!
 //! 正本は Host の Workspace session にあり、購読した Client は snapshot の後に
 //! `workspace.view_changed` で最新の view state 全体を受け取る。差分計算やマージは
-//! せず、最後に受理した値がそのまま全購読者へ配られる。
+//! せず、最後に受理した値がそのまま配られる。読取り権限を持たない Session には、
+//! 連番を保つため内容を伏せた `workspace.view_changed` だけを届ける。
 
 use serde::{Deserialize, Serialize};
 

@@ -163,7 +163,7 @@ fn next_view_event(receiver: &BackendEventReceiver) -> (u64, WorkspaceView) {
             .recv_timeout(Duration::from_secs(5))
             .expect("view state の delta が届く");
         if let EventBody::WorkspaceViewChanged { revision, view, .. } = event.body {
-            return (revision, view);
+            return (revision, view.expect("参加者がいる間の delta は内容を持つ"));
         }
     }
 }
