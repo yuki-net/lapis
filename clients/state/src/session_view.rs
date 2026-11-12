@@ -190,6 +190,13 @@ impl SessionViewCursor {
         }
     }
 
+    /// snapshot の受理 revision を進める。送信の応答ではないため、`pending` は
+    /// 消費しない。再同期の応答待ちに `begin_local` した値は、その event が応答より
+    /// 先に届いたときに照合する必要がある。
+    pub fn accept_snapshot(&self, revision: u64) {
+        self.applied.fetch_max(revision, Ordering::AcqRel);
+    }
+
     /// 自分の送信が受理された revision を、適用済みとして扱う。
     /// 応答の時点で pending から外し、同じ revision の event は再適用しない。
     pub fn accept_local(&self, revision: u64) {
@@ -295,7 +302,8 @@ impl SessionViewReplica {
         if self.workspace() != Some(&workspace) {
             self.cursor = Some(SessionViewCursor::new(workspace.clone(), revision));
         } else if let Some(cursor) = &self.cursor {
-            cursor.accept_local(revision);
+            // snapshot は送信の応答ではない。pending は保持したまま revision だけ進める。
+            cursor.accept_snapshot(revision);
         }
         if let Some(view) = view {
             self.watch.publish(workspace, revision, view);
@@ -453,6 +461,10 @@ fn publish_snapshot(inner: &Inner, snapshot: &SessionViewSnapshot) {
         inner
             .watch
             .publish(inner.workspace.clone(), snapshot.revision, view.clone());
+    } else {
+        // まだ誰も共有していない Workspace でも、参加は完了している。
+        // ここで同期済みにしないと、最初のタブ構成を共有できない。
+        inner.watch.mark_synced(inner.workspace.clone());
     }
 }
 
@@ -839,6 +851,25 @@ mod replica_tests {
         session.subscribe_snapshot(workspace.clone(), 3, Some(view("document-c")));
         let (_, revision, _) = session.watch().take_if_changed(&workspace, last).unwrap();
         assert_eq!(revision, 3);
+    }
+
+    /// snapshot の受信で、送信待ちの記録を消費しない。
+    #[test]
+    fn a_snapshot_does_not_consume_a_pending_send() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 1, None);
+        // 再同期の応答待ちに A を送信する。
+        let local = view("document-a");
+        session.begin_local(&local);
+        // snapshot が同じ revision で返ってきても pending は残る。
+        session.subscribe_snapshot(workspace.clone(), 1, None);
+        // 応答より先に A の event が届いても、自分の更新として捨てる。
+        session.apply_event(&workspace, 2, Some(local.clone()));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_none(),
+            "snapshot の受理で送信待ちの記録を消しました"
+        );
     }
 
     #[test]

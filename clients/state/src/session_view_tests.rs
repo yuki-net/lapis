@@ -135,6 +135,25 @@ fn wait_for(
 }
 
 #[test]
+fn empty_workspace_is_synced_so_the_first_tab_can_be_published() {
+    // まだ誰も共有していない Workspace（snapshot の view が null）でも、
+    // 参加した Client は自分のタブ構成を送れる。
+    let workspace = WorkspaceId::new("workspace-1");
+    let shared = Arc::new(SharedView::new());
+    let watch = SessionViewWatch::new();
+    let session =
+        SessionViewSession::start(shared.clone(), workspace.clone(), watch.clone()).unwrap();
+    assert!(
+        watch.is_synced(&workspace),
+        "空の snapshot で参加が完了していません"
+    );
+    session
+        .publish(SharedView::view("document-a"))
+        .expect("最初のタブ構成を共有できる");
+    session.close();
+}
+
+#[test]
 fn update_is_applied_to_other_subscribers_as_the_latest_value() {
     let workspace = WorkspaceId::new("workspace-1");
     let shared = Arc::new(SharedView::new());
