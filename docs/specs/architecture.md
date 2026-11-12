@@ -83,6 +83,8 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 計測は 1 秒間隔で行い、root ごとに直近 60 サンプル（60 秒分）を保持する。CPU は 100 分の 1 パーセント、メモリは byte の整数として wire に載せる。終了した root は状態確認のため 60 秒残してから削除する。
 - 終了操作は接続中の Workspace に属する root だけを対象とし、root とその子孫を OS のプロセスツリー単位で終了する。Host / Desktop 自身は終了対象にしない。所有外の root ID は存在の有無を区別せず拒否する。
 - `workspace.execute` の `Processes` / `TerminateProcess` を使い、Local / Remote で同じ意味にする。読み取りは `workspace.process.read`、終了は `workspace.process.control` を要求する。
+- Desktop の一覧取得は Resource Manager 専用の worker で行い、Document の編集・保存と直列化を共有しない。Workspace は worker 側が保持し、切替時は Feature から同期する。
+- 一覧の再取得は Resource Manager パネルが表示中のときだけ 2 秒間隔で行う。非表示にしたら周期を止め、再表示時に 1 回取得してから再開する。
 
 ## 設定の所有境界
 

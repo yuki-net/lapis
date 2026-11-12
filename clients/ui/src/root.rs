@@ -15,7 +15,7 @@ use crate::{
         id,
         preview::PreviewFeature,
         problems::{ProblemsEvent, ProblemsFeature},
-        resource_manager::ResourceManagerFeature,
+        resource_manager::{ProcessWorker, ResourceManagerFeature},
         search::SearchFeature,
         settings::SettingsFeature,
         tasks::TasksFeature,
@@ -77,6 +77,7 @@ pub(crate) struct DesktopRoot {
     tasks: Entity<TasksFeature>,
     terminal: Entity<TerminalFeature>,
     problems: Entity<ProblemsFeature>,
+    resources: Entity<ResourceManagerFeature>,
     search: Entity<SearchFeature>,
     conversation: Entity<ConversationFeature>,
     preview: Entity<PreviewFeature>,
@@ -156,16 +157,20 @@ impl DesktopRoot {
             services.terminal.restore_summaries(&summaries);
         }
         let document_connection = Some(session.document_connection());
+        let initial_workspace = session.workspace_id().cloned();
         let worker = ClientWorker::new(DocumentClient {
             editor: session,
             conversation: services.conversation,
             lsp: services.lsp,
             edit_chain: EditChain::default(),
             git: services.git.backend(),
-            process: services.process.clone(),
             snapshot_sequence: 0,
             document_owners: Default::default(),
         });
+        let process_worker = ClientWorker::new(ProcessWorker::new(
+            services.process.clone(),
+            initial_workspace.clone(),
+        ));
         let editor =
             cx.new(|cx| Editor::new_with_subscription(worker.clone(), document_connection, cx));
         // Web の DocumentConnection は同期購読を持たないため、Host からの
@@ -193,7 +198,8 @@ impl DesktopRoot {
         let terminal = cx
             .new(|cx| TerminalFeature::new(services.terminal, terminal_root, conversation_id, cx));
         let problems = cx.new(|cx| ProblemsFeature::new(worker.clone(), cx));
-        let resources = cx.new(|cx| ResourceManagerFeature::new(worker.clone(), cx));
+        let resources =
+            cx.new(|_| ResourceManagerFeature::new(process_worker, initial_workspace.clone()));
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
@@ -292,6 +298,14 @@ impl DesktopRoot {
         terminal.update(cx, |terminal, cx| {
             let visible = shell.read(cx).shell.terminal_tab_visible();
             terminal.sync_tab_presence(visible, cx);
+        });
+        // Resource Manager は表示中だけ取得する。初期 Layout の表示状態を反映する。
+        resources.update(cx, |resources, cx| {
+            let visible = shell
+                .read(cx)
+                .shell
+                .view_visible_in_layout(id::VIEW_RESOURCES);
+            resources.set_visible(visible, cx);
         });
         let group = cx.new(|_| {
             crate::window_host::WindowGroup::new(
@@ -518,6 +532,7 @@ impl DesktopRoot {
                 // Layout のタブ参照を Terminal の固定参照へ反映し、
                 // ターミナルタブが見えたら既定 profile の自動起動を1回促す。
                 root.sync_terminal_tab(cx);
+                root.sync_resource_manager_visibility(cx);
                 root.schedule_persist(cx);
             }),
             cx.observe(&terminal, |root, _, cx| root.schedule_persist(cx)),
@@ -582,6 +597,7 @@ impl DesktopRoot {
             tasks,
             terminal,
             problems,
+            resources,
             search,
             conversation,
             preview,
@@ -673,6 +689,9 @@ impl DesktopRoot {
         }
         self.files
             .update(cx, |files, cx| files.update(snapshot, cx));
+        self.resources.update(cx, |resources, cx| {
+            resources.set_workspace(snapshot.workspace.clone(), cx)
+        });
         self.git.update(cx, |git, cx| {
             git.set_workspace(snapshot.workspace.clone(), cx);
             let role = record
@@ -813,6 +832,7 @@ impl DesktopRoot {
             shell.apply_scope_visibility(hidden, cx);
         });
         self.sync_terminal_tab(cx);
+        self.sync_resource_manager_visibility(cx);
         self.sync_preview(cx);
     }
 
@@ -907,6 +927,17 @@ impl DesktopRoot {
         let visible = self.shell.read(cx).shell.terminal_tab_visible();
         self.terminal
             .update(cx, |terminal, cx| terminal.sync_tab_presence(visible, cx));
+    }
+
+    /// Resource Manager パネルの表示状態を Feature へ伝える。非表示の間は取得を止める。
+    fn sync_resource_manager_visibility(&mut self, cx: &mut Context<Self>) {
+        let visible = self
+            .shell
+            .read(cx)
+            .shell
+            .view_visible_in_layout(id::VIEW_RESOURCES);
+        self.resources
+            .update(cx, |resources, cx| resources.set_visible(visible, cx));
     }
 
     /// 復元したLayoutのうち、表示中のTerminalタブをHostの既存PTYへ再接続する。
