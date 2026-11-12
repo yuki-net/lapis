@@ -557,6 +557,26 @@ class LayoutTests(TempDirTest):
                 with self.assertRaises(layout.LayoutError):
                     layout.version_dir(root, name)
 
+    def test_zip_member_cannot_escape_or_reuse_layout_names(self):
+        import zipfile
+
+        target = self.root / "extract"
+        target.mkdir()
+        for name in ("../escape.txt", "/absolute.txt", "C:/x.txt"):
+            with self.subTest(name=name):
+                archive = self.root / "bad.zip"
+                with zipfile.ZipFile(archive, "w") as handle:
+                    handle.writestr(zipfile.ZipInfo(name), b"x")
+                with self.assertRaises(layout.LayoutError):
+                    layout._extract(archive, target)
+        for name in (MANIFEST_NAME, layout.POINTER_NAME):
+            with self.subTest(name=name):
+                archive = self.root / "reserved.zip"
+                with zipfile.ZipFile(archive, "w") as handle:
+                    handle.writestr(name, b"{}")
+                with self.assertRaises(layout.LayoutError):
+                    layout._extract(archive, target)
+
     def test_corrupt_pointer_is_not_silently_ignored(self):
         root = self.root / "install"
         root.mkdir()

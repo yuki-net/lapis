@@ -168,7 +168,8 @@ def install(
     if backup is not None:
         shutil.rmtree(backup, ignore_errors=True)
     write_pointer(root, version)
-    _prune(root, keep=[version, previous])
+    keep = [version] + ([previous] if previous else [])
+    _prune(root, keep=keep[:KEEP_VERSIONS])
     return target
 
 
@@ -195,13 +196,17 @@ def activate(
     return target
 
 
-
 def _extract(package: Path, destination: Path) -> None:
     with zipfile.ZipFile(package) as archive:
         for member in archive.infolist():
             name = member.filename
             parts = name.split("/")
-            if name.startswith("/") or "\\" in name or any(p in ("", ".", "..") for p in parts):
+            if (
+                name.startswith("/")
+                or "\\" in name
+                or ":" in name
+                or any(part in ("", ".", "..") for part in parts)
+            ):
                 raise LayoutError(f"package に不正な path がある: {name!r}")
             if parts[0] in RESERVED_ROOT_NAMES:
                 raise LayoutError(f"package が layout の予約名を使っている: {name!r}")

@@ -102,7 +102,8 @@ per-user 配置とし、管理者権限を要求しない。初回は package �
 - `versions/<version>/` は一時 directory に展開してから rename する。展開が途中で失敗した
   package を pointer の指す先にしない。
 - package は zip の root を `versions/<version>/` の直下に展開する。zip member の絶対パス、
-  `..`、backslash、layout の予約名（`current.json`、`manifest.json`）を拒否する。
+  `..`、drive 指定、layout の予約 name（`current.json`、`manifest.json`）を拒否する。
+  `zipfile` は member 名の `\` を `/` に正規化して読むが、`\` を含む名前も拒否する。
 - layout の定数は `scripts/release/layout.py` を正とする。launcher はここを import する
   代わりに同じ値を使うが、version の探索や保持数を独自に決めない。
 
