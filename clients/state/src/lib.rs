@@ -50,8 +50,8 @@ pub use process::ProcessSession;
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use web_access::{
-    WebAccess, WebAddress, WebAddressKind, address_kind_for, is_tailscale_interface,
-    split_host_port,
+    PageScheme, WebAccess, WebAddress, WebAddressKind, address_kind_for, is_tailscale_interface,
+    split_host_port, split_url,
 };
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 

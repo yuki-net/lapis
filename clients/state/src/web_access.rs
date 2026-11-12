@@ -30,6 +30,31 @@ impl WebAddressKind {
 pub struct WebAddress {
     pub kind: WebAddressKind,
     pub host: String,
+    /// ページをこの scheme で開くか。Web で https 配信している場合だけ `https`。
+    pub page_scheme: PageScheme,
+}
+
+/// ページ URL の scheme。bridge は常に `ws` / `wss` をページの scheme から決める。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PageScheme {
+    Http,
+    Https,
+}
+
+impl PageScheme {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Http => "http",
+            Self::Https => "https",
+        }
+    }
+
+    fn websocket_scheme(self) -> &'static str {
+        match self {
+            Self::Http => "ws",
+            Self::Https => "wss",
+        }
+    }
 }
 
 impl WebAddress {
@@ -37,17 +62,25 @@ impl WebAddress {
         Self {
             kind,
             host: host.into(),
+            page_scheme: PageScheme::Http,
         }
     }
 
     /// ブラウザーで開くページ URL。末尾は `/`。
     pub fn page_url(&self, page_port: u16) -> String {
-        format!("http://{}:{page_port}/", self.host)
+        format!("{}://{}:{page_port}/", self.page_scheme.as_str(), self.host)
     }
 
     /// Web の Host URL。ログインフォームへ入れる bridge の WebSocket。
+    ///
+    /// https のページからは混在コンテンツを避けるため `wss` を使う。
     pub fn bridge_url(&self, bridge_port: u16) -> String {
-        format!("ws://{}:{bridge_port}{}", self.host, wire_path())
+        format!(
+            "{}://{}:{bridge_port}{}",
+            self.page_scheme.websocket_scheme(),
+            self.host,
+            wire_path()
+        )
     }
 
     /// 同じホストの候補か。ポート違いや重複を除くために使う。
@@ -116,24 +149,26 @@ impl WebAccess {
         host_url: Option<&str>,
         workspace_id: Option<String>,
     ) -> Self {
-        let page = page_url.and_then(split_host_port);
-        let bridge = host_url.and_then(split_host_port);
+        let page = page_url.and_then(split_url);
+        let bridge = host_url.and_then(split_url);
         let page_port = page
             .as_ref()
-            .and_then(|(_, port)| *port)
+            .and_then(|(_, port, _)| *port)
             .unwrap_or(wire::WEB_PAGE_PORT);
         let bridge_port = bridge
             .as_ref()
-            .and_then(|(_, port)| *port)
+            .and_then(|(_, port, _)| *port)
             .unwrap_or(wire::WEB_BRIDGE_PORT);
         let addresses = page
-            .map(|(host, _)| {
+            .map(|(host, _, scheme)| {
                 let kind = if is_local_host(&host) {
                     WebAddressKind::Local
                 } else {
                     WebAddressKind::Network
                 };
-                vec![WebAddress::new(kind, host)]
+                let mut address = WebAddress::new(kind, host);
+                address.page_scheme = scheme;
+                vec![address]
             })
             .unwrap_or_default();
         Self::new(page_port, bridge_port, addresses, workspace_id)
@@ -142,6 +177,11 @@ impl WebAccess {
 
 /// `http://host:port/path` や `ws://host:port/remote` から host と port を取り出す。
 pub fn split_host_port(url: &str) -> Option<(String, Option<u16>)> {
+    split_url(url).map(|(host, port, _)| (host, port))
+}
+
+/// scheme・host・port をまとめて取り出す。https / wss だけを secure として扱う。
+pub fn split_url(url: &str) -> Option<(String, Option<u16>, PageScheme)> {
     let trimmed = url.trim();
     let after_scheme = trimmed.split_once("://").map_or(trimmed, |(_, rest)| rest);
     let authority = after_scheme.split(['/', '?', '#']).next()?.trim();
@@ -151,15 +191,29 @@ pub fn split_host_port(url: &str) -> Option<(String, Option<u16>)> {
     if authority.is_empty() {
         return None;
     }
-    // IPv6 は `[::1]:4757` の形で来るため、角括弧の中の ':' を区切りにしない。
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) if !host.ends_with(']') || host.starts_with('[') => {
-            (host.to_owned(), Some(port))
-        }
-        _ => (authority.to_owned(), None),
+    // IPv6 は `[::1]:4757` の形で来る。角括弧の外にだけ port があるため、
+    // 閉じ括弧より後ろの ':' を区切りにする。
+    let (host, port) = match authority.rsplit_once(']') {
+        Some((inside, after)) => match after.strip_prefix(':') {
+            Some(port) => (format!("{inside}]"), Some(port)),
+            None => (authority.to_owned(), None),
+        },
+        None => match authority.rsplit_once(':') {
+            Some((host, port)) => (host.to_owned(), Some(port)),
+            None => (authority.to_owned(), None),
+        },
     };
+    // port として解釈できない値は port なしとして扱い、host を壊さない。
     let port = port.and_then(|port| port.parse::<u16>().ok());
-    Some((host, port))
+    let scheme = match url.split_once("://").map(|(scheme, _)| scheme) {
+        Some(scheme)
+            if scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("wss") =>
+        {
+            PageScheme::Https
+        }
+        _ => PageScheme::Http,
+    };
+    Some((host, port, scheme))
 }
 
 fn is_local_host(host: &str) -> bool {
@@ -331,6 +385,27 @@ mod tests {
     }
 
     #[test]
+    fn https_pages_keep_https_and_use_wss_for_the_bridge() {
+        let access = WebAccess::from_urls(
+            Some("https://lapis.example:4747/repo"),
+            Some("wss://lapis.example:4757/remote"),
+            None,
+        );
+        let address = &access.addresses()[0];
+        assert_eq!(address.page_scheme, PageScheme::Https);
+        assert_eq!(address.page_url(4747), "https://lapis.example:4747/");
+        assert_eq!(address.bridge_url(4757), "wss://lapis.example:4757/remote");
+    }
+
+    #[test]
+    fn plain_pages_use_http_and_ws() {
+        let access = WebAccess::from_urls(Some("http://127.0.0.1:4747/"), None, None);
+        let address = &access.addresses()[0];
+        assert_eq!(address.page_scheme, PageScheme::Http);
+        assert_eq!(address.bridge_url(4757), "ws://127.0.0.1:4757/remote");
+    }
+
+    #[test]
     fn loopback_pages_are_labelled_as_this_device() {
         let access = WebAccess::from_urls(Some("http://localhost:4747/"), None, None);
         assert_eq!(access.addresses()[0].kind, WebAddressKind::Local);
@@ -347,9 +422,19 @@ mod tests {
             split_host_port("http://[::1]:4747/"),
             Some(("[::1]".to_owned(), Some(4747)))
         );
+        // 角括弧付きの IPv6 は port を省けば host をそのまま残す。
+        assert_eq!(
+            split_host_port("http://[::1]/"),
+            Some(("[::1]".to_owned(), None))
+        );
         assert_eq!(
             split_host_port("http://100.64.1.23/"),
             Some(("100.64.1.23".to_owned(), None))
+        );
+        // port が数値でない場合は host を壊さず port なしとして扱う。
+        assert_eq!(
+            split_host_port("http://example.com:/"),
+            Some(("example.com".to_owned(), None))
         );
         assert_eq!(split_host_port("  "), None);
     }
