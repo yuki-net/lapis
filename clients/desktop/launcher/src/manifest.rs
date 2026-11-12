@@ -43,6 +43,7 @@ pub(crate) struct Asset {
 pub(crate) struct Manifest {
     pub(crate) version: String,
     pub(crate) breaking: bool,
+    pub(crate) notes_url: String,
     pub(crate) assets: BTreeMap<String, Asset>,
 }
 
@@ -53,6 +54,12 @@ pub(crate) struct Distribution {
 }
 
 pub(crate) struct TrustedKeys(BTreeMap<String, VerifyingKey>);
+
+impl Clone for TrustedKeys {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
 
 impl TrustedKeys {
     /// repository の registry を返す。
@@ -176,6 +183,7 @@ pub(crate) fn parse(raw: &[u8]) -> Result<Manifest> {
     Ok(Manifest {
         version: version.to_owned(),
         breaking,
+        notes_url: notes_url.to_owned(),
         assets: parse_assets(&object["assets"])?,
     })
 }

@@ -7,11 +7,12 @@ use localization::LocaleId;
 use crate::definition::{
     DefinitionCatalog, SettingKey, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
     TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
-    UI_THEME,
+    UI_THEME, UPDATE_MODE, UPDATE_SOURCE, UPDATE_SOURCE_LOCATION,
 };
 use crate::document::SettingsDocument;
 use crate::scope::{SettingsContext, SettingsScope};
 use crate::syntax::{SyntaxTheme, TerminalCaretShape};
+use crate::update::{UpdateMode, UpdateSource};
 use crate::value::SettingValue;
 
 /// 1項目の解決結果。値が無い場合は `value` も `origin` も空になる。
@@ -108,6 +109,14 @@ impl ResolvedSettings {
         );
     }
 
+    /// 上書きを取り消し、表示を既定値へ戻す。保存値は変更しない。
+    pub fn clear_overlay(&mut self, key: SettingKey) {
+        if let Some(resolved) = self.settings.get_mut(&key) {
+            resolved.value = None;
+            resolved.origin = None;
+        }
+    }
+
     pub fn theme(&self) -> &str {
         self.text(UI_THEME).unwrap_or("lapis.dark")
     }
@@ -141,6 +150,28 @@ impl ResolvedSettings {
     pub fn terminal_default_profile(&self) -> Option<String> {
         self.text(TERMINAL_DEFAULT_PROFILE)
             .filter(|id| !id.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    /// 更新モード。未設定・不正値は既定（自動）へ倒す。
+    pub fn update_mode(&self) -> UpdateMode {
+        self.text(UPDATE_MODE)
+            .and_then(UpdateMode::from_id)
+            .unwrap_or(UpdateMode::Auto)
+    }
+
+    /// 配布元。未設定・不正値は既定（GitHub Releases）へ倒す。
+    pub fn update_source(&self) -> UpdateSource {
+        self.text(UPDATE_SOURCE)
+            .and_then(UpdateSource::from_id)
+            .unwrap_or(UpdateSource::Github)
+    }
+
+    /// 配布元の location。local は folder の path、server は URL。
+    pub fn update_source_location(&self) -> Option<String> {
+        self.text(UPDATE_SOURCE_LOCATION)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     }
 
@@ -258,5 +289,46 @@ mod tests {
         );
         let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[&user]);
         assert_eq!(resolved.terminal_default_profile().as_deref(), Some("cmd"));
+    }
+
+    #[test]
+    fn update_settings_default_to_auto_from_github_and_reject_unknown_values() {
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[]);
+        assert_eq!(resolved.update_mode(), UpdateMode::Auto);
+        assert_eq!(resolved.update_source(), UpdateSource::Github);
+        assert_eq!(resolved.update_source_location(), None);
+
+        let user = document(
+            SettingsScope::User,
+            &[
+                (UPDATE_MODE, SettingValue::text("notify")),
+                (UPDATE_SOURCE, SettingValue::text("server")),
+                (
+                    UPDATE_SOURCE_LOCATION,
+                    SettingValue::text("https://updates.example.invalid/lapis"),
+                ),
+            ],
+        );
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[&user]);
+        assert_eq!(resolved.update_mode(), UpdateMode::Notify);
+        assert_eq!(resolved.update_source(), UpdateSource::Server);
+        assert_eq!(
+            resolved.update_source_location().as_deref(),
+            Some("https://updates.example.invalid/lapis")
+        );
+
+        // 保存値が壊れていても起動を止めず、既定へ倒す。
+        let user = document(
+            SettingsScope::User,
+            &[
+                (UPDATE_MODE, SettingValue::text("sometimes")),
+                (UPDATE_SOURCE, SettingValue::text("ftp")),
+                (UPDATE_SOURCE_LOCATION, SettingValue::text("  ")),
+            ],
+        );
+        let resolved = ResolvedSettings::resolve(&SettingsContext::new(), catalog(), &[&user]);
+        assert_eq!(resolved.update_mode(), UpdateMode::Auto);
+        assert_eq!(resolved.update_source(), UpdateSource::Github);
+        assert_eq!(resolved.update_source_location(), None);
     }
 }

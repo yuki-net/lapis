@@ -183,9 +183,15 @@ fn local_host_executable(arguments: &[OsString]) -> Result<Option<PathBuf>, Erro
 }
 
 fn local_hosts_directory(arguments: &[OsString], directory: &Path) -> Result<PathBuf, Error> {
-    let hosts = option(arguments, "--local-host-directory")?
-        .map(PathBuf::from)
-        .unwrap_or_else(|| directory.join("hosts"));
+    let hosts = match option(arguments, "--local-host-directory")? {
+        Some(hosts) => PathBuf::from(hosts),
+        // Local Host の接続 credential は data 世代の外に置く。世代交代で再 pairing を
+        // 起こさない（docs/specs/release.md）。
+        None => match crate::install::InstallLayout::detect() {
+            Some(layout) => layout.credentials_directory().join("hosts"),
+            None => directory.join("hosts"),
+        },
+    };
     if hosts.is_absolute() {
         Ok(hosts)
     } else {
@@ -194,11 +200,21 @@ fn local_hosts_directory(arguments: &[OsString], directory: &Path) -> Result<Pat
 }
 
 fn default_state_directory() -> Result<PathBuf, Error> {
-    let preferred = BackendClient::user_directory()?;
     let legacy = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("Lapis");
+    // install layout があれば、data は世代 directory に置く。軸A は同じ世代を
+    // 使い続け、軸B だけが並置した新しい世代へ切り替える（docs/specs/release.md）。
+    if let Some(layout) = crate::install::InstallLayout::detect() {
+        layout.record();
+        let data = layout.data_directory();
+        std::fs::create_dir_all(&data)?;
+        // 旧保存先にだけ状態がある場合は、世代 directory を空で作り直さず元の場所を
+        // 使い続ける。移行の有無を勝手に決めず、既存の下書き・会話・設定を失わない。
+        return select_state_directory(&data, &legacy);
+    }
+    let preferred = BackendClient::user_directory()?;
     select_state_directory(&preferred, &legacy)
 }
 

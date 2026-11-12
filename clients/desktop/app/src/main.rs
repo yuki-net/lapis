@@ -1,4 +1,7 @@
 mod connection;
+mod install;
+mod update_fetch;
+mod updater;
 mod workspace_dialog;
 
 use std::path::{Path, PathBuf};
@@ -234,7 +237,7 @@ fn main() {
         terminal_session,
         search_session,
         conversation_session,
-        settings_session,
+        settings_session.clone(),
     )
     .with_workbench_watch(workbench_watch)
     .with_session_view(session_view)
@@ -243,6 +246,26 @@ fn main() {
         Some(local)
     }))
     .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
+    // 更新は install layout を検出できた実行だけ有効にする。開発用 binary では何もしない。
+    if let Some(layout) = install::InstallLayout::detect() {
+        layout.record();
+        let updater = Arc::new(updater::AppUpdater::new(
+            layout.root().to_owned(),
+            settings_session,
+        ));
+        let changed = {
+            let updater = updater.clone();
+            move || updater.settings_changed()
+        };
+        desktop_services = desktop_services.with_updater(
+            desktop_ui::UpdaterHandle::new(
+                updater.clone(),
+                updater.watch(),
+                updater::CHECK_INTERVAL,
+            )
+            .with_settings_changed(changed),
+        );
+    }
     if let Some(connection) = connection_identity {
         desktop_services = desktop_services.with_connection_identity(connection);
     }

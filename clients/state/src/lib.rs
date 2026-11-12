@@ -38,6 +38,7 @@ mod connection_display;
 mod extensions;
 mod process;
 mod settings_store;
+mod update;
 mod view_state;
 mod workbench_sync;
 // Session 共有は背景 thread と同期受信を使うため Desktop だけで動かす。
@@ -53,6 +54,7 @@ pub use process::ProcessSession;
 #[cfg(not(target_arch = "wasm32"))]
 pub use session_view::{SessionViewSession, SessionViewSync, SessionViewWatch};
 pub use settings_store::{SettingsModel, SettingsWatch};
+pub use update::{UpdateController, UpdateStatus, UpdateWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 

@@ -20,6 +20,7 @@ use crate::{
         settings::SettingsFeature,
         tasks::TasksFeature,
         terminal::{TerminalFeature, TerminalFeatureEvent},
+        update::UpdateFeature,
     },
     shell::main::{Shell, ShellPresentation},
     workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
@@ -84,6 +85,8 @@ pub(crate) struct DesktopRoot {
     preview_revision: Option<(editor_core::DocumentId, document::Revision)>,
     line_ending_cache: Option<((editor_core::DocumentId, document::Revision), &'static str)>,
     settings: Entity<SettingsFeature>,
+    /// 更新の通知・同意画面。install layout を検出できない実行では持たない。
+    update: Option<Entity<UpdateFeature>>,
     quick_search: Entity<QuickSearch>,
     universal_search: Entity<QuickSearch>,
     universal_search_open: bool,
@@ -229,6 +232,10 @@ impl DesktopRoot {
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
         let settings = cx.new(SettingsFeature::new);
+        let update = services
+            .updater
+            .clone()
+            .map(|updater| cx.new(|cx| UpdateFeature::new(updater, cx)));
         let root = cx.entity().downgrade();
         let quick_search = cx.new(|cx| {
             QuickSearch::new(cx, move |event, window, cx| {
@@ -295,6 +302,11 @@ impl DesktopRoot {
         shell.update(cx, |shell, cx| {
             shell.branch_picker = Some(branch_picker);
             shell.set_locale(initial_locale.clone(), cx);
+            if let Some(update) = update.clone() {
+                update.update(cx, |update, cx| {
+                    update.set_locale(initial_locale.clone(), cx)
+                });
+            }
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
                 shell.open_view_in_zone(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
@@ -366,6 +378,12 @@ impl DesktopRoot {
                     let locale = values.locale();
                     root.shell
                         .update(cx, |shell, cx| shell.set_locale(locale.clone(), cx));
+                    if let Some(update) = root.update.clone() {
+                        update.update(cx, |update, cx| {
+                            update.set_locale(locale.clone(), cx);
+                            update.settings_changed(cx);
+                        });
+                    }
                     root.group.update(cx, |group, cx| {
                         group.locale = locale;
                         cx.notify();
@@ -675,6 +693,7 @@ impl DesktopRoot {
             preview_revision: None,
             line_ending_cache: None,
             settings,
+            update,
             quick_search,
             universal_search,
             universal_search_open: false,
@@ -2256,6 +2275,7 @@ impl Render for DesktopRoot {
                 }
             }))
             .child(self.shell.clone())
+            .children(self.update.clone())
             .when(self.universal_search_open, |root| {
                 root.child(
                     div()

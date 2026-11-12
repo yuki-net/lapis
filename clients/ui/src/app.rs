@@ -93,9 +93,48 @@ pub struct DesktopServices {
     pub(crate) settings: SettingsSession,
     pub(crate) process: ProcessSession,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
+    /// アプリ側の更新処理。install layout を検出できない実行では持たない。
+    pub(crate) updater: Option<UpdaterHandle>,
     /// Workspace の view state 共有。Web 側の統合は別 PR のため Desktop だけで使う。
     #[cfg(not(target_family = "wasm"))]
     pub(crate) session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
+}
+
+/// 更新処理の共有 handle。UI は Controller だけを呼び、状態は Watch を購読する。
+#[derive(Clone)]
+pub struct UpdaterHandle {
+    pub(crate) controller: std::sync::Arc<dyn desktop_client::UpdateController>,
+    pub(crate) watch: desktop_client::UpdateWatch,
+    pub(crate) interval: std::time::Duration,
+    /// 設定変更の通知。方針が変わったときだけ再確認する。
+    pub(crate) settings_changed: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl UpdaterHandle {
+    pub fn new(
+        controller: std::sync::Arc<dyn desktop_client::UpdateController>,
+        watch: desktop_client::UpdateWatch,
+        interval: std::time::Duration,
+    ) -> Self {
+        Self {
+            controller,
+            watch,
+            interval,
+            settings_changed: None,
+        }
+    }
+
+    /// 設定変更を更新処理へ知らせる入口を設定する。
+    pub fn with_settings_changed(mut self, changed: impl Fn() + Send + Sync + 'static) -> Self {
+        self.settings_changed = Some(std::sync::Arc::new(changed));
+        self
+    }
+
+    pub fn notify_settings_changed(&self) {
+        if let Some(changed) = &self.settings_changed {
+            changed();
+        }
+    }
 }
 
 impl DesktopServices {
@@ -121,6 +160,7 @@ impl DesktopServices {
             settings,
             process: ProcessSession::unavailable(),
             workbench_watch: None,
+            updater: None,
             #[cfg(not(target_family = "wasm"))]
             session_view: None,
         }
@@ -160,6 +200,11 @@ impl DesktopServices {
     }
     pub fn with_process_session(mut self, process: ProcessSession) -> Self {
         self.process = process;
+        self
+    }
+    /// アプリ側の更新処理を有効にする。install layout を検出できたときだけ呼ぶ。
+    pub fn with_updater(mut self, updater: UpdaterHandle) -> Self {
+        self.updater = Some(updater);
         self
     }
     pub fn workbench_watch(&self) -> Option<&desktop_client::WorkbenchWatch> {
@@ -206,6 +251,7 @@ pub(crate) struct WindowFactory {
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
     process: ProcessSession,
+    updater: Option<UpdaterHandle>,
     #[cfg(not(target_family = "wasm"))]
     session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
 }
@@ -229,6 +275,7 @@ impl WindowFactory {
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
             process: services.process.clone(),
+            updater: services.updater.clone(),
             #[cfg(not(target_family = "wasm"))]
             session_view: services.session_view.clone(),
         }
@@ -249,6 +296,7 @@ impl WindowFactory {
         services.connect_host = self.connect_host;
         services.connection = self.connection;
         services.process = self.process;
+        services.updater = self.updater;
         #[cfg(not(target_family = "wasm"))]
         {
             services.session_view = self.session_view;
