@@ -29,6 +29,7 @@ mod document;
 mod event;
 mod git_state;
 mod terminal;
+mod view;
 mod workspace;
 
 pub(crate) use event::{EventJournal, require_revision};
@@ -504,6 +505,7 @@ impl BackendState {
         self.connected_sessions.remove(session_id);
         let mut published = Vec::new();
         for workspace in self.workspaces.values_mut() {
+            workspace.view.unsubscribe(session_id);
             for document in workspace.documents.values_mut() {
                 document.attached_sessions.remove(session_id);
             }
@@ -631,6 +633,47 @@ impl BackendState {
             }
             RequestBody::WorkspaceClose(request) => {
                 self.workspace_close(session, request.workspace_id)
+            }
+            RequestBody::WorkspaceViewSubscribe(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let workspace = self.workspace_mut(session)?;
+                let snapshot = workspace.view.subscribe(&session.session_id);
+                Ok((ResponseBody::WorkspaceViewSubscribe(snapshot), Vec::new()))
+            }
+            RequestBody::WorkspaceViewUnsubscribe(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                let workspace = self.workspace_mut(session)?;
+                workspace.view.unsubscribe(&session.session_id);
+                Ok((
+                    ResponseBody::WorkspaceViewUnsubscribe(
+                        client_api::WorkspaceViewUnsubscribeResponse {
+                            workspace_id: request.workspace_id,
+                        },
+                    ),
+                    Vec::new(),
+                ))
+            }
+            RequestBody::WorkspaceViewUpdate(request) => {
+                self.require_workspace(session, &request.workspace_id)?;
+                self.require_connected(session)?;
+                workbench_state::validate_session_view(&request.view)?;
+                let workspace = self.workspace_mut(session)?;
+                let update = workspace.view.update(request.view)?;
+                let response =
+                    ResponseBody::WorkspaceViewUpdate(client_api::WorkspaceViewUpdateResponse {
+                        revision: update.revision,
+                    });
+                let events = match update.broadcast {
+                    Some(view) => vec![workspace.publish(EventBody::WorkspaceViewChanged {
+                        workspace_id: request.workspace_id,
+                        revision: update.revision,
+                        view: Some(view),
+                    })?],
+                    None => Vec::new(),
+                };
+                Ok((response, events))
             }
             RequestBody::FileTree(request) => {
                 self.require_connected(session)?;
@@ -899,6 +942,7 @@ fn take_changed(slot: &mut Option<std::sync::mpsc::Receiver<()>>) -> bool {
 
 struct WorkspaceState {
     workbench: workbench::VersionedViewState,
+    view: view::SessionViewState,
     summary: WorkspaceSummary,
     identity: WorkspaceIdentitySnapshot,
     resolver: WorkspacePathResolver,
@@ -944,6 +988,7 @@ impl WorkspaceState {
         }
         Ok(Self {
             workbench: registration.workbench_initial,
+            view: view::SessionViewState::default(),
             summary: WorkspaceSummary {
                 workspace_id: registration.workspace_id.clone(),
                 name: registration.name,

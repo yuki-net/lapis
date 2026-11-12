@@ -29,12 +29,14 @@ mod revision;
 mod snapshot;
 mod terminal;
 mod version;
+mod view;
 mod workbench;
 mod workspace;
 
 pub mod capability;
 pub mod git;
 
+pub use ::workbench::{WorkspaceDocumentView, WorkspaceView};
 pub use ::workspace::{InvalidWorkspacePath, WorkspaceRelativePath};
 pub use capability::{CapabilityId, CapabilitySet, InvalidCapabilityId, TooManyCapabilities};
 pub use connection::ConnectionState;
@@ -85,6 +87,10 @@ pub use terminal::{
 };
 pub use version::{
     CURRENT_PROTOCOL, InvalidProtocolRange, ProtocolRange, ProtocolVersion, VersionMismatch,
+};
+pub use view::{
+    WorkspaceViewSnapshot, WorkspaceViewSubscribeRequest, WorkspaceViewUnsubscribeRequest,
+    WorkspaceViewUnsubscribeResponse, WorkspaceViewUpdateRequest, WorkspaceViewUpdateResponse,
 };
 pub use workbench::{
     WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkbenchSnapshot,

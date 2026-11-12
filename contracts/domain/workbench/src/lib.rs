@@ -108,6 +108,50 @@ pub struct SharedDocumentView {
     pub draft_content: Option<String>,
 }
 
+/// 同じ Workspace を開いている Client 間で共有する画面状態。
+/// Client 固有の絶対 path と未保存内容は含めない。
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceView {
+    pub open_documents: Vec<WorkspaceDocumentView>,
+    pub active_path: Option<WorkspaceRelativePath>,
+    pub active_document_id: Option<DocumentId>,
+}
+
+/// 共有する文書の表示位置。未保存内容は運ばない。
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceDocumentView {
+    pub document_id: Option<DocumentId>,
+    pub path: Option<WorkspaceRelativePath>,
+    pub cursor_char: u64,
+    pub selection_start: u64,
+    pub selection_end: u64,
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+}
+
+impl WorkspaceView {
+    /// Workbench 共有用の view から、未保存内容を落とした session 共有用の値を作る。
+    pub fn from_shared(shared: &SharedWorkspaceView) -> Self {
+        Self {
+            open_documents: shared
+                .open_documents
+                .iter()
+                .map(|document| WorkspaceDocumentView {
+                    document_id: document.document_id.clone(),
+                    path: document.path.clone(),
+                    cursor_char: document.cursor_char,
+                    selection_start: document.selection_start,
+                    selection_end: document.selection_end,
+                    scroll_x: document.scroll_x,
+                    scroll_y: document.scroll_y,
+                })
+                .collect(),
+            active_path: shared.active_path.clone(),
+            active_document_id: shared.active_document_id.clone(),
+        }
+    }
+}
+
 /// Viewの配置とTaskへの参照。Host上の実行資源は含めない。
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -495,6 +539,46 @@ mod tests {
         let mut restored = shared.layout.unwrap();
         restored.retain_active_tabs_from(&local);
         assert_eq!(restored, local);
+    }
+
+    #[test]
+    fn session_view_drops_unsaved_content_and_keeps_the_placement() {
+        let path = WorkspaceRelativePath::parse("src/main.rs").unwrap();
+        let shared = SharedWorkspaceView {
+            workspace_id: WorkspaceId::new("workspace-1"),
+            open_documents: vec![SharedDocumentView {
+                document_id: Some(DocumentId::new("document-1")),
+                path: Some(path.clone()),
+                cursor_char: 4,
+                selection_start: 2,
+                selection_end: 6,
+                scroll_x: 1.5,
+                scroll_y: 32.0,
+                draft_content: Some("未保存".into()),
+            }],
+            active_path: Some(path.clone()),
+            active_document_id: Some(DocumentId::new("document-1")),
+        };
+
+        let view = WorkspaceView::from_shared(&shared);
+
+        assert_eq!(view.active_path, Some(path));
+        assert_eq!(
+            view.open_documents,
+            vec![WorkspaceDocumentView {
+                document_id: Some(DocumentId::new("document-1")),
+                path: Some(WorkspaceRelativePath::parse("src/main.rs").unwrap()),
+                cursor_char: 4,
+                selection_start: 2,
+                selection_end: 6,
+                scroll_x: 1.5,
+                scroll_y: 32.0,
+            }]
+        );
+        assert!(
+            !serde_json::to_string(&view).unwrap().contains("draft"),
+            "未保存内容は共有しない"
+        );
     }
 
     #[test]

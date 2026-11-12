@@ -7,7 +7,7 @@ use crate::{
     WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceListResponse,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "payload")]
 /// Host から Client への応答。tag は method 名。
 pub enum ResponseBody {
@@ -41,6 +41,12 @@ pub enum ResponseBody {
     WorkspaceConnect(WorkspaceConnectResponse),
     #[serde(rename = "workspace.close")]
     WorkspaceClose(WorkspaceCloseResponse),
+    #[serde(rename = "workspace.view.subscribe")]
+    WorkspaceViewSubscribe(crate::WorkspaceViewSnapshot),
+    #[serde(rename = "workspace.view.unsubscribe")]
+    WorkspaceViewUnsubscribe(crate::WorkspaceViewUnsubscribeResponse),
+    #[serde(rename = "workspace.view.update")]
+    WorkspaceViewUpdate(crate::WorkspaceViewUpdateResponse),
     #[serde(rename = "files.tree")]
     FileTree(FileTreeResponse),
     #[serde(rename = "document.open")]
@@ -99,6 +105,9 @@ impl ResponseBody {
             Self::WorkspaceList(_) => Some("workspace.list"),
             Self::WorkspaceConnect(_) => Some("workspace.connect"),
             Self::WorkspaceClose(_) => Some("workspace.close"),
+            Self::WorkspaceViewSubscribe(_) => Some("workspace.view.subscribe"),
+            Self::WorkspaceViewUnsubscribe(_) => Some("workspace.view.unsubscribe"),
+            Self::WorkspaceViewUpdate(_) => Some("workspace.view.update"),
             Self::FileTree(_) => Some("files.tree"),
             Self::DocumentOpen(_) => Some("document.open"),
             Self::DocumentCreate(_) => Some("document.create"),

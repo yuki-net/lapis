@@ -124,6 +124,18 @@ pub fn validate_workspace(
     Ok(())
 }
 
+/// 共有 view state 単体の容量を検証する。画面配置と同じ予算を使う。
+pub fn validate_session_view(view: &workbench::WorkspaceView) -> Result<(), WorkbenchStateError> {
+    if serde_json::to_vec(view)
+        .map_err(|_| WorkbenchStateError::InvalidView)?
+        .len()
+        > MAX_LAYOUT_BYTES
+    {
+        return Err(WorkbenchStateError::InvalidView);
+    }
+    Ok(())
+}
+
 pub fn snapshot(
     state: &VersionedViewState,
 ) -> Result<client_api::WorkbenchSnapshot, WorkbenchStateError> {
@@ -191,5 +203,37 @@ mod tests {
     fn total_view_is_bounded_independently_of_the_draft_limit() {
         let drafts = (0..4).map(|_| "x".repeat(MAX_DRAFT_BYTES));
         assert!(parse_view(workspace_with_drafts(drafts)).is_err());
+    }
+
+    #[test]
+    fn session_view_is_bounded_like_the_layout() {
+        let path = client_api::WorkspaceRelativePath::parse("src/main.rs").unwrap();
+        let accepted = workbench::WorkspaceView {
+            open_documents: vec![workbench::WorkspaceDocumentView {
+                document_id: None,
+                path: Some(path.clone()),
+                cursor_char: 0,
+                selection_start: 0,
+                selection_end: 0,
+                scroll_x: 0.0,
+                scroll_y: 0.0,
+            }],
+            active_path: Some(path.clone()),
+            active_document_id: None,
+        };
+        assert!(validate_session_view(&accepted).is_ok());
+
+        let oversized = workbench::WorkspaceView {
+            open_documents: (0..MAX_LAYOUT_BYTES / 16)
+                .map(|_| workbench::WorkspaceDocumentView {
+                    document_id: None,
+                    path: Some(path.clone()),
+                    ..Default::default()
+                })
+                .collect(),
+            active_path: None,
+            active_document_id: None,
+        };
+        assert!(validate_session_view(&oversized).is_err());
     }
 }

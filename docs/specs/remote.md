@@ -19,6 +19,7 @@
 - `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・許可capability・期限に結び付き、失効させると関連sessionも無効になります。`workspace.switch` を持たないcredentialはWorkspaceにも固定し、`workspace.switch` を持つcredentialは接続ごとにWorkspaceを選べます。Client bindingは維持します。Workspaceを指定しなかった場合は固定先、無ければHostが解決するprimary Workspaceを使います。未登録のWorkspace、固定先との不一致、期限切れ、別Hostのcredentialは区別したerror codeで拒否します。
 - `auth.rs`: 認証済みsessionの有効性と、requestが要求するWorkspace・capabilityを検証します。
 - 購読イベントを送る前にもsessionの失効・期限を確認します。失効したClientへ新しいDocumentやTerminalの内容を配信しません。
+- 購読イベントでも、内容の読取りにcapabilityを要するものは権限のないsessionへ渡しません。配信自体を止めるとevent連番が欠落してClientが切断するため、同じ連番のまま内容だけを伏せた通知にします。
 
 ## QUICのwireと接続寿命
 
@@ -78,6 +79,45 @@ Workbench に保存するタブは `TabRef` で参照先だけを保持する。
 Terminal は Host の `TerminalId`、その他の View は `ViewInstanceId` を識別子とする。
 復元した Client は参照先の Resource に再アタッチし、Terminal では新しい profile を開始しない。
 保存済みの旧形式（文字列の View ID）は読み込み時に `TabRef` へ変換する。
+
+## Workspace の view state 共有
+
+Workspace を開いている Client 間で、開いている Document とその表示位置を自動共有する。
+真実は Host が Workspace 単位で保持し、Client は参加時の snapshot を取り、以後の変更を
+delta として受け取る。protocol 0.13 で追加した契約で、Client 側の統合は別 PR とする。
+
+- `workspace.view.subscribe` は共有へ参加し、`WorkspaceViewSnapshot`（`revision` と
+  `Option<WorkspaceView>`）を返す。まだ誰も共有していない Workspace は `view` が `null`。
+- `workspace.view.update` は `WorkspaceView` 全体を送り、Host は同時更新を直列化して
+  受理した `revision` を返す。マージはせず、最後に受理した値がそのまま正本になる
+  (last-writer-wins)。`expected_revision` による競合検出はしない。
+- Host は受理した値を `workspace.view_changed`（`revision` と `view`）として配る。
+  これは差分計算の結果ではなく置き換えるべき最新値であり、Client は丸ごと適用する。
+- `workspace.view.unsubscribe` は共有から抜ける。Workspace を閉じた Session は
+  `workspace.close` で attachment と購読を解除し、以後の delta を受け取らない。
+- 共有に参加している Session が無い間は `workspace.view_changed` を publish しない。
+  誰も見ていない更新で workspace の event 連番を消費しないため。
+- Host は Workspace を閉じても最後に受理した view state を保持し、次に参加した Client へ
+  snapshot として返す。永続化はせず、Host の終了で失う。
+- `WorkspaceView` は `clients/state` の `WorkspaceViewState` のうち、Client 固有の
+  `root`（絶対 path）と未保存内容（`draft_content`）を除いた形。Document の内容は
+  保存済みのものだけを既存の Workbench 同期・Document API 経由で共有し、未保存 buffer の
+  リアルタイム共有はこの契約に含めない。
+- 各文書の ID は `WorkspaceDocumentView.document_id`、選択中の Document の ID は
+  `WorkspaceView.active_document_id`。どちらも domain の `editor_core::DocumentId` で、
+  wire の `client_api::DocumentId` とは別型。変換は `From` / `TryFrom` を使う。
+- 購読は Session 単位で受けるが、event は同じ Workspace に接続している全 Session へ
+  同じ連番で配る。`clients/transport` は event 連番の欠落を切断として扱うため、
+  Session ごとに配信自体を絞ると未購読 Session がずれを検出して切断される。
+- 内容は読取り権限で絞る。`workspace.sync` を持たない Session へは `view` を `null` に
+  した `workspace.view_changed` を届け、文書 path とカーソル位置を渡さない。絞り込みは
+  Remote の配信境界（`host/transport/remote/src/backend_handler.rs` の event sink）で
+  行い、Runtime は全 Session へ同じ event を配る。Client は自ら購読していない間と
+  `view` が `null` の `workspace.view_changed` を適用しない。
+- パネル構成とレイアウト寸法、開いているタブ一覧は既存の Workbench 同期
+  (`ConversationViewState.layout`) がすでに共有しており、この契約はそれを置き換えない。
+  `for_shared_workbench` がアクティブタブを共有から外す挙動も変えない。Client 統合では
+  両者を合成して表示する。
 
 ## Terminal の同期契約
 
