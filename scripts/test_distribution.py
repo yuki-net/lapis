@@ -4,6 +4,7 @@
 Release への書き込みは gh CLI 呼び出しを差し替えて、upload の順序だけを確認する。
 """
 
+import contextlib
 import hashlib
 import http.server
 import io
@@ -399,6 +400,15 @@ class CliTests(unittest.TestCase):
 
     def test_invalid_destination_is_reported(self):
         self.assertEqual(tool.main(["verify", "--root", "ftp:/x", "--public-key", "00" * 32]), 1)
+
+    def test_main_recovers_from_a_non_utf8_stdout(self):
+        """Windows の既定コードページの stdout でも main が UnicodeEncodeError で落ちない。"""
+        buffer = io.BytesIO()
+        stream = io.TextIOWrapper(buffer, encoding="cp1252", errors="strict", write_through=True)
+        with contextlib.redirect_stdout(stream), contextlib.redirect_stderr(stream):
+            self.assertEqual(tool.main(["verify", "--root", "ftp:/x", "--public-key", "00" * 32]), 1)
+        stream.flush()
+        self.assertIn(b"error:", buffer.getvalue())
 
 
 if __name__ == "__main__":

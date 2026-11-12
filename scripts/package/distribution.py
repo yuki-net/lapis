@@ -584,6 +584,13 @@ def split_platform(value: str) -> tuple[str, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Windows の既定コードページ（cp1252 等）でも日本語のメッセージで落ちないようにする。
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except (OSError, ValueError):
+                pass
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
