@@ -365,6 +365,19 @@ impl TerminalFeature {
         self.bound_resource = resource;
     }
 
+    /// タブの参照先が無くなったとき、固定参照とそれに基づく自動起動の判断を捨てる。
+    ///
+    /// 固定参照が残っていると `ensure_auto_start` が「既存 Terminal への再アタッチ」と
+    /// みなして起動を拒否するため、参照先が無いと確定した時点で解除する。
+    /// 参照が元から無い場合は状態を変えない。
+    pub(crate) fn release_resource(&mut self) {
+        if self.bound_resource.take().is_some() {
+            // 参照先を前提にした判定を取り消し、表示中のタブで改めて判定できるようにする。
+            self.auto_start = AutoStart::Idle;
+            self.pending_auto_start = self.tab_visible;
+        }
+    }
+
     /// タブが参照するHost Terminalへ接続する。見つからない場合も新しいshellは開始しない。
     pub(crate) fn show_resource(
         &mut self,
@@ -671,7 +684,11 @@ impl TerminalFeature {
                     Err(error) => feature.message = error,
                 }
                 feature.message_from_poll = false;
+                // 閉じる応答より前にタブを開き直した場合も、表示中のタブを空のまま残さない。
+                // reset_after_close は固定参照も消すため、Terminal が残っていなければ
+                // 改めて既定 profile の自動起動を行う。
                 feature.reset_after_close();
+                feature.pending_auto_start = feature.tab_visible;
                 feature.load_profiles(cx);
                 cx.notify();
             },
@@ -2612,6 +2629,136 @@ mod tests {
             backend.terminated.load(Ordering::Relaxed),
             1,
             "タブを閉じたら PTY も終了する"
+        );
+    }
+
+    #[gpui::test]
+    fn reopening_the_tab_before_the_close_response_still_auto_starts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.auto_start = AutoStart::Finished;
+                feature.close_session(cx);
+                // 終了の応答より前にタブを開き直す。
+                // ここで pending_auto_start を消費しても、応答後にやり直す。
+                feature.sync_tab_presence(true, cx);
+                assert!(feature.tab_visible);
+            });
+            (entity, backend)
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            entity.update(cx, |feature, _| {
+                assert_eq!(feature.terminals.len(), 1, "表示中のタブを空のまま残さない");
+                assert_eq!(feature.auto_start, AutoStart::Finished);
+            });
+        });
+        assert_eq!(
+            backend.started_profiles.lock().unwrap().len(),
+            2,
+            "閉じた後に開き直したタブは既定 profile で起動し直す"
+        );
+    }
+
+    #[gpui::test]
+    fn releasing_a_stale_resource_allows_the_visible_tab_to_auto_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let feature = cx.update(|cx| {
+            let (_, backend) = feature();
+            cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, _| {
+                // 前の Task の Terminal を固定参照として持つ。
+                feature.bind_resource(Some(terminal::TerminalId::new("terminal-a")));
+                feature.tab_visible = true;
+                feature.auto_start = AutoStart::Finished;
+                feature.pending_auto_start = false;
+
+                feature.release_resource();
+
+                // 参照先が消えたら、表示中のタブで改めて自動起動を判定できる。
+                assert!(feature.bound_resource.is_none());
+                assert_eq!(feature.auto_start, AutoStart::Idle);
+                assert!(feature.pending_auto_start);
+
+                // 2 回目以降は状態を変えない。表示中のタブの判定を勝手に戻さない。
+                feature.auto_start = AutoStart::Finished;
+                feature.pending_auto_start = false;
+                feature.release_resource();
+                assert_eq!(feature.auto_start, AutoStart::Finished);
+                assert!(!feature.pending_auto_start);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn long_session_list_menu_stays_within_the_window(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (feature, visual) = cx.add_window_view(|_, cx| {
+            let (_, backend) = feature();
+            TerminalFeature::new(
+                TerminalSession::new(backend),
+                Some("workspace".into()),
+                ConversationId::new("task-a"),
+                cx,
+            )
+        });
+        feature.update(visual, |feature, cx| {
+            // 1 行 30px では Window の高さに収まらない件数のセッション一覧を開く。
+            feature.terminals = (0..40)
+                .map(|index| {
+                    terminal::TerminalSnapshot::empty(
+                        terminal::TerminalId::new(format!("terminal-{index:02}")),
+                        "workspace".into(),
+                        TerminalStatus::Running,
+                        TerminalSize::new(80, 24),
+                    )
+                })
+                .collect();
+            feature.context_menu = Some(());
+            feature.context_anchor = Some(gpui::point(gpui::px(8.0), gpui::px(8.0)));
+            cx.notify();
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let bounds = visual
+            .debug_bounds("terminal-context-menu")
+            .expect("context menu must be drawn");
+        // 共通 wrapper の上限（450px）で高さを切り、残りはスクロールさせる。
+        assert!(
+            bounds.size.height <= gpui::px(450.),
+            "メニューの高さは共通の上限に収める"
+        );
+        assert!(
+            bounds.size.height < gpui::px(40. * 30.),
+            "全項目を一度に描画せず、高さを制限してスクロールさせる"
         );
     }
 }

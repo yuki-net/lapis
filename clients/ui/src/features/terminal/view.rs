@@ -269,7 +269,7 @@ impl Render for TerminalFeature {
                 context_open.filter(|_| context_anchor.is_some()),
                 |view, _| {
                     let anchor = context_anchor.unwrap_or_else(|| point(px(0.0), px(0.0)));
-                    view.child(self.render_context_menu(anchor, discovered, cx))
+                    view.child(self.render_context_menu(anchor, discovered, window, cx))
                 },
             )
     }
@@ -280,6 +280,7 @@ impl TerminalFeature {
         &self,
         anchor: gpui::Point<Pixels>,
         discovered: Vec<terminal::TerminalSnapshot>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut entries = Vec::new();
@@ -465,7 +466,8 @@ impl TerminalFeature {
                 }))
                 .child(
                     Menu::new("terminal-context-menu", entries)
-                        .debug_selector("terminal-context-menu"),
+                        .debug_selector("terminal-context-menu")
+                        .max_height_in_viewport(window),
                 ),
         )
     }

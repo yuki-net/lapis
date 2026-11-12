@@ -128,7 +128,7 @@
   "settings.page.appearance.syntax.description": "明暗はアプリのテーマに自動で追従します。",
   "settings.page.terminal.font": "フォントとカーソル",
   "settings.page.terminal.startup": "新しいターミナル",
-  "settings.page.terminal.startup.description": "ターミナルを開いたときに自動で始まるプロファイルです。ターミナルを開くたびにこのプロファイルでシェルが起動します。",
+  "settings.page.terminal.startup.description": "ターミナルで新しいセッションを始めるときに使うプロファイルです。既存のセッションを再表示するだけのときは、シェルを起動しません。",
   "settings.page.language.locale": "表示言語",
   "settings.field.ui-theme": "テーマ",
   "settings.field.ui-syntax-theme": "構文配色の系統",

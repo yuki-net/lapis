@@ -128,7 +128,7 @@
   "settings.page.appearance.syntax.description": "Light and dark variants follow the app theme.",
   "settings.page.terminal.font": "Font and cursor",
   "settings.page.terminal.startup": "New terminal",
-  "settings.page.terminal.startup.description": "The profile that starts automatically when you open the terminal. Each time you open the terminal, this profile starts a shell.",
+  "settings.page.terminal.startup.description": "The profile used when the terminal starts a new session. Reopening an existing session does not start a shell.",
   "settings.page.language.locale": "Display language",
   "settings.field.ui-theme": "Theme",
   "settings.field.ui-syntax-theme": "Syntax color family",

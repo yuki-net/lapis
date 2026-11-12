@@ -215,13 +215,14 @@ impl ShellState {
     }
 
     /// ターミナルタブが実際に画面へ出ているか。自動起動の判定に使う。
+    ///
+    /// 表示中パネルで選択されているタブだけを見る。同じパネルの別タブを表示している
+    /// あいだは、Terminal タブは画面に出ていない。
     pub(crate) fn terminal_tab_visible(&self) -> bool {
         self.layout.visible_panels().any(|panel| {
-            panel.tabs.iter().any(|tab| {
-                tab.view_id()
-                    .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
-                    && self.view_visible(tab)
-            })
+            self.visible_active(panel)
+                .and_then(PanelTab::view_id)
+                .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
         })
     }
 
@@ -561,6 +562,37 @@ mod tests {
         // タブを消したら、セッション終了の対象になる。
         state.layout.remove_tab(&panel, &terminal, Instant::now());
         assert!(!state.terminal_tab_exists());
+        assert!(!state.terminal_tab_visible());
+    }
+
+    #[test]
+    fn terminal_tab_visibility_follows_the_selected_tab_of_each_panel() {
+        let mut state = ShellState::default();
+        let terminal = PanelTab::tool(id::VIEW_TERMINAL);
+        let panel = state
+            .layout
+            .open_tab(ZonePosition::Bottom, terminal.clone())
+            .unwrap();
+        let other =
+            PanelTab::tool_instance(ViewId::new(id::VIEW_ASSISTANT), "assistant:visible-test");
+        assert!(
+            state
+                .layout
+                .insert_tab_in_panel(&panel, other.clone(), false)
+        );
+
+        // 同じパネルでも、選択中のタブが Terminal のときだけ可視とみなす。
+        state.layout.activate_existing_tab(&terminal);
+        assert!(state.terminal_tab_visible());
+        state.layout.activate_existing_tab(&other);
+        assert!(
+            !state.terminal_tab_visible(),
+            "別タブを表示している間は Terminal タブは画面に出ていない"
+        );
+
+        // 非表示の Panel に Terminal が選択されていても、可視にはならない。
+        state.layout.activate_existing_tab(&terminal);
+        state.layout.set_panel_open(&panel, false);
         assert!(!state.terminal_tab_visible());
     }
 
