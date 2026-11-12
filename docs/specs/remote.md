@@ -132,6 +132,8 @@ Terminal Engine にだけ渡し、Client へは `TerminalSnapshot` と
   画面や状態は載せない。状態は `terminal.delta` / `terminal.status` イベントで届く。
 - 入力と resize は操作権を持つ Session だけが行える。`terminal.claim` で取得し、
   `terminal.release` または接続断で解放する。操作権の変更は `terminal.owner` で通知する。
+  `TerminalSnapshot.owner` も現在の操作権を表すため、Client は Snapshot からの復旧時にも
+  owner を反映し、通知が欠けた場合でも表示を Host と一致させる。
 - Client から Host へは `TerminalInput::Text`、`Key`、`Paste` を送り、PTY bytes
   への変換と bracketed paste の処理は Host の Terminal Engine 境界で行う。
 - Host は `terminal.list_profiles` で起動可能な `TerminalProfile`（program、args、env）を

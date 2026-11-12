@@ -47,8 +47,7 @@ pub use crate::web_replica::ROOT;
 
 use crate::web_cache::{CachedWorkspace, WorkspaceCache};
 use crate::web_replica::{
-    DocumentState, Replica, TerminalState, cache_of, local_id, model_terminal_snapshot,
-    versioned_workbench,
+    DocumentState, Replica, TerminalState, cache_of, local_id, terminal_state, versioned_workbench,
 };
 use crate::web_switch::{self, Command, Operation};
 use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
@@ -226,16 +225,8 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         for terminal in terminals {
             let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
             replica.next_terminal += 1;
-            let snapshot = model_terminal_snapshot(&local, &terminal);
-            replica.terminals.insert(
-                local.as_str().to_owned(),
-                TerminalState {
-                    host: Some(terminal.terminal_id.clone()),
-                    snapshot: Some(snapshot.clone()),
-                    events: vec![TerminalEvent::Snapshot(snapshot)],
-                    finished: false,
-                },
-            );
+            let state = terminal_state(&local, &terminal);
+            replica.terminals.insert(local.as_str().to_owned(), state);
         }
     }
     if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
@@ -268,7 +259,13 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             document_changes: document_changes.clone(),
         })
     });
-    wasm_bindgen_futures::spawn_local(pump(connection.clone(), receiver, replica.clone()));
+    wasm_bindgen_futures::spawn_local(pump(
+        connection.clone(),
+        receiver,
+        replica.clone(),
+        changes.clone(),
+        document_changes.clone(),
+    ));
     if let Some(events) = events {
         wasm_bindgen_futures::spawn_local(event_pump(
             connection.clone(),
@@ -456,16 +453,10 @@ async fn switch_workspace_inner(
     for terminal in terminals {
         let local = TerminalId::new(format!("web-terminal-{}", next_replica.next_terminal));
         next_replica.next_terminal += 1;
-        let snapshot = model_terminal_snapshot(&local, &terminal);
-        next_replica.terminals.insert(
-            local.as_str().to_owned(),
-            TerminalState {
-                host: Some(terminal.terminal_id.clone()),
-                snapshot: Some(snapshot.clone()),
-                events: vec![TerminalEvent::Snapshot(snapshot)],
-                finished: false,
-            },
-        );
+        let state = terminal_state(&local, &terminal);
+        next_replica
+            .terminals
+            .insert(local.as_str().to_owned(), state);
     }
     let replica = install_workspace(current, workspace, workspace_identity, next_replica, false)?;
     preload_workbench(connection, &replica, requested).await;
@@ -1597,6 +1588,7 @@ impl TerminalBackend for WebBackend {
                 TerminalState {
                     host: None,
                     snapshot: None,
+                    owner: None,
                     events: Vec::new(),
                     finished: false,
                 },
@@ -1721,16 +1713,20 @@ impl TerminalBackend for WebBackend {
     fn attach(&self, _: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
         let snapshot = self
             .with(|state| {
-                state
+                let snapshot = state
                     .replica
                     .borrow()
                     .terminals
                     .get(id.as_str())
                     .and_then(|state| state.snapshot.clone())
-                    .ok_or_else(|| "Terminalがありません".to_owned())
+                    .ok_or_else(|| TerminalError::new("Terminalがありません"))?;
+                // キャッシュだけを返さず、Host の現在の snapshot を取得し直す。
+                // delta 欠番や開始応答前の取りこぼしはこの snapshot で回復する。
+                let _ = state.commands.unbounded_send(Command::ResyncTerminals);
+                Ok::<_, TerminalError>(snapshot)
             })
-            .map_err(TerminalError::new)?;
-        snapshot.map_err(TerminalError::new)
+            .map_err(TerminalError::new)??;
+        Ok(snapshot)
     }
 
     fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
