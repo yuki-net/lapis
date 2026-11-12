@@ -1133,15 +1133,22 @@ impl DesktopRoot {
             |client| client.apply_session_view(),
             |root, result, cx| {
                 root.session_view_applying = false;
-                match result {
-                    Ok(Some(snapshot)) => root.apply_snapshot(&snapshot, cx),
-                    Ok(None) => {}
+                let applied = match result {
+                    Ok(Some(snapshot)) => {
+                        root.apply_snapshot(&snapshot, cx);
+                        true
+                    }
+                    Ok(None) => false,
                     Err(error) => {
                         eprintln!("Workspace view を反映できません: {error}");
+                        false
                     }
+                };
+                // 反映した時だけ、反映中に届いた次の変更を確認する。変化が無いのに
+                // 再投入すると、worker への送信が終わらない背景ループになる。
+                if applied {
+                    root.apply_remote_session_view(cx);
                 }
-                // 反映中に届いた次の変更を、完了後すぐに適用する。
-                root.apply_remote_session_view(cx);
             },
         );
         if submitted.is_err() {

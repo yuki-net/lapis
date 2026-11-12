@@ -853,6 +853,28 @@ mod replica_tests {
         assert_eq!(revision, 3);
     }
 
+    /// 一度適用した view は再提示しない。UI は「適用できた時だけ」再確認するため、
+    /// これが崩れると終わらない背景ループになる。
+    #[test]
+    fn an_applied_view_is_not_offered_again() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 1, Some(view("document-a")));
+        let (sequence, _, _) = session
+            .watch()
+            .take_if_changed(&workspace, 0)
+            .expect("最初は適用できる");
+        for _ in 0..3 {
+            assert!(
+                session
+                    .watch()
+                    .take_if_changed(&workspace, sequence)
+                    .is_none(),
+                "適用済みの view を繰り返し返しました"
+            );
+        }
+    }
+
     /// snapshot の受信で、送信待ちの記録を消費しない。
     #[test]
     fn a_snapshot_does_not_consume_a_pending_send() {
