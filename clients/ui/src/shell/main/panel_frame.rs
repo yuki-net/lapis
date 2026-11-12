@@ -78,7 +78,7 @@ impl Shell {
                     ElementId::Name(format!("panel-body-scroll-{}", panel_id.as_str()).into()),
                     axis,
                     &state,
-                    content,
+                    panel_content().child(content),
                     cx,
                 )
                 .flex_1()
@@ -92,7 +92,7 @@ impl Shell {
                 .min_h(px(0.0))
                 .min_w(px(0.0))
                 .overflow_hidden()
-                .child(content),
+                .child(panel_content().flex_1().child(content)),
         };
 
         let preview = self

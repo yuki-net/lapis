@@ -376,6 +376,103 @@ mod tests {
     }
 
     #[gpui::test]
+    fn panel_frame_applies_shared_content_padding_to_every_view(cx: &mut gpui::TestAppContext) {
+        use gpui::{IntoElement, div, prelude::*};
+
+        struct Probe;
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .id("panel-content-probe")
+                    .debug_selector(|| "panel-content-probe".into())
+                    .w_full()
+                    .h(px(10.0))
+            }
+        }
+
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (shell, visual) = cx.add_window_view(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let probe = cx.new(|_| Probe);
+            let views = HashMap::from([(crate::features::id::VIEW_FILES.into(), probe.into())]);
+            let mut shell = Shell::new(document.into(), views, cx);
+            shell.open_view_in_zone(
+                ZonePosition::Main,
+                crate::features::id::VIEW_FILES.into(),
+                cx,
+            );
+            shell
+        });
+        visual.simulate_resize(gpui::size(px(900.), px(600.)));
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let panel = shell.read_with(visual, |shell, _| {
+            let panel_id = shell
+                .shell
+                .layout
+                .first_panel_in_zone(ZonePosition::Main)
+                .unwrap();
+            shell.panel_bounds.borrow()[&panel_id]
+        });
+        let probe = visual.debug_bounds("panel-content-probe").unwrap();
+        let padding = f32::from(tokens::spacing::PANEL_CONTENT_X);
+        assert_eq!(
+            f32::from(probe.origin.x),
+            f32::from(panel.origin.x) + padding,
+            "panel={panel:?} probe={probe:?}"
+        );
+        assert_eq!(
+            f32::from(probe.right()),
+            f32::from(panel.right()) - padding,
+            "panel={panel:?} probe={probe:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn panel_content_keeps_horizontal_padding_and_follows_panel_width(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{IntoElement, div, prelude::*};
+
+        struct Content;
+        impl Render for Content {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                crate::components::panel_content().child(
+                    div()
+                        .id("panel-content-probe")
+                        .debug_selector(|| "panel-content-probe".into())
+                        .w_full()
+                        .h(px(10.0)),
+                )
+            }
+        }
+
+        let (_, visual) = cx.add_window_view(|_, _| Content);
+        for width in [320.0, 900.0] {
+            visual.simulate_resize(gpui::size(px(width), px(240.)));
+            visual.update(|window, cx| {
+                window.refresh();
+                window.draw(cx).clear();
+            });
+            let probe = visual.debug_bounds("panel-content-probe").unwrap();
+            let padding = f32::from(tokens::spacing::PANEL_CONTENT_X);
+            assert_eq!(
+                f32::from(probe.origin.x),
+                padding,
+                "probe={probe:?} width={width}"
+            );
+            assert!(
+                (f32::from(probe.size.width) - (width - padding * 2.0)).abs() < 1.0,
+                "probe={probe:?} width={width}"
+            );
+        }
+    }
+
+    #[gpui::test]
     fn preview_rectangle_matches_the_committed_gpui_panel(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)

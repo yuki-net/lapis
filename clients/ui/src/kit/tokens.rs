@@ -9,6 +9,10 @@ pub mod spacing {
     pub const MD: Pixels = px(12.0);
     pub const LG: Pixels = px(16.0);
     pub const GAP: Pixels = px(8.0);
+
+    // 用途別セマンティックエイリアス
+    /// Panel本文と内容の間に常時確保する左右余白。既存Panelの左右余白に合わせる。
+    pub const PANEL_CONTENT_X: Pixels = MD;
 }
 
 pub mod radius {

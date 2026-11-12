@@ -100,7 +100,7 @@ impl Shell {
                 .h_full()
                 .flex()
                 .flex_col()
-                .p_8()
+                .py_8()
                 .gap_5()
                 .child(
                     div()

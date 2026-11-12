@@ -166,6 +166,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
   - Terminal は可視行だけを仮想化して描画し、行ごとの色・属性・カーソルを `TerminalCell` から直接組む。行の高さと spacer が文字の実測に依存するため、wrapper を挟むと再計測が増える。
   - Editor は `ShapedLine` と IME / 選択範囲のハンドリングを `Element::paint` で行う。1文字単位の配置は wrapper ではなくテキスト整形の結果で決まる。
 - したがって「Terminal / Editor の描画を共通 wrapper に寄せる」は対象外とする。共通化するのは外側の Scroll・空状態・操作ボタンまでとし、セル / 行の描画ロジックは各 Feature が持つ。
+- Panel本文の左右余白は `shell/main/panel_frame.rs` が `components::panel_content` で一括して確保する。Featureは左右paddingを個別に付けず、幅はPanelに追従させる（内容がPanelより広い場合のみ横Scrollに任せる）。余白の値は `tokens::spacing::PANEL_CONTENT_X` を正本とする。
 
 ## Desktop の共通Tab操作
 
