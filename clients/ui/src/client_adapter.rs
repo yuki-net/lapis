@@ -36,6 +36,8 @@ pub(crate) struct DocumentClient {
     session_view_sequence: u64,
     /// 購読を開始した Workspace。二重の購読解除を送らないために保持する。
     session_view_open: Option<WorkspaceId>,
+    /// 参加直後に一度だけ snapshot を返した Workspace。shell の表示を揃える。
+    session_view_reconciled: Option<WorkspaceId>,
 }
 
 impl DocumentClient {
@@ -59,6 +61,7 @@ impl DocumentClient {
             session_view_signature: None,
             session_view_sequence: 0,
             session_view_open: None,
+            session_view_reconciled: None,
         }
     }
 
@@ -82,6 +85,7 @@ impl DocumentClient {
             session_view_signature: None,
             session_view_sequence: 0,
             session_view_open: None,
+            session_view_reconciled: None,
         }
     }
 }
@@ -160,6 +164,7 @@ impl DocumentClient {
     pub(crate) fn close_session_view(&mut self) {
         self.session_view_signature = None;
         self.session_view_open = None;
+        self.session_view_reconciled = None;
         let Some(handle) = &self.session_view else {
             return;
         };
@@ -197,6 +202,11 @@ impl DocumentClient {
         let watch = session_view_watch(handle);
         let applied = watch.take_if_changed(&workspace, self.session_view_sequence);
         let Some((sequence, _, view)) = applied else {
+            // 参加直後は、適用できる共有値が無くても一度だけ表示を揃える。
+            if self.session_view_reconciled.as_ref() != Some(&workspace) {
+                self.session_view_reconciled = Some(workspace);
+                return Ok(Some(self.reconcile_snapshot()));
+            }
             return Ok(None);
         };
         self.session_view_sequence = sequence;
@@ -207,6 +217,7 @@ impl DocumentClient {
             .map_err(|error| error.to_string())?;
         // 適用した構成をそのまま送り返さない。
         self.session_view_signature = Some(self.editor.tab_signature());
+        self.session_view_reconciled = Some(workspace);
         Ok(Some(self.reconcile_snapshot()))
     }
 
