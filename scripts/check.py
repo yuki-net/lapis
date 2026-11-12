@@ -18,7 +18,7 @@ SURFACE_SCOPES = {
     "repository": [],  # repositoryはcargoコマンドを使わない
     "rust_core": ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "desktop-ui", "--exclude", "host"],
     "host": ["-p", "host", "--all-targets"],
-    "desktop": ["-p", "lapis", "--all-targets", "-p", "desktop-ui"],
+    "desktop": ["-p", "lapis", "--all-targets", "-p", "desktop-ui", "-p", "lapis-launcher"],
     "backend": ["--workspace", "--all-targets", "--exclude", "lapis", "--exclude", "desktop-ui"],
 }
 

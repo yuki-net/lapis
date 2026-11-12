@@ -7,6 +7,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | 領域 | 所有するもの | 所有しないもの |
 | --- | --- | --- |
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
+| `clients/desktop/launcher/` | staging 済み package の適用と本体の起動 | manifest の取得・解釈、更新の同意、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
@@ -99,6 +100,8 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - Terminal 入力は端末ごとの送信 queue で Text / Key / Paste の順序を保つ。Text は 1 frame 程度まとめて送り、Key / Paste は先行 Text を送ってから即時送信する。失敗時は受理済み入力を再送せず、端末状態を再同期して未受理分だけを再試行する。
 - 応答の適用には要求順序と対象の世代を検証する。楽観編集の先行操作が失敗したら、数値 revision が偶然一致しても依存する後続編集を適用しない。未確定入力は明示的な復旧まで保持する。
 - Window 終了時は受付済み入力と表示状態の保存を完了させる。購読・表示 worker の破棄によって Host の Terminal・Agent を終了しない。保存先や Workspace が失われても、復元用 draft を無言で破棄しない。
+
+- 更新の適用は `clients/desktop/launcher/` が行い、Desktop の Composition Root と状態を共有しない。更新の検出・download・同意はアプリ側の責務であり、launcher は `staging/` と `current.json` の契約だけを使う（[配布と更新の内部契約](release.md)）。
 
 ## Desktop の WindowGroup
 

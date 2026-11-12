@@ -106,7 +106,20 @@ python -m scripts.release verify --source ~/.lapis
 
 `verify` は保存済み ZIP に加えて、展開済みの実行 file も ZIP の内容と照合する。
 
-## 5. 手動復旧
+## 5. 起動
+
+`lapis-launcher.exe` を起動する。install root は `--install-root`、環境変数
+`LAPIS_INSTALL_ROOT`、`~/.lapis` の順に決まり、`current.json` の version を起動する。
+
+```sh
+lapis-launcher.exe --install-root ~/.lapis
+```
+
+`staging/<version>/` に検証できる配布物があれば、起動前に `versions/<version>/` へ入れて
+pointer を進める。失敗しても起動は止まらず、今の version がそのまま立ち上がる。
+`breaking: true` の候補は launcher では適用しない（同意画面はアプリ側の更新 UX）。
+
+## 6. 手動復旧
 
 更新が壊れたときは、手元にある検証済み package で version を差し替える。
 
@@ -145,8 +158,7 @@ python -m scripts.release verify --source ~/.lapis
    pointer を書き換えない。同じ version が既にある場合は `--replace` を明示したときだけ
    入れ直す（検証と展開が終わってから置き換え、失敗時は元の directory を残す）。
    同じ version を入れ直しても、前版の directory は保持数の範囲で残る。
-5. 復旧後の状態を確認する。launcher は未実装（[配布と更新の内部契約](specs/release.md)）
-   なので、現時点では次の 2 つで確認する。
+5. 復旧後の状態を確認する。
 
    ```sh
    python -m scripts.release verify --source ~/.lapis
@@ -154,8 +166,8 @@ python -m scripts.release verify --source ~/.lapis
    ```
 
    期待する version が `current.json` にあり、`verify` が成功すれば復旧できている。
-   launcher の実装後は、launcher が `current.json` の version で起動することまで確認する
-   （将来この手順に追加する）。
+   最後に `lapis-launcher.exe` を起動し、`current.json` の version で立ち上がることを
+   確認する（`--install-root ~/.lapis` は省略できる）。
 6. 壊れた version の directory は、原因確認が済むまで `versions/` の外へ退避して残す。
    保持数の整理は directory 名と manifest の `version` が一致するものだけを対象にするため、
    `0.3.0.broken` のような名前は自動削除されない。`data/` と `credentials/` はこの操作では
@@ -175,7 +187,7 @@ version が 1 つも残っていない場合は `activate` では復旧できな
 `current.json` を削除または修正し、`install` で入れ直す。`current.json` を削除すると
 未導入状態として扱われ、`versions/` は残るが起動先が無くなる。
 
-## 6. やってはいけないこと
+## 7. やってはいけないこと
 
 - 秘密鍵 file、seed、token を repository・PR・Release asset へ置かない。
 - 検証を通さずに `versions/<version>/` や `current.json` を手で書き換えない。

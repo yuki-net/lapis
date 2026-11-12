@@ -62,7 +62,7 @@ jobs:
           python-version: "3.12"
 
       - name: Build binaries
-        run: cargo build --locked --release -p lapis -p host --bins
+        run: cargo build --locked --release -p lapis -p host -p lapis-launcher --bins
 
       - name: Assemble package input
         shell: pwsh
@@ -71,6 +71,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $input | Out-Null
           Copy-Item target/release/lapis.exe $input
           Copy-Item target/release/lapis-host.exe $input
+          Copy-Item target/release/lapis-launcher.exe $input
           Copy-Item assets/lapis.ico $input
 
       - name: Restore signing key
