@@ -351,7 +351,8 @@ async fn self_revoke_is_rejected_and_other_devices_still_revoke() {
         receive(&mut owner).await,
         ServerMessage::Paired(_)
     ));
-    let (_, other) = fixture.pair("other-device").await;
+    // 他端末を登録しておき、一覧から取得した ID を後段で失効させる。
+    fixture.pair("other-device").await;
 
     let ResponseBody::HostDeviceList(list) = request(
         &mut owner,
