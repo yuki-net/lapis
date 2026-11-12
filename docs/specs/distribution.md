@@ -65,10 +65,10 @@ manifest は1回の `publish` が所有し、その呼び出しで渡した全�
 
 - 秘密鍵はリポジトリに含めません。生成は鍵を持つ側だけで行います。
 - `keygen` は既存ファイルを上書きしません。秘密鍵は 32 byte seed の hex で、置き場所はリポジトリ外（CI では secret）です。
-- 公開鍵（32 byte の hex）だけを配布物とコードに含めます。鍵 ID で複数世代の公開鍵を区別できるようにし、`key_id` と公開鍵の対応を client 側に固定します。
+- 公開鍵（32 byte の hex）だけを配布物とコードに含めます。鍵 ID で複数世代の公開鍵を区別できるようにし、`key_id` と公開鍵の対応を client 側（launcher）に固定します。`manifest.pub` は照合用の写しで、それ単体では信頼の根拠になりません。
 - 秘密鍵を失った場合は、新しい鍵 ID で公開鍵を追加します。既存の公開鍵を消すと、その鍵で署名済みの版を検証できなくなります。
 
-CI では `LAPIS_RELEASE_SIGNING_KEY`（hex）を secret として渡します。secret が無い fork では Release への配置を行いません。
+CI では `LAPIS_RELEASE_SIGNING_KEY`（hex）を secret として渡します。secret が無い fork では Release への配置を行いません。公開鍵を client へ埋め込む作業は launcher の Issue で行い、それまでは `manifest.pub` と手元の公開鍵で照合します。
 
 ## install layout
 
