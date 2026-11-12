@@ -900,6 +900,79 @@ class LayoutTests(TempDirTest):
         with self.assertRaises(layout.LayoutError):
             layout._extract(archive, target)
 
+    def test_verify_treats_symlinks_as_mismatch(self):
+        root = self.root / "install"
+        distribution, trusted = self.distribution("0.2.0")
+        layout.install(
+            root, distribution, version="0.2.0", platform="windows-x86_64", trusted_keys=trusted
+        )
+        installed = layout.version_dir(root, "0.2.0")
+        outside = self.root / "outside.dll"
+        outside.write_bytes(b"outside")
+        link = installed / "extra.dll"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink を作れない環境")
+        with self.assertRaises(layout.LayoutError):
+            verify.verify_install(root, trusted)
+        with self.assertRaises(layout.LayoutError):
+            layout.activate(
+                root, "0.2.0", platform="windows-x86_64", trusted_keys=trusted
+            )
+
+    def test_install_does_not_extract_a_package_the_staged_verification_rejects(self):
+        """staged の再検証結果に無い platform を展開しない。
+
+        初回検証は Windows + Linux の manifest を通し、staged への複写中に
+        (1) Windows ZIP を別内容へ差し替え、(2) manifest を Linux のみの署名済み manifest
+        へ差し替える。再検証結果から展開対象を選ばないと、未検証の Windows ZIP を展開し、
+        その ZIP 自身と照合して一致と判定してしまう。
+        """
+        import zipfile
+
+        root = self.root / "install"
+        distribution, trusted = self.multi_platform_distribution("0.2.0")
+        key_path, _ = self.key_file()
+        _, seed = keys.load_signing_key(str(key_path))
+        linux_only = manifest.build(
+            version="0.2.0",
+            packages={
+                "linux-x86_64": distribution / "lapis-0.2.0-linux-x86_64.zip"
+            },
+            notes_url="https://example.invalid/releases/v0.2.0",
+            breaking=False,
+            key_id="test-key",
+            generated_at="2026-11-12T00:00:00Z",
+            signing_key=seed,
+        )
+        evil = self.root / "evil.zip"
+        with zipfile.ZipFile(evil, "w") as handle:
+            handle.writestr("bin/lapis.exe", b"evil")
+        real_copy = layout.shutil.copyfile
+
+        def swapped_copy(source, destination, *args, **kwargs):
+            result = real_copy(source, destination, *args, **kwargs)
+            destination = Path(destination)
+            if Path(source).name == MANIFEST_NAME:
+                destination.write_bytes(manifest.dump(linux_only))
+            elif destination.name == "lapis-0.2.0-windows-x86_64.zip":
+                destination.write_bytes(evil.read_bytes())
+            return result
+
+        with patch.object(layout.shutil, "copyfile", side_effect=swapped_copy):
+            with self.assertRaises(layout.LayoutError):
+                layout.install(
+                    root,
+                    distribution,
+                    version="0.2.0",
+                    platform="windows-x86_64",
+                    trusted_keys=trusted,
+                )
+        self.assertIsNone(layout.read_pointer(root))
+        self.assertFalse(layout.version_dir(root, "0.2.0").exists())
+        self.assertFalse((layout.version_dir(root, "0.2.0") / "bin").exists())
+
     def test_corrupt_pointer_is_not_silently_ignored(self):
         root = self.root / "install"
         root.mkdir()

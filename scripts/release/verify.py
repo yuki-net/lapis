@@ -112,10 +112,15 @@ def extracted_mismatches(
             expected[name] = digest.hexdigest()
     actual = {}
     for path in directory.rglob("*"):
-        if path.is_dir() or path.is_symlink():
-            continue
         relative = path.relative_to(directory).as_posix()
         if relative in skip:
+            continue
+        # symlink は参照先を辿らず不一致とする。展開物は通常 file だけであり、
+        # symlink を許すと install 外の file を実行対象にできてしまう。
+        if path.is_symlink():
+            actual[relative] = None
+            continue
+        if path.is_dir():
             continue
         digest = hashlib.sha256()
         with path.open("rb") as stream:
@@ -128,6 +133,8 @@ def extracted_mismatches(
             problems.append(f"{name} が無い")
         elif name not in expected:
             problems.append(f"{name} が package に無い")
+        elif actual[name] is None:
+            problems.append(f"{name} が symlink")
         elif expected[name] != actual[name]:
             problems.append(f"{name} が package と違う")
     return problems

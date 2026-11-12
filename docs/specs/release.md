@@ -117,8 +117,13 @@ per-user 配置とし、管理者権限を要求しない。初回は package �
   （`ZipInfo.orig_filename`）も検査し、`\` を含む名前を拒否する。
 - `install` は manifest が参照する全 platform の package を `versions/<version>/` に保持する。
   `verify_distribution` が全 package を要求するため、選択した platform だけを残さない。
+- pointer の読み取りから版本の置換、pointer 更新、prune までを root 単位で排他する。
+  `activate` も同じ排他に入る。並行する install 同士が互いの前版を削除して pointer の
+  参照先を失うのを防ぐ。
 - 検証は複写後の staged directory に対して行い、展開もその検証済み package から行う。
-  展開後は展開済み file を package の内容と照合し、不一致なら pointer を更新しない。
+  展開対象は複写後の再検証結果から選び直し、初回検証の manifest と食い違う package を
+  展開しない。展開後は展開済み file を package の内容と照合し、不一致なら pointer を
+  更新しない。symlink は package に含まれないため、展開先にあれば不一致として拒否する。
 - `activate` も保存済み ZIP だけでなく展開済み file を照合する。実行 file だけを書き換えた
   version は復旧先として使わない。install は選択した platform だけを展開するため、照合は
   manifest の各 platform の package に対して行い、どれか 1 つでも展開内容と一致すれば

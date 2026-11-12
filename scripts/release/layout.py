@@ -13,6 +13,7 @@ version の探索や保持数を独自に決めない。
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -25,6 +26,7 @@ from .publish import MANIFEST_NAME
 
 POINTER_NAME = "current.json"
 POINTER_SCHEMA = 1
+LOCK_NAME = ".layout.lock"
 VERSIONS_DIR = "versions"
 STAGING_DIR = "staging"
 DATA_DIR = "data"
@@ -62,6 +64,39 @@ def data_dir(root: Path, generation: str) -> Path:
 def credentials_dir(root: Path) -> Path:
     """data 世代の外に置く。失うと再登録が要る credential はここだけ。"""
     return root / CREDENTIALS_DIR
+
+
+@contextlib.contextmanager
+def _exclusive(root: Path):
+    """install と activate を root 単位で排他する。
+
+    `read_pointer` から版本の置換、pointer 更新、prune までの間に別の install が
+    割り込むと、互いの前版を削除して pointer の参照先を失う。OS の file lock ではなく、
+    同じ root を使う処理同士の相互排他だけを保証する簡易 lock とする。
+    """
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / LOCK_NAME
+    handle = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        try:
+            import fcntl
+        except ImportError:  # Windows
+            import msvcrt
+
+            msvcrt.locking(handle, msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                os.lseek(handle, 0, os.SEEK_SET)
+                msvcrt.locking(handle, msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle, fcntl.LOCK_UN)
+    finally:
+        os.close(handle)
 
 
 def _validate_name(value: str, label: str) -> None:
@@ -159,6 +194,9 @@ def install(
     元の distribution が検証後に差し替えられても、保存した package と展開内容が食い違わない。
     manifest が参照する platform の package はすべて保持する。`verify_distribution` は
     全 package を要求するため、選択した platform だけを残すと直後の検証が失敗する。
+
+    pointer の読み取りから版本の置換、pointer 更新、prune までを root 単位で排他する。
+    並行する install 同士が互いの前版を削除して pointer の参照先を失うのを防ぐ。
     """
     from . import verify as verify_module
 
@@ -169,6 +207,31 @@ def install(
         )
     if platform not in verified.packages:
         raise LayoutError(f"platform の package が無い: {platform!r}")
+    with _exclusive(root):
+        return _install_locked(
+            root,
+            distribution,
+            verified,
+            version=version,
+            platform=platform,
+            trusted_keys=trusted_keys,
+            replace=replace,
+        )
+
+
+def _install_locked(
+    root: Path,
+    distribution: Path,
+    verified,
+    *,
+    version: str,
+    platform: str,
+    trusted_keys: dict[str, str],
+    replace: bool,
+) -> Path:
+    """`_exclusive` を保持した状態で version を配置する。"""
+    from . import verify as verify_module
+
     target = version_dir(root, version)
     if target.exists() and not replace:
         raise LayoutError(
@@ -181,20 +244,25 @@ def install(
     backup: Path | None = None
     try:
         shutil.copyfile(distribution / MANIFEST_NAME, staged / MANIFEST_NAME)
-        copied = {}
-        for name, path in verified.packages.items():
-            destination = staged / path.name
-            shutil.copyfile(path, destination)
-            copied[name] = destination
+        for path in verified.packages.values():
+            shutil.copyfile(path, staged / path.name)
         # 複写した staged を再検証する。以後の展開はこの検証済みコピーだけを使う。
+        # 展開対象も再検証結果から選び直し、初回検証の manifest と食い違う package を
+        # 展開しない。
         staged_verified = verify_module.verify_distribution(staged, trusted_keys)
         if staged_verified.version != version:
             raise LayoutError(
                 f"複写した manifest の version ({staged_verified.version}) が違う"
             )
-        staged_package = copied[platform]
+        staged_package = staged_verified.packages.get(platform)
+        if staged_package is None:
+            raise LayoutError(
+                f"複写した manifest に platform の package が無い: {platform!r}"
+            )
         _extract(staged_package, staged)
-        skip = {MANIFEST_NAME} | {path.name for path in copied.values()}
+        skip = {MANIFEST_NAME} | {
+            path.name for path in staged_verified.packages.values()
+        }
         mismatched = verify_module.extracted_mismatches(
             staged, staged_package, skip=skip
         )
@@ -262,22 +330,25 @@ def activate(
     手動復旧で前版へ戻す経路。package の再取得や再展開をせず、壊れた version の
     directory には触らない。保存済み manifest と package に加えて、展開済み file も
     package の内容と照合する。実行 file だけが書き換わった version を復旧先にしない。
+
+    install と同じ root 単位の排他に入る。復旧先の検証から pointer 更新までに別の
+    install が割り込んで version を削除すると、存在しない version を指してしまう。
     """
     from . import verify as verify_module
 
-    target = version_dir(root, version)
-    if not target.is_dir():
-        raise LayoutError(f"version directory が無い: {target}")
-    verified = verify_module.verify_install_version(
-        target, trusted_keys, platform=platform
-    )
-    if verified.version != version:
-        raise LayoutError(
-            f"manifest の version ({verified.version}) が指定 ({version}) と違う"
+    with _exclusive(root):
+        target = version_dir(root, version)
+        if not target.is_dir():
+            raise LayoutError(f"version directory が無い: {target}")
+        verified = verify_module.verify_install_version(
+            target, trusted_keys, platform=platform
         )
-    root.mkdir(parents=True, exist_ok=True)
-    write_pointer(root, version)
-    return target
+        if verified.version != version:
+            raise LayoutError(
+                f"manifest の version ({verified.version}) が指定 ({version}) と違う"
+            )
+        write_pointer(root, version)
+        return target
 
 
 def _extract(package: Path, destination: Path) -> None:
