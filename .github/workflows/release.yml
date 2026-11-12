@@ -88,7 +88,7 @@ jobs:
             throw "secret LAPIS_RELEASE_SIGNING_KEY がありません。署名できないため配置しません"
           }
           $path = Join-Path $env:RUNNER_TEMP "signing.key"
-          Set-Content -Path $path -Value $env:SIGNING_KEY.Trim() -NoNewline
+          Set-Content -Path $path -Value $env:SIGNING_KEY.Trim() -NoNewline -Encoding ascii
           "key-path=$path" >> $env:GITHUB_OUTPUT
         id: signing
 
