@@ -142,6 +142,8 @@ def install(
         raise LayoutError(
             f"version directory が既にある: {target}。入れ直すなら --replace を使う"
         )
+    # pointer が壊れている場合は、展開する前に失敗させる。
+    previous = read_pointer(root)
     versions_dir(root).mkdir(parents=True, exist_ok=True)
     staged = Path(tempfile.mkdtemp(dir=versions_dir(root), prefix=".extract-"))
     backup: Path | None = None
@@ -165,7 +167,6 @@ def install(
         raise
     if backup is not None:
         shutil.rmtree(backup, ignore_errors=True)
-    previous = read_pointer(root)
     write_pointer(root, version)
     _prune(root, keep=[version, previous])
     return target

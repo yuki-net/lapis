@@ -500,6 +500,25 @@ class LayoutTests(TempDirTest):
             ["0.3.0", "0.3.0.broken", "0.4.0"],
         )
 
+    def test_install_does_not_extract_when_pointer_is_corrupt(self):
+        root = self.root / "install"
+        distribution, trusted = self.distribution("0.2.0")
+        root.mkdir()
+        layout.pointer_path(root).write_text("{not json", encoding="utf-8")
+        with self.assertRaises(layout.LayoutError):
+            layout.install(
+                root,
+                distribution,
+                version="0.2.0",
+                platform="windows-x86_64",
+                trusted_keys=trusted,
+            )
+        self.assertFalse(layout.versions_dir(root).exists())
+        # 壊れた pointer はそのまま残る（既存の破損を勝手に作り直さない）。
+        self.assertEqual(
+            layout.pointer_path(root).read_text(encoding="utf-8"), "{not json"
+        )
+
     def test_activate_rejects_unverified_version(self):
         root = self.root / "install"
         distribution, trusted = self.distribution("0.2.0")
