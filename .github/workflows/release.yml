@@ -146,5 +146,6 @@ jobs:
             --tag "${{ needs.build.outputs.tag }}" \
             --title "Lapis ${{ needs.build.outputs.tag }}" \
             --notes release-notes.md \
+            --repo "${{ github.repository }}" \
             --create \
             --execute
