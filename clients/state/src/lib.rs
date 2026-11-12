@@ -40,12 +40,18 @@ mod process;
 mod settings_store;
 mod view_state;
 mod workbench_sync;
+// Session 共有は背景 thread と同期受信を使うため Desktop だけで動かす。
+// Web 側の統合は別 PR とする。
+#[cfg(not(target_arch = "wasm32"))]
+mod session_view;
 pub use connection_display::{
     connected_workspace_name, connection_label, host_label, host_name_from_url,
     short_workspace_label, window_title, workspace_label,
 };
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use process::ProcessSession;
+#[cfg(not(target_arch = "wasm32"))]
+pub use session_view::{SessionViewSession, SessionViewSync, SessionViewWatch};
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
@@ -218,7 +224,7 @@ pub enum DocumentCloseDisposition {
 pub use workbench::{
     ConversationViewState, PanelLayoutViewState, SharedDocumentView, SharedWorkspaceView, TabRef,
     ViewBindingState, ViewScopeState, WorkbenchLayoutState, WorkbenchModeState, WorkbenchViewState,
-    ZONE_LAYOUT_VERSION, ZoneLayoutViewState, ZonePanelViewState, ZoneViewState,
+    WorkspaceView, ZONE_LAYOUT_VERSION, ZoneLayoutViewState, ZonePanelViewState, ZoneViewState,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1342,6 +1348,16 @@ impl EditorSession {
             .is_some_and(|open| open.document.is_dirty())
     }
 
+    /// 共有の要否を判断する、開いている文書とアクティブ文書の署名。
+    ///
+    /// 共有するのはタブ構成とアクティブ文書だけで、カーソル移動では変化しない。
+    pub fn tab_signature(&self) -> (Vec<DocumentId>, Option<DocumentId>) {
+        (
+            self.documents.iter().map(|open| open.id.clone()).collect(),
+            self.active_document_id().cloned(),
+        )
+    }
+
     pub fn external_change(&self) -> ExternalChange {
         self.active_document()
             .map(|open| open.external_change)
@@ -1719,6 +1735,89 @@ impl EditorSession {
         }
         self.persist_best_effort();
         true
+    }
+
+    /// Host が共有した view を、開いているタブの構成とアクティブ文書だけへ反映する。
+    ///
+    /// 文書の内容・カーソル位置・スクロールは既に開いている文書では変更しない。
+    /// 未保存の文書は共有側で閉じられていても破棄せず残す。適用できない文書
+    /// （path を持たないuntitled など）は無視する。
+    pub fn apply_shared_view(
+        &mut self,
+        view: &workbench::WorkspaceView,
+    ) -> Result<(), WorkspaceError> {
+        let Some(root) = self.workspace_root.clone() else {
+            return Ok(());
+        };
+        if self.workspace_id.is_none() {
+            return Ok(());
+        }
+        let mut slots: Vec<Option<OpenDocument>> = std::mem::take(&mut self.documents)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let take = |slots: &mut Vec<Option<OpenDocument>>,
+                    document_id: Option<&DocumentId>,
+                    path: Option<&Path>| {
+            slots.iter_mut().find_map(|slot| {
+                let open = slot.as_ref()?;
+                let matched = document_id.is_some_and(|id| &open.id == id)
+                    || path.is_some_and(|path| open.document.path() == Some(path));
+                matched.then(|| slot.take()).flatten()
+            })
+        };
+        let mut documents = Vec::with_capacity(view.open_documents.len());
+        for document in &view.open_documents {
+            let path = document.path.as_ref().map(|path| root.join(path.as_str()));
+            if let Some(open) = take(&mut slots, document.document_id.as_ref(), path.as_deref()) {
+                documents.push(open);
+                continue;
+            }
+            let Some(path) = path else {
+                continue;
+            };
+            let Ok(cache) = self.document_connection.open(&path) else {
+                continue;
+            };
+            let id = cache.id.clone();
+            if let Some(open) = take(&mut slots, Some(&id), Some(&path)) {
+                documents.push(open);
+                continue;
+            }
+            documents.push(OpenDocument::from_cache(
+                cache,
+                DocumentViewState {
+                    document_id: Some(id),
+                    path,
+                    ..DocumentViewState::default()
+                },
+            ));
+        }
+        let mut active = view
+            .active_document_id
+            .as_ref()
+            .and_then(|id| documents.iter().position(|open| &open.id == id));
+        if active.is_none() {
+            active = self
+                .active
+                .and_then(|previous| slots.get(previous).and_then(Option::as_ref))
+                .and_then(|open| documents.iter().position(|current| current.id == open.id));
+        }
+        // 未保存の文書は共有に含まれなくても破棄しない。保存されていない内容だけ残す。
+        for slot in slots.into_iter().flatten() {
+            if slot.document.is_dirty() {
+                documents.push(slot);
+            } else if let Err(error) = self.document_connection.close(&slot.id) {
+                self.restore_warning = Some(error.to_string());
+            }
+        }
+        if active.is_none() && !documents.is_empty() {
+            active = Some(0);
+        }
+        self.documents = documents;
+        self.active = active;
+        self.persist_best_effort();
+        Ok(())
     }
 
     /// Worker の操作対象だけを切り替える。表示状態の保存や文書 I/O は行わない。

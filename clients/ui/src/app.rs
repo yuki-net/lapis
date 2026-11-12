@@ -93,6 +93,9 @@ pub struct DesktopServices {
     pub(crate) settings: SettingsSession,
     pub(crate) process: ProcessSession,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
+    /// Workspace の view state 共有。Web 側の統合は別 PR のため Desktop だけで使う。
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
 }
 
 impl DesktopServices {
@@ -118,6 +121,8 @@ impl DesktopServices {
             settings,
             process: ProcessSession::unavailable(),
             workbench_watch: None,
+            #[cfg(not(target_family = "wasm"))]
+            session_view: None,
         }
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
@@ -139,6 +144,19 @@ impl DesktopServices {
     pub fn with_workbench_watch(mut self, watch: desktop_client::WorkbenchWatch) -> Self {
         self.workbench_watch = Some(watch);
         self
+    }
+    /// Workspace の view state 共有を有効にする。
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_session_view(
+        mut self,
+        sync: std::sync::Arc<desktop_client::SessionViewSync>,
+    ) -> Self {
+        self.session_view = Some(sync);
+        self
+    }
+    #[cfg(not(target_family = "wasm"))]
+    pub fn session_view(&self) -> Option<&std::sync::Arc<desktop_client::SessionViewSync>> {
+        self.session_view.as_ref()
     }
     pub fn with_process_session(mut self, process: ProcessSession) -> Self {
         self.process = process;
@@ -188,6 +206,8 @@ pub(crate) struct WindowFactory {
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
     process: ProcessSession,
+    #[cfg(not(target_family = "wasm"))]
+    session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
 }
 impl WindowFactory {
     pub(crate) fn path_scope(&self) -> Option<std::path::PathBuf> {
@@ -209,6 +229,8 @@ impl WindowFactory {
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
             process: services.process.clone(),
+            #[cfg(not(target_family = "wasm"))]
+            session_view: services.session_view.clone(),
         }
     }
     pub(crate) fn build(self) -> (EditorSession, DesktopServices) {
@@ -227,6 +249,10 @@ impl WindowFactory {
         services.connect_host = self.connect_host;
         services.connection = self.connection;
         services.process = self.process;
+        #[cfg(not(target_family = "wasm"))]
+        {
+            services.session_view = self.session_view;
+        }
         (editor, services)
     }
     pub(crate) fn open_host(self) -> Result<(), String> {
