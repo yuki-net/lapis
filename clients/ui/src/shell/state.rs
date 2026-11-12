@@ -219,10 +219,15 @@ impl ShellState {
     /// 表示中パネルで選択されているタブだけを見る。同じパネルの別タブを表示している
     /// あいだは、Terminal タブは画面に出ていない。
     pub(crate) fn terminal_tab_visible(&self) -> bool {
+        self.view_visible_in_layout(crate::features::id::VIEW_TERMINAL)
+    }
+
+    /// 指定 View が表示中パネルで選択されているか。表示中だけ動かす処理の判定に使う。
+    pub(crate) fn view_visible_in_layout(&self, view: &str) -> bool {
         self.layout.visible_panels().any(|panel| {
             self.visible_active(panel)
                 .and_then(PanelTab::view_id)
-                .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
+                .is_some_and(|active| active.as_str() == view)
         })
     }
 
@@ -594,6 +599,36 @@ mod tests {
         state.layout.activate_existing_tab(&terminal);
         state.layout.set_panel_open(&panel, false);
         assert!(!state.terminal_tab_visible());
+    }
+
+    #[test]
+    fn view_visibility_in_layout_covers_views_that_only_poll_while_shown() {
+        let mut state = ShellState::default();
+        let resources = PanelTab::tool(id::VIEW_RESOURCES);
+        let panel = state
+            .layout
+            .open_tab(ZonePosition::Bottom, resources.clone())
+            .unwrap();
+        assert!(state.view_visible_in_layout(id::VIEW_RESOURCES));
+
+        // 同じパネルの別タブを選んでいる間は表示されていない。
+        let other = PanelTab::tool(id::VIEW_PROBLEMS);
+        assert!(
+            state
+                .layout
+                .insert_tab_in_panel(&panel, other.clone(), false)
+        );
+        state.layout.activate_existing_tab(&other);
+        assert!(!state.view_visible_in_layout(id::VIEW_RESOURCES));
+
+        state.layout.activate_existing_tab(&resources);
+        assert!(state.view_visible_in_layout(id::VIEW_RESOURCES));
+
+        // Panel を閉じると、選択中でも表示されていない。
+        state.layout.set_panel_open(&panel, false);
+        assert!(!state.view_visible_in_layout(id::VIEW_RESOURCES));
+        // 未登録の View も安全に false になる。
+        assert!(!state.view_visible_in_layout("lapis.view.unknown"));
     }
 
     #[test]

@@ -79,9 +79,12 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - 対象は Host / Desktop が自ら spawn した root PID と、その PID から辿れる子孫だけとする。OS 全体の一覧や、Lapis 外で起動された同名プロセスを列挙・終了しない。
 - Host と Desktop はそれぞれプロセスレジストリをローカルに持つ。Host のレジストリは Host 自身と Host が起動した Terminal / Task Run などの root を、Desktop のレジストリは Desktop 自身と Desktop が起動した Language Server などの root を所有する。Remote Host から Desktop 側の root は操作できない。
 - Task / Execution のモデルと OS Process は独立させ、レジストリは root ごとに Workspace と所有元（Terminal / Task Run / Language Server 等）を保持する。Terminal 内の Agent CLI は Terminal の子孫として扱う。
+- PID 再利用は、登録時と比較時で同じ開始識別子を比べて判定する。識別子は壁時計の変更で値が変わらないもの（Linux は boot 相対の開始 ticks、Windows / macOS は OS が記録した作成時刻）を使い、開始時刻を確定できないプロセスは所有対象にしない。表示用の開始時刻と同一性判定は別の値として扱う。
 - 計測は 1 秒間隔で行い、root ごとに直近 60 サンプル（60 秒分）を保持する。CPU は 100 分の 1 パーセント、メモリは byte の整数として wire に載せる。終了した root は状態確認のため 60 秒残してから削除する。
 - 終了操作は接続中の Workspace に属する root だけを対象とし、root とその子孫を OS のプロセスツリー単位で終了する。Host / Desktop 自身は終了対象にしない。所有外の root ID は存在の有無を区別せず拒否する。
 - `workspace.execute` の `Processes` / `TerminateProcess` を使い、Local / Remote で同じ意味にする。読み取りは `workspace.process.read`、終了は `workspace.process.control` を要求する。
+- Desktop の一覧取得は Resource Manager 専用の worker で行い、Document の編集・保存と直列化を共有しない。Workspace は worker 側が保持し、切替時は Feature から同期する。
+- 一覧の再取得は Resource Manager パネルが表示中のときだけ 2 秒間隔で行う。非表示にしたら周期を止め、再表示時に 1 回取得してから再開する。
 
 ## 設定の所有境界
 

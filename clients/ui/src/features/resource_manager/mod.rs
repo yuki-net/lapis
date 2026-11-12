@@ -1,5 +1,5 @@
 use crate::{
-    client_adapter::{ClientWorker, DocumentClient},
+    client_adapter::ClientWorker,
     extension_ui::{ActivationCondition, FeatureDescriptor, UiContribution, UiSlot, ViewId},
     features::id,
 };
@@ -8,12 +8,17 @@ use process::{ProcessKind, ProcessOrigin, ProcessRoot, ProcessRootId, ProcessSna
 mod state;
 mod view;
 
+pub(crate) use state::ProcessWorker;
+
 pub(crate) struct ResourceManagerFeature {
-    worker: ClientWorker<DocumentClient>,
+    worker: ClientWorker<ProcessWorker>,
+    workspace: Option<editor_core::WorkspaceId>,
     pub(super) state: ProcessPanelState,
     busy: bool,
     scheduled: bool,
     refresh_generation: u64,
+    /// パネルが画面に出ているか。非表示の間は取得を止める。
+    visible: bool,
 }
 
 /// Resource Manager パネルの表示状態。worker や GPUI に依存せず更新できる。
