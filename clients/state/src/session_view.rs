@@ -236,8 +236,12 @@ impl SessionViewCursor {
         Some((revision, view))
     }
 
-    /// 自分の更新か。応答待ちの値と一致すれば自分の更新とみなし、記録を消費する。
+    /// 自分の更新か。応答待ちの値と一致すれば自分の更新とみなす。
     /// 応答済みの revision と一致する場合も自分の更新。
+    ///
+    /// ここでは記録を消費しない。echo が応答より先に届いた場合に消費すると、
+    /// 続く `accept_local` の `pop_front` が別の送信の記録を消してしまい、
+    /// その echo を自分の更新と判定できなくなる。削除は `accept_local` だけで行う。
     fn is_local(&self, revision: u64, view: &WorkspaceView) -> bool {
         let accepted = self.local_revisions.lock().is_ok_and(|mut revisions| {
             match revisions.iter().position(|&own| own == revision) {
@@ -251,15 +255,9 @@ impl SessionViewCursor {
         if accepted {
             return true;
         }
-        self.pending.lock().is_ok_and(|mut pending| {
-            match pending.iter().position(|own| own == view) {
-                Some(index) => {
-                    pending.remove(index);
-                    true
-                }
-                None => false,
-            }
-        })
+        self.pending
+            .lock()
+            .is_ok_and(|pending| pending.iter().any(|own| own == view))
     }
 }
 
@@ -837,6 +835,32 @@ mod replica_tests {
         assert!(
             session.watch().take_if_changed(&workspace, 0).is_none(),
             "応答待ちが重なった送信の echo を再適用しました"
+        );
+        // 他人の更新は適用する。
+        session.apply_event(&workspace, 3, Some(view("document-c")));
+        assert!(session.watch().take_if_changed(&workspace, 0).is_some());
+    }
+
+    /// echo が応答より先に届いても、後続の送信の記録を巻き込んで消さない。
+    /// A の echo → A の応答 → B の echo の順で、B の echo を再適用しない。
+    #[test]
+    fn an_echo_before_the_response_does_not_consume_the_next_send() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 0, None);
+        let first = view("document-a");
+        let second = view("document-b");
+        session.begin_local(&first);
+        session.begin_local(&second);
+        // A の echo が A の応答より先に届く。ここで記録を消費してはいけない。
+        session.apply_event(&workspace, 1, Some(first.clone()));
+        // A の応答で先頭（A）だけが消える。
+        session.accept_local(1);
+        // B の echo は自分の更新として捨てる。
+        session.apply_event(&workspace, 2, Some(second.clone()));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_none(),
+            "echo を先に受けた送信の応答で、次の送信の記録を消しました"
         );
         // 他人の更新は適用する。
         session.apply_event(&workspace, 3, Some(view("document-c")));

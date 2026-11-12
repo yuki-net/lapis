@@ -487,6 +487,12 @@ impl DesktopRoot {
                     root.apply_remote_workbench(cx);
                 }
                 EditorEvent::Idle => {
+                    // 入力中に保留した共有 snapshot は、共有の active を優先して
+                    // 反映する。`synchronize_group` の `receive_snapshot` は現在の
+                    // 文書を優先するため、先にこちらで適用する。
+                    let applied_shared = root
+                        .editor
+                        .update(cx, |editor, cx| editor.take_pending_shared_snapshot(cx));
                     root.synchronize_group(cx);
                     #[cfg(not(target_family = "wasm"))]
                     root.apply_remote_workbench(cx);
@@ -495,6 +501,9 @@ impl DesktopRoot {
                     // Editor の処理中に見送った再同期を、Idle で実行する。
                     if root.session_view_resync_pending {
                         root.resync_remote_session_view(cx);
+                    }
+                    if applied_shared {
+                        root.schedule_session_view_publish(cx);
                     }
                 }
                 EditorEvent::Status(message) => {

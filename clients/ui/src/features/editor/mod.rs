@@ -106,6 +106,8 @@ pub(crate) struct Editor {
     edit_epoch: Option<crate::client_adapter::EditEpoch>,
     in_flight: usize,
     group_sync_pending: bool,
+    /// 入力中で適用できなかった共有 snapshot。Idle 後に共有の active を反映する。
+    shared_pending: Option<ClientSnapshot>,
     sync_pending: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -177,6 +179,7 @@ impl Editor {
             edit_epoch: None,
             in_flight: 0,
             group_sync_pending: false,
+            shared_pending: None,
             sync_pending: false,
             selected_range: 0..0,
             selection_reversed: false,
@@ -438,20 +441,45 @@ impl Editor {
     ///
     /// 共有 view の適用ではタブ構成と選択中の文書が変わるため、`receive_snapshot`
     /// のように現在の文書を優先せず、snapshot の active をそのまま採用する。
-    /// 未確定の入力がある間は本文を置き換えない。
+    /// 未確定の入力がある間は snapshot を保留し、Idle 後に同じ active を採用する。
     pub(crate) fn receive_shared_snapshot(
         &mut self,
         snapshot: &ClientSnapshot,
         cx: &mut Context<Self>,
     ) {
-        self.group_sync_pending = self.has_pending();
         if self.has_pending() {
+            // Idle 後の再適用でも共有の active を失わないよう、保留中の snapshot を
+            // 保持する。ここでは本文を置き換えない。
+            self.shared_pending = Some(snapshot.clone());
+            self.group_sync_pending = true;
             return;
         }
+        self.shared_pending = None;
+        self.group_sync_pending = false;
         self.edit_epoch = Some(snapshot.edit_epoch);
         let local = self.local_snapshot(snapshot);
         self.accept_snapshot(&local, true, cx);
         cx.notify();
+    }
+
+    /// 保留した共有 snapshot を取り出して適用する。無ければ `false`。
+    ///
+    /// Idle 後の `receive_snapshot` は現在の文書を優先するため、共有された active を
+    /// 反映できない。保留があるときはこちらを優先する。
+    pub(crate) fn take_pending_shared_snapshot(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(snapshot) = self.shared_pending.take() else {
+            return false;
+        };
+        if self.has_pending() {
+            // まだ入力中なら保留を戻す。
+            self.shared_pending = Some(snapshot);
+            return false;
+        }
+        self.edit_epoch = Some(snapshot.edit_epoch);
+        let local = self.local_snapshot(&snapshot);
+        self.accept_snapshot(&local, true, cx);
+        cx.notify();
+        true
     }
 
     /// Workspace切替を通常の入力・Closeと同じ待ち処理の境界で保護する。
