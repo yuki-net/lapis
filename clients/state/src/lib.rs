@@ -40,6 +40,7 @@ mod process;
 mod settings_store;
 mod update;
 mod view_state;
+mod web_access;
 mod workbench_sync;
 // Session 共有は背景 thread と同期受信を使うため Desktop だけで動かす。
 // Web 側の統合は別 PR とする。
@@ -56,6 +57,10 @@ pub use session_view::{SessionViewSession, SessionViewSync, SessionViewWatch};
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use update::{UpdateController, UpdateStatus, UpdateWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
+pub use web_access::{
+    PageScheme, WebAccess, WebAddress, WebAddressKind, address_kind_for, is_tailscale_interface,
+    split_host_port, split_url,
+};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(any(target_arch = "wasm32", test))]

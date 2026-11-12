@@ -25,6 +25,8 @@ task = { path = "../../../contracts/domain/task" }
 tempfile.workspace = true
 getrandom.workspace = true
 rfd.workspace = true
+sysinfo.workspace = true
+wire = { path = "../../../contracts/transport/wire" }
 
 [dev-dependencies]
 editor-core = { path = "../../../contracts/domain/editor-core" }

@@ -231,7 +231,8 @@ impl DesktopRoot {
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
-        let settings = cx.new(SettingsFeature::new);
+        let settings =
+            cx.new(|cx| SettingsFeature::with_web_access(cx, services.web_access.clone()));
         let update = services
             .updater
             .clone()
@@ -832,7 +833,14 @@ impl DesktopRoot {
             search.set_workspace(snapshot.root.clone(), cx)
         });
         self.settings.update(cx, |settings, cx| {
-            settings.set_workspace(snapshot.root.clone(), cx)
+            settings.set_workspace(
+                snapshot.root.clone(),
+                snapshot
+                    .workspace
+                    .as_ref()
+                    .map(|workspace| workspace.as_str().to_owned()),
+                cx,
+            )
         });
         let terminal_key =
             ViewInstanceKey::new(crate::shell::PanelTab::tool(id::VIEW_TERMINAL).stable_view_key())

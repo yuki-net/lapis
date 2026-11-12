@@ -2,6 +2,7 @@ mod connection;
 mod install;
 mod update_fetch;
 mod updater;
+mod web_access;
 mod workspace_dialog;
 
 use std::path::{Path, PathBuf};
@@ -245,7 +246,10 @@ fn main() {
         let local: Arc<dyn process::ProcessRegistry> = local_processes;
         Some(local)
     }))
-    .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()));
+    .with_host_connector(move || connection::open_picker(startup.connector_directory.clone()))
+    // 設定の接続ページは表示のたびに候補を集める。保存値にしないことで、
+    // Tailscale の IP 変更のようにアドレスが変わっても現在の接続情報へ追随する。
+    .with_web_access(|| Some(web_access::local_web_access()));
     // 更新は install layout を検出できた実行だけ有効にする。開発用 binary では何もしない。
     if let Some(layout) = install::InstallLayout::detect() {
         layout.record();
