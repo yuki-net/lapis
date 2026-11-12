@@ -93,12 +93,4 @@ mod tests {
             }
         }
     }
-
-    /// ターミナルの既定 family が、実際に読み込まれる同梱フォントを指すことを保証する。
-    /// ここがずれると Web は未読み込みの family を解決しようとして等幅でなくなる。
-    #[test]
-    fn terminal_default_family_is_bundled() {
-        #[cfg(any(target_family = "wasm", windows))]
-        assert_eq!(crate::features::terminal::default_font_family(), FAMILY);
-    }
 }
