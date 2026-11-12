@@ -91,6 +91,11 @@ struct Inner {
     stopped: AtomicBool,
     /// 適用済み、または自分が受理させた revision。これ以下は再適用しない。
     applied: AtomicU64,
+    /// 自分の更新の受理 revision を確定するまで、event の適用を待たせる。
+    ///
+    /// Host は自分の更新の echo を、更新の応答より先に配ることがある。待たせないと
+    /// echo が先に適用され、自分の watch に自分の更新が戻って再送ループになる。
+    update_gate: Mutex<()>,
 }
 
 impl SessionViewSession {
@@ -111,6 +116,7 @@ impl SessionViewSession {
             watch,
             stopped: AtomicBool::new(false),
             applied: AtomicU64::new(snapshot.revision),
+            update_gate: Mutex::new(()),
         });
         publish_snapshot(&inner, &snapshot);
         let worker = inner.clone();
@@ -125,6 +131,9 @@ impl SessionViewSession {
     /// 自分の view を送る。受理した revision を適用済みとして扱い、
     /// 同じ値が event で返ってきても再度適用しない。
     pub fn publish(&self, view: WorkspaceView) -> Result<u64, String> {
+        // echo の適用と受理 revision の確定を排他し、自分の更新が自分の watch へ
+        // 戻らないようにする。
+        let _gate = lock(&self.inner.update_gate);
         let revision = self.inner.connection.update(&self.inner.workspace, view)?;
         self.inner.applied.fetch_max(revision, Ordering::AcqRel);
         Ok(revision)
@@ -155,6 +164,13 @@ impl Drop for Inner {
     fn drop(&mut self) {
         self.stopped.store(true, Ordering::Release);
     }
+}
+
+/// 毒された lock でも中身を読めるようにし、view の共有を止めない。
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn publish_snapshot(inner: &Inner, snapshot: &SessionViewSnapshot) {
@@ -215,6 +231,9 @@ fn run_events(inner: Arc<Inner>, mut events: Box<dyn SessionViewEvents>) {
 
 impl Inner {
     fn apply_event(&self, event: SessionViewEvent) {
+        // 自分の更新の echo は受理 revision の確定より先に届き得る。確定前に適用すると
+        // 自分の watch へ自分の更新が戻るため、確定まで待たせる。
+        let _gate = lock(&self.update_gate);
         if event.revision <= self.applied.load(Ordering::Acquire) {
             return;
         }
