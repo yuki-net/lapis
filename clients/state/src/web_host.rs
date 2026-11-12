@@ -864,12 +864,24 @@ pub fn resync_session_view() {
 /// 自分のタブ構成を共有へ送る。null 相当の view は送らない。
 pub fn publish_session_view(view: workbench::WorkspaceView) {
     BACKEND.with(|backend| {
-        if let Some(state) = backend.borrow().as_ref()
-            && let Err(error) = state.commands.unbounded_send(Command::PublishView { view })
-        {
-            web_sys::console::warn_1(&format!("Workspace view を共有できません: {error}").into());
+        let sent = match backend.borrow().as_ref() {
+            Some(state) => state
+                .commands
+                .unbounded_send(Command::PublishView { view: view.clone() })
+                .is_ok(),
+            None => false,
+        };
+        if !sent {
+            // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
+            SESSION_VIEW.with(|session| session.borrow().abort_local());
+            web_sys::console::warn_1(&"Workspace view を共有できません".into());
         }
     });
+}
+
+/// 送信する view を先に記録し、自分の更新が event で戻っても再適用しない。
+pub fn begin_local_session_view(view: &workbench::WorkspaceView) {
+    SESSION_VIEW.with(|session| session.borrow().begin_local(view));
 }
 
 /// Workspace を閉じたときに購読を解除する。

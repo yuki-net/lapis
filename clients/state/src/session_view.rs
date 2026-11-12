@@ -131,6 +131,10 @@ pub struct SessionViewCursor {
     workspace: WorkspaceId,
     /// 適用済み、または自分が受理させた revision。これ以下は再適用しない。
     applied: AtomicU64,
+    /// 送信中、または受理させた自分の view。自分の更新が event として戻ってきた
+    /// 場合に再適用しないための照合値。送信より前に記録するので、応答と event の
+    /// 到着順に依存しない。
+    local: Mutex<Option<WorkspaceView>>,
 }
 
 impl SessionViewCursor {
@@ -138,6 +142,7 @@ impl SessionViewCursor {
         Self {
             workspace,
             applied: AtomicU64::new(revision),
+            local: Mutex::new(None),
         }
     }
 
@@ -149,13 +154,29 @@ impl SessionViewCursor {
         self.applied.load(Ordering::Acquire)
     }
 
+    /// これから送る自分の view を記録する。送信より前に呼ぶ。
+    pub fn begin_local(&self, view: &WorkspaceView) {
+        if let Ok(mut local) = self.local.lock() {
+            *local = Some(view.clone());
+        }
+    }
+
+    /// 送信が失敗したため、記録した自分の view を捨てる。
+    pub fn abort_local(&self) {
+        if let Ok(mut local) = self.local.lock() {
+            *local = None;
+        }
+    }
+
     /// 自分の送信が受理された revision を、適用済みとして扱う。
     pub fn accept_local(&self, revision: u64) {
         self.applied.fetch_max(revision, Ordering::AcqRel);
+        self.abort_local();
     }
 
     /// event を適用対象として受け入れる。重複と巻き戻りは `None` で弾く。
     /// `view` が `None` の event は権限で伏せられているため内容は適用しない。
+    /// 自分の送信が戻ってきた event も内容を再適用しない。
     pub fn accept_event(
         &self,
         revision: u64,
@@ -165,7 +186,17 @@ impl SessionViewCursor {
             return None;
         }
         self.applied.store(revision, Ordering::Release);
-        view.map(|view| (revision, view))
+        let view = view?;
+        if self.is_local(&view) {
+            return None;
+        }
+        Some((revision, view))
+    }
+
+    fn is_local(&self, view: &WorkspaceView) -> bool {
+        self.local
+            .lock()
+            .is_ok_and(|local| local.as_ref() == Some(view))
     }
 }
 
@@ -233,6 +264,21 @@ impl SessionViewReplica {
         }
     }
 
+    /// 自分の送信を記録する。応答と event の到着順に依存せず、自分の更新を
+    /// 再適用しないために、送信より前に呼ぶ。
+    pub fn begin_local(&self, view: &WorkspaceView) {
+        if let Some(cursor) = &self.cursor {
+            cursor.begin_local(view);
+        }
+    }
+
+    /// 送信が失敗したとき、記録した自分の view を捨てる。
+    pub fn abort_local(&self) {
+        if let Some(cursor) = &self.cursor {
+            cursor.abort_local();
+        }
+    }
+
     /// 自分の送信が受理された revision を、適用済みとして扱う。
     pub fn accept_local(&self, revision: u64) {
         if let Some(cursor) = &self.cursor {
@@ -297,10 +343,19 @@ mod desktop {
         /// 自分の view を送る。受理した revision を適用済みとして扱い、
         /// 同じ値が event で返ってきても再度適用しない。
         pub fn publish(&self, view: WorkspaceView) -> Result<u64, String> {
-            let revision = self
+            // 応答と event の到着順に依存しないよう、送信より前に自分の値を記録する。
+            self.inner.cursor.begin_local(&view);
+            let revision = match self
                 .inner
                 .connection
-                .update(self.inner.cursor.workspace(), view)?;
+                .update(self.inner.cursor.workspace(), view)
+            {
+                Ok(revision) => revision,
+                Err(error) => {
+                    self.inner.cursor.abort_local();
+                    return Err(error);
+                }
+            };
             self.inner.cursor.accept_local(revision);
             Ok(revision)
         }
@@ -635,5 +690,57 @@ mod replica_tests {
         session.apply_event(&other, 9, Some(view("document-a")));
         assert!(session.watch().take_if_changed(&other, 0).is_none());
         assert!(session.watch().take_if_changed(&workspace, 0).is_none());
+    }
+
+    /// Host は受理した view を、応答より先に event として配り得る。
+    /// 送信前に記録した自分の値と一致する event は、応答の前後を問わず適用しない。
+    #[test]
+    fn own_echo_is_not_applied_whether_it_arrives_before_or_after_the_response() {
+        for response_first in [true, false] {
+            let mut session = SessionViewReplica::new(SessionViewWatch::new());
+            let workspace = WorkspaceId::new("workspace-1");
+            session.subscribe_snapshot(workspace.clone(), 0, None);
+
+            // publish と同じ順序で、送信より前に自分の値を記録する。
+            let local = view("document-a");
+            session.begin_local(&local);
+            if response_first {
+                session.accept_local(1);
+                session.apply_event(&workspace, 1, Some(local.clone()));
+            } else {
+                // 応答より先に自分の更新が event として戻る。
+                session.apply_event(&workspace, 1, Some(local.clone()));
+                session.accept_local(1);
+            }
+            assert!(
+                session.watch().take_if_changed(&workspace, 0).is_none(),
+                "自分の更新を再適用しました (response_first={response_first})"
+            );
+
+            // 別 Client の値は同じ経路で適用される。
+            session.apply_event(&workspace, 2, Some(view("document-b")));
+            let (_, revision, applied) = session
+                .watch()
+                .take_if_changed(&workspace, 0)
+                .expect("他人の更新は適用する");
+            assert_eq!(revision, 2);
+            assert_eq!(active(&applied), Some("document-b"));
+        }
+    }
+
+    #[test]
+    fn a_failed_send_stops_suppressing_later_events() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 0, None);
+        session.begin_local(&view("document-a"));
+        // 送信できなかったので記録を捨てる。
+        session.abort_local();
+        // 同じ内容が他 Client から届いた場合は適用する。
+        session.apply_event(&workspace, 1, Some(view("document-a")));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_some(),
+            "送信に失敗した値を他人の更新として捨てました"
+        );
     }
 }

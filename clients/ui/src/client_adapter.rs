@@ -274,6 +274,8 @@ impl DocumentClient {
         #[cfg(target_family = "wasm")]
         {
             let _ = handle;
+            // 応答と event の到着順に依存しないよう、送信より前に自分の値を記録する。
+            desktop_client::web_host::begin_local_session_view(&view);
             desktop_client::web_host::publish_session_view(view);
         }
         self.session_view_signature = Some(signature);

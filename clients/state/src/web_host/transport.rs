@@ -824,8 +824,17 @@ async fn handle(
                     view,
                 }),
             )
-            .await?;
+            .await;
+            let body = match body {
+                Ok(body) => body,
+                Err(error) => {
+                    // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
+                    super::SESSION_VIEW.with(|session| session.borrow().abort_local());
+                    return Err(error);
+                }
+            };
             let ResponseBody::WorkspaceViewUpdate(response) = body else {
+                super::SESSION_VIEW.with(|session| session.borrow().abort_local());
                 return Err("WorkspaceViewUpdate応答が不正です".into());
             };
             // 自分の送信は event で戻ってきても再適用しない。
