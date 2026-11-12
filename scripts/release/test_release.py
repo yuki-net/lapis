@@ -141,6 +141,20 @@ class ManifestTests(TempDirTest):
         self.assertEqual(parsed.version, "0.2.0")
         self.assertTrue(parsed.breaking)
 
+    def test_notes_url_must_be_a_url(self):
+        for notes in ("", "not a url", "/relative/path", "https://ok/../x"):
+            with self.subTest(notes=notes):
+                with self.assertRaises(manifest.ManifestError):
+                    manifest.build(
+                        version="0.2.0",
+                        packages={"windows-x86_64": self.root / "x.zip"},
+                        notes_url=notes,
+                        breaking=False,
+                        key_id="k",
+                        generated_at="2026-11-12T00:00:00Z",
+                        signing_key=bytes(32),
+                    )
+
     def test_unknown_field_is_rejected(self):
         result, trusted = self.build_manifest()
         result["channel"] = "stable"

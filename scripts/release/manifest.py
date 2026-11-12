@@ -57,9 +57,16 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def validate_version(version: str) -> None:
-    if not VERSION_PATTERN.match(version) or ".." in version:
+def validate_version(version: object) -> None:
+    if not isinstance(version, str) or not VERSION_PATTERN.match(version) or ".." in version:
         raise ManifestError(f"version の形式が不正: {version!r}")
+
+
+def validate_notes_url(notes_url: object) -> None:
+    if not isinstance(notes_url, str) or not notes_url.startswith(("https://", "http://")):
+        raise ManifestError(f"notes_url が URL でない: {notes_url!r}")
+    if "/.." in notes_url or "\\" in notes_url:
+        raise ManifestError(f"notes_url に不正な要素がある: {notes_url!r}")
 
 
 @dataclass(frozen=True)
@@ -91,6 +98,7 @@ def build(
 ) -> dict[str, Any]:
     """package の SHA-256 を含む manifest を作り、Ed25519 で署名する。"""
     validate_version(version)
+    validate_notes_url(notes_url)
     if not packages:
         raise ManifestError("package が 1 つもない")
     if not key_id:
@@ -145,8 +153,7 @@ def parse(raw: bytes) -> tuple[Manifest, dict[str, Any]]:
         raise ManifestError(f"未対応の schema: {manifest['schema']!r}")
     if not isinstance(manifest["breaking"], bool):
         raise ManifestError("breaking が bool でない")
-    if not isinstance(manifest["notes_url"], str) or not manifest["notes_url"]:
-        raise ManifestError("notes_url が空")
+    validate_notes_url(manifest["notes_url"])
     if not isinstance(manifest["key_id"], str) or not manifest["key_id"]:
         raise ManifestError("key_id が空")
     if not isinstance(manifest["generated_at"], str) or not manifest["generated_at"]:
