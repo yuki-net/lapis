@@ -36,12 +36,19 @@ impl RemoteRequestHandler for BackendRemoteHandler {
         let backend = self.backend.clone();
         let cleanup_backend = self.backend.clone();
         let request_id = request.request_id.clone();
-        let can_list_user_workspaces = grant.capabilities().contains(
-            &client_api::CapabilityId::try_new(client_api::capability::WORKSPACES_SWITCH)
-                .expect("valid capability"),
-        );
-        let session = BackendSession::new(grant.session_id().clone(), grant.workspace_id().clone())
-            .with_user_workspace_listing(can_list_user_workspaces);
+        // `workspace.switch` は Workspace 一覧・登録と、同一接続での Workspace 切替を許可する。
+        let may_switch = grant
+            .capabilities()
+            .iter()
+            .any(|capability| capability.as_str() == client_api::capability::WORKSPACES_SWITCH);
+        // Workspace へ接続する要求だけは、切替権限を持つ Session に限り要求先を
+        // Session の接続先として扱う。接続中の Workspace かどうかは Runtime が判定する。
+        let session_workspace = match (&request.body, may_switch) {
+            (RequestBody::WorkspaceConnect(connect), true) => connect.workspace_id.clone(),
+            _ => grant.workspace_id().clone(),
+        };
+        let session = BackendSession::new(grant.session_id().clone(), session_workspace)
+            .with_user_workspace_listing(may_switch);
         let opens_workspace = matches!(&request.body, RequestBody::WorkspaceConnect(_));
         let can_read_git = grant.capabilities().contains(
             &client_api::CapabilityId::try_new("workspace.git.read").expect("valid capability"),

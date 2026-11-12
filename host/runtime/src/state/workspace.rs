@@ -44,6 +44,7 @@ impl BackendState {
             .ok_or(BackendStateError::WorkspaceNotFound)?;
         let summary = workspace.summary.clone();
         let identity = workspace.identity.clone();
+        // 同じ Session は同時に1つの Workspace だけを使う。切替は workspace.close を挟む。
         if self
             .connected_sessions
             .get(&session.session_id)
@@ -68,7 +69,9 @@ impl BackendState {
         workspace_id: WorkspaceId,
     ) -> Result<(ResponseBody, Vec<PublishedEvent>), BackendStateError> {
         self.require_workspace(session, &workspace_id)?;
-        let events = self.disconnect(&session.session_id);
+        // attachment と購読だけを解除し、Session 自体は維持する。
+        // 認証・Session の終了は接続断（disconnect）が行う。
+        let events = self.release_session_workspace(&session.session_id);
         Ok((
             ResponseBody::WorkspaceClose(WorkspaceCloseResponse { workspace_id }),
             events,

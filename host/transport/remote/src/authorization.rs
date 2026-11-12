@@ -42,6 +42,24 @@ impl SessionGrant {
         }
     }
 
+    /// Workspace 切替の許可。`workspace.switch` を持つ Session だけが、
+    /// 接続中の Workspace を離れて別の Workspace へ付け替えられる。
+    pub fn require_workspace_switch(&self) -> Result<(), AuthorizationError> {
+        self.require_capability(
+            &CapabilityId::try_new(client_api::capability::WORKSPACES_SWITCH)
+                .expect("built-in capability must be valid"),
+        )
+    }
+
+    /// 同じ Session のまま接続先 Workspace を差し替えた grant を返す。
+    pub fn with_workspace(&self, workspace_id: WorkspaceId) -> Self {
+        Self {
+            session_id: self.session_id.clone(),
+            workspace_id,
+            capabilities: self.capabilities.clone(),
+        }
+    }
+
     pub fn require_capability(&self, capability: &CapabilityId) -> Result<(), AuthorizationError> {
         if self.capabilities.contains(capability) {
             Ok(())

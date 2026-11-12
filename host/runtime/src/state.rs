@@ -502,6 +502,12 @@ impl BackendState {
     }
 
     pub(crate) fn disconnect(&mut self, session_id: &SessionId) -> Vec<PublishedEvent> {
+        self.release_session_workspace(session_id)
+    }
+
+    /// Session が Workspace から離れるときの attachment と購読を解除する。
+    /// Session 自体の有効性は認証境界が所有する。
+    fn release_session_workspace(&mut self, session_id: &SessionId) -> Vec<PublishedEvent> {
         self.connected_sessions.remove(session_id);
         let mut published = Vec::new();
         for workspace in self.workspaces.values_mut() {

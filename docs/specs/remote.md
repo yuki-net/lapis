@@ -18,6 +18,9 @@
 - `server.rs`・`quic.rs` と `tls.rs`: Remoteが有効化されていなければlistenしません。WebSocketとQUICはTLS 1.3のみを許可し、TLS early dataを無効にしています。認証・認可・イベント配信は同じSession処理を使用します。
 - `auth.rs`: Pairing Tokenには有効期限があり、照合時に取り除くことで再使用を防ぎます。Remote credentialはClient・許可capability・期限に結び付き、失効させると関連sessionも無効になります。`workspace.switch` を持たないcredentialはWorkspaceにも固定し、`workspace.switch` を持つcredentialは接続ごとにWorkspaceを選べます。Client bindingは維持します。Workspaceを指定しなかった場合は固定先、無ければHostが解決するprimary Workspaceを使います。未登録のWorkspace、固定先との不一致、期限切れ、別Hostのcredentialは区別したerror codeで拒否します。
 - `auth.rs`: 認証済みsessionの有効性と、requestが要求するWorkspace・capabilityを検証します。
+  `workspace.connect` だけは `workspace.switch` を持つ Session に限り接続中と別の Workspace を
+  指定できます。切替が成功した時点で Session の接続先を移し、以後の要求は移った先で認可します。
+  `workspace.close` は attachment と購読だけを解除し、Session は維持します。
 - 購読イベントを送る前にもsessionの失効・期限を確認します。失効したClientへ新しいDocumentやTerminalの内容を配信しません。
 - 購読イベントでも、内容の読取りにcapabilityを要するものは権限のないsessionへ渡しません。配信自体を止めるとevent連番が欠落してClientが切断するため、同じ連番のまま内容だけを伏せた通知にします。
 
@@ -96,6 +99,8 @@ PR2、Web の統合は別 PR で行う。
   これは差分計算の結果ではなく置き換えるべき最新値であり、Client は丸ごと適用する。
 - `workspace.view.unsubscribe` は共有から抜ける。Workspace を閉じた Session は
   `workspace.close` で attachment と購読を解除し、以後の delta を受け取らない。
+  `workspace.close` は Session を終了させない。同じ接続のまま `workspace.connect` で
+  再接続・切替できる。Session の終了は接続断と失効だけが行う。
 - 共有に参加している Session が無い間は `workspace.view_changed` を publish しない。
   誰も見ていない更新で workspace の event 連番を消費しないため。
 - Host は Workspace を閉じても最後に受理した view state を保持し、次に参加した Client へ

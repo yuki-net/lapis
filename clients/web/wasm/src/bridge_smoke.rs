@@ -6,6 +6,33 @@ use client_api::{
 use futures_util::StreamExt;
 use wasm_bindgen::prelude::*;
 
+async fn wait_workbench_change(
+    events: &mut futures_channel::mpsc::Receiver<client_api::EventEnvelope>,
+    expected_revision: u64,
+    missing: &str,
+) -> Result<(), JsValue> {
+    // 同じ Workspace の他の変更（FilesChanged など）が先に届くため、
+    // 次の1件ではなく revision が一致する WorkbenchChanged まで待つ。
+    let wait = async {
+        while let Some(event) = events.next().await {
+            if matches!(&event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if *revision == expected_revision)
+            {
+                return Ok(());
+            }
+        }
+        Err(JsValue::from_str(missing))
+    };
+    match futures_util::future::select(
+        Box::pin(wait),
+        Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
+    )
+    .await
+    {
+        futures_util::future::Either::Left((result, _)) => result,
+        futures_util::future::Either::Right(_) => Err(JsValue::from_str(missing)),
+    }
+}
+
 async fn wait_document_edit(
     events: &mut futures_channel::mpsc::Receiver<client_api::EventEnvelope>,
     document_id: &client_api::DocumentId,
@@ -182,24 +209,13 @@ pub async fn bridge_smoke(
     else {
         return Err(JsValue::from_str("workbench write failed"));
     };
-    let event = futures_util::future::select(
-        Box::pin(events.next()),
-        Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
+    wait_workbench_change(&mut events, updated.revision, "workbench event missing").await?;
+    wait_workbench_change(
+        &mut other_events,
+        updated.revision,
+        "other workbench event missing",
     )
-    .await;
-    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
-    {
-        return Err(JsValue::from_str("workbench event missing"));
-    }
-    let event = futures_util::future::select(
-        Box::pin(other_events.next()),
-        Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
-    )
-    .await;
-    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
-    {
-        return Err(JsValue::from_str("other workbench event missing"));
-    }
+    .await?;
     let next = workbench::ConversationViewState::default();
     let stale = second_sync
         .save(next.clone())
@@ -225,15 +241,12 @@ pub async fn bridge_smoke(
     else {
         return Err(JsValue::from_str("other workbench write failed"));
     };
-    let event = futures_util::future::select(
-        Box::pin(events.next()),
-        Box::pin(gloo_timers::future::TimeoutFuture::new(5000)),
+    wait_workbench_change(
+        &mut events,
+        updated.revision,
+        "reverse workbench event missing",
     )
-    .await;
-    if !matches!(event, futures_util::future::Either::Left((Some(event), _)) if matches!(event.body, client_api::EventBody::WorkbenchChanged { revision, .. } if revision == updated.revision))
-    {
-        return Err(JsValue::from_str("reverse workbench event missing"));
-    }
+    .await?;
     let current = first_sync
         .reconnect(&other)
         .await

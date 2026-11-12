@@ -89,10 +89,12 @@ with tempfile.TemporaryDirectory() as directory:
         previous_certificate = cert.read_bytes()
         host.stdin.write('quit\n'); host.stdin.flush()
         if host.wait(timeout=10): raise RuntimeError('host shutdown failed')
+        # --state-directory を渡した Host は identity を保存して再起動後も同じ証明書で待ち受ける。
+        # 証明書の差し替えに bridge が追随することは web-bridge の単体テストで検証する。
         host = subprocess.Popen([str(root / f'target/debug/lapis-host{suffix}'), '--workspace', directory, '--certificate', str(cert), '--replace-certificate', '--listen', address, '--state-directory', str(state)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=flags)
         match = read_address(host)
         if match[0] != address or match[2] != workspace: raise RuntimeError('host restart failed')
-        if cert.read_bytes() == previous_certificate: raise RuntimeError('host certificate did not rotate')
+        if cert.read_bytes() != previous_certificate: raise RuntimeError('host certificate was not reused')
         host.stdout.readline()
         host.stdin.write('pair-user\n'); host.stdin.flush()
         match = re.fullmatch(r'User session pairing token \(1 hour, one use\): ([0-9a-f]{64})', host.stdout.readline().strip())
