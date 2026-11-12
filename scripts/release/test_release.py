@@ -869,15 +869,21 @@ class LayoutTests(TempDirTest):
         archive = self.root / "backslash.zip"
         with zipfile.ZipFile(archive, "w") as handle:
             handle.writestr("foo/bar.txt", b"x")
-        # zipfile は member 名を `/` に正規化して読むため、元の名前の `\` を書き込む。
+        # zipfile は Windows で member 名の `\` を `/` に正規化して読むため、元の名前の
+        # `\` を直接書き込む。Linux では正規化されないので、どちらでも拒否できることを見る。
         data = archive.read_bytes().replace(b"foo/bar.txt", b"foo\\bar.txt")
         archive.write_bytes(data)
         with zipfile.ZipFile(archive) as handle:
-            self.assertEqual(handle.infolist()[0].filename, "foo/bar.txt")
-            self.assertEqual(handle.infolist()[0].orig_filename, "foo\\bar.txt")
+            member = handle.infolist()[0]
+            self.assertEqual(member.orig_filename, "foo\\bar.txt")
+            if os.name == "nt":
+                self.assertEqual(member.filename, "foo/bar.txt")
+            else:
+                self.assertEqual(member.filename, "foo\\bar.txt")
         with self.assertRaises(layout.LayoutError):
             layout._extract(archive, target)
         self.assertFalse((target / "foo").exists())
+        self.assertFalse((target / "foo\\bar.txt").exists())
 
     def test_duplicate_member_names_are_rejected(self):
         import warnings
