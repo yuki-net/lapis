@@ -202,6 +202,8 @@ pub(crate) fn apply(
     keys: &manifest::TrustedKeys,
 ) -> Result<Applied> {
     let _lock = Lock::try_acquire(root)?.ok_or_else(|| Error::new("別の処理が layout を使用中"))?;
+    // 名前を先に検証し、候補の path を staging の外へ解決しない。
+    let target = version_dir(root, candidate)?;
     let current = read_pointer(root)?;
     // version の比較は hash より先に行う。適用しない候補のために毎回 package を
     // 読み直さない。
@@ -234,7 +236,6 @@ pub(crate) fn apply(
     if verified.manifest.breaking {
         return Err(Error::new("breaking な更新は同意が必要"));
     }
-    let target = version_dir(root, candidate)?;
     std::fs::create_dir_all(versions_dir(root))
         .map_err(|error| Error::new(format!("versions を作れません: {error}")))?;
     let staged = tempfile::Builder::new()
