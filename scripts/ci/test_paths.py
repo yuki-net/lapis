@@ -130,6 +130,10 @@ class TestPathRouting(unittest.TestCase):
     def test_scripts_run_repository(self):
         self.assertIn("repository", jobs_for_paths(["scripts/check.py"]))
 
+    def test_release_tooling_runs_repository(self):
+        for path in ("scripts/release/cli.py", "release/trusted-keys.json"):
+            self.assertEqual(jobs_for_paths([path]), {"repository"}, path)
+
     def test_ci_workflow_runs_repository(self):
         self.assertIn("repository", jobs_for_paths([".github/workflows/ci.yml"]))
 

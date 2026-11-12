@@ -1,0 +1,185 @@
+# リリース手順
+
+配布 package と署名付き manifest の生成・配置・検証・手動復旧の手順。
+内部契約（manifest schema、layout、データ世代）は [配布と更新の内部契約](specs/release.md) を
+正とする。
+
+## 前提
+
+- Python 3.10 以上。`scripts/release` は標準 library だけで動く。
+- 署名鍵 file は生成機だけに置く。repository へ commit しない。
+- tag は人の操作で作る。この tool は tag を新規作成しない。Release の作成も人が行い、
+  tag push の CI だけが `--create` で作成を代行する。
+
+## 1. 署名鍵
+
+初回だけ生成する。出力される `public` を `release/trusted-keys.json` へ追加し、
+秘密鍵 file は repository の外へ保管する。
+
+```sh
+python -m scripts.release keygen --key-id lapis-release --out ~/.lapis/release-key.json
+```
+
+`release/trusted-keys.json`:
+
+```json
+{ "schema": 1, "keys": { "lapis-release": "<keygen が表示した public>" } }
+```
+
+以後の生成では鍵 file を `--key` で渡す。環境変数 `LAPIS_RELEASE_SIGNING_KEY` に
+鍵 file の path を設定してもよい。CI では secret `LAPIS_RELEASE_SIGNING_KEY` に鍵 file の
+中身を入れ、workflow が一時 file に復元する。secret が無い場合 workflow は失敗する。
+
+`release/trusted-keys.json` に公開鍵が無い `key_id` の manifest は検証で拒否される。
+release workflow も同じ registry を使うため、公開鍵を登録するまで CI の Release job は
+失敗する（未登録の鍵で署名された成果物を通さないための意図的な失敗）。
+
+## 2. package と manifest の生成
+
+platform ごとに展開後の file を directory へまとめてから生成する。`--platform` は
+`<platform 名>=<directory>` で、複数指定できる。
+
+```sh
+python -m scripts.release build \
+  --version 0.2.0 \
+  --platform windows-x86_64=target/package/lapis \
+  --out dist \
+  --notes-url https://github.com/yuki-net/lapis/releases/tag/v0.2.0
+
+python -m scripts.release verify --source dist
+```
+
+`dist/` に `manifest.json` と `<name>-<version>-<platform>.zip` ができる。`--breaking` は
+data 世代を上げる release（軸B）のときだけ付ける。
+
+## 3. 配置
+
+### ローカル（folder / 静的配置）
+
+```sh
+python -m scripts.release publish --source dist --local /path/to/public/releases/v0.2.0
+```
+
+`dist/` と同じ形式（manifest + zip）がそのまま複写される。静的サーバーの場合は、この
+directory をそのまま公開する。`manifest.json` の `assets.<platform>.source` は相対パスの
+ままで、manifest と同じ directory に package が並んでいる必要がある。schema v1 は
+`https://` の source を許可しない（未対応として生成・検証の両方で拒否する）。
+
+### GitHub Releases
+
+tag を先に作り、その tag に対して Release と asset を用意する。
+
+```sh
+# dry-run。実行される command を確認するだけで、GitHub を読まず・書かない
+python -m scripts.release publish --source dist --github --tag v0.2.0
+
+# 実行。既存 Release の asset を差し替える（tag と Release は作らない）
+python -m scripts.release publish --source dist --github --tag v0.2.0 --execute
+```
+
+`--execute` は remote に tag と Release が既にあることを確認してから
+`gh release upload --clobber` を実行する。どちらかが無ければ失敗する。tag は
+`v<manifest の version>` と一致していなければならない（別 version の成果物を既存
+Release へ上書きしない）。
+
+CI では tag を push すると `.github/workflows/release.yml` が Release を作成・更新する。
+初回の Release 作成は workflow から `--create` を付けて行うが、CLI は `gh release create`
+に `--verify-tag` を必ず付け、push 済みの tag を検証するだけで新規作成しない。
+
+## 4. インストール layout への配置
+
+```sh
+python -m scripts.release install \
+  --source dist \
+  --root ~/.lapis \
+  --version 0.2.0 \
+  --platform windows-x86_64
+```
+
+`~/.lapis/versions/0.2.0/` に展開し、`~/.lapis/current.json` を 0.2.0 に更新する。
+manifest が参照する全 platform の package も一緒に保存する。現行 + 前版の 2 世代だけを残す。
+検証は次で行う。
+
+```sh
+python -m scripts.release verify --source ~/.lapis
+```
+
+`verify` は保存済み ZIP に加えて、展開済みの実行 file も ZIP の内容と照合する。
+
+## 5. 手動復旧
+
+更新が壊れたときは、手元にある検証済み package で version を差し替える。
+
+1. アプリを終了する。launcher と Host を終了し、`versions/<version>/` を掴んでいる
+   プロセスが無いことを確認する。
+2. 現在の状態を控える。
+
+   ```sh
+   python -m scripts.release verify --source ~/.lapis
+   cat ~/.lapis/current.json
+   ```
+
+3. 戻したい version の配置物（manifest + zip）を用意する。手元の `dist/` でも、配置済みの
+   ローカル folder でも、Release から download したものでもよい。形式は同じである。
+4. 戻す方法を選ぶ。
+
+   **前版の `versions/<version>/` が無事に残っている場合**は、再取得せず pointer だけを
+   戻す。`versions/<version>/` の manifest と package に加えて展開済み file も検証してから
+   pointer を書き換える。
+
+   ```sh
+   python -m scripts.release activate --root ~/.lapis --version 0.2.0 --platform windows-x86_64
+   ```
+
+   **前版が無い、または壊れている場合**は、検証済みの配置物から入れ直す。
+
+   ```sh
+   python -m scripts.release install \
+     --source /path/to/verified-dist \
+     --root ~/.lapis \
+     --version 0.2.0 \
+     --platform windows-x86_64
+   ```
+
+   `install` は署名と SHA-256 を検証してから展開する。検証に失敗した package は
+   pointer を書き換えない。同じ version が既にある場合は `--replace` を明示したときだけ
+   入れ直す（検証と展開が終わってから置き換え、失敗時は元の directory を残す）。
+   同じ version を入れ直しても、前版の directory は保持数の範囲で残る。
+5. 復旧後の状態を確認する。launcher は未実装（[配布と更新の内部契約](specs/release.md)）
+   なので、現時点では次の 2 つで確認する。
+
+   ```sh
+   python -m scripts.release verify --source ~/.lapis
+   cat ~/.lapis/current.json
+   ```
+
+   期待する version が `current.json` にあり、`verify` が成功すれば復旧できている。
+   launcher の実装後は、launcher が `current.json` の version で起動することまで確認する
+   （将来この手順に追加する）。
+6. 壊れた version の directory は、原因確認が済むまで `versions/` の外へ退避して残す。
+   保持数の整理は directory 名と manifest の `version` が一致するものだけを対象にするため、
+   `0.3.0.broken` のような名前は自動削除されない。`data/` と `credentials/` はこの操作では
+   触らない。
+
+`current.json` が壊れて JSON として読めない場合、`verify` も `install` も
+`read_pointer` の失敗で停止する（破損を勝手に作り直さない）。検証できる version が
+`versions/` に残っているなら、`current.json` を手で書き換えずに `activate` で復旧する。
+
+```sh
+python -m scripts.release activate --root ~/.lapis --version 0.2.0 --platform windows-x86_64
+```
+
+`activate` は pointer を読まずに書き直すため、破損した `current.json` でも通る。ただし
+対象 version の manifest・package・展開済み file が検証できる場合だけ成功する。検証できる
+version が 1 つも残っていない場合は `activate` では復旧できないので、原因を確認したうえで
+`current.json` を削除または修正し、`install` で入れ直す。`current.json` を削除すると
+未導入状態として扱われ、`versions/` は残るが起動先が無くなる。
+
+## 6. やってはいけないこと
+
+- 秘密鍵 file、seed、token を repository・PR・Release asset へ置かない。
+- 検証を通さずに `versions/<version>/` や `current.json` を手で書き換えない。
+- data 世代を通常の version up で上げない。`data/<generation>/` と `credentials/` を
+  手動で削除しない。
+- テストや手元確認で実際の tag / Release を作らない。Releases への配置確認は
+  `--github` の dry-run か `--local` を使う。
