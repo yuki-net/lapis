@@ -51,6 +51,7 @@ PATH_RULES = [
     
     # CI・scripts
     (["scripts/"], {"repository"}),
+    (["release/"], {"repository"}),
     
     # Cargo設定
     (["Cargo.toml"], {"repository", "rust_core", "host", "desktop"}),

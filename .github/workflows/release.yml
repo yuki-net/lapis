@@ -1,0 +1,150 @@
+name: Release
+
+# tag 駆動。Release と tag は人の操作で先に作り、この workflow は成果物の生成と
+# 既存 Release への asset 配置だけを行う。manifest の署名鍵は repository に置かず、
+# `LAPIS_RELEASE_SIGNING_KEY` secret に鍵 file の中身を渡す。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '既に存在する tag (v0.2.0 など)'
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: 1.96.0
+
+jobs:
+  build:
+    name: Package / Windows
+    runs-on: windows-2022
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          if ($tag -notmatch '^v[0-9]+(\.[0-9]+)+([.-][0-9A-Za-z]+)*$') {
+            throw "tag が version 形式でない: $tag"
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tag.Substring(1))" >> $env:GITHUB_OUTPUT
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build binaries
+        run: cargo build --locked --release -p lapis -p host --bins
+
+      - name: Assemble package input
+        shell: pwsh
+        run: |
+          $input = "target/package/lapis"
+          New-Item -ItemType Directory -Force -Path $input | Out-Null
+          Copy-Item target/release/lapis.exe $input
+          Copy-Item target/release/lapis-host.exe $input
+          Copy-Item assets/lapis.ico $input
+
+      - name: Restore signing key
+        shell: pwsh
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.LAPIS_RELEASE_SIGNING_KEY }}
+        run: |
+          if (-not $env:RELEASE_SIGNING_KEY) { throw "LAPIS_RELEASE_SIGNING_KEY が未設定" }
+          $path = Join-Path $env:RUNNER_TEMP "signing-key.json"
+          $env:RELEASE_SIGNING_KEY | Set-Content -Encoding utf8 -NoNewline $path
+          "LAPIS_RELEASE_SIGNING_KEY=$path" >> $env:GITHUB_ENV
+
+      - name: Build package and signed manifest
+        shell: pwsh
+        run: |
+          $url = "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
+          python -m scripts.release build `
+            --version "${{ steps.version.outputs.version }}" `
+            --platform "windows-x86_64=target/package/lapis" `
+            --out dist `
+            --notes-url $url
+          python -m scripts.release verify --source dist
+
+      - name: Verify repository registry rejects unknown keys
+        shell: pwsh
+        run: python -m unittest scripts.release.test_release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lapis-dist
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish / GitHub Releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: build
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: lapis-dist
+          path: dist
+
+      - name: Verify before upload
+        run: python -m scripts.release verify --source dist
+
+      - name: Prepare release notes
+        env:
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          {
+            echo "Lapis ${TAG}"
+            echo
+            echo "署名付き manifest と package はこの Release の asset です。"
+            echo "検証手順は docs/releases.md を参照してください。"
+          } > release-notes.md
+
+      - name: Upload assets to the existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m scripts.release publish \
+            --source dist \
+            --github \
+            --tag "${{ needs.build.outputs.tag }}" \
+            --title "Lapis ${{ needs.build.outputs.tag }}" \
+            --notes release-notes.md \
+            --create \
+            --execute
