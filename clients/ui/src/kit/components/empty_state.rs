@@ -18,7 +18,6 @@ pub(crate) fn panel_empty_state(
         .items_center()
         .justify_center()
         .gap(tokens::spacing::XS)
-        .px(tokens::spacing::LG)
         .text_center()
         .child(
             div()
@@ -55,7 +54,6 @@ pub(crate) fn panel_empty_state_element(
         .items_center()
         .justify_center()
         .gap(tokens::spacing::XS)
-        .px(tokens::spacing::LG)
         .text_center()
         .child(icon)
         .child(

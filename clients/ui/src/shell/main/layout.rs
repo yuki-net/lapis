@@ -376,6 +376,117 @@ mod tests {
     }
 
     #[gpui::test]
+    fn panel_frame_applies_shared_content_padding_to_every_view(cx: &mut gpui::TestAppContext) {
+        use gpui::{IntoElement, div, prelude::*};
+
+        struct Probe;
+        impl Render for Probe {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div()
+                    .id("panel-content-probe")
+                    .debug_selector(|| "panel-content-probe".into())
+                    .w_full()
+                    .h(px(10.0))
+            }
+        }
+
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (shell, visual) = cx.add_window_view(|_, cx| {
+            let document = cx.new(|_| Empty);
+            let probe = cx.new(|_| Probe);
+            let views = HashMap::from([(crate::features::id::VIEW_FILES.into(), probe.into())]);
+            let mut shell = Shell::new(document.into(), views, cx);
+            shell.open_view_in_zone(
+                ZonePosition::Main,
+                crate::features::id::VIEW_FILES.into(),
+                cx,
+            );
+            shell
+        });
+        visual.simulate_resize(gpui::size(px(900.), px(600.)));
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let panel = shell.read_with(visual, |shell, _| {
+            let panel_id = shell
+                .shell
+                .layout
+                .first_panel_in_zone(ZonePosition::Main)
+                .unwrap();
+            shell.panel_bounds.borrow()[&panel_id]
+        });
+        let probe = visual.debug_bounds("panel-content-probe").unwrap();
+        let padding = f32::from(tokens::spacing::PANEL_CONTENT_X);
+        assert_eq!(
+            f32::from(probe.origin.x),
+            f32::from(panel.origin.x) + padding,
+            "panel={panel:?} probe={probe:?}"
+        );
+        assert_eq!(
+            f32::from(probe.right()),
+            f32::from(panel.right()) - padding,
+            "panel={panel:?} probe={probe:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn panel_content_keeps_horizontal_padding_and_keeps_wide_content_scrollable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{IntoElement, div, prelude::*};
+
+        struct Content {
+            state: crate::components::ScrollState,
+        }
+        impl Render for Content {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let wide = div()
+                    .id("panel-content-probe")
+                    .debug_selector(|| "panel-content-probe".into())
+                    .w(px(2000.0))
+                    .h(px(10.0));
+                crate::components::panel_content(crate::components::scroll_viewport(
+                    "panel-content-scroll",
+                    crate::components::ScrollAxis::Both,
+                    &self.state,
+                    wide,
+                    cx,
+                ))
+                .w(px(320.0))
+                .h(px(100.0))
+            }
+        }
+
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (view, visual) = cx.add_window_view(|_, _| Content {
+            state: crate::components::ScrollState::new(),
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let padding = tokens::spacing::PANEL_CONTENT_X;
+        let probe = visual.debug_bounds("panel-content-probe").unwrap();
+        assert_eq!(probe.origin.x, padding, "probe={probe:?}");
+        view.read_with(visual, |view, _| {
+            let max = crate::gpui_compat::max_offset(&view.state.handle());
+            // 左右の余白を差し引いた表示幅を内容幅から引いた値が最大スクロール量になる。
+            // 左余白だけでは右余白の有無を区別できないため、両方をこの値で検証する。
+            let expected = px(2000.0) - (px(320.0) - padding * 2.0);
+            assert_eq!(max.width, expected, "max={max:?}");
+            assert!(
+                max.width > px(0.0),
+                "wide content must stay horizontally scrollable: {max:?}"
+            );
+        });
+    }
+
+    #[gpui::test]
     fn preview_rectangle_matches_the_committed_gpui_panel(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)

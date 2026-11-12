@@ -23,4 +23,4 @@ pub(crate) use scroll::scroll_surface;
 pub(crate) use scroll::{ScrollState, scroll_viewport};
 pub(crate) use search_input::{SearchInput, SearchInputEvent};
 pub(crate) use separator::separator;
-pub(crate) use surface::{SurfaceVariant, panel_header, panel_surface, surface};
+pub(crate) use surface::{SurfaceVariant, panel_content, panel_header, panel_surface, surface};

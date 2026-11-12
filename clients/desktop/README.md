@@ -128,6 +128,16 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 - 境界の通常Dragはサイズ変更。最後のTabが移動したPanelは閉じ、Windowの一時的な縮小だけではPanelやResourceを閉じない。
 - 同じWindowGroup内のDocumentはWindowHostのDock/Undock経路へ渡す。ToolのWindow間移動は受理しない。
 
+## Workspace の view state 共有
+
+同じ Workspace を開いている別 Client と、開いているタブの構成とアクティブ文書を共有します。契約の正本は [Workspace の view state 共有](../../docs/specs/remote.md#workspace-の-view-state-共有) です。
+
+- Workspace を開くと購読し、snapshot を現在の表示へ適用します。Workspace を閉じたときと終了時は購読を解除し、以後の変更を受け取りません。
+- 自分のタブ開閉とアクティブ文書の変更は 150ms の debounce で Host へ送ります。適用した値と同じタブ構成は送り返しません。
+- ウィンドウが再びアクティブになったとき（スリープやバックグラウンドから復帰）は snapshot を取り直して再同期します。
+- 共有するのはタブ構成と文書の更新状況だけで、パネル寸法・カーソル位置・スクロールは送らず、適用もしません。未保存の文書は共有側で閉じられていてもタブとして残します。
+- 既存の Workbench 同期と Task 共有の挙動は変わりません。
+
 ## Task とWorkbench Mode
 
 - TaskはProject配下の作業単位であり、作成しただけではAgent SessionやTerminalを生成しない。Agent Sessionが0件のTaskも有効な選択対象である。

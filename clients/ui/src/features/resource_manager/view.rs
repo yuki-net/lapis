@@ -12,7 +12,7 @@ impl Render for ResourceManagerFeature {
             .flex()
             .flex_col()
             .gap_1()
-            .p_2()
+            .py_2()
             .text_size(px(12.0))
             .text_color(theme::colors(cx).text_primary)
             .child(

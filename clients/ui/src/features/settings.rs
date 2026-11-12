@@ -176,7 +176,7 @@ impl SettingsFeature {
             .w_full()
             .flex()
             .flex_col()
-            .p_8()
+            .py_8()
             .gap_6()
             .child(
                 div()

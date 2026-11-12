@@ -13,7 +13,7 @@ impl Render for GitFeature {
             .id("git-content")
             .flex()
             .flex_col()
-            .p_2()
+            .py_2()
             .gap_2()
             .child(self.context_label.clone())
             .child(

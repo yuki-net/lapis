@@ -74,25 +74,27 @@ impl Shell {
                     || self.scroll_states.panel_empty(&panel_id),
                     |tab| self.scroll_states.panel_content(tab),
                 );
-                scroll_viewport(
+                panel_content(scroll_viewport(
                     ElementId::Name(format!("panel-body-scroll-{}", panel_id.as_str()).into()),
                     axis,
                     &state,
                     content,
                     cx,
-                )
+                ))
                 .flex_1()
                 .size_full()
             }
-            PanelScrollPolicy::FeatureOwned | PanelScrollPolicy::Disabled => div()
-                .flex_1()
-                .size_full()
-                .flex()
-                .flex_col()
-                .min_h(px(0.0))
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .child(content),
+            PanelScrollPolicy::FeatureOwned | PanelScrollPolicy::Disabled => panel_content(
+                div()
+                    .flex_1()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .min_h(px(0.0))
+                    .min_w(px(0.0))
+                    .overflow_hidden(),
+            )
+            .child(content),
         };
 
         let preview = self

@@ -921,7 +921,6 @@ impl Render for Editor {
             .min_w_full()
             .min_h_full()
             .w(px(self.content_width()))
-            .px(px(18.0))
             .py(px(10.0))
             .cursor(if read_only {
                 CursorStyle::Arrow

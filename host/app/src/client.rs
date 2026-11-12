@@ -157,6 +157,11 @@ impl BackendClient {
     pub fn workbench(&self) -> Arc<dyn workbench::WorkbenchConnection> {
         Arc::new(crate::workbench::HostWorkbench::new(self.clone()))
     }
+    /// Workspace の view state を Session 間で共有する接続。
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn session_view(&self) -> Arc<dyn workbench::SessionViewConnection> {
+        Arc::new(crate::session_view::HostSessionView::new(self.clone()))
+    }
     pub fn git(&self) -> Arc<dyn git::GitConnection> {
         Arc::new(crate::features::HostGit::new(self.clone()))
     }

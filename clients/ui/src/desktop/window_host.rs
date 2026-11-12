@@ -355,6 +355,8 @@ impl DesktopRoot {
             self.record_window_layout(cx);
             apply_panel_layout(&self.group, ROOT_HOST, &self.shell, cx);
             self.schedule_persist(cx);
+            // タブの開閉とアクティブ文書を共有へ送る。パネル寸法は送らない。
+            self.schedule_session_view_publish(cx);
         }
     }
 

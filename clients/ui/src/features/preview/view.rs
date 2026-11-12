@@ -19,7 +19,7 @@ impl Render for PreviewFeature {
         div()
             .flex()
             .flex_col()
-            .p_3()
+            .py_3()
             .children(self.text.lines().map(|line| {
                 let (text, size) = if let Some(text) = line.strip_prefix("# ") {
                     (text, 24.0)

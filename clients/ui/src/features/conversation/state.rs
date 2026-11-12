@@ -93,7 +93,7 @@ impl Render for ConversationFeature {
                 .flex()
                 .flex_col()
                 .gap_2()
-                .p_2()
+                .py_2()
                 .child(action_button("Projectを登録…", false, cx).on_click(
                     cx.listener(|_, _, _, cx| cx.emit(ConversationEvent::RegisterProject)),
                 ))
