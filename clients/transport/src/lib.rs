@@ -62,6 +62,8 @@ pub struct ClientCore {
     connected: bool,
     pending: HashMap<RequestId, Pending>,
     event_sequence: Option<EventSequence>,
+    /// 接続中の Workspace。イベント連番の系列が同じかを判定する。
+    workspace: Option<String>,
 }
 
 impl ClientCore {
@@ -123,9 +125,20 @@ impl ClientCore {
         );
     }
 
-    /// Workspace を切り替えたらイベント連番の系列が変わるため、基準を取り直す。
+    /// Workspace へ接続したらイベント連番の系列が変わるため、基準を取り直す。
     fn reset_watermark(&mut self) {
         self.event_sequence = None;
+    }
+
+    /// Workspace へ接続した結果を反映する。
+    ///
+    /// イベント連番は Workspace ごとに独立している。接続中の Workspace へ接続し直す
+    /// 場合は同じ系列が続くので基準を維持し、系列が変わる場合だけ取り直す。
+    fn track_workspace(&mut self, workspace: &str, switched: bool) {
+        if switched || self.workspace.as_deref() != Some(workspace) {
+            self.reset_watermark();
+        }
+        self.workspace = Some(workspace.to_owned());
     }
 
     pub fn receive(
@@ -158,16 +171,23 @@ impl ClientCore {
                 if let ResponseBody::SnapshotResync(snapshot) = &response.body {
                     self.set_watermark(snapshot.snapshot.event_watermark);
                 }
-                // Workspace を移った直後は、次のイベントを新しい系列の先頭として扱う。
-                // 連番は Workspace ごとに独立しているため、前の系列と比較しない。
-                if matches!(
-                    (&pending.request.body, &response.body),
+                // Workspace へ接続した直後の連番の扱いを決める。切り替えた場合と、
+                // close などで購読が一度切れた場合は基準を取り直す。
+                match (&pending.request.body, &response.body) {
                     (
                         RequestBody::WorkspaceConnect(_),
-                        ResponseBody::WorkspaceConnect(_)
-                    )
-                ) {
-                    self.reset_watermark();
+                        ResponseBody::WorkspaceConnect(connected),
+                    ) => {
+                        let switched = self.workspace.as_deref()
+                            != Some(connected.workspace.workspace_id.as_str());
+                        self.track_workspace(connected.workspace.workspace_id.as_str(), switched);
+                    }
+                    (RequestBody::WorkspaceClose(_), ResponseBody::WorkspaceClose(_)) => {
+                        // 次に接続し直す Workspace の系列は close 中に進み得る。
+                        self.workspace = None;
+                        self.reset_watermark();
+                    }
+                    _ => {}
                 }
                 let _ = pending.respond.send(Ok(response.body));
                 Ok(None)
@@ -196,6 +216,7 @@ impl ClientCore {
     pub fn disconnect(&mut self) {
         self.connected = false;
         self.event_sequence = None;
+        self.workspace = None;
         for (_, pending) in self.pending.drain() {
             let _ = pending.respond.send(Err(ClientError::Disconnected));
         }
@@ -282,6 +303,107 @@ mod tests {
             receive.try_recv(),
             Ok(Some(Ok(ResponseBody::WorkspaceList(_))))
         ));
+    }
+
+    /// Workspace へ接続する応答を返す。
+    fn connected_to(client: &mut ClientCore, workspace: &WorkspaceId) {
+        let (ClientMessage::Request(request), _reply) = client
+            .begin(RequestBody::WorkspaceConnect(
+                client_api::WorkspaceConnectRequest {
+                    workspace_id: workspace.clone(),
+                },
+            ))
+            .unwrap()
+        else {
+            panic!("request")
+        };
+        client
+            .receive(ServerMessage::Response(ResponseEnvelope {
+                request_id: request.request_id,
+                body: ResponseBody::WorkspaceConnect(client_api::WorkspaceConnectResponse {
+                    workspace: client_api::WorkspaceSummary {
+                        workspace_id: workspace.clone(),
+                        name: workspace.as_str().to_owned(),
+                    },
+                    identity: client_api::WorkspaceIdentitySnapshot {
+                        workspace_id: workspace.clone(),
+                        name: workspace.as_str().to_owned(),
+                        root_name: workspace.as_str().to_owned(),
+                    },
+                }),
+            }))
+            .unwrap();
+    }
+
+    fn workspace_event(workspace: &WorkspaceId, sequence: u64) -> ServerMessage {
+        ServerMessage::Event(EventEnvelope {
+            event_sequence: EventSequence::new(sequence),
+            body: EventBody::WorkspaceChanged {
+                workspace_id: workspace.clone(),
+            },
+        })
+    }
+
+    #[test]
+    fn reconnecting_to_the_same_workspace_keeps_event_gap_detection() {
+        let first = WorkspaceId::try_new("workspace-1").unwrap();
+        let mut client = ClientCore::default();
+        client.connected().unwrap();
+        connected_to(&mut client, &first);
+        client.set_watermark(EventSequence::new(100));
+
+        // 同じ Workspace へ接続し直しても系列は続く。欠番は検出したままにする。
+        connected_to(&mut client, &first);
+        assert!(matches!(
+            client.receive(workspace_event(&first, 103)),
+            Err(ClientError::EventGap)
+        ));
+    }
+
+    #[test]
+    fn switching_or_reconnecting_after_close_rebases_the_event_sequence() {
+        let first = WorkspaceId::try_new("workspace-1").unwrap();
+        let other = WorkspaceId::try_new("workspace-2").unwrap();
+        let mut client = ClientCore::default();
+        client.connected().unwrap();
+        connected_to(&mut client, &first);
+        client.set_watermark(EventSequence::new(100));
+
+        // 別 Workspace へ切り替えると系列が変わるため、1 から受理する。
+        connected_to(&mut client, &other);
+        assert!(
+            client
+                .receive(workspace_event(&other, 1))
+                .unwrap()
+                .is_some()
+        );
+
+        // close 後は同じ Workspace へ戻っても系列が進んでいる可能性があるため取り直す。
+        let (ClientMessage::Request(request), _reply) = client
+            .begin(RequestBody::WorkspaceClose(
+                client_api::WorkspaceCloseRequest {
+                    workspace_id: other.clone(),
+                },
+            ))
+            .unwrap()
+        else {
+            panic!("request")
+        };
+        client
+            .receive(ServerMessage::Response(ResponseEnvelope {
+                request_id: request.request_id,
+                body: ResponseBody::WorkspaceClose(client_api::WorkspaceCloseResponse {
+                    workspace_id: other.clone(),
+                }),
+            }))
+            .unwrap();
+        connected_to(&mut client, &other);
+        assert!(
+            client
+                .receive(workspace_event(&other, 9))
+                .unwrap()
+                .is_some()
+        );
     }
 
     #[test]
