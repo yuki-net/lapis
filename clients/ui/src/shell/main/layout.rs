@@ -433,43 +433,53 @@ mod tests {
     }
 
     #[gpui::test]
-    fn panel_content_keeps_horizontal_padding_and_follows_panel_width(
+    fn panel_content_keeps_horizontal_padding_and_keeps_wide_content_scrollable(
         cx: &mut gpui::TestAppContext,
     ) {
         use gpui::{IntoElement, div, prelude::*};
 
-        struct Content;
+        struct Content {
+            state: crate::components::ScrollState,
+        }
         impl Render for Content {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                crate::components::panel_content().child(
-                    div()
-                        .id("panel-content-probe")
-                        .debug_selector(|| "panel-content-probe".into())
-                        .w_full()
-                        .h(px(10.0)),
-                )
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let wide = div()
+                    .id("panel-content-probe")
+                    .debug_selector(|| "panel-content-probe".into())
+                    .w(px(2000.0))
+                    .h(px(10.0));
+                crate::components::panel_content(crate::components::scroll_viewport(
+                    "panel-content-scroll",
+                    crate::components::ScrollAxis::Both,
+                    &self.state,
+                    wide,
+                    cx,
+                ))
+                .w(px(320.0))
+                .h(px(100.0))
             }
         }
 
-        let (_, visual) = cx.add_window_view(|_, _| Content);
-        for width in [320.0, 900.0] {
-            visual.simulate_resize(gpui::size(px(width), px(240.)));
-            visual.update(|window, cx| {
-                window.refresh();
-                window.draw(cx).clear();
-            });
-            let probe = visual.debug_bounds("panel-content-probe").unwrap();
-            let padding = f32::from(tokens::spacing::PANEL_CONTENT_X);
-            assert_eq!(
-                f32::from(probe.origin.x),
-                padding,
-                "probe={probe:?} width={width}"
-            );
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (view, visual) = cx.add_window_view(|_, _| Content {
+            state: crate::components::ScrollState::new(),
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let padding = f32::from(tokens::spacing::PANEL_CONTENT_X);
+        let probe = visual.debug_bounds("panel-content-probe").unwrap();
+        assert_eq!(f32::from(probe.origin.x), padding, "probe={probe:?}");
+        view.read_with(visual, |view, _| {
+            let max = crate::gpui_compat::max_offset(&view.state.handle());
             assert!(
-                (f32::from(probe.size.width) - (width - padding * 2.0)).abs() < 1.0,
-                "probe={probe:?} width={width}"
+                max.width > px(0.0),
+                "wide content must stay horizontally scrollable: {max:?}"
             );
-        }
+        });
     }
 
     #[gpui::test]

@@ -14,18 +14,11 @@ pub(crate) fn panel_surface(cx: &gpui::App) -> gpui::Div {
         .overflow_hidden()
 }
 
-/// Panel本文の左右余白を常時確保する共通コンテナ。
+/// Panel本文の左右余白を常時確保する共通定義。
+/// Panel本文のScroll container自身へ適用し、内容の幅を制限しない。
 /// Featureは左右paddingを個別に付けず、この内側へ描画する。
-/// 幅はPanelに追従しつつ、内容が広い場合は横Scrollできるよう最低幅だけを揃える。
-pub(crate) fn panel_content() -> gpui::Div {
-    div()
-        .w_full()
-        .min_w(gpui::px(0.))
-        .min_h(gpui::px(0.))
-        .px(tokens::spacing::PANEL_CONTENT_X)
-        .flex()
-        .flex_col()
-        .debug_selector(|| "panel-content".into())
+pub(crate) fn panel_content(body: gpui::Div) -> gpui::Div {
+    body.px(tokens::spacing::PANEL_CONTENT_X)
 }
 
 pub(crate) fn panel_header() -> gpui::Div {
