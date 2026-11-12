@@ -48,8 +48,9 @@ struct RegistryState {
 struct RootState {
     spec: ProcessRootSpec,
     started_at_ms: u64,
-    /// 登録時に確定した OS 起動時刻（秒）。確定できない root は登録しない。
-    started_at_secs: u64,
+    /// 登録時に確定したプロセス開始識別子。壁時計の変更で変わらない。
+    /// 確定できない root は登録しない。
+    identity: u64,
     state: ProcessState,
     exited_at: Option<Instant>,
     cpu_centipercent: u32,
@@ -182,14 +183,20 @@ impl ProcessRegistry for LocalProcessRegistry {
                 "process pid must be greater than zero",
             ));
         }
-        // 最初のサンプル前でも PID 再利用を判定できるよう、登録時に開始時刻を確定する。
+        // 最初のサンプル前でも PID 再利用を判定できるよう、登録時に開始識別子を確定する。
         // 確定できない root は所有対象にしない（別プロセスを誤って管理しないため）。
-        let started_at_secs = process_start_time(spec.pid).ok_or_else(|| {
+        let (identity, started_at_secs) = process_identity(spec.pid).ok_or_else(|| {
             ProcessError::new(
                 ProcessErrorKind::Io,
                 "process identity could not be verified",
             )
         })?;
+        // 表示用の開始時刻。取得できない場合は登録時刻で代用する。
+        let started_at_ms = if started_at_secs > 0 {
+            started_at_secs.saturating_mul(1_000)
+        } else {
+            now_ms()
+        };
         let mut state = self
             .inner
             .lock()
@@ -205,8 +212,8 @@ impl ProcessRegistry for LocalProcessRegistry {
             root_id.clone(),
             RootState {
                 spec,
-                started_at_ms: started_at_secs.saturating_mul(1_000),
-                started_at_secs,
+                started_at_ms,
+                identity,
                 state: ProcessState::Running,
                 exited_at: None,
                 cpu_centipercent: 0,
@@ -249,7 +256,7 @@ impl ProcessRegistry for LocalProcessRegistry {
         workspace: Option<&WorkspaceId>,
         root_id: &ProcessRootId,
     ) -> Result<(), ProcessError> {
-        let (pid, started_at_secs) = {
+        let (pid, identity) = {
             let state = self.inner.lock().map_err(|_| {
                 ProcessError::new(ProcessErrorKind::Io, "process registry unavailable")
             })?;
@@ -271,9 +278,9 @@ impl ProcessRegistry for LocalProcessRegistry {
             if root.state == ProcessState::Exited {
                 return Ok(());
             }
-            (root.spec.pid, root.started_at_secs)
+            (root.spec.pid, root.identity)
         };
-        terminate_tree(pid, started_at_secs)?;
+        terminate_tree(pid, identity)?;
         if let Ok(mut state) = self.inner.lock()
             && let Some(root) = state.roots.get_mut(root_id)
         {
@@ -300,8 +307,8 @@ fn sample(state: &Mutex<RegistryState>, system: &mut System) {
             mark_exited(root);
             continue;
         };
-        let started_at_secs = process.start_time();
-        if root.started_at_secs != started_at_secs {
+        // 開始識別子は壁時計に依存しないため、時計変更後も同一プロセスを同一と判定できる。
+        if identity_of(process) != Some(root.identity) {
             // PID が再利用された。別プロセスを所有ツリーとして扱わない。
             mark_exited(root);
             continue;
@@ -401,14 +408,14 @@ fn collect_tree(
     (nodes, cpu_centipercent, memory)
 }
 
-fn terminate_tree(pid: u32, started_at_secs: u64) -> Result<(), ProcessError> {
+fn terminate_tree(pid: u32, identity: u64) -> Result<(), ProcessError> {
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::All);
-    let Some(root) = system.process(Pid::from_u32(pid)) else {
+    let Some(process) = system.process(Pid::from_u32(pid)) else {
         return Ok(());
     };
-    // 所有した時点の開始時刻と一致しない PID は再利用された別プロセス。
-    if root.start_time() != started_at_secs {
+    // 所有した時点の開始識別子と一致しない PID は再利用された別プロセス。
+    if identity_of(process) != Some(identity) {
         return Ok(());
     }
     // Windows は git_action と同じ taskkill /T で子孫を含めて止める。
@@ -461,14 +468,39 @@ fn now_ms() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn process_start_time(pid: u32) -> Option<u64> {
+/// PID 再利用の判定に使う開始識別子と、表示用の開始時刻（epoch 秒）。
+///
+/// 識別子は壁時計の変更で値が変わらないものを使う。`sysinfo` の `start_time` は Linux では
+/// 起動時刻（`/proc/stat` の btime）を足して作るため、時計を変更すると同じプロセスでも
+/// 値が変わる。Linux だけ boot 相対の ticks を直接読み、表示用の時刻とは分けて扱う。
+fn process_identity(pid: u32) -> Option<(u64, u64)> {
     let pid = Pid::from_u32(pid);
     let mut system = System::new();
     system.refresh_processes(ProcessesToUpdate::Some(&[pid]));
-    system
-        .process(pid)
-        .map(|process| process.start_time())
-        .filter(|started| *started > 0)
+    let process = system.process(pid)?;
+    Some((identity_of(process)?, process.start_time()))
+}
+
+/// 取得済みの `sysinfo` プロセスから、時計変更の影響を受けない開始識別子を組み立てる。
+#[cfg(target_os = "linux")]
+fn identity_of(process: &sysinfo::Process) -> Option<u64> {
+    let pid = process.pid().as_u32();
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    parse_starttime_ticks(&stat)
+}
+
+/// Windows / macOS / FreeBSD の作成時刻は OS が絶対時刻で記録し、壁時計の変更では変わらない。
+#[cfg(not(target_os = "linux"))]
+fn identity_of(process: &sysinfo::Process) -> Option<u64> {
+    Some(process.start_time()).filter(|started| *started > 0)
+}
+
+/// `/proc/<pid>/stat` から 22 番目（starttime、起動からの clock ticks）を取り出す。
+#[cfg(target_os = "linux")]
+fn parse_starttime_ticks(stat: &str) -> Option<u64> {
+    // 2 番目の comm は空白や ')' を含み得るため、最後の ')' 以降を項目として扱う。
+    let fields = &stat[stat.rfind(')')? + 1..];
+    fields.split_whitespace().nth(19)?.parse().ok()
 }
 
 #[cfg(test)]
@@ -617,9 +649,67 @@ mod tests {
     #[test]
     fn termination_refuses_a_reused_pid_identity() {
         let pid = std::process::id();
-        let started = process_start_time(pid).expect("current process start time");
-        terminate_tree(pid, started.saturating_add(1)).unwrap();
+        let (identity, _) = process_identity(pid).expect("current process identity");
+        terminate_tree(pid, identity.saturating_add(1)).unwrap();
         assert!(process_alive(pid));
+    }
+
+    // 回帰: 登録時に確定した識別子と、サンプリング・終了が比較する識別子が同じ値になること。
+    #[test]
+    fn registration_and_sampling_compare_the_same_identity() {
+        let registry =
+            LocalProcessRegistry::with_interval(ProcessOrigin::Host, Duration::from_millis(25));
+        let workspace = WorkspaceId::new("workspace-a");
+        let mut child = spawn_sleeper();
+        let pid = child.id();
+        let root_id = root(&registry, "workspace-a", pid);
+
+        let registered = {
+            let state = registry.inner.lock().unwrap();
+            state.roots.get(&root_id).expect("registered root").identity
+        };
+        let current = process_identity(pid).expect("current process identity").0;
+        assert_eq!(registered, current);
+
+        // 識別子が一致する間は running のまま。時計由来の値で比較するとここで exited になる。
+        assert!(wait_until(|| {
+            registry
+                .snapshot(Some(&workspace))
+                .roots
+                .iter()
+                .any(|root| root.root_id == root_id && root.state == ProcessState::Running)
+        }));
+
+        child.kill().unwrap();
+        let _ = child.wait();
+    }
+
+    // 回帰: Linux では `/proc/<pid>/stat` の boot 相対 ticks を識別子に使う。
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn identity_is_the_boot_relative_starttime_of_proc_stat() {
+        let pid = std::process::id();
+        let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("/proc stat");
+        let starttime: u64 = stat[stat.rfind(')').expect("comm") + 1..]
+            .split_whitespace()
+            .nth(19)
+            .expect("starttime")
+            .parse()
+            .expect("starttime ticks");
+
+        let mut system = System::new();
+        system.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]));
+        let process = system.process(Pid::from_u32(pid)).expect("process");
+        assert_eq!(identity_of(process), Some(starttime));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn starttime_ticks_are_parsed_after_a_comm_with_spaces() {
+        let stat =
+            "1234 (sleep 30) S 1 1234 1234 0 -1 4194560 100 0 0 0 0 0 0 0 20 0 1 0 98765 0 0";
+        assert_eq!(parse_starttime_ticks(stat), Some(98_765));
+        assert_eq!(parse_starttime_ticks("1234 (short) S 1"), None);
     }
 
     #[test]
