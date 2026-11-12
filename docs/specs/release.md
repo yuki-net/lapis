@@ -35,7 +35,7 @@ schema と検証規則を使うが、launcher 本体と更新 UX はこの Issue
 | `schema` | integer | 常に `1` |
 | `version` | string | 例 `0.2.0`。`versions/<version>/` の名前と一致する |
 | `breaking` | boolean | 軸B（data 世代が上がる破壊的変更）かどうか |
-| `notes_url` | string | release notes の URL。空にしない |
+| `notes_url` | string | release notes の URL（`https://` か `http://`。空にしない） |
 | `generated_at` | string | 生成時刻（UTC、`...Z`） |
 | `key_id` | string | 署名鍵の識別子。`trusted-keys.json` の key と対応する |
 | `assets` | object | platform 名 → `{ "source", "sha256" }` |
