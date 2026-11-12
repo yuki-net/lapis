@@ -14,7 +14,8 @@ use text::{TextBuffer, TextEdit, TextError};
 
 /// Document内で単調増加する変更世代。
 ///
-/// wire では u64 として透過する。上限では飽和し、dirty 状態を保持し続ける。
+/// wire では u64 として透過する。上限では飽和する。
+/// dirty 判定はこの値域に依存しない。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Revision(u64);
@@ -77,7 +78,8 @@ pub struct Document {
     text: TextBuffer,
     encoding: Encoding,
     revision: Revision,
-    saved_revision: Revision,
+    /// 保存済み内容から変更されているか。`revision` の値域とは独立に管理する。
+    dirty: bool,
     saved_fingerprint: Option<FileFingerprint>,
 }
 
@@ -94,7 +96,7 @@ impl Document {
             text: TextBuffer::from_string(content),
             encoding,
             revision,
-            saved_revision: if dirty { Revision(u64::MAX) } else { revision },
+            dirty,
             saved_fingerprint: None,
         }
     }
@@ -104,7 +106,7 @@ impl Document {
         self.text = TextBuffer::from_string(content);
         self.encoding = encoding;
         self.revision = self.revision.next();
-        self.saved_revision = self.revision;
+        self.dirty = false;
         self.saved_fingerprint = Some(data.fingerprint);
         Ok(())
     }
@@ -121,7 +123,7 @@ impl Document {
         self.text = TextBuffer::new();
         self.encoding = Encoding::Utf8;
         self.revision = self.revision.next();
-        self.saved_revision = self.revision;
+        self.dirty = false;
         Ok(())
     }
 
@@ -131,7 +133,7 @@ impl Document {
             text: TextBuffer::new(),
             encoding: Encoding::Utf8,
             revision: Revision::default(),
-            saved_revision: Revision::default(),
+            dirty: false,
             saved_fingerprint: None,
         }
     }
@@ -144,7 +146,7 @@ impl Document {
             text: TextBuffer::from_string(content),
             encoding,
             revision,
-            saved_revision: revision,
+            dirty: false,
             saved_fingerprint: Some(data.fingerprint),
         })
     }
@@ -156,7 +158,7 @@ impl Document {
             text: TextBuffer::from_string(content),
             encoding,
             revision: Revision(1),
-            saved_revision: Revision::default(),
+            dirty: true,
             saved_fingerprint: None,
         }
     }
@@ -256,6 +258,7 @@ impl Document {
             .map_err(DocumentError::from)?;
         if changed {
             self.revision = self.revision.next();
+            self.dirty = true;
         }
         Ok(changed)
     }
@@ -267,6 +270,7 @@ impl Document {
             .map_err(DocumentError::from)?;
         if changed {
             self.revision = self.revision.next();
+            self.dirty = true;
         }
         Ok(changed)
     }
@@ -274,6 +278,7 @@ impl Document {
     pub fn undo(&mut self) -> bool {
         if self.text.undo() {
             self.revision = self.revision.next();
+            self.dirty = true;
             true
         } else {
             false
@@ -283,6 +288,7 @@ impl Document {
     pub fn redo(&mut self) -> bool {
         if self.text.redo() {
             self.revision = self.revision.next();
+            self.dirty = true;
             true
         } else {
             false
@@ -307,12 +313,12 @@ impl Document {
 
     pub fn mark_saved(&mut self, path: PathBuf, fingerprint: FileFingerprint) {
         self.path = Some(path);
-        self.saved_revision = self.revision;
+        self.dirty = false;
         self.saved_fingerprint = Some(fingerprint);
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.revision != self.saved_revision
+        self.dirty
     }
 
     pub fn display_name(&self) -> String {
@@ -588,5 +594,37 @@ mod tests {
         assert_eq!(document.revision().number(), 1);
         assert_eq!(document.encoding(), Encoding::Utf8Bom);
         assert!(document.encoded_bytes().starts_with(&[0xef, 0xbb, 0xbf]));
+    }
+
+    #[test]
+    fn dirty_does_not_depend_on_max_revision() {
+        // 番兵値方式では revision が飽和すると dirty を失っていた。
+        let mut document = Document::from_snapshot(
+            Some(PathBuf::from("note.md")),
+            "saved".to_owned(),
+            Encoding::Utf8,
+            Revision::new(u64::MAX),
+            true,
+        );
+        assert!(document.is_dirty());
+        document
+            .replace_char_range(0..5, "changed")
+            .expect("edit should apply");
+        assert_eq!(document.revision().number(), u64::MAX);
+        assert!(document.is_dirty());
+        document.mark_saved(PathBuf::from("note.md"), fingerprint(b"changed"));
+        assert!(!document.is_dirty());
+    }
+
+    #[test]
+    fn clean_snapshot_is_not_dirty_even_at_max_revision() {
+        let document = Document::from_snapshot(
+            Some(PathBuf::from("note.md")),
+            "saved".to_owned(),
+            Encoding::Utf8,
+            Revision::new(u64::MAX),
+            false,
+        );
+        assert!(!document.is_dirty());
     }
 }
