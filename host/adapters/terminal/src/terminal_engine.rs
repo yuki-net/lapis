@@ -178,35 +178,32 @@ impl TerminalEngine {
     }
 
     fn screen(&self) -> TerminalScreen {
-        let mut rows = Vec::with_capacity(self.size.rows as usize);
-        let mut scrollback = Vec::new();
         let screen = self.term.screen();
         let total_rows = screen.scrollback_rows();
+        let columns = self.size.columns;
 
         // visible行の開始位置を計算
         let visible_start = total_rows.saturating_sub(self.size.rows as usize);
 
         // scrollback行を取得（visible行を除外し、MAX_SCROLLBACK_LINESで制限）
         // WezTermのscrollback_rows()はvisible rowsを含むため、visible_startまでをscrollbackとする
-        let scrollback_end = visible_start;
-        let scrollback_start = scrollback_end.saturating_sub(MAX_SCROLLBACK_LINES);
-        if scrollback_start < scrollback_end {
-            screen.with_phys_lines(scrollback_start..scrollback_end, |lines| {
-                scrollback.extend(
-                    lines
-                        .iter()
-                        .map(|line| row_from_engine(line, self.size.columns)),
-                );
-            });
-        }
+        let scrollback_start = visible_start.saturating_sub(MAX_SCROLLBACK_LINES);
 
-        // 表示行を取得（visible_start..total_rows）
-        screen.with_phys_lines(visible_start..total_rows, |lines| {
-            rows.extend(
-                lines
-                    .iter()
-                    .map(|line| row_from_engine(line, self.size.columns)),
-            );
+        // `Screen::with_phys_lines` は VecDeque が 2 スライスに分かれたとき
+        // 後半を絶対 index で参照するため範囲外 panic を起こす。
+        // `for_each_phys_line` は単一イテレータで走査するので分割形状に依存しない。
+        let mut rows = Vec::with_capacity(self.size.rows as usize);
+        let mut scrollback = Vec::with_capacity(visible_start - scrollback_start);
+        screen.for_each_phys_line(|index, line| {
+            let row = || row_from_engine(line, columns);
+            if index < scrollback_start {
+                return;
+            }
+            if index < visible_start {
+                scrollback.push(row());
+            } else {
+                rows.push(row());
+            }
         });
 
         let cursor = self.term.cursor_pos();
