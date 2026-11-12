@@ -14,7 +14,6 @@ pub(crate) struct DocumentClient {
     pub lsp: LspSession,
     pub edit_chain: EditChain,
     pub git: std::sync::Arc<dyn git::GitConnection>,
-    pub process: desktop_client::ProcessSession,
     pub snapshot_sequence: u64,
     pub document_owners: std::collections::HashMap<DocumentId, u64>,
 }
