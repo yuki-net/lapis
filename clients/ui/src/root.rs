@@ -288,6 +288,11 @@ impl DesktopRoot {
         if let Some(id) = shell.read(cx).active_terminal_resource() {
             terminal.update(cx, |terminal, cx| terminal.show_resource(id, cx));
         }
+        // 起動時からターミナルタブが見えていれば、既定 profile の自動起動を促す。
+        terminal.update(cx, |terminal, cx| {
+            let visible = shell.read(cx).shell.terminal_tab_visible();
+            terminal.sync_tab_presence(visible, cx);
+        });
         let group = cx.new(|_| {
             crate::window_host::WindowGroup::new(
                 window,
@@ -510,6 +515,9 @@ impl DesktopRoot {
             cx.observe(&shell, |root, _, cx| {
                 root.record_window_layout(cx);
                 root.sync_preview(cx);
+                // Layout のタブ参照を Terminal の固定参照へ反映し、
+                // ターミナルタブが見えたら既定 profile の自動起動を1回促す。
+                root.sync_terminal_tab(cx);
                 root.schedule_persist(cx);
             }),
             cx.observe(&terminal, |root, _, cx| root.schedule_persist(cx)),
@@ -888,16 +896,40 @@ impl DesktopRoot {
             .update(cx, |shell, cx| shell.open_terminal_tab(id.clone(), cx));
         self.terminal
             .update(cx, |terminal, cx| terminal.show_resource(id, cx));
+        self.sync_terminal_auto_start(cx);
         cx.notify();
+    }
+
+    /// ターミナルタブが見えているとき、既定 profile の自動起動を1回だけ促す。
+    ///
+    /// Feature 側で冪等なので、タブが表示されるたびに呼んでよい。
+    fn sync_terminal_auto_start(&mut self, cx: &mut Context<Self>) {
+        let visible = self.shell.read(cx).shell.terminal_tab_visible();
+        self.terminal
+            .update(cx, |terminal, cx| terminal.sync_tab_presence(visible, cx));
     }
 
     /// 復元したLayoutのうち、表示中のTerminalタブをHostの既存PTYへ再接続する。
     fn sync_terminal_tab(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.shell.read(cx).active_terminal_resource() else {
-            return;
-        };
-        self.terminal
-            .update(cx, |terminal, cx| terminal.show_resource(id, cx));
+        let shell = self.shell.read(cx);
+        let update = terminal_binding_update(
+            shell.active_terminal_resource(),
+            shell.shell.terminal_tab_visible(),
+        );
+        match update {
+            TerminalBindingUpdate::Show(id) => self
+                .terminal
+                .update(cx, |terminal, cx| terminal.show_resource(id, cx)),
+            // 復元した Layout に参照先が無いため、前の Task の固定参照を解除する。
+            // 残すと現在の Task に無い Terminal ID を参照し続け、既存セッションの
+            // 表示も既定 profile の自動起動も妨げる。
+            TerminalBindingUpdate::Unbind => self
+                .terminal
+                .update(cx, |terminal, _| terminal.release_resource()),
+            // タブが画面に出ていないだけなら、PTY を維持するため参照を残す。
+            TerminalBindingUpdate::Keep => {}
+        }
+        self.sync_terminal_auto_start(cx);
     }
 
     /// HostのWorkbench変更を、未確定の入力を待ってからUIへ反映する。
@@ -1682,6 +1714,14 @@ impl DesktopRoot {
                 self.activate_terminal(id, cx);
                 self.schedule_persist(cx);
             }
+            UiCommand::TerminalTabClosed => {
+                // 別のターミナルタブが残っていれば、その表示に任せる。
+                if !self.shell.read(cx).shell.terminal_tab_exists() {
+                    self.terminal
+                        .update(cx, |terminal, cx| terminal.close_session(cx));
+                    self.schedule_persist(cx);
+                }
+            }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::SelectTask(id) => self.select_task(id, cx),
             UiCommand::SetWorkbenchMode(mode) => self.set_workbench_mode(mode, cx),
@@ -2039,6 +2079,28 @@ struct TerminalContextTarget<'a> {
     record: Option<&'a desktop_client::ConversationRecord>,
 }
 
+/// 表示中の Terminal タブへ反映する固定参照の更新。
+enum TerminalBindingUpdate {
+    /// 参照先があるので、その PTY へ再アタッチする。
+    Show(terminal::TerminalId),
+    /// 参照先の無いタブが表示中なので、前の Task の固定参照を解除する。
+    Unbind,
+    /// Terminal タブが表示されていないので、固定参照をそのまま残す
+    /// （パネルを閉じただけでも PTY は維持する）。
+    Keep,
+}
+
+fn terminal_binding_update(
+    resource: Option<terminal::TerminalId>,
+    visible: bool,
+) -> TerminalBindingUpdate {
+    match resource {
+        Some(id) => TerminalBindingUpdate::Show(id),
+        None if visible => TerminalBindingUpdate::Unbind,
+        None => TerminalBindingUpdate::Keep,
+    }
+}
+
 /// Resourceの所有元が未確定なら、既存コンテキストへフォールバックしない。
 fn terminal_context_target<'a>(
     scope: Option<&ViewScope>,
@@ -2291,6 +2353,29 @@ mod tests {
                 .map(|target| target.task),
             Some(b)
         );
+    }
+
+    #[test]
+    fn terminal_binding_is_released_only_when_an_unresolved_tab_is_visible() {
+        let id = terminal::TerminalId::new("terminal-a");
+        assert!(matches!(
+            terminal_binding_update(Some(id.clone()), false),
+            TerminalBindingUpdate::Show(found) if found == id
+        ));
+        assert!(matches!(
+            terminal_binding_update(Some(id.clone()), true),
+            TerminalBindingUpdate::Show(found) if found == id
+        ));
+        // 参照先の無いタブが表示中なら、前の Task の固定参照を解除する。
+        assert!(matches!(
+            terminal_binding_update(None, true),
+            TerminalBindingUpdate::Unbind
+        ));
+        // パネルや Zone を閉じただけなら、PTY を維持するため固定参照を残す。
+        assert!(matches!(
+            terminal_binding_update(None, false),
+            TerminalBindingUpdate::Keep
+        ));
     }
 
     #[test]

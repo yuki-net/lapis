@@ -84,6 +84,30 @@ impl TerminalSessions {
         first_error.map_or(Ok(changed), Err)
     }
 
+    /// ターミナルタブを閉じたときの終了。表示中のコンテキストだけを対象にし、
+    /// 退避中の他コンテキストの Session には触れない。
+    pub fn close_active(&mut self) -> (Result<(), String>, Vec<terminal::TerminalSnapshot>) {
+        let ids = self
+            .session
+            .terminals()
+            .iter()
+            .map(|terminal| terminal.id.clone())
+            .collect::<Vec<_>>();
+        let mut failure = None;
+        for id in ids {
+            if let Err(error) = self.session.terminate_and_forget(&id)
+                && failure.is_none()
+            {
+                failure = Some(error.to_string());
+            }
+        }
+        self.bump();
+        (
+            failure.map_or(Ok(()), Err),
+            self.session.terminals().to_vec(),
+        )
+    }
+
     fn action(
         &mut self,
         operation: impl FnOnce(&mut TerminalSession) -> Result<(), TerminalError>,
@@ -118,6 +142,16 @@ struct TerminalRequests {
     poll_pending: bool,
     pending_actions: usize,
     context_unavailable: bool,
+}
+
+/// ターミナルタブを開いたときの自動起動の進み具合。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum AutoStart {
+    /// まだ開始していない。タブが見えていれば開始してよい。
+    #[default]
+    Idle,
+    /// 起動を試行済み。タブを閉じるかコンテキストが変わるまで再試行しない。
+    Finished,
 }
 
 impl TerminalRequests {
@@ -182,7 +216,7 @@ pub(crate) struct TerminalFeature {
     input_epoch: u64,
     /// 入力失敗で表示中のエラー。次の入力成功時に同じ端末の同じ message だけを消す。
     input_error: Option<(terminal::TerminalId, String)>,
-    /// 右クリック／「＋」で開くメニューのアンカー。None のときは閉じている。
+    /// 右クリック／セッション一覧ボタンで開くメニューのアンカー。None のときは閉じている。
     pub(super) context_menu: Option<()>,
     pub(super) context_anchor: Option<gpui::Point<gpui::Pixels>>,
     /// 描画に使うフォント設定。設定 UI から変更できるようにする。
@@ -190,8 +224,18 @@ pub(crate) struct TerminalFeature {
     pub(super) font_size: f32,
     pub(super) line_height_percent: u8,
     pub(super) caret_shape: settings::TerminalCaretShape,
-    /// Host が許可する Terminal profile。メニューに表示する。
+    /// Host が許可する Terminal profile。既定プロファイルの解決と例外操作に使う。
     pub(super) profiles: terminal::TerminalProfiles,
+    /// 設定で選ばれた既定 profile ID。`None` は Host の既定に従う。
+    pub(super) default_profile: Option<terminal::TerminalProfileId>,
+    /// ターミナルタブを初めて開いたときの自動起動状態。
+    auto_start: AutoStart,
+    /// タブ表示後に自動起動を要求されたか。
+    pending_auto_start: bool,
+    /// ターミナルタブが画面に出ているか。表示の切り替えだけでは終了しない。
+    tab_visible: bool,
+    /// Host の profile 一覧を読み終えたか。読み終えるまで既定 profile は決めない。
+    profiles_loaded: bool,
     pub(super) last_metrics: Option<super::view::TerminalMetrics>,
     pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
     /// 行の内容から shaped line を引き当てるキャッシュ。フォント変更時に捨てる。
@@ -247,10 +291,14 @@ impl TerminalFeature {
             .terminal_line_height_percent()
             .unwrap_or_else(super::default_line_height_percent);
         let caret_shape = values.terminal_caret_shape().unwrap_or_default();
+        let default_profile = values
+            .terminal_default_profile()
+            .map(terminal::TerminalProfileId::new);
         if self.font_family == family
             && self.font_size == size
             && self.line_height_percent == line_height_percent
             && self.caret_shape == caret_shape
+            && self.default_profile == default_profile
         {
             return;
         }
@@ -258,6 +306,7 @@ impl TerminalFeature {
         self.font_size = size;
         self.line_height_percent = line_height_percent;
         self.caret_shape = caret_shape;
+        self.default_profile = default_profile;
         self.last_metrics = None;
         self.last_size = None;
         self.line_cache.clear();
@@ -316,6 +365,19 @@ impl TerminalFeature {
         self.bound_resource = resource;
     }
 
+    /// タブの参照先が無くなったとき、固定参照とそれに基づく自動起動の判断を捨てる。
+    ///
+    /// 固定参照が残っていると `ensure_auto_start` が「既存 Terminal への再アタッチ」と
+    /// みなして起動を拒否するため、参照先が無いと確定した時点で解除する。
+    /// 参照が元から無い場合は状態を変えない。
+    pub(crate) fn release_resource(&mut self) {
+        if self.bound_resource.take().is_some() {
+            // 参照先を前提にした判定を取り消し、表示中のタブで改めて判定できるようにする。
+            self.auto_start = AutoStart::Idle;
+            self.pending_auto_start = self.tab_visible;
+        }
+    }
+
     /// タブが参照するHost Terminalへ接続する。見つからない場合も新しいshellは開始しない。
     pub(crate) fn show_resource(
         &mut self,
@@ -358,6 +420,10 @@ impl TerminalFeature {
             .as_ref()
             .and_then(|values| values.terminal_caret_shape())
             .unwrap_or_default();
+        let default_profile = values
+            .as_ref()
+            .and_then(|values| values.terminal_default_profile())
+            .map(terminal::TerminalProfileId::new);
         let sessions = TerminalSessions::new(session, root.clone(), conversation.clone());
         let mut feature = Self {
             worker: crate::client_adapter::ClientWorker::new(sessions),
@@ -384,6 +450,11 @@ impl TerminalFeature {
             line_height_percent,
             caret_shape,
             profiles: terminal::TerminalProfiles::default(),
+            default_profile,
+            auto_start: AutoStart::Idle,
+            pending_auto_start: false,
+            tab_visible: false,
+            profiles_loaded: false,
             last_metrics: None,
             last_size: None,
             line_cache: Default::default(),
@@ -421,8 +492,11 @@ impl TerminalFeature {
 
     /// Host が許可する profile を worker 経由で取得する。UI thread を止めない。
     fn load_profiles(&mut self, cx: &mut gpui::Context<Self>) {
+        self.profiles_loaded = false;
         let Some(root) = self.root.clone() else {
             self.profiles = terminal::TerminalProfiles::default();
+            super::publish_profile_catalog(&self.profiles, cx);
+            self.profiles_loaded = true;
             return;
         };
         let load_root = root.clone();
@@ -437,6 +511,10 @@ impl TerminalFeature {
                     Ok(Ok(profiles)) => feature.profiles = profiles,
                     Ok(Err(_)) | Err(_) => feature.profiles = terminal::TerminalProfiles::default(),
                 }
+                super::publish_profile_catalog(&feature.profiles, cx);
+                feature.profiles_loaded = true;
+                // profile が揃ってから既定 profile を解決する。
+                feature.ensure_auto_start(cx);
                 cx.notify();
             },
         );
@@ -519,11 +597,130 @@ impl TerminalFeature {
         self.root = root;
         self.conversation = conversation;
         self.terminals.clear();
+        // コンテキストが変われば、次にタブが現れたとき改めて自動起動する。
+        // タブが見えたままなら、profile 取得後に改めて 1 回だけ起動する。
+        self.auto_start = AutoStart::Idle;
+        self.pending_auto_start = self.tab_visible;
         self.load_profiles(cx);
         cx.notify();
     }
     pub(crate) fn start(&mut self, cx: &mut gpui::Context<Self>) {
-        self.start_profile(None, cx);
+        // 例外操作の「新しいシェル」も、設定の既定 profile を優先する。
+        let profile = self.resolved_default_profile();
+        self.start_profile(profile, cx);
+    }
+
+    /// ターミナルタブが見えているかを Feature へ伝える。見えたら既定 profile で1回だけ自動起動する。
+    ///
+    /// パネルや Zone を閉じただけ、または他 Task の表示へ切り替えただけでは
+    /// セッションを終了しない（Workspace の detach と同じ扱い）。
+    /// 終了はタブを閉じる操作 `close_session` だけが行う。
+    pub(crate) fn sync_tab_presence(&mut self, visible: bool, cx: &mut gpui::Context<Self>) {
+        self.tab_visible = visible;
+        self.pending_auto_start = visible;
+        // 表示中は、コンテキスト切替などで未起動に戻ったときも1回だけ起動を試みる。
+        if visible {
+            self.ensure_auto_start(cx);
+        }
+    }
+
+    /// profile とコンテキストが揃った時点で、保留中の自動起動を1回だけ実行する。
+    fn ensure_auto_start(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.pending_auto_start || !self.profiles_loaded || self.root.is_none() {
+            return;
+        }
+        self.pending_auto_start = false;
+        if self.auto_start != AutoStart::Idle {
+            return;
+        }
+        if self.bound_resource.is_some() {
+            // 既存の Host Terminal を参照するタブ。再アタッチに任せ、新しい shell は起動しない。
+            self.auto_start = AutoStart::Finished;
+            return;
+        }
+        if !self.terminals.is_empty() {
+            // 復元した既存セッションがある。新しく shell は起動しない。
+            self.auto_start = AutoStart::Finished;
+            return;
+        }
+        self.auto_start = AutoStart::Finished;
+        let profile = self.resolved_default_profile();
+        self.start_profile(profile, cx);
+    }
+
+    /// ターミナルタブを閉じたときの終了。表示中のコンテキストの Session を止める。
+    pub(crate) fn close_session(&mut self, cx: &mut gpui::Context<Self>) {
+        // 閉じた直後に開き直しても、次の表示で自動起動できるようにする。
+        self.auto_start = AutoStart::Idle;
+        self.pending_auto_start = false;
+        self.tab_visible = false;
+        self.requests.invalidate();
+        if self.root.is_none() {
+            self.reset_after_close();
+            cx.notify();
+            return;
+        }
+        let token = self.requests.begin_action();
+        let admitted = self.worker.submit(
+            cx,
+            |sessions| {
+                let (outcome, terminals) = sessions.close_active();
+                Ok((
+                    outcome,
+                    sessions.version(),
+                    terminals,
+                    sessions.owners().clone(),
+                ))
+            },
+            move |feature, result, cx| {
+                if !feature.requests.finish_action(token) {
+                    return;
+                }
+                match result {
+                    Ok((outcome, version, terminals, owners)) => {
+                        feature.apply_projection(version, terminals, owners);
+                        feature.message = outcome.err().unwrap_or_default();
+                    }
+                    Err(error) => feature.message = error,
+                }
+                feature.message_from_poll = false;
+                // 閉じる応答より前にタブを開き直した場合も、表示中のタブを空のまま残さない。
+                // reset_after_close は固定参照も消すため、Terminal が残っていなければ
+                // 改めて既定 profile の自動起動を行う。
+                feature.reset_after_close();
+                feature.pending_auto_start = feature.tab_visible;
+                feature.load_profiles(cx);
+                cx.notify();
+            },
+        );
+        if let Err(error) = admitted {
+            self.requests.finish_action(token);
+            self.message = error;
+            self.message_from_poll = false;
+            self.reset_after_close();
+            cx.notify();
+        }
+    }
+
+    /// 設定で選ばれた既定 profile。Host が公開していない ID は Host 既定へ倒す。
+    pub(super) fn resolved_default_profile(&self) -> Option<terminal::TerminalProfileId> {
+        let id = self.default_profile.clone()?;
+        self.profiles.find(&id).map(|_| id)
+    }
+
+    /// 閉じたタブの表示状態を捨て、次に開いたとき自動起動できるようにする。
+    fn reset_after_close(&mut self) {
+        self.selected = None;
+        self.bound_resource = None;
+        self.selected_by_context.clear();
+        self.discovered.clear();
+        self.inputs.clear();
+        self.input_flush_scheduled = false;
+        self.resyncing_inputs = false;
+        self.input_error = None;
+        self.visible_output = None;
+        self.last_size = None;
+        self.auto_start = AutoStart::Idle;
     }
 
     pub(super) fn start_profile(
@@ -569,6 +766,8 @@ impl TerminalFeature {
                         feature.message_from_poll = false;
                     }
                 }
+                // 起動を試みた後は、タブを閉じるかコンテキストが変わるまで自動起動を繰り返さない。
+                feature.auto_start = AutoStart::Finished;
                 cx.notify();
             },
         );
@@ -576,6 +775,7 @@ impl TerminalFeature {
             self.requests.finish_action(token);
             self.message = error;
             self.message_from_poll = false;
+            self.auto_start = AutoStart::Finished;
             cx.notify();
         }
     }
@@ -1547,14 +1747,31 @@ mod tests {
         fail_input_calls: Mutex<Vec<usize>>,
         polls: AtomicUsize,
         fail_poll_for: Mutex<Option<String>>,
+        /// 起動時に要求された profile。自動起動と例外操作の検証に使う。
+        started_profiles: Mutex<Vec<Option<terminal::TerminalProfileId>>>,
+        /// Host が公開する profile 一覧。
+        profiles: Mutex<terminal::TerminalProfiles>,
     }
 
     impl TerminalBackend for Backend {
-        fn start(&self, _: &Path, _: u16, _: u16) -> Result<TerminalId, TerminalError> {
+        fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+            self.start_profile(cwd, columns, rows, None)
+        }
+        fn start_profile(
+            &self,
+            _: &Path,
+            _: u16,
+            _: u16,
+            profile: Option<&terminal::TerminalProfileId>,
+        ) -> Result<TerminalId, TerminalError> {
+            self.started_profiles.lock().unwrap().push(profile.cloned());
             Ok(TerminalId::new(format!(
                 "terminal-{}",
                 self.next.fetch_add(1, Ordering::Relaxed)
             )))
+        }
+        fn profiles(&self, _: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+            Ok(self.profiles.lock().unwrap().clone())
         }
         fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
             self.inputs.lock().unwrap().push(id.clone());
@@ -2251,5 +2468,297 @@ mod tests {
         assert_eq!(feature.session.terminals()[0].id, terminal);
         drop(feature);
         assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);
+    }
+
+    #[gpui::test]
+    fn opening_the_terminal_tab_auto_starts_the_configured_default_profile(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let opened = cx.update(|cx| {
+            let (_, backend) = feature();
+            *backend.profiles.lock().unwrap() = terminal::TerminalProfiles::new(
+                vec![
+                    terminal::TerminalProfile::new("powershell", "PowerShell", "powershell.exe"),
+                    terminal::TerminalProfile::new("cmd", "Command Prompt", "cmd.exe"),
+                ],
+                Some(terminal::TerminalProfileId::new("powershell")),
+            );
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend.clone()),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            // 設定で選ばれた既定 profile を Host 公開後に解決できるようにする。
+            entity.update(cx, |feature, cx| {
+                feature.default_profile = Some(terminal::TerminalProfileId::new("cmd"));
+                feature.load_profiles(cx);
+                feature.sync_tab_presence(true, cx);
+            });
+            (entity, backend)
+        });
+        let (entity, backend) = opened;
+        cx.run_until_parked();
+        cx.update(|cx| {
+            entity.update(cx, |feature, _| {
+                assert_eq!(feature.terminals.len(), 1, "既定 profile で自動起動する");
+            });
+        });
+        assert_eq!(
+            *backend.started_profiles.lock().unwrap(),
+            vec![Some(terminal::TerminalProfileId::new("cmd"))],
+            "設定で選んだ profile を使う"
+        );
+
+        // 表示が続くだけでは新しい shell を起動しない。
+        cx.update(|cx| {
+            entity.update(cx, |feature, cx| {
+                feature.sync_tab_presence(true, cx);
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(backend.started_profiles.lock().unwrap().len(), 1);
+    }
+
+    #[gpui::test]
+    fn auto_start_falls_back_to_the_host_default_when_the_setting_is_unknown(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let (_, backend) = feature();
+            *backend.profiles.lock().unwrap() = terminal::TerminalProfiles::new(
+                vec![terminal::TerminalProfile::new(
+                    "powershell",
+                    "PowerShell",
+                    "powershell.exe",
+                )],
+                Some(terminal::TerminalProfileId::new("powershell")),
+            );
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend.clone()),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.default_profile = Some(terminal::TerminalProfileId::new("removed"));
+                feature.load_profiles(cx);
+                feature.sync_tab_presence(true, cx);
+            });
+            (entity, backend)
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            *backend.started_profiles.lock().unwrap(),
+            vec![None],
+            "存在しない profile は Host 既定へ倒す"
+        );
+        cx.update(|cx| {
+            entity.update(cx, |feature, _| assert_eq!(feature.terminals.len(), 1));
+        });
+    }
+
+    #[gpui::test]
+    fn closing_the_terminal_tab_terminates_the_session_and_detach_does_not(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, _| feature.auto_start = AutoStart::Finished);
+            (entity, backend)
+        });
+        // Workspace の detach 相当。セッションは残り、PTY も終了しない。
+        cx.update(|cx| {
+            entity.update(cx, |feature, cx| {
+                feature.set_context(
+                    Some("other".into()),
+                    ConversationId::new("task-b"),
+                    Vec::new(),
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            entity.update(cx, |feature, cx| {
+                feature.set_context(
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    Vec::new(),
+                    cx,
+                );
+            });
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            backend.terminated.load(Ordering::Relaxed),
+            0,
+            "コンテキスト切替（detach）では PTY を終了しない"
+        );
+        cx.update(|cx| {
+            entity.update(cx, |feature, _| assert_eq!(feature.terminals.len(), 1));
+        });
+        // タブを閉じた操作だけがセッションを終了する。
+        cx.update(|cx| {
+            entity.update(cx, |feature, cx| feature.close_session(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            entity.update(cx, |feature, _| {
+                assert!(feature.terminals.is_empty(), "閉じたタブは表示から消える");
+            });
+        });
+        assert_eq!(
+            backend.terminated.load(Ordering::Relaxed),
+            1,
+            "タブを閉じたら PTY も終了する"
+        );
+    }
+
+    #[gpui::test]
+    fn reopening_the_tab_before_the_close_response_still_auto_starts(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut session = TerminalSession::new(backend.clone());
+            session.start(Path::new("workspace"), 80, 24).unwrap();
+            let entity = cx.new(|cx| {
+                TerminalFeature::new(
+                    session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.auto_start = AutoStart::Finished;
+                feature.close_session(cx);
+                // 終了の応答より前にタブを開き直す。
+                // ここで pending_auto_start を消費しても、応答後にやり直す。
+                feature.sync_tab_presence(true, cx);
+                assert!(feature.tab_visible);
+            });
+            (entity, backend)
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            entity.update(cx, |feature, _| {
+                assert_eq!(feature.terminals.len(), 1, "表示中のタブを空のまま残さない");
+                assert_eq!(feature.auto_start, AutoStart::Finished);
+            });
+        });
+        assert_eq!(
+            backend.started_profiles.lock().unwrap().len(),
+            2,
+            "閉じた後に開き直したタブは既定 profile で起動し直す"
+        );
+    }
+
+    #[gpui::test]
+    fn releasing_a_stale_resource_allows_the_visible_tab_to_auto_start(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        let feature = cx.update(|cx| {
+            let (_, backend) = feature();
+            cx.new(|cx| {
+                TerminalFeature::new(
+                    TerminalSession::new(backend),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            })
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, _| {
+                // 前の Task の Terminal を固定参照として持つ。
+                feature.bind_resource(Some(terminal::TerminalId::new("terminal-a")));
+                feature.tab_visible = true;
+                feature.auto_start = AutoStart::Finished;
+                feature.pending_auto_start = false;
+
+                feature.release_resource();
+
+                // 参照先が消えたら、表示中のタブで改めて自動起動を判定できる。
+                assert!(feature.bound_resource.is_none());
+                assert_eq!(feature.auto_start, AutoStart::Idle);
+                assert!(feature.pending_auto_start);
+
+                // 2 回目以降は状態を変えない。表示中のタブの判定を勝手に戻さない。
+                feature.auto_start = AutoStart::Finished;
+                feature.pending_auto_start = false;
+                feature.release_resource();
+                assert_eq!(feature.auto_start, AutoStart::Finished);
+                assert!(!feature.pending_auto_start);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn long_session_list_menu_stays_within_the_window(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (feature, visual) = cx.add_window_view(|_, cx| {
+            let (_, backend) = feature();
+            TerminalFeature::new(
+                TerminalSession::new(backend),
+                Some("workspace".into()),
+                ConversationId::new("task-a"),
+                cx,
+            )
+        });
+        feature.update(visual, |feature, cx| {
+            // 1 行 30px では Window の高さに収まらない件数のセッション一覧を開く。
+            feature.terminals = (0..40)
+                .map(|index| {
+                    terminal::TerminalSnapshot::empty(
+                        terminal::TerminalId::new(format!("terminal-{index:02}")),
+                        "workspace".into(),
+                        TerminalStatus::Running,
+                        TerminalSize::new(80, 24),
+                    )
+                })
+                .collect();
+            feature.context_menu = Some(());
+            feature.context_anchor = Some(gpui::point(gpui::px(8.0), gpui::px(8.0)));
+            cx.notify();
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let bounds = visual
+            .debug_bounds("terminal-context-menu")
+            .expect("context menu must be drawn");
+        // 共通 wrapper の上限（450px）で高さを切り、残りはスクロールさせる。
+        assert!(
+            bounds.size.height <= gpui::px(450.),
+            "メニューの高さは共通の上限に収める"
+        );
+        assert!(
+            bounds.size.height < gpui::px(40. * 30.),
+            "全項目を一度に描画せず、高さを制限してスクロールさせる"
+        );
     }
 }

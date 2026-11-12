@@ -121,11 +121,15 @@ impl Render for TerminalFeature {
             .and_then(|id| self.owners.get(id.as_str()))
             .cloned()
             .flatten();
-        let tabs = self
-            .terminals
-            .iter()
-            .map(|terminal| (terminal.id.clone(), terminal.status))
-            .collect::<Vec<_>>();
+        // パネル内のタブ列は持たない。通常は1セッションだけを表示し、
+        // 複数あるときだけ1つのボタンから一覧を開く。
+        let session_count = self.terminals.len();
+        let active_status = active.as_ref().and_then(|id| {
+            self.terminals
+                .iter()
+                .find(|terminal| &terminal.id == id)
+                .map(|terminal| terminal.status)
+        });
         let discovered = self.discovered.clone();
         let context_open = self.context_menu;
         let context_anchor = self.context_anchor;
@@ -145,28 +149,37 @@ impl Render for TerminalFeature {
                     .px_1()
                     .border_b_1()
                     .border_color(theme::colors(cx).border_default)
-                    .children(tabs.into_iter().enumerate().map(|(index, (id, status))| {
-                        let selected = active.as_ref() == Some(&id);
-                        let tab_id = gpui::ElementId::named_usize("terminal-tab", index);
-                        tab_button(tab_id, format!("{} − {status:?}", index + 1), selected, cx)
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_terminal(id.clone(), cx);
-                                crate::gpui_compat::focus(window, &this.focus, cx);
-                            }))
-                    }))
                     .child(
-                        tab_button("terminal-new-tab", "+", false, cx)
-                            .debug_selector(|| "terminal-new-tab".into())
-                            .on_click(cx.listener(|this, event: &gpui::ClickEvent, window, cx| {
-                                this.open_menu(
-                                    event
-                                        .mouse_position()
-                                        .map(|position| point(position.x, position.y)),
-                                    cx,
-                                );
-                                crate::gpui_compat::focus(window, &this.focus, cx);
-                            })),
+                        div()
+                            .px_2()
+                            .text_size(px(11.0))
+                            .text_color(theme::colors(cx).text_secondary)
+                            .child(match active_status {
+                                Some(status) => status_label(status).to_owned(),
+                                None => "ターミナル".to_owned(),
+                            }),
                     )
+                    .when(session_count > 1, |el| {
+                        el.child(
+                            header_chip(
+                                "terminal-sessions",
+                                format!("{session_count} セッション"),
+                                cx,
+                            )
+                            .debug_selector(|| "terminal-sessions".into())
+                            .on_click(cx.listener(
+                                |this, event: &gpui::ClickEvent, window, cx| {
+                                    this.open_menu(
+                                        event
+                                            .mouse_position()
+                                            .map(|position| point(position.x, position.y)),
+                                        cx,
+                                    );
+                                    crate::gpui_compat::focus(window, &this.focus, cx);
+                                },
+                            )),
+                        )
+                    })
                     .child(div().flex_1())
                     .when_some(owner, |el, owner| {
                         el.child(
@@ -256,7 +269,7 @@ impl Render for TerminalFeature {
                 context_open.filter(|_| context_anchor.is_some()),
                 |view, _| {
                     let anchor = context_anchor.unwrap_or_else(|| point(px(0.0), px(0.0)));
-                    view.child(self.render_context_menu(anchor, discovered, cx))
+                    view.child(self.render_context_menu(anchor, discovered, window, cx))
                 },
             )
     }
@@ -267,21 +280,65 @@ impl TerminalFeature {
         &self,
         anchor: gpui::Point<Pixels>,
         discovered: Vec<terminal::TerminalSnapshot>,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut entries = Vec::new();
+        // 複数セッションがあるときだけ、切替えの最小UIとして一覧を出す。
+        // タブ列は持たず、番号付きの一覧から1つを選ぶ。
+        if self.terminals.len() > 1 {
+            let active = self.active_id();
+            for (index, terminal) in self.terminals.iter().enumerate() {
+                let id = terminal.id.clone();
+                let label = format!(
+                    "{}. {} ({})",
+                    index + 1,
+                    terminal.id.as_str(),
+                    status_label(terminal.status)
+                );
+                let menu_id =
+                    gpui::SharedString::from(format!("terminal.session.{}", terminal.id.as_str()));
+                let listener = cx.listener(
+                    move |this: &mut TerminalFeature,
+                          _: &gpui::ClickEvent,
+                          window: &mut Window,
+                          cx: &mut Context<TerminalFeature>| {
+                        this.context_menu = None;
+                        this.select_terminal(id.clone(), cx);
+                        crate::gpui_compat::focus(window, &this.focus, cx);
+                        cx.notify();
+                    },
+                );
+                entries.push(MenuEntry::new(
+                    MenuItemSpec {
+                        id: menu_id,
+                        label: label.into(),
+                        shortcut: None,
+                        icon: None,
+                        enabled: true,
+                        selected: active.as_ref() == Some(&terminal.id),
+                        indent: 0,
+                        tree: None,
+                        submenu: false,
+                        separator_before: false,
+                    },
+                    cx,
+                    move |row| row.on_click(listener).into_any_element(),
+                ));
+            }
+        }
         entries.push(menu_entry(
             "terminal.menu.new",
             "新しいシェル",
             true,
-            false,
+            !self.terminals.is_empty(),
             cx,
             |this, window, cx| {
                 this.start(cx);
                 crate::gpui_compat::focus(window, &this.focus, cx);
             },
         ));
-        // 起動できる profile は Host が決める。Web も接続先 Host の一覧を使う。
+        // 特定の profile で始める操作は例外として残す。標準フローは自動起動。
         for profile in &self.profiles.profiles {
             let id = profile.id.clone();
             let label = format!("{} を開く", profile.name);
@@ -305,7 +362,7 @@ impl TerminalFeature {
                     shortcut: None,
                     icon: None,
                     enabled: true,
-                    selected: self.profiles.default.as_ref() == Some(&profile.id),
+                    selected: self.resolved_default_profile().as_ref() == Some(&profile.id),
                     indent: 1,
                     tree: None,
                     submenu: false,
@@ -409,7 +466,8 @@ impl TerminalFeature {
                 }))
                 .child(
                     Menu::new("terminal-context-menu", entries)
-                        .debug_selector("terminal-context-menu"),
+                        .debug_selector("terminal-context-menu")
+                        .max_height_in_viewport(window),
                 ),
         )
     }
@@ -470,10 +528,10 @@ fn menu_entry_inner(
     )
 }
 
-fn tab_button(
+/// セッション数など、パネルヘッダーの状態表示に使う小さなチップ。
+fn header_chip(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
-    selected: bool,
     cx: &App,
 ) -> gpui::Stateful<gpui::Div> {
     let colors = theme::colors(cx);
@@ -485,15 +543,19 @@ fn tab_button(
         .py_0p5()
         .rounded(px(4.0))
         .text_size(px(11.0))
-        .text_color(if selected {
-            colors.text_primary
-        } else {
-            colors.text_secondary
-        })
-        .when(selected, |button| {
-            button.bg(colors.button_background_selected)
-        })
+        .text_color(colors.text_secondary)
+        .hover(|style| style.bg(colors.button_background_hover))
         .child(label.into())
+}
+
+/// セッション状態の日本語ラベル。Debug 表記をUIへ出さない。
+fn status_label(status: terminal::TerminalStatus) -> &'static str {
+    match status {
+        terminal::TerminalStatus::Running => "実行中",
+        terminal::TerminalStatus::Disconnected => "未接続",
+        terminal::TerminalStatus::Exited => "終了",
+        terminal::TerminalStatus::Failed => "失敗",
+    }
 }
 
 /// ターミナルの描画に使う寸法。フォント計測から求める。
@@ -638,6 +700,19 @@ fn caret_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use terminal::TerminalStatus;
+
+    #[test]
+    fn status_labels_are_readable_strings_not_debug_names() {
+        for (status, label) in [
+            (TerminalStatus::Running, "実行中"),
+            (TerminalStatus::Disconnected, "未接続"),
+            (TerminalStatus::Exited, "終了"),
+            (TerminalStatus::Failed, "失敗"),
+        ] {
+            assert_eq!(status_label(status), label);
+        }
+    }
 
     #[test]
     fn visible_row_range_clamps_old_offsets_and_keeps_overscan() {

@@ -38,6 +38,8 @@ pub(crate) enum UiCommand {
     Paste,
     ActivateDocument(DocumentId),
     ActivateTerminal(terminal::TerminalId),
+    /// ターミナルタブを閉じた。Session の終了は Shell ではなく Feature が行う。
+    TerminalTabClosed,
     CloseDocument(DocumentId),
     CloseTabs(Vec<crate::shell::PanelTab>),
     SelectTask(editor_core::ConversationId),
