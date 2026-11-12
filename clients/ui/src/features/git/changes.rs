@@ -105,7 +105,7 @@ impl Render for ChangesFeature {
             .flex()
             .flex_col()
             .gap_2()
-            .p_2()
+            .py_2()
             .child(
                 action_button("Rescan", false, cx).on_click(cx.listener(|this, _, _, cx| {
                     this.git.update(cx, |git, cx| {

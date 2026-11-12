@@ -154,7 +154,7 @@ impl TasksFeature {
         div()
             .flex_1()
             .min_h(px(0.0))
-            .p_3()
+            .py_3()
             .flex()
             .flex_col()
             .gap_2()

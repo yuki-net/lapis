@@ -222,7 +222,7 @@ impl Render for Center {
             .flex()
             .flex_col()
             .gap_2()
-            .p_2()
+            .py_2()
             .when(empty, |view| view.child(empty_label))
             .children(events.into_iter().map(|event| {
                 let id = event.id;

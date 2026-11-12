@@ -5,7 +5,7 @@ use crate::{
     app::*,
     commands::UiCommand,
     components::{
-        Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, panel_empty_state,
+        Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, panel_content, panel_empty_state,
         panel_empty_state_element, scroll_viewport,
     },
     extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, UiSlot, ViewId},

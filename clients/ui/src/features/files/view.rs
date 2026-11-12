@@ -15,7 +15,7 @@ impl FilesFeature {
             .flex()
             .flex_col()
             .flex_1()
-            .p(tokens::spacing::XS)
+            .py(tokens::spacing::XS)
             .child(
                 div()
                     .h(px(30.0))
