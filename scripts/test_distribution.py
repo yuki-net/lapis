@@ -6,12 +6,12 @@ Release への書き込みは gh CLI 呼び出しを差し替えて、upload の
 
 import hashlib
 import http.server
+import io
 import json
 import sys
 import tempfile
 import threading
 import unittest
-import urllib.request
 import zipfile
 from functools import partial
 from pathlib import Path
@@ -149,7 +149,7 @@ class PackageTests(unittest.TestCase):
             first = tool.build_package(files)
             second = tool.build_package(tool.collect_binaries(Path(directory)))
             self.assertEqual(hashlib.sha256(first).hexdigest(), hashlib.sha256(second).hexdigest())
-            with zipfile.ZipFile(__import__("io").BytesIO(first)) as archive:
+            with zipfile.ZipFile(io.BytesIO(first)) as archive:
                 self.assertEqual(sorted(archive.namelist()), ["lapis-host.exe", "lapis.exe"])
 
     def test_missing_required_binary_is_rejected(self):
