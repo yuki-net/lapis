@@ -112,6 +112,7 @@
   "settings.web.title": "Web 接続",
   "settings.web.description": "公開アドレスは Host の待受先です。Tailscale を選ぶと、この PC と複数の Tailscale 端末から同時に接続できます。端末ごとに招待リンクをコピーしてください。リンクは5分間有効で、一回限りです。",
   "settings.web.stopped": "Web 公開は停止中です",
+  "settings.web.unknown": "Web 公開の状態を取得できません",
   "settings.web.address": "Host の公開アドレス（接続元の端末ではありません）",
   "settings.web.refresh": "更新",
   "settings.web.start": "公開を開始",

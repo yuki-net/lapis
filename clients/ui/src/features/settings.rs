@@ -30,8 +30,8 @@ enum WebOperation {
 }
 
 struct WebResult {
-    status: HostWebStatus,
-    devices: Vec<HostDevice>,
+    status: Result<HostWebStatus, String>,
+    devices: Result<Vec<HostDevice>, String>,
     invitation: Option<zeroize::Zeroizing<String>>,
 }
 
@@ -171,9 +171,10 @@ impl SettingsFeature {
                         None
                     }
                 };
+                // 操作自体が成功していれば、状態と端末一覧の取得失敗で招征E��を捨てなぁE��E
                 Ok(WebResult {
-                    status: access.status(&root)?,
-                    devices: access.devices(&root)?,
+                    status: access.status(&root),
+                    devices: access.devices(&root),
                     invitation,
                 })
             },
@@ -186,22 +187,33 @@ impl SettingsFeature {
                 web.busy = false;
                 match result {
                     Ok(result) => {
-                        if let Some(url) = &result.status.url
-                            && let Some(address) = result
-                                .status
-                                .addresses
-                                .iter()
-                                .find(|address| url.starts_with(&format!("http://{address}:")))
-                        {
-                            web.address = address.clone();
+                        match result.status {
+                            Ok(status) => {
+                                if let Some(url) = &status.url
+                                    && let Some(address) = status.addresses.iter().find(|address| {
+                                        url.starts_with(&format!("http://{address}:"))
+                                    })
+                                {
+                                    web.address = address.clone();
+                                }
+                                if !status.addresses.contains(&web.address) {
+                                    web.address =
+                                        status.addresses.first().cloned().unwrap_or_default();
+                                }
+                                web.message = status.error.clone().unwrap_or_default();
+                                web.status = Some(status);
+                            }
+                            // 取得できなぁE��合は直前の状態を残し、停止中とはみなさなぁE��E
+                            Err(error) => web.message = error,
                         }
-                        if !result.status.addresses.contains(&web.address) {
-                            web.address =
-                                result.status.addresses.first().cloned().unwrap_or_default();
+                        match result.devices {
+                            Ok(devices) => web.devices = devices,
+                            Err(error) => {
+                                if web.message.is_empty() {
+                                    web.message = error;
+                                }
+                            }
                         }
-                        web.message = result.status.error.clone().unwrap_or_default();
-                        web.status = Some(result.status);
-                        web.devices = result.devices;
                         if let Some(invitation) = result.invitation {
                             cx.write_to_clipboard(gpui::ClipboardItem::new_string(
                                 invitation.to_string(),
@@ -245,7 +257,8 @@ impl SettingsFeature {
             })
             .child(self.t(label))
             .when(enabled, |button| {
-                button.cursor_pointer().on_click(
+                // focusable によりフォーカス中の Enter/Space が on_click を呼ぶ、E
+                button.focusable().cursor_pointer().on_click(
                     cx.listener(move |this, _, _, cx| this.web_request(operation.clone(), cx)),
                 )
             })
@@ -254,12 +267,22 @@ impl SettingsFeature {
     fn render_web_page(&self, cx: &mut Context<Self>) -> gpui::Div {
         let Some(web) = &self.web else { return div() };
         let available = self.root.is_some() && !web.busy;
+        // 未取得・取得失敗は「停止中」と区別し、開始操作を有効にしない。
+        let known = web.status.is_some();
         let url = web.status.as_ref().and_then(|status| status.url.as_ref());
         let addresses = web
             .status
             .as_ref()
             .map(|status| status.addresses.as_slice())
             .unwrap_or(&[]);
+        let status_text = match &web.status {
+            Some(status) => status
+                .url
+                .clone()
+                .unwrap_or_else(|| self.t("settings.web.stopped")),
+            // 未取得または取得失敗を「停止中」と混同しなぁE��E
+            None => self.t("settings.web.unknown"),
+        };
         let mut content = div()
             .flex_1()
             .min_w(px(0.0))
@@ -278,12 +301,7 @@ impl SettingsFeature {
                     .text_color(theme::colors(cx).text_tertiary)
                     .child(self.t("settings.web.description")),
             )
-            .child(
-                div().text_size(px(12.0)).child(
-                    url.cloned()
-                        .unwrap_or_else(|| self.t("settings.web.stopped")),
-                ),
-            )
+            .child(div().text_size(px(12.0)).child(status_text))
             .children((self.root.is_none()).then(|| {
                 div()
                     .text_color(theme::colors(cx).text_tertiary)
@@ -309,13 +327,14 @@ impl SettingsFeature {
                     })
                     .child(address.clone())
                     .when(available && url.is_none(), |row| {
-                        row.cursor_pointer()
-                            .on_click(cx.listener(move |this, _, _, cx| {
+                        row.cursor_pointer().focusable().on_click(cx.listener(
+                            move |this, _, _, cx| {
                                 if let Some(web) = &mut this.web {
                                     web.address = address.clone();
                                 }
                                 cx.notify();
-                            }))
+                            },
+                        ))
                     })
             }))
             .child(
@@ -333,14 +352,14 @@ impl SettingsFeature {
                         "web-start",
                         "settings.web.start",
                         WebOperation::Start(web.address.clone()),
-                        available && url.is_none() && !web.address.is_empty(),
+                        available && known && url.is_none() && !web.address.is_empty(),
                         cx,
                     ))
                     .child(self.web_button(
                         "web-stop",
                         "settings.web.stop",
                         WebOperation::Stop,
-                        available && url.is_some(),
+                        available && known && url.is_some(),
                         cx,
                     ))
                     .child(self.web_button(
@@ -387,7 +406,7 @@ impl SettingsFeature {
                             })
                             .child(self.t("settings.web.revoke"))
                             .when(can_revoke, |button| {
-                                button.cursor_pointer().on_click(cx.listener(
+                                button.focusable().cursor_pointer().on_click(cx.listener(
                                     move |this, _, _, cx| {
                                         this.web_request(WebOperation::Revoke(id.clone()), cx)
                                     },
@@ -472,6 +491,7 @@ impl SettingsFeature {
                             theme::colors(cx).text_primary
                         })
                         .child(self.t("settings.web.title"))
+                        .focusable()
                         .on_click(cx.listener(|this, _, _, cx| this.select_page("host.web", cx))),
                 )
             })

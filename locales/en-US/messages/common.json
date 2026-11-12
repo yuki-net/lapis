@@ -112,6 +112,7 @@
   "settings.web.title": "Web access",
   "settings.web.description": "The listen address belongs to this Host. Select Tailscale to connect from this PC and multiple Tailscale devices at once. Copy a separate invitation for each device. Each invitation is single-use and expires after five minutes.",
   "settings.web.stopped": "Web access is stopped",
+  "settings.web.unknown": "Web access status is unavailable",
   "settings.web.address": "Host listen address (not the connecting device)",
   "settings.web.refresh": "Refresh",
   "settings.web.start": "Start",

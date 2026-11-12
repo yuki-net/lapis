@@ -78,9 +78,9 @@ Tailscale の候補は、Tailscale と確認できるインターフェースま
 
 公開アドレスは接続元ではなく Host の待受先です。Tailscale アドレスを選ぶと、同じ PC を含む複数の端末が同時に接続できます。招待リンクは一回限りなので、端末ごとに発行してください。`127.0.0.1` を選んだ場合は同じ PC からのみ接続できます。
 
-Tailscale アドレスの `http://` はブラウザー上では secure context ではなく、Clipboard API や WebGPU などが利用できない場合があります。WebGPU が使えない場合は `?backend=webgl` を指定してください。通信は Tailscale の経路で保護されますが、Web サーバー自体は TLS を提供しません。localhost はブラウザー上の扱いが異なります。
+Tailscale アドレスの `http://` はブラウザー上では secure context ではなく、Clipboard API や WebGPU などが利用できない場合があります。WebGPU が使えない場合は `?backend=webgl` を指定してください（例: `http://<host>/?backend=webgl#/invite?token=<token>`）。`#` より後ろに足すと token が壊れるため、必ず `#` の前のクエリ部分へ追加します。通信は Tailscale の経路で保護されますが、Web サーバー自体は TLS を提供しません。localhost はブラウザー上の扱いが異なります。
 
-`Run Web` は別起動 Host の bridge 動作を調べる開発用構成で、事前に `npm run build` が必要です。製品の招待発行には `cargo dev` の Local Host を使用してください。
+`Run Web` は別起動 Host の bridge 動作を調べる開発用構成で、事前に `npm run build` が必要です。初回は招待リンクを要求します。Desktop が管理する Local Host の招待は別起動 Host では使えないため、`Run Host` のコンソールで `pair-user` を実行し、表示された token から `#/invite?token=<token>` 形式の招待リンクを作って開いてください。製品の招待発行には `cargo dev` の Local Host を使用してください。
 ## Web の UI を確認する
 
 デモ用の `Run Web (Page)`（`lapis-web --dev --dist clients/web/dist`）では変更時に Web が再ビルドされ、ブラウザーが再読み込みします。Host に接続する場合は `npm run build` を実行してから Desktop の設定で公開します。

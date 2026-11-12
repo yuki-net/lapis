@@ -148,6 +148,18 @@ impl RemoteRequestHandler for HostRemoteHandler {
                         let Ok(mut auth) = auth.lock() else {
                             return error(INTERNAL);
                         };
+                        // 自身の端末を失効させると Host 管理 credential を失い、
+                        // 再起動まで操作できなくなるため Host 側でも拒否する。
+                        let current = auth
+                            .session_client_id(grant.session_id())
+                            .map(str::to_owned);
+                        if let Some(current) = current
+                            && auth.devices().iter().any(|device| {
+                                device.id == request.device_id && device.client_id == current
+                            })
+                        {
+                            return error(INVALID_REQUEST);
+                        }
                         match auth.revoke_device_and_persist(&request.device_id) {
                             Ok(revoked) => {
                                 ResponseBody::HostDeviceRevoke(HostDeviceRevokeResponse { revoked })
@@ -162,7 +174,7 @@ impl RemoteRequestHandler for HostRemoteHandler {
                         let Ok(mut auth) = auth.lock() else {
                             return error(INTERNAL);
                         };
-                        match auth.begin_owner_pairing(grant.workspace_id().clone()) {
+                        match auth.begin_user_session_pairing(grant.workspace_id().clone()) {
                             Ok(token) => {
                                 use std::fmt::Write;
                                 let mut encoded = String::with_capacity(64);

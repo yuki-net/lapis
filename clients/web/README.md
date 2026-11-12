@@ -14,7 +14,6 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 - `#/t/<task-id>` は選択する Task です。選択に合わせて `history.replaceState` で更新し、履歴は増やしません。
 - Workspace の切替はアプリ内の Workspace メニューから行います。同じ接続のまま `workspace.close` → `workspace.connect` を実行し、ページ遷移・再接続はしません。URL も `history.replaceState` で `/<host>/<workspace>` に追従し、`#/t/<task-id>` は保持します。`workspace.switch` がない接続では切替メニューを表示しません。
 - ページの生存中は Workspace ごとの表示状態を保持します。一度開いた Workspace に戻ると、保持した状態を復元してから `snapshot.resync` と Workbench の再取得で差分を反映します。保持は接続中の Workspace 一覧数を上限とし、超えた分は古いものから破棄して次回は snapshot から復帰します。`localStorage` へは保存しません。
-- 招待リンクは `#/invite?url=<bridge URL>&workspace=<ID>&token=<token>` の形で token を fragment だけに載せます。fragment はサーバーへ送られません。
 - 招待リンクは `#/invite?token=<token>` の形式です。Web は同じアドレスの `/remote` に接続し、Workspace は Host が決定します。token は fragment のみに置き、読み取り後にアドレスから消します。
 
 Host なしのデモ:

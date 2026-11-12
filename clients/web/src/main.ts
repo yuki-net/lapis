@@ -760,7 +760,7 @@ function noticeHtml(notice: string | null): string {
 
 function showLogin(
   _defaultUrl: string,
-  _defaultWorkspace: string,
+  defaultWorkspace: string,
   notice: string | null,
   taskId: string | null,
   error?: unknown,
@@ -808,12 +808,25 @@ function showLogin(
       showLoginError("招待リンクの形式が正しくありません");
       return;
     }
+    // 同じ接続元への招待は fragment だけの遷移になり再読み込みされないため、
+    // URL を差し替えたうえで同じ文書のまま接続処理を実行する。
+    if (
+      invitation.origin === location.origin &&
+      invitation.pathname === location.pathname &&
+      invitation.search === location.search &&
+      invitation.hash.startsWith("#/invite")
+    ) {
+      history.replaceState(null, "", `${location.pathname}${location.search}${invitation.hash}`);
+      void handleInviteFragment(backend());
+      return;
+    }
     location.assign(invitation.href);
   });
 
   form.querySelector<HTMLButtonElement>("#oidc-login")?.addEventListener("click", () => {
     const url = hostWebSocketUrl(location.href);
-    const workspace = "";
+    // boot() が保存済みパスから渡した Workspace を再ログインでも維持する。
+    const workspace = defaultWorkspace;
     const token = "";
     const origin = bridgeOrigin(url);
     if (origin === null) {
@@ -1020,6 +1033,25 @@ function showPicker(
   attachCandidateLinks(taskId, reason);
 }
 
+/// fragment の招待を処理する。同じ文書からの再実行でも冪等に動く。
+async function handleInviteFragment(backend: string): Promise<void> {
+  const invite = parseInviteFragment(location.hash);
+  if (invite === null) {
+    return;
+  }
+  clearFragment();
+  const url = hostWebSocketUrl(location.href);
+  if (!invite.valid) {
+    showLogin(url, "", "招待リンクの形式が正しくありません。Desktop から新しい招待を発行してください。", null);
+    return;
+  }
+  try {
+    await connect(url, "", invite.token, backend, null);
+  } catch (error) {
+    showLogin(url, "", "招待リンクで接続できませんでした。token は URL から削除済みです。", null, error);
+  }
+}
+
 async function boot() {
   try {
     const legacy = stripLegacyQuery();
@@ -1028,18 +1060,7 @@ async function boot() {
     const fragment = readFragment();
     const segments = splitPath();
     if (fragment?.invite !== undefined) {
-      const invite = fragment.invite;
-      clearFragment();
-      const url = hostWebSocketUrl(location.href);
-      if (!invite.valid) {
-        showLogin(url, "", "招待リンクの形式が正しくありません。Desktop から新しい招待を発行してください。", null);
-        return;
-      }
-      try {
-        await connect(url, "", invite.token, backend, null);
-      } catch (error) {
-        showLogin(url, "", "招待リンクで接続できませんでした。token は URL から削除済みです。", null, error);
-      }
+      await handleInviteFragment(backend);
       return;
     }
 
@@ -1138,4 +1159,8 @@ window.addEventListener("pagehide", () => {
 
 window.addEventListener("error", (event) => fail(event.message));
 window.addEventListener("unhandledrejection", (event) => fail(event.reason));
+window.addEventListener("hashchange", () => {
+  const backend = new URLSearchParams(location.search).get("backend") ?? "auto";
+  void handleInviteFragment(backend);
+});
 void boot();

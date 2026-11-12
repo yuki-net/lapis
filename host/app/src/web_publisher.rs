@@ -244,8 +244,15 @@ impl WebPublisher {
             .running
             .lock()
             .map_err(|_| "Web 公開を停止できません")?;
-        self.save_config(None)?;
+        // 設定保存に失敗しても公開プロセスは必ず止める。
         *running = None;
+        drop(running);
+        if let Err(error) = self.save_config(None) {
+            if let Ok(mut last_error) = self.last_error.lock() {
+                *last_error = Some(error.clone());
+            }
+            return Err(error);
+        }
         *self
             .last_error
             .lock()
