@@ -86,6 +86,10 @@ pub struct ConnectionIdentity {
     pub workspaces: Vec<WorkspaceOption>,
 }
 
+/// ローカル Web の接続情報を表示のたびに集める供給元。
+pub type WebAccessSource =
+    std::sync::Arc<dyn Fn() -> Option<desktop_client::WebAccess> + Send + Sync>;
+
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) connection: Option<ConnectionIdentity>,
@@ -99,6 +103,8 @@ pub struct DesktopServices {
     pub(crate) settings: SettingsSession,
     pub(crate) process: ProcessSession,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
+    /// ローカル Web の接続設定を一度に集める経路。Web を使わない構成では `None`。
+    pub(crate) web_access: Option<WebAccessSource>,
     /// Workspace の view state 共有。Web は接続側の watch をそのまま渡す。
     pub(crate) session_view: Option<SessionViewHandle>,
 }
@@ -126,11 +132,21 @@ impl DesktopServices {
             settings,
             process: ProcessSession::unavailable(),
             workbench_watch: None,
+            web_access: None,
             session_view: None,
         }
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
         self.connection = Some(connection);
+        self
+    }
+    /// ローカル Web の接続情報を、表示のたびに集め直す供給元を設定する。
+    /// 起動構成によっては表示できないため、供給元自体が `None` を返してよい。
+    pub fn with_web_access(
+        mut self,
+        access: impl Fn() -> Option<desktop_client::WebAccess> + Send + Sync + 'static,
+    ) -> Self {
+        self.web_access = Some(std::sync::Arc::new(access));
         self
     }
     /// URL の fragment から復元した Task を、最初の snapshot で選択する。
@@ -205,6 +221,7 @@ pub(crate) struct WindowFactory {
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
     process: ProcessSession,
+    web_access: Option<WebAccessSource>,
     session_view: Option<SessionViewHandle>,
 }
 impl WindowFactory {
@@ -227,6 +244,7 @@ impl WindowFactory {
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
             process: services.process.clone(),
+            web_access: services.web_access.clone(),
             session_view: services.session_view.clone(),
         }
     }
@@ -246,6 +264,7 @@ impl WindowFactory {
         services.connect_host = self.connect_host;
         services.connection = self.connection;
         services.process = self.process;
+        services.web_access = self.web_access;
         services.session_view = self.session_view;
         (editor, services)
     }

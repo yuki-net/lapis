@@ -39,6 +39,7 @@ mod extensions;
 mod process;
 mod settings_store;
 mod view_state;
+mod web_access;
 mod workbench_sync;
 // Session 共有の適用判定は platform 共通。Desktop だけが背景 thread で受信する。
 mod session_view;
@@ -53,6 +54,10 @@ pub use session_view::{SessionViewCursor, SessionViewReplica, SessionViewWatch};
 pub use session_view::{SessionViewSession, SessionViewSync};
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
+pub use web_access::{
+    PageScheme, WebAccess, WebAddress, WebAddressKind, address_kind_for, is_tailscale_interface,
+    split_host_port, split_url,
+};
 pub use workbench_sync::{WorkbenchSync, WorkbenchSyncResult, WorkbenchWatch};
 
 #[cfg(any(target_arch = "wasm32", test))]

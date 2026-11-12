@@ -1,4 +1,5 @@
-//! Workspace の view state（開いているタブとアクティブ文書）の Session 共有。
+//! Workspace の view state（開いているタブとアクティブ文書）の Session 共有を、
+//! 受信と UI が読む watch に分離して扱う。
 //!
 //! 正本は Host にあり、購読した Client は snapshot の後に最新の view 全体を受け取る。
 //! 差分やマージは行わず、Host が受理した値だけを watch へ載せる。event は接続中の
@@ -8,17 +9,18 @@
 //! 受信手段は platform で異なる（Desktop は背景 thread、Web は非同期の event pump）。
 //! 適用可否と通知順の判断はここで共有し、受信だけを各 platform が持つ。
 
-use std::{
-    collections::VecDeque,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc,
-    },
+use std::collections::VecDeque;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    mpsc,
 };
+use std::time::Duration;
 
 use editor_core::WorkspaceId;
-use workbench::WorkspaceView;
+use workbench::{
+    SessionViewConnection, SessionViewEvent, SessionViewEvents, SessionViewSnapshot, WorkspaceView,
+};
 
 /// 別の Client が共有した view state を UI へ渡すための共有スロット。
 ///
@@ -92,6 +94,13 @@ impl SessionViewWatch {
             .is_ok_and(|synced| synced.as_ref() == Some(workspace))
     }
 
+    fn notify(&self) {
+        let sequence = self.sequence();
+        if let Ok(mut listeners) = self.listeners.lock() {
+            listeners.retain(|listener| listener.send(sequence).is_ok());
+        }
+    }
+
     pub(crate) fn publish(&self, workspace: WorkspaceId, revision: u64, view: WorkspaceView) {
         let Ok(mut slot) = self.slot.lock() else {
             return;
@@ -101,13 +110,6 @@ impl SessionViewWatch {
         self.mark_synced(workspace);
         // slot の更新後に順序を進める。順序を見た読み手は必ず新しい slot を読める。
         let sequence = self.sequence.fetch_add(1, Ordering::AcqRel) + 1;
-        if let Ok(mut listeners) = self.listeners.lock() {
-            listeners.retain(|listener| listener.send(sequence).is_ok());
-        }
-    }
-
-    fn notify(&self) {
-        let sequence = self.sequence();
         if let Ok(mut listeners) = self.listeners.lock() {
             listeners.retain(|listener| listener.send(sequence).is_ok());
         }
@@ -346,283 +348,277 @@ impl SessionViewReplica {
     /// 購読を解除した状態へ戻す。表示は古い可能性があるものとして残す。
     pub fn reset(&mut self) {
         self.cursor = None;
-        // 再購読の snapshot を確認するまで送信させない。sync 済みの判定を消し、
-        // 次に開いた Workspace で購読前の値を上書きしないようにする。
+        // 再購読の snapshot を確認するまで送信させない。
         self.watch.mark_unsynced();
         self.watch.mark_stale();
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-mod desktop {
-    use super::*;
-    use std::time::Duration;
+/// Workspace 単位の購読 session。Workspace を閉じるまで 1 つだけ持つ。
+pub struct SessionViewSession {
+    inner: Arc<Inner>,
+}
 
-    use workbench::{SessionViewConnection, SessionViewEvent, SessionViewEvents};
+struct Inner {
+    connection: Arc<dyn SessionViewConnection>,
+    workspace: WorkspaceId,
+    watch: SessionViewWatch,
+    stopped: AtomicBool,
+    /// 適用済み、または自分が受理させた revision。これ以下は再適用しない。
+    applied: AtomicU64,
+    /// 自分の更新の受理 revision を確定するまで、event の適用を待たせる。
+    ///
+    /// Host は自分の更新の echo を、更新の応答より先に配ることがある。待たせないと
+    /// echo が先に適用され、自分の watch に自分の更新が戻って再送ループになる。
+    update_gate: Mutex<()>,
+}
 
-    /// Workspace 単位の購読 session。Workspace を閉じるまで 1 つだけ持つ。
-    pub struct SessionViewSession {
-        inner: Arc<Inner>,
-    }
-
-    struct Inner {
+impl SessionViewSession {
+    /// 購読を開始し、snapshot を watch へ載せる。
+    ///
+    /// 先に event の受け口を作ってから snapshot を取ることで、購読開始と
+    /// snapshot 取得の間の更新を取りこぼさない。
+    pub fn start(
         connection: Arc<dyn SessionViewConnection>,
-        cursor: SessionViewCursor,
+        workspace: WorkspaceId,
         watch: SessionViewWatch,
-        stopped: AtomicBool,
+    ) -> Result<Self, String> {
+        let events = connection.events(&workspace)?;
+        let snapshot = connection.subscribe(&workspace)?;
+        let inner = Arc::new(Inner {
+            connection,
+            workspace,
+            watch,
+            stopped: AtomicBool::new(false),
+            applied: AtomicU64::new(snapshot.revision),
+            update_gate: Mutex::new(()),
+        });
+        publish_snapshot(&inner, &snapshot);
+        let worker = inner.clone();
+        std::thread::spawn(move || run_events(worker, events));
+        Ok(Self { inner })
     }
 
-    impl SessionViewSession {
-        /// 購読を開始し、snapshot を watch へ載せる。
-        ///
-        /// 先に event の受け口を作ってから snapshot を取ることで、購読開始と
-        /// snapshot 取得の間の更新を取りこぼさない。
-        pub fn start(
-            connection: Arc<dyn SessionViewConnection>,
-            workspace: WorkspaceId,
-            watch: SessionViewWatch,
-        ) -> Result<Self, String> {
-            let events = connection.events(&workspace)?;
-            let snapshot = connection.subscribe(&workspace)?;
-            let inner = Arc::new(Inner {
-                connection,
-                cursor: SessionViewCursor::new(workspace, snapshot.revision),
-                watch,
-                stopped: AtomicBool::new(false),
-            });
-            publish_snapshot(&inner, &snapshot);
-            let worker = inner.clone();
-            std::thread::spawn(move || run_events(worker, events));
-            Ok(Self { inner })
-        }
-
-        pub fn workspace(&self) -> &WorkspaceId {
-            self.inner.cursor.workspace()
-        }
-
-        /// 自分の view を送る。受理した revision を適用済みとして扱い、
-        /// 同じ値が event で返ってきても再度適用しない。
-        pub fn publish(&self, view: WorkspaceView) -> Result<u64, String> {
-            // 応答と event の到着順に依存しないよう、送信より前に自分の値を記録する。
-            self.inner.cursor.begin_local(&view);
-            let revision = match self
-                .inner
-                .connection
-                .update(self.inner.cursor.workspace(), view)
-            {
-                Ok(revision) => revision,
-                Err(error) => {
-                    self.inner.cursor.abort_local();
-                    return Err(error);
-                }
-            };
-            self.inner.cursor.accept_local(revision);
-            Ok(revision)
-        }
-
-        /// バックグラウンド復帰などで snapshot を取り直して再同期する。
-        pub fn resync(&self) -> Result<u64, String> {
-            let snapshot = self
-                .inner
-                .connection
-                .subscribe(self.inner.cursor.workspace())?;
-            self.inner.cursor.accept_local(snapshot.revision);
-            publish_snapshot(&self.inner, &snapshot);
-            Ok(snapshot.revision)
-        }
-
-        /// 購読を終了する。以後の delta は Host から届かない。
-        pub fn close(&self) {
-            if self.inner.stopped.swap(true, Ordering::AcqRel) {
-                return;
-            }
-            if let Err(error) = self
-                .inner
-                .connection
-                .unsubscribe(self.inner.cursor.workspace())
-            {
-                eprintln!("Workspace view の購読解除に失敗しました: {error}");
-            }
-        }
+    pub fn workspace(&self) -> &WorkspaceId {
+        &self.inner.workspace
     }
 
-    impl Drop for Inner {
-        fn drop(&mut self) {
-            self.stopped.store(true, Ordering::Release);
-        }
+    /// 自分の view を送る。受理した revision を適用済みとして扱い、
+    /// 同じ値が event で返ってきても再度適用しない。
+    pub fn publish(&self, view: WorkspaceView) -> Result<u64, String> {
+        // echo の適用と受理 revision の確定を排他し、自分の更新が自分の watch へ
+        // 戻らないようにする。
+        let _gate = lock(&self.inner.update_gate);
+        let revision = self.inner.connection.update(&self.inner.workspace, view)?;
+        self.inner.applied.fetch_max(revision, Ordering::AcqRel);
+        Ok(revision)
     }
 
-    fn publish_snapshot(inner: &Inner, snapshot: &workbench::SessionViewSnapshot) {
-        if let Some(view) = &snapshot.view {
-            inner.watch.publish(
-                inner.cursor.workspace().clone(),
-                snapshot.revision,
-                view.clone(),
-            );
-        } else {
-            inner.watch.mark_synced(inner.cursor.workspace().clone());
-        }
+    /// スリープ復帰などで snapshot を取り直して再同期する。
+    pub fn resync(&self) -> Result<u64, String> {
+        let snapshot = self.inner.connection.subscribe(&self.inner.workspace)?;
+        self.inner
+            .applied
+            .fetch_max(snapshot.revision, Ordering::AcqRel);
+        publish_snapshot(&self.inner, &snapshot);
+        Ok(snapshot.revision)
     }
 
-    fn run_events(inner: Arc<Inner>, mut events: Box<dyn SessionViewEvents>) {
-        let mut backoff = Duration::from_secs(1);
-        loop {
-            let broken = loop {
-                if inner.stopped.load(Ordering::Acquire) {
-                    return;
-                }
-                // 購読解除を速やかに反映するため、待機は短く区切る。event は購読中だけ
-                // 届くが、Host 側の解除とこの thread の停止は非同期にずれる。
-                match events.next(Duration::from_secs(1)) {
-                    Ok(Some(event)) => {
-                        // close 後は、配信境界の遅れで届いた event も適用しない。
-                        if !inner.stopped.load(Ordering::Acquire) {
-                            inner.apply_event(event);
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        if !inner.stopped.load(Ordering::Acquire) {
-                            // 表示は最後の値のまま残し、古い可能性を UI へ知らせる。
-                            inner.watch.mark_stale();
-                            eprintln!("Workspace view の購読が切断されました: {error}");
-                        }
-                        break true;
-                    }
-                }
-            };
-            if !broken {
-                continue;
-            }
-            // 切断後は snapshot で再同期し、購読を張り直す。待機はこの thread 内だけ。
-            match inner.connection.events(inner.cursor.workspace()) {
-                Ok(replacement) => {
-                    events = replacement;
-                    backoff = Duration::from_secs(1);
-                    if let Err(error) = inner.resubscribe() {
-                        inner.watch.mark_stale();
-                        eprintln!("Workspace view を再取得できません: {error}");
-                    }
-                }
-                Err(error) => {
-                    eprintln!("Workspace view の購読を再開できません: {error}");
-                    if !sleep_unless_stopped(&inner, backoff) {
-                        return;
-                    }
-                    backoff = (backoff * 2).min(Duration::from_secs(30));
-                }
-            }
+    /// 購読を終了する。以後の delta は Host から届かない。
+    pub fn close(&self) {
+        if self.inner.stopped.swap(true, Ordering::AcqRel) {
+            return;
         }
-    }
-
-    impl Inner {
-        fn apply_event(&self, event: SessionViewEvent) {
-            if let Some((revision, view)) = self.cursor.accept_event(event.revision, event.view) {
-                self.watch
-                    .publish(self.cursor.workspace().clone(), revision, view);
-            }
-        }
-
-        fn resubscribe(&self) -> Result<(), String> {
-            let snapshot = self.connection.subscribe(self.cursor.workspace())?;
-            self.cursor.accept_local(snapshot.revision);
-            publish_snapshot(self, &snapshot);
-            Ok(())
-        }
-    }
-
-    fn sleep_unless_stopped(inner: &Inner, duration: Duration) -> bool {
-        let step = Duration::from_millis(100);
-        let mut slept = Duration::ZERO;
-        while slept < duration {
-            if inner.stopped.load(Ordering::Acquire) {
-                return false;
-            }
-            std::thread::sleep(step);
-            slept += step;
-        }
-        !inner.stopped.load(Ordering::Acquire)
-    }
-
-    /// 現在の Workspace に対する購読 session を所有し、開き直しと公開を仲介する。
-    pub struct SessionViewSync {
-        connection: Arc<dyn SessionViewConnection>,
-        watch: SessionViewWatch,
-        session: Mutex<Option<SessionViewSession>>,
-    }
-
-    impl SessionViewSync {
-        pub fn new(connection: Arc<dyn SessionViewConnection>, watch: SessionViewWatch) -> Self {
-            Self {
-                connection,
-                watch,
-                session: Mutex::new(None),
-            }
-        }
-
-        pub fn watch(&self) -> &SessionViewWatch {
-            &self.watch
-        }
-
-        /// Workspace を開いたときに購読する。同じ Workspace なら何もしない。
-        pub fn open(&self, workspace: &WorkspaceId) -> Result<(), String> {
-            let mut session = self
-                .session
-                .lock()
-                .map_err(|_| "Workspace view の lock に失敗しました".to_owned())?;
-            if session
-                .as_ref()
-                .is_some_and(|current| current.workspace() == workspace)
-            {
-                return Ok(());
-            }
-            if let Some(current) = session.take() {
-                current.close();
-            }
-            *session = Some(SessionViewSession::start(
-                self.connection.clone(),
-                workspace.clone(),
-                self.watch.clone(),
-            )?);
-            Ok(())
-        }
-
-        /// Workspace を閉じたときや終了時に購読を解除する。
-        pub fn close(&self) {
-            let Ok(mut session) = self.session.lock() else {
-                return;
-            };
-            if let Some(current) = session.take() {
-                current.close();
-            }
-        }
-
-        pub fn publish(&self, view: WorkspaceView) -> Result<u64, String> {
-            let session = self
-                .session
-                .lock()
-                .map_err(|_| "Workspace view の lock に失敗しました".to_owned())?;
-            session
-                .as_ref()
-                .ok_or_else(|| "Workspace view を購読していません".to_owned())?
-                .publish(view)
-        }
-
-        pub fn resync(&self) -> Result<u64, String> {
-            let session = self
-                .session
-                .lock()
-                .map_err(|_| "Workspace view の lock に失敗しました".to_owned())?;
-            session
-                .as_ref()
-                .ok_or_else(|| "Workspace view を購読していません".to_owned())?
-                .resync()
+        if let Err(error) = self.inner.connection.unsubscribe(&self.inner.workspace) {
+            eprintln!("Workspace view の購読解除に失敗しました: {error}");
         }
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use desktop::{SessionViewSession, SessionViewSync};
+impl Drop for Inner {
+    fn drop(&mut self) {
+        self.stopped.store(true, Ordering::Release);
+    }
+}
+
+/// 毒された lock でも中身を読めるようにし、view の共有を止めない。
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn publish_snapshot(inner: &Inner, snapshot: &SessionViewSnapshot) {
+    if let Some(view) = &snapshot.view {
+        inner
+            .watch
+            .publish(inner.workspace.clone(), snapshot.revision, view.clone());
+    }
+}
+
+fn run_events(inner: Arc<Inner>, mut events: Box<dyn SessionViewEvents>) {
+    let mut backoff = Duration::from_secs(1);
+    loop {
+        let broken = loop {
+            if inner.stopped.load(Ordering::Acquire) {
+                return;
+            }
+            // 購読解除を速やかに反映するため、待機は短く区切る。event は購読中だけ
+            // 届くが、Host 側の解除とこの thread の停止は非同期にずれる。
+            match events.next(Duration::from_secs(1)) {
+                Ok(Some(event)) => {
+                    // close 後は、配信境界の遅れで届いた event も適用しない。
+                    if !inner.stopped.load(Ordering::Acquire) {
+                        inner.apply_event(event);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    if !inner.stopped.load(Ordering::Acquire) {
+                        eprintln!("Workspace view の購読が切断されました: {error}");
+                    }
+                    break true;
+                }
+            }
+        };
+        if !broken {
+            continue;
+        }
+        // 切断後は snapshot で再同期し、購読を張り直す。待機はこの thread 内だけ。
+        match inner.connection.events(&inner.workspace) {
+            Ok(replacement) => {
+                events = replacement;
+                backoff = Duration::from_secs(1);
+                if let Err(error) = inner.resubscribe() {
+                    eprintln!("Workspace view を再取得できません: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("Workspace view の購読を再開できません: {error}");
+                if !sleep_unless_stopped(&inner, backoff) {
+                    return;
+                }
+                backoff = (backoff * 2).min(Duration::from_secs(30));
+            }
+        }
+    }
+}
+
+impl Inner {
+    fn apply_event(&self, event: SessionViewEvent) {
+        // 自分の更新の echo は受理 revision の確定より先に届き得る。確定前に適用すると
+        // 自分の watch へ自分の更新が戻るため、確定まで待たせる。
+        let _gate = lock(&self.update_gate);
+        // gate を待つ間に close が完了していれば、終了済みの購読から watch を更新しない。
+        if self.stopped.load(Ordering::Acquire) {
+            return;
+        }
+        if event.revision <= self.applied.load(Ordering::Acquire) {
+            return;
+        }
+        self.applied.store(event.revision, Ordering::Release);
+        // 権限で伏せられた event は内容を持たないため適用しない。
+        if let Some(view) = event.view {
+            self.watch
+                .publish(self.workspace.clone(), event.revision, view);
+        }
+    }
+
+    fn resubscribe(&self) -> Result<(), String> {
+        let snapshot = self.connection.subscribe(&self.workspace)?;
+        self.applied.fetch_max(snapshot.revision, Ordering::AcqRel);
+        publish_snapshot(self, &snapshot);
+        Ok(())
+    }
+}
+
+fn sleep_unless_stopped(inner: &Inner, duration: Duration) -> bool {
+    let step = Duration::from_millis(100);
+    let mut slept = Duration::ZERO;
+    while slept < duration {
+        if inner.stopped.load(Ordering::Acquire) {
+            return false;
+        }
+        std::thread::sleep(step);
+        slept += step;
+    }
+    !inner.stopped.load(Ordering::Acquire)
+}
+
+/// 現在の Workspace に対する購読 session を所有し、開き直しと公開を仲介する。
+pub struct SessionViewSync {
+    connection: Arc<dyn SessionViewConnection>,
+    watch: SessionViewWatch,
+    session: Mutex<Option<SessionViewSession>>,
+}
+impl SessionViewSync {
+    pub fn new(connection: Arc<dyn SessionViewConnection>, watch: SessionViewWatch) -> Self {
+        Self {
+            connection,
+            watch,
+            session: Mutex::new(None),
+        }
+    }
+
+    pub fn watch(&self) -> &SessionViewWatch {
+        &self.watch
+    }
+
+    /// Workspace を開いたときに購読する。同じ Workspace なら何もしない。
+    pub fn open(&self, workspace: &WorkspaceId) -> Result<(), String> {
+        let mut session = self
+            .session
+            .lock()
+            .map_err(|_| "Workspace view の lock に失敗しました".to_owned())?;
+        if session
+            .as_ref()
+            .is_some_and(|current| current.workspace() == workspace)
+        {
+            return Ok(());
+        }
+        if let Some(current) = session.take() {
+            current.close();
+        }
+        *session = Some(SessionViewSession::start(
+            self.connection.clone(),
+            workspace.clone(),
+            self.watch.clone(),
+        )?);
+        Ok(())
+    }
+
+    /// Workspace を閉じたときや終了時に購読を解除する。
+    pub fn close(&self) {
+        let Ok(mut session) = self.session.lock() else {
+            return;
+        };
+        if let Some(current) = session.take() {
+            current.close();
+        }
+    }
+
+    pub fn publish(&self, view: WorkspaceView) -> Result<u64, String> {
+        let session = self
+            .session
+            .lock()
+            .map_err(|_| "Workspace view の lock に失敗しました".to_owned())?;
+        session
+            .as_ref()
+            .ok_or_else(|| "Workspace view を購読していません".to_owned())?
+            .publish(view)
+    }
+
+    pub fn resync(&self) -> Result<u64, String> {
+        let session = self
+            .session
+            .lock()
+            .map_err(|_| "Workspace view の lock に失敗しました".to_owned())?;
+        session
+            .as_ref()
+            .ok_or_else(|| "Workspace view を購読していません".to_owned())?
+            .resync()
+    }
+}
 
 #[cfg(test)]
 mod tests {

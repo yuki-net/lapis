@@ -14,8 +14,9 @@ struct SharedState {
     listeners: Vec<mpsc::Sender<SessionViewEvent>>,
     subscribed: usize,
     fail_update: bool,
+    /// 更新の応答より先に echo を配る Host を模す。
+    echo_before_return: bool,
 }
-
 impl SharedView {
     fn new() -> Self {
         Self {
@@ -25,6 +26,7 @@ impl SharedView {
                 listeners: Vec::new(),
                 subscribed: 0,
                 fail_update: false,
+                echo_before_return: false,
             }),
         }
     }
@@ -47,6 +49,11 @@ impl SharedView {
 
     fn set_fail_update(&self, fail: bool) {
         self.state.lock().unwrap().fail_update = fail;
+    }
+
+    /// 更新の応答より先に echo を配る Host を模す。
+    fn echo_before_return(&self) {
+        self.state.lock().unwrap().echo_before_return = true;
     }
 }
 
@@ -83,6 +90,12 @@ impl SessionViewConnection for SharedView {
         state
             .listeners
             .retain(|listener| listener.send(event.clone()).is_ok());
+        // echo を配ってから応答を返す Host を模す。
+        let echo_before_return = state.echo_before_return;
+        drop(state);
+        if echo_before_return {
+            std::thread::sleep(Duration::from_millis(50));
+        }
         Ok(revision)
     }
 
@@ -142,6 +155,27 @@ fn update_is_applied_to_other_subscribers_as_the_latest_value() {
     // 自分の更新は自分の watch へ戻さない。loop しない。
     assert!(writer_watch.take_if_changed(&workspace, 0).is_none());
     reader.close();
+    writer.close();
+}
+
+#[test]
+fn echo_arriving_before_the_update_response_is_not_applied_to_the_writer() {
+    let workspace = WorkspaceId::new("workspace-1");
+    let shared = Arc::new(SharedView::new());
+    // 応答より先に自分の更新の echo を配る Host を模す。受理 revision の確定前に
+    // echo を適用すると、自分の watch に自分の更新が戻って再送ループになる。
+    shared.echo_before_return();
+    let writer_watch = SessionViewWatch::new();
+    let writer = SessionViewSession::start(
+        shared.clone(),
+        workspace.clone(),
+        writer_watch.clone(),
+    )
+    .unwrap();
+    writer
+        .publish(SharedView::view("document-a"))
+        .expect("update が受理されません");
+    assert!(writer_watch.take_if_changed(&workspace, 0).is_none());
     writer.close();
 }
 

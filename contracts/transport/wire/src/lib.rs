@@ -1,5 +1,10 @@
 //! ClientとHostが共用する接続識別子。
 pub const REMOTE_WEBSOCKET_PATH: &str = "/remote";
+
+/// Web ページ配信（`lapis-web`）の既定ポート。待受の既定値と一致させる。
+pub const WEB_PAGE_PORT: u16 = 4747;
+/// Web bridge（`web-bridge`）の既定ポート。待受の既定値と一致させる。
+pub const WEB_BRIDGE_PORT: u16 = 4757;
 pub const REMOTE_WEBSOCKET_PROTOCOL: &str = "lapis.v0";
 pub const REMOTE_QUIC_PROTOCOL: &[u8] = b"lapis.v0";
 
