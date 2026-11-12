@@ -4561,6 +4561,7 @@ dependencies = [
  "task",
  "tempfile",
  "winresource",
+ "workbench",
  "workspace",
 ]
 

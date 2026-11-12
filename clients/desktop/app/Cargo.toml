@@ -25,6 +25,7 @@ rfd.workspace = true
 
 [dev-dependencies]
 editor-core = { path = "../../../contracts/domain/editor-core" }
+workbench = { path = "../../../contracts/domain/workbench" }
 workspace = { path = "../../../contracts/domain/workspace" }
 tempfile.workspace = true
 

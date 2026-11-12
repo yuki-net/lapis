@@ -246,6 +246,8 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
                 .collect(),
         });
     }
+    // 接続側が受けた共有 view state を、UI と同じ watch で適用する。
+    services = services.with_session_view(desktop_client::web_host::session_view_watch());
     if let Some(task) = requested_task() {
         services = services.with_initial_task(task);
     }

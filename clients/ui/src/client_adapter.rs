@@ -1,12 +1,24 @@
+use crate::app::SessionViewHandle;
 use desktop_client::{
     ConversationRecord, ConversationSession, ConversationViewState, DocumentTab, EditorSession,
-    LspSession,
+    LspSession, SessionViewWatch,
 };
 use document::DocumentCache;
 use editor_core::{ConversationId, DocumentId, WorkspaceId};
 use gpui::Context;
 use std::path::PathBuf;
 use workspace::FileEntry;
+
+fn session_view_watch(handle: &SessionViewHandle) -> &SessionViewWatch {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        handle.watch()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        handle
+    }
+}
 
 pub(crate) struct DocumentClient {
     pub editor: EditorSession,
@@ -16,16 +28,11 @@ pub(crate) struct DocumentClient {
     pub git: std::sync::Arc<dyn git::GitConnection>,
     pub snapshot_sequence: u64,
     pub document_owners: std::collections::HashMap<DocumentId, u64>,
-    /// Workspace の view state 共有。Web 側の統合は別 PR のため Desktop だけで持つ。
-    #[cfg(not(target_family = "wasm"))]
-    session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
+    /// Workspace の view state 共有。未対応の構成では `None`。
+    session_view: Option<SessionViewHandle>,
     /// 最後に共有したタブ構成。カーソル移動だけでは共有を進めない。
-    #[cfg(not(target_family = "wasm"))]
     session_view_signature: Option<(Vec<DocumentId>, Option<DocumentId>)>,
-    /// snapshot を取り込み済みの Workspace。未取り込みの間は送信しない。
-    #[cfg(not(target_family = "wasm"))]
-    session_view_ready: Option<WorkspaceId>,
-    #[cfg(not(target_family = "wasm"))]
+    /// 最後に適用した通知順。古い通知の再適用を防ぐ。
     session_view_sequence: u64,
 }
 
@@ -48,7 +55,6 @@ impl DocumentClient {
             document_owners: Default::default(),
             session_view,
             session_view_signature: None,
-            session_view_ready: None,
             session_view_sequence: 0,
         }
     }
@@ -59,6 +65,7 @@ impl DocumentClient {
         conversation: ConversationSession,
         lsp: LspSession,
         git: std::sync::Arc<dyn git::GitConnection>,
+        session_view: Option<SessionViewWatch>,
     ) -> Self {
         Self {
             editor,
@@ -68,6 +75,9 @@ impl DocumentClient {
             git,
             snapshot_sequence: 0,
             document_owners: Default::default(),
+            session_view,
+            session_view_signature: None,
+            session_view_sequence: 0,
         }
     }
 }
@@ -142,12 +152,14 @@ impl DocumentClient {
     }
 
     /// Workspace を閉じたときに購読を解除する。以後の delta は適用しない。
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn close_session_view(&mut self) {
-        if let Some(sync) = &self.session_view {
-            sync.close();
+        if let Some(handle) = &self.session_view {
+            #[cfg(not(target_family = "wasm"))]
+            handle.close();
+            #[cfg(target_family = "wasm")]
+            desktop_client::web_host::close_session_view();
+            let _ = handle;
         }
-        self.session_view_ready = None;
         self.session_view_signature = None;
     }
 
@@ -157,25 +169,21 @@ impl DocumentClient {
     /// 適用する。UI はこれを worker で呼び、結果を Editor の snapshot として受け取る。
     /// snapshot が空（まだ誰も共有していない）の場合も購読済みとして扱い、以後の
     /// ローカル変更を共有へ送れるようにする。
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn apply_session_view(&mut self) -> Result<Option<ClientSnapshot>, String> {
-        let Some(sync) = &self.session_view else {
-            return Ok(None);
-        };
         let Some(workspace) = self.editor.workspace_id().cloned() else {
-            sync.close();
-            self.session_view_ready = None;
+            self.close_session_view();
             return Ok(None);
         };
-        sync.open(&workspace)?;
-        let applied = sync
-            .watch()
-            .take_if_changed(&workspace, self.session_view_sequence);
+        let Some(handle) = &self.session_view else {
+            return Ok(None);
+        };
+        // Desktop は開いた時点で購読を張る。Web は接続時に購読済みで、
+        // snapshot 待ちの間は何もしない。
+        #[cfg(not(target_family = "wasm"))]
+        handle.open(&workspace)?;
+        let watch = session_view_watch(handle);
+        let applied = watch.take_if_changed(&workspace, self.session_view_sequence);
         let Some((sequence, _, view)) = applied else {
-            if self.session_view_ready.as_ref() != Some(&workspace) {
-                self.session_view_ready = Some(workspace);
-                return Ok(Some(self.reconcile_snapshot()));
-            }
             return Ok(None);
         };
         self.session_view_sequence = sequence;
@@ -186,17 +194,25 @@ impl DocumentClient {
             .map_err(|error| error.to_string())?;
         // 適用した構成をそのまま送り返さない。
         self.session_view_signature = Some(self.editor.tab_signature());
-        self.session_view_ready = Some(workspace);
         Ok(Some(self.reconcile_snapshot()))
     }
 
-    /// スリープ復帰などで snapshot を取り直してから共有 view を適用する。
-    #[cfg(not(target_family = "wasm"))]
+    /// バックグラウンド復帰などで snapshot を取り直してから共有 view を適用する。
     pub(crate) fn resync_session_view(&mut self) -> Result<Option<ClientSnapshot>, String> {
-        if let Some(sync) = &self.session_view
-            && self.editor.workspace_id().is_some()
+        let Some(handle) = &self.session_view else {
+            return Ok(None);
+        };
+        #[cfg(not(target_family = "wasm"))]
+        if self.editor.workspace_id().is_some() {
+            handle.resync()?;
+        }
+        #[cfg(target_family = "wasm")]
         {
-            sync.resync()?;
+            let _ = handle;
+            if self.editor.workspace_id().is_some() {
+                // snapshot の反映は event pump から通知される。ここでは要求だけ出す。
+                desktop_client::web_host::resync_session_view();
+            }
         }
         self.apply_session_view()
     }
@@ -206,27 +222,36 @@ impl DocumentClient {
     /// 共有するのはタブの構成とアクティブ文書だけで、カーソル位置やスクロールは送らない。
     /// 直前に適用した共有値と同じタブ構成なら送らないため、自分の更新が event として
     /// 戻ってきても再送や再適用のループにならない。
-    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn publish_session_view(&mut self) -> Result<(), String> {
-        let Some(sync) = &self.session_view else {
+        let Some(handle) = &self.session_view else {
             return Ok(());
         };
-        let Some(workspace) = self.editor.workspace_id() else {
+        let Some(workspace) = self.editor.workspace_id().cloned() else {
             return Ok(());
         };
-        if self.session_view_ready.as_ref() != Some(workspace) {
+        // 購読の完了前は送らない。参加前の送信は共有済みの状態を上書きしてしまう。
+        if !session_view_watch(handle).is_synced(&workspace) {
             return Ok(());
         }
         let signature = self.editor.tab_signature();
         if self.session_view_signature.as_ref() == Some(&signature) {
             return Ok(());
         }
-        let view = self
-            .editor
-            .snapshot()
-            .to_shared_view()
-            .map_err(|error| error.to_string())?;
-        sync.publish(view)?;
+        // Web も Desktop と同じくタブ構成とアクティブ文書だけを共有する。
+        let snapshot = self.editor.snapshot();
+        let view = if cfg!(target_family = "wasm") {
+            snapshot.to_shared_tabs()
+        } else {
+            snapshot.to_shared_view()
+        }
+        .map_err(|error| error.to_string())?;
+        #[cfg(not(target_family = "wasm"))]
+        handle.publish(view)?;
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = handle;
+            desktop_client::web_host::publish_session_view(view);
+        }
         self.session_view_signature = Some(signature);
         Ok(())
     }

@@ -73,6 +73,14 @@ pub(crate) enum Command {
         view: ConversationViewState,
     },
     RetryWorkbenchLocal,
+    /// 自分のタブ構成とアクティブ文書を Workspace の view state として共有する。
+    PublishView {
+        view: workbench::WorkspaceView,
+    },
+    /// `workspace.view.subscribe` を取り直して共有状態を再同期する。
+    ResyncView,
+    /// 共有から抜ける。Workspace を閉じたときに送る。
+    CloseView,
     /// ここまでに積まれたCommandの処理完了を待つ。
     Barrier {
         done: oneshot::Sender<()>,
@@ -99,6 +107,8 @@ impl Command {
                 | Self::TerminalRelease { .. }
                 | Self::SaveWorkbench { .. }
                 | Self::RetryWorkbenchLocal
+                | Self::PublishView { .. }
+                | Self::CloseView
         )
     }
 }
@@ -205,6 +215,14 @@ mod tests {
             Command::Discard { local: document() },
             Command::Close { local: document() },
             Command::RetryWorkbenchLocal,
+            Command::PublishView {
+                view: workbench::WorkspaceView {
+                    open_documents: Vec::new(),
+                    active_path: None,
+                    active_document_id: None,
+                },
+            },
+            Command::CloseView,
         ];
         for command in commands {
             assert!(command.is_mutation(), "変更系Commandを読み取り扱いしない");
@@ -220,6 +238,12 @@ mod tests {
     fn terminal_resync_is_a_read() {
         // 切替中でも Host の snapshot 取得は止めない。
         assert!(!Command::ResyncTerminals.is_mutation());
+    }
+
+    #[test]
+    fn view_resync_is_a_read() {
+        // 共有状態の取り直しは Host を書き換えないため、切替中も止めない。
+        assert!(!Command::ResyncView.is_mutation());
     }
 
     #[test]

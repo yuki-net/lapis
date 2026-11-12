@@ -37,6 +37,34 @@ impl WorkspaceViewState {
             .as_ref()
             .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
         validate_root(root)?;
+        self.shared_view(root)
+    }
+
+    /// タブ構成とアクティブ文書だけを共有する。
+    ///
+    /// カーソル・選択・スクロールは共有しない。共有範囲をタブ構成に限る Client
+    /// （Web）はこちらを使い、位置の値を送らない。
+    pub fn to_shared_tabs(&self) -> Result<workbench::WorkspaceView, WorkspaceError> {
+        let root = self
+            .root
+            .as_ref()
+            .ok_or_else(|| WorkspaceError::new("Workspaceがありません"))?;
+        validate_root(root)?;
+        let mut view = self.shared_view(root)?;
+        for document in &mut view.open_documents {
+            *document = workbench::WorkspaceDocumentView {
+                document_id: document.document_id.clone(),
+                path: document.path.clone(),
+                ..Default::default()
+            };
+        }
+        Ok(view)
+    }
+
+    fn shared_view(
+        &self,
+        root: &std::path::Path,
+    ) -> Result<workbench::WorkspaceView, WorkspaceError> {
         let relative =
             |path: &std::path::Path| -> Result<workspace::WorkspaceRelativePath, WorkspaceError> {
                 let path = path
@@ -164,8 +192,17 @@ impl WorkspaceViewState {
     }
 }
 
+/// 正規化された root かを検証する。
+///
+/// 絶対 path の判定は、wasm では OS の path 意味論が無く `is_absolute` が常に偽に
+/// なるため、Web の仮想 root（`/Lapis Host` など）は root を持つことで判定する。
 fn validate_root(root: &std::path::Path) -> Result<(), WorkspaceError> {
-    if !root.is_absolute()
+    let absolute = if cfg!(target_family = "wasm") {
+        root.has_root()
+    } else {
+        root.is_absolute()
+    };
+    if !absolute
         || root
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
@@ -238,6 +275,53 @@ mod tests {
             Some(second_root.join("src").join("画面.rs"))
         );
         assert_eq!(snapshot.root, Some(first_root));
+    }
+
+    #[test]
+    fn shared_tabs_omit_cursor_selection_and_scroll_but_keep_order_and_active() {
+        let root = std::env::temp_dir().join("lapis-tabs-root");
+        let file = root.join("src").join("main.rs");
+        let snapshot = WorkspaceViewState {
+            root: Some(root),
+            open_documents: vec![
+                DocumentViewState {
+                    document_id: Some(DocumentId::new("document-1")),
+                    path: file.clone(),
+                    cursor_char: 12,
+                    selection_start: 3,
+                    selection_end: 12,
+                    scroll_x: 4.0,
+                    scroll_y: 80.0,
+                    ..Default::default()
+                },
+                DocumentViewState {
+                    document_id: Some(DocumentId::new("document-2")),
+                    ..Default::default()
+                },
+            ],
+            active_path: Some(file),
+            active_document_id: Some(DocumentId::new("document-1")),
+        };
+        let view = snapshot.to_shared_tabs().unwrap();
+        assert_eq!(
+            view.open_documents
+                .iter()
+                .map(|document| document.document_id.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Some(DocumentId::new("document-1")),
+                Some(DocumentId::new("document-2"))
+            ]
+        );
+        assert_eq!(view.active_document_id, Some(DocumentId::new("document-1")));
+        // 位置は送らない。タブ構成とアクティブ文書だけを共有する。
+        for document in &view.open_documents {
+            assert_eq!(document.cursor_char, 0);
+            assert_eq!(document.selection_start, 0);
+            assert_eq!(document.selection_end, 0);
+            assert_eq!(document.scroll_x, 0.0);
+            assert_eq!(document.scroll_y, 0.0);
+        }
     }
 
     #[test]

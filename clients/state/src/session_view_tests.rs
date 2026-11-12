@@ -1,5 +1,7 @@
 use super::*;
 use std::sync::Mutex;
+use std::time::Duration;
+use workbench::{SessionViewConnection, SessionViewEvent, SessionViewEvents, SessionViewSnapshot};
 
 /// 1 つの Workspace の view を保持する、Host 相当の共有先。
 struct SharedView {

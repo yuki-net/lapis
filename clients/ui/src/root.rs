@@ -30,6 +30,20 @@ use gpui::{
 };
 use std::collections::HashMap;
 
+/// 共有ハンドルから、適用判定を持つ watch を取り出す。
+fn session_view_watch_of(
+    handle: &crate::app::SessionViewHandle,
+) -> &desktop_client::SessionViewWatch {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        handle.watch()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        handle
+    }
+}
+
 enum PathRequest {
     Open(std::path::PathBuf),
     Save(std::path::PathBuf, editor_core::DocumentId),
@@ -99,13 +113,12 @@ pub(crate) struct DesktopRoot {
     workbench_publish_signature: Option<desktop_client::ConversationViewState>,
     /// Workspace view の購読から受け取った共有 view を UI へ反映する。
     /// 適用中に次の通知が来ても取りこぼさないよう、完了後にもう一度確認する。
-    #[cfg(not(target_family = "wasm"))]
-    session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
-    #[cfg(not(target_family = "wasm"))]
+    session_view: Option<crate::app::SessionViewHandle>,
     session_view_applying: bool,
     /// 自分のタブ変更を共有へ送る debounce。
-    #[cfg(not(target_family = "wasm"))]
     session_view_task: Option<gpui::Task<()>>,
+    /// 接続中の Workspace の共有状態が古い可能性があるか。表示に出す。
+    session_view_stale: bool,
     #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
     #[cfg(not(target_family = "wasm"))]
@@ -148,10 +161,10 @@ impl DesktopRoot {
         let pending_initial_task = services.initial_task.clone();
         #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
-        #[cfg(not(target_family = "wasm"))]
         let session_view = services.session_view.clone();
-        #[cfg(not(target_family = "wasm"))]
-        let session_view_watch = session_view.as_ref().map(|sync| sync.watch().clone());
+        let session_view_watch = session_view
+            .as_ref()
+            .map(|handle| session_view_watch_of(handle).clone());
         #[cfg(not(target_family = "wasm"))]
         let workbench_revision = workbench_watch
             .as_ref()
@@ -171,27 +184,13 @@ impl DesktopRoot {
         }
         let document_connection = Some(session.document_connection());
         let initial_workspace = session.workspace_id().cloned();
-        let worker = ClientWorker::new({
-            #[cfg(not(target_family = "wasm"))]
-            {
-                DocumentClient::new(
-                    session,
-                    services.conversation,
-                    services.lsp,
-                    services.git.backend(),
-                    session_view.clone(),
-                )
-            }
-            #[cfg(target_family = "wasm")]
-            {
-                DocumentClient::new(
-                    session,
-                    services.conversation,
-                    services.lsp,
-                    services.git.backend(),
-                )
-            }
-        });
+        let worker = ClientWorker::new(DocumentClient::new(
+            session,
+            services.conversation,
+            services.lsp,
+            services.git.backend(),
+            session_view.clone(),
+        ));
         let process_worker = ClientWorker::new(ProcessWorker::new(
             services.process.clone(),
             initial_workspace.clone(),
@@ -349,8 +348,8 @@ impl DesktopRoot {
                     return;
                 }
                 // スリープやバックグラウンドから戻ったら snapshot を取り直して再同期する。
-                #[cfg(not(target_family = "wasm"))]
                 root.resync_remote_session_view(cx);
+                root.sync_session_view_stale(cx);
             }),
             cx.observe_window_bounds(window, |root, window, cx| {
                 root.group.update(cx, |group, _| {
@@ -484,18 +483,16 @@ impl DesktopRoot {
                 EditorEvent::Idle => {
                     root.synchronize_group(cx);
                     #[cfg(not(target_family = "wasm"))]
-                    {
-                        root.apply_remote_workbench(cx);
-                        root.apply_remote_session_view(cx);
-                    }
+                    root.apply_remote_workbench(cx);
+                    root.apply_remote_session_view(cx);
+                    root.sync_session_view_stale(cx);
                 }
                 EditorEvent::Status(message) => {
                     root.set_status(message.clone(), cx);
                     #[cfg(not(target_family = "wasm"))]
-                    {
-                        root.apply_remote_workbench(cx);
-                        root.apply_remote_session_view(cx);
-                    }
+                    root.apply_remote_workbench(cx);
+                    root.apply_remote_session_view(cx);
+                    root.sync_session_view_stale(cx);
                 }
                 EditorEvent::WorkspaceSearch(query) => {
                     root.search
@@ -580,10 +577,15 @@ impl DesktopRoot {
         });
         subscriptions.push(cx.on_app_quit(|root, cx| {
             let view = root.persisted_view(cx);
-            #[cfg(not(target_family = "wasm"))]
-            if let Some(sync) = &root.session_view {
+            if let Some(handle) = &root.session_view {
                 // 終了時に購読を解除し、Host 側に残った参加者を残さない。
-                sync.close();
+                #[cfg(not(target_family = "wasm"))]
+                handle.close();
+                #[cfg(target_family = "wasm")]
+                {
+                    let _ = handle;
+                    desktop_client::web_host::close_session_view();
+                }
             }
             let worker = root.worker.clone();
             let receiver = worker.request(move |client| client.persist_view(view));
@@ -651,8 +653,28 @@ impl DesktopRoot {
             })
             .detach();
         }
+        // Web は接続の event pump から通知を受ける。watch の blocking 受信は使わない。
+        #[cfg(target_family = "wasm")]
+        if session_view_watch.is_some()
+            && let Some(mut changes) = desktop_client::web_host::session_view_changes()
+        {
+            cx.spawn(async move |root, cx| {
+                use futures_util::StreamExt;
+                while changes.next().await.is_some() {
+                    if root
+                        .update(cx, |root, cx| {
+                            root.apply_remote_session_view(cx);
+                            root.sync_session_view_stale(cx);
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            })
+            .detach();
+        }
         // 起動時に復元した Workspace は、最初の通知を待たずに購読を始める。
-        #[cfg(not(target_family = "wasm"))]
         if session_view_watch.is_some() {
             let weak = cx.entity().downgrade();
             cx.defer(move |cx| {
@@ -688,12 +710,10 @@ impl DesktopRoot {
             persist_task: None,
             persist_signature: None,
             workbench_publish_signature: None,
-            #[cfg(not(target_family = "wasm"))]
             session_view,
-            #[cfg(not(target_family = "wasm"))]
             session_view_applying: false,
-            #[cfg(not(target_family = "wasm"))]
             session_view_task: None,
+            session_view_stale: false,
             #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
             #[cfg(not(target_family = "wasm"))]
@@ -1084,7 +1104,6 @@ impl DesktopRoot {
     ///
     /// 未確定の入力がある間は適用せず、Idleで再試行する。適用した値はそのまま
     /// 送り返さない。適用中に届いた次の変更は、反映完了後にもう一度適用する。
-    #[cfg(not(target_family = "wasm"))]
     fn apply_remote_session_view(&mut self, cx: &mut Context<Self>) {
         if self.session_view.is_none()
             || self.session_view_applying
@@ -1118,49 +1137,44 @@ impl DesktopRoot {
     /// 自分のタブ開閉とアクティブ文書を、短い debounce で共有へ送る。
     ///
     /// 保存の debounce とは分離し、タブ操作が続く間は最後の状態だけを送る。
-    /// 共有の統合は Desktop だけのため、Web では何もしない。
+    /// 再同期の要求より後にだけ送り、共有済みの状態を古い値で上書きしない。
     pub(crate) fn schedule_session_view_publish(&mut self, cx: &mut Context<Self>) {
-        #[cfg(target_family = "wasm")]
+        if self.session_view.is_none()
+            || self.group.read(cx).closing
+            || self.group.read(cx).synchronization_required
+            || self.task_context_resolution == TaskContextResolution::Pending
+            || self.editor.read(cx).has_in_flight()
         {
-            let _ = (self, cx);
+            return;
         }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            if self.session_view.is_none()
-                || self.group.read(cx).closing
-                || self.group.read(cx).synchronization_required
-                || self.task_context_resolution == TaskContextResolution::Pending
-                || self.editor.read(cx).has_in_flight()
-            {
-                return;
-            }
-            self.session_view_task = Some(cx.spawn(async move |this, cx| {
-                crate::timer::Timer::after(std::time::Duration::from_millis(150)).await;
-                let _ = this.update(cx, |root, cx| {
-                    if root.group.read(cx).closing
-                        || root.group.read(cx).synchronization_required
-                        || root.task_context_resolution == TaskContextResolution::Pending
-                        || root.editor.read(cx).has_in_flight()
-                    {
-                        return;
-                    }
-                    let worker = root.worker.clone();
-                    let _ = worker.submit(
-                        cx,
-                        |client| client.publish_session_view(),
-                        |_, result, _| {
-                            if let Err(error) = result {
-                                eprintln!("Workspace view を共有できません: {error}");
-                            }
-                        },
-                    );
-                });
-            }));
-        }
+        self.session_view_task = Some(cx.spawn(async move |this, cx| {
+            crate::timer::Timer::after(std::time::Duration::from_millis(150)).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.group.read(cx).closing
+                    || root.group.read(cx).synchronization_required
+                    || root.task_context_resolution == TaskContextResolution::Pending
+                    || root.editor.read(cx).has_in_flight()
+                {
+                    return;
+                }
+                let worker = root.worker.clone();
+                let _ = worker.submit(
+                    cx,
+                    |client| client.publish_session_view(),
+                    |_, result, _| {
+                        if let Err(error) = result {
+                            eprintln!("Workspace view を共有できません: {error}");
+                        }
+                    },
+                );
+            });
+        }));
     }
 
-    /// スリープ等から復帰したら snapshot を取り直し、取りこぼした変更を再同期する。
-    #[cfg(not(target_family = "wasm"))]
+    /// バックグラウンド復帰や再接続で snapshot を取り直し、取りこぼしを再同期する。
+    ///
+    /// 継続中の debounce があれば取り消し、再同期した snapshot より先に古い値を
+    /// 送らないようにする。
     fn resync_remote_session_view(&mut self, cx: &mut Context<Self>) {
         if self.session_view.is_none()
             || self.group.read(cx).closing
@@ -1168,6 +1182,7 @@ impl DesktopRoot {
         {
             return;
         }
+        self.session_view_task.take();
         let worker = self.worker.clone();
         let _ = worker.submit(
             cx,
@@ -1178,6 +1193,26 @@ impl DesktopRoot {
                 Err(error) => eprintln!("Workspace view を再同期できません: {error}"),
             },
         );
+    }
+
+    /// 共有 view が古い可能性を表示へ反映する。状態が変わった時だけ再描画する。
+    fn sync_session_view_stale(&mut self, cx: &mut Context<Self>) {
+        // Workspace を閉じた後は共有対象が無いため、古い表示の警告を出さない。
+        let stale = self.shell.read(cx).session.workspace_id.is_some()
+            && self
+                .session_view
+                .as_ref()
+                .is_some_and(|handle| session_view_watch_of(handle).is_stale());
+        if self.session_view_stale == stale {
+            return;
+        }
+        self.session_view_stale = stale;
+        let message = if stale {
+            "共有中のタブ構成は最新ではない可能性があります"
+        } else {
+            ""
+        };
+        self.set_status(message.to_owned(), cx);
     }
 
     /// 一覧のTask選択は共通APIへ渡し、作業環境を変える操作だけWindow数で制限する。
@@ -1829,7 +1864,6 @@ impl DesktopRoot {
                     move |client| {
                         client.persist_view(view)?;
                         if matches!(command, UiCommand::CloseWorkspace) {
-                            #[cfg(not(target_family = "wasm"))]
                             client.close_session_view();
                             return client
                                 .conversation
@@ -1847,7 +1881,6 @@ impl DesktopRoot {
                                 .map_err(|error| error.to_string())?;
                             // Workspace を開いた直後に共有 snapshot を取り込み、
                             // 同じ Workspace を開いている別 Client のタブ構成へ合わせる。
-                            #[cfg(not(target_family = "wasm"))]
                             if let Err(error) = client.apply_session_view() {
                                 eprintln!("Workspace view を取得できません: {error}");
                             }
