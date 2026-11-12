@@ -34,7 +34,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # 手動実行でも入力 tag の revision を checkout する。ref を省略すると起動元
+          # branch の code を tag の version として署名・配置してしまう。
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Resolve version
         id: version
@@ -111,7 +115,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # build job と同じ revision を扱う。tag と無関係な branch の code で
+          # verify / publish しない。
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
