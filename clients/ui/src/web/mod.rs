@@ -259,14 +259,17 @@ fn launch_host(backend_preference: &str) -> Result<(), String> {
 }
 
 fn run(session: EditorSession, services: DesktopServices, backend_preference: &str) {
+    let mut fonts = vec![
+        Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-Regular.ttf")),
+        Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-SemiBold.ttf")),
+    ];
+    // UI 用の IBM Plex Sans だけではターミナルの罫線・ブロック要素を描けない。
+    fonts.extend(crate::bundled_font::fonts());
     let handle = crate::run_web(
         session,
         services,
         InitialView::default(),
-        vec![
-            Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-Regular.ttf")),
-            Cow::<'static, [u8]>::Borrowed(include_bytes!("../../assets/IBMPlexSans-SemiBold.ttf")),
-        ],
+        fonts,
         backend_preference,
         || READY.with(|ready| ready.set(true)),
     );

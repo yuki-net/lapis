@@ -1,6 +1,8 @@
 mod app;
 #[cfg(target_family = "wasm")]
 extern crate gpui_preview as gpui;
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
+mod bundled_font;
 mod client_adapter;
 mod client_worker;
 mod commands;
