@@ -217,6 +217,9 @@ where
 }
 
 /// Host へ接続済みの状態から UI の Session 一式を組み立てる。
+///
+/// Workspace 切替後にここで Root を作り直すため、Web 接続情報の供給元も
+/// ここで設定し、切替後も接続ページを表示できるようにする。
 pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String> {
     let backend = Arc::new(desktop_client::web_host::WebBackend);
     let root = PathBuf::from(desktop_client::web_host::ROOT);
@@ -268,12 +271,14 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
     if let Some(task) = requested_task() {
         services = services.with_initial_task(task);
     }
+    // 設定の接続ページは、このページ自身と接続した Host URL から作る。
+    // Workspace 切替で Root を作り直す経路も同じ入口を通るため、ここで設定する。
+    let services = services.with_web_access(web_access);
     Ok((session, services))
 }
 
 fn launch_host(backend_preference: &str) -> Result<(), String> {
     let (session, services) = host_sessions()?;
-    let services = services.with_web_access(|| web_access());
     run(session, services, backend_preference);
     Ok(())
 }

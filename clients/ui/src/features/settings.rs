@@ -101,10 +101,13 @@ impl SettingsFeature {
     }
 
     /// そのページをこの起動構成で表示できるか。
+    ///
+    /// 接続ページは供給元の有無ではなく取得結果で決める。供給元が `None` を返す
+    /// 起動構成では、空のページをナビへ出さない。
     fn page_available(&self, page: &settings::SettingPage) -> bool {
         match page.content {
             settings::SettingPageContent::Feature => {
-                page.id != settings::catalog::CONNECTION_WEB_PAGE || self.web_access.is_some()
+                page.id != settings::catalog::CONNECTION_WEB_PAGE || self.web_access().is_some()
             }
             settings::SettingPageContent::Settings => true,
         }
@@ -278,7 +281,7 @@ impl SettingsFeature {
     }
     fn render_page(&self, cx: &mut Context<Self>) -> gpui::Div {
         let catalog = settings::catalog();
-        if self.page == settings::catalog::CONNECTION_WEB_PAGE && self.web_access.is_some() {
+        if self.page == settings::catalog::CONNECTION_WEB_PAGE && self.web_access().is_some() {
             return self.render_web_connection_page(cx);
         }
         let page = catalog.page(self.page).or_else(|| catalog.first_page());
@@ -350,12 +353,8 @@ impl SettingsFeature {
         };
         let access = access.with_loopback_fallback();
         let selected = self.selected_web_address(&access);
-        let page_url = selected
-            .as_ref()
-            .map(|address| address.page_url(access.page_port));
-        let bridge_url = selected
-            .as_ref()
-            .map(|address| address.bridge_url(access.bridge_port));
+        let page_url = access.page_url(selected.as_ref());
+        let bridge_url = access.bridge_url(selected.as_ref());
 
         container =
             container.child(
@@ -1027,9 +1026,16 @@ mod tests {
             let access = feature.read(cx).web_access().expect("接続情報がある");
             assert_eq!(access.addresses().len(), 3);
             let selected = selected_web_address(feature.read(cx)).expect("候補がある");
+            let access = feature.read(cx).web_access().expect("接続情報がある");
             assert_eq!(selected.host, "127.0.0.1");
-            assert_eq!(selected.page_url(4747), "http://127.0.0.1:4747/");
-            assert_eq!(selected.bridge_url(4757), "ws://127.0.0.1:4757/remote");
+            assert_eq!(
+                access.page_url(Some(&selected)).as_deref(),
+                Some("http://127.0.0.1:4747/")
+            );
+            assert_eq!(
+                access.bridge_url(Some(&selected)).as_deref(),
+                Some("ws://127.0.0.1:4757/remote")
+            );
         });
     }
 
@@ -1043,9 +1049,16 @@ mod tests {
                 feature.select_web_host("100.64.1.23".to_owned(), cx);
             });
             let selected = selected_web_address(feature.read(cx)).expect("候補がある");
+            let access = feature.read(cx).web_access().expect("接続情報がある");
             assert_eq!(selected.host, "100.64.1.23");
-            assert_eq!(selected.page_url(4747), "http://100.64.1.23:4747/");
-            assert_eq!(selected.bridge_url(4757), "ws://100.64.1.23:4757/remote");
+            assert_eq!(
+                access.page_url(Some(&selected)).as_deref(),
+                Some("http://100.64.1.23:4747/")
+            );
+            assert_eq!(
+                access.bridge_url(Some(&selected)).as_deref(),
+                Some("ws://100.64.1.23:4757/remote")
+            );
         });
     }
 
@@ -1135,6 +1148,25 @@ mod tests {
         let available = web_feature(cx, web_addresses(), None);
         cx.update(|cx| {
             assert!(available.read(cx).page_available(page));
+        });
+    }
+
+    /// 供給元はあっても取得結果が `None` なら、空のページをナビへ出さない。
+    #[gpui::test]
+    fn connection_page_is_hidden_when_the_source_returns_none(cx: &mut gpui::TestAppContext) {
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let source: crate::app::WebAccessSource = Arc::new(|| None);
+            cx.new(|cx| SettingsFeature::with_web_access(cx, Some(source)))
+        });
+        let page = settings::catalog()
+            .page(settings::catalog::CONNECTION_WEB_PAGE)
+            .expect("接続ページの定義がある");
+        cx.update(|cx| {
+            assert!(feature.read(cx).web_access().is_none());
+            assert!(!feature.read(cx).page_available(page));
         });
     }
 

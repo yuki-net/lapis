@@ -234,6 +234,10 @@ impl Inner {
         // 自分の更新の echo は受理 revision の確定より先に届き得る。確定前に適用すると
         // 自分の watch へ自分の更新が戻るため、確定まで待たせる。
         let _gate = lock(&self.update_gate);
+        // gate を待つ間に close が完了していれば、終了済みの購読から watch を更新しない。
+        if self.stopped.load(Ordering::Acquire) {
+            return;
+        }
         if event.revision <= self.applied.load(Ordering::Acquire) {
             return;
         }
