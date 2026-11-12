@@ -83,16 +83,14 @@ impl Fixture {
             editor.new_document();
         }
         let conversation = ConversationSession::new(port.clone(), editor.snapshot());
-        DocumentClient {
+        DocumentClient::new(
             editor,
             conversation,
-            lsp: LspSession::new(port.clone()),
-
-            edit_chain: EditChain::default(),
-            git: port,
-            snapshot_sequence: 0,
-            document_owners: HashMap::new(),
-        }
+            LspSession::new(port.clone()),
+            port.clone(),
+            #[cfg(not(target_family = "wasm"))]
+            None,
+        )
     }
     pub fn view() -> PersistedView {
         PersistedView {

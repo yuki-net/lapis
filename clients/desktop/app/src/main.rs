@@ -107,6 +107,12 @@ fn main() {
         startup.directory.join("conversations-v1.json"),
     ));
     let workbench_watch = desktop_client::WorkbenchWatch::new();
+    // Workspace view の共有は接続時に遅延して購読する。Workspace を持たない Window でも
+    // 後から Workspace を開いたときに同じ SessionViewSync を使えるよう常に作る。
+    let session_view = std::sync::Arc::new(desktop_client::SessionViewSync::new(
+        host.session_view(),
+        desktop_client::SessionViewWatch::new(),
+    ));
     let conversation_repository: Arc<dyn ConversationRepository> = match session.workspace_id() {
         Some(workspace) => Arc::new(HostConversationRepository::new(
             local_conversations,
@@ -231,6 +237,7 @@ fn main() {
         settings_session,
     )
     .with_workbench_watch(workbench_watch)
+    .with_session_view(session_view)
     .with_process_session(ProcessSession::new(host.processes(), {
         let local: Arc<dyn process::ProcessRegistry> = local_processes;
         Some(local)

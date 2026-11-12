@@ -84,7 +84,8 @@ Terminal は Host の `TerminalId`、その他の View は `ViewInstanceId` を�
 
 Workspace を開いている Client 間で、開いている Document とその表示位置を自動共有する。
 真実は Host が Workspace 単位で保持し、Client は参加時の snapshot を取り、以後の変更を
-delta として受け取る。protocol 0.13 で追加した契約で、Client 側の統合は別 PR とする。
+delta として受け取る。protocol 0.13 で追加した契約で、Desktop の統合は Issue #290 の
+PR2、Web の統合は別 PR で行う。
 
 - `workspace.view.subscribe` は共有へ参加し、`WorkspaceViewSnapshot`（`revision` と
   `Option<WorkspaceView>`）を返す。まだ誰も共有していない Workspace は `view` が `null`。
@@ -118,6 +119,17 @@ delta として受け取る。protocol 0.13 で追加した契約で、Client �
   (`ConversationViewState.layout`) がすでに共有しており、この契約はそれを置き換えない。
   `for_shared_workbench` がアクティブタブを共有から外す挙動も変えない。Client 統合では
   両者を合成して表示する。
+- Desktop は Workspace を開いた時点で購読し、snapshot を `WorkspaceViewState` に適用して
+  以後の delta も反映する。Workspace を閉じたときと終了時に購読を解除する。
+- Desktop が共有へ送るのは開いているタブの並びとアクティブ文書だけで、カーソル位置・
+  選択・スクロールとパネル寸法は送らない。送信は 150ms の debounce を挟み、直前に
+  適用したタブ構成と同じ間は再送しない。
+- Desktop はウィンドウが再びアクティブになったとき（スリープ復帰やバックグラウンド復帰）
+  に snapshot を取り直して再同期する。受信の異常や event の欠落時も snapshot へ戻る。
+- 共有 view の適用ではタブの並びと選択中の文書だけを変更し、既に開いている文書の内容は
+  置き換えない。共有側で閉じられた未保存の文書は、データ損失を避けるためタブとして残す。
+- 共有するのはタブ構成と文書の更新状況だけで、レイアウト寸法やレスポンシブな状態は
+  各端末に委ねる（Issue #290 のコメント）。
 
 ## Terminal の同期契約
 
