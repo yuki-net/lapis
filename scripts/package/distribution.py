@@ -226,7 +226,7 @@ def collect_binaries(directory: Path) -> dict[str, bytes]:
 
 def require_binaries(files: dict[str, bytes]) -> None:
     for name in REQUIRED_BINARIES:
-        if not any(entry.startswith(f"{name}.") or entry == name for entry in files):
+        if not any(entry in (name, f"{name}.exe") for entry in files):
             raise DistributionError(f"必須の実行ファイルがありません: {name}")
 
 
