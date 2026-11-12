@@ -151,7 +151,10 @@ pub struct SessionViewCursor {
     pending: Mutex<VecDeque<WorkspaceView>>,
 }
 
-/// 自分の送信として覚えておく件数の上限。応答待ちが積み重なる目安。
+/// 自分の送信として覚えておく revision の上限。
+///
+/// 応答待ち（`pending`）には適用しない。応答待ちは送信キュー上の件数までしか
+/// 増えず、切り捨てると応答との対応がずれて自分の echo を再適用するため。
 const MAX_LOCAL_ENTRIES: usize = 16;
 
 impl SessionViewCursor {
@@ -174,11 +177,13 @@ impl SessionViewCursor {
 
     /// これから送る自分の view を記録する。送信より前に呼ぶ。応答より先に自分の
     /// 更新が event として届いても、値を照合して再適用しないため。
+    ///
+    /// 応答待ちの記録は件数で切り捨てない。切り捨てると、消えた送信の応答が
+    /// 次の送信の記録を先頭から消費し、その echo を自分の更新と判定できなくなる。
+    /// 応答待ちは送信キューに載っている件数までしか増えず、応答または
+    /// `abort_local` で必ず 1 件ずつ減る。
     pub fn begin_local(&self, view: &WorkspaceView) {
         if let Ok(mut pending) = self.pending.lock() {
-            while pending.len() >= MAX_LOCAL_ENTRIES {
-                pending.pop_front();
-            }
             pending.push_back(view.clone());
         }
     }
@@ -865,6 +870,40 @@ mod replica_tests {
         // 他人の更新は適用する。
         session.apply_event(&workspace, 3, Some(view("document-c")));
         assert!(session.watch().take_if_changed(&workspace, 0).is_some());
+    }
+
+    /// 応答待ちが上限を超えて積み重なっても、先頭の記録を切り捨てない。
+    ///
+    /// 切り捨てると、消えた送信の echo を自分の更新と判定できず、共有 view として
+    /// 再適用してしまう。さらにその応答が次の送信の記録を先頭から消費するため、
+    /// 後続の echo も判定できなくなる。
+    #[test]
+    fn many_pending_sends_are_not_dropped() {
+        let mut session = SessionViewReplica::new(SessionViewWatch::new());
+        let workspace = WorkspaceId::new("workspace-1");
+        session.subscribe_snapshot(workspace.clone(), 0, None);
+        let first = view("document-a");
+        // 応答を待たずに十分多くの送信を積む。上限を超える件数にする。
+        session.begin_local(&first);
+        for index in 1..40 {
+            session.begin_local(&view(&format!("document-{index}")));
+        }
+
+        // 最初の送信の echo が、その応答より先に届く。
+        session.apply_event(&workspace, 1, Some(first.clone()));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_none(),
+            "応答待ちの記録を切り捨てたため、自分の echo を再適用しました"
+        );
+
+        // 応答で先頭（最初の送信）だけが消える。
+        session.accept_local(1);
+        // 2 番目の送信の echo も自分の更新として捨てる。
+        session.apply_event(&workspace, 2, Some(view("document-1")));
+        assert!(
+            session.watch().take_if_changed(&workspace, 0).is_none(),
+            "先の送信の応答が、次の送信の記録を消しました"
+        );
     }
 
     /// 応答を待たずに次の送信が積み重なっても、先の送信の event を捨てない。

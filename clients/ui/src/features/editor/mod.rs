@@ -816,10 +816,7 @@ impl Editor {
     }
 
     pub(crate) fn activate(&mut self, id: DocumentId, cx: &mut Context<Self>) {
-        // 明示的な選択は共有の active より優先する。保留を捨てないと、
-        // この選択を反映した snapshot を受理するときに上書きされる。
-        self.shared_active.explicit_selection();
-        self.submit(
+        let submitted = self.submit(
             false,
             move |client| {
                 client.editor.activate_document(&id);
@@ -827,6 +824,12 @@ impl Editor {
             },
             cx,
         );
+        // 選択を受け付けたときだけ、共有の active の保留を捨てる。復旧待ちなどで
+        // 受け付けられなかった場合は選択自体が起きないため、共有の active を
+        // 残しておかないと、復旧後の snapshot でも反映されなくなる。
+        if submitted {
+            self.shared_active.explicit_selection();
+        }
     }
 
     pub(crate) fn selected_text(&self) -> Option<String> {
@@ -1228,6 +1231,50 @@ mod tests {
             Some(second)
         );
         assert_eq!(body(&editor, cx), "fn second() {}");
+    }
+
+    /// 選択が受け付けられなかったときは、共有の active の保留を残す。
+    ///
+    /// 復旧待ちで `submit` が拒否する状況ではタブ選択自体が起きないため、
+    /// 保留を捨てると復旧後の snapshot でも共有の active が反映されない。
+    #[gpui::test]
+    fn a_rejected_selection_keeps_the_deferred_shared_active(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let second = opened.tabs[1].id.clone();
+        let third = opened.tabs[2].id.clone();
+        show(&editor, &opened, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second.clone());
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 1;
+            editor.receive_shared_snapshot(&shared, cx);
+        });
+        // 復旧待ちで選択を受け付けない。
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 0;
+            editor.recovery = true;
+            editor.activate(third, cx);
+        });
+        assert!(
+            editor.read_with(cx, |editor, _| editor.has_pending()),
+            "復旧待ちは選択を受け付けない"
+        );
+
+        // 復旧後の snapshot を受理すると、保留した共有の active を反映する。
+        let mut newer = opened.clone();
+        newer.sequence += 2;
+        newer.active = Some(opened.tabs[0].id.clone());
+        editor.update(cx, |editor, cx| {
+            editor.recovery = false;
+            editor.accept_snapshot(&newer, true, cx);
+        });
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(second)
+        );
     }
 
     /// 入力中に共有の active を保留していても、後からの明示的な選択が優先される。
