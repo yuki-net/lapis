@@ -44,7 +44,8 @@ def build(args) -> int:
     packages = {}
     for platform, directory in _platforms(args.platform).items():
         packages[platform] = package.build(
-            directory, work / f"{args.name}-{args.version}-{platform}.zip"
+            directory,
+            work / package.package_name(args.name, args.version, platform),
         )
     generated_at = args.generated_at or dt.datetime.now(dt.timezone.utc).replace(
         microsecond=0

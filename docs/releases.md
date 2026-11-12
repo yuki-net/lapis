@@ -29,6 +29,10 @@ python -m scripts.release keygen --key-id lapis-release --out ~/.lapis/release-k
 鍵 file の path を設定してもよい。CI では secret `LAPIS_RELEASE_SIGNING_KEY` に鍵 file の
 中身を入れ、workflow が一時 file に復元する。secret が無い場合 workflow は失敗する。
 
+`release/trusted-keys.json` に公開鍵が無い `key_id` の manifest は検証で拒否される。
+release workflow も同じ registry を使うため、公開鍵を登録するまで CI の Release job は
+失敗する（未登録の鍵で署名された成果物を通さないための意図的な失敗）。
+
 ## 2. package と manifest の生成
 
 platform ごとに展開後の file を directory へまとめてから生成する。`--platform` は

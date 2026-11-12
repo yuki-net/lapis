@@ -6,16 +6,29 @@
 from __future__ import annotations
 
 import os
+import re
 import stat
 import zipfile
 from pathlib import Path
 
 FIXED_TIMESTAMP = (1980, 1, 1, 0, 0, 0)
 EXECUTABLE_SUFFIXES = {".exe", ".cmd", ".bat", ".sh", ""}
+NAME_PATTERN = re.compile(r"^[a-z0-9]+([._-][a-z0-9]+)*$")
 
 
 class PackageError(ValueError):
     """package に含められない入力。"""
+
+
+def package_name(name: str, version: str, platform: str) -> str:
+    """配置先で衝突しない package 名を作る。名前に path 要素を許さない。"""
+    if not NAME_PATTERN.match(name):
+        raise PackageError(f"package 名の形式が不正: {name!r}")
+    if not NAME_PATTERN.match(platform):
+        raise PackageError(f"platform 名の形式が不正: {platform!r}")
+    if not version or "/" in version or "\\" in version or ".." in version:
+        raise PackageError(f"version の形式が不正: {version!r}")
+    return f"{name}-{version}-{platform}.zip"
 
 
 def collect(input_dir: Path) -> list[Path]:

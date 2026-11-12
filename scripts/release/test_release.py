@@ -205,6 +205,21 @@ class PackageTests(TempDirTest):
         with self.assertRaises(package.PackageError):
             package.build(empty, self.root / "empty.zip")
 
+    def test_package_name_rejects_path_elements(self):
+        self.assertEqual(
+            package.package_name("lapis", "0.2.0", "windows-x86_64"),
+            "lapis-0.2.0-windows-x86_64.zip",
+        )
+        for name, version, platform in (
+            ("../evil", "0.2.0", "windows-x86_64"),
+            ("lapis", "../../0.2.0", "windows-x86_64"),
+            ("lapis", "0.2.0", "../linux"),
+            ("", "0.2.0", "windows-x86_64"),
+        ):
+            with self.subTest(name=name, version=version, platform=platform):
+                with self.assertRaises(package.PackageError):
+                    package.package_name(name, version, platform)
+
 
 class PublishTests(TempDirTest):
     class FakeRemote:
