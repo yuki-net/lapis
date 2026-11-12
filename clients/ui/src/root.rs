@@ -115,6 +115,9 @@ pub(crate) struct DesktopRoot {
     /// 適用中に次の通知が来ても取りこぼさないよう、完了後にもう一度確認する。
     session_view: Option<crate::app::SessionViewHandle>,
     session_view_applying: bool,
+    /// 反映中に見送った view 通知があるか。完了時に再確認する。
+    /// 見送った時だけ立て、変化が無いのに再投入しない。
+    session_view_pending: bool,
     /// 自分のタブ変更を共有へ送る debounce。
     session_view_task: Option<gpui::Task<()>>,
     /// 接続中の Workspace の共有状態が古い可能性があるか。表示に出す。
@@ -719,6 +722,7 @@ impl DesktopRoot {
             workbench_publish_signature: None,
             session_view,
             session_view_applying: false,
+            session_view_pending: false,
             session_view_task: None,
             session_view_stale: false,
             session_view_resync_pending: false,
@@ -1120,10 +1124,15 @@ impl DesktopRoot {
     /// 未確定の入力がある間は適用せず、Idleで再試行する。適用した値はそのまま
     /// 送り返さない。適用中に届いた次の変更は、反映完了後にもう一度適用する。
     fn apply_remote_session_view(&mut self, cx: &mut Context<Self>) {
-        if self.session_view.is_none()
-            || self.session_view_applying
-            || self.editor.read(cx).has_in_flight()
-        {
+        if self.session_view.is_none() {
+            return;
+        }
+        if self.session_view_applying {
+            // 反映中の通知は捨てずに記録し、完了後にもう一度確認する。
+            self.session_view_pending = true;
+            return;
+        }
+        if self.editor.read(cx).has_in_flight() {
             return;
         }
         self.session_view_applying = true;
@@ -1144,9 +1153,10 @@ impl DesktopRoot {
                         false
                     }
                 };
-                // 反映した時だけ、反映中に届いた次の変更を確認する。変化が無いのに
-                // 再投入すると、worker への送信が終わらない背景ループになる。
-                if applied {
+                // 反映した時と、反映中に見送った通知がある時だけ再確認する。
+                // 変化が無いのに再投入すると、worker への送信が終わらない背景ループになる。
+                let pending = std::mem::take(&mut root.session_view_pending);
+                if applied || pending {
                     root.apply_remote_session_view(cx);
                 }
             },
