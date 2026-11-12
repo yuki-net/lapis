@@ -427,6 +427,93 @@ fn scrollback_delta_tail_truncate_resets() {
     assert_eq!(delta.rows.len(), 2, "reset should contain all new rows");
 }
 
+/// scrollback が上限に達して `VecDeque` が 2 スライスへ回り込んだ後も、
+/// `screen()` が panic せず、行の順序と色属性を保つこと。
+///
+/// 以前は wezterm の `Screen::with_phys_lines`（不変版）が後半スライスを
+/// 絶対 index で参照していたため、2000 行を超えた時点で範囲外 panic していた。
+#[test]
+fn screen_survives_scrollback_wrap_and_keeps_row_order_and_colors() {
+    let (mut engine, _writes) = engine();
+    // 上限 (2000) + visible (4) を十分に超えて VecDeque を回り込ませる。
+    let total = 2_100usize;
+    for index in 0..total {
+        engine.process(format!("\x1b[31mL{index}\x1b[0m\r\n").as_bytes());
+    }
+
+    let screen = engine.screen();
+
+    assert_eq!(
+        screen.rows.len(),
+        screen.size.rows as usize,
+        "visible rows must match the terminal height"
+    );
+
+    // scrollback は上限までで、古い行から昇順に連続していること。
+    assert_eq!(screen.scrollback.len(), MAX_SCROLLBACK_LINES);
+    let numbers: Vec<usize> = screen
+        .scrollback
+        .iter()
+        .map(|row| {
+            let text = row.plain_text();
+            text.trim_end()
+                .strip_prefix('L')
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or_else(|| panic!("unexpected scrollback row: {text:?}"))
+        })
+        .collect();
+    assert!(
+        numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+        "scrollback rows must be contiguous and ascending"
+    );
+
+    // 色属性が落ちていないこと（#305 の症状そのもの）。
+    for row in &screen.scrollback {
+        assert_eq!(
+            row.cells[0].foreground,
+            terminal::TerminalColor::Indexed(1),
+            "scrollback rows must keep their color attributes: {:?}",
+            row.plain_text().trim_end()
+        );
+    }
+
+    // visible 行は末尾の 3 行と、改行後の空行。
+    let visible: Vec<String> = screen
+        .rows
+        .iter()
+        .map(|row| row.plain_text().trim_end().to_owned())
+        .collect();
+    let row_count = screen.size.rows as usize;
+    let mut expected_visible: Vec<String> = (total - (row_count - 1)..total)
+        .map(|index| format!("L{index}"))
+        .collect();
+    expected_visible.push(String::new());
+    assert_eq!(visible, expected_visible);
+    assert!(
+        !numbers.contains(&(total - (row_count - 1))),
+        "visible rows must not be duplicated in scrollback"
+    );
+}
+
+/// 回り込み後に画面サイズを変えても panic しないこと（`resize` も `screen()` を通る）。
+#[test]
+fn resize_after_scrollback_wrap_does_not_panic() {
+    let (mut engine, _writes) = engine();
+    for index in 0..2_100 {
+        engine.process(format!("\x1b[31mL{index}\x1b[0m\r\n").as_bytes());
+    }
+
+    let (screen, delta) = engine.resize(TerminalSize::new(64, 8));
+
+    assert_eq!(screen.size, TerminalSize::new(64, 8));
+    assert_eq!(screen.rows.len(), 8);
+    assert_eq!(delta.size, screen.size);
+    assert!(
+        delta.changed_rows.len() <= 8,
+        "resize delta must report at most the visible rows"
+    );
+}
+
 #[test]
 fn visible_rows_not_duplicated_in_scrollback() {
     // visible行がscrollbackに含まれないことを確認
