@@ -34,6 +34,8 @@ pub(crate) struct DocumentClient {
     session_view_signature: Option<(Vec<DocumentId>, Option<DocumentId>)>,
     /// 最後に適用した通知順。古い通知の再適用を防ぐ。
     session_view_sequence: u64,
+    /// 購読を開始した Workspace。二重の購読解除を送らないために保持する。
+    session_view_open: Option<WorkspaceId>,
 }
 
 impl DocumentClient {
@@ -56,6 +58,7 @@ impl DocumentClient {
             session_view,
             session_view_signature: None,
             session_view_sequence: 0,
+            session_view_open: None,
         }
     }
 
@@ -78,6 +81,7 @@ impl DocumentClient {
             session_view,
             session_view_signature: None,
             session_view_sequence: 0,
+            session_view_open: None,
         }
     }
 }
@@ -152,15 +156,20 @@ impl DocumentClient {
     }
 
     /// Workspace を閉じたときに購読を解除する。以後の delta は適用しない。
+    /// 解除は 1 回だけ送る。Workspace が無い状態で繰り返し呼ばれても何もしない。
     pub(crate) fn close_session_view(&mut self) {
-        if let Some(handle) = &self.session_view {
-            #[cfg(not(target_family = "wasm"))]
-            handle.close();
-            #[cfg(target_family = "wasm")]
-            desktop_client::web_host::close_session_view();
-            let _ = handle;
-        }
         self.session_view_signature = None;
+        self.session_view_open = None;
+        let Some(handle) = &self.session_view else {
+            return;
+        };
+        #[cfg(not(target_family = "wasm"))]
+        handle.close();
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = handle;
+            desktop_client::web_host::close_session_view();
+        }
     }
 
     /// 1 回だけ共有 view を取り込み、適用できた snapshot を返す。
@@ -171,7 +180,10 @@ impl DocumentClient {
     /// ローカル変更を共有へ送れるようにする。
     pub(crate) fn apply_session_view(&mut self) -> Result<Option<ClientSnapshot>, String> {
         let Some(workspace) = self.editor.workspace_id().cloned() else {
-            self.close_session_view();
+            // Workspace が無い間は購読もしない。既に解除済みなら何もしない。
+            if self.session_view_open.take().is_some() {
+                self.close_session_view();
+            }
             return Ok(None);
         };
         let Some(handle) = &self.session_view else {
@@ -181,6 +193,7 @@ impl DocumentClient {
         // snapshot 待ちの間は何もしない。
         #[cfg(not(target_family = "wasm"))]
         handle.open(&workspace)?;
+        self.session_view_open = Some(workspace.clone());
         let watch = session_view_watch(handle);
         let applied = watch.take_if_changed(&workspace, self.session_view_sequence);
         let Some((sequence, _, view)) = applied else {
