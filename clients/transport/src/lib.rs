@@ -123,6 +123,11 @@ impl ClientCore {
         );
     }
 
+    /// Workspace を切り替えたらイベント連番の系列が変わるため、基準を取り直す。
+    fn reset_watermark(&mut self) {
+        self.event_sequence = None;
+    }
+
     pub fn receive(
         &mut self,
         message: ServerMessage,
@@ -152,6 +157,17 @@ impl ClientCore {
                 }
                 if let ResponseBody::SnapshotResync(snapshot) = &response.body {
                     self.set_watermark(snapshot.snapshot.event_watermark);
+                }
+                // Workspace を移った直後は、次のイベントを新しい系列の先頭として扱う。
+                // 連番は Workspace ごとに独立しているため、前の系列と比較しない。
+                if matches!(
+                    (&pending.request.body, &response.body),
+                    (
+                        RequestBody::WorkspaceConnect(_),
+                        ResponseBody::WorkspaceConnect(_)
+                    )
+                ) {
+                    self.reset_watermark();
                 }
                 let _ = pending.respond.send(Ok(response.body));
                 Ok(None)

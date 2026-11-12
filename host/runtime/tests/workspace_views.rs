@@ -251,3 +251,49 @@ fn closed_sessions_stop_receiving_view_state_deltas() {
         "閉じた Session へは delta を配らない"
     );
 }
+
+/// `workspace.close` は attachment と購読だけを解除し、Session は閉じない。
+/// 同じ Session が `snapshot.resync` と `workspace.connect` で戻れることを保証する。
+#[test]
+fn closing_a_workspace_keeps_the_session_usable() {
+    let workspace_id = WorkspaceId::try_new("workspace-view").unwrap();
+    let (service, _root) = service_with_workspace(&workspace_id);
+    let session = session("session-close", &workspace_id);
+    connect(&service, &session);
+
+    close(&service, &session);
+
+    // close 直後は接続中ではないため、snapshot は拒否される。
+    let denied = service
+        .dispatch(
+            session.clone(),
+            envelope(
+                "snapshot-after-close",
+                RequestBody::SnapshotResync(client_api::SnapshotRequest {
+                    workspace_id: workspace_id.clone(),
+                    reason: client_api::SnapshotReason::Reconnect,
+                }),
+            ),
+        )
+        .unwrap();
+    assert!(
+        matches!(denied.body, ResponseBody::Error(_)),
+        "close 後は接続中ではない"
+    );
+
+    // 同じ Session で再接続でき、続けて操作できる。
+    connect(&service, &session);
+    let snapshot = service
+        .dispatch(
+            session.clone(),
+            envelope(
+                "snapshot-after-reconnect",
+                RequestBody::SnapshotResync(client_api::SnapshotRequest {
+                    workspace_id: workspace_id.clone(),
+                    reason: client_api::SnapshotReason::Reconnect,
+                }),
+            ),
+        )
+        .unwrap();
+    assert!(matches!(snapshot.body, ResponseBody::SnapshotResync(_)));
+}

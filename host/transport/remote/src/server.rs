@@ -460,6 +460,17 @@ pub(crate) async fn handle_socket(
                     reply.close = true;
                 }
             }
+        } else if matches!(
+            &reply.message,
+            ServerMessage::Response(ResponseEnvelope {
+                body: ResponseBody::WorkspaceClose(_),
+                ..
+            })
+        ) {
+            // `workspace.close` は Session を終了させない。購読だけを外し、次の
+            // `workspace.connect` で張り直す。event 連番は Workspace ごとに独立して
+            // いるため、Client 側も connect で系列を切り替える。
+            events = None;
         }
         if send_message(
             &mut socket,

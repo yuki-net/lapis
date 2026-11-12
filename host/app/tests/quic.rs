@@ -261,6 +261,110 @@ async fn desktop_workbench_port_receives_remote_updates() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_session_switches_workspace_in_place_after_close() {
+    let fixture = Fixture::new().await;
+    let other_root = tempfile::tempdir().unwrap();
+    let other = fixture.host.register_workspace(other_root.path()).unwrap();
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_user_session_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut client = fixture.connect().await;
+    client
+        .send(&ClientMessage::Pair(PairRequest::new(
+            hello("switch-in-place"),
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    let ServerMessage::Paired(mut paired) = receive(&mut client).await else {
+        panic!("user pairing")
+    };
+    let credential = paired.credential_id().unwrap();
+    let secret = zeroize::Zeroizing::new(paired.take_secret().unwrap());
+    drop(client);
+
+    let mut client = fixture.connect().await;
+    client
+        .send(&ClientMessage::Authenticate(AuthenticateRequest::new(
+            hello("switch-in-place"),
+            fixture.workspace.clone(),
+            &credential,
+            &secret,
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut client).await,
+        ServerMessage::Authenticated(_)
+    ));
+    connect_workspace(&mut client, &fixture.workspace).await;
+
+    // close を挟まずに別 Workspace へは移れない。
+    assert!(matches!(
+        request(
+            &mut client,
+            2,
+            RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: other.clone(),
+            })
+        )
+        .await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+
+    // close しても Session は生きており、同じ接続のまま切替先へ移れる。
+    assert!(matches!(
+        request(
+            &mut client,
+            3,
+            RequestBody::WorkspaceClose(WorkspaceCloseRequest {
+                workspace_id: fixture.workspace.clone(),
+            })
+        )
+        .await,
+        ResponseBody::WorkspaceClose(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut client,
+            4,
+            RequestBody::WorkspaceConnect(WorkspaceConnectRequest {
+                workspace_id: other.clone(),
+            })
+        )
+        .await,
+        ResponseBody::WorkspaceConnect(_)
+    ));
+    // 切替後は新しい Workspace の操作だけが通る。
+    assert!(matches!(
+        request(
+            &mut client,
+            5,
+            RequestBody::SnapshotResync(SnapshotRequest {
+                workspace_id: other.clone(),
+                reason: SnapshotReason::Reconnect,
+            })
+        )
+        .await,
+        ResponseBody::SnapshotResync(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut client,
+            6,
+            RequestBody::WorkbenchGet(WorkbenchGetRequest {
+                workspace_id: fixture.workspace.clone(),
+            })
+        )
+        .await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn workbench_updates_and_conflicts_cross_authenticated_quic_sessions() {
     let fixture = Fixture::new().await;
     let (mut first, _) = fixture.pair("workbench-first").await;

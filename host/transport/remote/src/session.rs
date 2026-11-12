@@ -7,8 +7,8 @@ use std::{
 use client_api::{
     CREDENTIAL_EXPIRED, CURRENT_PROTOCOL, ErrorCode, FORBIDDEN, HOST_MISMATCH, HelloResponse,
     INTERNAL, INVALID_REQUEST, PROTOCOL_ERROR, ProtocolError, ProtocolRange, RATE_LIMITED,
-    RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope, UNAUTHORIZED, WORKSPACE_MISMATCH,
-    WORKSPACE_UNAVAILABLE,
+    RequestBody, RequestEnvelope, RequestId, ResponseBody, ResponseEnvelope, UNAUTHORIZED,
+    WORKSPACE_MISMATCH, WORKSPACE_UNAVAILABLE,
 };
 
 use crate::{
@@ -278,6 +278,12 @@ impl ConnectionSession {
             .grant
             .as_ref()
             .expect("authenticated branch must contain a grant");
+        // 接続中の Workspace 以外へ移る要求だけを切替として扱う。同じ Workspace への
+        // 接続し直しは切替権限を要さない。
+        let switching = matches!(
+            &request.body,
+            RequestBody::WorkspaceConnect(connect) if &connect.workspace_id != grant.workspace_id()
+        );
         let access = auth
             .lock()
             .map_err(|_| AccessError::Authentication(AuthError::CredentialUnavailable))
@@ -285,6 +291,7 @@ impl ConnectionSession {
         if let Err(error) = access {
             return access_rejected(&request, error);
         }
+        let grant = grant.clone();
 
         let response = match tokio::time::timeout(
             request_timeout,
@@ -309,6 +316,16 @@ impl ConnectionSession {
                 message: ServerMessage::Response(error_response(&request, INTERNAL)),
                 close: false,
             };
+        }
+        // 切替が成功した場合だけ、以後の要求を新しい Workspace で認可する。
+        if switching
+            && matches!(response.body, ResponseBody::WorkspaceConnect(_))
+            && let RequestBody::WorkspaceConnect(connect) = &request.body
+        {
+            self.grant = Some(grant.with_workspace(connect.workspace_id.clone()));
+            if let Ok(mut auth) = auth.lock() {
+                auth.commit_workspace_switch(grant.session_id(), &connect.workspace_id);
+            }
         }
         SessionReply {
             message: ServerMessage::Response(response),
