@@ -19,10 +19,9 @@ use crate::{
         search::SearchFeature,
         settings::SettingsFeature,
         tasks::TasksFeature,
-        terminal::{TerminalFeature, TerminalFeatureEvent},
         update::UpdateFeature,
     },
-    shell::main::{Shell, ShellPresentation},
+    shell::main::{Shell, ShellPresentation, TerminalContext, TerminalTabSource},
     workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
 };
 use desktop_client::EditorSession;
@@ -30,6 +29,20 @@ use gpui::{
     AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
 };
 use std::collections::HashMap;
+
+/// 共有ハンドルから、適用判定を持つ watch を取り出す。
+fn session_view_watch_of(
+    handle: &crate::app::SessionViewHandle,
+) -> &desktop_client::SessionViewWatch {
+    #[cfg(not(target_family = "wasm"))]
+    {
+        handle.watch()
+    }
+    #[cfg(target_family = "wasm")]
+    {
+        handle
+    }
+}
 
 enum PathRequest {
     Open(std::path::PathBuf),
@@ -76,7 +89,6 @@ pub(crate) struct DesktopRoot {
     files: Entity<FilesFeature>,
     git: Entity<GitFeature>,
     tasks: Entity<TasksFeature>,
-    terminal: Entity<TerminalFeature>,
     problems: Entity<ProblemsFeature>,
     resources: Entity<ResourceManagerFeature>,
     search: Entity<SearchFeature>,
@@ -102,13 +114,17 @@ pub(crate) struct DesktopRoot {
     workbench_publish_signature: Option<desktop_client::ConversationViewState>,
     /// Workspace view の購読から受け取った共有 view を UI へ反映する。
     /// 適用中に次の通知が来ても取りこぼさないよう、完了後にもう一度確認する。
-    #[cfg(not(target_family = "wasm"))]
-    session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
-    #[cfg(not(target_family = "wasm"))]
+    session_view: Option<crate::app::SessionViewHandle>,
     session_view_applying: bool,
+    /// 反映中に見送った view 通知があるか。完了時に再確認する。
+    /// 見送った時だけ立て、変化が無いのに再投入しない。
+    session_view_pending: bool,
     /// 自分のタブ変更を共有へ送る debounce。
-    #[cfg(not(target_family = "wasm"))]
     session_view_task: Option<gpui::Task<()>>,
+    /// 接続中の Workspace の共有状態が古い可能性があるか。表示に出す。
+    session_view_stale: bool,
+    /// Editor の処理中に見送った snapshot 再取得。Idle で実行する。
+    session_view_resync_pending: bool,
     #[cfg(not(target_family = "wasm"))]
     native_smoke_requested: bool,
     #[cfg(not(target_family = "wasm"))]
@@ -151,16 +167,17 @@ impl DesktopRoot {
         let pending_initial_task = services.initial_task.clone();
         #[cfg(not(target_family = "wasm"))]
         let workbench_watch = services.workbench_watch.clone();
-        #[cfg(not(target_family = "wasm"))]
         let session_view = services.session_view.clone();
-        #[cfg(not(target_family = "wasm"))]
-        let session_view_watch = session_view.as_ref().map(|sync| sync.watch().clone());
+        let session_view_watch = session_view
+            .as_ref()
+            .map(|handle| session_view_watch_of(handle).clone());
         #[cfg(not(target_family = "wasm"))]
         let workbench_revision = workbench_watch
             .as_ref()
             .map(desktop_client::WorkbenchWatch::revision)
             .unwrap_or_default();
         let conversation_id = services.conversation.active_id().clone();
+        let terminal_context = conversation_id.clone();
         let terminal_root = session.workspace_root().map(ToOwned::to_owned);
         let initial_locale = services.settings.settings().locale();
         if services.terminal.terminals().is_empty() {
@@ -174,27 +191,13 @@ impl DesktopRoot {
         }
         let document_connection = Some(session.document_connection());
         let initial_workspace = session.workspace_id().cloned();
-        let worker = ClientWorker::new({
-            #[cfg(not(target_family = "wasm"))]
-            {
-                DocumentClient::new(
-                    session,
-                    services.conversation,
-                    services.lsp,
-                    services.git.backend(),
-                    session_view.clone(),
-                )
-            }
-            #[cfg(target_family = "wasm")]
-            {
-                DocumentClient::new(
-                    session,
-                    services.conversation,
-                    services.lsp,
-                    services.git.backend(),
-                )
-            }
-        });
+        let worker = ClientWorker::new(DocumentClient::new(
+            session,
+            services.conversation,
+            services.lsp,
+            services.git.backend(),
+            session_view.clone(),
+        ));
         let process_worker = ClientWorker::new(ProcessWorker::new(
             services.process.clone(),
             initial_workspace.clone(),
@@ -223,8 +226,6 @@ impl DesktopRoot {
         let git = cx.new(|cx| GitFeature::new(services.git, cx));
         let changes = cx.new(|cx| ChangesFeature::new(git.clone(), cx));
         let tasks = cx.new(|cx| TasksFeature::new(services.task, cx));
-        let terminal = cx
-            .new(|cx| TerminalFeature::new(services.terminal, terminal_root, conversation_id, cx));
         let problems = cx.new(|cx| ProblemsFeature::new(worker.clone(), cx));
         let resources =
             cx.new(|_| ResourceManagerFeature::new(process_worker, initial_workspace.clone()));
@@ -289,7 +290,6 @@ impl DesktopRoot {
             (id::VIEW_GIT.into(), git.clone().into()),
             (id::VIEW_CHANGES.into(), changes.into()),
             (id::VIEW_ASSISTANT.into(), tasks.clone().into()),
-            (id::VIEW_TERMINAL.into(), terminal.clone().into()),
             (id::VIEW_PROBLEMS.into(), problems.clone().into()),
             (id::VIEW_RESOURCES.into(), resources.clone().into()),
             (id::VIEW_SEARCH.into(), search.clone().into()),
@@ -300,6 +300,11 @@ impl DesktopRoot {
         ]);
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
         let branch_picker = cx.new(|cx| features::git::BranchPicker::new(git.clone(), window, cx));
+        let terminal_backend = services.terminal.backend();
+        let terminal_context = std::rc::Rc::new(std::cell::RefCell::new(TerminalContext {
+            root: terminal_root.clone(),
+            conversation: terminal_context,
+        }));
         shell.update(cx, |shell, cx| {
             shell.branch_picker = Some(branch_picker);
             shell.set_locale(initial_locale.clone(), cx);
@@ -308,6 +313,13 @@ impl DesktopRoot {
                     update.set_locale(initial_locale.clone(), cx)
                 });
             }
+            shell.configure_terminal_tabs(
+                TerminalTabSource {
+                    backend: terminal_backend,
+                    context: terminal_context,
+                },
+                cx,
+            );
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
                 shell.open_view_in_zone(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
@@ -328,14 +340,7 @@ impl DesktopRoot {
             if let Some(view) = desktop_client::web_host::restore_view() {
                 shell.restore_view(view, cx);
             }
-        });
-        if let Some(id) = shell.read(cx).active_terminal_resource() {
-            terminal.update(cx, |terminal, cx| terminal.show_resource(id, cx));
-        }
-        // 起動時からターミナルタブが見えていれば、既定 profile の自動起動を促す。
-        terminal.update(cx, |terminal, cx| {
-            let visible = shell.read(cx).shell.terminal_tab_visible();
-            terminal.sync_tab_presence(visible, cx);
+            shell.start_terminal_changes(cx);
         });
         // Resource Manager は表示中だけ取得する。初期 Layout の表示状態を反映する。
         resources.update(cx, |resources, cx| {
@@ -362,8 +367,8 @@ impl DesktopRoot {
                     return;
                 }
                 // スリープやバックグラウンドから戻ったら snapshot を取り直して再同期する。
-                #[cfg(not(target_family = "wasm"))]
                 root.resync_remote_session_view(cx);
+                root.sync_session_view_stale(cx);
             }),
             cx.observe_window_bounds(window, |root, window, cx| {
                 root.group.update(cx, |group, _| {
@@ -392,15 +397,6 @@ impl DesktopRoot {
                     cx.refresh_windows();
                 },
             ),
-            cx.subscribe(&terminal, |root, _, event: &TerminalFeatureEvent, cx| {
-                let id = match event {
-                    TerminalFeatureEvent::Started(id) | TerminalFeatureEvent::Selected(id) => {
-                        id.clone()
-                    }
-                };
-                root.activate_terminal(id, cx);
-                root.schedule_persist(cx);
-            }),
             cx.subscribe_in(&shell, window, |root, _, command, window, cx| {
                 root.command(command.clone(), window, cx)
             }),
@@ -501,20 +497,24 @@ impl DesktopRoot {
                     root.apply_remote_workbench(cx);
                 }
                 EditorEvent::Idle => {
+                    // 入力中に保留した共有の active は、この中の `receive_snapshot` →
+                    // `accept_snapshot` で反映される。
                     root.synchronize_group(cx);
                     #[cfg(not(target_family = "wasm"))]
-                    {
-                        root.apply_remote_workbench(cx);
-                        root.apply_remote_session_view(cx);
+                    root.apply_remote_workbench(cx);
+                    root.apply_remote_session_view(cx);
+                    root.sync_session_view_stale(cx);
+                    // Editor の処理中に見送った再同期を、Idle で実行する。
+                    if root.session_view_resync_pending {
+                        root.resync_remote_session_view(cx);
                     }
                 }
                 EditorEvent::Status(message) => {
                     root.set_status(message.clone(), cx);
                     #[cfg(not(target_family = "wasm"))]
-                    {
-                        root.apply_remote_workbench(cx);
-                        root.apply_remote_session_view(cx);
-                    }
+                    root.apply_remote_workbench(cx);
+                    root.apply_remote_session_view(cx);
+                    root.sync_session_view_stale(cx);
                 }
                 EditorEvent::WorkspaceSearch(query) => {
                     root.search
@@ -583,13 +583,11 @@ impl DesktopRoot {
             cx.observe(&shell, |root, _, cx| {
                 root.record_window_layout(cx);
                 root.sync_preview(cx);
-                // Layout のタブ参照を Terminal の固定参照へ反映し、
-                // ターミナルタブが見えたら既定 profile の自動起動を1回促す。
+                // Layout のターミナルタブと実体を一致させ、表示中のタブだけ自動起動する。
                 root.sync_terminal_tab(cx);
                 root.sync_resource_manager_visibility(cx);
                 root.schedule_persist(cx);
             }),
-            cx.observe(&terminal, |root, _, cx| root.schedule_persist(cx)),
         ];
 
         let weak = cx.entity().downgrade();
@@ -599,10 +597,15 @@ impl DesktopRoot {
         });
         subscriptions.push(cx.on_app_quit(|root, cx| {
             let view = root.persisted_view(cx);
-            #[cfg(not(target_family = "wasm"))]
-            if let Some(sync) = &root.session_view {
+            if let Some(handle) = &root.session_view {
                 // 終了時に購読を解除し、Host 側に残った参加者を残さない。
-                sync.close();
+                #[cfg(not(target_family = "wasm"))]
+                handle.close();
+                #[cfg(target_family = "wasm")]
+                {
+                    let _ = handle;
+                    desktop_client::web_host::close_session_view();
+                }
             }
             let worker = root.worker.clone();
             let receiver = worker.request(move |client| client.persist_view(view));
@@ -670,8 +673,28 @@ impl DesktopRoot {
             })
             .detach();
         }
+        // Web は接続の event pump から通知を受ける。watch の blocking 受信は使わない。
+        #[cfg(target_family = "wasm")]
+        if session_view_watch.is_some()
+            && let Some(mut changes) = desktop_client::web_host::session_view_changes()
+        {
+            cx.spawn(async move |root, cx| {
+                use futures_util::StreamExt;
+                while changes.next().await.is_some() {
+                    if root
+                        .update(cx, |root, cx| {
+                            root.apply_remote_session_view(cx);
+                            root.sync_session_view_stale(cx);
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            })
+            .detach();
+        }
         // 起動時に復元した Workspace は、最初の通知を待たずに購読を始める。
-        #[cfg(not(target_family = "wasm"))]
         if session_view_watch.is_some() {
             let weak = cx.entity().downgrade();
             cx.defer(move |cx| {
@@ -685,7 +708,6 @@ impl DesktopRoot {
             files,
             git,
             tasks,
-            terminal,
             problems,
             resources,
             search,
@@ -708,12 +730,12 @@ impl DesktopRoot {
             persist_task: None,
             persist_signature: None,
             workbench_publish_signature: None,
-            #[cfg(not(target_family = "wasm"))]
             session_view,
-            #[cfg(not(target_family = "wasm"))]
             session_view_applying: false,
-            #[cfg(not(target_family = "wasm"))]
+            session_view_pending: false,
             session_view_task: None,
+            session_view_stale: false,
+            session_view_resync_pending: false,
             #[cfg(not(target_family = "wasm"))]
             native_smoke_requested: initial.native_window_smoke,
             #[cfg(not(target_family = "wasm"))]
@@ -842,40 +864,40 @@ impl DesktopRoot {
                 cx,
             )
         });
-        let terminal_key =
-            ViewInstanceKey::new(crate::shell::PanelTab::tool(id::VIEW_TERMINAL).stable_view_key())
-                .unwrap();
-        let terminal_scope = self.workbench.view_scope(&terminal_key);
-        let resource = match terminal_scope {
-            Some(ViewScope::Resource(resource)) => {
-                Some(terminal::TerminalId::new(resource.clone()))
-            }
-            _ => None,
-        };
+        // Terminal はタブごとに個体が異なるため、代表として表示中の Terminal タブの
+        // 所属を使う。Resource 固定の参照先は各タブ自身が保持する。
+        let terminal_key = self
+            .shell
+            .read(cx)
+            .shell
+            .layout
+            .placements()
+            .into_iter()
+            .find(|(tab, _)| tab.is_terminal())
+            .and_then(|(tab, _)| ViewInstanceKey::new(tab.stable_view_key()));
+        let terminal_scope = terminal_key
+            .as_ref()
+            .and_then(|key| self.workbench.view_scope(key));
         let terminal_target = terminal_context_target(
             terminal_scope,
             &selected,
-            self.terminal.read(cx).context_task(),
+            &snapshot.conversation,
             &snapshot.conversations,
         );
-        // Resource参照タブが表示中なら、そのHost Terminalを優先して再接続する。
-        let resource = self.shell.read(cx).active_terminal_resource().or(resource);
-        self.terminal.update(cx, |terminal, cx| {
-            terminal.bind_resource(resource);
-            if let Some(target) = terminal_target {
-                terminal.set_context(
-                    target
-                        .record
-                        .and_then(|record| record.workspace.root.clone()),
-                    target.task,
-                    target
-                        .record
-                        .map(|record| record.terminals.clone())
-                        .unwrap_or_default(),
-                    cx,
-                );
-            }
-        });
+        if let Some(target) = terminal_target {
+            let root = target
+                .record
+                .and_then(|record| record.workspace.root.clone());
+            let summaries = target
+                .record
+                .map(|record| record.terminals.clone())
+                .unwrap_or_default();
+            self.shell.update(cx, |shell, cx| {
+                shell.set_terminal_context(root, target.task, summaries, cx)
+            });
+        }
+        self.shell
+            .update(cx, |shell, cx| shell.bind_terminal_resources(cx));
         self.conversation.update(cx, |conversation, cx| {
             conversation.context = Some(snapshot.conversation.clone());
             conversation.update(
@@ -1014,23 +1036,18 @@ impl DesktopRoot {
         self.workbench.prepare_task_switch(task.as_ref(), &view);
     }
 
-    /// Terminalタブの参照先をShellとTerminal Featureへ同時に反映する。
+    /// Terminalタブの参照先をShellへ反映する。
     fn activate_terminal(&mut self, id: terminal::TerminalId, cx: &mut Context<Self>) {
         self.shell
             .update(cx, |shell, cx| shell.open_terminal_tab(id.clone(), cx));
-        self.terminal
-            .update(cx, |terminal, cx| terminal.show_resource(id, cx));
-        self.sync_terminal_auto_start(cx);
+        self.sync_terminal_tab(cx);
         cx.notify();
     }
 
-    /// ターミナルタブが見えているとき、既定 profile の自動起動を1回だけ促す。
-    ///
-    /// Feature 側で冪等なので、タブが表示されるたびに呼んでよい。
+    /// ターミナルタブの表示状態を各実体へ伝える。表示中のタブだけ自動起動する。
     fn sync_terminal_auto_start(&mut self, cx: &mut Context<Self>) {
-        let visible = self.shell.read(cx).shell.terminal_tab_visible();
-        self.terminal
-            .update(cx, |terminal, cx| terminal.sync_tab_presence(visible, cx));
+        self.shell
+            .update(cx, |shell, cx| shell.sync_terminal_tab_presence(cx));
     }
 
     /// Resource Manager パネルの表示状態を Feature へ伝える。非表示の間は取得を止める。
@@ -1044,26 +1061,13 @@ impl DesktopRoot {
             .update(cx, |resources, cx| resources.set_visible(visible, cx));
     }
 
-    /// 復元したLayoutのうち、表示中のTerminalタブをHostの既存PTYへ再接続する。
+    /// 復元したLayoutのタブと実体を一致させ、表示中のタブへ自動起動を促す。
+    ///
+    /// 参照先 Resource はタブ自身が保持するため、ここで別のタブへ付け替えない。
+    /// 一致させるのは Layout 上のタブと実体だけ。
     fn sync_terminal_tab(&mut self, cx: &mut Context<Self>) {
-        let shell = self.shell.read(cx);
-        let update = terminal_binding_update(
-            shell.active_terminal_resource(),
-            shell.shell.terminal_tab_visible(),
-        );
-        match update {
-            TerminalBindingUpdate::Show(id) => self
-                .terminal
-                .update(cx, |terminal, cx| terminal.show_resource(id, cx)),
-            // 復元した Layout に参照先が無いため、前の Task の固定参照を解除する。
-            // 残すと現在の Task に無い Terminal ID を参照し続け、既存セッションの
-            // 表示も既定 profile の自動起動も妨げる。
-            TerminalBindingUpdate::Unbind => self
-                .terminal
-                .update(cx, |terminal, _| terminal.release_resource()),
-            // タブが画面に出ていないだけなら、PTY を維持するため参照を残す。
-            TerminalBindingUpdate::Keep => {}
-        }
+        self.shell
+            .update(cx, |shell, cx| shell.synchronize_terminal_tabs(cx));
         self.sync_terminal_auto_start(cx);
     }
 
@@ -1107,16 +1111,35 @@ impl DesktopRoot {
         );
     }
 
+    /// 共有 view を Editor と WindowGroup にも反映する。
+    ///
+    /// Shell のタブ構成だけを更新すると、共有された active 文書が変わっても Editor の
+    /// 本文が前の文書のまま残る。Editor と WindowGroup にも同じ snapshot を渡し、
+    /// 選択中の文書と本文を一致させる。
+    fn apply_shared_snapshot(&mut self, snapshot: &ClientSnapshot, cx: &mut Context<Self>) {
+        self.apply_snapshot(snapshot, cx);
+        self.group
+            .update(cx, |group, cx| group.publish(snapshot.clone(), cx));
+        self.editor.update(cx, |editor, cx| {
+            editor.receive_shared_snapshot(snapshot, cx)
+        });
+        self.synchronize_group(cx);
+    }
+
     /// 他Clientが共有したタブ構成をUIへ反映する。
     ///
     /// 未確定の入力がある間は適用せず、Idleで再試行する。適用した値はそのまま
     /// 送り返さない。適用中に届いた次の変更は、反映完了後にもう一度適用する。
-    #[cfg(not(target_family = "wasm"))]
     fn apply_remote_session_view(&mut self, cx: &mut Context<Self>) {
-        if self.session_view.is_none()
-            || self.session_view_applying
-            || self.editor.read(cx).has_in_flight()
-        {
+        if self.session_view.is_none() {
+            return;
+        }
+        if self.session_view_applying {
+            // 反映中の通知は捨てずに記録し、完了後にもう一度確認する。
+            self.session_view_pending = true;
+            return;
+        }
+        if self.editor.read(cx).has_in_flight() {
             return;
         }
         self.session_view_applying = true;
@@ -1126,15 +1149,23 @@ impl DesktopRoot {
             |client| client.apply_session_view(),
             |root, result, cx| {
                 root.session_view_applying = false;
-                match result {
-                    Ok(Some(snapshot)) => root.apply_snapshot(&snapshot, cx),
-                    Ok(None) => {}
+                let applied = match result {
+                    Ok(Some(snapshot)) => {
+                        root.apply_shared_snapshot(&snapshot, cx);
+                        true
+                    }
+                    Ok(None) => false,
                     Err(error) => {
                         eprintln!("Workspace view を反映できません: {error}");
+                        false
                     }
+                };
+                // 反映した時と、反映中に見送った通知がある時だけ再確認する。
+                // 変化が無いのに再投入すると、worker への送信が終わらない背景ループになる。
+                let pending = std::mem::take(&mut root.session_view_pending);
+                if applied || pending {
+                    root.apply_remote_session_view(cx);
                 }
-                // 反映中に届いた次の変更を、完了後すぐに適用する。
-                root.apply_remote_session_view(cx);
             },
         );
         if submitted.is_err() {
@@ -1145,66 +1176,95 @@ impl DesktopRoot {
     /// 自分のタブ開閉とアクティブ文書を、短い debounce で共有へ送る。
     ///
     /// 保存の debounce とは分離し、タブ操作が続く間は最後の状態だけを送る。
-    /// 共有の統合は Desktop だけのため、Web では何もしない。
+    /// 再同期の要求より後にだけ送り、共有済みの状態を古い値で上書きしない。
+    /// タブ構成とアクティブ文書が変わっていない編集では待機を延長しない。
     pub(crate) fn schedule_session_view_publish(&mut self, cx: &mut Context<Self>) {
-        #[cfg(target_family = "wasm")]
-        {
-            let _ = (self, cx);
-        }
-        #[cfg(not(target_family = "wasm"))]
-        {
-            if self.session_view.is_none()
-                || self.group.read(cx).closing
-                || self.group.read(cx).synchronization_required
-                || self.task_context_resolution == TaskContextResolution::Pending
-                || self.editor.read(cx).has_in_flight()
-            {
-                return;
-            }
-            self.session_view_task = Some(cx.spawn(async move |this, cx| {
-                crate::timer::Timer::after(std::time::Duration::from_millis(150)).await;
-                let _ = this.update(cx, |root, cx| {
-                    if root.group.read(cx).closing
-                        || root.group.read(cx).synchronization_required
-                        || root.task_context_resolution == TaskContextResolution::Pending
-                        || root.editor.read(cx).has_in_flight()
-                    {
-                        return;
-                    }
-                    let worker = root.worker.clone();
-                    let _ = worker.submit(
-                        cx,
-                        |client| client.publish_session_view(),
-                        |_, result, _| {
-                            if let Err(error) = result {
-                                eprintln!("Workspace view を共有できません: {error}");
-                            }
-                        },
-                    );
-                });
-            }));
-        }
-    }
-
-    /// スリープ等から復帰したら snapshot を取り直し、取りこぼした変更を再同期する。
-    #[cfg(not(target_family = "wasm"))]
-    fn resync_remote_session_view(&mut self, cx: &mut Context<Self>) {
         if self.session_view.is_none()
             || self.group.read(cx).closing
+            || self.group.read(cx).synchronization_required
+            || self.task_context_resolution == TaskContextResolution::Pending
             || self.editor.read(cx).has_in_flight()
         {
             return;
         }
+        // 既に同じ構成の送信待ちがあるなら、カーソル移動や入力で待機を延ばさない。
+        // 送信自体は worker 側で直前の構成と比較して省略される。
+        if self.session_view_task.is_some() {
+            return;
+        }
+        self.session_view_task = Some(cx.spawn(async move |this, cx| {
+            crate::timer::Timer::after(std::time::Duration::from_millis(150)).await;
+            let _ = this.update(cx, |root, cx| {
+                // 見送る場合も待機印を消す。残すと以後の予約がすべて止まる。
+                root.session_view_task = None;
+                if root.group.read(cx).closing
+                    || root.group.read(cx).synchronization_required
+                    || root.task_context_resolution == TaskContextResolution::Pending
+                    || root.editor.read(cx).has_in_flight()
+                {
+                    return;
+                }
+                let worker = root.worker.clone();
+                let _ = worker.submit(
+                    cx,
+                    |client| client.publish_session_view(),
+                    |_, result, _| {
+                        // 失敗したら署名を確定させず、次の変更で再送させる。
+                        if let Err(error) = result {
+                            eprintln!("Workspace view を共有できません: {error}");
+                        }
+                    },
+                );
+            });
+        }));
+    }
+
+    /// バックグラウンド復帰や再接続で snapshot を取り直し、取りこぼしを再同期する。
+    ///
+    /// 継続中の debounce があれば取り消し、再同期した snapshot より先に古い値を
+    /// 送らないようにする。Editor の処理中は保留し、Idle で実行する。
+    fn resync_remote_session_view(&mut self, cx: &mut Context<Self>) {
+        if self.session_view.is_none() || self.group.read(cx).closing {
+            return;
+        }
+        if self.editor.read(cx).has_in_flight() {
+            self.session_view_resync_pending = true;
+            return;
+        }
+        self.session_view_resync_pending = false;
+        self.session_view_task.take();
         let worker = self.worker.clone();
         let _ = worker.submit(
             cx,
             |client| client.resync_session_view(),
             |root, result, cx| match result {
-                Ok(Some(snapshot)) => root.apply_snapshot(&snapshot, cx),
+                Ok(Some(snapshot)) => root.apply_shared_snapshot(&snapshot, cx),
                 Ok(None) => {}
                 Err(error) => eprintln!("Workspace view を再同期できません: {error}"),
             },
         );
+    }
+
+    /// 共有 view が古い可能性を表示へ反映する。状態が変わった時だけ再描画する。
+    fn sync_session_view_stale(&mut self, cx: &mut Context<Self>) {
+        // Workspace を閉じた後は共有対象が無いため、古い表示の警告を出さない。
+        let stale = self.shell.read(cx).session.workspace_id.is_some()
+            && self
+                .session_view
+                .as_ref()
+                .is_some_and(|handle| session_view_watch_of(handle).is_stale());
+        if self.session_view_stale == stale {
+            return;
+        }
+        self.session_view_stale = stale;
+        let message = if stale {
+            "共有中のタブ構成は最新ではない可能性があります"
+        } else {
+            ""
+        };
+        // 通常の status とは別枠で出す。他のメッセージを上書きしない。
+        self.shell
+            .update(cx, |shell, cx| shell.set_warning(message.to_owned(), cx));
     }
 
     /// 一覧のTask選択は共通APIへ渡し、作業環境を変える操作だけWindow数で制限する。
@@ -1517,12 +1577,23 @@ impl DesktopRoot {
             return;
         }
         if let ViewScope::Resource(resource) = &scope {
-            let terminal_key = crate::shell::PanelTab::tool(id::VIEW_TERMINAL).stable_view_key();
-            let supported = view.as_str() == terminal_key
+            // Terminal タブだけが Resource 固定参照を持つ。個体IDはタブごとに異なるため、
+            // 種別はタブの View で判定する。
+            let terminal_tab = self
+                .shell
+                .read(cx)
+                .shell
+                .layout
+                .placements()
+                .into_iter()
+                .find(|(tab, _)| tab.stable_view_key() == view.as_str())
+                .map(|(tab, _)| tab)
+                .is_some_and(|tab| tab.is_terminal());
+            let supported = terminal_tab
                 && (self
-                    .terminal
+                    .shell
                     .read(cx)
-                    .summaries()
+                    .terminal_summaries(cx)
                     .iter()
                     .any(|terminal| terminal.id.as_str() == resource)
                     || self.conversation.read(cx).records.iter().any(|record| {
@@ -1561,18 +1632,12 @@ impl DesktopRoot {
         )
     }
 
+    /// ターミナルタブの永続化先 Task。全タブが同じコンテキストを共有する。
     fn terminal_owner_for_persistence(
         &self,
         cx: &gpui::App,
     ) -> Option<editor_core::ConversationId> {
-        let terminal = self.terminal.read(cx);
-        let record = self
-            .conversation
-            .read(cx)
-            .records
-            .iter()
-            .find(|record| &record.id == terminal.context_task())?;
-        terminal.persistence_owner_for(&record.id, record.workspace.root.as_deref())
+        self.shell.read(cx).terminal_owner(cx)
     }
 
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
@@ -1583,7 +1648,7 @@ impl DesktopRoot {
             document: self.editor.read(cx).view_state(),
             layout,
             execution: self.execution_for_persistence(cx),
-            terminals: self.terminal.read(cx).summaries(),
+            terminals: self.shell.read(cx).terminal_summaries(cx),
             terminal_owner: self.terminal_owner_for_persistence(cx),
             input: self
                 .editor
@@ -1650,10 +1715,9 @@ impl DesktopRoot {
             })
             .unwrap_or_default();
         self.schedule_session_view_publish(cx);
-        let terminal = self.terminal.read(cx);
         let owner = self.terminal_owner_for_persistence(cx);
         let summaries = if owner.is_some() {
-            terminal.persistence_summaries()
+            self.shell.read(cx).terminal_persistence_summaries(cx)
         } else {
             Vec::new()
         };
@@ -1856,7 +1920,6 @@ impl DesktopRoot {
                     move |client| {
                         client.persist_view(view)?;
                         if matches!(command, UiCommand::CloseWorkspace) {
-                            #[cfg(not(target_family = "wasm"))]
                             client.close_session_view();
                             return client
                                 .conversation
@@ -1874,7 +1937,6 @@ impl DesktopRoot {
                                 .map_err(|error| error.to_string())?;
                             // Workspace を開いた直後に共有 snapshot を取り込み、
                             // 同じ Workspace を開いている別 Client のタブ構成へ合わせる。
-                            #[cfg(not(target_family = "wasm"))]
                             if let Err(error) = client.apply_session_view() {
                                 eprintln!("Workspace view を取得できません: {error}");
                             }
@@ -1957,14 +2019,6 @@ impl DesktopRoot {
             UiCommand::ActivateTerminal(id) => {
                 self.activate_terminal(id, cx);
                 self.schedule_persist(cx);
-            }
-            UiCommand::TerminalTabClosed => {
-                // 別のターミナルタブが残っていれば、その表示に任せる。
-                if !self.shell.read(cx).shell.terminal_tab_exists() {
-                    self.terminal
-                        .update(cx, |terminal, cx| terminal.close_session(cx));
-                    self.schedule_persist(cx);
-                }
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
             UiCommand::SelectTask(id) => self.select_task(id, cx),
@@ -2324,28 +2378,6 @@ struct TerminalContextTarget<'a> {
     record: Option<&'a desktop_client::ConversationRecord>,
 }
 
-/// 表示中の Terminal タブへ反映する固定参照の更新。
-enum TerminalBindingUpdate {
-    /// 参照先があるので、その PTY へ再アタッチする。
-    Show(terminal::TerminalId),
-    /// 参照先の無いタブが表示中なので、前の Task の固定参照を解除する。
-    Unbind,
-    /// Terminal タブが表示されていないので、固定参照をそのまま残す
-    /// （パネルを閉じただけでも PTY は維持する）。
-    Keep,
-}
-
-fn terminal_binding_update(
-    resource: Option<terminal::TerminalId>,
-    visible: bool,
-) -> TerminalBindingUpdate {
-    match resource {
-        Some(id) => TerminalBindingUpdate::Show(id),
-        None if visible => TerminalBindingUpdate::Unbind,
-        None => TerminalBindingUpdate::Keep,
-    }
-}
-
 /// Resourceの所有元が未確定なら、既存コンテキストへフォールバックしない。
 fn terminal_context_target<'a>(
     scope: Option<&ViewScope>,
@@ -2601,26 +2633,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_binding_is_released_only_when_an_unresolved_tab_is_visible() {
-        let id = terminal::TerminalId::new("terminal-a");
-        assert!(matches!(
-            terminal_binding_update(Some(id.clone()), false),
-            TerminalBindingUpdate::Show(found) if found == id
-        ));
-        assert!(matches!(
-            terminal_binding_update(Some(id.clone()), true),
-            TerminalBindingUpdate::Show(found) if found == id
-        ));
-        // 参照先の無いタブが表示中なら、前の Task の固定参照を解除する。
-        assert!(matches!(
-            terminal_binding_update(None, true),
-            TerminalBindingUpdate::Unbind
-        ));
-        // パネルや Zone を閉じただけなら、PTY を維持するため固定参照を残す。
-        assert!(matches!(
-            terminal_binding_update(None, false),
-            TerminalBindingUpdate::Keep
-        ));
+    fn terminal_tabs_track_their_own_resource_without_rebinding_others() {
+        // タブは自身の Resource を持ち、起動で個体IDが変わらないことを固定する。
+        let tab = crate::shell::PanelTab::terminal_instance("terminal:one");
+        let bound = tab.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        assert_eq!(tab.instance_id(), bound.instance_id());
+        assert!(tab.terminal_id().is_none());
+        assert_eq!(
+            bound.terminal_id(),
+            Some(terminal::TerminalId::new("terminal-a"))
+        );
+        // 別のセッションを参照するタブは、独立したタブのまま共存する。
+        let other = crate::shell::PanelTab::terminal(terminal::TerminalId::new("terminal-b"));
+        assert_ne!(bound.instance_id(), other.instance_id());
     }
 
     #[test]

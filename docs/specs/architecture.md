@@ -177,6 +177,8 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
+- タブは種類ごとの単一実体ではなく、個体（`ViewInstanceId`）ごとの実体として扱う。`UiContribution`の複数起動方針で個体化するか単一実体を共有するかを決める。Terminalは`multiple_instances`で個体化し、2つ目のタブは新しいSessionを起動する。同じDocumentは`DocumentId`で同一タブを指すため、開き直しは複製せず既存タブの選択になる。状態を持たない単一表示のToolは共有実体のままとする。
+- TerminalタブのCloseはそのタブが所有するSessionだけを終了し、他のタブのPTYには触れない。
 - ピン留めはPanelの共通Tab状態として保存し、左側に配置する。タブの単独・一括Closeではピン留め済みを対象から外すが、Windowやアプリの終了は妨げない。移動時はPINを維持する。
 - ボタン起点のPopupは`components::Popup`でボタン直下へ、サブメニューは起点行の横へ配置する。クリック座標やShellに保存した位置は使わない。`PopupScope`は親子の表示範囲と起点ボタンを一つの操作範囲として外側クリックを判定する。Window端補正は共通部品、開閉・選択状態とEscape・Focus復帰は呼び出し側が所有する。`components::Menu`は`MenuEntry`の配列から行・アイコン・区切りを描画し、表示フォントで計測したラベル・ショートカット・矢印の最大行幅にpadding・borderを加えて幅を決める。呼び出し側に固定幅や文字数による幅推定を置かず、Window幅を上限にする。
 - HeaderのZone操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じZone Commandを実行できる。

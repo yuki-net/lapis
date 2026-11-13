@@ -246,6 +246,52 @@ mod tests {
     }
 
     #[test]
+    fn terminal_is_the_only_multiple_instance_built_in_view() {
+        let registry = bundled_registry();
+        let policy = |view_id: &str| {
+            [
+                ZonePosition::Main,
+                ZonePosition::Left,
+                ZonePosition::Bottom,
+                ZonePosition::Right,
+            ]
+            .into_iter()
+            .flat_map(|position| registry.zone_contributions(position))
+            .find(|contribution| {
+                contribution
+                    .view
+                    .as_ref()
+                    .is_some_and(|view| view.as_str() == view_id)
+            })
+            .map(|contribution| contribution.instance_policy)
+            .expect("built-in view is registered")
+        };
+        // Terminal だけをタブ単位の個体にする。他の Tool は単一実体を共有する。
+        assert_eq!(
+            policy(id::VIEW_TERMINAL),
+            crate::extension_ui::ToolInstancePolicy::Multiple
+        );
+        for view in [
+            id::VIEW_FILES,
+            id::VIEW_GIT,
+            id::VIEW_CHANGES,
+            id::VIEW_ASSISTANT,
+            id::VIEW_PROBLEMS,
+            id::VIEW_RESOURCES,
+            id::VIEW_SEARCH,
+            id::VIEW_PROJECT_TASKS,
+            id::VIEW_PREVIEW,
+            id::VIEW_SETTINGS,
+        ] {
+            assert_eq!(
+                policy(view),
+                crate::extension_ui::ToolInstancePolicy::Shared,
+                "{view}"
+            );
+        }
+    }
+
+    #[test]
     fn process_features_declare_workspace_process_capability() {
         for feature in [
             id::FEATURE_TERMINAL,

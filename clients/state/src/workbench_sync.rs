@@ -218,6 +218,60 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// パネル寸法（領域の比率とパネル分割の重み）が Workbench 共有で往復する。
+    ///
+    /// Issue #290 の「パネル状態（寸法を含む）」は、この既存経路が担う。
+    #[test]
+    fn panel_dimensions_survive_the_shared_workbench_round_trip() {
+        use workbench::{PanelLayoutViewState, WorkbenchLayoutState};
+
+        let store = Arc::new(Store::default());
+        let workspace = WorkspaceId::new("workspace");
+        let mut writer = WorkbenchSync::new(store.clone());
+        let mut reader = WorkbenchSync::new(store.clone());
+        writer.open(workspace.clone()).unwrap();
+        reader.open(workspace).unwrap();
+
+        let mut view = tabs_view(&["doc-a", "doc-b"]);
+        let layout = view.layout.as_mut().unwrap();
+        layout.zones[0].extent_ratio = 0.25;
+        layout.zones[0].layout = Some(PanelLayoutViewState::Arrangement {
+            direction: "horizontal".to_owned(),
+            children: vec![
+                PanelLayoutViewState::Panel {
+                    id: "panel-a".to_owned(),
+                },
+                PanelLayoutViewState::Panel {
+                    id: "panel-b".to_owned(),
+                },
+            ],
+            weights: vec![0.7, 0.3],
+        });
+        // Workbench 保存経路と同じく、共有用に正規化してから送る。
+        let shared = view.clone().for_shared_workbench();
+        assert!(matches!(
+            writer.save(shared).unwrap(),
+            WorkbenchSyncResult::Updated(_)
+        ));
+
+        // 別 Client は同じ寸法を受け取る。
+        let applied = reader.refresh().unwrap().unwrap();
+        let received = applied.view.unwrap();
+        let zone = &received.layout.as_ref().unwrap().zones[0];
+        assert_eq!(zone.extent_ratio, 0.25);
+        let Some(PanelLayoutViewState::Arrangement { weights, .. }) = zone.layout.as_ref() else {
+            panic!("パネル分割が共有されていません");
+        };
+        assert_eq!(weights, &vec![0.7, 0.3]);
+
+        // 受信側が保存する形でも寸法は保持される。
+        let record = WorkbenchLayoutState {
+            layout: received.layout.clone(),
+            show_panel_controls: true,
+        };
+        assert_eq!(record.layout.as_ref().unwrap().zones[0].extent_ratio, 0.25);
+    }
+
     #[test]
     fn watch_exposes_only_unseen_views() {
         let watch = WorkbenchWatch::new();
