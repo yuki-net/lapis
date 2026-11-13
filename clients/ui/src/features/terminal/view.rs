@@ -4,9 +4,7 @@ use crate::{
     components::{Menu, MenuEntry, MenuItemSpec, ScrollAxis, scroll_viewport},
     theme,
 };
-use gpui::{
-    App, Context, Pixels, Render, ScrollHandle, Window, canvas, div, point, prelude::*, px,
-};
+use gpui::{Context, Pixels, Render, ScrollHandle, Window, canvas, div, point, prelude::*, px};
 use terminal::{TerminalCursor, TerminalId};
 
 /// セル幅を決めるサンプル文字。
@@ -121,9 +119,7 @@ impl Render for TerminalFeature {
             .and_then(|id| self.owners.get(id.as_str()))
             .cloned()
             .flatten();
-        // パネル内のタブ列は持たない。通常は1セッションだけを表示し、
-        // 複数あるときだけ1つのボタンから一覧を開く。
-        let session_count = self.terminals.len();
+        // タブは1セッションだけを持つ。複数セッションの一覧は出さない。
         let active_status = active.as_ref().and_then(|id| {
             self.terminals
                 .iter()
@@ -159,27 +155,6 @@ impl Render for TerminalFeature {
                                 None => "ターミナル".to_owned(),
                             }),
                     )
-                    .when(session_count > 1, |el| {
-                        el.child(
-                            header_chip(
-                                "terminal-sessions",
-                                format!("{session_count} セッション"),
-                                cx,
-                            )
-                            .debug_selector(|| "terminal-sessions".into())
-                            .on_click(cx.listener(
-                                |this, event: &gpui::ClickEvent, window, cx| {
-                                    this.open_menu(
-                                        event
-                                            .mouse_position()
-                                            .map(|position| point(position.x, position.y)),
-                                        cx,
-                                    );
-                                    crate::gpui_compat::focus(window, &this.focus, cx);
-                                },
-                            )),
-                        )
-                    })
                     .child(div().flex_1())
                     .when_some(owner, |el, owner| {
                         el.child(
@@ -284,64 +259,23 @@ impl TerminalFeature {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let mut entries = Vec::new();
-        // 複数セッションがあるときだけ、切替えの最小UIとして一覧を出す。
-        // タブ列は持たず、番号付きの一覧から1つを選ぶ。
-        if self.terminals.len() > 1 {
-            let active = self.active_id();
-            for (index, terminal) in self.terminals.iter().enumerate() {
-                let id = terminal.id.clone();
-                let label = format!(
-                    "{}. {} ({})",
-                    index + 1,
-                    terminal.id.as_str(),
-                    status_label(terminal.status)
-                );
-                let menu_id =
-                    gpui::SharedString::from(format!("terminal.session.{}", terminal.id.as_str()));
-                let listener = cx.listener(
-                    move |this: &mut TerminalFeature,
-                          _: &gpui::ClickEvent,
-                          window: &mut Window,
-                          cx: &mut Context<TerminalFeature>| {
-                        this.context_menu = None;
-                        this.select_terminal(id.clone(), cx);
-                        crate::gpui_compat::focus(window, &this.focus, cx);
-                        cx.notify();
-                    },
-                );
-                entries.push(MenuEntry::new(
-                    MenuItemSpec {
-                        id: menu_id,
-                        label: label.into(),
-                        shortcut: None,
-                        icon: None,
-                        enabled: true,
-                        selected: active.as_ref() == Some(&terminal.id),
-                        indent: 0,
-                        tree: None,
-                        submenu: false,
-                        separator_before: false,
-                    },
-                    cx,
-                    move |row| row.on_click(listener).into_any_element(),
-                ));
-            }
-        }
+        // タブは1セッション。複数セッションを持つ旧UIは出さず、
+        // 新しいシェルは新しいタブとして開く。
         entries.push(menu_entry(
             "terminal.menu.new",
-            "新しいシェル",
+            "新しいタブ",
             true,
             !self.terminals.is_empty(),
             cx,
             |this, window, cx| {
-                this.start(cx);
+                this.request_new_tab(cx);
                 crate::gpui_compat::focus(window, &this.focus, cx);
             },
         ));
         // 特定の profile で始める操作は例外として残す。標準フローは自動起動。
         for profile in &self.profiles.profiles {
             let id = profile.id.clone();
-            let label = format!("{} を開く", profile.name);
+            let label = format!("{} を次のタブで開く", profile.name);
             let menu_id =
                 gpui::SharedString::from(format!("terminal.profile.{}", profile.id.as_str()));
             let listener = cx.listener(
@@ -350,7 +284,8 @@ impl TerminalFeature {
                       window: &mut Window,
                       cx: &mut Context<TerminalFeature>| {
                     this.context_menu = None;
-                    this.start_profile(Some(id.clone()), cx);
+                    this.default_profile = Some(id.clone());
+                    this.request_new_tab(cx);
                     crate::gpui_compat::focus(window, &this.focus, cx);
                     cx.notify();
                 },
@@ -526,26 +461,6 @@ fn menu_entry_inner(
                 .into_any_element()
         },
     )
-}
-
-/// セッション数など、パネルヘッダーの状態表示に使う小さなチップ。
-fn header_chip(
-    id: impl Into<gpui::ElementId>,
-    label: impl Into<gpui::SharedString>,
-    cx: &App,
-) -> gpui::Stateful<gpui::Div> {
-    let colors = theme::colors(cx);
-    div()
-        .id(id)
-        .flex()
-        .items_center()
-        .px_2()
-        .py_0p5()
-        .rounded(px(4.0))
-        .text_size(px(11.0))
-        .text_color(colors.text_secondary)
-        .hover(|style| style.bg(colors.button_background_hover))
-        .child(label.into())
 }
 
 /// セッション状態の日本語ラベル。Debug 表記をUIへ出さない。

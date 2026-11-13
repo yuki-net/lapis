@@ -84,21 +84,26 @@ impl TerminalSessions {
         first_error.map_or(Ok(changed), Err)
     }
 
-    /// ターミナルタブを閉じたときの終了。表示中のコンテキストだけを対象にし、
-    /// 退避中の他コンテキストの Session には触れない。
-    pub fn close_active(&mut self) -> (Result<(), String>, Vec<terminal::TerminalSnapshot>) {
-        let ids = self
-            .session
-            .terminals()
-            .iter()
-            .map(|terminal| terminal.id.clone())
-            .collect::<Vec<_>>();
+    /// この実体が所有する全 Session を終了する。
+    ///
+    /// タブごとに独立した TerminalFeature を持つため、ここで止まるのは
+    /// このタブのセッションだけ。他のタブの PTY には触れない。
+    /// 退避中のコンテキストも同じタブの所有物なので併せて止める。
+    pub fn close_all(&mut self) -> (Result<(), String>, Vec<terminal::TerminalSnapshot>) {
         let mut failure = None;
-        for id in ids {
-            if let Err(error) = self.session.terminate_and_forget(&id)
-                && failure.is_none()
-            {
-                failure = Some(error.to_string());
+        for session in std::iter::once(&mut self.session).chain(self.inactive_sessions.values_mut())
+        {
+            let ids = session
+                .terminals()
+                .iter()
+                .map(|terminal| terminal.id.clone())
+                .collect::<Vec<_>>();
+            for id in ids {
+                if let Err(error) = session.terminate_and_forget(&id)
+                    && failure.is_none()
+                {
+                    failure = Some(error.to_string());
+                }
             }
         }
         self.bump();
@@ -131,8 +136,8 @@ impl TerminalSessions {
 pub(crate) enum TerminalFeatureEvent {
     /// 新しい Terminal を開始した。
     Started(terminal::TerminalId),
-    /// 表示する Terminal を切り替えた。Resource固定のタブでも外側のタブを追従させる。
-    Selected(terminal::TerminalId),
+    /// 新しいタブを開く操作。タブは Shell が1つ増やす。
+    NewTabRequested,
 }
 
 #[derive(Default)]
@@ -344,6 +349,8 @@ impl TerminalFeature {
         (self.requests.pending_actions == 0 && !self.requests.context_unavailable)
             .then(|| self.conversation.clone())
     }
+    /// テスト用: 指定 Task と root に一致し、参照先が実在する場合だけ保存先を返す。
+    #[cfg(test)]
     pub(crate) fn persistence_owner_for(
         &self,
         task: &ConversationId,
@@ -358,9 +365,9 @@ impl TerminalFeature {
                     .is_none_or(|id| self.terminals.iter().any(|terminal| &terminal.id == id))
         })
     }
-    pub(crate) fn context_task(&self) -> &ConversationId {
-        &self.conversation
-    }
+
+    /// タブの参照先 Resource を固定する。復元時と開始時に使う。
+    #[cfg(test)]
     pub(crate) fn bind_resource(&mut self, resource: Option<terminal::TerminalId>) {
         self.bound_resource = resource;
     }
@@ -370,6 +377,7 @@ impl TerminalFeature {
     /// 固定参照が残っていると `ensure_auto_start` が「既存 Terminal への再アタッチ」と
     /// みなして起動を拒否するため、参照先が無いと確定した時点で解除する。
     /// 参照が元から無い場合は状態を変えない。
+    #[cfg(test)]
     pub(crate) fn release_resource(&mut self) {
         if self.bound_resource.take().is_some() {
             // 参照先を前提にした判定を取り消し、表示中のタブで改めて判定できるようにする。
@@ -390,6 +398,10 @@ impl TerminalFeature {
         self.bound_resource = Some(resource.clone());
         self.attach(resource, cx);
     }
+    /// タブ1つ分の実体を作る。
+    ///
+    /// タブは1セッションを持つ。Host の変更通知は Shell が1本だけ購読して
+    /// 全タブへ配るため、ここでは購読しない。
     pub(crate) fn new(
         session: TerminalSession,
         root: Option<PathBuf>,
@@ -397,7 +409,6 @@ impl TerminalFeature {
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let terminals = session.terminals().to_vec();
-        let changes = session.backend().changes();
         let coordinator =
             crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx);
         let values = coordinator
@@ -471,18 +482,6 @@ impl TerminalFeature {
             cx.observe(&coordinator, |feature, coordinator, cx| {
                 let values = coordinator.read(cx).values.clone();
                 feature.apply_terminal_appearance(&values, cx);
-            })
-            .detach();
-        }
-        if let Some(mut changes) = changes {
-            // 受信スレッドからの通知で取得する。250ms の定期取得は行わない。
-            cx.spawn(async move |this, cx| {
-                use futures_util::StreamExt;
-                while changes.next().await.is_some() {
-                    if this.update(cx, |feature, cx| feature.poll(cx)).is_err() {
-                        break;
-                    }
-                }
             })
             .detach();
         }
@@ -602,12 +601,22 @@ impl TerminalFeature {
         self.auto_start = AutoStart::Idle;
         self.pending_auto_start = self.tab_visible;
         self.load_profiles(cx);
+        // 固定参照を持つタブは、切り替え先のコンテキストで同じ PTY へ戻す。
+        // 戻さないと表示だけが空のまま残る。
+        if let Some(resource) = self.bound_resource.clone() {
+            self.attach(resource, cx);
+        }
         cx.notify();
     }
-    pub(crate) fn start(&mut self, cx: &mut gpui::Context<Self>) {
-        // 例外操作の「新しいシェル」も、設定の既定 profile を優先する。
-        let profile = self.resolved_default_profile();
-        self.start_profile(profile, cx);
+    /// 新しいシェルは新しいタブとして開く。タブは1セッションだけを持つ。
+    pub(super) fn request_new_tab(&mut self, cx: &mut gpui::Context<Self>) {
+        cx.emit(TerminalFeatureEvent::NewTabRequested);
+    }
+
+    /// Host の変更通知を受けたときに、この実体の表示を更新する。
+    /// Shell が1本の通知を全タブへ配るため、複数タブでも購読は1回で済む。
+    pub(crate) fn note_change(&mut self, cx: &mut gpui::Context<Self>) {
+        self.poll(cx);
     }
 
     /// ターミナルタブが見えているかを Feature へ伝える。見えたら既定 profile で1回だけ自動起動する。
@@ -664,7 +673,7 @@ impl TerminalFeature {
         let admitted = self.worker.submit(
             cx,
             |sessions| {
-                let (outcome, terminals) = sessions.close_active();
+                let (outcome, terminals) = sessions.close_all();
                 Ok((
                     outcome,
                     sessions.version(),
@@ -794,23 +803,6 @@ impl TerminalFeature {
             return;
         };
         self.send_input(TerminalInput::Paste(text), cx);
-    }
-
-    /// 表示する Terminal を選ぶ。
-    ///
-    /// Resource固定のタブでは `active_id` が固定参照を優先するため、選択だけでは
-    /// 表示が変わらない。Shellが外側のタブも同じ Terminal へ切り替えられるよう通知する。
-    pub(super) fn select_terminal(
-        &mut self,
-        id: terminal::TerminalId,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if !self.terminals.iter().any(|terminal| terminal.id == id) {
-            return;
-        }
-        self.selected = Some(id.clone());
-        cx.emit(TerminalFeatureEvent::Selected(id));
-        cx.notify();
     }
 
     pub(super) fn active_id(&self) -> Option<terminal::TerminalId> {
@@ -1384,9 +1376,7 @@ mod tests {
     }
     use super::*;
     use std::{
-        cell::RefCell,
         path::Path,
-        rc::Rc,
         sync::{
             Arc, Mutex,
             atomic::{AtomicUsize, Ordering},
@@ -1894,72 +1884,6 @@ mod tests {
                 assert!(!feature.pending_output_render);
             })
             .unwrap();
-    }
-
-    struct EventObserver {
-        _subscription: gpui::Subscription,
-    }
-
-    #[gpui::test]
-    fn selecting_a_terminal_notifies_the_shell_even_when_a_resource_is_bound(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        use gpui::AppContext;
-
-        let (entity, events, _observer) = cx.update(|cx| {
-            let (_, backend) = feature();
-            let entity = cx.new(|cx| {
-                TerminalFeature::new(
-                    TerminalSession::new(backend),
-                    Some("workspace".into()),
-                    ConversationId::new("task-a"),
-                    cx,
-                )
-            });
-            let events = Rc::new(RefCell::new(Vec::new()));
-            let observed = events.clone();
-            let observer = cx.new(|cx| {
-                let subscription =
-                    cx.subscribe(&entity, move |_: &mut EventObserver, _, event, _| {
-                        observed.borrow_mut().push(event.clone());
-                    });
-                EventObserver {
-                    _subscription: subscription,
-                }
-            });
-            (entity, events, observer)
-        });
-        let selected = cx.update(|cx| {
-            let first = TerminalId::new("terminal-a");
-            let second = TerminalId::new("terminal-b");
-            entity.update(cx, |feature, cx| {
-                feature.terminals = [&first, &second]
-                    .into_iter()
-                    .map(|id| {
-                        terminal::TerminalSnapshot::empty(
-                            id.clone(),
-                            "workspace".into(),
-                            TerminalStatus::Running,
-                            TerminalSize::new(80, 24),
-                        )
-                    })
-                    .collect();
-                feature.bind_resource(Some(first.clone()));
-
-                feature.select_terminal(second, cx);
-
-                // 固定参照は残したまま、外側のタブを切り替える通知を出す。
-                feature.selected.clone()
-            })
-        });
-        cx.run_until_parked();
-        assert_eq!(selected, Some(TerminalId::new("terminal-b")));
-        assert_eq!(
-            *events.borrow(),
-            vec![TerminalFeatureEvent::Selected(TerminalId::new(
-                "terminal-b"
-            ))]
-        );
     }
 
     fn drain_inputs(
@@ -2561,6 +2485,64 @@ mod tests {
         );
         cx.update(|cx| {
             entity.update(cx, |feature, _| assert_eq!(feature.terminals.len(), 1));
+        });
+    }
+
+    #[gpui::test]
+    fn two_tab_instances_own_independent_sessions_and_closing_one_keeps_the_other(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::AppContext;
+        // 同じ backend を共有しても、タブごとの実体は別の Session を持つ。
+        let (first, second, backend) = cx.update(|cx| {
+            let backend = Arc::new(Backend::default());
+            let mut first_session = TerminalSession::new(backend.clone());
+            first_session.start(Path::new("workspace"), 80, 24).unwrap();
+            let mut second_session = TerminalSession::new(backend.clone());
+            second_session
+                .start(Path::new("workspace"), 80, 24)
+                .unwrap();
+            let first = cx.new(|cx| {
+                TerminalFeature::new(
+                    first_session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            let second = cx.new(|cx| {
+                TerminalFeature::new(
+                    second_session,
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            for feature in [&first, &second] {
+                feature.update(cx, |feature, _| feature.auto_start = AutoStart::Finished);
+            }
+            (first, second, backend)
+        });
+        // 2つのタブは別々の Terminal を表示する。
+        let ids = cx.update(|cx| {
+            (
+                first.read(cx).terminals[0].id.clone(),
+                second.read(cx).terminals[0].id.clone(),
+            )
+        });
+        assert_ne!(ids.0, ids.1, "タブごとに独立したセッション");
+
+        // 片方のタブを閉じても、もう片方の PTY は終了しない。
+        cx.update(|cx| second.update(cx, |feature, cx| feature.close_session(cx)));
+        cx.run_until_parked();
+        assert_eq!(
+            backend.terminated.load(Ordering::Relaxed),
+            1,
+            "閉じたタブの PTY だけを終了する"
+        );
+        cx.update(|cx| {
+            assert!(!first.read(cx).terminals.is_empty(), "他のタブは残る");
+            assert!(second.read(cx).terminals.is_empty());
         });
     }
 

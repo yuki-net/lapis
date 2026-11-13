@@ -62,7 +62,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         match self.feature_registry.instance_view(instance) {
-            Some(view) => div().flex().flex_1().min_h(px(0.0)).child(view.clone()),
+            Some(entity) => div().flex().flex_1().min_h(px(0.0)).child(entity.clone()),
             None => panel_empty_state("?", "Unknown view", view.as_str().to_owned(), cx),
         }
     }

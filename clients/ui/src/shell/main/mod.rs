@@ -1,4 +1,5 @@
 use super::ShellState;
+use crate::shell::ViewInstanceId;
 use crate::timer::Timer;
 pub(crate) use crate::tokens;
 use crate::{
@@ -41,7 +42,10 @@ mod render;
 mod resize;
 mod tab_context;
 mod tab_drag;
+mod terminal_tabs;
 mod tool_picker;
+
+pub(crate) use terminal_tabs::{TerminalContext, TerminalTabSource};
 
 pub(crate) struct Shell {
     pub(crate) branch_picker: Option<gpui::Entity<crate::features::git::BranchPicker>>,
@@ -66,6 +70,12 @@ pub(crate) struct Shell {
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
     notification_center: gpui::Entity<crate::notification::Center>,
+    /// タブごとのターミナル購読。個体IDごとに1本だけ持つ。
+    terminal_subscriptions: HashMap<ViewInstanceId, gpui::Subscription>,
+    /// ターミナルタブの実体を作るための情報。
+    terminal_source: Option<TerminalTabSource>,
+    /// 変更通知を購読済みか。backend は receiver を1度しか返さない。
+    terminal_changes_started: bool,
     locale: Localizer,
     languages: language::LanguageRegistry,
     scroll_states: ShellScrollStates,
@@ -243,6 +253,9 @@ impl Shell {
             focus_handle: cx.focus_handle(),
             feature_registry,
             notification_center: center,
+            terminal_subscriptions: HashMap::new(),
+            terminal_source: None,
+            terminal_changes_started: false,
             locale: Localizer::bundled(),
             languages: language::LanguageRegistry::bundled(),
             scroll_states: ShellScrollStates::default(),
@@ -281,11 +294,16 @@ impl Shell {
     }
     fn synchronize_view_instances(&mut self, cx: &mut Context<Self>) {
         for (tab, _) in self.shell.layout.placements() {
-            if let PanelTab::Tool { view, instance } = tab {
+            if let PanelTab::Tool { view, instance, .. } = tab {
+                // Terminal は factory と購読を Shell が管理する。
+                if view.as_str() == id::VIEW_TERMINAL {
+                    continue;
+                }
                 self.feature_registry
                     .ensure_view_instance(&view, &instance, cx);
             }
         }
+        self.synchronize_terminal_tabs(cx);
     }
     pub(crate) fn preview_visible(&self) -> bool {
         self.shell.layout.visible_panels().any(|panel| {
@@ -300,14 +318,6 @@ impl Shell {
         crate::features::conversation::capture_view_state(&self.shell)
     }
 
-    /// 表示中のPanelから、Host Terminalを参照しているタブのResourceを返す。
-    pub(crate) fn active_terminal_resource(&self) -> Option<terminal::TerminalId> {
-        self.shell
-            .layout
-            .visible_panels()
-            .filter_map(|panel| self.shell.visible_active(panel))
-            .find_map(PanelTab::terminal_id)
-    }
     pub(crate) fn restore_view(
         &mut self,
         view: desktop_client::ConversationViewState,

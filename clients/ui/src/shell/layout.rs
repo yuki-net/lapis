@@ -549,16 +549,23 @@ impl DockLayout {
         })
     }
 
-    /// 既存Panel内のTabを、同じ位置を保ったまま別のResource参照へ置き換える。
-    pub(crate) fn replace_tab(&mut self, id: &PanelId, old: &PanelTab, new: PanelTab) -> bool {
-        if self
-            .placements()
-            .iter()
-            .any(|(existing, _)| existing.instance_id() == new.instance_id())
+    /// 既存Panel内のTabを、同じ位置・選択・ピン留めを保ったまま別の参照へ置き換える。
+    ///
+    /// 個体IDが同じなら参照だけを差し替えられる。Terminal タブの起動後に
+    /// Resource を結び直す用途。個体IDが変わるときは重複を拒否する。
+    pub(crate) fn rebind_tab(&mut self, old: &PanelTab, new: PanelTab) -> bool {
+        let Some(panel_id) = self.find_tab(old) else {
+            return false;
+        };
+        if old.instance_id() != new.instance_id()
+            && self
+                .placements()
+                .iter()
+                .any(|(existing, _)| existing.instance_id() == new.instance_id())
         {
             return false;
         }
-        let Some(panel) = self.panel_mut(id) else {
+        let Some(panel) = self.panel_mut(&panel_id) else {
             return false;
         };
         let Some(index) = panel.tabs.iter().position(|tab| tab == old) else {
@@ -1147,17 +1154,76 @@ mod tests {
     }
 
     #[test]
-    fn replacing_a_terminal_view_keeps_its_panel_and_active_position() {
+    fn two_terminal_tabs_stay_independent_until_they_reference_the_same_session() {
         let mut layout = DockLayout::default();
-        let generic = PanelTab::tool(crate::features::id::VIEW_TERMINAL);
+        // 開くたびに別の個体。1つ目と2つ目が同じタブとして畳まれない。
+        let first = PanelTab::terminal_instance("terminal:one");
+        let second = PanelTab::terminal_instance("terminal:two");
         let panel = layout
-            .open_tab(ZonePosition::Bottom, generic.clone())
+            .open_tab(ZonePosition::Bottom, first.clone())
             .unwrap();
-        let terminal = PanelTab::terminal(terminal::TerminalId::new("host-terminal"));
-        assert!(layout.replace_tab(&panel, &generic, terminal.clone()));
-        assert_eq!(layout.find_tab(&terminal), Some(panel.clone()));
-        assert_eq!(layout.panel(&panel).unwrap().active, Some(terminal));
-        assert!(layout.find_tab(&generic).is_none());
+        layout
+            .open_tab(ZonePosition::Bottom, second.clone())
+            .unwrap();
+        assert_eq!(layout.panel(&panel).unwrap().tabs.len(), 2);
+        assert_ne!(first.instance_id(), second.instance_id());
+
+        // 起動で Resource が決まっても、タブの個体は保たれる。
+        let bound = first.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        assert_eq!(bound.instance_id(), first.instance_id());
+        assert_eq!(
+            bound.terminal_id(),
+            Some(terminal::TerminalId::new("terminal-a"))
+        );
+        assert!(layout.rebind_tab(&first, bound.clone()));
+        assert_eq!(layout.find_tab(&bound), Some(panel.clone()));
+        // 別のセッションを参照するタブを開いても、既存タブは畳まれない。
+        let other = PanelTab::terminal(terminal::TerminalId::new("terminal-b"));
+        layout
+            .open_tab(ZonePosition::Bottom, other.clone())
+            .unwrap();
+        assert_eq!(layout.panel(&panel).unwrap().tabs.len(), 3);
+        assert_eq!(layout.find_tab(&bound), Some(panel.clone()));
+    }
+
+    #[test]
+    fn rebinding_a_terminal_tab_keeps_pin_and_active_selection() {
+        let mut layout = DockLayout::default();
+        let first = PanelTab::terminal_instance("terminal:one");
+        let other = PanelTab::tool(crate::features::id::VIEW_FILES);
+        let panel = layout
+            .open_tab(ZonePosition::Bottom, first.clone())
+            .unwrap();
+        layout
+            .open_tab(ZonePosition::Bottom, other.clone())
+            .unwrap();
+        assert!(layout.set_tab_pinned(&first, true));
+        layout.activate_existing_tab(&first);
+
+        let bound = first.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        assert!(layout.rebind_tab(&first, bound.clone()));
+        assert!(layout.tab_is_pinned(&bound));
+        assert_eq!(layout.panel(&panel).unwrap().active, Some(bound.clone()));
+        assert!(layout.find_tab(&first).is_none());
+        assert!(layout.valid());
+    }
+
+    #[test]
+    fn unstarted_terminal_tab_is_not_persisted_as_a_host_session() {
+        let mut layout = DockLayout::default();
+        let unstarted = PanelTab::terminal_instance("terminal:one");
+        layout
+            .open_tab(ZonePosition::Bottom, unstarted.clone())
+            .unwrap();
+        let saved = serialize_tab(&unstarted);
+        // Resource 未確定のタブは View 参照として保存し、存在しない PTY を指さない。
+        assert!(matches!(saved, desktop_client::TabRef::View { .. }));
+        let started =
+            unstarted.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        assert!(matches!(
+            serialize_tab(&started),
+            desktop_client::TabRef::Terminal { .. }
+        ));
     }
 
     #[test]
