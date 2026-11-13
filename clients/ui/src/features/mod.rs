@@ -96,11 +96,14 @@ pub fn bundled_registry() -> FeatureRegistry {
                 )
                 .hidden_in_picker(),
             )
-            .contributes(crate::extension_ui::UiContribution::settings_view(
-                id::VIEW_SETTINGS,
-                "view.settings",
-                "settings",
-            ))
+            .contributes(
+                crate::extension_ui::UiContribution::settings_view(
+                    id::VIEW_SETTINGS,
+                    "view.settings",
+                    "settings",
+                )
+                .feature_owned_scroll(),
+            )
             .contributes(crate::extension_ui::UiContribution::command(
                 id::COMMAND_TOGGLE_PANEL_CONTROLS,
                 "command.toggle-panel-controls",
@@ -337,6 +340,7 @@ mod tests {
             id::VIEW_COMMAND_SEARCH,
             id::VIEW_ASSISTANT,
             id::VIEW_TERMINAL,
+            id::VIEW_SETTINGS,
         ] {
             assert_eq!(policy(view), PanelScrollPolicy::FeatureOwned);
         }
@@ -351,7 +355,6 @@ mod tests {
             id::VIEW_PROBLEMS,
             id::VIEW_OUTPUT,
             id::VIEW_RESOURCES,
-            id::VIEW_SETTINGS,
         ] {
             assert_eq!(
                 policy(view),

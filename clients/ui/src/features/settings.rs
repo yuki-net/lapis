@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use super::settings_coordinator::{Change, SettingsCoordinator};
 use crate::client_adapter::ClientWorker;
 use crate::{
-    components::{Icon, IconName},
+    components::{Icon, IconName, ScrollAxis, ScrollState, scroll_items_viewport, scroll_viewport},
     localization::Localizer,
     theme,
 };
@@ -50,6 +50,11 @@ pub(crate) struct SettingsFeature {
     locale: Localizer,
     message: String,
     page: &'static str,
+    content_scroll: ScrollState,
+    nav_scroll: ScrollState,
+    pending_scroll: bool,
+    sync_page_on_scroll: bool,
+    last_scroll_offset: gpui::Pixels,
     /// 候補を持たない値を編集中の項目。確定するまで保存しない。
     editing: Option<TextEdit>,
     /// Desktop からの Web 公開管理。リモート接続や Web 構成では `None`。
@@ -111,6 +116,10 @@ impl SettingsFeature {
             generation: 0,
             message: String::new(),
         });
+        let content_scroll = ScrollState::new();
+        if web.is_some() {
+            content_scroll.handle().scroll_to_top_of_item(1);
+        }
         Self {
             coordinator,
             _subscription: subscription,
@@ -120,6 +129,11 @@ impl SettingsFeature {
             locale,
             message: String::new(),
             page: default_page(),
+            content_scroll,
+            nav_scroll: ScrollState::new(),
+            pending_scroll: false,
+            sync_page_on_scroll: false,
+            last_scroll_offset: px(0.0),
             editing: None,
             web,
             web_access,
@@ -188,7 +202,7 @@ impl SettingsFeature {
                 web.devices.clear();
                 web.busy = false;
             }
-            if self.page == "host.web" && self.root.is_some() {
+            if self.web.is_some() && self.root.is_some() {
                 self.web_request(WebOperation::Refresh, cx);
             }
             cx.notify();
@@ -233,14 +247,40 @@ impl SettingsFeature {
     }
 
     fn select_page(&mut self, page: &'static str, cx: &mut Context<Self>) {
+        if let Some(index) = self
+            .visible_pages()
+            .iter()
+            .position(|candidate| *candidate == page)
+        {
+            self.content_scroll.handle().scroll_to_top_of_item(index);
+            self.pending_scroll = true;
+        }
         if self.page != page {
             self.page = page;
             self.web_message.clear();
             if page == "host.web" {
                 self.web_request(WebOperation::Refresh, cx);
             }
-            cx.notify();
         }
+        cx.notify();
+    }
+
+    fn visible_pages(&self) -> Vec<&'static str> {
+        let mut pages = Vec::new();
+        if self.web.is_some() {
+            pages.push("host.web");
+        }
+        let catalog = settings::catalog();
+        for category in catalog.categories() {
+            for group in category.groups {
+                for id in group.pages {
+                    if let Some(page) = catalog.page(id).filter(|page| self.page_available(page)) {
+                        pages.push(page.id);
+                    }
+                }
+            }
+        }
+        pages
     }
 
     fn web_request(&mut self, operation: WebOperation, cx: &mut Context<Self>) {
@@ -387,7 +427,7 @@ impl SettingsFeature {
             None => self.t("settings.web.unknown"),
         };
         let mut content = div()
-            .flex_1()
+            .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
@@ -575,12 +615,34 @@ impl SettingsFeature {
             .as_deref()
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| self.t("settings.no-workspace"));
+        let nav = self.render_nav(cx).into_any_element();
+        let mut items = self
+            .visible_pages()
+            .into_iter()
+            .map(|page| self.render_page(page, cx).flex_shrink_0())
+            .collect::<Vec<_>>();
+        items.push(
+            self.render_workspace_info(cx, workspace_info)
+                .flex_shrink_0(),
+        );
+        let on_scroll = cx.listener(|this, _, _, cx| {
+            this.sync_page_on_scroll = true;
+            cx.notify();
+        });
+        let content = scroll_items_viewport(
+            "settings-content-scroll",
+            &self.content_scroll,
+            items,
+            on_scroll,
+            cx,
+        );
 
         div()
-            .w_full()
+            .size_full()
+            .min_h(px(0.0))
             .flex()
             .flex_col()
-            .py_8()
+            .pt_8()
             .gap_6()
             .child(
                 div()
@@ -600,12 +662,25 @@ impl SettingsFeature {
                 div()
                     .w_full()
                     .max_w(px(920.0))
+                    .flex_1()
+                    .min_h(px(0.0))
                     .flex()
                     .gap_6()
-                    .child(self.render_nav(cx))
-                    .child(self.render_page(cx)),
+                    .child(
+                        div()
+                            .w(px(220.0))
+                            .flex_shrink_0()
+                            .h_full()
+                            .child(scroll_viewport(
+                                "settings-nav-scroll",
+                                ScrollAxis::Vertical,
+                                &self.nav_scroll,
+                                nav,
+                                cx,
+                            )),
+                    )
+                    .child(div().flex_1().min_w(px(0.0)).h_full().child(content)),
             )
-            .child(self.render_workspace_info(cx, workspace_info))
     }
 
     /// 分類と中間層は分類専用の行として並べ、ページだけを選べるようにする。
@@ -707,16 +782,16 @@ impl SettingsFeature {
                     }))
             }))
     }
-    fn render_page(&self, cx: &mut Context<Self>) -> gpui::Div {
-        if self.page == "host.web" {
+    fn render_page(&self, page_id: &'static str, cx: &mut Context<Self>) -> gpui::Div {
+        if page_id == "host.web" {
             return self.render_web_page(cx);
         }
         let catalog = settings::catalog();
-        if self.page == settings::catalog::CONNECTION_WEB_PAGE && self.web_access().is_some() {
+        if page_id == settings::catalog::CONNECTION_WEB_PAGE && self.web_access().is_some() {
             return self.render_web_connection_page(cx);
         }
-        let page = catalog.page(self.page).or_else(|| catalog.first_page());
-        let mut container = div().flex_1().min_w(px(0.0)).flex().flex_col().gap_4();
+        let page = catalog.page(page_id).or_else(|| catalog.first_page());
+        let mut container = div().w_full().min_w(px(0.0)).flex().flex_col().gap_4();
         let Some(page) = page else {
             return container.child(self.t("settings.empty"));
         };
@@ -821,7 +896,7 @@ impl SettingsFeature {
     /// コピーと「ブラウザーで開く」は同じ候補アドレスを対象にする。
     fn render_web_connection_page(&self, cx: &mut Context<Self>) -> gpui::Div {
         let mut container = div()
-            .flex_1()
+            .w_full()
             .min_w(px(0.0))
             .flex()
             .flex_col()
@@ -1363,8 +1438,29 @@ pub(super) fn catalog_for_tests() -> &'static settings::DefinitionCatalog {
 
 impl Render for SettingsFeature {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let handle = self.content_scroll.handle();
+        let offset = handle.offset().y;
+        if self.pending_scroll {
+            self.pending_scroll = false;
+        } else if (self.sync_page_on_scroll || offset != self.last_scroll_offset)
+            && handle.bounds().size.height > px(0.0)
+        {
+            let pages = self.visible_pages();
+            let max = crate::gpui_compat::max_offset(&handle).height;
+            let index = if max > px(0.0) && -offset >= max - px(1.0) {
+                pages.len().saturating_sub(1)
+            } else {
+                handle.top_item().min(pages.len().saturating_sub(1))
+            };
+            if let Some(page) = pages.get(index) {
+                self.page = page;
+            }
+            self.sync_page_on_scroll = false;
+        }
+        self.last_scroll_offset = offset;
         div()
-            .w_full()
+            .size_full()
+            .min_h(px(0.0))
             .flex()
             .flex_col()
             .child(self.message.clone())
@@ -1381,6 +1477,75 @@ mod tests {
     use std::sync::Arc;
 
     struct MemorySettings;
+
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn navigation_scrolls_to_sections_without_moving_navigation(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+        });
+        let (feature, visual) = cx.add_window_view(|_, cx| SettingsFeature::new(cx));
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let nav = visual
+            .debug_bounds("main-settings-nav")
+            .expect("navigation");
+        let target = feature.read_with(visual, |feature, _| {
+            *feature.visible_pages().last().unwrap()
+        });
+        visual.update(|_, cx| feature.update(cx, |feature, cx| feature.select_page(target, cx)));
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        feature.read_with(visual, |feature, _| {
+            assert!(feature.content_scroll.handle().offset().y < px(0.0));
+            assert_eq!(feature.page, target);
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        feature.read_with(visual, |feature, _| assert_eq!(feature.page, target));
+        assert_eq!(visual.debug_bounds("main-settings-nav"), Some(nav));
+        let position = feature.read_with(visual, |feature, _| {
+            feature.content_scroll.handle().bounds().center()
+        });
+        visual.simulate_event(gpui::ScrollWheelEvent {
+            position,
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(10000.0))),
+            modifiers: gpui::Modifiers::none(),
+            touch_phase: gpui::TouchPhase::Moved,
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        feature.read_with(visual, |feature, _| {
+            assert_eq!(feature.page, feature.visible_pages()[0]);
+        });
+        // スクロールバーのドラッグは wheel event を発行しない。
+        visual.update(|window, cx| {
+            let handle = feature.read(cx).content_scroll.handle();
+            let max = crate::gpui_compat::max_offset(&handle).height;
+            handle.set_offset(gpui::point(px(0.0), -max / 2.0));
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        feature.read_with(visual, |feature, _| {
+            let pages = feature.visible_pages();
+            let index = feature
+                .content_scroll
+                .handle()
+                .top_item()
+                .min(pages.len() - 1);
+            assert_eq!(feature.page, pages[index]);
+        });
+    }
     impl SettingsRepository for MemorySettings {
         fn load(&self) -> Result<SettingsDocument, SettingsError> {
             Ok(SettingsDocument::empty(SettingsScope::User))
