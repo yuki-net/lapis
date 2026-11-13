@@ -11,30 +11,41 @@ const CAPACITY: usize = 64;
 /// 1つのユーザー操作としてまとめて保存する設定変更。
 #[derive(Clone, Debug)]
 pub(crate) struct Change {
-    values: Vec<(SettingKey, SettingValue)>,
+    /// `None` は保存値を消して既定値へ戻す。
+    values: Vec<(SettingKey, Option<SettingValue>)>,
 }
 
 impl Change {
     pub(crate) fn set(key: SettingKey, value: SettingValue) -> Self {
         Self {
-            values: vec![(key, value)],
+            values: vec![(key, Some(value))],
         }
+    }
+
+    /// 保存値を消して既定値へ戻す。
+    pub(crate) fn clear(key: SettingKey) -> Self {
+        Self {
+            values: vec![(key, None)],
+        }
+    }
+
+    /// 複数項目を 1 回の保存にまとめる。`None` は既定値へ戻す。
+    pub(crate) fn update(values: Vec<(SettingKey, Option<SettingValue>)>) -> Self {
+        Self { values }
     }
 
     /// 表示だけ先に反映し、保存が終われば共有 state の値に置き換わる。
     fn apply(&self, values: &mut ResolvedSettings) {
         for (key, value) in &self.values {
-            values.overlay(SettingsScope::User, *key, value.clone());
+            match value {
+                Some(value) => values.overlay(SettingsScope::User, *key, value.clone()),
+                None => values.clear_overlay(*key),
+            }
         }
     }
 
     fn save(&self, session: &SettingsSession) -> Result<(), SettingsError> {
-        let changes = self
-            .values
-            .iter()
-            .map(|(key, value)| (*key, Some(value.clone())))
-            .collect::<Vec<_>>();
-        session.update(&changes)
+        session.update(&self.values)
     }
 }
 
@@ -204,6 +215,11 @@ impl SettingsCoordinator {
                 false
             }
         }
+    }
+
+    /// 複数の設定を1回の保存でまとめて更新する。`None` は既定値へ戻す。
+    pub(crate) fn clear(&mut self, key: SettingKey, cx: &mut Context<Self>) {
+        self.change(Change::clear(key), cx)
     }
 
     fn publish(&mut self, cx: &mut Context<Self>) {

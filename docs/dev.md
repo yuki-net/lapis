@@ -162,3 +162,4 @@ dx は自前でリソースをリンクするため、`build.rs` は `DX_RUSTC` 
 | Host と bridge の結合 | `cargo build -p host -p web-bridge` → `python clients/web/wasm/tests/bridge_smoke.py` |
 | launcher と Hot Reload | `python -m unittest discover -s scripts -p test_dev_session.py` |
 | 更新 launcher の適用と起動 | `cargo test -p lapis-launcher` |
+| アプリ側の更新（download・検証・staging・同意） | `cargo test -p lapis` |

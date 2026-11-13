@@ -186,21 +186,112 @@ pub(crate) fn candidates(root: &Path) -> Result<Vec<String>> {
     Ok(found.into_iter().map(|(name, _)| name).collect())
 }
 
-pub(crate) struct Applied {
-    pub(crate) version: String,
+/// `staging/<version>/` に置いた適用候補。directory 名と manifest の version が一致し、
+/// 署名と SHA-256 を検証できたものだけを返す。
+/// `staging/<version>/` に置いた適用候補。directory 名と manifest の version が一致し、
+/// 署名と SHA-256 を検証できたものだけを返す。
+pub(crate) fn staged_with_keys(
+    root: &Path,
+    version: &str,
+    keys: &manifest::TrustedKeys,
+) -> Result<Option<crate::Staged>> {
+    validate_name(version, "version")?;
+    let directory = staging_dir(root).join(version);
+    if !directory.is_dir() {
+        return Ok(None);
+    }
+    let verified = manifest::verify_distribution(&directory, keys)?;
+    if verified.manifest.version != version {
+        return Err(Error::new(format!(
+            "staging の directory 名 ({version}) と manifest の version ({}) が違います",
+            verified.manifest.version
+        )));
+    }
+    Ok(Some(crate::Staged {
+        version: version.to_owned(),
+        breaking: verified.manifest.breaking,
+        directory,
+    }))
 }
 
-/// 適用候補を検証して `versions/<version>/` へ展開し、pointer を進める。
+/// 配布物を検証して `staging/<version>/` へ原子的に置く。
 ///
-/// 署名・SHA-256・展開内容のいずれかが一致しなければ pointer を更新しない。現在の
-/// version と同じか古い候補、および `breaking: true` の候補は適用しない（軸B は同意が
-/// 必要であり、同意画面はアプリ側の範囲）。
-pub(crate) fn apply(
+/// 置くのは検証済みの manifest と package の複写だけであり、pointer も versions も
+/// 変えない。同じ version の staging が既にある場合は置き換える（未完了の download を
+/// 残さない）。現行 version と同じか古い配布物は置かない。
+pub(crate) fn stage_with_keys(
+    root: &Path,
+    distribution: &Path,
+    keys: &manifest::TrustedKeys,
+    options: crate::StageOptions,
+) -> Result<crate::Staged> {
+    let verified = manifest::verify_distribution(distribution, keys)?;
+    let version = verified.manifest.version.clone();
+    validate_name(&version, "version")?;
+    if verified.manifest.breaking && !options.allow_breaking {
+        return Err(Error::new("breaking な更新は同意が必要"));
+    }
+    let _lock = Lock::try_acquire(root)?.ok_or_else(|| Error::new("別の処理が layout を使用中"))?;
+    if let Some(current) = read_pointer(root)?
+        && !is_newer(&version, &current)
+    {
+        return Err(Error::new(format!(
+            "現在の version ({current}) より新しくない: {version}"
+        )));
+    }
+    let directory = staging_dir(root);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| Error::new(format!("staging を作れません: {error}")))?;
+    // 一時 directory に複写してから rename する。途中の download を候補として見せない。
+    let temporary = tempfile::Builder::new()
+        .prefix(".staging-")
+        .tempdir_in(&directory)
+        .map_err(|error| Error::new(format!("staging の一時 directory を作れません: {error}")))?;
+    for asset in verified.manifest.assets.values() {
+        std::fs::copy(
+            distribution.join(&asset.source),
+            temporary.path().join(&asset.source),
+        )
+        .map_err(|error| Error::new(format!("package を複写できません: {error}")))?;
+    }
+    std::fs::copy(
+        distribution.join(MANIFEST_NAME),
+        temporary.path().join(MANIFEST_NAME),
+    )
+    .map_err(|error| Error::new(format!("manifest を複写できません: {error}")))?;
+    // 複写した staged を再検証する。検証後に差し替えられた package を候補にしない。
+    let staged_verified = manifest::verify_distribution(temporary.path(), keys)?;
+    if staged_verified.manifest.version != version {
+        return Err(Error::new(format!(
+            "複写した manifest の version ({}) が違います",
+            staged_verified.manifest.version
+        )));
+    }
+    let target = directory.join(&version);
+    if target.exists() {
+        std::fs::remove_dir_all(&target)
+            .map_err(|error| Error::new(format!("古い staging を消せません: {error}")))?;
+    }
+    let staged = temporary.keep();
+    std::fs::rename(&staged, &target).map_err(|error| {
+        let _ = std::fs::remove_dir_all(&staged);
+        Error::new(format!("staging を配置できません: {error}"))
+    })?;
+    Ok(crate::Staged {
+        version,
+        breaking: staged_verified.manifest.breaking,
+        directory: target,
+    })
+}
+
+/// `platform` と信頼済み鍵を明示して適用する。launcher とテストが使う。
+pub(crate) fn apply_with_platform(
     root: &Path,
     candidate: &str,
     platform: &str,
     keys: &manifest::TrustedKeys,
-) -> Result<Applied> {
+    options: crate::ApplyOptions,
+) -> Result<crate::Applied> {
     let _lock = Lock::try_acquire(root)?.ok_or_else(|| Error::new("別の処理が layout を使用中"))?;
     // 名前を先に検証し、候補の path を staging の外へ解決しない。
     let target = version_dir(root, candidate)?;
@@ -233,7 +324,7 @@ pub(crate) fn apply(
             "platform の package がありません: {platform}"
         )));
     }
-    if verified.manifest.breaking {
+    if verified.manifest.breaking && !options.allow_breaking {
         return Err(Error::new("breaking な更新は同意が必要"));
     }
     std::fs::create_dir_all(versions_dir(root))
@@ -292,7 +383,7 @@ pub(crate) fn apply(
     // 適用済みの候補は「未適用」ではないため staging から片付ける。失敗しても起動には
     // 影響しない。
     let _ = std::fs::remove_dir_all(&source);
-    Ok(Applied {
+    Ok(crate::Applied {
         version: candidate.to_owned(),
     })
 }
@@ -403,7 +494,7 @@ fn installed_version(directory: &Path) -> Option<String> {
 }
 
 /// `candidate` が `current` より新しいか。比較できない形式では、同じでなければ適用する。
-fn is_newer(candidate: &str, current: &str) -> bool {
+pub(crate) fn is_newer(candidate: &str, current: &str) -> bool {
     match (
         semver::Version::parse(candidate),
         semver::Version::parse(current),
@@ -514,12 +605,29 @@ mod tests {
         crate::manifest::fixtures::copy(fixture, &path);
     }
 
+    fn apply(
+        root: &Path,
+        version: &str,
+        platform: &str,
+        keys: &crate::manifest::TrustedKeys,
+        options: crate::ApplyOptions,
+    ) -> Result<crate::Applied> {
+        apply_with_platform(root, version, platform, keys, options)
+    }
+
     #[test]
     fn staged_distributions_are_installed_and_pointer_moves() {
         let root = tempfile::tempdir().expect("temp");
         let keys = crate::manifest::fixtures::keys();
         stage(root.path(), "distribution", "0.1.0-alpha.1");
-        let applied = apply(root.path(), "0.1.0-alpha.1", PLATFORM, &keys).expect("apply");
+        let applied = apply(
+            root.path(),
+            "0.1.0-alpha.1",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("apply");
         assert_eq!(applied.version, "0.1.0-alpha.1");
         assert_eq!(
             read_pointer(root.path()).expect("pointer"),
@@ -553,9 +661,23 @@ mod tests {
         let root = tempfile::tempdir().expect("temp");
         let keys = crate::manifest::fixtures::keys();
         stage(root.path(), "distribution", "0.1.0-alpha.1");
-        apply(root.path(), "0.1.0-alpha.1", PLATFORM, &keys).expect("first");
+        apply(
+            root.path(),
+            "0.1.0-alpha.1",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("first");
         stage(root.path(), "distribution2", "0.1.0-alpha.2");
-        apply(root.path(), "0.1.0-alpha.2", PLATFORM, &keys).expect("second");
+        apply(
+            root.path(),
+            "0.1.0-alpha.2",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("second");
         assert_eq!(
             read_pointer(root.path()).expect("pointer"),
             Some("0.1.0-alpha.2".to_owned())
@@ -582,14 +704,28 @@ mod tests {
         let root = tempfile::tempdir().expect("temp");
         let keys = crate::manifest::fixtures::keys();
         stage(root.path(), "distribution", "0.1.0-alpha.1");
-        apply(root.path(), "0.1.0-alpha.1", PLATFORM, &keys).expect("first");
+        apply(
+            root.path(),
+            "0.1.0-alpha.1",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("first");
         stage(root.path(), "distribution2", "0.1.0-alpha.2");
-        apply(root.path(), "0.1.0-alpha.2", PLATFORM, &keys).expect("second");
+        apply(
+            root.path(),
+            "0.1.0-alpha.2",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("second");
         // 手動復旧で退避した directory は削除しない。
         let quarantined = versions_dir(root.path()).join("0.1.0-alpha.2.broken");
         std::fs::create_dir(&quarantined).expect("quarantine");
         stage(root.path(), "distribution3", "0.2.0");
-        apply(root.path(), "0.2.0", PLATFORM, &keys).expect("third");
+        apply(root.path(), "0.2.0", PLATFORM, &keys, Default::default()).expect("third");
         assert!(
             !version_dir(root.path(), "0.1.0-alpha.1")
                 .expect("dir")
@@ -609,7 +745,14 @@ mod tests {
         let root = tempfile::tempdir().expect("temp");
         let keys = crate::manifest::fixtures::keys();
         stage(root.path(), "distribution", "0.1.0-alpha.1");
-        apply(root.path(), "0.1.0-alpha.1", PLATFORM, &keys).expect("first");
+        apply(
+            root.path(),
+            "0.1.0-alpha.1",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("first");
         stage(root.path(), "distribution2", "0.1.0-alpha.2");
         let package = staging_dir(root.path())
             .join("0.1.0-alpha.2")
@@ -617,7 +760,16 @@ mod tests {
         let mut bytes = std::fs::read(&package).expect("package");
         bytes[0] ^= 0xff;
         std::fs::write(&package, bytes).expect("tamper");
-        assert!(apply(root.path(), "0.1.0-alpha.2", PLATFORM, &keys).is_err());
+        assert!(
+            apply(
+                root.path(),
+                "0.1.0-alpha.2",
+                PLATFORM,
+                &keys,
+                Default::default()
+            )
+            .is_err()
+        );
         assert_eq!(
             read_pointer(root.path()).expect("pointer"),
             Some("0.1.0-alpha.1".to_owned())
@@ -634,9 +786,16 @@ mod tests {
         let root = tempfile::tempdir().expect("temp");
         let keys = crate::manifest::fixtures::keys();
         stage(root.path(), "distribution", "0.1.0-alpha.1");
-        apply(root.path(), "0.1.0-alpha.1", PLATFORM, &keys).expect("first");
+        apply(
+            root.path(),
+            "0.1.0-alpha.1",
+            PLATFORM,
+            &keys,
+            Default::default(),
+        )
+        .expect("first");
         stage(root.path(), "distribution-breaking", "0.3.0");
-        assert!(apply(root.path(), "0.3.0", PLATFORM, &keys).is_err());
+        assert!(apply(root.path(), "0.3.0", PLATFORM, &keys, Default::default()).is_err());
         assert_eq!(
             read_pointer(root.path()).expect("pointer"),
             Some("0.1.0-alpha.1".to_owned())
@@ -648,9 +807,18 @@ mod tests {
         let root = tempfile::tempdir().expect("temp");
         let keys = crate::manifest::fixtures::keys();
         stage(root.path(), "distribution3", "0.2.0");
-        apply(root.path(), "0.2.0", PLATFORM, &keys).expect("first");
+        apply(root.path(), "0.2.0", PLATFORM, &keys, Default::default()).expect("first");
         stage(root.path(), "distribution", "0.1.0-alpha.1");
-        assert!(apply(root.path(), "0.1.0-alpha.1", PLATFORM, &keys).is_err());
+        assert!(
+            apply(
+                root.path(),
+                "0.1.0-alpha.1",
+                PLATFORM,
+                &keys,
+                Default::default()
+            )
+            .is_err()
+        );
         assert_eq!(
             read_pointer(root.path()).expect("pointer"),
             Some("0.2.0".to_owned())
@@ -672,7 +840,7 @@ mod tests {
         std::fs::write(&package, bytes).expect("tamper");
         let mut applied = None;
         for version in candidates(root.path()).expect("candidates") {
-            if let Ok(result) = apply(root.path(), &version, PLATFORM, &keys) {
+            if let Ok(result) = apply(root.path(), &version, PLATFORM, &keys, Default::default()) {
                 applied = Some(result.version);
             }
         }
@@ -688,5 +856,160 @@ mod tests {
         crate::manifest::fixtures::copy("distribution", &directory);
         assert!(installed_version_matches(root.path(), "0.1.0-alpha.1").expect("check"));
         assert!(!installed_version_matches(root.path(), "0.2.0").expect("check"));
+    }
+
+    #[test]
+    fn a_verified_distribution_is_staged_without_moving_the_pointer() {
+        let root = tempfile::tempdir().expect("temp");
+        let stage_result =
+            stage_fixture(root.path(), "distribution2", Default::default()).expect("stage");
+        assert_eq!(stage_result.version, "0.1.0-alpha.2");
+        assert!(!stage_result.breaking);
+        assert_eq!(read_pointer(root.path()).expect("pointer"), None);
+        assert!(
+            !version_dir(root.path(), "0.1.0-alpha.2")
+                .expect("dir")
+                .exists()
+        );
+        assert_eq!(
+            staged_fixture(root.path(), "0.1.0-alpha.2")
+                .expect("staged")
+                .map(|found| found.version),
+            Some("0.1.0-alpha.2".to_owned())
+        );
+        // staging に置いただけでは展開しない。次の launcher 起動が適用する。
+        apply(
+            root.path(),
+            "0.1.0-alpha.2",
+            PLATFORM,
+            &keys(),
+            Default::default(),
+        )
+        .expect("apply");
+        assert_eq!(
+            read_pointer(root.path()).expect("pointer"),
+            Some("0.1.0-alpha.2".to_owned())
+        );
+    }
+
+    #[test]
+    fn staging_a_tampered_distribution_leaves_no_candidate() {
+        let root = tempfile::tempdir().expect("temp");
+        let source = tempfile::tempdir().expect("source");
+        crate::manifest::fixtures::copy("distribution2", source.path());
+        let package = source.path().join("lapis-0.1.0-alpha.2-windows-x86_64.zip");
+        let mut bytes = std::fs::read(&package).expect("package");
+        bytes[0] ^= 0xff;
+        std::fs::write(&package, bytes).expect("tamper");
+        assert!(
+            stage_with_keys(root.path(), source.path(), &keys(), Default::default()).is_err(),
+            "署名・hash が合わない package は staging へ入れない"
+        );
+        assert!(!staging_dir(root.path()).join("0.1.0-alpha.2").exists());
+    }
+
+    #[test]
+    fn staging_rejects_a_version_that_is_not_newer() {
+        let root = tempfile::tempdir().expect("temp");
+        stage_fixture(root.path(), "distribution3", Default::default()).expect("stage");
+        apply(root.path(), "0.2.0", PLATFORM, &keys(), Default::default()).expect("apply");
+        assert!(
+            stage_fixture(root.path(), "distribution2", Default::default()).is_err(),
+            "現行より古い配布物を staging に置かない"
+        );
+        assert_eq!(
+            read_pointer(root.path()).expect("pointer"),
+            Some("0.2.0".to_owned())
+        );
+    }
+
+    #[test]
+    fn breaking_distributions_need_consent_to_be_staged_and_applied() {
+        let root = tempfile::tempdir().expect("temp");
+        stage(root.path(), "distribution", "0.1.0-alpha.1");
+        apply(
+            root.path(),
+            "0.1.0-alpha.1",
+            PLATFORM,
+            &keys(),
+            Default::default(),
+        )
+        .expect("first");
+
+        // 同意が無ければ staging にも入れない。
+        assert!(stage_fixture(root.path(), "distribution-breaking", Default::default()).is_err());
+        assert!(!staging_dir(root.path()).join("0.3.0").exists());
+
+        // 同意済みなら staging に置ける。
+        let allowed = stage_fixture(
+            root.path(),
+            "distribution-breaking",
+            crate::StageOptions {
+                allow_breaking: true,
+            },
+        )
+        .expect("stage");
+        assert!(allowed.breaking);
+        // launcher（同意無しの適用）は breaking を適用しない。
+        assert!(apply(root.path(), "0.3.0", PLATFORM, &keys(), Default::default()).is_err());
+        assert_eq!(
+            read_pointer(root.path()).expect("pointer"),
+            Some("0.1.0-alpha.1".to_owned())
+        );
+        // 同意済みの適用だけが pointer を進める。
+        apply(
+            root.path(),
+            "0.3.0",
+            PLATFORM,
+            &keys(),
+            crate::ApplyOptions {
+                allow_breaking: true,
+            },
+        )
+        .expect("apply");
+        assert_eq!(
+            read_pointer(root.path()).expect("pointer"),
+            Some("0.3.0".to_owned())
+        );
+    }
+
+    #[test]
+    fn staging_keeps_other_candidates_side_by_side() {
+        let root = tempfile::tempdir().expect("temp");
+        stage_fixture(root.path(), "distribution2", Default::default()).expect("first");
+        stage_fixture(root.path(), "distribution3", Default::default()).expect("second");
+        assert_eq!(
+            staged_fixture(root.path(), "0.1.0-alpha.2")
+                .expect("staged")
+                .map(|found| found.version),
+            Some("0.1.0-alpha.2".to_owned())
+        );
+        assert_eq!(
+            staged_fixture(root.path(), "0.2.0")
+                .expect("staged")
+                .map(|found| found.version),
+            Some("0.2.0".to_owned())
+        );
+    }
+
+    fn keys() -> crate::manifest::TrustedKeys {
+        crate::manifest::fixtures::keys()
+    }
+
+    fn stage_fixture(
+        root: &Path,
+        fixture: &str,
+        options: crate::StageOptions,
+    ) -> Result<crate::Staged> {
+        stage_with_keys(
+            root,
+            &crate::manifest::fixtures::directory(fixture),
+            &keys(),
+            options,
+        )
+    }
+
+    fn staged_fixture(root: &Path, version: &str) -> Result<Option<crate::Staged>> {
+        staged_with_keys(root, version, &keys())
     }
 }

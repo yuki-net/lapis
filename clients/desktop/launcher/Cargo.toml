@@ -5,6 +5,9 @@ edition.workspace = true
 description.workspace = true
 license.workspace = true
 publish = false
+[lib]
+name = "lapis_launcher"
+path = "src/lib.rs"
 
 [[bin]]
 name = "lapis-launcher"

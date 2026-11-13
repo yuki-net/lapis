@@ -38,6 +38,7 @@ mod connection_display;
 mod extensions;
 mod process;
 mod settings_store;
+mod update;
 mod view_state;
 mod web_access;
 mod web_control;
@@ -54,6 +55,7 @@ pub use session_view::{SessionViewCursor, SessionViewReplica, SessionViewWatch};
 #[cfg(not(target_arch = "wasm32"))]
 pub use session_view::{SessionViewSession, SessionViewSync};
 pub use settings_store::{SettingsModel, SettingsWatch};
+pub use update::{UpdateController, UpdateStatus, UpdateWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use web_access::{
     PageScheme, WebAccess, WebAddress, WebAddressKind, address_kind_for, is_tailscale_interface,

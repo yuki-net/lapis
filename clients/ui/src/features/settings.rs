@@ -8,7 +8,7 @@ use crate::{
     theme,
 };
 use desktop_client::{HostDevice, HostWebStatus, WebAccessControl};
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, Focusable, Render, Window, div, prelude::*, px};
 
 #[derive(Clone)]
 enum WebOperation {
@@ -34,6 +34,7 @@ struct WebState {
     generation: u64,
     message: String,
 }
+
 use settings::{
     Label, OptionSource, ResolvedSettings, SettingControl, SettingDefinition, SettingKey,
     SettingOption, SettingValue, SettingsScope,
@@ -49,6 +50,8 @@ pub(crate) struct SettingsFeature {
     locale: Localizer,
     message: String,
     page: &'static str,
+    /// 候補を持たない値を編集中の項目。確定するまで保存しない。
+    editing: Option<TextEdit>,
     /// Desktop からの Web 公開管理。リモート接続や Web 構成では `None`。
     web: Option<WebState>,
     /// ローカル Web の接続情報を都度集める供給元。無い構成では接続ページを出さない。
@@ -59,6 +62,15 @@ pub(crate) struct SettingsFeature {
     selected_web_host: Option<String>,
     /// コピーやブラウザー起動の結果を一時的に示す。
     web_message: String,
+}
+
+/// 単一行の値編集。IME 対応は共通の入力部品に任せる。
+struct TextEdit {
+    key: SettingKey,
+    input: gpui::Entity<crate::components::SearchInput>,
+    /// 入力中の値。確定するまで保存しない。
+    draft: String,
+    _subscription: gpui::Subscription,
 }
 
 impl gpui::EventEmitter<ResolvedSettings> for SettingsFeature {}
@@ -108,11 +120,56 @@ impl SettingsFeature {
             locale,
             message: String::new(),
             page: default_page(),
+            editing: None,
             web,
             web_access,
             workspace_id: None,
             selected_web_host: None,
             web_message: String::new(),
+        }
+    }
+
+    /// 候補を持たない値を編集する。確定するまで保存しない。
+    fn begin_text_edit(&mut self, key: SettingKey, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing.as_ref().is_some_and(|edit| edit.key == key) {
+            return;
+        }
+        let current = self.values.text(key).unwrap_or_default().to_owned();
+        let placeholder = self.t("settings.value.placeholder");
+        let input = cx.new(|cx| crate::components::SearchInput::new(&placeholder, cx));
+        input.update(cx, |input, cx| input.set_text(current.clone(), cx));
+        crate::gpui_compat::focus(window, &input.read(cx).focus_handle(cx), cx);
+        let subscription = cx.subscribe(&input, |this, _, event, cx| {
+            let crate::components::SearchInputEvent::Changed(text) = event;
+            if let Some(edit) = this.editing.as_mut() {
+                edit.draft = text.clone();
+            }
+            cx.notify();
+        });
+        self.editing = Some(TextEdit {
+            key,
+            input,
+            draft: current,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn commit_text_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(edit) = self.editing.take() else {
+            return;
+        };
+        if edit.draft.trim().is_empty() {
+            self.coordinator
+                .update(cx, |coordinator, cx| coordinator.clear(edit.key, cx));
+        } else {
+            self.choose(edit.key, SettingValue::text(edit.draft), cx);
+        }
+    }
+
+    fn cancel_text_edit(&mut self, cx: &mut Context<Self>) {
+        if self.editing.take().is_some() {
+            cx.notify();
         }
     }
 
@@ -143,10 +200,23 @@ impl SettingsFeature {
     }
 
     /// 保存する値は定義データの候補から来るため、UI 側で型を組み立てない。
+    ///
+    /// 配布元が実際に変わったときだけ、以前の場所を同じ操作で消す。場所の意味は取得元
+    /// ごとに変わるため、別の取得元へ古い path/URL を流用しない。同じ取得元の再選択では
+    /// 保存済みの場所を残す。
     pub(crate) fn choose(&mut self, key: SettingKey, value: SettingValue, cx: &mut Context<Self>) {
-        self.coordinator.update(cx, |coordinator, cx| {
-            coordinator.change(Change::set(key, value), cx)
-        });
+        let source_changed = key == settings::UPDATE_SOURCE
+            && self.values.text(settings::UPDATE_SOURCE) != value.as_text();
+        let changes = if source_changed {
+            Change::update(vec![
+                (key, Some(value)),
+                (settings::UPDATE_SOURCE_LOCATION, None),
+            ])
+        } else {
+            Change::set(key, value)
+        };
+        self.coordinator
+            .update(cx, |coordinator, cx| coordinator.change(changes, cx));
     }
 
     /// そのページをこの起動構成で表示できるか。
@@ -672,6 +742,77 @@ impl SettingsFeature {
         for definition in catalog.settings_of(page.id) {
             container = container.child(self.render_field(definition, cx));
         }
+        if let Some(edit) = &self.editing
+            && catalog
+                .settings_of(page.id)
+                .any(|definition| definition.key == edit.key)
+        {
+            let input = edit.input.clone();
+            let key = edit.key.as_str();
+            container = container.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .p_4()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme::colors(cx).border_default)
+                    .bg(theme::colors(cx).background_tertiary)
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::colors(cx).text_tertiary)
+                            .child(self.t("settings.value.edit-description")),
+                    )
+                    .child(input)
+                    .child(
+                        div()
+                            .flex()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "settings-text-save-{key}"
+                                    )))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded(px(6.0))
+                                    .bg(theme::colors(cx).button_background_selected)
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors(cx).text_accent)
+                                    .child(self.t("settings.value.save"))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.commit_text_edit(cx)),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "settings-text-cancel-{key}"
+                                    )))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded(px(6.0))
+                                    .border_1()
+                                    .border_color(theme::colors(cx).border_default)
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors(cx).text_primary)
+                                    .child(self.t("settings.value.cancel"))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| this.cancel_text_edit(cx)),
+                                    ),
+                            ),
+                    )
+                    .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                        if event.keystroke.key != "enter" {
+                            return;
+                        }
+                        cx.stop_propagation();
+                        this.commit_text_edit(cx);
+                    })),
+            );
+        }
         container
     }
 
@@ -969,36 +1110,97 @@ impl SettingsFeature {
                     .text_color(theme::colors(cx).text_tertiary)
                     .child(self.t(description))
             }))
-            .child(div().flex().flex_wrap().gap_2().children(
-                self.options(definition, cx).into_iter().enumerate().map(
-                    |(index, (value, label))| {
-                        let selected = current.as_ref() == Some(&value);
-                        div()
-                            .id((key.as_str(), index))
-                            .px_3()
-                            .py_2()
-                            .rounded(px(6.0))
-                            .border_1()
-                            .border_color(if selected {
-                                theme::colors(cx).text_accent
-                            } else {
-                                theme::colors(cx).border_default
+            .child(
+                div()
+                    .flex()
+                    .flex_wrap()
+                    .gap_2()
+                    .children(match &definition.control {
+                        SettingControl::Choice(_) => self
+                            .options(definition, cx)
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (value, label))| {
+                                let selected = current.as_ref() == Some(&value);
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "{}-{index}",
+                                        key.as_str()
+                                    )))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded(px(6.0))
+                                    .border_1()
+                                    .border_color(if selected {
+                                        theme::colors(cx).text_accent
+                                    } else {
+                                        theme::colors(cx).border_default
+                                    })
+                                    .bg(if selected {
+                                        theme::colors(cx).button_background_selected
+                                    } else {
+                                        theme::colors(cx).background_secondary
+                                    })
+                                    .hover(|style| {
+                                        style.bg(theme::colors(cx).button_background_hover)
+                                    })
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors(cx).text_primary)
+                                    .child(format!("{} {label}", if selected { "✓" } else { "" }))
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.choose(key, value.clone(), cx)
+                                    }))
+                                    .into_any_element()
                             })
-                            .bg(if selected {
-                                theme::colors(cx).button_background_selected
-                            } else {
-                                theme::colors(cx).background_secondary
-                            })
-                            .hover(|style| style.bg(theme::colors(cx).button_background_hover))
-                            .text_size(px(12.0))
-                            .text_color(theme::colors(cx).text_primary)
-                            .child(format!("{} {label}", if selected { "✓" } else { "" }))
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                this.choose(key, value.clone(), cx)
-                            }))
-                    },
-                ),
-            ))
+                            .collect::<Vec<_>>(),
+                        // 候補を持たない値は、保存済みの値を表示し、明示的な編集入口から保存する。
+                        SettingControl::Text => {
+                            let value_text = current
+                                .as_ref()
+                                .and_then(|value| value.as_text().map(ToOwned::to_owned))
+                                .filter(|value| !value.is_empty())
+                                .unwrap_or_else(|| self.t("settings.value.unset"));
+                            vec![
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "settings-value-{}",
+                                        key.as_str()
+                                    )))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded(px(6.0))
+                                    .border_1()
+                                    .border_color(theme::colors(cx).border_default)
+                                    .bg(theme::colors(cx).background_secondary)
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors(cx).text_primary)
+                                    .child(value_text)
+                                    .into_any_element(),
+                                div()
+                                    .id(gpui::SharedString::from(format!(
+                                        "settings-edit-{}",
+                                        key.as_str()
+                                    )))
+                                    .px_3()
+                                    .py_2()
+                                    .rounded(px(6.0))
+                                    .border_1()
+                                    .border_color(theme::colors(cx).border_default)
+                                    .bg(theme::colors(cx).background_secondary)
+                                    .hover(|style| {
+                                        style.bg(theme::colors(cx).button_background_hover)
+                                    })
+                                    .text_size(px(12.0))
+                                    .text_color(theme::colors(cx).text_accent)
+                                    .child(self.t("settings.value.edit"))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.begin_text_edit(key, window, cx)
+                                    }))
+                                    .into_any_element(),
+                            ]
+                        }
+                    }),
+            )
     }
 
     /// 未保存の項目は、UI が持つ実行時の既定値を選択状態として見せる。
@@ -1040,7 +1242,9 @@ impl SettingsFeature {
         definition: &SettingDefinition,
         cx: &mut Context<Self>,
     ) -> Vec<(SettingValue, String)> {
-        let SettingControl::Choice(source) = &definition.control;
+        let SettingControl::Choice(source) = &definition.control else {
+            return Vec::new();
+        };
         match source {
             OptionSource::Values(options) => options
                 .iter()
@@ -1509,6 +1713,103 @@ mod tests {
             });
             cx.new(|cx| SettingsFeature::with_web_access(cx, Some(source), None))
         })
+    }
+
+    /// 更新の項目が定義データだけで描画され、配布元の場所を編集して保存できることを確かめる。
+    #[gpui::test]
+    fn update_settings_render_from_the_catalog_and_save_the_location(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+        });
+        let feature = cx.update(|cx| cx.new(SettingsFeature::new));
+        feature.update(cx, |feature, cx| {
+            // 更新ページには定義済みの 3 項目だけが並ぶ。
+            let keys = catalog_for_tests()
+                .settings_of("update.channel")
+                .map(|definition| definition.key)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                keys,
+                vec![
+                    settings::UPDATE_MODE,
+                    settings::UPDATE_SOURCE,
+                    settings::UPDATE_SOURCE_LOCATION
+                ]
+            );
+            // 候補を持つ項目は定義の候補から、持たない項目は入力を出す。
+            let location = settings::catalog()
+                .definition(settings::UPDATE_SOURCE_LOCATION)
+                .expect("定義がある");
+            assert!(feature.options(location, cx).is_empty());
+            assert_eq!(location.value_kind, settings::ValueKind::Text);
+            assert_eq!(
+                feature.values.update_mode(),
+                settings::UpdateMode::Auto,
+                "既定は自動"
+            );
+        });
+    }
+
+    /// 取得元を変えたら以前の location を流用しない。場所の意味は取得元ごとに変わる。
+    /// 同じ取得元の再選択では保存済みの場所を残す。
+    #[gpui::test]
+    fn changing_the_update_source_clears_the_previous_location(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+        });
+        let feature = cx.update(|cx| cx.new(SettingsFeature::new));
+
+        // まず Local と場所を保存し、保存が反映されるまで待つ。
+        feature.update(cx, |feature, cx| {
+            feature.choose(settings::UPDATE_SOURCE, SettingValue::text("local"), cx);
+        });
+        wait_for_settings(cx);
+        feature.update(cx, |feature, cx| {
+            feature.choose(
+                settings::UPDATE_SOURCE_LOCATION,
+                SettingValue::text("C:/releases"),
+                cx,
+            );
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            let values = &feature.read(cx).values;
+            assert_eq!(values.update_source(), settings::UpdateSource::Local);
+            assert_eq!(
+                values.update_source_location().as_deref(),
+                Some("C:/releases")
+            );
+        });
+
+        // 同じ Local を選び直しても場所は消さない。
+        feature.update(cx, |feature, cx| {
+            feature.choose(settings::UPDATE_SOURCE, SettingValue::text("local"), cx);
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                feature.read(cx).values.update_source_location().as_deref(),
+                Some("C:/releases"),
+                "取得元が変わっていなければ場所を残す"
+            );
+        });
+
+        // Server へ変えたら場所を消し、再入力を促す。
+        feature.update(cx, |feature, cx| {
+            feature.choose(settings::UPDATE_SOURCE, SettingValue::text("server"), cx);
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            let values = &feature.read(cx).values;
+            assert_eq!(values.update_source(), settings::UpdateSource::Server);
+            assert_eq!(values.update_source_location(), None);
+        });
     }
 
     /// 接続ページは保存値ではなく、いま集めた候補を表示する。

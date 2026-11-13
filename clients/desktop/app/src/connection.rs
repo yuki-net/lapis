@@ -183,9 +183,19 @@ fn local_host_executable(arguments: &[OsString]) -> Result<Option<PathBuf>, Erro
 }
 
 fn local_hosts_directory(arguments: &[OsString], directory: &Path) -> Result<PathBuf, Error> {
-    let hosts = option(arguments, "--local-host-directory")?
-        .map(PathBuf::from)
-        .unwrap_or_else(|| directory.join("hosts"));
+    let hosts = match option(arguments, "--local-host-directory")? {
+        Some(hosts) => PathBuf::from(hosts),
+        // Local Host の接続 credential は data 世代の外に置く。世代交代で再 pairing を
+        // 起こさない（docs/specs/release.md）。
+        None => match crate::install::InstallLayout::detect() {
+            Some(layout) => {
+                let target = layout.credentials_directory().join("hosts");
+                migrate_legacy_hosts(&target, directory);
+                target
+            }
+            None => directory.join("hosts"),
+        },
+    };
     if hosts.is_absolute() {
         Ok(hosts)
     } else {
@@ -193,12 +203,113 @@ fn local_hosts_directory(arguments: &[OsString], directory: &Path) -> Result<Pat
     }
 }
 
+/// 旧保存先の Local Host credential を、新しい `credentials/hosts` へ引き継ぐ。
+///
+/// 保存先を世代の外へ移した初回に、既存の pairing を失わせないため。既にある
+/// credential は上書きせず、失敗しても旧 credential を消さない（複写のみ）。
+fn migrate_legacy_hosts(target: &Path, state_directory: &Path) {
+    let mut sources = vec![state_directory.join("hosts")];
+    if let Ok(user) = BackendClient::user_directory() {
+        sources.push(user.join("hosts"));
+    }
+    sources.extend([std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("Lapis/hosts")]);
+    for source in sources {
+        if same_path(&source, target) || !source.is_dir() {
+            continue;
+        }
+        let entries = match std::fs::read_dir(&source) {
+            Ok(entries) => entries,
+            Err(error) => {
+                eprintln!(
+                    "旧 Host credential を読めません ({}): {error}",
+                    source.display()
+                );
+                continue;
+            }
+        };
+        if let Err(error) = std::fs::create_dir_all(target) {
+            eprintln!("credential の保存先を作れません: {error}");
+            return;
+        }
+        for entry in entries.flatten() {
+            if !entry.path().is_file() {
+                continue;
+            }
+            // 排他的に作成し、既存の credential は上書きしない。`exists()` による
+            // 事前確認では、確認と書き込みの間に別プロセスが入る余地が残る。
+            copy_new_file(&entry.path(), &target.join(entry.file_name()));
+        }
+    }
+}
+
+/// 移行先が無い場合だけ複写する。既にあれば何もしない。
+fn copy_new_file(source: &Path, destination: &Path) {
+    let mut input = match std::fs::File::open(source) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!(
+                "旧 Host credential を読めません ({}): {error}",
+                source.display()
+            );
+            return;
+        }
+    };
+    let mut output = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+    {
+        // 既にある credential は上書きしない。
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return,
+        Err(error) => {
+            eprintln!(
+                "旧 Host credential を引き継げません ({}): {error}",
+                destination.display()
+            );
+            return;
+        }
+        Ok(file) => file,
+    };
+    // 途中で失敗した半端な file は残さない。次回起動で作り直せる。
+    if let Err(error) = std::io::copy(&mut input, &mut output) {
+        eprintln!(
+            "旧 Host credential を引き継げません ({}): {error}",
+            destination.display()
+        );
+        drop(output);
+        let _ = std::fs::remove_file(destination);
+    }
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 fn default_state_directory() -> Result<PathBuf, Error> {
-    let preferred = BackendClient::user_directory()?;
     let legacy = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(std::env::temp_dir)
         .join("Lapis");
+    // install layout があれば、data は世代 directory に置く。軸A は同じ世代を
+    // 使い続け、軸B だけが並置した新しい世代へ切り替える（docs/specs/release.md）。
+    if let Some(layout) = crate::install::InstallLayout::detect() {
+        layout.record();
+        let data = layout.data_directory();
+        std::fs::create_dir_all(&data)?;
+        // 初回だけ従来の保存先から引き継ぐ。breaking 更新で用意した新しい世代は、
+        // 旧保存先へフォールバックさせない（世代分離を保つ）。
+        if layout.is_first_generation() {
+            return select_state_directory(&data, &legacy);
+        }
+        return Ok(data);
+    }
+    let preferred = BackendClient::user_directory()?;
     select_state_directory(&preferred, &legacy)
 }
 

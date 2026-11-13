@@ -119,6 +119,19 @@ lapis-launcher.exe --install-root ~/.lapis
 pointer を進める。失敗しても起動は止まらず、今の version がそのまま立ち上がる。
 `breaking: true` の候補は launcher では適用しない（同意画面はアプリ側の更新 UX）。
 
+## 5.1 アプリからの更新
+
+通常の起動では Desktop が裏で manifest を確認し、新しい version があれば署名と SHA-256 を
+検証して `staging/<version>/` へ置く。次回 launcher を起動すると新版に差し替わる。適用の
+ために install を都度確認する操作は無い。
+
+- 設定の「更新」で確認方法（自動 / 通知のみ / OFF）と配布元（GitHub Releases / ローカル
+  フォルダ / 自宅サーバー）を切り替える。ローカルと自宅サーバーは場所の指定が要る。
+- `breaking: true` の release は、data 世代が変わることを示す同意画面を出す。同意した場合
+  だけ新しい世代を `data/` に並置し、旧 version と旧世代 data は残る。`credentials/` は
+  世代の外なので再 pairing は不要。
+- 確認や download に失敗しても、今の version でそのまま使える。
+
 ## 6. 手動復旧
 
 更新が壊れたときは、手元にある検証済み package で version を差し替える。

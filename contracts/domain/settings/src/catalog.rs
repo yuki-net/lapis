@@ -6,10 +6,11 @@ use crate::definition::{
     DefinitionCatalog, OptionSource, SettingCategory, SettingControl, SettingDefinition,
     SettingGroup, SettingPage, SettingPageContent, TERMINAL_CARET_SHAPE, TERMINAL_DEFAULT_PROFILE,
     TERMINAL_FONT_FAMILY, TERMINAL_FONT_SIZE, TERMINAL_LINE_HEIGHT, UI_LOCALE, UI_SYNTAX_THEME,
-    UI_THEME,
+    UI_THEME, UPDATE_MODE, UPDATE_SOURCE, UPDATE_SOURCE_LOCATION,
 };
 use crate::scope::ScopeKind;
 use crate::syntax::{SyntaxTheme, TerminalCaretShape};
+use crate::update::{UpdateMode, UpdateSource};
 use crate::value::{Label, SettingOption, SettingValue, ValueKind};
 
 const USER: &[ScopeKind] = &[ScopeKind::User];
@@ -87,6 +88,15 @@ fn categories() -> Vec<SettingCategory> {
                 pages: &["connection.web"],
             }],
         },
+        SettingCategory {
+            id: "update",
+            label: "settings.category.update",
+            groups: &[SettingGroup {
+                id: "update.install",
+                label: "settings.group.update.install",
+                pages: &["update.channel"],
+            }],
+        },
     ]
 }
 
@@ -139,6 +149,14 @@ fn pages() -> Vec<SettingPage> {
             label: "settings.page.connection.web",
             description: Some("settings.page.connection.web.description"),
             content: SettingPageContent::Feature,
+        },
+        SettingPage {
+            id: "update.channel",
+            category: "update",
+            group: "update.install",
+            label: "settings.page.update.channel",
+            description: Some("settings.page.update.channel.description"),
+            content: SettingPageContent::Settings,
         },
     ]
 }
@@ -225,7 +243,61 @@ fn settings() -> Vec<SettingDefinition> {
             scopes: USER,
             default: Some(SettingValue::text("en-US")),
         },
+        SettingDefinition {
+            key: UPDATE_MODE,
+            page: "update.channel",
+            label: "settings.field.update-mode",
+            description: Some("settings.field.update-mode.description"),
+            control: SettingControl::Choice(OptionSource::Values(update_mode_options())),
+            value_kind: ValueKind::Text,
+            scopes: USER,
+            default: Some(SettingValue::text(UpdateMode::Auto.as_id())),
+        },
+        SettingDefinition {
+            key: UPDATE_SOURCE,
+            page: "update.channel",
+            label: "settings.field.update-source",
+            description: Some("settings.field.update-source.description"),
+            control: SettingControl::Choice(OptionSource::Values(update_source_options())),
+            value_kind: ValueKind::Text,
+            scopes: USER,
+            default: Some(SettingValue::text(UpdateSource::Github.as_id())),
+        },
+        SettingDefinition {
+            key: UPDATE_SOURCE_LOCATION,
+            page: "update.channel",
+            label: "settings.field.update-source-location",
+            description: Some("settings.field.update-source-location.description"),
+            control: SettingControl::Text,
+            value_kind: ValueKind::Text,
+            scopes: USER,
+            default: None,
+        },
     ]
+}
+
+fn update_mode_options() -> Vec<SettingOption> {
+    [
+        (UpdateMode::Auto, "settings.update-mode.auto"),
+        (UpdateMode::Notify, "settings.update-mode.notify"),
+        (UpdateMode::Off, "settings.update-mode.off"),
+    ]
+    .into_iter()
+    .map(|(mode, key)| SettingOption::with_label(SettingValue::text(mode.as_id()), Label::Key(key)))
+    .collect()
+}
+
+fn update_source_options() -> Vec<SettingOption> {
+    [
+        (UpdateSource::Github, "settings.update-source.github"),
+        (UpdateSource::Local, "settings.update-source.local"),
+        (UpdateSource::Server, "settings.update-source.server"),
+    ]
+    .into_iter()
+    .map(|(source, key)| {
+        SettingOption::with_label(SettingValue::text(source.as_id()), Label::Key(key))
+    })
+    .collect()
 }
 
 fn syntax_options() -> Vec<SettingOption> {
@@ -364,6 +436,51 @@ mod tests {
         assert_eq!(
             catalog().page("terminal.startup").map(|page| page.category),
             Some("terminal")
+        );
+    }
+
+    #[test]
+    fn update_settings_are_user_only_choices_with_defaults() {
+        for (key, expected) in [
+            (UPDATE_MODE, UpdateMode::Auto.as_id()),
+            (UPDATE_SOURCE, UpdateSource::Github.as_id()),
+        ] {
+            let definition = catalog().definition(key).expect("更新設定の定義がある");
+            assert_eq!(definition.scopes, USER);
+            assert_eq!(definition.page, "update.channel");
+            assert_eq!(
+                definition.default.as_ref().and_then(SettingValue::as_text),
+                Some(expected)
+            );
+        }
+        // 配布元の location は入力候補を持たず、取得元ごとに意味が変わる。
+        let location = catalog()
+            .definition(UPDATE_SOURCE_LOCATION)
+            .expect("location の定義がある");
+        assert!(location.default.is_none());
+        assert_eq!(location.control, SettingControl::Text);
+        assert_eq!(location.page, "update.channel");
+    }
+
+    #[test]
+    fn update_options_name_every_stored_value() {
+        let options = |key| {
+            let definition = catalog().definition(key).expect("定義がある");
+            let SettingControl::Choice(OptionSource::Values(values)) = &definition.control else {
+                panic!("固定候補の選択肢である");
+            };
+            values
+                .iter()
+                .filter_map(|option| option.value.as_text().map(ToOwned::to_owned))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            options(UPDATE_MODE),
+            ["auto", "notify", "off"].map(ToOwned::to_owned)
+        );
+        assert_eq!(
+            options(UPDATE_SOURCE),
+            ["github", "local", "server"].map(ToOwned::to_owned)
         );
     }
 

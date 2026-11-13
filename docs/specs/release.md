@@ -3,9 +3,10 @@
 配布 package・署名付き manifest・インストール layout・データ世代の正本。
 利用者・運用者向けの手順は [リリース手順](../releases.md) を参照する。
 
-現時点では launcher 本体までを実装している。アプリ側の更新確認・download・世代切替の
-同意画面（更新 UX）は未実装である。ここに書くのは生成・配置・検証の契約と、後から
-変更できない layout・launcher の起動前提の決定である。
+現時点では launcher 本体とアプリ側の更新 UX を実装している。アプリは起動時とセッション中に
+manifest を確認し、新版なら download・検証して staging へ置く。軸A は次回起動で無言適用し、
+軸B は同意画面を経て新しい data 世代を並置する。ここに書くのは生成・配置・検証の契約と、
+後から変更できない layout・launcher の起動前提の決定である。
 
 ## 経路は 1 本
 
@@ -26,7 +27,8 @@ package (zip) + manifest.json (+ Ed25519 署名)
 `scripts/release/` は生成・配置・検証の tool である。launcher（`clients/desktop/launcher/`）
 は同じ manifest schema と検証規則を使い、staging 済み package の適用と本体の起動だけを行う。
 manifest の取得・download・更新の同意画面といった変わりうる処理はアプリ側に置き、
-launcher には置かない。
+launcher には置かない。アプリ側の取得・検証・staging も `clients/desktop/launcher/` の
+library（`Verifier`）を共用し、署名・SHA-256・layout の規則を 1 か所に保つ。
 
 ## manifest schema v1
 
@@ -160,11 +162,37 @@ manifest の解釈・更新モードの設定を持たず、変更のたびに�
 - 信頼済み公開鍵 registry は launcher に埋め込む。鍵の追加・失効は launcher の再配布を
   伴うが、配布物に含めた公開鍵を信頼の起点にはしない。
 
+## アプリ側の更新 UX
+
+`clients/desktop/app/` が manifest の取得・download・検証・staging と同意画面を持つ。
+検証と staging は launcher の library（`Verifier`）を共用する。
+
+- 起動時とセッション中（既定 6 時間間隔）に manifest を確認する。取得元は設定
+  `update.source`（GitHub Releases / ローカル folder / 自宅サーバー）で切り替え、
+  `update.source-location` に folder の path か https URL を置く。形式・検証・staging は
+  取得元で変えない。
+- `update.mode` は `auto` / `notify` / `off`。`off` は確認しない。`notify` は新しい version を
+  知らせるだけで download しない。`auto` は署名と SHA-256 を検証して `staging/<version>/`
+  まで置き、適用は次回起動の launcher に任せる。
+- 軸A（`breaking: false`）では install の可否を尋ねない。「再起動で更新される」ことだけを
+  控えめに通知する。
+- 軸B（`breaking: true`）は download の前に同意画面を出す。失うのは現在の data 世代
+  （`data/<generation>/` の DB と保存 data）だけで、`credentials/` は世代の外にあるため
+  再 pairing は起きない。同意した場合だけ新しい世代を並置して staging へ置き、旧 version と
+  旧世代 data は残す。同意しなければ何も変えず、staging の候補も残さない。
+- 確認・download・検証の失敗は、現在の版での利用を止めない。状態だけを UI に知らせ、
+  起動・編集・接続はそのまま続ける。
+- 起動時の Desktop は自分の実行 path（`versions/<version>/lapis.exe`）から install root を
+  求め、`data/versions.json` で version ごとの世代を解決する。記録が無い version は現在の
+  世代を使う。install root を検出できない開発用 binary は従来の state directory を使う。
+
 ## データ世代
 
-- DB / data は `<install root>/data/<generation>/` に置き、世代番号で分ける。
-- 世代を上げるのは `breaking: true` の release（軸B）のときだけ。軸A（通常の version up）は
+- DB / data は `<install root>/data/<generation>/` に置き、世代番号で分ける。- 世代を上げるのは `breaking: true` の release（軸B）のときだけ。軸A（通常の version up）は
   同じ世代の directory を使い続ける。
+- 世代の pointer は `<install root>/data/current.json` の `{"schema": 1, "generation": n}`。
+  version ごとの世代は `<install root>/data/versions.json` に残し、旧 version を旧世代で
+  起動できるようにする。
 - 新しい世代を用意する場合も、旧世代の directory を自動削除しない。世代の切り替えと旧世代の
   削除は別の操作とする。
 - 失うと再登録が要るもの（Host 接続 credential、OIDC token、DPAPI 保護 profile など）は
@@ -199,4 +227,7 @@ manifest の解釈・更新モードの設定を持たず、変更のたびに�
 - launcher は `cargo test -p lapis-launcher` で、`scripts.release` が生成・署名した fixture
   配布物を検証する。Python 側の正規化 bytes・署名・layout の規則と Rust 実装が食い違うと
   落ちる。fixture を更新するときは `scripts.release` で作り直す。
+- アプリ側の更新は `cargo test -p lapis` で、署名済み fixture の download・検証・staging、
+  `notify` / `off` の分岐、軸B の同意前後の世代を確認する。実 network を使わず、
+  folder の取得元で同じ経路を通す。
 - Release を実際に作る検証を行わない。GitHub 側は fake remote と runner に差し替える。

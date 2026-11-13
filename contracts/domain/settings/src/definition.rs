@@ -25,6 +25,9 @@ pub const TERMINAL_FONT_SIZE: SettingKey = SettingKey::new("terminal.font-size")
 pub const TERMINAL_LINE_HEIGHT: SettingKey = SettingKey::new("terminal.line-height-percent");
 pub const TERMINAL_CARET_SHAPE: SettingKey = SettingKey::new("terminal.caret-shape");
 pub const TERMINAL_DEFAULT_PROFILE: SettingKey = SettingKey::new("terminal.default-profile");
+pub const UPDATE_MODE: SettingKey = SettingKey::new("update.mode");
+pub const UPDATE_SOURCE: SettingKey = SettingKey::new("update.source");
+pub const UPDATE_SOURCE_LOCATION: SettingKey = SettingKey::new("update.source-location");
 
 /// 選択候補の供給元。値そのものではなく、UI が所有する一覧を指す。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,10 +48,11 @@ pub enum OptionSource {
     TerminalProfiles,
 }
 
-/// 設定値の入力方法。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SettingControl {
     Choice(OptionSource),
+    /// 単一行のテキスト入力。候補を持たない値（path や URL）に使う。
+    Text,
 }
 
 /// 1つの設定項目の定義。
@@ -79,6 +83,7 @@ impl SettingDefinition {
                 options.iter().any(|option| &option.value == value)
             }
             SettingControl::Choice(_) => true,
+            SettingControl::Text => value.as_text().is_some_and(|text| !text.trim().is_empty()),
         }
     }
 

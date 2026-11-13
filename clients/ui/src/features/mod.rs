@@ -13,6 +13,7 @@ pub(crate) mod settings;
 pub(crate) mod settings_coordinator;
 pub(crate) mod tasks;
 pub(crate) mod terminal;
+pub(crate) mod update;
 
 pub mod id {
     pub const FEATURE_SHELL: &str = "core.shell";
