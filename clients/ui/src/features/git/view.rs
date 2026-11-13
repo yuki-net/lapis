@@ -71,13 +71,15 @@ impl GitFeature {
             .flex_wrap()
             .items_center()
             .gap(tokens::spacing::XS)
-            .child(badge(
+            .w_full()
+            .min_w(px(0.0))
+            .child(shrinking_badge(
                 context,
                 colors.text_primary,
                 colors.background_tertiary,
             ));
         bar = bar.child(match self.target.as_ref() {
-            Some(target) => badge(
+            Some(target) => shrinking_badge(
                 format!("Worktree {}", target.as_str()),
                 colors.info_text,
                 colors.info_background,
@@ -91,7 +93,7 @@ impl GitFeature {
         let Some(status) = self.selected_status() else {
             return bar;
         };
-        bar = bar.child(badge(
+        bar = bar.child(shrinking_badge(
             status.branch.clone(),
             colors.text_accent,
             colors.info_background,
@@ -296,6 +298,7 @@ impl GitFeature {
                         div()
                             .flex_1()
                             .min_w(px(0.0))
+                            .truncate()
                             .font_family(MONO_FONT_FAMILY)
                             .text_size(tokens::typography::FONT_XS)
                             .text_color(colors.text_primary)
@@ -614,7 +617,7 @@ impl GitFeature {
                             .flex_wrap()
                             .items_center()
                             .gap(tokens::spacing::XS)
-                            .child(badge(
+                            .child(shrinking_badge(
                                 format!("Worktree {}", id.as_str()),
                                 if selected {
                                     colors.info_text
@@ -627,7 +630,7 @@ impl GitFeature {
                                     colors.background_tertiary
                                 },
                             ))
-                            .child(badge(
+                            .child(shrinking_badge(
                                 status.branch.clone(),
                                 colors.text_secondary,
                                 colors.background_tertiary,
@@ -849,6 +852,7 @@ impl GitFeature {
                 .child(
                     div()
                         .min_w(px(0.0))
+                        .truncate()
                         .font_family(MONO_FONT_FAMILY)
                         .text_size(tokens::typography::FONT_XS)
                         .text_color(colors.text_primary)
@@ -1138,6 +1142,23 @@ fn badge(label: impl Into<SharedString>, text: Rgba, background: Rgba) -> gpui::
         .text_size(tokens::typography::FONT_XS)
         .text_color(text)
         .whitespace_nowrap()
+        .child(label.into())
+}
+
+/// 長さが外由来で読めない可能性があるBadge（パスなど）。
+///
+/// 幅を親に合わせて縮め、はみ出す分だけ省略する。`badge` の `flex_shrink_0` は
+/// 短い固定ラベル用で、長いパスに使うとPanelの横スクロールを強制してしまう。
+fn shrinking_badge(label: impl Into<SharedString>, text: Rgba, background: Rgba) -> gpui::Div {
+    div()
+        .min_w(px(0.0))
+        .px(tokens::spacing::XS)
+        .py(px(1.0))
+        .rounded(tokens::radius::CONTROL)
+        .bg(background)
+        .text_size(tokens::typography::FONT_XS)
+        .text_color(text)
+        .truncate()
         .child(label.into())
 }
 
@@ -1574,6 +1595,30 @@ mod reachability_tests {
         draw(visual);
         let bar = visual.debug_bounds("git-status-bar").unwrap();
         assert!(bar.size.height > px(0.0));
+    }
+
+    #[gpui::test]
+    fn a_long_work_target_path_does_not_force_horizontal_overflow(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let (feature, visual) = cx.add_window_view(|_, cx| {
+            let mut feature = feature(cx);
+            // context_label は root.rs が実パスから作る。長いパスでも横スクロールを強制しない。
+            feature.context_label = format!("Desktop · C:/{}", "very-long-directory/".repeat(20));
+            feature
+        });
+        visual.simulate_resize(gpui::size(px(360.), px(900.)));
+        draw(visual);
+        let bar = visual.debug_bounds("git-status-bar").unwrap();
+        assert!(
+            bar.right() <= px(360.),
+            "長い作業対象パスがPanel幅を超えている: {bar:?}"
+        );
+        assert!(
+            feature.read_with(visual, |feature, _| !feature.context_label.is_empty()),
+            "ラベル自体は保持する（省略表示だけ）"
+        );
     }
 
     #[gpui::test]
