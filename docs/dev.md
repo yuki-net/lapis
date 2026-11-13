@@ -8,13 +8,13 @@ Windows で Desktop と Web を起動して確認する手順の正本です。�
 | --- | --- |
 | `Run Host` | Host だけ。Desktop と Web の両方がここへ繋がる |
 | `Run Desktop` | Desktop だけ。Host の招待を待って接続する |
-| `Run Web` | bridge（TCP `4757`）＋ ページ配信（TCP `4747`）。Host は起動しない |
+| `Run Web` | 別起動 Host の bridge と Web ページ（TCP `4747`）。事前に Web のビルドが必要 |
 
-3つは独立していて、起動順は問いません。`Run Host` を1つ立ち上げれば、Desktop と Web が同じ Host に同時に繋がります。
+通常の Web 接続は `cargo dev` の Local Host と Desktop の設定から利用します。別起動 Host の招待発行は Desktop 設定では扱いません。
 
 `Run Desktop (Hot Reload)` は `Run Desktop` の起動方法だけを変えたもので、Host の招待待ちと `target/dev-desktop/state` は共通です。
 
-`.run` のその他は、`Run Web` の部品（`Run Web (Bridge)` / `Run Web (Page)`）、`Build Web`、`Run Android`、`Build Android` です。部品は単体で動きを調べたいときだけ押します。`Run Web (Page)` だけを起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host と bridge なしで UI を確認できます。
+`.run` のその他は、`Run Web (Bridge)`、デモ用の `Run Web (Page)`、`Build Web`、`Run Android`、`Build Android` です。`Run Web (Page)` だけを起動して `http://127.0.0.1:4747/?demo=1` を開くと、Host と bridge なしで UI を確認できます。
 
 ## Host と Desktop の接続
 
@@ -64,19 +64,21 @@ Hot Reload は次を守ります。
 
 ## Web
 
-Web はプロトコルが異なる3つの process に分かれます。Desktop は不要です。
+通常の初回接続は、Desktop が管理する Local Host を使います。別起動 Host の Web 招待管理は対象外です。
 
-| process | 役割 | 待受 |
-| --- | --- | --- |
-| Host（`lapis-host`） | Workspace と認証の本体 | QUIC。既定 `4787` |
-| bridge（`lapis-web-bridge`） | ブラウザーの WebSocket を Host の QUIC へ転送し、OIDC の token 交換を行う | TCP `4757` |
-| ページ配信（`lapis-web`） | `clients/web/dist` の Wasm UI を配る。`--dev` で `.rs` とページの変更を監視して作り直す | TCP `4747` |
+1. `clients/web` で `npm ci` と `npm run build` を実行します。Node.js 24、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129 が必要です。
+2. `cargo dev` で Desktop と Local Host を起動し、設定の「Web 接続」を開きます。
+3. 同一 PC または Tailscale のアドレスを選択して公開を開始し、招待リンクをコピーします。
+4. 同じ PC または Tailscale 内のブラウザーで招待リンクを開きます。リンクは5分間有効で一回限りです。
+5. 接続後は `/<host>/<workspace>` を使用し、同じブラウザーでは保存済み credential で再接続します。
 
-初回だけ `cd clients\web` で `npm ci` を実行します。`npm run build` は Wasm をビルドして `clients/web/dist` に HTML・JS・CSS・Wasm を揃えるため、`wasm32-unknown-unknown`、`wasm-bindgen-cli` 0.2.129、Node.js 24（`tsc` 用）が必要です。`Run Web` のページ側は `lapis-web --dev --dist clients/web/dist` で起動し、起動時と変更時に `npm run build` を実行します。
+ページと WebSocket は同じ `4747` ポートを使います。Desktop を閉じても Host と公開は継続し、Host の終了時に公開も終了します。公開中の設定は Host の再起動時に復元し、アドレスが使用できない場合は設定画面にエラーを表示します。Tailscale ACL と OS ファイアウォールで到達可能な端末を制限してください。失効は Desktop の同じ設定ページから行います。
 
-起動順は問いません。Host は待受を始めた後に接続情報を `target/dev-web/connection.json` へ書き出し、bridge は起動時にそれが現れるまで待ち（10 秒ごとに待機中を表示）、接続のたびに読み直します。Host の初回ビルドに時間がかかっても bridge は終了しません。Host を正常終了すると、自分が書いた接続情報だけが削除されます。
+Tailscale の候補は、Tailscale と確認できるインターフェースまたは `tailscale ip -4` の IPv4 から選びます。候補が出ない環境では Tailscale の起動と CLI の利用可否を確認してください。
 
-### ログイン
+公開アドレスは接続元ではなく Host の待受先です。Tailscale アドレスを選ぶと、同じ PC を含む複数の端末が同時に接続できます。招待リンクは一回限りなので、端末ごとに発行してください。`127.0.0.1` を選んだ場合は同じ PC からのみ接続できます。
+
+Tailscale アドレスの `http://` はブラウザー上では secure context ではなく、Clipboard API や WebGPU などが利用できない場合があります。WebGPU が使えない場合は `?backend=webgl` を指定してください（例: `http://<host>/?backend=webgl#/invite?token=<token>`）。`#` より後ろに足すと token が壊れるため、必ず `#` の前のクエリ部分へ追加します。通信は Tailscale の経路で保護されますが、Web サーバー自体は TLS を提供しません。localhost はブラウザー上の扱いが異なります。
 
 1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます。
 2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/` が出ます。その URL を開きます。接続先と token は URL に含まれません。
@@ -117,9 +119,10 @@ loopback で待ち受けているときは `open` の 1 行だけです。
 
 `4787` が他の用途で埋まっているときは `Run Host` の `--listen` を変えてください。その場合、Desktop は招待を作り直せば接続できます。
 
+`Run Web` は別起動 Host の bridge 動作を調べる開発用構成で、事前に `npm run build` が必要です。初回は招待リンクを要求します。Desktop が管理する Local Host の招待は別起動 Host では使えないため、`Run Host` のコンソールで `pair-user` を実行し、表示された token から `#/invite?token=<token>` 形式の招待リンクを作って開いてください。製品の招待発行には `cargo dev` の Local Host を使用してください。
 ## Web の UI を確認する
 
-`Run Web`（ページ側は `lapis-web --dev --dist clients/web/dist`）を立ち上げたまま `clients/ui`・`clients/state`・`clients/transport`・`contracts`・`extensions` 配下の `.rs`、または `clients/web/src` と `clients/web/index.html` を変更すると、`npm run build` が走って `clients/web/dist` が作り直され、ブラウザーが再読み込みします。`localStorage` の credential で再接続するため、ログインし直す必要はありません。
+デモ用の `Run Web (Page)`（`lapis-web --dev --dist clients/web/dist`）では変更時に Web が再ビルドされ、ブラウザーが再読み込みします。Host に接続する場合は `npm run build` を実行してから Desktop の設定で公開します。
 
 - 反映は再読み込みで行います。Desktop の Hot Reload のように State を保ったまま差し替えるものではありません。
 - 初回と依存 crate を変えたときは数十秒かかります。2回目以降は cargo の増分ビルドで数秒です。

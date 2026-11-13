@@ -102,11 +102,13 @@ pub struct DesktopServices {
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
     pub(crate) process: ProcessSession,
+    /// ローカル Web の接続設定を一度に集める経路。Web を使わない構成では `None`。
+    pub(crate) web_access: Option<WebAccessSource>,
+    /// Desktop からの Web 公開管理（開始/停止・招待・端末）。リモート接続では `None`。
+    pub(crate) web_access_control: Option<std::sync::Arc<dyn desktop_client::WebAccessControl>>,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
     /// アプリ側の更新処理。install layout を検出できない実行では持たない。
     pub(crate) updater: Option<UpdaterHandle>,
-    /// ローカル Web の接続設定を一度に集める経路。Web を使わない構成では `None`。
-    pub(crate) web_access: Option<WebAccessSource>,
     /// Workspace の view state 共有。Web は接続側の watch をそのまま渡す。
     pub(crate) session_view: Option<SessionViewHandle>,
 }
@@ -170,11 +172,19 @@ impl DesktopServices {
             conversation,
             settings,
             process: ProcessSession::unavailable(),
+            web_access: None,
+            web_access_control: None,
             workbench_watch: None,
             updater: None,
-            web_access: None,
             session_view: None,
         }
+    }
+    pub fn with_web_access_control(
+        mut self,
+        web: std::sync::Arc<dyn desktop_client::WebAccessControl>,
+    ) -> Self {
+        self.web_access_control = Some(web);
+        self
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
         self.connection = Some(connection);
@@ -268,6 +278,7 @@ pub(crate) struct WindowFactory {
     process: ProcessSession,
     updater: Option<UpdaterHandle>,
     web_access: Option<WebAccessSource>,
+    web_access_control: Option<std::sync::Arc<dyn desktop_client::WebAccessControl>>,
     session_view: Option<SessionViewHandle>,
 }
 impl WindowFactory {
@@ -292,6 +303,7 @@ impl WindowFactory {
             process: services.process.clone(),
             updater: services.updater.clone(),
             web_access: services.web_access.clone(),
+            web_access_control: services.web_access_control.clone(),
             session_view: services.session_view.clone(),
         }
     }
@@ -313,6 +325,7 @@ impl WindowFactory {
         services.process = self.process;
         services.updater = self.updater;
         services.web_access = self.web_access;
+        services.web_access_control = self.web_access_control;
         services.session_view = self.session_view;
         (editor, services)
     }

@@ -19,6 +19,7 @@ pub use client::BackendClient;
 mod features;
 mod session_view;
 mod terminal;
+mod web_publisher;
 mod workbench;
 mod workspace;
 /// Hostが提供する操作だけをペアリングで許可する。

@@ -16,33 +16,25 @@ cargo run -p web-bridge -- --connection-info target/dev-web/connection.json
 cargo run -p web-bridge -- --listen 127.0.0.1:4757 --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der --origin http://127.0.0.1:4747
 ```
 
-`--host` と `--certificate` は起動中Hostのアドレスと公開証明書です。証明書とサーバー名を検証し、検証失敗時に接続を許可しません。Hostへの接続は常にloopbackに限定し、指定したOriginと `lapis.v0` subprotocolだけを受け付けます。Webページ自体は配信しません。
+`--host` と `--certificate` は起動中Hostのアドレスと公開証明書です。証明書とサーバー名を検証し、検証失敗時に接続を許可しません。Hostへの接続は常にloopbackに限定し、指定したOriginと `lapis.v0` subprotocolだけを受け付けます。既定ではWebページを配信しません。
 
-Hostを固定ポートで起動し、再起動時に `--replace-certificate` を指定すると、公開証明書を同じパスへ更新できます。Bridgeは新しい接続ごとに証明書を読み直すため、Bridge自体の再起動は不要です。`--connection-info` を使う場合も同じで、Hostが再起動してアドレスや証明書が変われば次の接続から追従します。接続情報を読めない場合はその接続だけ失敗し、Bridgeは停止しません。証明書ファイルはHostとBridgeを実行するユーザーが管理し、他のユーザーが変更できない場所に置いてください。Host再起動後のClient認証は別途やり直す必要があります。
+Hostを固定ポートで起動し、再起動時に `--replace-certificate` を指定すると、公開証明書を同じパスへ更新できます。Bridgeは新しい接続ごとに証明書を読み直すため、Bridge自体の再起動は不要です。`--connection-info` を使う場合も同じで、Hostが再起動してアドレスや証明書が変われば次の接続から追従します。接続情報を読めない場合はその接続だけ失敗し、Bridgeは停止しません。証明書ファイルはHostとBridgeを実行するユーザーが管理し、他のユーザーが変更できない場所に置いてください。Host が認証状態を永続化している場合、再起動後も保存済み credential で再接続できます。
+
+`--dist <directory>` を指定すると、同じ待受アドレスでビルド済みの Web ページも配信します。`/remote` は引き続き WebSocket で、この構成では Origin のホスト名とポートを接続先と照合します。通常は managed Host がこの構成で bridge を起動し、Desktop の設定で公開と招待を管理します。
 
 ## 別PCから開く
 
 **SSHポート転送（既定のまま）**
 
-Webの開発サーバーとBridgeのTCPポートをSSHで転送し、ブラウザーから転送先のlocalhostを開きます。待ち受けはloopbackのままで、Originもlocalhostのまま使えます。
+ページと WebSocket を同一ポートで公開し、その TCP ポートを SSH で転送します。
 
 **Tailscaleで直接つなぐ**
 
-Bridgeをtailnetへ公開する場合は、明示的に `--allow-remote` を付けます。`--listen` を省くと `0.0.0.0:4757` で待ち受けます。
+Desktop の Web 接続設定で Tailscale アドレスを選びます。managed Host はそのアドレスだけで待ち受け、公開の開始・停止と子プロセスの寿命を所有します。
 
-```powershell
-cargo run -p web-bridge -- --allow-remote --host 127.0.0.1:HOST_PORT --server-name lapis-host --certificate HOST_CERTIFICATE.der
-```
+Web ページと接続口を同じアドレスで公開し、Desktop から `#/invite?token=<token>` 形式の招待を発行します。接続後の URL は `/<host>/<workspace>` になります。
 
-Webの開発サーバーもtailnetで待ち受けます。`--host` を付けると `0.0.0.0:4747` になります。
-
-```powershell
-cargo run -p lapis-web -- --dev --host --dist clients/web/dist
-```
-
-ページは `http://TAILSCALE_IP:4747/` を開き、一覧またはログインフォームから Host URL（`ws://TAILSCALE_IP:4757/remote`）・Workspace ID・pairing token を入力します。接続後の URL は `/<host>/<workspace>` になります。token をリンクで渡す場合は `#/invite?url=<bridge URL>&workspace=<ID>&token=<token>` の fragment 形式を使います。
-
-bridge は Origin がリクエストの Host と同じホスト名なら許可します。別名で開く場合やプロキシを挟む場合だけ `--origin` を指定してください。
+同一入口で配信する場合、bridge は Origin のホスト名とポートをリクエストの Host と照合します。
 
 `--allow-remote` を付けると、tailnet内の端末からページとBridgeへ到達できます。Origin検証は認証ではないため、Hostへの接続に必要なcredentialやpairing tokenとは別に、Tailscale ACLで到達端末を制限してください。Windowsファイアウォールで該当ポートの受信許可も必要です。
 

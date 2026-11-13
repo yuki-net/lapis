@@ -9,6 +9,7 @@ pub enum ClientKind {
     Android,
     Ios,
     Desktop,
+    Web,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

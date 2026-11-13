@@ -250,6 +250,10 @@ fn main() {
     // 設定の接続ページは表示のたびに候補を集める。保存値にしないことで、
     // Tailscale の IP 変更のようにアドレスが変わっても現在の接続情報へ追随する。
     .with_web_access(|| Some(web_access::local_web_access()));
+    if !is_remote {
+        desktop_services = desktop_services
+            .with_web_access_control(Arc::new(web_access::LocalWebAccess(host.clone())));
+    }
     // 更新は install layout を検出できた実行だけ有効にする。開発用 binary では何もしない。
     if let Some(layout) = install::InstallLayout::detect() {
         layout.record();

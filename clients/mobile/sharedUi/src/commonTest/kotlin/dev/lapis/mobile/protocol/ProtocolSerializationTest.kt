@@ -10,6 +10,12 @@ import kotlin.test.assertEquals
  */
 class ProtocolSerializationTest {
     @Test
+    fun webClientKindUsesTheRustWireName() {
+        assertEquals("\"web\"", lapisJson.encodeToString(ClientKind.Web))
+        assertEquals(ClientKind.Web, lapisJson.decodeFromString<ClientKind>("\"web\""))
+    }
+
+    @Test
     fun clientHelloMatchesRustFixture() {
         val json =
             """{"protocol":{"major":0,"minimum_minor":13,"maximum_minor":13},"client_id":"mobile-1","client_name":"Mobile","client_kind":"android","requested_capabilities":[]}"""

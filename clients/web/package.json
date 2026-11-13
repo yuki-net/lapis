@@ -7,6 +7,7 @@
     "wasm": "cargo build -p desktop-ui --target wasm32-unknown-unknown --profile web && wasm-bindgen --target web --out-dir src/generated/wasm --out-name lapis_ui ../../target/wasm32-unknown-unknown/web/desktop_ui.wasm",
     "prepare:dist": "node scripts/prepare-dist.mjs",
     "typecheck": "tsc -b",
+    "test": "node --test tests/invite.test.mjs",
     "build": "npm run wasm && npm run prepare:dist && tsc -p tsconfig.build.json"
   },
   "devDependencies": {

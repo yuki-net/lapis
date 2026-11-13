@@ -45,7 +45,15 @@ impl Fixture {
                 PairingLifetime::new(300).unwrap(),
                 CredentialLifetime::new(3600).unwrap(),
             ),
-            AuthPolicy::new(host::supported_capabilities()),
+            AuthPolicy::new(
+                CapabilitySet::try_new(
+                    host::supported_capabilities()
+                        .iter()
+                        .cloned()
+                        .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
+                )
+                .unwrap(),
+            ),
         );
         auth.set_workspace_resolver(Arc::new(host.clone()));
         auth.enable();
@@ -61,7 +69,7 @@ impl Fixture {
             "127.0.0.1:0".parse().unwrap(),
             tls,
             auth.clone(),
-            Arc::new(host::HostRemoteHandler::new(host.clone())),
+            Arc::new(host::HostRemoteHandler::new(host.clone()).with_auth(auth.clone())),
             RemoteLimits::default(),
         )
         .await
@@ -109,6 +117,295 @@ impl Fixture {
         };
         (client, paired)
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_can_invite_a_web_client_but_a_workspace_client_cannot() {
+    let fixture = Fixture::new().await;
+    let (mut ordinary, _) = fixture.pair("ordinary").await;
+    assert!(matches!(
+        request(&mut ordinary, 1, RequestBody::HostInvite(HostInviteRequest {})).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_owner_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut owner_hello = hello("owner");
+    owner_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .cloned()
+            .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
+    )
+    .unwrap();
+    let mut owner = fixture.connect().await;
+    owner
+        .send(&ClientMessage::Pair(PairRequest::new(
+            owner_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut owner).await,
+        ServerMessage::Paired(_)
+    ));
+    let ResponseBody::HostInvite(invite) =
+        request(&mut owner, 2, RequestBody::HostInvite(HostInviteRequest {})).await
+    else {
+        panic!("owner invitation failed");
+    };
+    assert_eq!(invite.token.len(), 64);
+    let mut secret = zeroize::Zeroizing::new([0u8; 32]);
+    for (index, byte) in secret.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&invite.token[index * 2..index * 2 + 2], 16).unwrap();
+    }
+    let mut web = fixture.connect().await;
+    let mut web_hello = hello("web-client");
+    web_hello.client_kind = ClientKind::Web;
+    web.send(&ClientMessage::Pair(PairRequest::new(web_hello, &secret)))
+        .await
+        .unwrap();
+    let ServerMessage::Paired(mut paired) = receive(&mut web).await else {
+        panic!("web pairing failed")
+    };
+    let web_id = paired.credential_id().unwrap();
+    let web_secret = zeroize::Zeroizing::new(paired.take_secret().unwrap());
+    assert!(matches!(
+        request(
+            &mut web,
+            3,
+            RequestBody::WorkspaceList(WorkspaceListRequest {})
+        )
+        .await,
+        ResponseBody::WorkspaceList(_)
+    ));
+    assert!(
+        matches!(request(&mut web, 4, RequestBody::HostInvite(HostInviteRequest {})).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN)
+    );
+    let mut reused = fixture.connect().await;
+    reused
+        .send(&ClientMessage::Pair(PairRequest::new(
+            hello("another-web"),
+            &secret,
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut reused).await,
+        ServerMessage::Error(_)
+    ));
+    let ResponseBody::HostDeviceList(list) = request(
+        &mut owner,
+        5,
+        RequestBody::HostDeviceList(HostDeviceListRequest {}),
+    )
+    .await
+    else {
+        panic!("device list failed")
+    };
+    assert!(
+        list.devices
+            .iter()
+            .any(|device| device.client_id == "owner" && device.is_current)
+    );
+    let device = list
+        .devices
+        .iter()
+        .find(|device| device.client_id == "web-client")
+        .unwrap();
+    assert!(!device.is_current);
+    assert_eq!(device.kind, "web");
+    assert!(matches!(
+        request(
+            &mut owner,
+            6,
+            RequestBody::HostDeviceRevoke(HostDeviceRevokeRequest {
+                device_id: device.id.clone()
+            })
+        )
+        .await,
+        ResponseBody::HostDeviceRevoke(HostDeviceRevokeResponse { revoked: true })
+    ));
+    assert!(
+        matches!(request(&mut web, 7, RequestBody::WorkspaceList(WorkspaceListRequest {})).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == UNAUTHORIZED)
+    );
+    let mut reconnect = fixture.connect().await;
+    reconnect
+        .send(&ClientMessage::Authenticate(AuthenticateRequest::new_auto(
+            hello("web-client"),
+            &web_id,
+            &web_secret,
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut reconnect).await,
+        ServerMessage::Error(_)
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn web_invitation_does_not_grant_host_management() {
+    let fixture = Fixture::new().await;
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_owner_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut owner_hello = hello("invite-owner");
+    owner_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .cloned()
+            .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
+    )
+    .unwrap();
+    let mut owner = fixture.connect().await;
+    owner
+        .send(&ClientMessage::Pair(PairRequest::new(
+            owner_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut owner).await,
+        ServerMessage::Paired(_)
+    ));
+
+    let ResponseBody::HostInvite(invite) =
+        request(&mut owner, 1, RequestBody::HostInvite(HostInviteRequest {})).await
+    else {
+        panic!("owner invitation failed");
+    };
+    let mut secret = zeroize::Zeroizing::new([0u8; 32]);
+    for (index, byte) in secret.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&invite.token[index * 2..index * 2 + 2], 16).unwrap();
+    }
+
+    // Web 招待で host.manage を要求しても User scope に制限される。
+    let mut web_hello = hello("greedy-web");
+    web_hello.client_kind = ClientKind::Web;
+    web_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .cloned()
+            .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
+    )
+    .unwrap();
+    let mut web = fixture.connect().await;
+    web.send(&ClientMessage::Pair(PairRequest::new(web_hello, &secret)))
+        .await
+        .unwrap();
+    let ServerMessage::Paired(paired) = receive(&mut web).await else {
+        panic!("web pairing failed")
+    };
+    assert!(
+        paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .all(|capability| capability.as_str() != capability::HOST_MANAGE),
+        "web invitation must not grant host.manage"
+    );
+    assert!(matches!(
+        request(&mut web, 2, RequestBody::HostWebStatus(HostWebStatusRequest {})).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn self_revoke_is_rejected_and_other_devices_still_revoke() {
+    let fixture = Fixture::new().await;
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_owner_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut owner_hello = hello("owner-self");
+    owner_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .cloned()
+            .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
+    )
+    .unwrap();
+    let mut owner = fixture.connect().await;
+    owner
+        .send(&ClientMessage::Pair(PairRequest::new(
+            owner_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut owner).await,
+        ServerMessage::Paired(_)
+    ));
+    // 他端末を登録しておき、一覧から取得した ID を後段で失効させる。
+    fixture.pair("other-device").await;
+
+    let ResponseBody::HostDeviceList(list) = request(
+        &mut owner,
+        1,
+        RequestBody::HostDeviceList(HostDeviceListRequest {}),
+    )
+    .await
+    else {
+        panic!("device list failed")
+    };
+    let own = list
+        .devices
+        .iter()
+        .find(|device| device.client_id == "owner-self")
+        .expect("own device is listed")
+        .id
+        .clone();
+    let other = list
+        .devices
+        .iter()
+        .find(|device| device.client_id == "other-device")
+        .expect("other device is listed")
+        .id
+        .clone();
+
+    // 自身の端末は Host 側でも失効を拒否し、管理 credential を失わない。
+    assert!(matches!(
+        request(
+            &mut owner,
+            2,
+            RequestBody::HostDeviceRevoke(HostDeviceRevokeRequest { device_id: own })
+        )
+        .await,
+        ResponseBody::Error(ref error) if error.code.as_str() == INVALID_REQUEST
+    ));
+    assert!(matches!(
+        request(
+            &mut owner,
+            3,
+            RequestBody::WorkspaceList(WorkspaceListRequest {})
+        )
+        .await,
+        ResponseBody::WorkspaceList(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut owner,
+            4,
+            RequestBody::HostDeviceRevoke(HostDeviceRevokeRequest { device_id: other })
+        )
+        .await,
+        ResponseBody::HostDeviceRevoke(HostDeviceRevokeResponse { revoked: true })
+    ));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
