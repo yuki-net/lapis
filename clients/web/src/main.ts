@@ -1,4 +1,5 @@
 import init, { connectionInfo, is_ready, start } from "./generated/wasm/lapis_ui.js";
+import { hostWebSocketUrl, parseInviteFragment, selectClientId } from "./invite.js";
 
 const root = document.querySelector<HTMLElement>("#app");
 if (root === null) {
@@ -17,9 +18,7 @@ const STORAGE = {
 };
 const LEGACY_WARNING =
   "旧形式の URL に含まれる接続先・token は使用しません。接続先を選ぶか、保存済みの接続から開き直してください。";
-// web-bridge の既定待受ポート。サーバ側の DEFAULT_LISTEN と揃える。
-const DEFAULT_BRIDGE_PORT = 4757;
-// 接続中の Host URL。アプリ内で Workspace を切り替えたときの registry 更新に使う。
+// ????? Workspace ????????? registry ??????
 let connectedUrl: string | null = null;
 
 type ConnectionInfo = {
@@ -68,7 +67,7 @@ type Candidate = {
 
 type FragmentState = {
   taskId?: string;
-  invite?: { url: string; workspace: string; token: string };
+  invite?: { token: string; valid: boolean };
 };
 
 type ResolvedPath =
@@ -468,17 +467,8 @@ function readFragment(): FragmentState | null {
       return { taskId: id };
     }
   }
-  const invitePrefix = "#/invite";
-  if (hash === invitePrefix || hash.startsWith(`${invitePrefix}?`)) {
-    const params = new URLSearchParams(hash.slice(invitePrefix.length + 1));
-    return {
-      invite: {
-        url: (params.get("url") ?? "").trim(),
-        workspace: (params.get("workspace") ?? "").trim(),
-        token: (params.get("token") ?? "").trim(),
-      },
-    };
-  }
+  const invite = parseInviteFragment(hash);
+  if (invite !== null) return { invite };
   return null;
 }
 
@@ -602,11 +592,11 @@ async function launch(
   idToken: string | null,
   taskId: string | null,
 ) {
-  const clientId = localStorage.getItem(STORAGE.clientId) ?? createClientId();
-  localStorage.setItem(STORAGE.clientId, clientId);
+  // 新しい招待は端末の再登録でも使う。失敗時に既存 credential の ID を壊さない。
+  const clientId = selectClientId(token, localStorage.getItem(STORAGE.clientId), createClientId);
   // 切り替え可能な credential は Workspace に固定されないため、Host 単位で保存する。
   const credentialKey = url ?? "";
-  const credential = credentialKey === "" ? null : localStorage.getItem(credentialKey);
+  const credential = credentialKey === "" || token !== null ? null : localStorage.getItem(credentialKey);
   if (url !== null) {
     localStorage.setItem(STORAGE.url, url);
     localStorage.setItem(STORAGE.workspace, workspace ?? "");
@@ -614,9 +604,14 @@ async function launch(
 
   await init();
   const fresh = await start(backend, url, workspace, token, credential, idToken, clientId);
+  if (token !== null && (fresh === undefined || fresh === null || fresh === "")) {
+    throw new Error("招待から credential を保存できませんでした");
+  }
   if (fresh !== undefined && fresh !== null && credentialKey !== "") {
     localStorage.setItem(credentialKey, fresh);
   }
+  localStorage.setItem(STORAGE.clientId, clientId);
+  if (token !== null && url !== null) clearOidcToken(url);
 
   const deadline = performance.now() + 20_000;
   while (!is_ready()) {
@@ -674,8 +669,11 @@ async function connect(
   backend: string,
   taskId: string | null,
 ) {
+  if (url !== hostWebSocketUrl(location.href)) {
+    throw new Error("以前の接続先は使用できません。新しい招待リンクを開いてください");
+  }
   stashTaskFragment(taskId);
-  const idToken = readOidcToken(url);
+  const idToken = token === "" ? readOidcToken(url) : null;
   try {
     await launch(backend, url, workspace, token === "" ? null : token, idToken, taskId);
   } catch (error) {
@@ -692,12 +690,6 @@ async function connect(
 
 async function launchDemo(backend: string) {
   await launch(backend, null, null, null, null, null);
-}
-
-function defaultBridgeUrl(): string {
-  // 同梱起動ではページと bridge が同じホストで動くため、bridge の既定ポートを使う。
-  const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${scheme}//${location.hostname || "127.0.0.1"}:${DEFAULT_BRIDGE_PORT}/remote`;
 }
 
 function bridgeOrigin(hostUrl: string): string | null {
@@ -755,7 +747,7 @@ function hasCredential(url: string): boolean {
 }
 
 function defaultLoginUrl(registry: Registry): string {
-  return lastHost(registry)?.url ?? readLocal(STORAGE.url) ?? defaultBridgeUrl();
+  return lastHost(registry)?.url ?? readLocal(STORAGE.url) ?? hostWebSocketUrl(location.href);
 }
 
 function defaultLoginWorkspace(registry: Registry): string {
@@ -767,7 +759,7 @@ function noticeHtml(notice: string | null): string {
 }
 
 function showLogin(
-  defaultUrl: string,
+  _defaultUrl: string,
   defaultWorkspace: string,
   notice: string | null,
   taskId: string | null,
@@ -779,23 +771,11 @@ function showLogin(
   root!.innerHTML = `
     <form class="login" id="login">
       <h1>Lapis Web</h1>
-      <p class="login-lead">Host に接続します。pairing token か OIDC ログインが必要です。</p>
+      <p class="login-lead">Desktop の設定で発行した招待リンクを開くか、ここに貼り付けてください。</p>
       ${noticeHtml(notice)}
       <label>
-        <span>Host URL</span>
-        <input name="url" type="url" required autocomplete="url"
-          placeholder="ws://127.0.0.1:${DEFAULT_BRIDGE_PORT}/remote"
-          value="${escapeHtml(defaultUrl)}" />
-      </label>
-      <label>
-        <span>Workspace ID <small>省略時は primary Workspace を取得します</small></span>
-        <input name="workspace" type="text" autocomplete="off"
-          placeholder="workspace-..."
-          value="${escapeHtml(defaultWorkspace)}" />
-      </label>
-      <label>
-        <span>Pairing token <small>初回のみ</small></span>
-        <input name="token" type="password" autocomplete="off" placeholder="64桁の16進数" />
+        <span>招待リンク</span>
+        <input name="invite" type="url" required autocomplete="off" placeholder="http://.../#/invite?token=..." />
       </label>
       <button type="submit">接続</button>
       <button type="button" class="secondary" id="oidc-login">OIDC でログイン</button>
@@ -812,36 +792,42 @@ function showLogin(
     showLoginError(error);
   }
 
-  const read = () => {
-    const data = new FormData(form);
-    return {
-      url: String(data.get("url") ?? "").trim(),
-      workspace: String(data.get("workspace") ?? "").trim(),
-      token: String(data.get("token") ?? "").trim(),
-    };
-  };
   const backend = () => new URLSearchParams(location.search).get("backend") ?? "auto";
 
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const { url, workspace, token } = read();
-    if (url === "") {
-      showLoginError("Host URL を入力してください");
+    const value = String(new FormData(form).get("invite") ?? "").trim();
+    let invitation: URL;
+    try {
+      invitation = new URL(value);
+    } catch {
+      showLoginError("招待リンクを入力してください");
       return;
     }
-    setLoginBusy(true);
-    void connect(url, workspace, token, backend(), taskId).catch((connectError) => {
-      setLoginBusy(false);
-      showLoginError(connectError);
-    });
+    if (!["http:", "https:"].includes(invitation.protocol) || !parseInviteFragment(invitation.hash)?.valid) {
+      showLoginError("招待リンクの形式が正しくありません");
+      return;
+    }
+    // 同じ接続元への招待は fragment だけの遷移になり再読み込みされないため、
+    // URL を差し替えたうえで同じ文書のまま接続処理を実行する。
+    if (
+      invitation.origin === location.origin &&
+      invitation.pathname === location.pathname &&
+      invitation.search === location.search &&
+      invitation.hash.startsWith("#/invite")
+    ) {
+      history.replaceState(null, "", `${location.pathname}${location.search}${invitation.hash}`);
+      void handleInviteFragment(backend());
+      return;
+    }
+    location.assign(invitation.href);
   });
 
   form.querySelector<HTMLButtonElement>("#oidc-login")?.addEventListener("click", () => {
-    const { url, workspace, token } = read();
-    if (url === "") {
-      showLoginError("Host URL を入力してください");
-      return;
-    }
+    const url = hostWebSocketUrl(location.href);
+    // boot() が保存済みパスから渡した Workspace を再ログインでも維持する。
+    const workspace = defaultWorkspace;
+    const token = "";
     const origin = bridgeOrigin(url);
     if (origin === null) {
       showLoginError("Host URL が不正です");
@@ -981,6 +967,7 @@ function showWorkspaceList(
             <ul>
               ${host.workspaces.map((workspace, index) => candidateMarkup({ host, workspace }, index)).join("")}
             </ul>
+            <button type="button" class="secondary forget-host" data-url="${escapeHtml(host.url)}">このブラウザーから接続情報を削除</button>
           </li>
         `,
           )
@@ -990,6 +977,30 @@ function showWorkspaceList(
     </section>
   `;
   attachCandidateLinks(taskId, notice);
+  for (const button of root!.querySelectorAll<HTMLButtonElement>(".forget-host")) {
+    button.addEventListener("click", () => {
+      const url = button.dataset.url;
+      if (url === undefined) return;
+      try {
+        localStorage.removeItem(url);
+        const oidcKey = oidcStorageKey(url);
+        if (oidcKey !== null) sessionStorage.removeItem(oidcKey);
+        if (localStorage.getItem(STORAGE.url) === url) {
+          localStorage.removeItem(STORAGE.url);
+          localStorage.removeItem(STORAGE.workspace);
+        }
+        const updated: Registry = {
+          hosts: registry.hosts.filter((host) => host.url !== url),
+          aliases: registry.aliases.filter((alias) => alias.host_url !== url),
+          selections: registry.selections.filter((selection) => selection.host_url !== url),
+        };
+        localStorage.setItem(STORAGE.registry, JSON.stringify(updated));
+        showWorkspaceList(updated, "このブラウザーの接続情報を削除しました。Host の端末失効は Desktop で行えます。", null);
+      } catch {
+        showWorkspaceList(loadRegistry(), "接続情報を削除できません。ブラウザーの保存領域を確認してください。", null);
+      }
+    });
+  }
   root!.querySelector<HTMLButtonElement>("#show-login")?.addEventListener("click", () => {
     showLogin(defaultLoginUrl(registry), defaultLoginWorkspace(registry), notice, taskId);
   });
@@ -1022,6 +1033,25 @@ function showPicker(
   attachCandidateLinks(taskId, reason);
 }
 
+/// fragment の招待を処理する。同じ文書からの再実行でも冪等に動く。
+async function handleInviteFragment(backend: string): Promise<void> {
+  const invite = parseInviteFragment(location.hash);
+  if (invite === null) {
+    return;
+  }
+  clearFragment();
+  const url = hostWebSocketUrl(location.href);
+  if (!invite.valid) {
+    showLogin(url, "", "招待リンクの形式が正しくありません。Desktop から新しい招待を発行してください。", null);
+    return;
+  }
+  try {
+    await connect(url, "", invite.token, backend, null);
+  } catch (error) {
+    showLogin(url, "", "招待リンクで接続できませんでした。token は URL から削除済みです。", null, error);
+  }
+}
+
 async function boot() {
   try {
     const legacy = stripLegacyQuery();
@@ -1030,28 +1060,7 @@ async function boot() {
     const fragment = readFragment();
     const segments = splitPath();
     if (fragment?.invite !== undefined) {
-      const invite = fragment.invite;
-      clearFragment();
-      if (invite.url === "") {
-        showLogin(
-          defaultLoginUrl(loadRegistry()),
-          invite.workspace,
-          "招待リンクに Host URL がありません。",
-          fragment.taskId ?? null,
-        );
-        return;
-      }
-      try {
-        await connect(invite.url, invite.workspace, invite.token, backend, fragment.taskId ?? null);
-      } catch (error) {
-        showLogin(
-          invite.url,
-          invite.workspace,
-          "招待リンクで接続できませんでした。token は URL から削除済みです。",
-          fragment.taskId ?? null,
-          error,
-        );
-      }
+      await handleInviteFragment(backend);
       return;
     }
 
@@ -1150,4 +1159,8 @@ window.addEventListener("pagehide", () => {
 
 window.addEventListener("error", (event) => fail(event.message));
 window.addEventListener("unhandledrejection", (event) => fail(event.reason));
+window.addEventListener("hashchange", () => {
+  const backend = new URLSearchParams(location.search).get("backend") ?? "auto";
+  void handleInviteFragment(backend);
+});
 void boot();

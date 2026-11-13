@@ -247,6 +247,10 @@ fn main() {
     // 設定の接続ページは表示のたびに候補を集める。保存値にしないことで、
     // Tailscale の IP 変更のようにアドレスが変わっても現在の接続情報へ追随する。
     .with_web_access(|| Some(web_access::local_web_access()));
+    if !is_remote {
+        desktop_services = desktop_services
+            .with_web_access_control(Arc::new(web_access::LocalWebAccess(host.clone())));
+    }
     if let Some(connection) = connection_identity {
         desktop_services = desktop_services.with_connection_identity(connection);
     }

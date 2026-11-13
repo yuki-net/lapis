@@ -1,14 +1,17 @@
-//! ローカル Web へ接続するための、この端末の候補アドレスを集める。
+//! ローカル Web へ接続するための候補アドレス収集と、Host の Web 公開管理。
 //!
 //! アドレスは運用で変わる（Tailscale の IP 変更など）ため、起動時ではなく
-//! 表示のたびに集め直す。ページ配信と bridge のポートは既定値を使う。
+//! 表示のために集め直す。ページ配信と bridge のポートは既定値を使う。
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::path::Path;
 
-use desktop_client::{WebAccess, WebAddress, WebAddressKind, address_kind_for};
+use desktop_client::{
+    HostDevice, HostWebStatus, WebAccess, WebAccessControl, WebAddress, WebAddressKind,
+    address_kind_for,
+};
 
 /// この端末で利用できる Web 接続の候補を返す。
-///
 /// Workspace ID は接続中の Workspace から設定画面が補うため、ここでは持たない。
 pub(super) fn local_web_access() -> WebAccess {
     WebAccess::new(
@@ -45,6 +48,72 @@ fn interface_addresses() -> Vec<WebAddress> {
         }
     }
     addresses
+}
+
+/// Desktop から Local Host の Web 公開と端末を管理する操作の実装。
+pub(super) struct LocalWebAccess(pub host::BackendClient);
+
+impl LocalWebAccess {
+    fn workspace(&self, root: &Path) -> Result<client_api::WorkspaceId, String> {
+        self.0
+            .register_workspace(root)
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl WebAccessControl for LocalWebAccess {
+    fn status(&self, root: &Path) -> Result<HostWebStatus, String> {
+        self.0
+            .web_status(self.workspace(root)?)
+            .map_err(|error| error.to_string())
+    }
+
+    fn start(&self, root: &Path, address: &str, port: u16) -> Result<HostWebStatus, String> {
+        self.0
+            .start_web(self.workspace(root)?, address.to_owned(), port)
+            .map_err(|error| error.to_string())
+    }
+
+    fn stop(&self, root: &Path) -> Result<HostWebStatus, String> {
+        self.0
+            .stop_web(self.workspace(root)?)
+            .map_err(|error| error.to_string())
+    }
+
+    fn invite(&self, root: &Path) -> Result<zeroize::Zeroizing<String>, String> {
+        let workspace = self.workspace(root)?;
+        let status = self
+            .0
+            .web_status(workspace.clone())
+            .map_err(|error| error.to_string())?;
+        let url = status.url.ok_or("Web 公開を開始してください")?;
+        let token = self
+            .0
+            .issue_web_invitation(workspace)
+            .map_err(|error| error.to_string())?;
+        Ok(zeroize::Zeroizing::new(format!(
+            "{}#/invite?token={}",
+            url,
+            token.as_str()
+        )))
+    }
+
+    fn devices(&self, root: &Path) -> Result<Vec<HostDevice>, String> {
+        self.0
+            .managed_devices(self.workspace(root)?)
+            .map_err(|error| error.to_string())
+    }
+
+    fn revoke(&self, root: &Path, device_id: &str) -> Result<(), String> {
+        match self
+            .0
+            .revoke_managed_device(self.workspace(root)?, device_id.to_owned())
+        {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("端末が見つかりません".into()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
 }
 
 #[cfg(test)]

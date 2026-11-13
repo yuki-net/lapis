@@ -15,6 +15,7 @@ val lapisJson = Json {
 @Serializable
 enum class ClientKind {
     @SerialName("desktop") Desktop,
+    @SerialName("web") Web,
     @SerialName("android") Android,
     @SerialName("ios") Ios,
 }

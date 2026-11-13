@@ -1,9 +1,9 @@
 use crate::{BackendHost, HostProfileInfo, protected::protect};
 use client_api::*;
 use remote::{
-    AuthConfig, AuthPolicy, CredentialHandle, CredentialId, CredentialLifetime, PairingLifetime,
-    QuicAuth, QuicConnection, QuicConnectionConfig, QuicServer, RemoteAuth, RemoteLimits,
-    tls13_server_config,
+    AuthConfig, AuthPersistence, AuthPersistenceError, AuthPolicy, CredentialHandle, CredentialId,
+    CredentialLifetime, PairingLifetime, QuicAuth, QuicConnection, QuicConnectionConfig,
+    QuicServer, RemoteAuth, RemoteLimits, StoredCredential, StoredDevice, tls13_server_config,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -97,6 +97,36 @@ fn hello(client: &str) -> Result<HelloRequest, Error> {
     })
 }
 const LOCAL_KEY: &str = "local-v1";
+
+/// managed Host の bootstrap credential は起動ごとに作り直すため保存しない。
+struct ManagedAuthPersistence {
+    store: Mutex<platform::CredentialStore>,
+    bootstrap_client: String,
+}
+
+impl AuthPersistence for ManagedAuthPersistence {
+    fn save(
+        &self,
+        credentials: &[StoredCredential],
+        devices: &[StoredDevice],
+    ) -> Result<(), AuthPersistenceError> {
+        let credentials = credentials
+            .iter()
+            .filter(|item| item.client_id != self.bootstrap_client)
+            .cloned()
+            .collect::<Vec<_>>();
+        let devices = devices
+            .iter()
+            .filter(|item| item.client_id != self.bootstrap_client)
+            .cloned()
+            .collect::<Vec<_>>();
+        self.store
+            .lock()
+            .map_err(|_| AuthPersistenceError)?
+            .replace_auth(&credentials, &devices)
+            .map_err(|_| AuthPersistenceError)
+    }
+}
 
 pub(crate) struct LocalHosts {
     executable: PathBuf,
@@ -458,6 +488,9 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
         .with_auto_approve_oidc_devices(true),
         AuthPolicy::new(owner_capabilities.clone()),
     );
+    let credential_store = platform::CredentialStore::open(directory.join("managed-auth.sqlite3"))?;
+    auth.import_credentials(credential_store.load()?);
+    auth.import_devices(credential_store.load_devices()?);
     auth.set_workspace_resolver(Arc::new(host.clone()));
     auth.enable();
     match crate::oidc_from_env() {
@@ -483,19 +516,44 @@ pub fn run_managed_host(root: &Path, directory: &Path) -> Result<(), Error> {
     let token = auth.begin_owner_pairing(workspace.clone())?;
     let credential =
         auth.complete_pairing(&token, &ClientId::try_new(&client)?, &owner_capabilities)?;
+    auth.ensure_token_device(&hello(&client)?)?;
+    auth.set_persistence(Arc::new(ManagedAuthPersistence {
+        store: Mutex::new(credential_store),
+        bootstrap_client: client.clone(),
+    }));
     let auth = Arc::new(Mutex::new(auth));
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
         .block_on(async {
+            let web = Arc::new(std::sync::OnceLock::new());
             let server = QuicServer::bind(
                 "127.0.0.1:0".parse()?,
                 tls,
-                auth,
-                Arc::new(crate::HostRemoteHandler::new(host.clone())),
+                auth.clone(),
+                Arc::new(
+                    crate::HostRemoteHandler::new(host.clone())
+                        .with_auth(auth.clone())
+                        .with_web(web.clone()),
+                ),
                 RemoteLimits::default(),
             )
             .await?;
+            let connection = wire::HostConnection {
+                version: wire::HOST_CONNECTION_VERSION,
+                address: server.listening_address()?,
+                server_name: "lapis-host".into(),
+                workspace_id: workspace.as_str().to_owned(),
+                certificate: identity.certificate.as_ref().to_vec(),
+            };
+            let publisher = Arc::new(crate::web_publisher::WebPublisher::new(
+                directory,
+                &connection,
+            )?);
+            let restore = publisher.clone();
+            tokio::task::spawn_blocking(move || restore.restore()).await?;
+            web.set(publisher)
+                .map_err(|_| "Web 公開を初期化できません")?;
             let record = Record {
                 version: 1,
                 key: LOCAL_KEY.to_owned(),
@@ -564,6 +622,33 @@ fn register(mut config: QuicConnectionConfig, root: &Path) -> Result<QuicConnect
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_auth_saves_remote_credentials_without_bootstrap_credential() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("managed-auth.sqlite3");
+        let persistence = ManagedAuthPersistence {
+            store: Mutex::new(platform::CredentialStore::open(&path).unwrap()),
+            bootstrap_client: "desktop-bootstrap".into(),
+        };
+        let credential = |client: &str| StoredCredential {
+            id: format!("credential-{client}"),
+            client_id: client.into(),
+            workspace_id: None,
+            capabilities: vec![],
+            digest: "digest".into(),
+            expires_at: u64::MAX,
+        };
+        persistence
+            .save(&[credential("desktop-bootstrap"), credential("web")], &[])
+            .unwrap();
+        drop(persistence);
+        let store = platform::CredentialStore::open(&path).unwrap();
+        let saved = store.load().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].client_id, "web");
+        assert_eq!(saved[0].expires_at, i64::MAX as u64);
+    }
 
     fn record() -> Record {
         Record {

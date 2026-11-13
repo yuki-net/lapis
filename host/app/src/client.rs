@@ -175,6 +175,118 @@ impl BackendClient {
         Arc::new(crate::features::HostProcesses::new(self.clone()))
     }
 
+    /// Local Host で Web 用の一回限りの招待を発行する。呼び出しは worker で行う。
+    pub fn issue_web_invitation(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<zeroize::Zeroizing<String>, BackendServiceError> {
+        if !matches!(&self.source, Source::Local(_)) {
+            return Err(BackendServiceError::Unavailable);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostInvite(client_api::HostInviteRequest {}))?
+        {
+            ResponseBody::HostInvite(mut response) => {
+                Ok(zeroize::Zeroizing::new(std::mem::take(&mut response.token)))
+            }
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    /// Local Host の認証済み端末を取得する。呼び出しは worker で行う。
+    pub fn managed_devices(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<Vec<client_api::HostDevice>, BackendServiceError> {
+        if !matches!(&self.source, Source::Local(_)) {
+            return Err(BackendServiceError::Unavailable);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostDeviceList(
+                client_api::HostDeviceListRequest {},
+            ))? {
+            ResponseBody::HostDeviceList(response) => Ok(response.devices),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    /// 端末の資格情報と session を失効し、結果を永続化する。呼び出しは worker で行う。
+    pub fn revoke_managed_device(
+        &self,
+        workspace: WorkspaceId,
+        device_id: String,
+    ) -> Result<bool, BackendServiceError> {
+        if !matches!(&self.source, Source::Local(_)) {
+            return Err(BackendServiceError::Unavailable);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostDeviceRevoke(
+                client_api::HostDeviceRevokeRequest { device_id },
+            ))? {
+            ResponseBody::HostDeviceRevoke(response) => Ok(response.revoked),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    /// Local Host の Web 公開状態を取得する。呼び出しは worker で行う。
+    pub fn web_status(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<client_api::HostWebStatus, BackendServiceError> {
+        self.web_control(
+            workspace,
+            RequestBody::HostWebStatus(client_api::HostWebStatusRequest {}),
+        )
+    }
+
+    /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
+    pub fn start_web(
+        &self,
+        workspace: WorkspaceId,
+        address: String,
+        port: u16,
+    ) -> Result<client_api::HostWebStatus, BackendServiceError> {
+        self.web_control(
+            workspace,
+            RequestBody::HostWebStart(client_api::HostWebStartRequest { address, port }),
+        )
+    }
+
+    /// Local Host の Web 公開を停止する。呼び出しは worker で行う。
+    pub fn stop_web(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<client_api::HostWebStatus, BackendServiceError> {
+        self.web_control(
+            workspace,
+            RequestBody::HostWebStop(client_api::HostWebStopRequest {}),
+        )
+    }
+
+    fn web_control(
+        &self,
+        workspace: WorkspaceId,
+        body: RequestBody,
+    ) -> Result<client_api::HostWebStatus, BackendServiceError> {
+        if !matches!(&self.source, Source::Local(_)) {
+            return Err(BackendServiceError::Unavailable);
+        }
+        match self.connect_workspace(workspace)?.request(body)? {
+            ResponseBody::HostWebStatus(status)
+            | ResponseBody::HostWebStart(status)
+            | ResponseBody::HostWebStop(status) => Ok(status),
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {
         match &self.source {
             Source::Embedded(host) => host.register_workspace(root),

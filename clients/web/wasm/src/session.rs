@@ -44,7 +44,7 @@ impl WebSession {
                 workspace: Some(workspace.clone()),
                 client_id: &client_id,
                 client_name: "lapis-web-test",
-                client_kind: ClientKind::Desktop,
+                client_kind: ClientKind::Web,
                 token: token.as_deref(),
                 credential: credential.as_deref(),
                 id_token: None,

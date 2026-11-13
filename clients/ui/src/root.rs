@@ -229,8 +229,13 @@ impl DesktopRoot {
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
-        let settings =
-            cx.new(|cx| SettingsFeature::with_web_access(cx, services.web_access.clone()));
+        let settings = cx.new(|cx| {
+            SettingsFeature::with_web_access(
+                cx,
+                services.web_access.clone(),
+                services.web_access_control.clone(),
+            )
+        });
         let root = cx.entity().downgrade();
         let quick_search = cx.new(|cx| {
             QuickSearch::new(cx, move |event, window, cx| {

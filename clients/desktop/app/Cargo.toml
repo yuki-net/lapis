@@ -11,6 +11,7 @@ hot-reload = ["desktop-ui/hot-reload"]
 [dependencies]
 host = { path = "../../../host/app" }
 client-api = { path = "../../../contracts/protocol" }
+zeroize.workspace = true
 desktop-client = { path = "../../state" }
 desktop-ui = { path = "../../ui" }
 platform = { path = "../../../host/adapters/local" }

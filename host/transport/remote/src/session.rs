@@ -61,8 +61,8 @@ impl ConnectionSession {
     ) -> SessionReply {
         match (self.grant.is_some(), message) {
             (false, ClientMessage::Hello(hello)) => self.hello(hello, auth),
-            (false, ClientMessage::Pair(request)) => self.pair(request, auth),
-            (false, ClientMessage::Authenticate(request)) => self.authenticate(request, auth),
+            (false, ClientMessage::Pair(request)) => self.pair(request, auth).await,
+            (false, ClientMessage::Authenticate(request)) => self.authenticate(request, auth).await,
             (false, ClientMessage::Oidc(request)) => self.oidc(request, auth, handler),
             (false, ClientMessage::Request(_)) => SessionReply {
                 message: protocol_error(UNAUTHORIZED),
@@ -123,7 +123,7 @@ impl ConnectionSession {
             .is_none_or(|expected| expected.client_id == hello.client_id)
     }
 
-    fn pair(&mut self, mut request: PairRequest, auth: &SharedRemoteAuth) -> SessionReply {
+    async fn pair(&mut self, mut request: PairRequest, auth: &SharedRemoteAuth) -> SessionReply {
         if !self.hello_matches(&request.hello) {
             return protocol_rejected();
         }
@@ -136,16 +136,22 @@ impl ConnectionSession {
             Err(_) => return authentication_rejected(),
         };
         let token = PairingToken::from_secret_bytes(&mut token_bytes);
-        let result = auth
-            .lock()
-            .map_err(|_| AuthError::CredentialUnavailable)
-            .and_then(|mut auth| {
-                auth.complete_pairing_and_authenticate(
-                    &token,
-                    &request.hello,
-                    &request.hello.requested_capabilities,
-                )
-            });
+        let auth_for_worker = auth.clone();
+        let hello = request.hello.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            auth_for_worker
+                .lock()
+                .map_err(|_| AuthError::CredentialUnavailable)
+                .and_then(|mut auth| {
+                    auth.complete_pairing_and_authenticate(
+                        &token,
+                        &hello,
+                        &hello.requested_capabilities,
+                    )
+                })
+        })
+        .await
+        .unwrap_or(Err(AuthError::CredentialUnavailable));
         let (credential, grant) = match result {
             Ok(result) => result,
             Err(_) => return authentication_rejected(),
@@ -160,7 +166,7 @@ impl ConnectionSession {
         }
     }
 
-    fn authenticate(
+    async fn authenticate(
         &mut self,
         mut request: AuthenticateRequest,
         auth: &SharedRemoteAuth,
@@ -183,22 +189,29 @@ impl ConnectionSession {
         let credential = CredentialHandle::from_parts(credential_id, &mut secret);
         let workspace_id = request.workspace_id.clone();
         let host_id = request.host_id.clone();
-        let grant = match auth
-            .lock()
-            .map_err(|_| AuthError::CredentialUnavailable)
-            .and_then(|mut auth| match workspace_id.as_ref() {
+        let auth_for_worker = auth.clone();
+        let client_id = request.hello.client_id.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let mut auth = auth_for_worker
+                .lock()
+                .map_err(|_| AuthError::CredentialUnavailable)?;
+            let grant = match workspace_id.as_ref() {
                 Some(workspace_id) => auth.authenticate_with_host(
                     &credential,
-                    &request.hello.client_id,
+                    &client_id,
                     workspace_id,
                     host_id.as_deref(),
                 ),
-                None => auth.authenticate_auto_with_host(
-                    &credential,
-                    &request.hello.client_id,
-                    host_id.as_deref(),
-                ),
-            }) {
+                None => {
+                    auth.authenticate_auto_with_host(&credential, &client_id, host_id.as_deref())
+                }
+            }?;
+            auth.persist_state()?;
+            Ok(grant)
+        })
+        .await
+        .unwrap_or(Err(AuthError::CredentialUnavailable));
+        let grant = match result {
             Ok(grant) => grant,
             Err(error) => return authentication_failure(error),
         };

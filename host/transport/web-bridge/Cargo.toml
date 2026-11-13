@@ -22,6 +22,7 @@ serde.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["fs", "macros", "net", "signal"] }
 tokio-util.workspace = true
+tower-http.workspace = true
 url = "2"
 
 [dev-dependencies]

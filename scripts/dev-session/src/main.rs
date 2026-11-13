@@ -65,6 +65,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
         );
         host.status()?
     } else {
+        copy_binary(root, &bin, "lapis-web-bridge")?;
         let desktop = copy_binary(root, &bin, "lapis")?;
         let hosts = session.join("hosts");
         fs::create_dir(&hosts)?;
@@ -75,6 +76,9 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
             session.file_name().unwrap().to_string_lossy()
         );
         let mut command = Command::new(desktop);
+        if env::var_os("LAPIS_WEB_DIST").is_none() {
+            command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
+        }
         command
             .current_dir(root)
             .arg("--state-directory")
@@ -174,8 +178,9 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 "hot-reload",
                 "--package",
                 "host",
-                "--bin",
-                "lapis-host",
+                "--package",
+                "web-bridge",
+                "--bins",
             ])
             .status();
         let built = match build {
@@ -196,6 +201,14 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
         fs::create_dir(&bin)?;
         let host = bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX));
         fs::copy(&built, &host)?;
+        let bridge_name = format!("lapis-web-bridge{}", env::consts::EXE_SUFFIX);
+        fs::copy(
+            built
+                .parent()
+                .ok_or("Host build directory is unavailable")?
+                .join(&bridge_name),
+            bin.join(&bridge_name),
+        )?;
         let hosts = session.join("hosts");
         fs::create_dir(&hosts)?;
         // Desktop と同じく、Host を別の Run で起動していれば招待を待ってから接続する。
@@ -225,7 +238,11 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
             "Hot Reload session: {}",
             session.file_name().unwrap().to_string_lossy()
         );
-        let status = Command::new(&dx)
+        let mut command = Command::new(&dx);
+        if env::var_os("LAPIS_WEB_DIST").is_none() {
+            command.env("LAPIS_WEB_DIST", root.join("clients/web/dist"));
+        }
+        let status = command
             .current_dir(root)
             .args([
                 "serve",

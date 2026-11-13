@@ -163,6 +163,15 @@ jobs:
       - name: Test Host
         run: python scripts/check.py host test
 
+      - name: Test managed Web publication
+        shell: pwsh
+        run: |
+          cargo build --locked -p web-bridge
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:LAPIS_TEST_WEB_BRIDGE = (Resolve-Path target/debug/lapis-web-bridge.exe).Path
+          cargo test --locked -p host --test managed_web_auth managed_host_owns_web_publication_and_stops_it_on_exit -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Lint Host
         run: python scripts/check.py host lint
 
@@ -309,6 +318,9 @@ jobs:
 
       - name: Build Web
         run: npm run build
+
+      - name: Test Web connection handling
+        run: npm test
 
   ci_gate:
     name: Gate
