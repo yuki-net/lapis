@@ -81,10 +81,29 @@ fn opencode_answers_a_prompt_through_the_acp_boundary() {
 
     // 本番の worker と同じ関数を in-process で走らせる。
     let path = spec_path.clone();
-    let handle = thread::spawn(move || run_task_worker(&path));
+    // 期限超過で worker が終わらない場合にテストが止まらないよう、
+    // 終了を待つのは期限までとする。回収できない worker は切り離す。
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        let result = run_task_worker(&path);
+        let _ = done_tx.send(());
+        result
+    });
     let storage = Arc::new(root.path().to_owned());
     let record = wait_for_terminal(&storage, &execution_id);
-    let result = handle.join().expect("worker thread");
+    if record.is_none() {
+        // 期限超過。worker を回収せずに失敗させる（テストを停止させない）。
+        eprintln!("worker が期限内に完了しなかったため acceptance 検証を失敗させます");
+        panic!("execution did not reach a terminal state in time");
+    }
+    // 記録が終端に達した後、worker の終了を短い猶予で待つ。
+    if done_rx.recv_timeout(Duration::from_secs(30)).is_err() {
+        // 回収には join しない。join は停止した worker でテストを固める。
+        panic!("worker が終端状態の保存後に終了しませんでした");
+    }
+    let result = handle.join();
+    assert!(result.is_ok(), "worker thread panicked: {:?}", result.err());
+    let result = result.unwrap();
     assert!(result.is_ok(), "worker failed: {result:?}");
 
     let record = record.expect("execution record");

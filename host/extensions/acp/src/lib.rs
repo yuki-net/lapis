@@ -10,7 +10,7 @@ mod map;
 mod session;
 
 pub use harness::opencode_spec;
-pub use map::session_update_event;
+pub use map::UpdateMapper;
 pub use session::{AcpAgentSpec, AcpError, AcpUpdate, run_acp_session};
 
 pub use task::ExecutionStatus;

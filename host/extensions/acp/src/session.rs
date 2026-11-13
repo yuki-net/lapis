@@ -33,7 +33,7 @@ use agent_client_protocol::{
 };
 use task::{ExecutionStatus, TaskControl, TaskEvent};
 
-use crate::map::session_update_event;
+use crate::map::UpdateMapper;
 
 /// ACP agent を1回起動して 1 prompt を実行するための指定。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,10 +83,35 @@ impl From<agent_client_protocol::Error> for AcpError {
     }
 }
 
+/// 承認要求への応答に使う状態。制御スレッドと読み取りループが共有する。
+#[derive(Default)]
+struct ApprovalState {
+    /// 未応答の要求。要求ごとに保持し、取り違えを防ぐ。
+    pending: Vec<PendingPermission>,
+    /// Cancel 済みか。取消後の新しい要求は即座に cancelled で返す。
+    cancelled: bool,
+}
+
+impl ApprovalState {
+    /// 未応答の要求が残っているか。表示を `Running` へ戻すかの判断に使う。
+    fn is_waiting(&self) -> bool {
+        !self.pending.is_empty()
+    }
+}
+
 /// 承認待ちの要求。応答は制御スレッドから行う。
 struct PendingPermission {
     options: Vec<PermissionOption>,
-    responder: Responder<RequestPermissionResponse>,
+    responder: Option<Responder<RequestPermissionResponse>>,
+}
+
+impl PendingPermission {
+    /// 要求へ応答する。二重応答は無視する。
+    fn respond(&mut self, outcome: RequestPermissionOutcome) {
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.respond(RequestPermissionResponse::new(outcome));
+        }
+    }
 }
 
 /// 実行中の接続へ cancel と承認を中継するスレッド。
@@ -101,7 +126,7 @@ impl ControlBridge {
         connection: agent_client_protocol::ConnectionTo<agent_client_protocol::Agent>,
         session_id: agent_client_protocol::v1::schema::SessionId,
         controls: Receiver<TaskControl>,
-        pending: Arc<Mutex<Option<PendingPermission>>>,
+        approvals: Arc<Mutex<ApprovalState>>,
     ) -> Self {
         let done = Arc::new(AtomicBool::new(false));
         let resumed = Arc::new(AtomicBool::new(false));
@@ -116,22 +141,28 @@ impl ControlBridge {
                 };
                 match control {
                     TaskControl::Cancel => {
-                        // 承認待ちは cancel の結果として cancelled を返す。
-                        let waiting = pending.lock().ok().and_then(|mut slot| slot.take());
-                        if let Some(waiting) = waiting {
-                            let _ = waiting.responder.respond(RequestPermissionResponse::new(
-                                RequestPermissionOutcome::Cancelled,
-                            ));
+                        // フラグを先に立て、後から届く要求も取りこぼさない。
+                        let waiting = approvals.lock().map(|mut state| {
+                            state.cancelled = true;
+                            std::mem::take(&mut state.pending)
+                        });
+                        if let Ok(mut waiting) = waiting {
+                            for pending in &mut waiting {
+                                pending.respond(RequestPermissionOutcome::Cancelled);
+                            }
                         }
                         let _ = connection
                             .send_notification(CancelNotification::new(session_id.clone()));
                     }
                     TaskControl::Approve | TaskControl::Decline => {
-                        let waiting = pending.lock().ok().and_then(|mut slot| slot.take());
-                        if let Some(waiting) = waiting {
+                        let waiting = approvals.lock().ok().and_then(|mut state| {
+                            // 表示中の要求（先頭）から応答する。
+                            (!state.pending.is_empty()).then(|| state.pending.remove(0))
+                        });
+                        if let Some(mut waiting) = waiting {
                             let allow = matches!(control, TaskControl::Approve);
-                            let response = permission_response(&waiting.options, allow);
-                            let _ = waiting.responder.respond(response);
+                            let response = permission_outcome(&waiting.options, allow);
+                            waiting.respond(response);
                             control_resumed.store(true, Ordering::Relaxed);
                         }
                     }
@@ -163,7 +194,7 @@ impl Drop for ControlBridge {
 }
 
 /// 承認要求へ返す応答。位置や名前ではなく種類で選び、常に狭い方を優先する。
-fn permission_response(options: &[PermissionOption], allow: bool) -> RequestPermissionResponse {
+fn permission_outcome(options: &[PermissionOption], allow: bool) -> RequestPermissionOutcome {
     let preferred = if allow {
         [
             PermissionOptionKind::AllowOnce,
@@ -179,10 +210,10 @@ fn permission_response(options: &[PermissionOption], allow: bool) -> RequestPerm
         .iter()
         .find_map(|kind| options.iter().find(|option| option.kind == *kind));
     match selected {
-        Some(option) => RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
-            SelectedPermissionOutcome::new(option.option_id.clone()),
+        Some(option) => RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
+            option.option_id.clone(),
         )),
-        None => RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
+        None => RequestPermissionOutcome::Cancelled,
     }
 }
 
@@ -207,7 +238,7 @@ async fn run_connection(
     let cwd = spec.workspace_root.clone();
     let prompt = spec.prompt.clone();
     let controls = Arc::new(Mutex::new(Some(controls)));
-    let pending = Arc::new(Mutex::new(None::<PendingPermission>));
+    let approvals = Arc::new(Mutex::new(ApprovalState::default()));
     let mut terminal = false;
     let mut failure: Option<String> = None;
 
@@ -238,21 +269,38 @@ async fn run_connection(
                         session.connection().clone().into_raw(),
                         session_id,
                         controls,
-                        pending.clone(),
+                        approvals.clone(),
                     )
                 });
 
-            update(AcpUpdate::Status(ExecutionStatus::Running));
-            session
-                .send_prompt_blocks(vec![ContentBlock::Text(TextContent::new(prompt.clone()))])?;
+            // prompt 送信前に cancel 済みなら送らない。cancel は進行中の
+            // prompt turn だけを対象にするため、後追いでは止められない。
+            if !is_cancelled(&approvals) {
+                update(AcpUpdate::Status(ExecutionStatus::Running));
+                session.send_prompt_blocks(vec![ContentBlock::Text(TextContent::new(
+                    prompt.clone(),
+                ))])?;
+            }
 
+            let mut mapper = UpdateMapper::new();
             loop {
-                if bridge.as_ref().is_some_and(ControlBridge::take_resumed) {
+                let resumed = bridge.as_ref().is_some_and(ControlBridge::take_resumed);
+                // 未応答の要求が残っている間は承認待ちの表示を維持する。
+                if resumed && !is_waiting(&approvals) {
                     update(AcpUpdate::Status(ExecutionStatus::Running));
                 }
                 match session.read_update().await? {
                     SessionMessage::Message(dispatch) => {
-                        handle_dispatch(dispatch.into_raw(), &pending, update).await?;
+                        if !handle_dispatch(dispatch.into_raw(), &approvals, &mut mapper, update)
+                            .await?
+                        {
+                            // 取消済みの session では以降の更新を表示しない。
+                            if is_cancelled(&approvals) {
+                                update(AcpUpdate::Status(ExecutionStatus::Cancelled));
+                                terminal = true;
+                                break;
+                            }
+                        }
                     }
                     SessionMessage::PromptResponse(response) => {
                         match response {
@@ -279,6 +327,12 @@ async fn run_connection(
                     _ => {}
                 }
             }
+            // 未応答の要求は接続終了で無効になるため、cancel として閉じる。
+            if let Ok(mut state) = approvals.lock() {
+                for mut pending in std::mem::take(&mut state.pending) {
+                    pending.respond(RequestPermissionOutcome::Cancelled);
+                }
+            }
             drop(bridge);
             Ok(())
         })
@@ -297,18 +351,29 @@ async fn run_connection(
     }
 }
 
-/// agent からの 1 メッセージを処理する。未知の method は無視せず -32601 を返す。
+fn is_cancelled(approvals: &Arc<Mutex<ApprovalState>>) -> bool {
+    approvals.lock().is_ok_and(|state| state.cancelled)
+}
+
+fn is_waiting(approvals: &Arc<Mutex<ApprovalState>>) -> bool {
+    approvals.lock().is_ok_and(|state| state.is_waiting())
+}
+
+/// agent からの 1 メッセージを処理する。
+///
+/// 取消済みなら `false` を返し、呼び出し側が読み取りループを終了する。
 async fn handle_dispatch(
     dispatch: Dispatch,
-    pending: &Arc<Mutex<Option<PendingPermission>>>,
+    approvals: &Arc<Mutex<ApprovalState>>,
+    mapper: &mut UpdateMapper,
     update: &mut impl FnMut(AcpUpdate),
-) -> Result<(), agent_client_protocol::Error> {
+) -> Result<bool, agent_client_protocol::Error> {
     let mut mappings: Vec<TaskEvent> = Vec::new();
     let mut approval: Option<(String, String)> = None;
 
     MatchDispatch::new(dispatch)
         .if_notification(async |notification: SessionNotification| {
-            if let Some(event) = session_update_event(&notification.update) {
+            if let Some(event) = mapper.map(&notification.update) {
                 mappings.push(event);
             }
             Ok(agent_client_protocol::Handled::Yes)
@@ -322,12 +387,35 @@ async fn handle_dispatch(
                 .clone()
                 .or_else(|| request.tool_call.fields.name.clone())
                 .unwrap_or_else(|| "agent が操作の許可を求めています".to_owned());
-            let options = request.options.clone();
             let request_id = request.tool_call.tool_call_id.to_string();
-            if let Ok(mut slot) = pending.lock() {
-                *slot = Some(PendingPermission { options, responder });
+            // 取消判定と格納を同じロック内で行い、取消後の取りこぼしを防ぐ。
+            let mut responder = Some(responder);
+            let cancelled = approvals.lock().map(|mut state| {
+                if state.cancelled {
+                    true
+                } else {
+                    state.pending.push(PendingPermission {
+                        options: request.options,
+                        responder: responder.take(),
+                    });
+                    false
+                }
+            });
+            match cancelled {
+                Ok(true) => {
+                    if let Some(responder) = responder {
+                        let _ = responder.respond(RequestPermissionResponse::new(
+                            RequestPermissionOutcome::Cancelled,
+                        ));
+                    }
+                }
+                Ok(false) => approval = Some((request_id, summary)),
+                Err(_) => {
+                    if let Some(responder) = responder {
+                        let _ = responder.respond_with_internal_error("approval state poisoned");
+                    }
+                }
             }
-            approval = Some((request_id, summary));
             Ok(agent_client_protocol::Handled::Yes)
         })
         .await
@@ -343,7 +431,7 @@ async fn handle_dispatch(
             summary,
         }));
     }
-    Ok(())
+    Ok(!is_cancelled(approvals))
 }
 
 /// prompt の終了理由を実行状態へ写す。
@@ -379,9 +467,8 @@ mod tests {
             PermissionOption::new("once", "Once", PermissionOptionKind::AllowOnce),
             PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
         ];
-        let response = permission_response(&options, true);
         assert_eq!(
-            response.outcome,
+            permission_outcome(&options, true),
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("once"))
         );
     }
@@ -392,9 +479,8 @@ mod tests {
             PermissionOption::new("once", "Once", PermissionOptionKind::AllowOnce),
             PermissionOption::new("never", "Never", PermissionOptionKind::RejectAlways),
         ];
-        let response = permission_response(&options, false);
         assert_eq!(
-            response.outcome,
+            permission_outcome(&options, false),
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new("never"))
         );
     }
@@ -407,8 +493,44 @@ mod tests {
             PermissionOptionKind::AllowOnce,
         )];
         assert_eq!(
-            permission_response(&options, false).outcome,
+            permission_outcome(&options, false),
             RequestPermissionOutcome::Cancelled
         );
+    }
+
+    /// 応答を観測できるダミーの responder を作れないため、要求の保持だけを確かめる。
+    #[test]
+    fn approvals_are_kept_per_request_and_waiting_reports_true() {
+        let state = ApprovalState {
+            pending: vec![
+                PendingPermission {
+                    options: Vec::new(),
+                    responder: None,
+                },
+                PendingPermission {
+                    options: Vec::new(),
+                    responder: None,
+                },
+            ],
+            cancelled: false,
+        };
+        assert!(state.is_waiting());
+        assert_eq!(state.pending.len(), 2);
+    }
+
+    #[test]
+    fn an_empty_approval_state_is_not_waiting() {
+        assert!(!ApprovalState::default().is_waiting());
+    }
+
+    #[test]
+    fn responding_twice_is_ignored() {
+        let mut pending = PendingPermission {
+            options: Vec::new(),
+            responder: None,
+        };
+        // responder が無くても panic しない。
+        pending.respond(RequestPermissionOutcome::Cancelled);
+        pending.respond(RequestPermissionOutcome::Cancelled);
     }
 }

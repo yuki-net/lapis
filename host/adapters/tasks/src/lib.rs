@@ -238,21 +238,31 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
     });
 
     let mut last_persist = Instant::now();
-    let run_result = if spec.runner.runner.as_deref() == Some(ACP_RUNNER) {
+    let runner_id = spec.runner.runner.as_deref();
+    let run_result = if is_acp_runner_id(runner_id) {
         let acp_spec = AcpAgentSpec {
             executable: opencode_spec(),
             prompt: spec.runner.prompt.clone(),
             workspace_root: spec.runner.workspace_root.clone(),
         };
-        run_acp_session(&acp_spec, control_rx, |update| {
+        let mut persist_error = None;
+        let result = run_acp_session(&acp_spec, control_rx, |update| {
             let urgent = apply_acp_update(&mut record, update);
             if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
-                let _ = backend.persist_record(&record);
+                // 保存失敗は最後にまとめて返す。途中では実行を止めない。
+                if let Err(error) = backend.persist_record(&record) {
+                    persist_error.get_or_insert(error);
+                }
                 last_persist = Instant::now();
             }
         })
-        .map_err(|error| TaskError::new(error.to_string()))
-    } else {
+        .map_err(|error| TaskError::new(error.to_string()));
+        match (result, persist_error) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Some(error)) => Err(error),
+            (Ok(()), None) => Ok(()),
+        }
+    } else if is_codex_runner_id(runner_id) {
         run_codex_app_server(&spec.runner, control_rx, |update| {
             let urgent = match update {
                 RunnerUpdate::Status(status) => {
@@ -283,6 +293,12 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
                 last_persist = Instant::now();
             }
         })
+    } else {
+        // 未知の runner を別の実行系として起動しない。記録と実行を一致させる。
+        Err(TaskError::new(format!(
+            "未対応の runner です: {}",
+            spec.runner.runner.as_deref().unwrap_or("(default)")
+        )))
     };
     finished.store(true, Ordering::Relaxed);
     let _ = poller.join();
@@ -292,11 +308,24 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
             message: error.to_string(),
         });
         record.set_status(ExecutionStatus::Failed);
+        // 失敗時の保存まで失敗したら、開始仕様を残して再実行の手掛かりにする。
+        backend.persist_record(&record)?;
+    } else {
+        // 正常終了でも、終端状態の保存成功を確認してから完了とする。
         backend.persist_record(&record)?;
     }
     let _ = fs::remove_file(spec_path);
     let _ = fs::remove_file(backend.control_path(&execution_id));
     run_result
+}
+
+/// 実行系の識別子から分岐する。ACP でも Codex でもない識別子は起動しない。
+fn is_acp_runner_id(runner: Option<&str>) -> bool {
+    runner == Some(ACP_RUNNER)
+}
+
+fn is_codex_runner_id(runner: Option<&str>) -> bool {
+    matches!(runner, None | Some("codex-app-server"))
 }
 
 fn apply_acp_update(record: &mut TaskRecord, update: AcpUpdate) -> bool {
@@ -452,5 +481,43 @@ mod tests {
     fn only_the_acp_runner_selects_the_acp_path() {
         assert_eq!(record().execution.runner, ACP_RUNNER);
         assert_ne!(record().execution.runner, "codex-app-server");
+    }
+
+    #[test]
+    fn unknown_runners_do_not_fall_back_to_codex() {
+        assert!(!is_acp_runner_id(Some("acp-opencod")));
+        assert!(!is_codex_runner_id(Some("acp-opencod")));
+
+        assert!(is_codex_runner_id(Some("codex-app-server")));
+        assert!(is_codex_runner_id(None));
+    }
+
+    #[test]
+    fn a_typo_of_the_acp_runner_is_not_treated_as_acp() {
+        assert!(is_acp_runner_id(Some(ACP_RUNNER)));
+        assert!(!is_codex_runner_id(Some(ACP_RUNNER)));
+    }
+
+    /// 未知の runner は Codex でも ACP でもないため、開始仕様から分岐できない。
+    #[test]
+    fn an_unknown_runner_selects_no_execution_path() {
+        let spec = worker_spec("acp-opencod");
+        let runner_id = spec.runner.runner.as_deref();
+        assert!(!is_acp_runner_id(runner_id));
+        assert!(!is_codex_runner_id(runner_id));
+    }
+
+    fn worker_spec(runner: &str) -> TaskWorkerSpec {
+        TaskWorkerSpec {
+            root: PathBuf::from("tasks"),
+            record: record(),
+            runner: CodexExecutionSpec {
+                executable: PathBuf::from("agent"),
+                prompt: "hi".to_owned(),
+                workspace_root: PathBuf::from("workspace"),
+                mode: task::TaskMode::Default,
+                runner: Some(runner.to_owned()),
+            },
+        }
     }
 }

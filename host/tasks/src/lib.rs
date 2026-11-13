@@ -229,6 +229,11 @@ pub fn validate_start(input: &TaskStart) -> Result<(), TaskStateError> {
     if input.prompt.trim().is_empty() {
         return Err(TaskStateError::Denied);
     }
+    if let Some(runner) = &input.runner
+        && runner.len() > 64
+    {
+        return Err(TaskStateError::Denied);
+    }
     require_safe_id(input.conversation_id.as_str())
 }
 

@@ -983,12 +983,20 @@ impl TaskSession {
     }
 
     /// ACP 経由のハーネスを開始する。ACP 固有の型は渡さず runner 識別子だけを選ぶ。
+    ///
+    /// ACP の安定面にはモード切替が無いため、`TaskMode::Default` 以外は実行前に拒否する。
+    /// 記録と実際の実行条件を一致させるため。
     pub fn start_agent(
         &mut self,
         workspace: WorkspaceId,
         prompt: impl Into<String>,
         mode: TaskMode,
     ) -> Result<ExecutionId, TaskError> {
+        if mode != TaskMode::Default {
+            return Err(TaskError::new(
+                "ACP runner は TaskMode::Default のみ対応しています",
+            ));
+        }
         self.start(
             workspace,
             prompt.into(),
@@ -3690,6 +3698,36 @@ mod tests {
             )
             .unwrap();
         assert_eq!(backend.controls.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn task_session_rejects_non_default_mode_for_the_acp_runner() {
+        let workspace = WorkspaceId::new("canonical-workspace");
+        let backend = Arc::new(MemoryTaskBackend::default());
+        let mut tasks = TaskSession::new(backend.clone());
+
+        let error = tasks
+            .start_agent(workspace.clone(), "質問する", TaskMode::Plan)
+            .unwrap_err();
+        assert!(error.to_string().contains("TaskMode::Default"));
+        // 拒否時は実行記録も開始要求も作らない。
+        assert!(tasks.records().is_empty());
+        assert!(backend.starts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn task_session_starts_the_acp_runner_with_the_default_mode() {
+        let workspace = WorkspaceId::new("canonical-workspace");
+        let backend = Arc::new(MemoryTaskBackend::default());
+        let mut tasks = TaskSession::new(backend.clone());
+
+        tasks
+            .start_agent(workspace, "pong と回答してください", TaskMode::Default)
+            .unwrap();
+        let starts = backend.starts.lock().unwrap();
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0].runner.as_deref(), Some(acp_contract::ACP_RUNNER));
+        assert_eq!(starts[0].mode, TaskMode::Default);
     }
 
     #[test]
