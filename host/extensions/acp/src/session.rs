@@ -88,6 +88,8 @@ impl From<agent_client_protocol::Error> for AcpError {
 struct ApprovalState {
     /// 未応答の要求。要求ごとに保持し、取り違えを防ぐ。
     pending: Vec<PendingPermission>,
+    /// 直近に画面へ表示した要求の ID。利用者が見ている要求へ応答する。
+    shown: Option<String>,
     /// Cancel 済みか。取消後の新しい要求は即座に cancelled で返す。
     cancelled: bool,
 }
@@ -97,10 +99,25 @@ impl ApprovalState {
     fn is_waiting(&self) -> bool {
         !self.pending.is_empty()
     }
+
+    /// 画面に表示した要求（`shown`）を取り出して応答対象にする。
+    ///
+    /// 表示していない要求を先頭から消費すると、利用者が見ていない要求へ
+    /// 判断が適用される。`shown` が無ければ何もしない。
+    fn take_shown(&mut self) -> Option<PendingPermission> {
+        let shown = self.shown.take()?;
+        let index = self
+            .pending
+            .iter()
+            .position(|pending| pending.request_id == shown)?;
+        Some(self.pending.remove(index))
+    }
 }
 
 /// 承認待ちの要求。応答は制御スレッドから行う。
 struct PendingPermission {
+    /// agent が払い出した tool call ID。表示と応答の対応に使う。
+    request_id: String,
     options: Vec<PermissionOption>,
     responder: Option<Responder<RequestPermissionResponse>>,
 }
@@ -155,10 +172,10 @@ impl ControlBridge {
                             .send_notification(CancelNotification::new(session_id.clone()));
                     }
                     TaskControl::Approve | TaskControl::Decline => {
-                        let waiting = approvals.lock().ok().and_then(|mut state| {
-                            // 表示中の要求（先頭）から応答する。
-                            (!state.pending.is_empty()).then(|| state.pending.remove(0))
-                        });
+                        let waiting = approvals
+                            .lock()
+                            .ok()
+                            .and_then(|mut state| state.take_shown());
                         if let Some(mut waiting) = waiting {
                             let allow = matches!(control, TaskControl::Approve);
                             let response = permission_outcome(&waiting.options, allow);
@@ -214,6 +231,23 @@ fn permission_outcome(options: &[PermissionOption], allow: bool) -> RequestPermi
             option.option_id.clone(),
         )),
         None => RequestPermissionOutcome::Cancelled,
+    }
+}
+
+/// 未応答の承認要求を接続終了時に閉じるためのガード。
+///
+/// 正常終了・エラー・取消のどの経路でも未応答の要求を `cancelled` で閉じる。
+struct ApprovalCleanup {
+    approvals: Arc<Mutex<ApprovalState>>,
+}
+
+impl Drop for ApprovalCleanup {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.approvals.lock() {
+            for mut pending in std::mem::take(&mut state.pending) {
+                pending.respond(RequestPermissionOutcome::Cancelled);
+            }
+        }
     }
 }
 
@@ -283,6 +317,10 @@ async fn run_connection(
             }
 
             let mut mapper = UpdateMapper::new();
+            // どの経路で抜けても未応答の要求を閉じる。
+            let _cleanup = ApprovalCleanup {
+                approvals: approvals.clone(),
+            };
             loop {
                 let resumed = bridge.as_ref().is_some_and(ControlBridge::take_resumed);
                 // 未応答の要求が残っている間は承認待ちの表示を維持する。
@@ -328,11 +366,7 @@ async fn run_connection(
                 }
             }
             // 未応答の要求は接続終了で無効になるため、cancel として閉じる。
-            if let Ok(mut state) = approvals.lock() {
-                for mut pending in std::mem::take(&mut state.pending) {
-                    pending.respond(RequestPermissionOutcome::Cancelled);
-                }
-            }
+            drop(_cleanup);
             drop(bridge);
             Ok(())
         })
@@ -395,6 +429,7 @@ async fn handle_dispatch(
                     true
                 } else {
                     state.pending.push(PendingPermission {
+                        request_id: request_id.clone(),
                         options: request.options,
                         responder: responder.take(),
                     });
@@ -425,6 +460,10 @@ async fn handle_dispatch(
         update(AcpUpdate::Event(event));
     }
     if let Some((request_id, summary)) = approval {
+        // 画面に表示した要求を記録し、承認・拒否をその要求へ対応づける。
+        if let Ok(mut state) = approvals.lock() {
+            state.shown = Some(request_id.clone());
+        }
         update(AcpUpdate::Status(ExecutionStatus::WaitingForApproval));
         update(AcpUpdate::Event(TaskEvent::ApprovalRequested {
             request_id,
@@ -504,18 +543,65 @@ mod tests {
         let state = ApprovalState {
             pending: vec![
                 PendingPermission {
+                    request_id: "call-a".to_owned(),
                     options: Vec::new(),
                     responder: None,
                 },
                 PendingPermission {
+                    request_id: "call-b".to_owned(),
                     options: Vec::new(),
                     responder: None,
                 },
             ],
+            shown: None,
             cancelled: false,
         };
         assert!(state.is_waiting());
         assert_eq!(state.pending.len(), 2);
+    }
+
+    #[test]
+    fn approval_targets_the_request_that_was_shown_to_the_user() {
+        let mut state = ApprovalState {
+            pending: vec![
+                PendingPermission {
+                    request_id: "call-a".to_owned(),
+                    options: Vec::new(),
+                    responder: None,
+                },
+                PendingPermission {
+                    request_id: "call-b".to_owned(),
+                    options: Vec::new(),
+                    responder: None,
+                },
+            ],
+            shown: Some("call-b".to_owned()),
+            cancelled: false,
+        };
+        // 表示した B へ応答し、A は残す。
+        let taken = state.take_shown().expect("shown request");
+        assert_eq!(taken.request_id, "call-b");
+        assert_eq!(state.pending.len(), 1);
+        assert_eq!(state.pending[0].request_id, "call-a");
+        assert!(state.shown.is_none());
+        // 2 回目は対象が無いので消費しない。
+        assert!(state.take_shown().is_none());
+        assert_eq!(state.pending.len(), 1);
+    }
+
+    #[test]
+    fn approval_without_a_shown_request_does_not_consume_pending() {
+        let mut state = ApprovalState {
+            pending: vec![PendingPermission {
+                request_id: "call-a".to_owned(),
+                options: Vec::new(),
+                responder: None,
+            }],
+            shown: None,
+            cancelled: false,
+        };
+        assert!(state.take_shown().is_none());
+        assert_eq!(state.pending.len(), 1);
     }
 
     #[test]
@@ -526,6 +612,7 @@ mod tests {
     #[test]
     fn responding_twice_is_ignored() {
         let mut pending = PendingPermission {
+            request_id: "call-a".to_owned(),
             options: Vec::new(),
             responder: None,
         };

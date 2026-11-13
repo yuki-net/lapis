@@ -24,8 +24,34 @@ struct ToolState {
     kind: ToolKind,
     /// 直近の `content`。置換であり追記ではない。
     output: String,
-    /// 完了を通知済みか。同じ status の再送で二重に表示しない。
-    reported: bool,
+    /// 完了（または失敗）を通知済みのラベル。
+    completion: Option<&'static str>,
+    /// 完了通知を表示済みか。
+    reported_completion: bool,
+    /// 表示済みの出力。完了通知より後に届いた出力の重複表示を防ぐ。
+    reported_output: String,
+}
+
+impl ToolState {
+    fn new(title: String, kind: ToolKind) -> Self {
+        Self {
+            title,
+            kind,
+            output: String::new(),
+            completion: None,
+            reported_completion: false,
+            reported_output: String::new(),
+        }
+    }
+
+    /// 完了通知本文。未表示の出力があれば含める。
+    fn completion_text(&self, label: &str) -> String {
+        if self.output.is_empty() {
+            format!("[{label}] {}\n", self.title)
+        } else {
+            format!("[{label}] {}\n{}\n", self.title, self.output)
+        }
+    }
 }
 
 impl UpdateMapper {
@@ -44,27 +70,18 @@ impl UpdateMapper {
             }),
             SessionUpdate::ToolCall(call) => {
                 let id = call.tool_call_id.to_string();
-                self.tools.insert(
-                    id,
-                    ToolState {
-                        title: call.title.clone(),
-                        kind: call.kind,
-                        output: String::new(),
-                        reported: false,
-                    },
-                );
+                self.tools
+                    .insert(id, ToolState::new(call.title.clone(), call.kind));
                 Some(TaskEvent::MessageDelta {
                     text: format!("\n[{}] {}\n", kind_label(call.kind), call.title),
                 })
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 let id = update.tool_call_id.to_string();
-                let state = self.tools.entry(id).or_insert_with(|| ToolState {
-                    title: "tool".to_owned(),
-                    kind: ToolKind::Other,
-                    output: String::new(),
-                    reported: false,
-                });
+                let state = self
+                    .tools
+                    .entry(id)
+                    .or_insert_with(|| ToolState::new("tool".to_owned(), ToolKind::Other));
                 if let Some(kind) = update.fields.kind {
                     state.kind = kind;
                 }
@@ -75,22 +92,37 @@ impl UpdateMapper {
                     // content は置換。累積内容を二重に追記しない。
                     state.output = collect_text(content);
                 }
-                let status = update.fields.status?;
-                let label = match status {
-                    ToolCallStatus::Completed => "完了",
-                    ToolCallStatus::Failed => "失敗",
-                    _ => return None,
+                if let Some(status) = update.fields.status {
+                    let label = match status {
+                        ToolCallStatus::Completed => Some("完了"),
+                        ToolCallStatus::Failed => Some("失敗"),
+                        _ => None,
+                    };
+                    if let Some(label) = label
+                        && state.completion.is_none()
+                    {
+                        state.completion = Some(label);
+                    }
+                }
+                let Some(label) = state.completion else {
+                    // 未完了の更新は表示用イベントを持たない。
+                    return None;
                 };
-                if state.reported {
+                // 完了通知は1度だけ。その後に届いた出力は追記として反映する。
+                if !state.reported_completion {
+                    state.reported_completion = true;
+                    state.reported_output.clone_from(&state.output);
+                    return Some(TaskEvent::MessageDelta {
+                        text: state.completion_text(label),
+                    });
+                }
+                if state.output == state.reported_output {
                     return None;
                 }
-                state.reported = true;
+                let added = state.output[state.reported_output.len()..].to_owned();
+                state.reported_output.clone_from(&state.output);
                 Some(TaskEvent::MessageDelta {
-                    text: if state.output.is_empty() {
-                        format!("[{label}] {}\n", state.title)
-                    } else {
-                        format!("[{label}] {}\n{}\n", state.title, state.output)
-                    },
+                    text: format!("[{label}] {}\n{}\n", state.title, added),
                 })
             }
             SessionUpdate::UserMessageChunk(_)
@@ -270,6 +302,30 @@ mod tests {
         assert!(first.is_some());
         assert_eq!(
             mapper.map(&tool_update(Some(ToolCallStatus::Completed), None)),
+            None
+        );
+    }
+
+    #[test]
+    fn output_arriving_after_completion_is_still_reported() {
+        let mut mapper = UpdateMapper::new();
+        // status だけが先に届く。
+        assert_eq!(
+            mapper.map(&tool_update(Some(ToolCallStatus::Completed), None)),
+            Some(TaskEvent::MessageDelta {
+                text: "[完了] tool\n".to_owned()
+            })
+        );
+        // 後から content だけが届いても出力を失わない。
+        assert_eq!(
+            mapper.map(&tool_update(None, Some(text_content("late")))),
+            Some(TaskEvent::MessageDelta {
+                text: "[完了] tool\nlate\n".to_owned()
+            })
+        );
+        // 同じ内容の再送では二重表示しない。
+        assert_eq!(
+            mapper.map(&tool_update(None, Some(text_content("late")))),
             None
         );
     }
