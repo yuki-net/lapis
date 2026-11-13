@@ -69,11 +69,16 @@ impl UpdateWatch {
     }
 
     /// 次の状態を受け取る購読。購読時点の最新値を最初に 1 件受け取る。
+    ///
+    /// 初期値の送信と購読登録を同じロック保持中に行う。分けると、その間に
+    /// `publish()` された状態を取りこぼし、古い初期値だけが残る。
     pub fn subscribe(&self) -> mpsc::Receiver<UpdateStatus> {
         let (sender, receiver) = mpsc::channel();
-        let _ = sender.send(self.status());
-        if let Ok(mut listeners) = self.listeners.lock() {
-            listeners.push(sender);
+        if let Ok(current) = self.status.lock() {
+            let _ = sender.send(current.clone());
+            if let Ok(mut listeners) = self.listeners.lock() {
+                listeners.push(sender);
+            }
         }
         receiver
     }

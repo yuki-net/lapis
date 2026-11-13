@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 pub use generation::{
-    credentials_dir, data_dir, generation_dir, generation_for, prepare_generation, read_generation,
-    record_generation, write_generation,
+    activate_generation, consented_generation, credentials_dir, data_dir, generation_dir,
+    generation_for, prepare_generation, read_generation, record_consent, record_generation,
+    write_generation,
 };
 
 /// launcher と更新処理の失敗。起動可否の判断にだけ使い、原因は stderr へ出す。
@@ -317,10 +318,24 @@ fn absolute(path: &Path) -> Result<PathBuf> {
     Ok(std::env::current_dir()?.join(path))
 }
 
+/// 1 つの候補に適用してよいかを決める。
+///
+/// `breaking: true` の候補は、アプリが同意を記録した version だけ許可する。同意記録の
+/// 無い breaking 候補は拒否し、記録を読めない場合も安全側に倒して拒否する。
+fn apply_options_for(root: &Path, version: &str) -> ApplyOptions {
+    let allow_breaking = generation::consented_generation(root, version)
+        .map(|consented| consented.is_some())
+        .unwrap_or(false);
+    ApplyOptions { allow_breaking }
+}
+
 /// 適用できる staging の候補を 1 つだけ適用する。
 ///
 /// 新しい順に試し、署名・SHA-256・展開内容が一致した最初の候補だけを採用する。
 /// 一致しない候補は削除せず残す（未完了の download を壊さないため）。
+///
+/// `breaking: true` の候補は、アプリが同意を記録した version だけ適用する。適用できた
+/// breaking 版に対してだけ、準備済みの data 世代を現在世代へ進める。
 fn apply_pending(root: &Path) -> Result<()> {
     let candidates = layout::candidates(root)?;
     if candidates.is_empty() {
@@ -329,14 +344,16 @@ fn apply_pending(root: &Path) -> Result<()> {
     let verifier = Verifier::repository()?;
     let platform = platform_name().ok_or_else(|| Error::new("対応していない platform"))?;
     for version in candidates {
-        match layout::apply_with_platform(
-            root,
-            &version,
-            &platform,
-            verifier.keys(),
-            ApplyOptions::default(),
-        ) {
+        let consented = generation::consented_generation(root, &version).unwrap_or(None);
+        let options = apply_options_for(root, &version);
+        match layout::apply_with_platform(root, &version, &platform, verifier.keys(), options) {
             Ok(applied) => {
+                // 同意済みの breaking 版が実際に起動したので、ここで現在世代を進める。
+                if let Some(generation) = consented
+                    && let Err(error) = generation::activate_generation(root, &applied.version)
+                {
+                    eprintln!("launcher: data 世代を切り替えません: {error} ({generation})");
+                }
                 eprintln!("launcher: {} を適用しました", applied.version);
                 return Ok(());
             }
@@ -435,5 +452,17 @@ mod tests {
             .expect("mkdir");
         layout::write_pointer(root.path(), "0.1.0").expect("pointer");
         assert!(launch(root.path(), &[]).is_err());
+    }
+
+    #[test]
+    fn only_a_consented_version_may_apply_a_breaking_candidate() {
+        let root = tempfile::tempdir().expect("temp");
+        // 同意記録の無い候補は breaking の適用を許可しない。
+        assert!(!apply_options_for(root.path(), "0.3.0").allow_breaking);
+        // 同意を記録した version だけ許可する。
+        std::fs::create_dir_all(generation::generation_dir(root.path(), 2)).expect("data");
+        generation::record_consent(root.path(), "0.3.0", 2).expect("consent");
+        assert!(apply_options_for(root.path(), "0.3.0").allow_breaking);
+        assert!(!apply_options_for(root.path(), "0.3.1").allow_breaking);
     }
 }

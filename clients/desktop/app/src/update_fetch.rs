@@ -5,6 +5,7 @@
 //! 検証と staging は launcher の library に任せ、ここは network と file の入出力だけを持つ。
 //! launcher の実行ファイルは network をリンクしない。
 
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -195,7 +196,7 @@ fn download(url: &str, destination: &Path) -> std::result::Result<(), FetchError
         .map_err(|error| FetchError {
             message: error.to_string(),
         })?;
-    let mut response = client.get(url).send().map_err(|error| FetchError {
+    let response = client.get(url).send().map_err(|error| FetchError {
         message: format!("{url}: {error}"),
     })?;
     if !response.status().is_success() {
@@ -214,10 +215,14 @@ fn download(url: &str, destination: &Path) -> std::result::Result<(), FetchError
     let mut file = std::fs::File::create(destination).map_err(|error| FetchError {
         message: format!("{}: {error}", destination.display()),
     })?;
-    let written = std::io::copy(&mut response, &mut file).map_err(|error| FetchError {
+    // 読み取り自体を LIMIT + 1 byte に制限する。Content-Length が無い応答でも、
+    // 上限を超えた時点で打ち切り、一時領域を書き切らない。
+    let mut limited = response.take(LIMIT + 1);
+    let written = std::io::copy(&mut limited, &mut file).map_err(|error| FetchError {
         message: format!("{url}: {error}"),
     })?;
     if written > LIMIT {
+        drop(file);
         let _ = std::fs::remove_file(destination);
         return Err(FetchError {
             message: format!("{url}: 応答が大きすぎる"),

@@ -7,7 +7,7 @@
 //! [`desktop_client::UpdateController`] だけを呼ぶ。通信・file 操作はアプリ側が持つ。
 
 use desktop_client::{UpdateController, UpdateStatus, UpdateWatch};
-use gpui::{Context, Render, Window, div, prelude::*, px};
+use gpui::{Context, FocusHandle, Focusable, Render, Window, div, prelude::*, px};
 
 use crate::app::UpdaterHandle;
 use crate::{localization::Localizer, theme, tokens};
@@ -20,6 +20,16 @@ pub(crate) struct UpdateFeature {
     locale: Localizer,
     /// 設定変更を更新処理へ知らせる入口。
     settings_changed: Option<std::sync::Arc<dyn Fn() + Send + Sync>>,
+    /// 同意画面の focus。表示時に移し、キーボードだけで操作できるようにする。
+    focus: FocusHandle,
+    /// 同意画面へ focus を移した状態。表示ごとに 1 回だけ移す。
+    focused: bool,
+}
+
+impl Focusable for UpdateFeature {
+    fn focus_handle(&self, _: &gpui::App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl UpdateFeature {
@@ -31,8 +41,35 @@ impl UpdateFeature {
             status,
             locale: Localizer::bundled(),
             settings_changed: updater.settings_changed.clone(),
+            focus: cx.focus_handle(),
+            focused: false,
         }
         .subscribe(updater.interval, cx)
+    }
+
+    /// 同意画面の操作。Enter で同意、Escape で辞退する。
+    fn consent_key(&mut self, event: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        if self.consent().is_none() {
+            return;
+        }
+        match event.keystroke.key.as_str() {
+            "enter" => {
+                cx.stop_propagation();
+                self.controller.consent_breaking();
+            }
+            "escape" => {
+                cx.stop_propagation();
+                self.dismiss(cx);
+            }
+            _ => {}
+        }
+    }
+
+    fn dismiss(&mut self, cx: &mut Context<Self>) {
+        self.controller.dismiss_breaking();
+        self.status = UpdateStatus::Idle;
+        self.focused = false;
+        cx.notify();
     }
 
     /// 更新方針の設定が変わったときに呼ぶ。変わっていなければ何もしない。
@@ -47,12 +84,17 @@ impl UpdateFeature {
     /// 購読を開始し、起動時にもう一度確認する。失敗しても起動は止めない。
     fn subscribe(self, interval: std::time::Duration, cx: &mut Context<Self>) -> Self {
         let watch = self.watch.clone();
+        // 購読は 1 回だけ登録し、同じ receiver で後続の状態を待つ。
+        // 反復ごとに subscribe すると初期値を即座に受け取り、更新が無くても
+        // 通知と background task を繰り返してしまう。receiver は Clone できないため
+        // lock で共有し、待つ処理だけを background executor に渡す。
+        let receiver = std::sync::Arc::new(std::sync::Mutex::new(watch.subscribe()));
         cx.spawn(async move |this, cx| {
             loop {
-                let receiver = watch.subscribe();
-                let notified = cx
-                    .background_executor()
-                    .spawn(async move { receiver.recv().ok() });
+                let shared = receiver.clone();
+                let notified = cx.background_executor().spawn(async move {
+                    shared.lock().ok().and_then(|receiver| receiver.recv().ok())
+                });
                 let Some(status) = notified.await else {
                     return;
                 };
@@ -139,11 +181,16 @@ impl UpdateFeature {
 }
 
 impl Render for UpdateFeature {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let colors = theme::colors(cx);
         if let Some((version, notes_url, generation)) = self.consent() {
             let version = version.to_owned();
             let notes_url = notes_url.to_owned();
+            // 同意画面を表示したら focus を移す。キーボードだけでも同意・辞退できる。
+            if !self.focused {
+                crate::gpui_compat::focus(window, &self.focus, cx);
+                self.focused = true;
+            }
             return div()
                 .id("update-consent")
                 .absolute()
@@ -152,6 +199,10 @@ impl Render for UpdateFeature {
                 .items_center()
                 .justify_center()
                 .bg(gpui::rgba(0x00000088))
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                    this.consent_key(event, cx);
+                }))
                 .child(
                     crate::components::surface(crate::components::SurfaceVariant::Popover, cx)
                         .w(px(520.0))
@@ -214,9 +265,7 @@ impl Render for UpdateFeature {
                                         .text_color(colors.text_primary)
                                         .child(self.t("update.consent.decline"))
                                         .on_click(cx.listener(|this, _, _, cx| {
-                                            this.controller.dismiss_breaking();
-                                            this.status = UpdateStatus::Idle;
-                                            cx.notify();
+                                            this.dismiss(cx);
                                         })),
                                 )
                                 .child(
@@ -238,6 +287,7 @@ impl Render for UpdateFeature {
                 )
                 .into_any_element();
         }
+        self.focused = false;
         match self.notice() {
             Some((title, message)) => div()
                 .id("update-notice")
@@ -276,16 +326,6 @@ impl Render for UpdateFeature {
 mod tests {
     use super::*;
 
-    fn feature(status: UpdateStatus) -> UpdateFeature {
-        UpdateFeature {
-            controller: std::sync::Arc::new(Off),
-            watch: UpdateWatch::new(),
-            status,
-            locale: Localizer::bundled(),
-            settings_changed: None,
-        }
-    }
-
     struct Off;
     impl UpdateController for Off {
         fn check(&self) {}
@@ -293,27 +333,46 @@ mod tests {
         fn dismiss_breaking(&self) {}
     }
 
-    #[test]
-    fn only_axis_b_shows_the_consent_screen() {
-        let breaking = feature(UpdateStatus::Breaking {
-            version: "1.0.0".into(),
-            notes_url: "https://example.invalid".into(),
-            current_generation: 1,
-        });
+    fn feature(cx: &mut gpui::TestAppContext, status: UpdateStatus) -> UpdateFeature {
+        let focus = cx.update(|cx| cx.focus_handle());
+        UpdateFeature {
+            controller: std::sync::Arc::new(Off),
+            watch: UpdateWatch::new(),
+            status,
+            locale: Localizer::bundled(),
+            settings_changed: None,
+            focus,
+            focused: false,
+        }
+    }
+
+    #[gpui::test]
+    fn only_axis_b_shows_the_consent_screen(cx: &mut gpui::TestAppContext) {
+        let breaking = feature(
+            cx,
+            UpdateStatus::Breaking {
+                version: "1.0.0".into(),
+                notes_url: "https://example.invalid".into(),
+                current_generation: 1,
+            },
+        );
         assert!(breaking.consent().is_some());
         assert!(breaking.notice().is_none());
 
         // 軸A の適用は確認せず、次回起動の案内だけを出す。
-        let staged = feature(UpdateStatus::Staged {
-            version: "0.2.0".into(),
-            breaking: false,
-        });
+        let staged = feature(
+            cx,
+            UpdateStatus::Staged {
+                version: "0.2.0".into(),
+                breaking: false,
+            },
+        );
         assert!(staged.consent().is_none());
         assert!(staged.notice().is_some());
     }
 
-    #[test]
-    fn failures_and_idle_show_nothing() {
+    #[gpui::test]
+    fn failures_and_idle_show_nothing(cx: &mut gpui::TestAppContext) {
         for status in [
             UpdateStatus::Idle,
             UpdateStatus::Checking,
@@ -321,7 +380,7 @@ mod tests {
                 message: "offline".into(),
             },
         ] {
-            let feature = feature(status);
+            let feature = feature(cx, status);
             assert!(feature.consent().is_none());
             assert!(feature.notice().is_none());
         }

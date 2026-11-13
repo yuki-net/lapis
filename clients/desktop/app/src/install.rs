@@ -50,15 +50,19 @@ impl InstallLayout {
 
     fn open(root: PathBuf, version: Option<String>) -> Option<Self> {
         // 世代の記録は version ごとに残る。記録が無い version は現在の世代を使う。
-        let generation = version
+        // 記録を読めない場合は、別の世代を推測せず起動を止める（旧版の data を
+        // 新版の世代で開かないため）。
+        let recorded = version
             .as_deref()
-            .and_then(|version| {
-                lapis_launcher::generation_for(&root, version)
-                    .ok()
-                    .flatten()
-            })
-            .or_else(|| lapis_launcher::read_generation(&root).ok())
-            .unwrap_or(1);
+            .map(|version| lapis_launcher::generation_for(&root, version));
+        let generation = match recorded {
+            Some(Ok(Some(generation))) => generation,
+            Some(Ok(None)) | None => lapis_launcher::read_generation(&root).ok()?,
+            Some(Err(error)) => {
+                eprintln!("data 世代の記録を読めません: {error}");
+                return None;
+            }
+        };
         Some(Self {
             root,
             version,
@@ -102,6 +106,13 @@ impl InstallLayout {
             lapis_launcher::record_generation(&self.root, version, generation)?;
         }
         Ok(())
+    }
+
+    /// 世代 1（初回）か。初回だけ従来の保存先から状態を引き継ぐ。
+    ///
+    /// breaking 更新で用意した世代（2 以上）は、旧保存先を読まずにその世代を使う。
+    pub(crate) fn is_first_generation(&self) -> bool {
+        self.generation <= 1
     }
 }
 

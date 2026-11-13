@@ -150,10 +150,21 @@ impl SettingsFeature {
     }
 
     /// 保存する値は定義データの候補から来るため、UI 側で型を組み立てない。
+    ///
+    /// 配布元を切り替えたときは、以前の場所を同じ操作で消す。場所の意味は取得元ごとに
+    /// 変わるため、別の取得元へ古い path/URL を流用しない（`contracts/domain/settings`
+    /// の `UpdateSource::uses_location` の契約）。
     pub(crate) fn choose(&mut self, key: SettingKey, value: SettingValue, cx: &mut Context<Self>) {
-        self.coordinator.update(cx, |coordinator, cx| {
-            coordinator.change(Change::set(key, value), cx)
-        });
+        let changes = if key == settings::UPDATE_SOURCE {
+            Change::update(vec![
+                (key, Some(value)),
+                (settings::UPDATE_SOURCE_LOCATION, None),
+            ])
+        } else {
+            Change::set(key, value)
+        };
+        self.coordinator
+            .update(cx, |coordinator, cx| coordinator.change(changes, cx));
     }
 
     /// そのページをこの起動構成で表示できるか。
@@ -1241,6 +1252,33 @@ mod tests {
                 settings::UpdateMode::Auto,
                 "既定は自動"
             );
+        });
+    }
+
+    /// 取得元を変えたら以前の location を流用しない。場所の意味は取得元ごとに変わる。
+    #[gpui::test]
+    fn changing_the_update_source_clears_the_previous_location(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+        });
+        let feature = cx.update(|cx| cx.new(SettingsFeature::new));
+        feature.update(cx, |feature, cx| {
+            feature.choose(
+                settings::UPDATE_SOURCE_LOCATION,
+                SettingValue::text("C:/releases"),
+                cx,
+            );
+            feature.choose(settings::UPDATE_SOURCE, SettingValue::text("server"), cx);
+            // 同じ保存操作で location を消す。古い folder path を Server の URL に
+            // 流用させない。
+            let changes = Change::update(vec![
+                (settings::UPDATE_SOURCE, Some(SettingValue::text("server"))),
+                (settings::UPDATE_SOURCE_LOCATION, None),
+            ]);
+            assert_eq!(changes.len(), 2);
+            assert_eq!(feature.values.update_source_location(), None);
         });
     }
 

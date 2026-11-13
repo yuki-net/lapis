@@ -57,10 +57,14 @@ pub struct AppUpdater {
     verifier: Verifier,
     /// 確認中に別の要求が来ても二重に走らせない。worker からも解除する。
     running: Arc<AtomicBool>,
+    /// 実行中に来た再確認要求。完了後にもう一度走らせる。
+    pending: Arc<AtomicBool>,
     /// 同意待ちの軸B。同意画面から参照する。
     consent: Arc<Mutex<Option<UpdateStatus>>>,
     /// 直近に確認した方針。設定変更で方針が変わったときだけ再確認する。
     last_policy: Arc<Mutex<Option<UpdatePolicy>>>,
+    /// worker が毎回参照する現在の方針。設定変更で更新する。
+    current_policy: Arc<Mutex<UpdatePolicy>>,
 }
 
 impl AppUpdater {
@@ -71,8 +75,14 @@ impl AppUpdater {
             settings: Mutex::new(settings),
             verifier: Verifier::repository().expect("trusted release keys must load"),
             running: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(AtomicBool::new(false)),
             consent: Arc::new(Mutex::new(None)),
             last_policy: Arc::new(Mutex::new(None)),
+            current_policy: Arc::new(Mutex::new(UpdatePolicy {
+                mode: UpdateMode::Auto,
+                source: UpdateSource::Github,
+                location: None,
+            })),
         }
     }
 
@@ -82,22 +92,22 @@ impl AppUpdater {
 
     /// 設定変更後に更新方針が変わったかを確認し、変わっていれば次の確認を予約する。
     ///
-    /// 保存は worker が直列化するため、ここでは状態を変えず記録だけする。
+    /// 実行中の確認があっても要求を捨てず、完了後にもう一度評価させる。
     pub fn settings_changed(&self) {
-        let policy = self.policy();
-        if let Ok(mut last) = self.last_policy.lock() {
-            if last.as_ref() == Some(&policy) {
-                return;
-            }
-            *last = Some(policy);
+        // 保存済みの設定から方針を読み直してから共有 slot を更新する。
+        let policy = self.refresh_policy();
+        if let Ok(last) = self.last_policy.lock()
+            && last.as_ref() == Some(&policy)
+        {
+            return;
         }
         self.spawn_check();
     }
 
     fn policy(&self) -> UpdatePolicy {
-        self.settings
+        self.current_policy
             .lock()
-            .map(|settings| UpdatePolicy::from_settings(&settings))
+            .map(|policy| policy.clone())
             .unwrap_or(UpdatePolicy {
                 mode: UpdateMode::Auto,
                 source: UpdateSource::Github,
@@ -105,36 +115,77 @@ impl AppUpdater {
             })
     }
 
+    /// 保存済みの設定から方針を読み直し、worker が参照する共有 slot を更新する。
+    fn refresh_policy(&self) -> UpdatePolicy {
+        let policy = self
+            .settings
+            .lock()
+            .map(|settings| UpdatePolicy::from_settings(&settings))
+            .unwrap_or(UpdatePolicy {
+                mode: UpdateMode::Auto,
+                source: UpdateSource::Github,
+                location: None,
+            });
+        if let Ok(mut current) = self.current_policy.lock() {
+            *current = policy.clone();
+        }
+        policy
+    }
+
     /// manifest を確認する。呼び出し側の thread を止めないよう、別 thread で走らせる。
     ///
-    /// 既に確認中なら何もしない。軸A は download・検証・staging まで進め、軸B は同意待ちで
-    /// 止める。
+    /// 既に確認中なら、その回の完了後にもう一度確認するよう要求を残す。設定変更で
+    /// 方針が変わった場合に、古い方針の結果だけを確定しない。
     pub fn spawn_check(&self) {
         if self
             .running
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
+            // 実行中の確認がある。完了後にもう一度走らせる要求だけ残す。
+            self.pending.store(true, Ordering::Release);
             return;
-        }
-        let policy = self.policy();
-        if let Ok(mut last) = self.last_policy.lock() {
-            *last = Some(policy.clone());
         }
         let watch = self.watch.clone();
         let root = self.install_root.clone();
         let running = self.running.clone();
+        let pending = self.pending.clone();
         let consent = self.consent.clone();
         let verifier = self.verifier.clone_verifier();
+        let settings = self.settings.lock().map(|settings| settings.clone()).ok();
+        let current_policy = self.current_policy.clone();
+        let last_policy = self.last_policy.clone();
         let spawned = std::thread::Builder::new()
             .name("lapis-update-check".to_owned())
             .spawn(move || {
-                let status = check_once(&root, &policy, &verifier);
-                if let Ok(mut pending) = consent.lock() {
-                    *pending = status.awaits_consent().then(|| status.clone());
+                loop {
+                    // 方針は毎回読み直す。SettingsSession は共有モデルの handle なので、
+                    // clone しても後から保存された値を読める。実行中の設定変更を古い
+                    // 方針のまま確定しない。
+                    let policy = settings
+                        .as_ref()
+                        .map(UpdatePolicy::from_settings)
+                        .unwrap_or(UpdatePolicy {
+                            mode: UpdateMode::Auto,
+                            source: UpdateSource::Github,
+                            location: None,
+                        });
+                    if let Ok(mut current) = current_policy.lock() {
+                        *current = policy.clone();
+                    }
+                    if let Ok(mut last) = last_policy.lock() {
+                        *last = Some(policy.clone());
+                    }
+                    let status = check_once(&root, &policy, &verifier);
+                    if let Ok(mut pending_consent) = consent.lock() {
+                        *pending_consent = status.awaits_consent().then(|| status.clone());
+                    }
+                    // 同意待ちも UI に知らせる。同意画面は Breaking のときだけ出す。
+                    watch.publish(status);
+                    if !pending.swap(false, Ordering::AcqRel) {
+                        break;
+                    }
                 }
-                // 同意待ちも UI に知らせる。同意画面は Breaking のときだけ出す。
-                watch.publish(status);
                 running.store(false, Ordering::Release);
             });
         if spawned.is_err() {
@@ -242,6 +293,25 @@ fn check_once(root: &Path, policy: &UpdatePolicy, verifier: &Verifier) -> Update
     if !current.is_empty() && !lapis_launcher::is_newer(&remote.version, &current) {
         return UpdateStatus::Idle;
     }
+    // 既に検証済みで staging にある同じ版は、download も通知もやり直さない。
+    // pointer は次の launcher 起動まで旧版のままなので、毎回「新着」と誤認しやすい。
+    if verifier
+        .staged(root, &remote.version)
+        .ok()
+        .flatten()
+        .is_some()
+    {
+        return match lapis_launcher::consented_generation(root, &remote.version) {
+            Ok(Some(_)) => UpdateStatus::Staged {
+                version: remote.version,
+                breaking: true,
+            },
+            _ => UpdateStatus::Staged {
+                version: remote.version,
+                breaking: false,
+            },
+        };
+    }
     // 通知のみのモードでは download しない。適用は利用者の操作から行う。
     if policy.mode == UpdateMode::Notify {
         return UpdateStatus::Available {
@@ -316,7 +386,8 @@ fn consent_once(
             };
         }
     };
-    // 新しい世代を用意し、version と世代の対応を先に残す。適用は次の launcher が行う。
+    // 新しい世代を用意し、同意済みとして記録する。現在世代の pointer はまだ進めない。
+    // 適用は次の launcher が行い、実際に起動したときだけ世代を切り替える。
     let generation = match lapis_launcher::prepare_generation(root) {
         Ok(generation) => generation,
         Err(error) => {
@@ -325,7 +396,7 @@ fn consent_once(
             };
         }
     };
-    if let Err(error) = lapis_launcher::record_generation(root, &staged.version, generation) {
+    if let Err(error) = lapis_launcher::record_consent(root, &staged.version, generation) {
         return UpdateStatus::Failed {
             message: error.to_string(),
         };
@@ -549,9 +620,14 @@ mod tests {
             }
         );
         assert!(root.path().join("staging/0.3.0/manifest.json").is_file());
+        // 同意しただけでは現在世代を進めない。実際に起動したときだけ切り替える。
         assert_eq!(
             lapis_launcher::read_generation(root.path()).expect("generation"),
-            2
+            1
+        );
+        assert_eq!(
+            lapis_launcher::consented_generation(root.path(), "0.3.0").expect("consent"),
+            Some(2)
         );
         // 旧世代は残り、旧 version は旧世代で再開できる。
         assert!(root.path().join("data/1").is_dir());
@@ -562,6 +638,15 @@ mod tests {
         assert_eq!(
             lapis_launcher::generation_for(root.path(), "0.3.0").expect("read"),
             Some(2)
+        );
+        // launcher が起動したときに初めて現在世代を進める。
+        assert_eq!(
+            lapis_launcher::activate_generation(root.path(), "0.3.0").expect("activate"),
+            Some(2)
+        );
+        assert_eq!(
+            lapis_launcher::read_generation(root.path()).expect("generation"),
+            2
         );
     }
 
@@ -604,12 +689,18 @@ mod tests {
             ),
             verifier: verifier(),
             running: Arc::new(AtomicBool::new(false)),
+            pending: Arc::new(AtomicBool::new(false)),
             consent: Arc::new(Mutex::new(Some(UpdateStatus::Breaking {
                 version: "0.3.0".into(),
                 notes_url: "https://example.invalid".into(),
                 current_generation: 1,
             }))),
             last_policy: Arc::new(Mutex::new(None)),
+            current_policy: Arc::new(Mutex::new(UpdatePolicy {
+                mode: UpdateMode::Auto,
+                source: UpdateSource::Github,
+                location: None,
+            })),
         };
         updater.dismiss_consent();
         assert!(!staging.exists());

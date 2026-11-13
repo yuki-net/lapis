@@ -29,6 +29,16 @@ impl Change {
         }
     }
 
+    /// 複数項目を 1 回の保存にまとめる。`None` は既定値へ戻す。
+    pub(crate) fn update(values: Vec<(SettingKey, Option<SettingValue>)>) -> Self {
+        Self { values }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.values.len()
+    }
+
     /// 表示だけ先に反映し、保存が終われば共有 state の値に置き換わる。
     fn apply(&self, values: &mut ResolvedSettings) {
         for (key, value) in &self.values {

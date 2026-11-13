@@ -17,6 +17,8 @@ const DATA_DIR: &str = "data";
 const CREDENTIALS_DIR: &str = "credentials";
 const GENERATION_POINTER: &str = "current.json";
 const VERSION_MAP: &str = "versions.json";
+/// 同意済みの breaking 更新。launcher はここにある version だけを breaking 適用する。
+const CONSENT_MAP: &str = "consented.json";
 const SCHEMA: i64 = 1;
 
 /// `<install root>/data/`。世代 directory と世代の pointer を置く。
@@ -75,11 +77,11 @@ pub fn write_generation(root: &Path, generation: u32) -> Result<()> {
     write_atomic(&directory, GENERATION_POINTER, payload.as_bytes())
 }
 
-/// 次の世代を並置して切り替える。旧世代の directory は残す。
+/// 新しい世代を用意する。現在世代の pointer は進めない。
 ///
-/// 返すのは新しい世代番号。既にある世代の最大 + 1 を使い、directory を先に作ってから
-/// pointer を進める。pointer の書き込みに失敗した場合は、空のまま残った世代を消さない
-/// （判断できない directory を消さない方針に合わせる）。
+/// 返すのは新しい世代番号。既にある世代の最大 + 1 を使い、directory を作るだけにする。
+/// pointer の切り替えは breaking 版が実際に起動したとき（[`activate_generation`]）に行い、
+/// 準備しただけで適用されなかった候補が利用者の data を別世代へ移さないようにする。
 pub fn prepare_generation(root: &Path) -> Result<u32> {
     let current = read_generation(root)?;
     let next = highest_generation(root)?
@@ -93,7 +95,6 @@ pub fn prepare_generation(root: &Path) -> Result<u32> {
             directory.display()
         ))
     })?;
-    write_generation(root, next)?;
     Ok(next)
 }
 
@@ -135,41 +136,117 @@ pub fn record_generation(root: &Path, version: &str, generation: u32) -> Result<
         return Ok(());
     }
     versions.insert(version.to_owned(), generation);
+    write_version_map(root, &versions)
+}
+
+/// 同意済みの breaking 更新を記録する。launcher はこの記録がある version だけを適用する。
+///
+/// 世代は準備済みのものを対応付ける。適用は次回起動の launcher が行い、そのとき
+/// [`activate_generation`] で現在世代を進める。
+pub fn record_consent(root: &Path, version: &str, generation: u32) -> Result<()> {
+    record_generation(root, version, generation)?;
+    let mut consents = read_consents(root)?;
+    consents.insert(version.to_owned(), generation);
     let directory = data_dir(root);
     std::fs::create_dir_all(&directory)
         .map_err(|error| Error::new(format!("data directory を作れません: {error}")))?;
-    let sorted = versions
+    let sorted = consents
         .iter()
         .map(|(version, generation)| (version.clone(), Value::from(*generation)))
         .collect::<serde_json::Map<_, _>>();
-    let payload = serde_json::json!({ "schema": SCHEMA, "versions": sorted });
+    let payload = serde_json::json!({ "schema": SCHEMA, "consented": sorted });
     let mut text = serde_json::to_string_pretty(&payload)?;
     text.push('\n');
-    write_atomic(&directory, VERSION_MAP, text.as_bytes())
+    write_atomic(&directory, CONSENT_MAP, text.as_bytes())
+}
+
+/// 同意済みの breaking 更新か。`Some(generation)` なら同意済み。
+pub fn consented_generation(root: &Path, version: &str) -> Result<Option<u32>> {
+    Ok(read_consents(root)?.get(version).copied())
+}
+
+/// 同意済み version が実際に起動したので、現在世代を進めて同意記録を消す。
+///
+/// ここで初めて pointer を切り替える。準備しただけの世代は、breaking 版が起動するまで
+/// 現在世代にならない。
+pub fn activate_generation(root: &Path, version: &str) -> Result<Option<u32>> {
+    let Some(generation) = consented_generation(root, version)? else {
+        return Ok(None);
+    };
+    write_generation(root, generation)?;
+    record_generation(root, version, generation)?;
+    let mut consents = read_consents(root)?;
+    consents.remove(version);
+    let directory = data_dir(root);
+    let sorted = consents
+        .iter()
+        .map(|(version, generation)| (version.clone(), Value::from(*generation)))
+        .collect::<serde_json::Map<_, _>>();
+    let payload = serde_json::json!({ "schema": SCHEMA, "consented": sorted });
+    let mut text = serde_json::to_string_pretty(&payload)?;
+    text.push('\n');
+    write_atomic(&directory, CONSENT_MAP, text.as_bytes())?;
+    Ok(Some(generation))
+}
+
+fn read_consents(root: &Path) -> Result<BTreeMap<String, u32>> {
+    read_version_table(root, CONSENT_MAP, "consented", "同意の記録")
+}
+
+fn write_version_map(root: &Path, versions: &BTreeMap<String, u32>) -> Result<()> {
+    write_version_table(root, VERSION_MAP, "versions", versions)
+}
+
+fn write_version_table(
+    root: &Path,
+    name: &str,
+    field: &str,
+    values: &BTreeMap<String, u32>,
+) -> Result<()> {
+    let directory = data_dir(root);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| Error::new(format!("data directory を作れません: {error}")))?;
+    let sorted = values
+        .iter()
+        .map(|(version, generation)| (version.clone(), Value::from(*generation)))
+        .collect::<serde_json::Map<_, _>>();
+    let payload = serde_json::json!({ "schema": SCHEMA, field: sorted });
+    let mut text = serde_json::to_string_pretty(&payload)?;
+    text.push('\n');
+    write_atomic(&directory, name, text.as_bytes())
 }
 
 fn read_version_map(root: &Path) -> Result<BTreeMap<String, u32>> {
-    let path = data_dir(root).join(VERSION_MAP);
+    read_version_table(root, VERSION_MAP, "versions", "世代の記録")
+}
+
+fn read_version_table(
+    root: &Path,
+    name: &str,
+    field: &str,
+    label: &str,
+) -> Result<BTreeMap<String, u32>> {
+    let path = data_dir(root).join(name);
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(Error::new(format!("世代の記録を読めません: {error}"))),
+        Err(error) => return Err(Error::new(format!("{label}を読めません: {error}"))),
     };
     let value: Value = serde_json::from_str(text.trim_start_matches('\u{feff}'))
-        .map_err(|error| Error::new(format!("世代の記録が JSON でない: {error}")))?;
+        .map_err(|error| Error::new(format!("{label}が JSON でない: {error}")))?;
     let object = value
         .as_object()
         .filter(|object| {
-            object.len() == 2 && object.contains_key("schema") && object.contains_key("versions")
+            object.len() == 2 && object.contains_key("schema") && object.contains_key(field)
         })
-        .ok_or_else(|| Error::new("世代の記録の field が不正"))?;
+        .ok_or_else(|| Error::new(format!("{label}の field が不正")))?;
     if object["schema"].as_i64() != Some(SCHEMA) {
-        return Err(Error::new("世代の記録の schema が不正"));
+        return Err(Error::new(format!("{label}の schema が不正")));
     }
     let mut versions = BTreeMap::new();
-    for (version, generation) in object["versions"]
+    for (version, generation) in object[field]
         .as_object()
-        .ok_or_else(|| Error::new("世代の記録の versions が object でない"))?
+        .ok_or_else(|| Error::new(format!("{label}の {field} が object でない")))?
     {
         let generation = generation
             .as_u64()
@@ -209,20 +286,61 @@ mod tests {
     }
 
     #[test]
-    fn preparing_a_generation_places_it_side_by_side_and_keeps_old_data() {
+    fn preparing_a_generation_places_it_side_by_side_without_moving_the_pointer() {
         let root = tempfile::tempdir().expect("temp");
         let first = generation_dir(root.path(), 1);
         std::fs::create_dir_all(&first).expect("mkdir");
         std::fs::write(first.join("db"), "old").expect("data");
         let second = prepare_generation(root.path()).expect("prepare");
         assert_eq!(second, 2);
-        assert_eq!(read_generation(root.path()).expect("read"), 2);
+        // 準備しただけでは現在世代を進めない。適用されなかった候補が利用者の data を
+        // 別世代へ移さないため。
+        assert_eq!(read_generation(root.path()).expect("read"), 1);
         assert!(generation_dir(root.path(), 2).is_dir());
         assert_eq!(
             std::fs::read_to_string(first.join("db")).expect("old data"),
             "old",
             "旧世代は削除しない"
         );
+    }
+
+    #[test]
+    fn activating_a_generation_advances_the_pointer_only_for_the_consented_version() {
+        let root = tempfile::tempdir().expect("temp");
+        std::fs::create_dir_all(generation_dir(root.path(), 1)).expect("mkdir");
+        std::fs::create_dir_all(generation_dir(root.path(), 2)).expect("mkdir");
+        write_generation(root.path(), 1).expect("pointer");
+        record_consent(root.path(), "0.3.0", 2).expect("consent");
+        // 同意しただけでは pointer を進めない。
+        assert_eq!(read_generation(root.path()).expect("read"), 1);
+        assert_eq!(
+            consented_generation(root.path(), "0.3.0").expect("consent"),
+            Some(2)
+        );
+
+        assert_eq!(
+            activate_generation(root.path(), "0.3.0").expect("activate"),
+            Some(2)
+        );
+        assert_eq!(read_generation(root.path()).expect("read"), 2);
+        assert_eq!(generation_for(root.path(), "0.3.0").expect("read"), Some(2));
+        // 切り替え後は同意記録を残さない。
+        assert_eq!(
+            consented_generation(root.path(), "0.3.0").expect("consent"),
+            None
+        );
+    }
+
+    #[test]
+    fn a_version_without_consent_does_not_advance_the_generation() {
+        let root = tempfile::tempdir().expect("temp");
+        std::fs::create_dir_all(generation_dir(root.path(), 1)).expect("mkdir");
+        write_generation(root.path(), 1).expect("pointer");
+        assert_eq!(
+            activate_generation(root.path(), "0.9.0").expect("activate"),
+            None
+        );
+        assert_eq!(read_generation(root.path()).expect("read"), 1);
     }
 
     #[test]
@@ -243,8 +361,8 @@ mod tests {
         assert_eq!(generation_for(root.path(), "0.1.0").expect("read"), Some(1));
         assert_eq!(generation_for(root.path(), "0.3.0").expect("read"), Some(2));
         assert_eq!(generation_for(root.path(), "0.9.0").expect("read"), None);
-        // 新しい世代へ移っても旧 version の記録は残る。
-        assert_eq!(read_generation(root.path()).expect("read"), 2);
+        // 記録は現在世代の pointer とは独立に残る。
+        assert_eq!(read_generation(root.path()).expect("read"), 1);
     }
 
     #[test]
