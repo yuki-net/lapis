@@ -31,8 +31,8 @@ PATH_RULES = [
     (["host/app/"], {"host"}),
     
     # Backend共通（Host以外）
-    (["host/runtime/"], {"rust_core", "host", "desktop"}),
-    (["host/adapters/"], {"rust_core", "host", "desktop"}),
+    (["host/extensions/"], {"rust_core", "host", "desktop"}),
+    (["host/runtime/"], {"rust_core", "host", "desktop"}),    (["host/adapters/"], {"rust_core", "host", "desktop"}),
     (["host/transport/web/"], {"rust_core", "host", "desktop", "web"}),
     (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
@@ -43,6 +43,10 @@ PATH_RULES = [
     (["contracts/protocol/"], {"rust_core", "host", "desktop", "web"}),
     (["contracts/transport/wire/"], {"rust_core", "host", "desktop", "web"}),
     (["clients/transport/"], {"rust_core", "host", "desktop", "web"}),
+
+    # Extensions
+    # 拡張の contract は Client からも参照するため両surfaceを検証する。
+    (["extensions/"], {"rust_core", "host", "desktop", "web"}),
     
     # Mobile
     (["clients/mobile/"], {"mobile"}),

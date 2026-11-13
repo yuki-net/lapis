@@ -20,6 +20,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `host/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
 | `host/adapters/` | FS、PTY、LSP、runner、検索、永続化 | 画面の判断 |
 | `host/extensions/git/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
+| `host/extensions/acp/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
 | `host/transport/` | 認証・wire・接続と共通 Runtime への配送 | 独立した Workspace/Document 正本 |
 | `host/app/` | Runtime と具体実装の組み立て、開始・終了 | UI |
 
@@ -197,8 +198,8 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Task選択・Mode変更・View所属変更は共通の`UiCommand`経路で処理する。View所属は表示上のScopeであり、`ViewInstanceId`、Document、Terminal、SessionのResource所有権を変更する契機にはしない。
 - `ConversationViewState.workbench`にはMode・選択Task・View所属と、IDE用Layout・IDEの作業Task・AgentのTask別Layoutを保存する。Layoutの退避値にWorkbench自身を入れ子で複製しない。これらを永続化の変更判定にも含める。初回はIDEでも保存Layoutを復元し、以後のIDEのTask選択では復元しない。Mode切替は現在の表示を対応する保存先へ退避し、作業Taskの切替成功を確認してから確定する。旧保存値はIDE・空のBindingへ移行し、Host Resourceや実行中Sessionを永続化値から再生成しない。
 - Task所属のViewはAgentで別Taskを選択すると非表示にし、IDEでは現在の配置を維持する。共有Toolの配置はTask Layoutの復元時にも個体IDを維持する。Terminalの表示コンテキストはViewのTask/Resource Bindingから解決し、共有Terminalは現在の接続先を維持する。Terminal参照はEditorや選択中Taskへ移さず、実際の接続先Taskへ保存する。再Attach・操作待ち・接続失敗の未確定表示を空のTerminal一覧として保存しない。Resource固定参照は対応済みFeatureと実在するIDに限定し、対象がなければ別Resourceへフォールバックしない。
-- Task一覧は選択中Taskに属するAgent表示だけを描画する。別TaskのSessionを自動起動・自動追加せず、既存のTask / Worktree / Terminal / Agent開始操作を明示的な入口として再利用する。
-- ACPプロトコルやAgent実行エンジンの新規実装は対象外とする。未対応機能を表示だけのButtonで完了扱いにせず、既存能力の範囲を共通RegistryとCommandで表現する。
+- Agent 実行エンジンは `runner` 識別子で選び、core に固有の型や分岐を置かない。未対応機能を表示だけのButtonで完了扱いにせず、既存能力の範囲を共通RegistryとCommandで表現する。Task一覧は選択中Taskに属するAgent表示だけを描画する。別TaskのSessionを自動起動・自動追加せず、既存のTask / Worktree / Terminal / Agent開始操作を明示的な入口として再利用する。
+- ACP client は `host/extensions/acp`（crate `local-acp`）が境界を持ち、ACP の型・起動・`session/update` の解釈を `task` の値へ変換する。対象は安定面の最小セット（`initialize` / `session/new` / `session/prompt` / `session/update` / `session/request_permission` / `session/cancel`）に限る。最初のハーネスは OpenCode（`opencode acp`）とする。ACP Registry・複数プロバイダ同時接続・Subagent Sessions RFD は対象外。
 
 ## Desktop の Command / Keymap
 

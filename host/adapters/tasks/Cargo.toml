@@ -6,10 +6,17 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
+acp-contract = { path = "../../../extensions/acp/contract" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 process = { path = "../../../contracts/domain/process" }
+local-acp = { path = "../../extensions/acp" }
 local-fs = { path = "../fs" }
 notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 task-runner = { path = "../agent" }
+
+[dev-dependencies]
+task = { path = "../../../contracts/domain/task" }
+serde_json.workspace = true
+tempfile.workspace = true

@@ -185,6 +185,7 @@ mod tests {
                         mode: task::TaskMode::Default,
                         isolated,
                         conversation_id: editor_core::ConversationId::new("conversation-1"),
+                        runner: None,
                     },
                 },
             })

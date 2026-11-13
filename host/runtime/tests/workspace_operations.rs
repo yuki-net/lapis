@@ -369,6 +369,7 @@ fn input(isolated: bool) -> TaskStart {
         mode: TaskMode::Plan,
         isolated,
         conversation_id: ConversationId::new("conversation"),
+        runner: None,
     }
 }
 fn body(workspace: &WorkspaceId, operation: Operation) -> RequestBody {

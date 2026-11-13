@@ -47,6 +47,17 @@ class TestPathRouting(unittest.TestCase):
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
 
+    def test_extension_paths_run_both_backends(self):
+        """ACP などの拡張は Host と Client の両方から参照するため両方の job を実行する。"""
+        self.assertEqual(
+            jobs_for_paths(["host/extensions/acp/src/session.rs"]),
+            {"rust_core", "host", "desktop"},
+        )
+        self.assertEqual(
+            jobs_for_paths(["extensions/acp/contract/src/lib.rs"]),
+            {"rust_core", "host", "desktop", "web"},
+        )
+
     def test_ui_path_runs_desktop_and_web(self):
         """clients/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
         for path in ("clients/ui/src/shell/layout.rs", "clients/ui/assets/themes/dark.json"):
