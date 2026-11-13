@@ -80,3 +80,85 @@ fn acp_client_sends_a_prompt_and_receives_updates() {
         "a completed prompt must succeed: {updates:?}"
     );
 }
+
+/// 承認要求 A・B が届き、agent が追加の通知を送らなくても両方に応答できること。
+///
+/// 応答のたびに読み取りループが起床して次の要求を表示する必要がある。
+#[test]
+fn both_pending_approvals_can_be_answered_without_further_agent_traffic() {
+    let executable = fake_agent();
+    assert!(
+        executable.is_file(),
+        "fake ACP agent is missing: {}",
+        executable.display()
+    );
+
+    let workspace = tempfile::tempdir().expect("workspace");
+    let spec = AcpAgentSpec {
+        executable,
+        prompt: "send approvals".to_owned(),
+        workspace_root: workspace.path().to_owned(),
+    };
+    let (control_tx, control_rx) = mpsc::channel();
+
+    let updates = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sink = updates.clone();
+    let worker = std::thread::spawn(move || {
+        run_acp_session(&spec, control_rx, |update| {
+            sink.lock().unwrap().push(update);
+        })
+    });
+
+    // 1 件目の承認待ちが出るまで待つ。
+    wait_for_approvals(&updates, 1);
+    control_tx.send(task::TaskControl::Approve).unwrap();
+    // 2 件目が再表示されるまで待つ（agent からの追加通知は無い）。
+    wait_for_approvals(&updates, 2);
+    control_tx.send(task::TaskControl::Approve).unwrap();
+
+    let result = worker.join().expect("worker thread");
+    assert!(result.is_ok(), "ACP session failed: {result:?}");
+
+    let updates = updates.lock().unwrap();
+    let approvals = updates
+        .iter()
+        .filter(|update| {
+            matches!(
+                update,
+                AcpUpdate::Event(TaskEvent::ApprovalRequested { .. })
+            )
+        })
+        .count();
+    assert!(
+        approvals >= 2,
+        "both approvals must be displayed: {updates:?}"
+    );
+    assert!(
+        updates
+            .iter()
+            .any(|update| matches!(update, AcpUpdate::Status(ExecutionStatus::Succeeded))),
+        "the prompt must complete after both approvals: {updates:?}"
+    );
+}
+
+fn wait_for_approvals(updates: &std::sync::Arc<std::sync::Mutex<Vec<AcpUpdate>>>, count: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    while std::time::Instant::now() < deadline {
+        let seen = updates
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|update| {
+                matches!(
+                    update,
+                    AcpUpdate::Event(TaskEvent::ApprovalRequested { .. })
+                )
+            })
+            .count();
+        if seen >= count {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("approval {count} was not displayed in time");
+}

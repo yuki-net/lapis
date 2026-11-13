@@ -46,6 +46,21 @@ pub struct AcpAgentSpec {
     pub workspace_root: PathBuf,
 }
 
+impl AcpAgentSpec {
+    /// 実行ファイル・prompt・cwd から指定を作る。
+    pub fn new(
+        executable: impl Into<PathBuf>,
+        prompt: impl Into<String>,
+        workspace_root: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            executable: executable.into(),
+            prompt: prompt.into(),
+            workspace_root: workspace_root.into(),
+        }
+    }
+}
+
 /// ACP client から runner への通知。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AcpUpdate {
@@ -113,11 +128,12 @@ impl ApprovalState {
         Some(self.pending.remove(index))
     }
 
-    /// 次に表示すべき未応答の要求を選び、`shown` を更新する。
+    /// 表示すべき要求が無ければ、未応答の要求から 1 件を選んで `shown` にする。
     ///
-    /// 応答後に残った要求を、agent の次の通知を待たずに再表示するために使う。
-    fn show_next(&mut self) -> Option<(String, String)> {
-        if self.cancelled {
+    /// 既に何かを表示中なら何もしない。利用者が見ている要求を勝手に
+    /// 差し替えないため。応答後に `shown` が空になった時点で次を表示する。
+    fn ensure_shown(&mut self) -> Option<(String, String)> {
+        if self.cancelled || self.shown.is_some() {
             return None;
         }
         let next = self.pending.first()?;
@@ -150,6 +166,8 @@ impl PendingPermission {
 struct ControlBridge {
     done: Arc<AtomicBool>,
     resumed: Arc<AtomicBool>,
+    /// 承認応答で読み取りループを起床させる。agent の次の通知を待たない。
+    wake_rx: futures::channel::mpsc::UnboundedReceiver<()>,
     handle: Option<thread::JoinHandle<()>>,
 }
 
@@ -164,6 +182,8 @@ impl ControlBridge {
         let resumed = Arc::new(AtomicBool::new(false));
         let control_done = done.clone();
         let control_resumed = resumed.clone();
+        let (wake, wake_rx) = futures::channel::mpsc::unbounded();
+        let control_wake = wake;
         let handle = thread::spawn(move || {
             while !control_done.load(Ordering::Relaxed) {
                 let control = match controls.recv_timeout(Duration::from_millis(100)) {
@@ -197,6 +217,7 @@ impl ControlBridge {
                             waiting.respond(response);
                             // 応答後に残った要求があれば、agent の次の通知を待たずに再表示する。
                             control_resumed.store(true, Ordering::Relaxed);
+                            let _ = control_wake.unbounded_send(());
                         }
                     }
                     // ACP の安定面に自由入力の受け口はない。
@@ -207,6 +228,7 @@ impl ControlBridge {
         Self {
             done,
             resumed,
+            wake_rx,
             handle: Some(handle),
         }
     }
@@ -310,33 +332,40 @@ async fn run_connection(
             let session_id = session.session_id().clone();
             update(AcpUpdate::ExternalThread(session_id.to_string()));
 
-            let bridge = controls
-                .lock()
-                .ok()
-                .and_then(|mut slot| slot.take())
-                .map(|controls| {
-                    ControlBridge::start(
-                        session.connection().clone().into_raw(),
-                        session_id,
-                        controls,
-                        approvals.clone(),
-                    )
-                });
+            let mut bridge =
+                controls
+                    .lock()
+                    .ok()
+                    .and_then(|mut slot| slot.take())
+                    .map(|controls| {
+                        ControlBridge::start(
+                            session.connection().clone().into_raw(),
+                            session_id,
+                            controls,
+                            approvals.clone(),
+                        )
+                    });
 
             // prompt 送信前に cancel 済みなら送らない。cancel は進行中の
             // prompt turn だけを対象にするため、後追いでは止められない。
-            if !is_cancelled(&approvals) {
-                update(AcpUpdate::Status(ExecutionStatus::Running));
-                session.send_prompt_blocks(vec![ContentBlock::Text(TextContent::new(
-                    prompt.clone(),
-                ))])?;
+            if is_cancelled(&approvals) {
+                // prompt を送らないので、agent の更新を待たずに終了する。
+                update(AcpUpdate::Status(ExecutionStatus::Cancelled));
+                return Ok(());
             }
+            update(AcpUpdate::Status(ExecutionStatus::Running));
+            session
+                .send_prompt_blocks(vec![ContentBlock::Text(TextContent::new(prompt.clone()))])?;
 
             let mut mapper = UpdateMapper::new();
             // どの経路で抜けても未応答の要求を閉じる。
             let _cleanup = ApprovalCleanup {
                 approvals: approvals.clone(),
             };
+            // 承認応答の起床信号。`read_update` を待たずに再表示できるようにする。
+            let mut wake_rx = bridge.as_mut().map(|bridge| {
+                std::mem::replace(&mut bridge.wake_rx, futures::channel::mpsc::unbounded().1)
+            });
             loop {
                 let resumed = bridge.as_ref().is_some_and(ControlBridge::take_resumed);
                 if resumed {
@@ -351,7 +380,24 @@ async fn run_connection(
                         update(AcpUpdate::Status(ExecutionStatus::Running));
                     }
                 }
-                match session.read_update().await? {
+                // 承認応答が来たら、agent の次の通知を待たずにループを回し直す。
+                let update_future = session.read_update();
+                futures::pin_mut!(update_future);
+                let message = match wake_rx.as_mut() {
+                    Some(wake_rx) => {
+                        use futures::{FutureExt as _, StreamExt as _};
+                        let mut update_future = update_future.fuse();
+                        futures::select! {
+                            message = update_future => Some(message),
+                            _ = wake_rx.select_next_some() => None,
+                        }
+                    }
+                    None => Some(update_future.await),
+                };
+                let Some(message) = message else {
+                    continue;
+                };
+                match message? {
                     SessionMessage::Message(dispatch) => {
                         if !handle_dispatch(dispatch.into_raw(), &approvals, &mut mapper, update)
                             .await?
@@ -422,7 +468,7 @@ fn show_next(approvals: &Arc<Mutex<ApprovalState>>) -> Option<(String, String)> 
     approvals
         .lock()
         .ok()
-        .and_then(|mut state| state.show_next())
+        .and_then(|mut state| state.ensure_shown())
 }
 
 /// agent からの 1 メッセージを処理する。
@@ -615,10 +661,14 @@ mod tests {
             shown: Some("call-b".to_owned()),
             cancelled: false,
         };
+        // 表示中の B がある間は別の要求を差し替えない。
+        assert!(state.ensure_shown().is_none());
+        assert_eq!(state.shown.as_deref(), Some("call-b"));
+
         state.take_shown().expect("shown request");
         // B への応答後、残った A を次の表示対象にする。
         assert_eq!(
-            state.show_next(),
+            state.ensure_shown(),
             Some(("call-a".to_owned(), "call-a summary".to_owned()))
         );
         assert_eq!(state.shown.as_deref(), Some("call-a"));
@@ -626,7 +676,21 @@ mod tests {
         let taken = state.take_shown().expect("reshown request");
         assert_eq!(taken.request_id, "call-a");
         assert!(state.pending.is_empty());
-        assert!(state.show_next().is_none());
+        assert!(state.ensure_shown().is_none());
+    }
+
+    #[test]
+    fn a_new_request_does_not_replace_the_one_already_shown() {
+        let mut state = ApprovalState {
+            pending: vec![pending("call-a")],
+            shown: None,
+            cancelled: false,
+        };
+        assert!(state.ensure_shown().is_some());
+        state.pending.push(pending("call-b"));
+        // A を表示中に B が届いても、表示は A のまま。
+        assert!(state.ensure_shown().is_none());
+        assert_eq!(state.shown.as_deref(), Some("call-a"));
     }
 
     #[test]
@@ -636,7 +700,7 @@ mod tests {
             shown: None,
             cancelled: true,
         };
-        assert!(state.show_next().is_none());
+        assert!(state.ensure_shown().is_none());
         assert!(state.shown.is_none());
     }
 

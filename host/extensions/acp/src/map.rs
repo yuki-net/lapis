@@ -74,10 +74,22 @@ impl UpdateMapper {
                 let mut state = ToolState::new(call.title.clone(), call.kind);
                 state.output = collect_text(&call.content);
                 state.completion = completion_label(call.status);
+                let start = format!("\n[{}] {}\n", kind_label(call.kind), call.title);
+                // 初回通知だけで完了している場合は、開始と完了の両方をこの時点で出す。
+                let completed = match state.completion {
+                    Some(label) => {
+                        state.reported_completion = true;
+                        state.reported_output.clone_from(&state.output);
+                        Some(state.completion_text(label))
+                    }
+                    None => None,
+                };
                 self.tools.insert(id, state);
-                Some(TaskEvent::MessageDelta {
-                    text: format!("\n[{}] {}\n", kind_label(call.kind), call.title),
-                })
+                let mut text = start;
+                if let Some(completed) = completed {
+                    text.push_str(&completed);
+                }
+                Some(TaskEvent::MessageDelta { text })
             }
             SessionUpdate::ToolCallUpdate(update) => {
                 let id = update.tool_call_id.to_string();
@@ -116,18 +128,24 @@ impl UpdateMapper {
                     return None;
                 }
                 // content は置換なので短縮・同長置換・UTF-8 があり得る。
-                // 表示済みの出力が接頭辞のときだけ差分を出し、それ以外は全体を出す。
-                let added = state
-                    .output
-                    .strip_prefix(state.reported_output.as_str())
-                    .map_or_else(
-                        || state.output.clone(),
-                        |suffix| suffix.trim_start_matches('\n').to_owned(),
-                    );
-                state.reported_output.clone_from(&state.output);
-                Some(TaskEvent::MessageDelta {
-                    text: format!("[{label}] {}\n{}\n", state.title, added),
-                })
+                // `MessageDelta` は追記専用に合成されるため、置換は次の 2 通りに分ける。
+                // - 表示済み出力の後ろへの追加: 差分だけを追記する
+                // - それ以外（短縮・同長・内容変更）: 更新であることを明示して全体を出す
+                match state.output.strip_prefix(state.reported_output.as_str()) {
+                    Some(suffix) => {
+                        let added = suffix.trim_start_matches('\n').to_owned();
+                        state.reported_output.clone_from(&state.output);
+                        Some(TaskEvent::MessageDelta {
+                            text: format!("[{label}] {}\n{}\n", state.title, added),
+                        })
+                    }
+                    None => {
+                        state.reported_output.clone_from(&state.output);
+                        Some(TaskEvent::MessageDelta {
+                            text: format!("[{label}] {} (更新)\n{}\n", state.title, state.output),
+                        })
+                    }
+                }
             }
             SessionUpdate::UserMessageChunk(_)
             | SessionUpdate::Plan(_)
@@ -399,22 +417,45 @@ mod tests {
     fn initial_tool_call_content_and_status_are_kept() {
         let mut mapper = UpdateMapper::new();
         // 初回通知にだけ出力と完了が含まれるケース。
-        mapper.map(&SessionUpdate::ToolCall(
-            ToolCall::new("call-1", "read README")
-                .kind(ToolKind::Read)
-                .status(ToolCallStatus::Completed)
-                .content(text_content("first-output")),
-        ));
-        // 後続が status だけでも、初回の出力を失わない。
+        assert_eq!(
+            mapper.map(&SessionUpdate::ToolCall(
+                ToolCall::new("call-1", "read README")
+                    .kind(ToolKind::Read)
+                    .status(ToolCallStatus::Completed)
+                    .content(text_content("first-output")),
+            )),
+            Some(TaskEvent::MessageDelta {
+                text: "\n[read] read README\n[完了] read README\nfirst-output\n".to_owned()
+            })
+        );
+        // 後続の status 再送では二重表示しない（既に完了と出力を表示済み）。
         assert_eq!(
             mapper.map(&tool_update(Some(ToolCallStatus::Completed), None)),
-            Some(TaskEvent::MessageDelta {
-                text: "[完了] read README\nfirst-output\n".to_owned()
-            })
+            None
         );
     }
 
-    /// content は置換なので、短縮・同長・UTF-8 のいずれでも panic せず全体を出す。
+    #[test]
+    fn initial_tool_call_completed_without_followup_update_shows_output() {
+        let mut mapper = UpdateMapper::new();
+        // 後続の ToolCallUpdate が一切届かないケース。
+        let event = mapper
+            .map(&SessionUpdate::ToolCall(
+                ToolCall::new("call-1", "run tests")
+                    .kind(ToolKind::Execute)
+                    .status(ToolCallStatus::Completed)
+                    .content(text_content("all green")),
+            ))
+            .expect("initial completion must be displayed");
+        let text = event.display_text();
+        assert!(
+            text.contains("[完了]"),
+            "completion label missing: {text:?}"
+        );
+        assert!(text.contains("all green"), "output missing: {text:?}");
+    }
+
+    /// content は置換なので、短縮・同長・UTF-8 のいずれでも panic せず更新として示す。
     #[test]
     fn replaced_output_shorter_than_reported_is_safe() {
         let mut mapper = UpdateMapper::new();
@@ -426,7 +467,7 @@ mod tests {
         assert_eq!(
             mapper.map(&tool_update(None, Some(text_content("x")))),
             Some(TaskEvent::MessageDelta {
-                text: "[完了] tool\nx\n".to_owned()
+                text: "[完了] tool (更新)\nx\n".to_owned()
             })
         );
     }
@@ -441,7 +482,7 @@ mod tests {
         assert_eq!(
             mapper.map(&tool_update(None, Some(text_content("bbbb")))),
             Some(TaskEvent::MessageDelta {
-                text: "[完了] tool\nbbbb\n".to_owned()
+                text: "[完了] tool (更新)\nbbbb\n".to_owned()
             })
         );
     }
@@ -457,8 +498,30 @@ mod tests {
         assert_eq!(
             mapper.map(&tool_update(None, Some(text_content("確認済み")))),
             Some(TaskEvent::MessageDelta {
-                text: "[完了] tool\n確認済み\n".to_owned()
+                text: "[完了] tool (更新)\n確認済み\n".to_owned()
             })
+        );
+    }
+
+    #[test]
+    fn shortened_non_prefix_replacement_does_not_reappend_old_text() {
+        let mut mapper = UpdateMapper::new();
+        mapper.map(&tool_update(
+            Some(ToolCallStatus::Completed),
+            Some(text_content("abcdef")),
+        ));
+        // "abcdef" -> "abcde" は短縮（接頭辞ではない）。更新として全体を出し、
+        // 旧内容を再追記しない。
+        assert_eq!(
+            mapper.map(&tool_update(None, Some(text_content("abcde")))),
+            Some(TaskEvent::MessageDelta {
+                text: "[完了] tool (更新)\nabcde\n".to_owned()
+            })
+        );
+        // 同じ内容の再送では二重表示しない。
+        assert_eq!(
+            mapper.map(&tool_update(None, Some(text_content("abcde")))),
+            None
         );
     }
 
