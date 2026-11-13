@@ -979,7 +979,23 @@ impl TaskSession {
         prompt: impl Into<String>,
         mode: TaskMode,
     ) -> Result<ExecutionId, TaskError> {
-        self.start(workspace, prompt.into(), mode, false)
+        self.start(workspace, prompt.into(), mode, false, None)
+    }
+
+    /// ACP 経由のハーネスを開始する。ACP 固有の型は渡さず runner 識別子だけを選ぶ。
+    pub fn start_agent(
+        &mut self,
+        workspace: WorkspaceId,
+        prompt: impl Into<String>,
+        mode: TaskMode,
+    ) -> Result<ExecutionId, TaskError> {
+        self.start(
+            workspace,
+            prompt.into(),
+            mode,
+            false,
+            Some(acp_contract::ACP_RUNNER.to_owned()),
+        )
     }
 
     pub fn start_codex_in_worktree(
@@ -988,7 +1004,7 @@ impl TaskSession {
         prompt: impl Into<String>,
         mode: TaskMode,
     ) -> Result<ExecutionId, TaskError> {
-        self.start(workspace, prompt.into(), mode, true)
+        self.start(workspace, prompt.into(), mode, true, None)
     }
 
     fn start(
@@ -997,6 +1013,7 @@ impl TaskSession {
         prompt: String,
         mode: TaskMode,
         isolated: bool,
+        runner: Option<String>,
     ) -> Result<ExecutionId, TaskError> {
         let record = self.backend.start(
             &workspace,
@@ -1005,6 +1022,7 @@ impl TaskSession {
                 mode,
                 isolated,
                 conversation_id: self.conversation.clone(),
+                runner,
             },
         )?;
         let execution_id = record.execution.id.clone();

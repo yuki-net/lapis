@@ -10,6 +10,11 @@ pub struct TaskStart {
     pub mode: TaskMode,
     pub isolated: bool,
     pub conversation_id: ConversationId,
+    /// 実行系の識別子。未指定は既定の runner を使う。
+    ///
+    /// ACP 固有の分岐は infrastructure 側が持ち、core は文字列として扱う。
+    #[serde(default)]
+    pub runner: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

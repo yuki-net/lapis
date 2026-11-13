@@ -172,7 +172,10 @@ impl TaskOperations {
                     .as_ref()
                     .map(|tree| tree.path.clone())
                     .unwrap_or_else(|| root.to_owned()),
-                runner: "codex-app-server".to_owned(),
+                runner: input
+                    .runner
+                    .clone()
+                    .unwrap_or_else(|| "codex-app-server".to_owned()),
                 mode: input.mode,
                 status: ExecutionStatus::Queued,
                 started_at_ms: None,
@@ -303,6 +306,7 @@ mod tests {
             mode: task::TaskMode::Plan,
             isolated,
             conversation_id: editor_core::ConversationId::new("conversation-1"),
+            runner: None,
         }
     }
 

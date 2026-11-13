@@ -195,6 +195,18 @@ impl Render for TasksFeature {
             .size_full()
             .flex()
             .flex_col()
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(div().flex_1().child(self.prompt_input()))
+                    .child(action_button("送信", true, cx).on_click(cx.listener(
+                        |this, _, _, cx| {
+                            this.start_agent_task(cx);
+                        },
+                    ))),
+            )
             .child(action_button("Start Codex", true, cx).on_click(cx.listener(
                 |this, _, _, cx| {
                     this.start_codex_task(TaskMode::Default, false, cx);

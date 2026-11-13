@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use acp_contract::ACP_RUNNER;
 use editor_core::ExecutionId;
 use local_fs::atomic_json_write;
 use notify::Watcher;
@@ -21,6 +22,8 @@ use task_runner::{
     CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
     TaskEvent, TaskRecord, run_codex_app_server,
 };
+
+use local_acp::{AcpAgentSpec, AcpUpdate, opencode_spec, run_acp_session};
 
 #[derive(Clone)]
 pub struct LocalTaskBackend {
@@ -146,6 +149,7 @@ impl TaskBackend for LocalTaskBackend {
                 prompt: record.task.prompt.clone(),
                 workspace_root: record.execution.workspace_root.clone(),
                 mode: record.execution.mode,
+                runner: Some(record.execution.runner.clone()),
             },
         };
         let spec_path = self.spec_path(&record.execution.id);
@@ -234,36 +238,52 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
     });
 
     let mut last_persist = Instant::now();
-    let run_result = run_codex_app_server(&spec.runner, control_rx, |update| {
-        let urgent = match update {
-            RunnerUpdate::Status(status) => {
-                record.set_status(status);
-                true
-            }
-            RunnerUpdate::Event(event) => {
-                let urgent = matches!(
-                    event,
-                    TaskEvent::InputRequested { .. }
-                        | TaskEvent::ApprovalRequested { .. }
-                        | TaskEvent::Error { .. }
-                );
-                record.push_event(event);
-                urgent
-            }
-            RunnerUpdate::ExternalThread(id) => {
-                record.execution.external_thread_id = Some(id);
-                true
-            }
-            RunnerUpdate::Failure(message) => {
-                record.execution.failure = Some(message);
-                true
-            }
+    let run_result = if spec.runner.runner.as_deref() == Some(ACP_RUNNER) {
+        let acp_spec = AcpAgentSpec {
+            executable: opencode_spec(),
+            prompt: spec.runner.prompt.clone(),
+            workspace_root: spec.runner.workspace_root.clone(),
         };
-        if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
-            let _ = backend.persist_record(&record);
-            last_persist = Instant::now();
-        }
-    });
+        run_acp_session(&acp_spec, control_rx, |update| {
+            let urgent = apply_acp_update(&mut record, update);
+            if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
+                let _ = backend.persist_record(&record);
+                last_persist = Instant::now();
+            }
+        })
+        .map_err(|error| TaskError::new(error.to_string()))
+    } else {
+        run_codex_app_server(&spec.runner, control_rx, |update| {
+            let urgent = match update {
+                RunnerUpdate::Status(status) => {
+                    record.set_status(status);
+                    true
+                }
+                RunnerUpdate::Event(event) => {
+                    let urgent = matches!(
+                        event,
+                        TaskEvent::InputRequested { .. }
+                            | TaskEvent::ApprovalRequested { .. }
+                            | TaskEvent::Error { .. }
+                    );
+                    record.push_event(event);
+                    urgent
+                }
+                RunnerUpdate::ExternalThread(id) => {
+                    record.execution.external_thread_id = Some(id);
+                    true
+                }
+                RunnerUpdate::Failure(message) => {
+                    record.execution.failure = Some(message);
+                    true
+                }
+            };
+            if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
+                let _ = backend.persist_record(&record);
+                last_persist = Instant::now();
+            }
+        })
+    };
     finished.store(true, Ordering::Relaxed);
     let _ = poller.join();
     if let Err(error) = &run_result {
@@ -277,6 +297,31 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
     let _ = fs::remove_file(spec_path);
     let _ = fs::remove_file(backend.control_path(&execution_id));
     run_result
+}
+
+fn apply_acp_update(record: &mut TaskRecord, update: AcpUpdate) -> bool {
+    match update {
+        AcpUpdate::Status(status) => {
+            record.set_status(status);
+            true
+        }
+        AcpUpdate::Event(event) => {
+            let urgent = matches!(
+                event,
+                TaskEvent::ApprovalRequested { .. } | TaskEvent::Error { .. }
+            );
+            record.push_event(event);
+            urgent
+        }
+        AcpUpdate::ExternalThread(id) => {
+            record.execution.external_thread_id = Some(id);
+            true
+        }
+        AcpUpdate::Failure(message) => {
+            record.execution.failure = Some(message);
+            true
+        }
+    }
 }
 
 fn default_codex_executable() -> PathBuf {
@@ -301,3 +346,111 @@ fn configure_detached_process(command: &mut Command) {
 
 #[cfg(not(windows))]
 fn configure_detached_process(_command: &mut Command) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_core::{ConversationId, TaskId};
+    use task::{Execution, Task};
+
+    fn record() -> TaskRecord {
+        let task_id = TaskId::new("task-acp");
+        TaskRecord::new(
+            Task {
+                id: task_id.clone(),
+                conversation_id: ConversationId::new("conversation-acp"),
+                title: "agent".to_owned(),
+                prompt: "hi".to_owned(),
+                created_at_ms: 1,
+            },
+            Execution {
+                id: ExecutionId::new("execution-acp"),
+                task_id,
+                workspace_id: editor_core::WorkspaceId::new("workspace-acp"),
+                workspace_root: PathBuf::from("workspace"),
+                runner: ACP_RUNNER.to_owned(),
+                mode: task::TaskMode::Default,
+                status: ExecutionStatus::Queued,
+                started_at_ms: None,
+                completed_at_ms: None,
+                external_thread_id: None,
+                failure: None,
+            },
+        )
+    }
+
+    #[test]
+    fn acp_status_and_thread_updates_reach_the_record() {
+        let mut record = record();
+        assert!(apply_acp_update(
+            &mut record,
+            AcpUpdate::ExternalThread("ses-1".to_owned())
+        ));
+        assert!(apply_acp_update(
+            &mut record,
+            AcpUpdate::Status(ExecutionStatus::Running)
+        ));
+        assert_eq!(
+            record.execution.external_thread_id.as_deref(),
+            Some("ses-1")
+        );
+        assert_eq!(record.execution.status, ExecutionStatus::Running);
+        assert!(record.execution.started_at_ms.is_some());
+    }
+
+    #[test]
+    fn acp_message_chunks_become_displayable_events() {
+        let mut record = record();
+        apply_acp_update(
+            &mut record,
+            AcpUpdate::Event(TaskEvent::MessageDelta {
+                text: "pong".to_owned(),
+            }),
+        );
+        assert_eq!(record.events.len(), 1);
+        assert_eq!(record.events[0].event.display_text(), "pong");
+
+        // 連続する delta は1件のイベントへ合成される。
+        apply_acp_update(
+            &mut record,
+            AcpUpdate::Event(TaskEvent::MessageDelta {
+                text: "!".to_owned(),
+            }),
+        );
+        assert_eq!(record.events.len(), 1);
+        assert_eq!(record.events[0].event.display_text(), "pong!");
+    }
+
+    #[test]
+    fn acp_approval_requests_are_persisted_immediately() {
+        let mut record = record();
+        let urgent = apply_acp_update(
+            &mut record,
+            AcpUpdate::Event(TaskEvent::ApprovalRequested {
+                request_id: "call-1".to_owned(),
+                summary: "write file".to_owned(),
+            }),
+        );
+        assert!(urgent);
+        assert!(matches!(
+            record.events[0].event,
+            TaskEvent::ApprovalRequested { .. }
+        ));
+    }
+
+    #[test]
+    fn acp_failures_are_recorded_on_the_execution() {
+        let mut record = record();
+        assert!(apply_acp_update(
+            &mut record,
+            AcpUpdate::Failure("boom".to_owned())
+        ));
+        assert_eq!(record.execution.failure.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn only_the_acp_runner_selects_the_acp_path() {
+        assert_eq!(record().execution.runner, ACP_RUNNER);
+        assert_ne!(record().execution.runner, "codex-app-server");
+    }
+}

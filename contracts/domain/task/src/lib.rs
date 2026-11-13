@@ -228,6 +228,9 @@ pub struct CodexExecutionSpec {
     pub prompt: String,
     pub workspace_root: PathBuf,
     pub mode: TaskMode,
+    /// 実行系の識別子。`None` は Codex app-server。
+    #[serde(default)]
+    pub runner: Option<String>,
 }
 
 pub trait TaskBackend: Send + Sync {
