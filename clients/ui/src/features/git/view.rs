@@ -137,8 +137,8 @@ impl GitFeature {
             .flex()
             .flex_col()
             .gap(tokens::spacing::SM)
+            .flex_1()
             .flex_basis(FILES_PANE_BASIS)
-            .flex_grow()
             .min_w(FILES_PANE_MIN_WIDTH)
             .min_h(px(0.0))
             .child(self.render_commit_pane(cx))
@@ -789,8 +789,8 @@ impl GitFeature {
             .flex()
             .flex_col()
             .gap(tokens::spacing::XS)
+            .flex_1()
             .flex_basis(DIFF_PANE_BASIS)
-            .flex_grow()
             .min_w(DIFF_PANE_MIN_WIDTH)
             .min_h(px(0.0));
         let (Some(diff), Some(selection)) = (
