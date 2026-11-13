@@ -235,18 +235,52 @@ fn migrate_legacy_hosts(target: &Path, state_directory: &Path) {
             return;
         }
         for entry in entries.flatten() {
-            let destination = target.join(entry.file_name());
-            // 既存の credential を上書きしない。複写に失敗しても旧 file は残す。
-            if destination.exists() || !entry.path().is_file() {
+            if !entry.path().is_file() {
                 continue;
             }
-            if let Err(error) = std::fs::copy(entry.path(), &destination) {
-                eprintln!(
-                    "旧 Host credential を引き継げません ({}): {error}",
-                    entry.path().display()
-                );
-            }
+            // 排他的に作成し、既存の credential は上書きしない。`exists()` による
+            // 事前確認では、確認と書き込みの間に別プロセスが入る余地が残る。
+            copy_new_file(&entry.path(), &target.join(entry.file_name()));
         }
+    }
+}
+
+/// 移行先が無い場合だけ複写する。既にあれば何もしない。
+fn copy_new_file(source: &Path, destination: &Path) {
+    let mut input = match std::fs::File::open(source) {
+        Ok(file) => file,
+        Err(error) => {
+            eprintln!(
+                "旧 Host credential を読めません ({}): {error}",
+                source.display()
+            );
+            return;
+        }
+    };
+    let mut output = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+    {
+        // 既にある credential は上書きしない。
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return,
+        Err(error) => {
+            eprintln!(
+                "旧 Host credential を引き継げません ({}): {error}",
+                destination.display()
+            );
+            return;
+        }
+        Ok(file) => file,
+    };
+    // 途中で失敗した半端な file は残さない。次回起動で作り直せる。
+    if let Err(error) = std::io::copy(&mut input, &mut output) {
+        eprintln!(
+            "旧 Host credential を引き継げません ({}): {error}",
+            destination.display()
+        );
+        drop(output);
+        let _ = std::fs::remove_file(destination);
     }
 }
 

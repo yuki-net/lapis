@@ -19,6 +19,8 @@ const GENERATION_POINTER: &str = "current.json";
 const VERSION_MAP: &str = "versions.json";
 /// 同意済みの breaking 更新。launcher はここにある version だけを breaking 適用する。
 const CONSENT_MAP: &str = "consented.json";
+/// 世代記録の read-modify-write を root 単位で排他する。
+const LOCK_NAME: &str = "records.lock";
 const SCHEMA: i64 = 1;
 
 /// `<install root>/data/`。世代 directory と世代の pointer を置く。
@@ -130,7 +132,16 @@ pub fn generation_for(root: &Path, version: &str) -> Result<Option<u32>> {
 }
 
 /// `version` と世代の対応を記録する。旧 version を旧世代で起動できるようにする。
+///
+/// 読取から保存までを root 単位の排他で守る。複数プロセスの同時更新で、先の追加を
+/// 後の保存が失わせない。`layout` の lock とは別の、世代記録専用の lock を使う
+/// （layout の lock は `install` が保持したまま `record` を呼ぶ経路があるため）。
 pub fn record_generation(root: &Path, version: &str, generation: u32) -> Result<()> {
+    let _lock = record_lock(root)?;
+    update_version_map(root, version, generation)
+}
+
+fn update_version_map(root: &Path, version: &str, generation: u32) -> Result<()> {
     let mut versions = read_version_map(root)?;
     if versions.get(version) == Some(&generation) {
         return Ok(());
@@ -139,25 +150,44 @@ pub fn record_generation(root: &Path, version: &str, generation: u32) -> Result<
     write_version_map(root, &versions)
 }
 
+/// 世代記録専用の排他。読取から保存までを 1 区間にし、lost update を防ぐ。
+///
+/// 区間は小さな JSON の読み書きだけなので、待って取得する。取得できなければ記録を
+/// 落とすより、待って直列化する方が安全である。
+fn record_lock(root: &Path) -> Result<RecordLock> {
+    let directory = data_dir(root);
+    std::fs::create_dir_all(&directory)
+        .map_err(|error| Error::new(format!("data directory を作れません: {error}")))?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(directory.join(LOCK_NAME))
+        .map_err(|error| Error::new(format!("世代記録の lock を開けません: {error}")))?;
+    file.lock()
+        .map_err(|error| Error::new(format!("世代記録の lock を取得できません: {error}")))?;
+    Ok(RecordLock(file))
+}
+
+struct RecordLock(std::fs::File);
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// 同意済みの breaking 更新を記録する。launcher はこの記録がある version だけを適用する。
 ///
 /// 世代は準備済みのものを対応付ける。適用は次回起動の launcher が行い、そのとき
 /// [`activate_generation`] で現在世代を進める。
 pub fn record_consent(root: &Path, version: &str, generation: u32) -> Result<()> {
-    record_generation(root, version, generation)?;
+    let _lock = record_lock(root)?;
+    update_version_map(root, version, generation)?;
     let mut consents = read_consents(root)?;
     consents.insert(version.to_owned(), generation);
-    let directory = data_dir(root);
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| Error::new(format!("data directory を作れません: {error}")))?;
-    let sorted = consents
-        .iter()
-        .map(|(version, generation)| (version.clone(), Value::from(*generation)))
-        .collect::<serde_json::Map<_, _>>();
-    let payload = serde_json::json!({ "schema": SCHEMA, "consented": sorted });
-    let mut text = serde_json::to_string_pretty(&payload)?;
-    text.push('\n');
-    write_atomic(&directory, CONSENT_MAP, text.as_bytes())
+    write_version_table(root, CONSENT_MAP, "consented", &consents)
 }
 
 /// 同意済みの breaking 更新か。`Some(generation)` なら同意済み。
@@ -170,22 +200,15 @@ pub fn consented_generation(root: &Path, version: &str) -> Result<Option<u32>> {
 /// ここで初めて pointer を切り替える。準備しただけの世代は、breaking 版が起動するまで
 /// 現在世代にならない。
 pub fn activate_generation(root: &Path, version: &str) -> Result<Option<u32>> {
+    let _lock = record_lock(root)?;
     let Some(generation) = consented_generation(root, version)? else {
         return Ok(None);
     };
     write_generation(root, generation)?;
-    record_generation(root, version, generation)?;
+    update_version_map(root, version, generation)?;
     let mut consents = read_consents(root)?;
     consents.remove(version);
-    let directory = data_dir(root);
-    let sorted = consents
-        .iter()
-        .map(|(version, generation)| (version.clone(), Value::from(*generation)))
-        .collect::<serde_json::Map<_, _>>();
-    let payload = serde_json::json!({ "schema": SCHEMA, "consented": sorted });
-    let mut text = serde_json::to_string_pretty(&payload)?;
-    text.push('\n');
-    write_atomic(&directory, CONSENT_MAP, text.as_bytes())?;
+    write_version_table(root, CONSENT_MAP, "consented", &consents)?;
     Ok(Some(generation))
 }
 
@@ -341,6 +364,56 @@ mod tests {
             None
         );
         assert_eq!(read_generation(root.path()).expect("read"), 1);
+    }
+
+    /// 記録の排他は root ごとに独立し、保持中は別の更新が同じ root で待つ。
+    #[test]
+    fn generation_records_are_guarded_by_a_root_lock() {
+        let first = tempfile::tempdir().expect("temp");
+        let second = tempfile::tempdir().expect("temp");
+        let held = record_lock(first.path()).expect("lock");
+
+        // 別の root は独立して取得できる。
+        assert!(record_lock(second.path()).is_ok());
+
+        // 同じ root の 2 つ目は、解放されるまで待つ。
+        let root_path = first.path().to_owned();
+        let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = started.clone();
+        let waiter = std::thread::spawn(move || {
+            let _lock = record_lock(&root_path).expect("lock after release");
+            observed.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            !started.load(std::sync::atomic::Ordering::SeqCst),
+            "保持中は同じ root の記録を進めない"
+        );
+        drop(held);
+        waiter.join().expect("join");
+        assert!(started.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn concurrent_record_keeps_every_version() {
+        let root = tempfile::tempdir().expect("temp");
+        let root_path = root.path().to_owned();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let results = std::thread::scope(|scope| {
+            let handles = ["0.1.0", "0.3.0"].map(|version| {
+                let root = root_path.clone();
+                let barrier = barrier.clone();
+                scope.spawn(move || {
+                    barrier.wait();
+                    record_generation(&root, version, 1)
+                })
+            });
+            handles.map(|handle| handle.join().expect("join"))
+        });
+        // 排他により、どちらも失われない（片方が待つ場合も含めて全件残る）。
+        assert!(results.iter().all(|result| result.is_ok()), "{results:?}");
+        assert_eq!(generation_for(&root_path, "0.1.0").expect("read"), Some(1));
+        assert_eq!(generation_for(&root_path, "0.3.0").expect("read"), Some(1));
     }
 
     #[test]

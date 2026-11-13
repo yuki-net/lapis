@@ -34,11 +34,6 @@ impl Change {
         Self { values }
     }
 
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.values.len()
-    }
-
     /// 表示だけ先に反映し、保存が終われば共有 state の値に置き換わる。
     fn apply(&self, values: &mut ResolvedSettings) {
         for (key, value) in &self.values {

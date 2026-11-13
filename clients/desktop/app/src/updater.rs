@@ -197,11 +197,16 @@ impl AppUpdater {
     }
 
     /// 破壊的更新に同意する。新しい data 世代を並置してから staging へ置く。
+    ///
+    /// 同意画面は即座に閉じる。download 中に辞退操作が来ても、確定済みの同意と
+    /// 食い違う表示を残さない（辞退は同意画面が残っている間だけ受け付ける）。
     pub fn spawn_consent(&self) {
         let Some(UpdateStatus::Breaking { version, .. }) = self.consent() else {
             return;
         };
         self.set_consent(None);
+        // 同意画面を閉じ、進捗は Checking として知らせる。
+        self.watch.publish(UpdateStatus::Checking);
         let policy = self.policy();
         let watch = self.watch.clone();
         let root = self.install_root.clone();
@@ -336,7 +341,11 @@ fn check_once(root: &Path, policy: &UpdatePolicy, verifier: &Verifier) -> Update
         StageOptions {
             allow_breaking: false,
         },
-        |manifest| !manifest.breaking,
+        |manifest: &RemoteManifest| {
+            // 再取得した manifest が、通知した version より古ければ受け付けない。
+            // 通知と違う版を staging しない。
+            !manifest.breaking && !lapis_launcher::is_newer(&remote.version, &manifest.version)
+        },
     ) {
         Ok(Some(staged)) => UpdateStatus::Staged {
             version: staged.version,
@@ -388,15 +397,19 @@ fn consent_once(
     };
     // 新しい世代を用意し、同意済みとして記録する。現在世代の pointer はまだ進めない。
     // 適用は次の launcher が行い、実際に起動したときだけ世代を切り替える。
+    // どちらかが失敗したら staging の候補を消す。残すと次の確認が同意待ちに入れず、
+    // 再同意できないまま候補だけが停滞する。
     let generation = match lapis_launcher::prepare_generation(root) {
         Ok(generation) => generation,
         Err(error) => {
+            discard_staged(root, &staged.version);
             return UpdateStatus::Failed {
                 message: error.to_string(),
             };
         }
     };
     if let Err(error) = lapis_launcher::record_consent(root, &staged.version, generation) {
+        discard_staged(root, &staged.version);
         return UpdateStatus::Failed {
             message: error.to_string(),
         };
@@ -405,6 +418,11 @@ fn consent_once(
         version: staged.version,
         breaking: true,
     }
+}
+
+/// 同意処理が失敗したときに、適用予定にしない staging 候補を消す。
+fn discard_staged(root: &Path, version: &str) {
+    let _ = std::fs::remove_dir_all(root.join("staging").join(version));
 }
 
 #[cfg(test)]

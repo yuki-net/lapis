@@ -249,6 +249,16 @@ pub fn run(arguments: Vec<OsString>) -> Result<u8> {
     launch(&root, &forwarded)
 }
 
+/// 本体を起動する command を組み立てる。
+///
+/// 起動する本体にも同じ install root を渡す。親の環境変数が別の root を指していても、
+/// 実行ファイルと data 世代・credential の root を一致させる。
+fn app_command(executable: &Path, root: &Path, arguments: &[OsString]) -> Command {
+    let mut command = Command::new(executable);
+    command.args(arguments).env(INSTALL_ROOT_ENV, root);
+    command
+}
+
 /// pointer の version を起動する。install 未完了や pointer の破損は、勝手に直さず停止する。
 pub fn launch(root: &Path, arguments: &[OsString]) -> Result<u8> {
     let version = layout::read_pointer(root)?.ok_or_else(|| {
@@ -269,8 +279,7 @@ pub fn launch(root: &Path, arguments: &[OsString]) -> Result<u8> {
             executable.display()
         )));
     }
-    let status = Command::new(&executable)
-        .args(arguments)
+    let status = app_command(&executable, root, arguments)
         .status()
         .map_err(|error| {
             Error::new(format!(
@@ -464,5 +473,21 @@ mod tests {
         generation::record_consent(root.path(), "0.3.0", 2).expect("consent");
         assert!(apply_options_for(root.path(), "0.3.0").allow_breaking);
         assert!(!apply_options_for(root.path(), "0.3.1").allow_breaking);
+    }
+
+    /// 起動する本体へ、選択した install root を環境変数として渡す。
+    ///
+    /// 親の環境変数が別の root を指していても、実行ファイルと data 世代・credential の
+    /// root を一致させる。
+    #[test]
+    fn the_child_process_receives_the_selected_install_root() {
+        let install_root = std::env::temp_dir().join("lapis-install-root-fixture");
+        let command = app_command(Path::new("lapis.exe"), &install_root, &[]);
+        let received = command
+            .get_envs()
+            .find(|(name, _)| *name == std::ffi::OsStr::new(INSTALL_ROOT_ENV))
+            .and_then(|(_, value)| value)
+            .map(std::path::PathBuf::from);
+        assert_eq!(received, Some(install_root));
     }
 }

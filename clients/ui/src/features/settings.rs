@@ -201,11 +201,13 @@ impl SettingsFeature {
 
     /// 保存する値は定義データの候補から来るため、UI 側で型を組み立てない。
     ///
-    /// 配布元を切り替えたときは、以前の場所を同じ操作で消す。場所の意味は取得元ごとに
-    /// 変わるため、別の取得元へ古い path/URL を流用しない（`contracts/domain/settings`
-    /// の `UpdateSource::uses_location` の契約）。
+    /// 配布元が実際に変わったときだけ、以前の場所を同じ操作で消す。場所の意味は取得元
+    /// ごとに変わるため、別の取得元へ古い path/URL を流用しない。同じ取得元の再選択では
+    /// 保存済みの場所を残す。
     pub(crate) fn choose(&mut self, key: SettingKey, value: SettingValue, cx: &mut Context<Self>) {
-        let changes = if key == settings::UPDATE_SOURCE {
+        let source_changed = key == settings::UPDATE_SOURCE
+            && self.values.text(settings::UPDATE_SOURCE) != value.as_text();
+        let changes = if source_changed {
             Change::update(vec![
                 (key, Some(value)),
                 (settings::UPDATE_SOURCE_LOCATION, None),
@@ -1753,6 +1755,7 @@ mod tests {
     }
 
     /// 取得元を変えたら以前の location を流用しない。場所の意味は取得元ごとに変わる。
+    /// 同じ取得元の再選択では保存済みの場所を残す。
     #[gpui::test]
     fn changing_the_update_source_clears_the_previous_location(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
@@ -1761,21 +1764,51 @@ mod tests {
             SettingsCoordinator::init(settings, cx);
         });
         let feature = cx.update(|cx| cx.new(SettingsFeature::new));
+
+        // まず Local と場所を保存し、保存が反映されるまで待つ。
+        feature.update(cx, |feature, cx| {
+            feature.choose(settings::UPDATE_SOURCE, SettingValue::text("local"), cx);
+        });
+        wait_for_settings(cx);
         feature.update(cx, |feature, cx| {
             feature.choose(
                 settings::UPDATE_SOURCE_LOCATION,
                 SettingValue::text("C:/releases"),
                 cx,
             );
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            let values = &feature.read(cx).values;
+            assert_eq!(values.update_source(), settings::UpdateSource::Local);
+            assert_eq!(
+                values.update_source_location().as_deref(),
+                Some("C:/releases")
+            );
+        });
+
+        // 同じ Local を選び直しても場所は消さない。
+        feature.update(cx, |feature, cx| {
+            feature.choose(settings::UPDATE_SOURCE, SettingValue::text("local"), cx);
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                feature.read(cx).values.update_source_location().as_deref(),
+                Some("C:/releases"),
+                "取得元が変わっていなければ場所を残す"
+            );
+        });
+
+        // Server へ変えたら場所を消し、再入力を促す。
+        feature.update(cx, |feature, cx| {
             feature.choose(settings::UPDATE_SOURCE, SettingValue::text("server"), cx);
-            // 同じ保存操作で location を消す。古い folder path を Server の URL に
-            // 流用させない。
-            let changes = Change::update(vec![
-                (settings::UPDATE_SOURCE, Some(SettingValue::text("server"))),
-                (settings::UPDATE_SOURCE_LOCATION, None),
-            ]);
-            assert_eq!(changes.len(), 2);
-            assert_eq!(feature.values.update_source_location(), None);
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            let values = &feature.read(cx).values;
+            assert_eq!(values.update_source(), settings::UpdateSource::Server);
+            assert_eq!(values.update_source_location(), None);
         });
     }
 
