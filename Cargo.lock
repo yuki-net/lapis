@@ -786,7 +786,7 @@ dependencies = [
  "task",
  "task-state",
  "tempfile",
- "terminal",
+ "terminal-contract",
  "terminal-state",
  "text",
  "workbench",
@@ -1272,7 +1272,7 @@ dependencies = [
  "serde",
  "serde_json",
  "task",
- "terminal",
+ "terminal-contract",
  "workbench",
  "workspace",
  "zeroize",
@@ -1982,7 +1982,7 @@ dependencies = [
  "settings",
  "task",
  "tempfile",
- "terminal",
+ "terminal-contract",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
@@ -2023,7 +2023,7 @@ dependencies = [
  "subsecond",
  "syntect",
  "task",
- "terminal",
+ "terminal-contract",
  "tracing",
  "tracing-subscriber",
  "ttf-parser 0.25.1",
@@ -4061,7 +4061,7 @@ dependencies = [
  "sysinfo",
  "task",
  "tempfile",
- "terminal",
+ "terminal-contract",
  "tokio",
  "tokio-tungstenite",
  "windows-sys 0.61.2",
@@ -5043,7 +5043,7 @@ version = "0.1.0"
 dependencies = [
  "futures-channel",
  "portable-pty",
- "terminal",
+ "terminal-contract",
  "wezterm-surface",
  "wezterm-term",
 ]
@@ -6262,7 +6262,7 @@ dependencies = [
  "serde_json",
  "settings",
  "tempfile",
- "terminal",
+ "terminal-contract",
  "workbench",
  "workspace",
 ]
@@ -6436,7 +6436,7 @@ dependencies = [
  "lsp",
  "task-runner",
  "tempfile",
- "terminal",
+ "terminal-contract",
  "workbench",
  "workspace",
 ]
@@ -8657,10 +8657,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "terminal"
+name = "terminal-contract"
 version = "0.1.0"
 dependencies = [
- "editor-core",
  "futures-channel",
  "serde",
  "serde_json",
@@ -8674,7 +8673,7 @@ dependencies = [
  "editor-core",
  "futures-channel",
  "process",
- "terminal",
+ "terminal-contract",
 ]
 
 [[package]]
@@ -10940,7 +10939,7 @@ dependencies = [
  "editor-core",
  "serde",
  "serde_json",
- "terminal",
+ "terminal-contract",
  "workspace",
 ]
 

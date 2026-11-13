@@ -11,7 +11,7 @@ process = { path = "../domain/process" }
 task = { path = "../domain/task" }
 editor-core = { path = "../domain/editor-core" }
 document = { path = "../domain/document" }
-terminal = { path = "../domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workspace = { path = "../domain/workspace" }
 workbench = { path = "../domain/workbench" }
 serde.workspace = true

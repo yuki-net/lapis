@@ -22,7 +22,7 @@ backend-state = { path = "../runtime" }
 client-api = { path = "../../contracts/protocol" }
 platform = { path = "../adapters/local" }
 local-process = { path = "../adapters/process" }
-terminal = { path = "../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 remote = { path = "../transport/remote" }
 wire = { path = "../../contracts/transport/wire" }
 tokio = { workspace = true, features = ["signal"] }

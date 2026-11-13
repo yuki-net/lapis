@@ -128,17 +128,27 @@ def layer(manifest, root):
 DUPLICATE_TYPE_ALLOWLIST = {
     "OidcConfig": {"remote", "web-bridge"},
     "OidcError": {"remote", "web-bridge"},
-    "TerminalSnapshot": {"protocol", "terminal"},
-    "TerminalStatus": {"protocol", "terminal"},
+    "TerminalSnapshot": {"client-api", "terminal-contract"},
+    "TerminalStatus": {"client-api", "terminal-contract"},
 }
 
 PUBLIC_TYPE = re.compile(r"^pub (?:struct|enum|trait) ([A-Za-z_][A-Za-z0-9_]*)", re.M)
 
 
 def crate_name_of(path, root):
+    """crate の同一性は package 名で判定する。
+
+    `extensions/*/contract` のようにディレクトリ名が重複するため、ディレクトリ名では
+    別 crate の型を同じ crate のものとして扱ってしまう。
+    """
     directory = path.parent
     while directory != root and not (directory / "Cargo.toml").exists():
         directory = directory.parent
+    manifest = directory / "Cargo.toml"
+    if manifest.exists():
+        match = re.search(r'^name\s*=\s*"([^"]+)"', manifest.read_text(encoding="utf-8"), re.M)
+        if match:
+            return match.group(1)
     return directory.name
 
 

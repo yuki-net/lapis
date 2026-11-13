@@ -20,7 +20,7 @@ local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 local-workspace-store = { path = "../workspace-store" }
 lsp = { path = "../../../contracts/domain/lsp" }
-terminal = { path = "../../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../contracts/domain/workspace" }
 workbench = { path = "../../../contracts/domain/workbench" }
