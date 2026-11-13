@@ -47,8 +47,18 @@ impl Shell {
             .child(path)
             .child(
                 div()
+                    .flex()
+                    .items_center()
+                    .gap(tokens::spacing::XS)
                     .text_color(theme::colors(cx).text_secondary)
-                    .child(self.status.clone()),
+                    .child(self.status.clone())
+                    .when(!self.warning.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .text_color(theme::colors(cx).text_warning)
+                                .child(self.warning.clone()),
+                        )
+                    }),
             )
             .child(right)
     }

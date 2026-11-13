@@ -12,13 +12,14 @@ use std::{
 };
 
 use crate::{
-    ConversationRecord, Project, WorkspaceDialog, WorkspaceStateRepository, WorkspaceViewState,
+    ConversationRecord, Project, SessionViewReplica, SessionViewWatch, WorkspaceDialog,
+    WorkspaceStateRepository, WorkspaceViewState,
 };
 use client_api::{
     ClientKind, DocumentInspectRequest, RequestBody, ResponseBody, Revision as ApiRevision,
     SnapshotReason, SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest,
     WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
-    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
+    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary, WorkspaceViewUnsubscribeRequest,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
@@ -66,6 +67,9 @@ thread_local! {
     static PREVIOUS: RefCell<Option<PreviousWorkspace>> = const { RefCell::new(None) };
     /// ページの生存中だけ保持する Workspace ごとの複製。永続化はしない。
     static CACHE: RefCell<WorkspaceCache> = const { RefCell::new(WorkspaceCache::new(0)) };
+    /// Workspace の view state 共有。UI と同じ watch を共有する。
+    static SESSION_VIEW: RefCell<SessionViewReplica> =
+        RefCell::new(SessionViewReplica::new(SessionViewWatch::new()));
 }
 
 struct PreviousWorkspace {
@@ -89,6 +93,8 @@ struct BackendState {
     changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     /// Editor 向けの文書変更通知。Terminal 向けの `changes` とは分ける。
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    /// 共有 view state の変更通知。tabs の適用は他の通知と独立させる。
+    session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 }
 
 /// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
@@ -244,19 +250,21 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
     let (commands, receiver) = mpsc::unbounded();
     let changes = Rc::new(RefCell::new(Vec::new()));
     let document_changes = Rc::new(RefCell::new(Vec::new()));
+    let session_view_changes = Rc::new(RefCell::new(Vec::new()));
     BACKEND.with(|backend| {
         *backend.borrow_mut() = Some(BackendState {
             connection: connection.clone(),
-            workspace,
+            workspace: workspace.clone(),
             workspace_identity,
             host_name,
             host_id,
             can_switch,
             workspaces,
             replica: replica.clone(),
-            commands,
+            commands: commands.clone(),
             changes: changes.clone(),
             document_changes: document_changes.clone(),
+            session_view_changes: session_view_changes.clone(),
         })
     });
     wasm_bindgen_futures::spawn_local(pump(
@@ -265,6 +273,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         replica.clone(),
         changes.clone(),
         document_changes.clone(),
+        session_view_changes.clone(),
     ));
     if let Some(events) = events {
         wasm_bindgen_futures::spawn_local(event_pump(
@@ -273,9 +282,12 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             replica.clone(),
             changes,
             document_changes,
+            session_view_changes,
         ));
     }
     preload(&connection, &replica).await?;
+    // 購読は接続直後から始め、snapshot を現在のタブ構成へ適用できるようにする。
+    resync_session_view();
     Ok(fresh_credential)
 }
 
@@ -337,6 +349,15 @@ async fn switch_workspace_inner(
     requested: &ApiWorkspaceId,
 ) -> Result<(), String> {
     let current_api = api_workspace(current);
+    // 離れる Workspace の共有購読を解除する。閉じたら以後 delta は届かない。
+    let _ = request(
+        connection,
+        RequestBody::WorkspaceViewUnsubscribe(WorkspaceViewUnsubscribeRequest {
+            workspace_id: current_api.clone(),
+        }),
+    )
+    .await;
+    SESSION_VIEW.with(|session| session.borrow_mut().reset());
     request(
         connection,
         RequestBody::WorkspaceClose(WorkspaceCloseRequest {
@@ -392,6 +413,7 @@ async fn switch_workspace_inner(
             return Err(fail_switch(connection, &current_api, Some(requested), error).await);
         }
         install_workspace(current, workspace, workspace_identity, replica, true)?;
+        resync_session_view();
         return Ok(());
     }
 
@@ -465,6 +487,7 @@ async fn switch_workspace_inner(
             &format!("Workspace切替後の初期ファイルを開けません: {error}").into(),
         );
     }
+    resync_session_view();
     Ok(())
 }
 
@@ -656,7 +679,11 @@ async fn fail_switch(
     error: String,
 ) -> String {
     match restore_connection(connection, current, attempted).await {
-        Ok(()) => error,
+        Ok(()) => {
+            // 旧 Workspace の購読を解除済みなので、戻った先で再開する。
+            resync_session_view();
+            error
+        }
         Err(recovery) => {
             BACKEND.with(|backend| *backend.borrow_mut() = None);
             format!(
@@ -751,6 +778,8 @@ async fn rollback_workspace_inner(
     if let Some(replica) = target {
         cache_workspace(CachedWorkspace { replica });
     }
+    // 復帰した Workspace の購読を再開する。切替時に解除済みのため。
+    resync_session_view();
     Ok(())
 }
 
@@ -809,6 +838,71 @@ pub fn document_changes() -> Option<mpsc::UnboundedReceiver<()>> {
         state.document_changes.borrow_mut().push(sender);
         Some(receiver)
     })
+}
+
+/// 別 Client が共有したタブ構成の変更を UI が購読する。
+pub fn session_view_changes() -> Option<mpsc::UnboundedReceiver<()>> {
+    BACKEND.with(|backend| {
+        let backend = backend.borrow();
+        let state = backend.as_ref()?;
+        let (sender, receiver) = mpsc::unbounded();
+        state.session_view_changes.borrow_mut().push(sender);
+        Some(receiver)
+    })
+}
+
+/// 共有 view state の watch。UI はこれを通じて適用対象を読む。
+pub fn session_view_watch() -> SessionViewWatch {
+    SESSION_VIEW.with(|session| session.borrow().watch().clone())
+}
+
+/// 共有中の workspace に対する snapshot を取り込み直す（再接続・復帰時）。
+pub fn resync_session_view() {
+    BACKEND.with(|backend| {
+        if let Some(state) = backend.borrow().as_ref()
+            && let Err(error) = state.commands.unbounded_send(Command::ResyncView)
+        {
+            web_sys::console::warn_1(&format!("Workspace view を再同期できません: {error}").into());
+        }
+    });
+}
+
+/// 自分のタブ構成を共有へ送る。null 相当の view は送らない。
+/// キューへ渡せたときだけ `true` を返し、呼び出し側は成功時だけ署名を確定する。
+pub fn publish_session_view(view: workbench::WorkspaceView) -> bool {
+    SESSION_VIEW.with(|session| session.borrow().begin_local(&view));
+    if send_view(view) {
+        return true;
+    }
+    // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
+    SESSION_VIEW.with(|session| session.borrow().abort_local());
+    false
+}
+
+/// キューへ渡せたときだけ `true`。
+fn send_view(view: workbench::WorkspaceView) -> bool {
+    BACKEND.with(|backend| match backend.borrow().as_ref() {
+        Some(state) => state
+            .commands
+            .unbounded_send(Command::PublishView { view })
+            .is_ok(),
+        None => false,
+    })
+}
+
+/// 送信する view を先に記録し、自分の更新が event で戻っても再適用しない。
+/// `publish_session_view` が記録するため、通常は UI から直接呼ばない。
+pub fn begin_local_session_view(view: &workbench::WorkspaceView) {
+    SESSION_VIEW.with(|session| session.borrow().begin_local(view));
+}
+
+/// Workspace を閉じたときに購読を解除する。
+pub fn close_session_view() {
+    BACKEND.with(|backend| {
+        if let Some(state) = backend.borrow().as_ref() {
+            let _ = state.commands.unbounded_send(Command::CloseView);
+        }
+    });
 }
 
 /// UIへ渡す同期Client。状態はthread_localにあるため、この型自体は空。

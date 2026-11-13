@@ -106,6 +106,9 @@ pub(crate) struct Editor {
     edit_epoch: Option<crate::client_adapter::EditEpoch>,
     in_flight: usize,
     group_sync_pending: bool,
+    /// 入力中で反映できなかった共有の active 文書。次の snapshot 受理で反映する。
+    /// snapshot 全体ではなく選択だけを持つことで、より新しい snapshot に追い越されない。
+    shared_active: DeferredSharedActive,
     sync_pending: bool,
     selected_range: Range<usize>,
     selection_reversed: bool,
@@ -124,6 +127,39 @@ pub(crate) struct Editor {
 }
 
 impl gpui::EventEmitter<EditorEvent> for Editor {}
+
+/// 入力中に保留した共有の active。
+///
+/// snapshot 全体を保留すると、入力完了時に届くより新しい snapshot に追い越されて
+/// `accept_snapshot` の sequence 検査で拒否され、共有の active が失われる。
+/// 選択だけを保留し、次に受理する snapshot の active を差し替える。
+#[derive(Default)]
+struct DeferredSharedActive(Option<DocumentId>);
+
+impl DeferredSharedActive {
+    /// 共有の active を保留する。入力中は本文も選択も変えない。
+    fn defer(&mut self, id: Option<DocumentId>) {
+        self.0 = id;
+    }
+
+    /// ユーザーが明示的に選んだので保留を捨てる。
+    ///
+    /// 後からの明示的なタブ選択は共有より優先する。捨てないと、その選択を
+    /// 反映した snapshot を受理するときに保留中の active が上書きしてしまう。
+    fn explicit_selection(&mut self) {
+        self.0 = None;
+    }
+
+    /// 受理する snapshot の active に保留を反映する。共有側で閉じられた文書は選ばない。
+    fn apply_to(&mut self, active: &mut Option<DocumentId>, tabs: &[desktop_client::DocumentTab]) {
+        let Some(id) = self.0.take() else {
+            return;
+        };
+        if tabs.iter().any(|tab| tab.id == id) {
+            *active = Some(id);
+        }
+    }
+}
 
 impl Drop for Editor {
     fn drop(&mut self) {
@@ -177,6 +213,7 @@ impl Editor {
             edit_epoch: None,
             in_flight: 0,
             group_sync_pending: false,
+            shared_active: DeferredSharedActive::default(),
             sync_pending: false,
             selected_range: 0..0,
             selection_reversed: false,
@@ -434,6 +471,33 @@ impl Editor {
         }
     }
 
+    /// 共有された active 文書を反映する。
+    ///
+    /// 共有 view の適用ではタブ構成と選択中の文書が変わるため、`receive_snapshot`
+    /// のように現在の文書を優先せず、snapshot の active をそのまま採用する。
+    /// 未確定の入力がある間は active だけを保留し、後の snapshot 受理で反映する。
+    /// snapshot 全体を保留すると、入力完了時の新しい snapshot に追い越されて
+    /// `accept_snapshot` に拒否され、共有の active が失われるため。
+    pub(crate) fn receive_shared_snapshot(
+        &mut self,
+        snapshot: &ClientSnapshot,
+        cx: &mut Context<Self>,
+    ) {
+        if self.has_pending() {
+            // Idle 後の再適用でも共有の active を失わないよう、選択だけを保持する。
+            // 本文は置き換えない。
+            self.shared_active.defer(snapshot.active.clone());
+            self.group_sync_pending = true;
+            return;
+        }
+        self.shared_active.explicit_selection();
+        self.group_sync_pending = false;
+        self.edit_epoch = Some(snapshot.edit_epoch);
+        let local = self.local_snapshot(snapshot);
+        self.accept_snapshot(&local, true, cx);
+        cx.notify();
+    }
+
     /// Workspace切替を通常の入力・Closeと同じ待ち処理の境界で保護する。
     pub(crate) fn begin_context_transition(&mut self) -> bool {
         if !self.enabled || self.has_pending() || self.recovery {
@@ -496,6 +560,10 @@ impl Editor {
             return;
         }
         self.snapshot_sequence = snapshot.sequence;
+        let mut snapshot = snapshot.clone();
+        self.shared_active
+            .apply_to(&mut snapshot.active, &snapshot.tabs);
+        let snapshot = &snapshot;
         for view in &snapshot.workspace_view.open_documents {
             if let Some(id) = &view.document_id {
                 self.scroll_positions
@@ -748,7 +816,7 @@ impl Editor {
     }
 
     pub(crate) fn activate(&mut self, id: DocumentId, cx: &mut Context<Self>) {
-        self.submit(
+        let submitted = self.submit(
             false,
             move |client| {
                 client.editor.activate_document(&id);
@@ -756,6 +824,12 @@ impl Editor {
             },
             cx,
         );
+        // 選択を受け付けたときだけ、共有の active の保留を捨てる。復旧待ちなどで
+        // 受け付けられなかった場合は選択自体が起きないため、共有の active を
+        // 残しておかないと、復旧後の snapshot でも反映されなくなる。
+        if submitted {
+            self.shared_active.explicit_selection();
+        }
     }
 
     pub(crate) fn selected_text(&self) -> Option<String> {
@@ -842,6 +916,8 @@ impl Editor {
         id: DocumentId,
         cx: &mut Context<Self>,
     ) {
+        // 転送されたタブの選択は明示的な選択として扱う。
+        self.shared_active.explicit_selection();
         let mut snapshot = self.local_snapshot(snapshot);
         snapshot.active = Some(id);
         self.accept_snapshot(&snapshot, false, cx);
@@ -991,5 +1067,379 @@ impl Render for Editor {
                 )
                 .size_full(),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DeferredSharedActive, Editor};
+
+    /// `EditorEvent::Idle` を数えるための購読先。
+    struct Observer {
+        _subscription: gpui::Subscription,
+    }
+    use crate::client_adapter::{ClientSnapshot, ClientWorker};
+    use editor_core::DocumentId;
+    use gpui::prelude::*;
+
+    fn tab(id: &str) -> desktop_client::DocumentTab {
+        desktop_client::DocumentTab {
+            id: DocumentId::new(id),
+            display_name: id.to_owned(),
+            path: None,
+            dirty: false,
+            external_change: document::ExternalChange::Unchanged,
+            encoding: document::Encoding::Utf8,
+            active: false,
+        }
+    }
+
+    fn tabs(ids: &[&str]) -> Vec<desktop_client::DocumentTab> {
+        ids.iter().map(|id| tab(id)).collect()
+    }
+
+    /// 入力完了時に届いた新しい snapshot が共有の active を追い越しても、
+    /// 保留した選択を反映して共有の active を失わない。
+    #[test]
+    fn a_deferred_shared_active_survives_a_newer_snapshot() {
+        let tabs = tabs(&["a", "b"]);
+        // 入力中は B を保留したまま、snapshot は受理しない。
+        let mut shared = DeferredSharedActive::default();
+        shared.defer(Some(DocumentId::new("b")));
+        // 入力完了後に届いた新しい snapshot は A を選んでいる。
+        let mut active = Some(DocumentId::new("a"));
+        shared.apply_to(&mut active, &tabs);
+        assert_eq!(active, Some(DocumentId::new("b")));
+        // 反映した保留は消費し、次の snapshot では上書きしない。
+        let mut next = Some(DocumentId::new("a"));
+        shared.apply_to(&mut next, &tabs);
+        assert_eq!(next, Some(DocumentId::new("a")));
+    }
+
+    /// 後からの明示的なタブ選択は共有の active より優先する。
+    #[test]
+    fn an_explicit_selection_wins_over_a_deferred_shared_active() {
+        let tabs = tabs(&["a", "b", "c"]);
+        let mut shared = DeferredSharedActive::default();
+        shared.defer(Some(DocumentId::new("b")));
+        // 入力の応答前にユーザーが C を選ぶ。
+        shared.explicit_selection();
+        let mut active = Some(DocumentId::new("c"));
+        shared.apply_to(&mut active, &tabs);
+        assert_eq!(active, Some(DocumentId::new("c")));
+    }
+
+    /// 共有側で閉じられた文書は選ばず、保留も捨てる。
+    #[test]
+    fn a_deferred_shared_active_ignores_a_closed_document() {
+        let tabs = tabs(&["a"]);
+        let mut shared = DeferredSharedActive::default();
+        shared.defer(Some(DocumentId::new("b")));
+        let mut active = Some(DocumentId::new("a"));
+        shared.apply_to(&mut active, &tabs);
+        assert_eq!(active, Some(DocumentId::new("a")));
+        // 閉じられた文書の保留は残さない。
+        let mut next = Some(DocumentId::new("a"));
+        shared.apply_to(&mut next, &tabs);
+        assert_eq!(next, Some(DocumentId::new("a")));
+    }
+
+    /// 保留が無ければ active を変えない。
+    #[test]
+    fn no_deferred_shared_active_keeps_the_snapshot_active() {
+        let tabs = tabs(&["a", "b"]);
+        let mut shared = DeferredSharedActive::default();
+        let mut active = Some(DocumentId::new("a"));
+        shared.apply_to(&mut active, &tabs);
+        assert_eq!(active, Some(DocumentId::new("a")));
+    }
+
+    /// 本文を書き込んだ 3 つの文書を持つ Client と Editor を用意する。
+    fn fixture(cx: &mut gpui::TestAppContext) -> (gpui::Entity<Editor>, ClientSnapshot) {
+        use document::DocumentConnection;
+
+        let port = crate::client_adapter::tests::Fixture::default();
+        let mut client = port.client();
+        let opened = client.reconcile_snapshot();
+        let ids = opened
+            .tabs
+            .iter()
+            .map(|tab| tab.id.clone())
+            .collect::<Vec<_>>();
+        for (index, text) in ["fn first() {}", "fn second() {}", "fn third() {}"]
+            .into_iter()
+            .enumerate()
+        {
+            let revision = opened.documents[index].document.revision();
+            port.edit(&ids[index], revision, 0..0, text)
+                .expect("本文を書き込める");
+        }
+        let opened = client.reconcile_snapshot();
+        let worker = ClientWorker::new(client);
+        let editor =
+            cx.update(|cx| cx.new(|cx| Editor::new_with_initial_snapshot(worker, false, cx)));
+        // 直前の new_document で最後の文書が選ばれているため、先頭を表示しておく。
+        let mut opened = opened;
+        opened.active = opened.tabs.first().map(|tab| tab.id.clone());
+        (editor, opened)
+    }
+
+    fn body(editor: &gpui::Entity<Editor>, cx: &mut gpui::TestAppContext) -> String {
+        editor.read_with(cx, |editor, _| {
+            let len = editor.document().len_chars();
+            editor.document().slice_chars(0..len).unwrap_or_default()
+        })
+    }
+
+    fn show(
+        editor: &gpui::Entity<Editor>,
+        snapshot: &ClientSnapshot,
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let snapshot = snapshot.clone();
+        editor.update(cx, |editor, cx| {
+            editor.accept_snapshot(&snapshot, false, cx)
+        });
+    }
+
+    /// 入力中に共有の active を受け、入力完了時に新しい snapshot を受理しても、
+    /// 共有の active の本文へ切り替わる。
+    #[gpui::test]
+    fn a_shared_active_is_applied_after_the_pending_input_completes(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let first = opened.tabs[0].id.clone();
+        let second = opened.tabs[1].id.clone();
+        show(&editor, &opened, cx);
+        assert_eq!(body(&editor, cx), "fn first() {}");
+
+        // 入力中に共有側が 2 番目を選ぶ。本文はまだ置き換えない。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second.clone());
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 1;
+            editor.receive_shared_snapshot(&shared, cx);
+        });
+        assert_eq!(body(&editor, cx), "fn first() {}");
+
+        // 入力が完了し、より新しい snapshot（1 番目を選ぶ）を受理する。
+        let mut newer = opened.clone();
+        newer.sequence += 2;
+        newer.active = Some(first);
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 0;
+            editor.accept_snapshot(&newer, true, cx);
+        });
+        // 保留した共有の active を反映し、本文もそちらへ切り替わる。
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(second)
+        );
+        assert_eq!(body(&editor, cx), "fn second() {}");
+    }
+
+    /// 実際の入力完了と `EditorEvent::Idle` を通しても、共有の active が反映される。
+    ///
+    /// worker の応答で `in_flight` が減り、`notify_idle` が `Idle` を出す経路を
+    /// そのまま通す。保留した共有の active は、その完了時の snapshot 受理で反映する。
+    #[gpui::test]
+    fn a_pending_input_completion_applies_the_shared_active(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let first = opened.tabs[0].id.clone();
+        let second = opened.tabs[1].id.clone();
+        show(&editor, &opened, cx);
+        let (idles, _observer) = subscribe_idle(&editor, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。本文はまだ置き換えない。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second.clone());
+        let completed = editor.update(cx, |editor, cx| {
+            let submitted = editor.submit(
+                false,
+                {
+                    let first = first.clone();
+                    move |client| {
+                        // 入力の応答はユーザーが表示していた文書を選んだ状態で返る。
+                        client.editor.activate_document(&first);
+                        Ok(())
+                    }
+                },
+                cx,
+            );
+            assert!(submitted, "入力を投入できる");
+            editor.receive_shared_snapshot(&shared, cx);
+            editor.has_pending()
+        });
+        assert!(completed, "入力中は共有の active を保留する");
+        assert_eq!(body(&editor, cx), "fn first() {}");
+
+        // 実際の応答を待つ。完了時に `Idle` が出る。
+        run_until_idle(cx, &idles);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(second),
+            "入力完了後も共有の active を反映する"
+        );
+        assert_eq!(body(&editor, cx), "fn second() {}");
+    }
+
+    /// 実際の入力完了と `Idle` を通しても、後からの明示的な選択が優先される。
+    #[gpui::test]
+    fn an_explicit_selection_survives_the_input_completion(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let first = opened.tabs[0].id.clone();
+        let second = opened.tabs[1].id.clone();
+        let third = opened.tabs[2].id.clone();
+        show(&editor, &opened, cx);
+        let (idles, _observer) = subscribe_idle(&editor, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second);
+        editor.update(cx, |editor, cx| {
+            let submitted = editor.submit(
+                false,
+                {
+                    let first = first.clone();
+                    move |client| {
+                        client.editor.activate_document(&first);
+                        Ok(())
+                    }
+                },
+                cx,
+            );
+            assert!(submitted, "入力を投入できる");
+            editor.receive_shared_snapshot(&shared, cx);
+            // 応答前にユーザーが 3 番目を明示的に選ぶ。
+            editor.activate(third.clone(), cx);
+        });
+
+        run_until_idle(cx, &idles);
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(third),
+            "明示的な選択が共有の active に置き換わらない"
+        );
+        assert_eq!(body(&editor, cx), "fn third() {}");
+    }
+
+    /// `EditorEvent::Idle` の回数を数える購読と、購読を生かすための observer を返す。
+    fn subscribe_idle(
+        editor: &gpui::Entity<Editor>,
+        cx: &mut gpui::TestAppContext,
+    ) -> (std::rc::Rc<std::cell::Cell<usize>>, gpui::Entity<Observer>) {
+        let idles = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = idles.clone();
+        let editor = editor.clone();
+        let observer = cx.update(|cx| {
+            cx.new(|cx| {
+                let subscription = cx.subscribe(&editor, move |_: &mut Observer, _, event, _| {
+                    if matches!(event, super::EditorEvent::Idle) {
+                        counted.set(counted.get() + 1);
+                    }
+                });
+                Observer {
+                    _subscription: subscription,
+                }
+            })
+        });
+        (idles, observer)
+    }
+
+    /// worker の応答が返り、`Idle` が出るまで進める。
+    fn run_until_idle(cx: &mut gpui::TestAppContext, idles: &std::rc::Rc<std::cell::Cell<usize>>) {
+        let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(5);
+        while idles.get() == 0 {
+            cx.executor()
+                .advance_clock(std::time::Duration::from_millis(20));
+            cx.run_until_parked();
+            assert!(crate::time::Instant::now() < deadline, "Idle が来ない");
+            std::thread::yield_now();
+        }
+    }
+
+    /// 選択が受け付けられなかったときは、共有の active の保留を残す。    /// 選択が受け付けられなかったときは、共有の active の保留を残す。
+    ///
+    /// 復旧待ちで `submit` が拒否する状況ではタブ選択自体が起きないため、
+    /// 保留を捨てると復旧後の snapshot でも共有の active が反映されない。
+    #[gpui::test]
+    fn a_rejected_selection_keeps_the_deferred_shared_active(cx: &mut gpui::TestAppContext) {
+        let (editor, opened) = fixture(cx);
+        let second = opened.tabs[1].id.clone();
+        let third = opened.tabs[2].id.clone();
+        show(&editor, &opened, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second.clone());
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 1;
+            editor.receive_shared_snapshot(&shared, cx);
+        });
+        // 復旧待ちで選択を受け付けない。
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 0;
+            editor.recovery = true;
+            editor.activate(third, cx);
+        });
+        assert!(
+            editor.read_with(cx, |editor, _| editor.has_pending()),
+            "復旧待ちは選択を受け付けない"
+        );
+
+        // 復旧後の snapshot を受理すると、保留した共有の active を反映する。
+        let mut newer = opened.clone();
+        newer.sequence += 2;
+        newer.active = Some(opened.tabs[0].id.clone());
+        editor.update(cx, |editor, cx| {
+            editor.recovery = false;
+            editor.accept_snapshot(&newer, true, cx);
+        });
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(second)
+        );
+    }
+
+    /// 入力中に共有の active を保留していても、後からの明示的な選択が優先される。
+    #[gpui::test]
+    fn an_explicit_selection_is_not_replaced_by_a_deferred_shared_active(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (editor, opened) = fixture(cx);
+        let second = opened.tabs[1].id.clone();
+        let third = opened.tabs[2].id.clone();
+        show(&editor, &opened, cx);
+
+        // 入力中に共有側が 2 番目を選ぶ。
+        let mut shared = opened.clone();
+        shared.sequence += 1;
+        shared.active = Some(second);
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 1;
+            editor.receive_shared_snapshot(&shared, cx);
+        });
+        // 応答前にユーザーが 3 番目を明示的に選ぶ。
+        let selected = third.clone();
+        editor.update(cx, |editor, cx| editor.activate(selected, cx));
+
+        // その明示的な選択を反映した応答 snapshot を受理する。
+        let mut newer = opened.clone();
+        newer.sequence += 2;
+        newer.active = Some(third.clone());
+        editor.update(cx, |editor, cx| {
+            editor.in_flight = 0;
+            editor.accept_snapshot(&newer, true, cx);
+        });
+
+        // 明示的な選択が共有の active に置き換わらない。
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.document_id()),
+            Some(third)
+        );
+        assert_eq!(body(&editor, cx), "fn third() {}");
     }
 }

@@ -14,7 +14,6 @@ Desktop と同じ Rust/GPUI の UI を WebAssembly でブラウザーに表示�
 - Workspace の切替はアプリ内の Workspace メニューから行います。同じ接続のまま `workspace.close` → `workspace.connect` を実行し、ページ遷移・再接続はしません。URL も `history.replaceState` で `/<host>/<workspace>` に追従し、`#/t/<task-id>` は保持します。`workspace.switch` がない接続では切替メニューを表示しません。
 - ページの生存中は Workspace ごとの表示状態を保持します。一度開いた Workspace に戻ると、保持した状態を復元してから `snapshot.resync` と Workbench の再取得で差分を反映します。保持は接続中の Workspace 一覧数を上限とし、超えた分は古いものから破棄して次回は snapshot から復帰します。`localStorage` へは保存しません。
 - 招待リンクは `#/invite?url=<bridge URL>&workspace=<ID>&token=<token>` の形で token を fragment だけに載せます。fragment はサーバーへ送られません。
-
 Host なしのデモ:
 
 ```text
@@ -31,13 +30,24 @@ http://127.0.0.1:4747/?demo=1
 - 編集はローカルへ即時反映し、Host へ非同期で送ります。保存は Host の `document.save` を使います。
 - `?demo=1` を明示した場合だけ、メモリー上のサンプル Workspace で起動します（再読み込みで初期化）。
 
+## Workspace の view state 共有
+
+同じ Workspace を開いている別 Client と、開いているタブの構成とアクティブ文書を共有します。契約の正本は [Workspace の view state 共有](../../docs/specs/remote.md#workspace-の-view-state-共有) です。
+
+- Workspace へ接続すると `workspace.view.subscribe` で購読し、snapshot をタブ構成へ適用します。以後の `workspace.view_changed` は delta として適用します。
+- 自分のタブ開閉とアクティブ文書の変更は 150ms の debounce で `workspace.view.update` を送ります。直前の snapshot で適用したタブ構成と同じなら送りません。revision / sequence により、自分の更新が event として戻っても再適用・再送しません。`view` が `null` の event は無視します。
+- タブをバックグラウンドから戻したときと再接続時は、snapshot を取り直して再同期します。切断中は古い共有状態であることをステータスバーに表示します。
+- Workspace を閉じたときとページ終了時は `workspace.view.unsubscribe` を送り、以後の delta を受け取りません。
+- 共有するのはタブ構成と文書の更新状況だけで、パネル寸法・カーソル位置・スクロールは送らず、適用もしません。未保存の文書は共有側で閉じられていてもタブとして残します。
+- 既存の Workbench 同期と Task 共有の挙動は変わりません。
+
 ## 現状の制限
 
 - Host 接続時、起動時に開くのは1ファイルだけです。他のファイルは開いた直後は空で、Host からの読み込みが終わると次の再取得で表示されます。
 - Workbench は Host へ保存し、接続時に開いていた文書・未保存下書き・パネル配置を復元します。
 - Terminal は Host へ接続して開始・入力・リサイズ・終了・出力の受信まで行います。ページ再読み込み後は Host の snapshot から既存 Terminal を再発見できます。
 - Git、LSP、Search、Task は未接続です。
-- Host のイベント購読は Terminal のみで、他の Client の文書変更はこちらから操作したときに再取得されます。
+- Host のイベント購読は Terminal・Document・Workspace view state です。他の Client の文書変更は、イベントと操作時の再取得で反映されます。
 
 ## フォント
 

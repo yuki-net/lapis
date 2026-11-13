@@ -41,9 +41,7 @@ mod settings_store;
 mod view_state;
 mod web_access;
 mod workbench_sync;
-// Session 共有は背景 thread と同期受信を使うため Desktop だけで動かす。
-// Web 側の統合は別 PR とする。
-#[cfg(not(target_arch = "wasm32"))]
+// Session 共有の適用判定は platform 共通。Desktop だけが背景 thread で受信する。
 mod session_view;
 pub use connection_display::{
     connected_workspace_name, connection_label, host_label, host_name_from_url,
@@ -51,8 +49,9 @@ pub use connection_display::{
 };
 pub use extensions::{ExtensionDescriptor, ExtensionId, ExtensionRegistry, git_extension};
 pub use process::ProcessSession;
+pub use session_view::{SessionViewCursor, SessionViewReplica, SessionViewWatch};
 #[cfg(not(target_arch = "wasm32"))]
-pub use session_view::{SessionViewSession, SessionViewSync, SessionViewWatch};
+pub use session_view::{SessionViewSession, SessionViewSync};
 pub use settings_store::{SettingsModel, SettingsWatch};
 pub use view_state::{DocumentViewState, WorkspaceStateRepository, WorkspaceViewState};
 pub use web_access::{
@@ -1802,6 +1801,15 @@ impl EditorSession {
             .active_document_id
             .as_ref()
             .and_then(|id| documents.iter().position(|open| &open.id == id));
+        if active.is_none() {
+            // ID を共有しない Client（Web）のために、相対 path でも解決する。
+            active = view.active_path.as_ref().and_then(|path| {
+                let path = root.join(path.as_str());
+                documents
+                    .iter()
+                    .position(|open| open.document.path() == Some(path.as_path()))
+            });
+        }
         if active.is_none() {
             active = self
                 .active

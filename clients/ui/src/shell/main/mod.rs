@@ -70,6 +70,8 @@ pub(crate) struct Shell {
     languages: language::LanguageRegistry,
     scroll_states: ShellScrollStates,
     status: String,
+    /// 通常の status とは独立した警告。共有状態が古い可能性の表示に使う。
+    warning: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,6 +247,7 @@ impl Shell {
             languages: language::LanguageRegistry::bundled(),
             scroll_states: ShellScrollStates::default(),
             status: String::new(),
+            warning: String::new(),
         }
     }
     pub(crate) fn update_presentation(
@@ -377,6 +380,14 @@ impl Shell {
 
     pub(crate) fn set_status(&mut self, status: String, cx: &mut Context<Self>) {
         self.status = status;
+        cx.notify();
+    }
+    /// 通常の status と独立した警告を設定する。空文字列で解除する。
+    pub(crate) fn set_warning(&mut self, warning: String, cx: &mut Context<Self>) {
+        if self.warning == warning {
+            return;
+        }
+        self.warning = warning;
         cx.notify();
     }
     pub(crate) fn set_locale(&mut self, locale: localization::LocaleId, cx: &mut Context<Self>) {

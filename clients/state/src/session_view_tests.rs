@@ -1,5 +1,7 @@
 use super::*;
 use std::sync::Mutex;
+use std::time::Duration;
+use workbench::{SessionViewConnection, SessionViewEvent, SessionViewEvents, SessionViewSnapshot};
 
 /// 1 つの Workspace の view を保持する、Host 相当の共有先。
 struct SharedView {
@@ -130,6 +132,25 @@ fn wait_for(
         std::thread::sleep(Duration::from_millis(10));
     }
     panic!("共有 view が届きません");
+}
+
+#[test]
+fn empty_workspace_is_synced_so_the_first_tab_can_be_published() {
+    // まだ誰も共有していない Workspace（snapshot の view が null）でも、
+    // 参加した Client は自分のタブ構成を送れる。
+    let workspace = WorkspaceId::new("workspace-1");
+    let shared = Arc::new(SharedView::new());
+    let watch = SessionViewWatch::new();
+    let session =
+        SessionViewSession::start(shared.clone(), workspace.clone(), watch.clone()).unwrap();
+    assert!(
+        watch.is_synced(&workspace),
+        "空の snapshot で参加が完了していません"
+    );
+    session
+        .publish(SharedView::view("document-a"))
+        .expect("最初のタブ構成を共有できる");
+    session.close();
 }
 
 #[test]
