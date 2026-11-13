@@ -14,7 +14,7 @@ use client_api::{
     TerminalInputRequest, TerminalReleaseRequest, TerminalResizeRequest, TerminalSize,
     TerminalStartRequest, TerminalStatus as WireTerminalStatus, TerminalTerminateRequest,
     WorkbenchGetRequest, WorkbenchPutRequest, WorkbenchPutResponse, WorkspaceId as ApiWorkspaceId,
-    WorkspaceRelativePath,
+    WorkspaceRelativePath, WorkspaceViewSubscribeRequest, WorkspaceViewUpdateRequest,
 };
 use client_core::{AsyncHostConnection, browser::BrowserConnection};
 use document::{ExternalChange, FileFingerprint};
@@ -211,10 +211,18 @@ pub(super) async fn pump(
     replica: Rc<RefCell<Replica>>,
     changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 ) {
     while let Some(command) = commands.next().await {
-        if let Err(error) =
-            handle(&connection, &replica, &changes, &document_changes, command).await
+        if let Err(error) = handle(
+            &connection,
+            &replica,
+            &changes,
+            &document_changes,
+            &session_view_changes,
+            command,
+        )
+        .await
         {
             web_sys::console::warn_1(&format!("Host同期: {error}").into());
         }
@@ -233,12 +241,18 @@ pub(super) fn notify_documents(documents: &RefCell<Vec<mpsc::UnboundedSender<()>
         .retain(|documents| documents.unbounded_send(()).is_ok());
 }
 
+pub(super) fn notify_session_view(view: &RefCell<Vec<mpsc::UnboundedSender<()>>>) {
+    view.borrow_mut()
+        .retain(|view| view.unbounded_send(()).is_ok());
+}
+
 pub(super) async fn event_pump(
     connection: Rc<BrowserConnection>,
     mut events: mpsc::Receiver<EventEnvelope>,
     replica: Rc<RefCell<Replica>>,
     changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
 ) {
     while let Some(event) = events.next().await {
         // 画面や状態の変化を UI に知らせる。UI は通知で terminal の poll を呼ぶ。
@@ -296,6 +310,27 @@ pub(super) async fn event_pump(
                     state.owner = owner_of(&document);
                 }
             }
+            // 保存された内容へ追従するため、開いている文書だけ正本を取り直す。
+            // 未保存の入力を抱えた文書は、解決を急がず外部変更として知らせる。
+            EventBody::DocumentSaved { document_id, .. } => {
+                let local = replica
+                    .borrow()
+                    .documents
+                    .iter()
+                    .find(|(_, state)| state.host.as_ref() == Some(&document_id))
+                    .map(|(local, _)| local.clone());
+                if let Some(local) = local {
+                    // 取得中に入力された未保存の変更を失わないよう、常に保持判定を
+                    // 応答後の apply_inspection に任せる（未保存が無ければ保存内容を採用する）。
+                    if let Err(error) = refresh_document(&connection, &replica, &local, true).await
+                    {
+                        web_sys::console::warn_1(
+                            &format!("保存後の文書を再取得できません: {error}").into(),
+                        );
+                    }
+                    notify_documents(&document_changes);
+                }
+            }
             EventBody::WorkbenchChanged { .. } => {
                 let workspace = api_workspace(&replica.borrow().workspace);
                 if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
@@ -312,8 +347,25 @@ pub(super) async fn event_pump(
                     let _ = replica.workbench.refresh(state);
                 }
             }
+            EventBody::WorkspaceViewChanged {
+                workspace_id,
+                revision,
+                view,
+            } => {
+                let current = replica.borrow().workspace.clone();
+                if current.as_str() == workspace_id.as_str() {
+                    super::SESSION_VIEW.with(|session| {
+                        session.borrow_mut().apply_event(&current, revision, view);
+                    });
+                    // タブ構成が変わったことを UI に知らせ、適用させる。
+                    notify_session_view(&session_view_changes);
+                }
+            }
             EventBody::SnapshotRequired { .. } => {
                 // イベントを取りこぼした。Host の Snapshot で複製を取り直す。
+                // 共有中のタブ構成も snapshot から取り直すまで古い可能性がある。
+                super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
+                notify_session_view(&session_view_changes);
                 let delta = sync_snapshot(&connection, &replica).await;
                 if delta.display {
                     notify_changes(&changes);
@@ -323,10 +375,50 @@ pub(super) async fn event_pump(
                     // 文書の変更を専用の通知で伝えて再同期させる。
                     notify_documents(&document_changes);
                 }
+                // 共有 view state を snapshot で戻し、取り直せたら通知する。
+                if let Some(state) =
+                    super::SESSION_VIEW.with(|session| session.borrow().workspace().cloned())
+                {
+                    let body = request(
+                        &connection,
+                        RequestBody::WorkspaceViewSubscribe(WorkspaceViewSubscribeRequest {
+                            workspace_id: api_workspace(&state),
+                        }),
+                    )
+                    .await;
+                    // 応答待ちの間に Workspace が変わっていたら、古い snapshot を適用しない。
+                    let unchanged = super::SESSION_VIEW
+                        .with(|session| session.borrow().workspace().cloned())
+                        .as_ref()
+                        == Some(&state);
+                    if unchanged {
+                        match body {
+                            Ok(ResponseBody::WorkspaceViewSubscribe(snapshot)) => {
+                                super::SESSION_VIEW.with(|session| {
+                                    session.borrow_mut().subscribe_snapshot(
+                                        state,
+                                        snapshot.revision,
+                                        snapshot.view,
+                                    );
+                                });
+                                notify_session_view(&session_view_changes);
+                            }
+                            _ => {
+                                // 再同期できなかった。古い可能性を表示に出し続ける。
+                                super::SESSION_VIEW
+                                    .with(|session| session.borrow().watch().mark_stale());
+                                notify_session_view(&session_view_changes);
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
     }
+    // 接続が切れて event が来なくなった。共有中のタブ構成は最新ではない可能性がある。
+    super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
+    notify_session_view(&session_view_changes);
 }
 
 /// `snapshot.required` の後で、保持している複製を Host の Snapshot へ合わせる。
@@ -360,6 +452,7 @@ async fn handle(
     replica: &Rc<RefCell<Replica>>,
     changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
     document_changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
+    session_view_changes: &RefCell<Vec<mpsc::UnboundedSender<()>>>,
     command: Command,
 ) -> Result<(), String> {
     // 送信待ちを流し終えた後は、変更系Commandを成功扱いで捨てず呼び出し元へ返す。
@@ -735,6 +828,86 @@ async fn handle(
             let pending = replica.borrow_mut().workbench.prepare_retry()?;
             let plan = replica.borrow_mut().workbench.stage(pending)?;
             write_workbench(connection, replica, plan).await?;
+        }
+        Command::PublishView { view } => {
+            let workspace = replica.borrow().workspace.clone();
+            let body = request(
+                connection,
+                RequestBody::WorkspaceViewUpdate(WorkspaceViewUpdateRequest {
+                    workspace_id: api_workspace(&workspace),
+                    view,
+                }),
+            )
+            .await;
+            let body = match body {
+                Ok(body) => body,
+                Err(error) => {
+                    // 送れなかった値は記録からも外し、後続の event を誤って捨てない。
+                    // stale にして UI が次の機会に送り直せるようにする。
+                    super::SESSION_VIEW.with(|session| {
+                        session.borrow().abort_local();
+                        session.borrow().watch().mark_stale();
+                    });
+                    notify_session_view(session_view_changes);
+                    return Err(error);
+                }
+            };
+            let ResponseBody::WorkspaceViewUpdate(response) = body else {
+                super::SESSION_VIEW.with(|session| {
+                    session.borrow().abort_local();
+                    session.borrow().watch().mark_stale();
+                });
+                notify_session_view(session_view_changes);
+                return Err("WorkspaceViewUpdate応答が不正です".into());
+            };
+            // 自分の送信は event で戻ってきても再適用しない。
+            super::SESSION_VIEW.with(|session| session.borrow().accept_local(response.revision));
+        }
+        Command::ResyncView => {
+            let workspace = replica.borrow().workspace.clone();
+            let body = request(
+                connection,
+                RequestBody::WorkspaceViewSubscribe(WorkspaceViewSubscribeRequest {
+                    workspace_id: api_workspace(&workspace),
+                }),
+            )
+            .await;
+            // 応答待ちの間に Workspace が変わっていたら、古い snapshot を適用しない。
+            if replica.borrow().workspace != workspace {
+                return Ok(());
+            }
+            let snapshot = match body {
+                Ok(ResponseBody::WorkspaceViewSubscribe(snapshot)) => snapshot,
+                _ => {
+                    // 再同期できなかった。切断中と同じく古い可能性を表示に出す。
+                    super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
+                    notify_session_view(session_view_changes);
+                    return Err("WorkspaceViewSubscribe応答が不正です".into());
+                }
+            };
+            super::SESSION_VIEW.with(|session| {
+                session.borrow_mut().subscribe_snapshot(
+                    workspace,
+                    snapshot.revision,
+                    snapshot.view,
+                );
+            });
+            // snapshot を反映したら UI に変更を知らせる。
+            notify_session_view(session_view_changes);
+        }
+        Command::CloseView => {
+            let workspace = replica.borrow().workspace.clone();
+            let _ = request(
+                connection,
+                RequestBody::WorkspaceViewUnsubscribe(
+                    client_api::WorkspaceViewUnsubscribeRequest {
+                        workspace_id: api_workspace(&workspace),
+                    },
+                ),
+            )
+            .await;
+            super::SESSION_VIEW.with(|session| session.borrow_mut().reset());
+            notify_session_view(session_view_changes);
         }
     }
     Ok(())

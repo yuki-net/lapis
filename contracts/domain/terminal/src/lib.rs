@@ -8,7 +8,7 @@ pub type TerminalRevision = u64;
 
 pub const MAX_SCROLLBACK_LINES: usize = 2_000;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TerminalId(String);
 
 impl TerminalId {

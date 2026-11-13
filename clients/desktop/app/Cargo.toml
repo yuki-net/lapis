@@ -23,9 +23,12 @@ settings = { path = "../../../contracts/domain/settings" }
 task = { path = "../../../contracts/domain/task" }
 getrandom.workspace = true
 rfd.workspace = true
+sysinfo.workspace = true
+wire = { path = "../../../contracts/transport/wire" }
 
 [dev-dependencies]
 editor-core = { path = "../../../contracts/domain/editor-core" }
+workbench = { path = "../../../contracts/domain/workbench" }
 workspace = { path = "../../../contracts/domain/workspace" }
 tempfile.workspace = true
 

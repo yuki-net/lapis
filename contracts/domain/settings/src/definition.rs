@@ -104,6 +104,9 @@ pub struct SettingGroup {
 }
 
 /// 実際に設定項目を並べるページ。1ページに1つ以上の項目を持つ。
+///
+/// 例外として、保存値を持たない接続情報のようなページは
+/// [`SettingPageContent::Feature`] とし、項目を持たない。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SettingPage {
     pub id: &'static str,
@@ -111,6 +114,16 @@ pub struct SettingPage {
     pub group: &'static str,
     pub label: &'static str,
     pub description: Option<&'static str>,
+    pub content: SettingPageContent,
+}
+
+/// ページ本文の供給元。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingPageContent {
+    /// 定義データの設定項目から組み立てる。
+    Settings,
+    /// 機能が所有する実行時の状態を表示する。保存値を持たない。
+    Feature,
 }
 
 /// 定義データ一式。
@@ -206,7 +219,10 @@ impl DefinitionCatalog {
             if !owned {
                 return Err(format!("ページが分類ツリーに属していません: {}", page.id));
             }
-            if self.settings_of(page.id).next().is_none() {
+            // 機能が所有するページは保存値を持たないため、項目を要求しない。
+            if page.content == SettingPageContent::Settings
+                && self.settings_of(page.id).next().is_none()
+            {
                 return Err(format!("ページに設定項目がありません: {}", page.id));
             }
         }

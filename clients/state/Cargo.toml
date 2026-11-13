@@ -19,6 +19,7 @@ task = { path = "../../contracts/domain/task" }
 terminal = { path = "../../contracts/domain/terminal" }
 workspace = { path = "../../contracts/domain/workspace" }
 workbench = { path = "../../contracts/domain/workbench" }
+wire = { path = "../../contracts/transport/wire" }
 serde.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true

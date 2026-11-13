@@ -7,18 +7,8 @@ use crate::{
     localization::Localizer,
     theme,
 };
-use desktop_client::web_access::{HostDevice, HostWebStatus, WebAccess};
-#[cfg(any(not(target_family = "wasm"), test))]
-use gpui::App;
-use gpui::{Context, Global, Render, Window, div, prelude::*, px};
-
-struct WebAccessGlobal(Arc<dyn WebAccess>);
-impl Global for WebAccessGlobal {}
-
-#[cfg(any(not(target_family = "wasm"), test))]
-pub(crate) fn install_web_access(access: Arc<dyn WebAccess>, cx: &mut App) {
-    cx.set_global(WebAccessGlobal(access));
-}
+use desktop_client::{HostDevice, HostWebStatus, WebAccessControl};
+use gpui::{Context, Render, Window, div, prelude::*, px};
 
 #[derive(Clone)]
 enum WebOperation {
@@ -36,7 +26,7 @@ struct WebResult {
 }
 
 struct WebState {
-    worker: ClientWorker<Arc<dyn WebAccess>>,
+    worker: ClientWorker<Arc<dyn WebAccessControl>>,
     status: Option<HostWebStatus>,
     devices: Vec<HostDevice>,
     address: String,
@@ -59,13 +49,32 @@ pub(crate) struct SettingsFeature {
     locale: Localizer,
     message: String,
     page: &'static str,
+    /// Desktop からの Web 公開管理。リモート接続や Web 構成では `None`。
     web: Option<WebState>,
+    /// ローカル Web の接続情報を都度集める供給元。無い構成では接続ページを出さない。
+    web_access: Option<crate::app::WebAccessSource>,
+    /// 接続中の Workspace ID。Web の初回接続で入力する値として表示する。
+    workspace_id: Option<String>,
+    /// 接続ページで選んでいる候補ホスト。
+    selected_web_host: Option<String>,
+    /// コピーやブラウザー起動の結果を一時的に示す。
+    web_message: String,
 }
 
 impl gpui::EventEmitter<ResolvedSettings> for SettingsFeature {}
 
 impl SettingsFeature {
+    #[cfg(test)]
     pub(crate) fn new(cx: &mut Context<Self>) -> Self {
+        Self::with_web_access(cx, None, None)
+    }
+
+    /// 接続情報の供給元と Web 公開管理を受け取って作る。テストは同じ入口を使う。
+    pub(crate) fn with_web_access(
+        cx: &mut Context<Self>,
+        web_access: Option<crate::app::WebAccessSource>,
+        web_control: Option<Arc<dyn WebAccessControl>>,
+    ) -> Self {
         let coordinator = SettingsCoordinator::shared(cx);
         let values = coordinator.read(cx).values.clone();
         let mut locale = Localizer::bundled();
@@ -81,8 +90,8 @@ impl SettingsFeature {
         // Terminal Feature が Host の profile 一覧を公開したら選択肢を作り直す。
         let catalogs =
             vec![cx.observe_global::<super::terminal::TerminalProfileCatalog>(|_, cx| cx.notify())];
-        let web = cx.try_global::<WebAccessGlobal>().map(|global| WebState {
-            worker: ClientWorker::new(global.0.clone()),
+        let web = web_control.map(|control| WebState {
+            worker: ClientWorker::new(control),
             status: None,
             devices: Vec::new(),
             address: "127.0.0.1".into(),
@@ -100,12 +109,22 @@ impl SettingsFeature {
             message: String::new(),
             page: default_page(),
             web,
+            web_access,
+            workspace_id: None,
+            selected_web_host: None,
+            web_message: String::new(),
         }
     }
 
-    pub(crate) fn set_workspace(&mut self, root: Option<PathBuf>, cx: &mut Context<Self>) {
-        if self.root != root {
+    pub(crate) fn set_workspace(
+        &mut self,
+        root: Option<PathBuf>,
+        workspace_id: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.root != root || self.workspace_id != workspace_id {
             self.root = root;
+            self.workspace_id = workspace_id;
             if let Some(web) = &mut self.web {
                 web.generation = web.generation.wrapping_add(1);
                 web.status = None;
@@ -130,9 +149,23 @@ impl SettingsFeature {
         });
     }
 
+    /// そのページをこの起動構成で表示できるか。
+    ///
+    /// 接続ページは供給元の有無ではなく取得結果で決める。供給元が `None` を返す
+    /// 起動構成では、空のページをナビへ出さない。
+    fn page_available(&self, page: &settings::SettingPage) -> bool {
+        match page.content {
+            settings::SettingPageContent::Feature => {
+                page.id != settings::catalog::CONNECTION_WEB_PAGE || self.web_access().is_some()
+            }
+            settings::SettingPageContent::Settings => true,
+        }
+    }
+
     fn select_page(&mut self, page: &'static str, cx: &mut Context<Self>) {
         if self.page != page {
             self.page = page;
+            self.web_message.clear();
             if page == "host.web" {
                 self.web_request(WebOperation::Refresh, cx);
             }
@@ -293,7 +326,7 @@ impl SettingsFeature {
                 div()
                     .text_size(px(16.0))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child(self.t("settings.web.title")),
+                    .child(self.t("settings.web.publish-title")),
             )
             .child(
                 div()
@@ -419,6 +452,53 @@ impl SettingsFeature {
         content
     }
 
+    /// 現在の接続情報。供給元が無い、または取得できない場合は `None`。
+    fn web_access(&self) -> Option<desktop_client::WebAccess> {
+        self.web_access.as_ref()?.as_ref()()
+    }
+
+    /// 表示中の候補アドレス。選んだホストが消えていれば先頭へ戻す。
+    ///
+    /// 1回の描画では同じ `access` を使い、候補と URL が食い違わないようにする。
+    fn selected_web_address(
+        &self,
+        access: &desktop_client::WebAccess,
+    ) -> Option<desktop_client::WebAddress> {
+        match self.selected_web_host.as_deref() {
+            Some(host)
+                if access
+                    .addresses()
+                    .iter()
+                    .any(|address| address.host == host) =>
+            {
+                access
+                    .addresses()
+                    .iter()
+                    .find(|address| address.host == host)
+                    .cloned()
+            }
+            _ => access.preferred().cloned(),
+        }
+    }
+
+    fn select_web_host(&mut self, host: String, cx: &mut Context<Self>) {
+        if self.selected_web_host.as_deref() != Some(host.as_str()) {
+            self.selected_web_host = Some(host);
+            self.web_message.clear();
+            cx.notify();
+        }
+    }
+
+    /// 表示中のページ URL をクリップボードへ書き、画面にも知らせる。
+    fn copy_web_url(&mut self, value: String, copied_key: &'static str, cx: &mut Context<Self>) {
+        if value.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(gpui::ClipboardItem::new_string(value));
+        self.web_message = self.t(copied_key);
+        cx.notify();
+    }
+
     pub(super) fn render_settings_content(&self, cx: &mut Context<Self>) -> gpui::Div {
         let workspace_info = self
             .root
@@ -490,7 +570,7 @@ impl SettingsFeature {
                         } else {
                             theme::colors(cx).text_primary
                         })
-                        .child(self.t("settings.web.title"))
+                        .child(self.t("settings.web.publish-title"))
                         .focusable()
                         .on_click(cx.listener(|this, _, _, cx| this.select_page("host.web", cx))),
                 )
@@ -521,43 +601,50 @@ impl SettingsFeature {
                                     .text_color(theme::colors(cx).text_tertiary)
                                     .child(self.t(group.label)),
                             )
-                            .children(group.pages.iter().filter_map(|id| catalog.page(id)).map(
-                                |page| {
-                                    let selected = page.id == self.page;
-                                    div()
-                                        .id(page.id)
-                                        .px_5()
-                                        .py_2()
-                                        .rounded(px(6.0))
-                                        .bg(if selected {
-                                            theme::colors(cx).button_background_selected
-                                        } else {
-                                            theme::colors(cx).background_primary
-                                        })
-                                        .hover(|style| {
-                                            style.bg(theme::colors(cx).button_background_hover)
-                                        })
-                                        .text_size(px(12.0))
-                                        .text_color(if selected {
-                                            theme::colors(cx).text_accent
-                                        } else {
-                                            theme::colors(cx).text_primary
-                                        })
-                                        .child(self.t(page.label))
-                                        .on_click(cx.listener(move |this, _, _, cx| {
-                                            this.select_page(page.id, cx)
-                                        }))
-                                },
-                            ))
+                            .children(
+                                group
+                                    .pages
+                                    .iter()
+                                    .filter_map(|id| catalog.page(id))
+                                    .filter(|page| self.page_available(page))
+                                    .map(|page| {
+                                        let selected = page.id == self.page;
+                                        div()
+                                            .id(page.id)
+                                            .px_5()
+                                            .py_2()
+                                            .rounded(px(6.0))
+                                            .bg(if selected {
+                                                theme::colors(cx).button_background_selected
+                                            } else {
+                                                theme::colors(cx).background_primary
+                                            })
+                                            .hover(|style| {
+                                                style.bg(theme::colors(cx).button_background_hover)
+                                            })
+                                            .text_size(px(12.0))
+                                            .text_color(if selected {
+                                                theme::colors(cx).text_accent
+                                            } else {
+                                                theme::colors(cx).text_primary
+                                            })
+                                            .child(self.t(page.label))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.select_page(page.id, cx)
+                                            }))
+                                    }),
+                            )
                     }))
             }))
     }
-
     fn render_page(&self, cx: &mut Context<Self>) -> gpui::Div {
         if self.page == "host.web" {
             return self.render_web_page(cx);
         }
         let catalog = settings::catalog();
+        if self.page == settings::catalog::CONNECTION_WEB_PAGE && self.web_access().is_some() {
+            return self.render_web_connection_page(cx);
+        }
         let page = catalog.page(self.page).or_else(|| catalog.first_page());
         let mut container = div().flex_1().min_w(px(0.0)).flex().flex_col().gap_4();
         let Some(page) = page else {
@@ -586,6 +673,257 @@ impl SettingsFeature {
             container = container.child(self.render_field(definition, cx));
         }
         container
+    }
+
+    /// 現在の接続情報を示すページ。保存値を持たないため、表示のたびに集め直す。
+    ///
+    /// コピーと「ブラウザーで開く」は同じ候補アドレスを対象にする。
+    fn render_web_connection_page(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let mut container = div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(16.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme::colors(cx).text_primary)
+                            .child(self.t("settings.page.connection.web")),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::colors(cx).text_tertiary)
+                            .child(self.t("settings.page.connection.web.description")),
+                    ),
+            );
+        let Some(access) = self.web_access() else {
+            return container.child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::colors(cx).text_tertiary)
+                    .child(self.t("settings.web.unavailable")),
+            );
+        };
+        let access = access.with_loopback_fallback();
+        let selected = self.selected_web_address(&access);
+        let page_url = access.page_url(selected.as_ref());
+        let bridge_url = access.bridge_url(selected.as_ref());
+
+        container =
+            container.child(
+                div()
+                    .p_4()
+                    .rounded(px(8.0))
+                    .border_1()
+                    .border_color(theme::colors(cx).border_default)
+                    .bg(theme::colors(cx).background_tertiary)
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(theme::colors(cx).text_tertiary)
+                            .child(self.t("settings.web.address")),
+                    )
+                    .child(div().flex().flex_wrap().gap_2().children(
+                        access.addresses().iter().map(|address| {
+                            let host = address.host.clone();
+                            let selected = selected
+                                .as_ref()
+                                .is_some_and(|current| current.same_host(address));
+                            div()
+                                .id(gpui::ElementId::Name(format!("web-address-{host}").into()))
+                                .debug_selector({
+                                    let host = host.clone();
+                                    move || format!("web-address-{host}")
+                                })
+                                .px_3()
+                                .py_2()
+                                .rounded(px(6.0))
+                                .border_1()
+                                .border_color(if selected {
+                                    theme::colors(cx).text_accent
+                                } else {
+                                    theme::colors(cx).border_default
+                                })
+                                .bg(if selected {
+                                    theme::colors(cx).button_background_selected
+                                } else {
+                                    theme::colors(cx).background_secondary
+                                })
+                                .hover(|style| style.bg(theme::colors(cx).button_background_hover))
+                                .text_size(px(12.0))
+                                .text_color(theme::colors(cx).text_primary)
+                                .child(format!(
+                                    "{} {}",
+                                    self.t(address.kind.label_key()),
+                                    address.host
+                                ))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.select_web_host(host.clone(), cx)
+                                }))
+                        }),
+                    )),
+            );
+
+        container = container.child(self.render_web_value_row(
+            "web-page-url",
+            "settings.web.page-url",
+            page_url.clone(),
+            "settings.web.copy-page-url",
+            "settings.web.copied",
+            cx,
+        ));
+        container = container.child(self.render_web_value_row(
+            "web-bridge-url",
+            "settings.web.bridge-url",
+            bridge_url.clone(),
+            "settings.web.copy-bridge-url",
+            "settings.web.copied",
+            cx,
+        ));
+
+        container = container.child(
+            div()
+                .flex()
+                .items_center()
+                .flex_wrap()
+                .gap_2()
+                .child(
+                    div()
+                        .id("web-open-browser")
+                        .debug_selector(|| "web-open-browser".into())
+                        .px_3()
+                        .py_2()
+                        .rounded(px(6.0))
+                        .border_1()
+                        .border_color(theme::colors(cx).border_default)
+                        .bg(theme::colors(cx).background_secondary)
+                        .text_size(px(12.0))
+                        .text_color(if page_url.is_some() {
+                            theme::colors(cx).text_primary
+                        } else {
+                            theme::colors(cx).text_tertiary
+                        })
+                        .child(self.t("settings.web.open"))
+                        .when_some(page_url, |button, url| {
+                            button
+                                .cursor_pointer()
+                                .hover(|style| style.bg(theme::colors(cx).button_background_hover))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    cx.open_url(&url);
+                                    this.web_message = this.t("settings.web.opened");
+                                    cx.notify();
+                                }))
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme::colors(cx).text_tertiary)
+                        .child(self.web_message.clone()),
+                ),
+        );
+
+        // Desktop は接続中の Workspace をそのまま初回入力の候補として出す。
+        if let Some(workspace_id) = access.workspace_id.or_else(|| self.workspace_id.clone()) {
+            container = container.child(self.render_web_value_row(
+                "web-workspace-id",
+                "settings.web.workspace-id",
+                Some(workspace_id),
+                "settings.web.copy-bridge-url",
+                "settings.web.copied",
+                cx,
+            ));
+        }
+        container.child(
+            div()
+                .text_size(px(11.0))
+                .text_color(theme::colors(cx).text_tertiary)
+                .child(self.t("settings.web.hint")),
+        )
+    }
+
+    /// 値・コピー・動作の3点を1行に並べる。値が無いときはボタンを無効にする。
+    fn render_web_value_row(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        value: Option<String>,
+        copy_label: &'static str,
+        copied_label: &'static str,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let shown = value.clone().unwrap_or_else(|| "-".to_owned());
+        div()
+            .p_4()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(theme::colors(cx).border_default)
+            .bg(theme::colors(cx).background_tertiary)
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .text_size(px(12.0))
+                    .text_color(theme::colors(cx).text_tertiary)
+                    .child(self.t(label)),
+            )
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .flex_wrap()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(id)
+                            .debug_selector(move || id.into())
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_size(px(12.0))
+                            .text_color(theme::colors(cx).text_primary)
+                            .child(shown),
+                    )
+                    .child(
+                        div()
+                            .id(gpui::ElementId::Name(format!("{id}-copy").into()))
+                            .debug_selector(move || format!("{id}-copy"))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(6.0))
+                            .border_1()
+                            .border_color(theme::colors(cx).border_default)
+                            .bg(theme::colors(cx).background_secondary)
+                            .text_size(px(12.0))
+                            .text_color(if value.is_some() {
+                                theme::colors(cx).text_primary
+                            } else {
+                                theme::colors(cx).text_tertiary
+                            })
+                            .child(self.t(copy_label))
+                            .when_some(value, |button, value| {
+                                button
+                                    .cursor_pointer()
+                                    .hover(|style| {
+                                        style.bg(theme::colors(cx).button_background_hover)
+                                    })
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        this.copy_web_url(value.clone(), copied_label, cx)
+                                    }))
+                            }),
+                    ),
+            )
     }
 
     /// 1項目は定義データだけで決まる。値の保存キーも定義から取る。
@@ -1000,7 +1338,7 @@ mod tests {
 
     #[derive(Default)]
     struct TestWeb(std::sync::Mutex<Option<String>>);
-    impl WebAccess for TestWeb {
+    impl WebAccessControl for TestWeb {
         fn status(&self, _: &std::path::Path) -> Result<HostWebStatus, String> {
             Ok(HostWebStatus {
                 url: self.0.lock().unwrap().clone(),
@@ -1035,10 +1373,10 @@ mod tests {
                 desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap(),
                 cx,
             );
-            install_web_access(Arc::new(TestWeb::default()), cx);
-            let feature = cx.new(SettingsFeature::new);
+            let control: Arc<dyn WebAccessControl> = Arc::new(TestWeb::default());
+            let feature = cx.new(|cx| SettingsFeature::with_web_access(cx, None, Some(control)));
             feature.update(cx, |feature, cx| {
-                feature.set_workspace(Some(PathBuf::from("workspace")), cx);
+                feature.set_workspace(Some(PathBuf::from("workspace")), None, cx);
                 feature.select_page("host.web", cx);
             });
             feature
@@ -1104,9 +1442,11 @@ mod tests {
                 desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap(),
                 cx,
             );
-            install_web_access(Arc::new(TestWeb::default()), cx);
         });
-        let (feature, visual) = cx.add_window_view(|_, cx| SettingsFeature::new(cx));
+        let (feature, visual) = {
+            let control: Arc<dyn WebAccessControl> = Arc::new(TestWeb::default());
+            cx.add_window_view(|_, cx| SettingsFeature::with_web_access(cx, None, Some(control)))
+        };
         feature.read_with(visual, |feature, _| {
             assert!(feature.web.is_some(), "Web service missing")
         });
@@ -1129,5 +1469,264 @@ mod tests {
         });
         assert!(visual.debug_bounds("web-start").is_some());
         assert!(visual.debug_bounds("web-invite").is_some());
+    }
+
+    fn web_addresses() -> Vec<desktop_client::WebAddress> {
+        vec![
+            desktop_client::WebAddress::new(desktop_client::WebAddressKind::Local, "127.0.0.1"),
+            desktop_client::WebAddress::new(
+                desktop_client::WebAddressKind::Network,
+                "192.168.1.20",
+            ),
+            desktop_client::WebAddress::new(
+                desktop_client::WebAddressKind::Tailscale,
+                "100.64.1.23",
+            ),
+        ]
+    }
+
+    fn selected_web_address(feature: &SettingsFeature) -> Option<desktop_client::WebAddress> {
+        let access = feature.web_access()?.with_loopback_fallback();
+        feature.selected_web_address(&access)
+    }
+
+    fn web_feature(
+        cx: &mut gpui::TestAppContext,
+        addresses: Vec<desktop_client::WebAddress>,
+        workspace_id: Option<String>,
+    ) -> gpui::Entity<SettingsFeature> {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let source: crate::app::WebAccessSource = Arc::new(move || {
+                Some(desktop_client::WebAccess::new(
+                    4747,
+                    4757,
+                    addresses.clone(),
+                    workspace_id.clone(),
+                ))
+            });
+            cx.new(|cx| SettingsFeature::with_web_access(cx, Some(source), None))
+        })
+    }
+
+    /// 接続ページは保存値ではなく、いま集めた候補を表示する。
+    #[gpui::test]
+    fn connection_page_shows_the_current_web_addresses(cx: &mut gpui::TestAppContext) {
+        let feature = web_feature(cx, web_addresses(), Some("workspace-1".to_owned()));
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.select_page(settings::catalog::CONNECTION_WEB_PAGE, cx);
+            });
+            let access = feature.read(cx).web_access().expect("接続情報がある");
+            assert_eq!(access.addresses().len(), 3);
+            let selected = selected_web_address(feature.read(cx)).expect("候補がある");
+            let access = feature.read(cx).web_access().expect("接続情報がある");
+            assert_eq!(selected.host, "127.0.0.1");
+            assert_eq!(
+                access.page_url(Some(&selected)).as_deref(),
+                Some("http://127.0.0.1:4747/")
+            );
+            assert_eq!(
+                access.bridge_url(Some(&selected)).as_deref(),
+                Some("ws://127.0.0.1:4757/remote")
+            );
+        });
+    }
+
+    /// 候補を選ぶと、コピーと「ブラウザーで開く」の対象がその候補へ変わる。
+    #[gpui::test]
+    fn choosing_a_web_address_changes_the_urls_to_open_and_copy(cx: &mut gpui::TestAppContext) {
+        let feature = web_feature(cx, web_addresses(), None);
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.select_page(settings::catalog::CONNECTION_WEB_PAGE, cx);
+                feature.select_web_host("100.64.1.23".to_owned(), cx);
+            });
+            let selected = selected_web_address(feature.read(cx)).expect("候補がある");
+            let access = feature.read(cx).web_access().expect("接続情報がある");
+            assert_eq!(selected.host, "100.64.1.23");
+            assert_eq!(
+                access.page_url(Some(&selected)).as_deref(),
+                Some("http://100.64.1.23:4747/")
+            );
+            assert_eq!(
+                access.bridge_url(Some(&selected)).as_deref(),
+                Some("ws://100.64.1.23:4757/remote")
+            );
+        });
+    }
+
+    /// Tailscale の IP が変わっても、表示は供給元の現在値へ追随する。
+    #[gpui::test]
+    fn web_addresses_follow_the_current_network(cx: &mut gpui::TestAppContext) {
+        let current = std::sync::Arc::new(std::sync::Mutex::new("100.64.1.23".to_owned()));
+        let observed = current.clone();
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let source: crate::app::WebAccessSource = Arc::new(move || {
+                let host = observed.lock().unwrap().clone();
+                Some(desktop_client::WebAccess::new(
+                    4747,
+                    4757,
+                    vec![
+                        desktop_client::WebAddress::new(
+                            desktop_client::WebAddressKind::Local,
+                            "127.0.0.1",
+                        ),
+                        desktop_client::WebAddress::new(
+                            desktop_client::WebAddressKind::Tailscale,
+                            host,
+                        ),
+                    ],
+                    None,
+                ))
+            });
+            cx.new(|cx| SettingsFeature::with_web_access(cx, Some(source), None))
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.select_page(settings::catalog::CONNECTION_WEB_PAGE, cx);
+                feature.select_web_host("100.64.1.23".to_owned(), cx);
+            });
+            *current.lock().unwrap() = "100.64.9.9".to_owned();
+            // 保存値ではないため、選んだホストが消えていれば現在の候補へ戻る。
+            let selected = selected_web_address(feature.read(cx)).expect("候補がある");
+            assert_eq!(selected.host, "127.0.0.1");
+            let access = feature.read(cx).web_access().expect("接続情報がある");
+            assert!(
+                access
+                    .addresses()
+                    .iter()
+                    .any(|address| address.host == "100.64.9.9")
+            );
+        });
+    }
+
+    /// Desktop は接続中の Workspace ID を初回入力の候補として表示する。
+    #[gpui::test]
+    fn connection_page_shows_the_connected_workspace_id(cx: &mut gpui::TestAppContext) {
+        let feature = web_feature(cx, web_addresses(), None);
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.set_workspace(None, Some("workspace-9".to_owned()), cx);
+                feature.select_page(settings::catalog::CONNECTION_WEB_PAGE, cx);
+            });
+            assert_eq!(
+                feature
+                    .read(cx)
+                    .web_access()
+                    .and_then(|access| access.workspace_id)
+                    .or_else(|| feature.read(cx).workspace_id.clone()),
+                Some("workspace-9".to_owned())
+            );
+        });
+    }
+
+    /// 接続情報を出せない構成では、空のページをナビへ出さない。
+    #[gpui::test]
+    fn connection_page_is_hidden_without_a_web_source(cx: &mut gpui::TestAppContext) {
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            cx.new(SettingsFeature::new)
+        });
+        let page = settings::catalog()
+            .page(settings::catalog::CONNECTION_WEB_PAGE)
+            .expect("接続ページの定義がある");
+        cx.update(|cx| {
+            assert!(!feature.read(cx).page_available(page));
+        });
+        let available = web_feature(cx, web_addresses(), None);
+        cx.update(|cx| {
+            assert!(available.read(cx).page_available(page));
+        });
+    }
+
+    /// 供給元はあっても取得結果が `None` なら、空のページをナビへ出さない。
+    #[gpui::test]
+    fn connection_page_is_hidden_when_the_source_returns_none(cx: &mut gpui::TestAppContext) {
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let source: crate::app::WebAccessSource = Arc::new(|| None);
+            cx.new(|cx| SettingsFeature::with_web_access(cx, Some(source), None))
+        });
+        let page = settings::catalog()
+            .page(settings::catalog::CONNECTION_WEB_PAGE)
+            .expect("接続ページの定義がある");
+        cx.update(|cx| {
+            assert!(feature.read(cx).web_access().is_none());
+            assert!(!feature.read(cx).page_available(page));
+        });
+    }
+
+    /// 描画した接続ページのボタンが、実際にコピーとブラウザー起動を行う。
+    #[gpui::test]
+    fn connection_page_buttons_copy_and_open_the_selected_address(cx: &mut gpui::TestAppContext) {
+        use gpui::Modifiers;
+
+        let (feature, visual) = cx.add_window_view(|_, cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let source: crate::app::WebAccessSource = std::sync::Arc::new(|| {
+                Some(desktop_client::WebAccess::new(
+                    4747,
+                    4757,
+                    vec![
+                        desktop_client::WebAddress::new(
+                            desktop_client::WebAddressKind::Local,
+                            "127.0.0.1",
+                        ),
+                        desktop_client::WebAddress::new(
+                            desktop_client::WebAddressKind::Tailscale,
+                            "100.64.1.23",
+                        ),
+                    ],
+                    None,
+                ))
+            });
+            SettingsFeature::with_web_access(cx, Some(source), None)
+        });
+        feature.update(visual, |feature, cx| {
+            feature.select_page(settings::catalog::CONNECTION_WEB_PAGE, cx)
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+
+        // Tailscale の候補を選ぶと、コピーと起動の対象がその候補へ変わる。
+        let tailscale = visual
+            .debug_bounds("web-address-100.64.1.23")
+            .expect("候補が出ている");
+        visual.simulate_click(tailscale.center(), Modifiers::none());
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let copy = visual
+            .debug_bounds("web-page-url-copy")
+            .expect("ページ URL のコピー操作が出ている");
+        visual.simulate_click(copy.center(), Modifiers::none());
+        assert_eq!(
+            visual.read_from_clipboard().and_then(|item| item.text()),
+            Some("http://100.64.1.23:4747/".to_owned())
+        );
+
+        let open = visual
+            .debug_bounds("web-open-browser")
+            .expect("ブラウザーで開く操作が出ている");
+        visual.simulate_click(open.center(), Modifiers::none());
+        assert_eq!(
+            visual.opened_url().as_deref(),
+            Some("http://100.64.1.23:4747/")
+        );
     }
 }

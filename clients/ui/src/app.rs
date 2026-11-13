@@ -6,6 +6,12 @@ use gpui::{App, AppContext, actions};
 
 use crate::root::DesktopRoot;
 
+/// Workspace の view state 共有のハンドル。Desktop は購読 session、Web は watch。
+#[cfg(not(target_family = "wasm"))]
+pub type SessionViewHandle = std::sync::Arc<desktop_client::SessionViewSync>;
+#[cfg(target_family = "wasm")]
+pub type SessionViewHandle = desktop_client::SessionViewWatch;
+
 actions!(
     editor,
     [
@@ -80,6 +86,10 @@ pub struct ConnectionIdentity {
     pub workspaces: Vec<WorkspaceOption>,
 }
 
+/// ローカル Web の接続情報を表示のたびに集める供給元。
+pub type WebAccessSource =
+    std::sync::Arc<dyn Fn() -> Option<desktop_client::WebAccess> + Send + Sync>;
+
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) connection: Option<ConnectionIdentity>,
@@ -92,11 +102,13 @@ pub struct DesktopServices {
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
     pub(crate) process: ProcessSession,
-    pub(crate) web_access: Option<std::sync::Arc<dyn desktop_client::web_access::WebAccess>>,
+    /// ローカル Web の接続設定を一度に集める経路。Web を使わない構成では `None`。
+    pub(crate) web_access: Option<WebAccessSource>,
+    /// Desktop からの Web 公開管理（開始/停止・招待・端末）。リモート接続では `None`。
+    pub(crate) web_access_control: Option<std::sync::Arc<dyn desktop_client::WebAccessControl>>,
     pub(crate) workbench_watch: Option<desktop_client::WorkbenchWatch>,
-    /// Workspace の view state 共有。Web 側の統合は別 PR のため Desktop だけで使う。
-    #[cfg(not(target_family = "wasm"))]
-    pub(crate) session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
+    /// Workspace の view state 共有。Web は接続側の watch をそのまま渡す。
+    pub(crate) session_view: Option<SessionViewHandle>,
 }
 
 impl DesktopServices {
@@ -122,20 +134,29 @@ impl DesktopServices {
             settings,
             process: ProcessSession::unavailable(),
             web_access: None,
+            web_access_control: None,
             workbench_watch: None,
-            #[cfg(not(target_family = "wasm"))]
             session_view: None,
         }
     }
-    pub fn with_web_access(
+    pub fn with_web_access_control(
         mut self,
-        web: std::sync::Arc<dyn desktop_client::web_access::WebAccess>,
+        web: std::sync::Arc<dyn desktop_client::WebAccessControl>,
     ) -> Self {
-        self.web_access = Some(web);
+        self.web_access_control = Some(web);
         self
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
         self.connection = Some(connection);
+        self
+    }
+    /// ローカル Web の接続情報を、表示のたびに集め直す供給元を設定する。
+    /// 起動構成によっては表示できないため、供給元自体が `None` を返してよい。
+    pub fn with_web_access(
+        mut self,
+        access: impl Fn() -> Option<desktop_client::WebAccess> + Send + Sync + 'static,
+    ) -> Self {
+        self.web_access = Some(std::sync::Arc::new(access));
         self
     }
     /// URL の fragment から復元した Task を、最初の snapshot で選択する。
@@ -155,16 +176,11 @@ impl DesktopServices {
         self
     }
     /// Workspace の view state 共有を有効にする。
-    #[cfg(not(target_family = "wasm"))]
-    pub fn with_session_view(
-        mut self,
-        sync: std::sync::Arc<desktop_client::SessionViewSync>,
-    ) -> Self {
+    pub fn with_session_view(mut self, sync: SessionViewHandle) -> Self {
         self.session_view = Some(sync);
         self
     }
-    #[cfg(not(target_family = "wasm"))]
-    pub fn session_view(&self) -> Option<&std::sync::Arc<desktop_client::SessionViewSync>> {
+    pub fn session_view(&self) -> Option<&SessionViewHandle> {
         self.session_view.as_ref()
     }
     pub fn with_process_session(mut self, process: ProcessSession) -> Self {
@@ -215,8 +231,9 @@ pub(crate) struct WindowFactory {
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
     process: ProcessSession,
-    #[cfg(not(target_family = "wasm"))]
-    session_view: Option<std::sync::Arc<desktop_client::SessionViewSync>>,
+    web_access: Option<WebAccessSource>,
+    web_access_control: Option<std::sync::Arc<dyn desktop_client::WebAccessControl>>,
+    session_view: Option<SessionViewHandle>,
 }
 impl WindowFactory {
     pub(crate) fn path_scope(&self) -> Option<std::path::PathBuf> {
@@ -238,7 +255,8 @@ impl WindowFactory {
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
             process: services.process.clone(),
-            #[cfg(not(target_family = "wasm"))]
+            web_access: services.web_access.clone(),
+            web_access_control: services.web_access_control.clone(),
             session_view: services.session_view.clone(),
         }
     }
@@ -258,10 +276,9 @@ impl WindowFactory {
         services.connect_host = self.connect_host;
         services.connection = self.connection;
         services.process = self.process;
-        #[cfg(not(target_family = "wasm"))]
-        {
-            services.session_view = self.session_view;
-        }
+        services.web_access = self.web_access;
+        services.web_access_control = self.web_access_control;
+        services.session_view = self.session_view;
         (editor, services)
     }
     pub(crate) fn open_host(self) -> Result<(), String> {

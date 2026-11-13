@@ -85,10 +85,10 @@ Terminal は Host の `TerminalId`、その他の View は `ViewInstanceId` を�
 
 ## Workspace の view state 共有
 
-Workspace を開いている Client 間で、開いている Document とその表示位置を自動共有する。
+Workspace を開いている Client 間で、開いているタブと選択中の Document を自動共有する。
 真実は Host が Workspace 単位で保持し、Client は参加時の snapshot を取り、以後の変更を
-delta として受け取る。protocol 0.13 で追加した契約で、Desktop の統合は Issue #290 の
-PR2、Web の統合は別 PR で行う。
+delta として受け取る。protocol 0.13 で追加した契約で、Desktop（PR #314）と Web の
+両方が購読する。
 
 - `workspace.view.subscribe` は共有へ参加し、`WorkspaceViewSnapshot`（`revision` と
   `Option<WorkspaceView>`）を返す。まだ誰も共有していない Workspace は `view` が `null`。
@@ -112,6 +112,10 @@ PR2、Web の統合は別 PR で行う。
 - 各文書の ID は `WorkspaceDocumentView.document_id`、選択中の Document の ID は
   `WorkspaceView.active_document_id`。どちらも domain の `editor_core::DocumentId` で、
   wire の `client_api::DocumentId` とは別型。変換は `From` / `TryFrom` を使う。
+- Document ID は Client の複製キーである場合がある（Web の `web-N` は Host の ID と
+  一致しない）。ID を共有できない Client は `document_id` と `active_document_id` を
+  `null` にし、Workspace 相対 path だけでタブ構成とアクティブ文書を伝える。適用側は
+  ID が無ければ path で文書を解決する。
 - 購読は Session 単位で受けるが、event は同じ Workspace に接続している全 Session へ
   同じ連番で配る。`clients/transport` は event 連番の欠落を切断として扱うため、
   Session ごとに配信自体を絞ると未購読 Session がずれを検出して切断される。
@@ -131,6 +135,17 @@ PR2、Web の統合は別 PR で行う。
   適用したタブ構成と同じ間は再送しない。
 - Desktop はウィンドウが再びアクティブになったとき（スリープ復帰やバックグラウンド復帰）
   に snapshot を取り直して再同期する。受信の異常や event の欠落時も snapshot へ戻る。
+- Web は Workspace へ接続した時点で購読し、snapshot と delta をタブ構成へ適用する。
+  送信は Desktop と同じく 150ms の debounce と直前のタブ構成との比較で抑える。
+  自分の更新は次の 2 段階で識別し、再適用しない。応答を受け取る前は、送信時に
+  `begin_local` で記録した値と event の `view` を照合する（Host が応答より先に
+  echo を配るため）。応答後は受理済みの `revision` で抑える。応答待ちが重なっても
+  取り違えないよう、記録は送信順に消費する。`view` が `null` の event は無視する。
+- Web はページがアクティブな間だけ live とする。タブのバックグラウンド復帰と再接続時は
+  snapshot で再同期し、切断中は最後に受信した値のまま古い可能性を表示する。ページ終了時と
+  Workspace を閉じたときは `workspace.view.unsubscribe` を送る。
+- Web の `WorkspaceView` は Client 固有の `root` を持たないため、仮想 root からの相対 path
+  で送受信する。文書の内容は `document.save` の後に Host の正本を取り直して追従する。
 - 共有 view の適用ではタブの並びと選択中の文書だけを変更し、既に開いている文書の内容は
   置き換えない。共有側で閉じられた未保存の文書は、データ損失を避けるためタブとして残す。
 - 共有するのはタブ構成と文書の更新状況だけで、レイアウト寸法やレスポンシブな状態は

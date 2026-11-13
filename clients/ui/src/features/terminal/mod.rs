@@ -114,6 +114,8 @@ pub(super) fn descriptor() -> FeatureDescriptor {
             "terminal",
             10,
         )
+        // タブごとに独立したセッションを持つ。開くたびに新しい個体を作る。
+        .multiple_instances()
         .feature_owned_scroll(),
     )
     .requires("workspace.process")

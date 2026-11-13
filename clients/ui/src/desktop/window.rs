@@ -27,9 +27,6 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
                 services.settings.clone(),
                 cx,
             );
-            if let Some(web_access) = services.web_access.clone() {
-                crate::features::settings::install_web_access(web_access, cx);
-            }
             #[cfg(all(feature = "hot-reload", debug_assertions))]
             crate::hot_reload::init(cx);
             crate::keymap::gpui::bind_keys(cx);
