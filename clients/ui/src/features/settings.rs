@@ -50,6 +50,11 @@ pub(crate) struct SettingsFeature {
     locale: Localizer,
     message: String,
     page: &'static str,
+    search: gpui::Entity<crate::components::SearchInput>,
+    _search_subscription: gpui::Subscription,
+    query: String,
+    open_choice: Option<SettingKey>,
+    choice_scroll: ScrollState,
     content_scroll: ScrollState,
     nav_scroll: ScrollState,
     pending_scroll: bool,
@@ -96,11 +101,29 @@ impl SettingsFeature {
         let values = coordinator.read(cx).values.clone();
         let mut locale = Localizer::bundled();
         let _ = locale.set_active(&values.locale());
+        let placeholder =
+            locale.resolve(&localization::MessageId::new("settings.search.placeholder"));
+        let search = cx.new(|cx| crate::components::SearchInput::new(&placeholder, cx));
+        let search_subscription = cx.subscribe(&search, |this, _, event, cx| {
+            let crate::components::SearchInputEvent::Changed(text) = event;
+            this.query = text.clone();
+            this.open_choice = None;
+            this.content_scroll
+                .handle()
+                .set_offset(gpui::point(px(0.0), px(0.0)));
+            if let Some(page) = this.visible_pages().first() {
+                this.page = page;
+            }
+            cx.notify();
+        });
         let subscription = cx.observe(&coordinator, |this, coordinator, cx| {
             let state = coordinator.read(cx);
             this.values = state.values.clone();
             this.message = state.message.clone();
             let _ = this.locale.set_active(&this.values.locale());
+            let placeholder = this.t("settings.search.placeholder");
+            this.search
+                .update(cx, |search, cx| search.set_placeholder(placeholder, cx));
             cx.emit(this.values.clone());
             cx.notify();
         });
@@ -117,9 +140,6 @@ impl SettingsFeature {
             message: String::new(),
         });
         let content_scroll = ScrollState::new();
-        if web.is_some() {
-            content_scroll.handle().scroll_to_top_of_item(1);
-        }
         Self {
             coordinator,
             _subscription: subscription,
@@ -129,6 +149,11 @@ impl SettingsFeature {
             locale,
             message: String::new(),
             page: default_page(),
+            search,
+            _search_subscription: search_subscription,
+            query: String::new(),
+            open_choice: None,
+            choice_scroll: ScrollState::new(),
             content_scroll,
             nav_scroll: ScrollState::new(),
             pending_scroll: false,
@@ -267,20 +292,93 @@ impl SettingsFeature {
 
     fn visible_pages(&self) -> Vec<&'static str> {
         let mut pages = Vec::new();
-        if self.web.is_some() {
-            pages.push("host.web");
-        }
         let catalog = settings::catalog();
         for category in catalog.categories() {
             for group in category.groups {
                 for id in group.pages {
-                    if let Some(page) = catalog.page(id).filter(|page| self.page_available(page)) {
+                    if let Some(page) = catalog.page(id).filter(|page| self.page_available(page))
+                        && (self.matches_search(&[
+                            self.t(category.label),
+                            self.t(group.label),
+                            self.t(page.label),
+                            page.description.map(|key| self.t(key)).unwrap_or_default(),
+                        ]) || catalog
+                            .settings_of(page.id)
+                            .any(|field| self.field_matches_search(field)))
+                    {
                         pages.push(page.id);
                     }
                 }
             }
         }
+        if self.web.is_some()
+            && self.matches_search(&[
+                self.t("settings.web.publish-title"),
+                self.t("settings.web.devices"),
+                self.t("settings.web.address"),
+                self.t("settings.web.invite"),
+            ])
+        {
+            pages.push("host.web");
+        }
         pages
+    }
+
+    fn matches_search(&self, fields: &[String]) -> bool {
+        let text = fields.join(" ").to_lowercase();
+        self.query
+            .split_whitespace()
+            .all(|term| text.contains(&term.to_lowercase()))
+    }
+
+    fn field_matches_search(&self, definition: &SettingDefinition) -> bool {
+        let catalog = settings::catalog();
+        let page = catalog.page(definition.page);
+        let category = page.and_then(|page| {
+            catalog
+                .categories()
+                .iter()
+                .find(|category| category.id == page.category)
+        });
+        let group = page.and_then(|page| {
+            category
+                .and_then(|category| category.groups.iter().find(|group| group.id == page.group))
+        });
+        let mut fields = vec![
+            category
+                .map(|value| self.t(value.label))
+                .unwrap_or_default(),
+            group.map(|value| self.t(value.label)).unwrap_or_default(),
+            page.map(|value| self.t(value.label)).unwrap_or_default(),
+            definition.key.as_str().to_owned(),
+            self.t(definition.label),
+            definition
+                .description
+                .map(|key| self.t(key))
+                .unwrap_or_default(),
+        ];
+        if let SettingControl::Choice(OptionSource::Values(options)) = &definition.control {
+            fields.extend(options.iter().map(|option| self.option_label(option)));
+        }
+        self.matches_search(&fields)
+    }
+
+    fn page_heading_matches_search(&self, page: &settings::SettingPage) -> bool {
+        let catalog = settings::catalog();
+        let category = catalog
+            .categories()
+            .iter()
+            .find(|category| category.id == page.category);
+        let group = category
+            .and_then(|category| category.groups.iter().find(|group| group.id == page.group));
+        self.matches_search(&[
+            category
+                .map(|value| self.t(value.label))
+                .unwrap_or_default(),
+            group.map(|value| self.t(value.label)).unwrap_or_default(),
+            self.t(page.label),
+            page.description.map(|key| self.t(key)).unwrap_or_default(),
+        ])
     }
 
     fn web_request(&mut self, operation: WebOperation, cx: &mut Context<Self>) {
@@ -621,10 +719,19 @@ impl SettingsFeature {
             .into_iter()
             .map(|page| self.render_page(page, cx).flex_shrink_0())
             .collect::<Vec<_>>();
-        items.push(
-            self.render_workspace_info(cx, workspace_info)
-                .flex_shrink_0(),
-        );
+        if items.is_empty() {
+            items.push(
+                div()
+                    .text_size(px(13.0))
+                    .text_color(theme::colors(cx).text_tertiary)
+                    .child(self.t("settings.search.empty")),
+            );
+        } else if self.query.trim().is_empty() {
+            items.push(
+                self.render_workspace_info(cx, workspace_info)
+                    .flex_shrink_0(),
+            );
+        }
         let on_scroll = cx.listener(|this, _, _, cx| {
             this.sync_page_on_scroll = true;
             cx.notify();
@@ -642,21 +749,17 @@ impl SettingsFeature {
             .min_h(px(0.0))
             .flex()
             .flex_col()
+            .items_center()
             .pt_8()
-            .gap_6()
+            .px_4()
+            .gap_4()
             .child(
                 div()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .child(Icon::new(IconName::Settings))
-                    .child(
-                        div()
-                            .text_size(px(22.0))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .text_color(theme::colors(cx).text_primary)
-                            .child(self.t("settings.title")),
-                    ),
+                    .id("settings-search")
+                    .debug_selector(|| "settings-search".into())
+                    .w_full()
+                    .max_w(px(920.0))
+                    .child(self.search.clone()),
             )
             .child(
                 div()
@@ -686,6 +789,7 @@ impl SettingsFeature {
     /// 分類と中間層は分類専用の行として並べ、ページだけを選べるようにする。
     fn render_nav(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let catalog = settings::catalog();
+        let visible = self.visible_pages();
         div()
             .id("main-settings-nav")
             .debug_selector(|| "main-settings-nav".into())
@@ -694,7 +798,87 @@ impl SettingsFeature {
             .flex()
             .flex_col()
             .gap_1()
-            .when(self.web.is_some(), |nav| {
+            .children(
+                catalog
+                    .categories()
+                    .iter()
+                    .filter(|category| {
+                        category
+                            .groups
+                            .iter()
+                            .any(|group| group.pages.iter().any(|id| visible.contains(id)))
+                    })
+                    .map(|category| {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .px_3()
+                                    .pt_3()
+                                    .pb_1()
+                                    .text_size(px(11.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(theme::colors(cx).text_tertiary)
+                                    .child(self.t(category.label)),
+                            )
+                            .children(
+                                category
+                                    .groups
+                                    .iter()
+                                    .filter(|group| {
+                                        group.pages.iter().any(|id| visible.contains(id))
+                                    })
+                                    .map(|group| {
+                                        div()
+                                            .flex()
+                                            .flex_col()
+                                            .child(
+                                                div()
+                                                    .px_5()
+                                                    .py_1()
+                                                    .text_size(px(11.0))
+                                                    .text_color(theme::colors(cx).text_tertiary)
+                                                    .child(self.t(group.label)),
+                                            )
+                                            .children(
+                                                group
+                                                    .pages
+                                                    .iter()
+                                                    .filter_map(|id| catalog.page(id))
+                                                    .filter(|page| visible.contains(&page.id))
+                                                    .map(|page| {
+                                                        let selected = page.id == self.page;
+                                                        div()
+                                                            .id(page.id)
+                                                            .px_5()
+                                                            .py_2()
+                                                            .rounded(px(6.0))
+                                                            .when(selected, |row| {
+                                                                row.bg(theme::colors(cx)
+                                                                    .button_background_selected)
+                                                            })
+                                                            .hover(|style| {
+                                                                style.bg(theme::colors(cx)
+                                                                    .button_background_hover)
+                                                            })
+                                                            .text_size(px(12.0))
+                                                            .text_color(
+                                                                theme::colors(cx).text_primary,
+                                                            )
+                                                            .child(self.t(page.label))
+                                                            .on_click(cx.listener(
+                                                                move |this, _, _, cx| {
+                                                                    this.select_page(page.id, cx)
+                                                                },
+                                                            ))
+                                                    }),
+                                            )
+                                    }),
+                            )
+                    }),
+            )
+            .when(visible.contains(&"host.web"), |nav| {
                 let selected = self.page == "host.web";
                 nav.child(
                     div()
@@ -703,84 +887,17 @@ impl SettingsFeature {
                         .px_5()
                         .py_2()
                         .rounded(px(6.0))
-                        .bg(if selected {
-                            theme::colors(cx).button_background_selected
-                        } else {
-                            theme::colors(cx).background_primary
+                        .when(selected, |row| {
+                            row.bg(theme::colors(cx).button_background_selected)
                         })
                         .hover(|style| style.bg(theme::colors(cx).button_background_hover))
                         .text_size(px(12.0))
-                        .text_color(if selected {
-                            theme::colors(cx).text_accent
-                        } else {
-                            theme::colors(cx).text_primary
-                        })
+                        .text_color(theme::colors(cx).text_primary)
                         .child(self.t("settings.web.publish-title"))
                         .focusable()
                         .on_click(cx.listener(|this, _, _, cx| this.select_page("host.web", cx))),
                 )
             })
-            .children(catalog.categories().iter().map(|category| {
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .px_3()
-                            .pt_3()
-                            .pb_1()
-                            .text_size(px(11.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(theme::colors(cx).text_tertiary)
-                            .child(self.t(category.label)),
-                    )
-                    .children(category.groups.iter().map(|group| {
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .px_5()
-                                    .py_1()
-                                    .text_size(px(11.0))
-                                    .text_color(theme::colors(cx).text_tertiary)
-                                    .child(self.t(group.label)),
-                            )
-                            .children(
-                                group
-                                    .pages
-                                    .iter()
-                                    .filter_map(|id| catalog.page(id))
-                                    .filter(|page| self.page_available(page))
-                                    .map(|page| {
-                                        let selected = page.id == self.page;
-                                        div()
-                                            .id(page.id)
-                                            .px_5()
-                                            .py_2()
-                                            .rounded(px(6.0))
-                                            .bg(if selected {
-                                                theme::colors(cx).button_background_selected
-                                            } else {
-                                                theme::colors(cx).background_primary
-                                            })
-                                            .hover(|style| {
-                                                style.bg(theme::colors(cx).button_background_hover)
-                                            })
-                                            .text_size(px(12.0))
-                                            .text_color(if selected {
-                                                theme::colors(cx).text_accent
-                                            } else {
-                                                theme::colors(cx).text_primary
-                                            })
-                                            .child(self.t(page.label))
-                                            .on_click(cx.listener(move |this, _, _, cx| {
-                                                this.select_page(page.id, cx)
-                                            }))
-                                    }),
-                            )
-                    }))
-            }))
     }
     fn render_page(&self, page_id: &'static str, cx: &mut Context<Self>) -> gpui::Div {
         if page_id == "host.web" {
@@ -814,8 +931,24 @@ impl SettingsFeature {
                         .child(self.t(description))
                 })),
         );
-        for definition in catalog.settings_of(page.id) {
-            container = container.child(self.render_field(definition, cx));
+        let show_page = self.page_heading_matches_search(page);
+        let fields = catalog
+            .settings_of(page.id)
+            .filter(|definition| show_page || self.field_matches_search(definition))
+            .map(|definition| self.render_field(definition, cx))
+            .collect::<Vec<_>>();
+        if !fields.is_empty() {
+            container = container.child(
+                div()
+                    .w_full()
+                    .p_4()
+                    .rounded(px(8.0))
+                    .bg(theme::colors(cx).background_tertiary)
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(fields),
+            );
         }
         if let Some(edit) = &self.editing
             && catalog
@@ -1146,135 +1279,232 @@ impl SettingsFeature {
     fn render_field(&self, definition: &SettingDefinition, cx: &mut Context<Self>) -> gpui::Div {
         let key = definition.key;
         let current = self.effective_value(definition, cx);
-        let origin = match self.values.origin(key) {
-            Some(scope) => self.t(scope_label(scope)),
-            None => self.t("settings.scope.default"),
-        };
-
-        div()
-            .p_4()
-            .rounded(px(8.0))
-            .border_1()
-            .border_color(theme::colors(cx).border_default)
-            .bg(theme::colors(cx).background_tertiary)
+        let origin = self.values.origin(key).map_or_else(
+            || self.t("settings.scope.default"),
+            |scope| self.t(scope_label(scope)),
+        );
+        let label = div()
+            .w(px(150.0))
+            .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap_3()
-            .child(
+            .gap_1()
+            .text_size(px(13.0))
+            .text_color(theme::colors(cx).text_primary)
+            .child(self.t(definition.label))
+            .children(definition.description.map(|description| {
                 div()
+                    .text_size(px(11.0))
+                    .text_color(theme::colors(cx).text_tertiary)
+                    .child(self.t(description))
+            }));
+        let control = match &definition.control {
+            SettingControl::Choice(_) => {
+                let options = self.options(definition, cx);
+                let selected = options
+                    .iter()
+                    .find(|(value, _)| Some(value) == current.as_ref())
+                    .map(|(_, label)| label.clone())
+                    .unwrap_or_else(|| self.t("settings.value.unset"));
+                let open = self.open_choice == Some(key);
+                let choice_height = px((options.len() as f32 * 34.0).clamp(34.0, 200.0));
+                let keyboard_options = options.clone();
+                let keyboard_current = current.clone();
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
                     .flex()
-                    .items_center()
-                    .justify_between()
-                    .gap_3()
+                    .flex_col()
+                    .gap_1()
                     .child(
                         div()
-                            .text_size(px(13.0))
+                            .id(gpui::SharedString::from(format!(
+                                "settings-choice-{}",
+                                key.as_str()
+                            )))
+                            .debug_selector(move || format!("settings-choice-{}", key.as_str()))
+                            .w_full()
+                            .px_3()
+                            .py_2()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(theme::colors(cx).border_default)
+                            .bg(theme::colors(cx).background_secondary)
+                            .hover(|style| style.bg(theme::colors(cx).button_background_hover))
+                            .cursor_pointer()
+                            .focusable()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .text_size(px(12.0))
                             .text_color(theme::colors(cx).text_primary)
-                            .child(self.t(definition.label)),
+                            .child(selected)
+                            .child(Icon::new(IconName::ChevronDown))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.open_choice = if this.open_choice == Some(key) {
+                                    None
+                                } else {
+                                    Some(key)
+                                };
+                                this.choice_scroll
+                                    .handle()
+                                    .set_offset(gpui::point(px(0.0), px(0.0)));
+                                cx.notify();
+                            }))
+                            .on_key_down(cx.listener(
+                                move |this, event: &gpui::KeyDownEvent, _, cx| {
+                                    if event.keystroke.key == "enter"
+                                        || event.keystroke.key == "space"
+                                    {
+                                        cx.stop_propagation();
+                                        this.open_choice = if this.open_choice == Some(key) {
+                                            None
+                                        } else {
+                                            Some(key)
+                                        };
+                                        this.choice_scroll
+                                            .handle()
+                                            .set_offset(gpui::point(px(0.0), px(0.0)));
+                                        cx.notify();
+                                    } else if event.keystroke.key == "escape"
+                                        && this.open_choice == Some(key)
+                                    {
+                                        cx.stop_propagation();
+                                        this.open_choice = None;
+                                        cx.notify();
+                                    } else if matches!(event.keystroke.key.as_str(), "up" | "down")
+                                        && !keyboard_options.is_empty()
+                                    {
+                                        cx.stop_propagation();
+                                        let index = keyboard_options
+                                            .iter()
+                                            .position(|(value, _)| {
+                                                Some(value) == keyboard_current.as_ref()
+                                            })
+                                            .unwrap_or(0);
+                                        let next = if event.keystroke.key == "down" {
+                                            (index + 1).min(keyboard_options.len() - 1)
+                                        } else {
+                                            index.saturating_sub(1)
+                                        };
+                                        this.choose(key, keyboard_options[next].0.clone(), cx);
+                                    }
+                                },
+                            )),
+                    )
+                    .when(open, |control| {
+                        let choices = div().w_full().flex().flex_col().children(
+                            options
+                                .into_iter()
+                                .enumerate()
+                                .map(|(index, (value, label))| {
+                                    let selected = current.as_ref() == Some(&value);
+                                    div()
+                                        .id(gpui::SharedString::from(format!(
+                                            "{}-{index}",
+                                            key.as_str()
+                                        )))
+                                        .debug_selector(move || format!("{}-{index}", key.as_str()))
+                                        .px_3()
+                                        .py_2()
+                                        .rounded(px(4.0))
+                                        .bg(if selected {
+                                            theme::colors(cx).button_background_selected
+                                        } else {
+                                            theme::colors(cx).background_secondary
+                                        })
+                                        .hover(|style| {
+                                            style.bg(theme::colors(cx).button_background_hover)
+                                        })
+                                        .cursor_pointer()
+                                        .text_size(px(12.0))
+                                        .text_color(theme::colors(cx).text_primary)
+                                        .child(label)
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.open_choice = None;
+                                            this.choose(key, value.clone(), cx);
+                                        }))
+                                }),
+                        );
+                        control.child(div().h(choice_height).child(scroll_viewport(
+                            gpui::SharedString::from(format!("settings-choices-{}", key.as_str())),
+                            ScrollAxis::Vertical,
+                            &self.choice_scroll,
+                            choices,
+                            cx,
+                        )))
+                    })
+                    .into_any_element()
+            }
+            SettingControl::Text => {
+                let value_text = current
+                    .as_ref()
+                    .and_then(|value| value.as_text().map(ToOwned::to_owned))
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| self.t("settings.value.unset"));
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .id(gpui::SharedString::from(format!(
+                                "settings-value-{}",
+                                key.as_str()
+                            )))
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(4.0))
+                            .border_1()
+                            .border_color(theme::colors(cx).border_default)
+                            .bg(theme::colors(cx).background_secondary)
+                            .text_size(px(12.0))
+                            .child(value_text),
                     )
                     .child(
                         div()
-                            .text_size(px(11.0))
+                            .id(gpui::SharedString::from(format!(
+                                "settings-edit-{}",
+                                key.as_str()
+                            )))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(4.0))
+                            .cursor_pointer()
+                            .text_size(px(12.0))
+                            .text_color(theme::colors(cx).text_accent)
+                            .child(self.t("settings.value.edit"))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.begin_text_edit(key, window, cx)
+                            })),
+                    )
+                    .into_any_element()
+            }
+        };
+        div()
+            .w_full()
+            .flex()
+            .items_start()
+            .gap_4()
+            .child(label)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(control)
+                    .child(
+                        div()
+                            .text_size(px(10.0))
                             .text_color(theme::colors(cx).text_tertiary)
                             .child(origin),
                     ),
-            )
-            .children(definition.description.map(|description| {
-                div()
-                    .text_size(px(12.0))
-                    .text_color(theme::colors(cx).text_tertiary)
-                    .child(self.t(description))
-            }))
-            .child(
-                div()
-                    .flex()
-                    .flex_wrap()
-                    .gap_2()
-                    .children(match &definition.control {
-                        SettingControl::Choice(_) => self
-                            .options(definition, cx)
-                            .into_iter()
-                            .enumerate()
-                            .map(|(index, (value, label))| {
-                                let selected = current.as_ref() == Some(&value);
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "{}-{index}",
-                                        key.as_str()
-                                    )))
-                                    .px_3()
-                                    .py_2()
-                                    .rounded(px(6.0))
-                                    .border_1()
-                                    .border_color(if selected {
-                                        theme::colors(cx).text_accent
-                                    } else {
-                                        theme::colors(cx).border_default
-                                    })
-                                    .bg(if selected {
-                                        theme::colors(cx).button_background_selected
-                                    } else {
-                                        theme::colors(cx).background_secondary
-                                    })
-                                    .hover(|style| {
-                                        style.bg(theme::colors(cx).button_background_hover)
-                                    })
-                                    .text_size(px(12.0))
-                                    .text_color(theme::colors(cx).text_primary)
-                                    .child(format!("{} {label}", if selected { "✓" } else { "" }))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.choose(key, value.clone(), cx)
-                                    }))
-                                    .into_any_element()
-                            })
-                            .collect::<Vec<_>>(),
-                        // 候補を持たない値は、保存済みの値を表示し、明示的な編集入口から保存する。
-                        SettingControl::Text => {
-                            let value_text = current
-                                .as_ref()
-                                .and_then(|value| value.as_text().map(ToOwned::to_owned))
-                                .filter(|value| !value.is_empty())
-                                .unwrap_or_else(|| self.t("settings.value.unset"));
-                            vec![
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "settings-value-{}",
-                                        key.as_str()
-                                    )))
-                                    .px_3()
-                                    .py_2()
-                                    .rounded(px(6.0))
-                                    .border_1()
-                                    .border_color(theme::colors(cx).border_default)
-                                    .bg(theme::colors(cx).background_secondary)
-                                    .text_size(px(12.0))
-                                    .text_color(theme::colors(cx).text_primary)
-                                    .child(value_text)
-                                    .into_any_element(),
-                                div()
-                                    .id(gpui::SharedString::from(format!(
-                                        "settings-edit-{}",
-                                        key.as_str()
-                                    )))
-                                    .px_3()
-                                    .py_2()
-                                    .rounded(px(6.0))
-                                    .border_1()
-                                    .border_color(theme::colors(cx).border_default)
-                                    .bg(theme::colors(cx).background_secondary)
-                                    .hover(|style| {
-                                        style.bg(theme::colors(cx).button_background_hover)
-                                    })
-                                    .text_size(px(12.0))
-                                    .text_color(theme::colors(cx).text_accent)
-                                    .child(self.t("settings.value.edit"))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.begin_text_edit(key, window, cx)
-                                    }))
-                                    .into_any_element(),
-                            ]
-                        }
-                    }),
             )
     }
 
@@ -1477,6 +1707,95 @@ mod tests {
     use std::sync::Arc;
 
     struct MemorySettings;
+
+    #[gpui::test]
+    fn search_filters_settings_and_restores_them_when_cleared(cx: &mut gpui::TestAppContext) {
+        let feature = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            cx.new(SettingsFeature::new)
+        });
+        cx.update(|cx| {
+            let search = feature.read(cx).search.clone();
+            search.update(cx, |search, cx| {
+                search.set_text("terminal font size".into(), cx)
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let feature = feature.read(cx);
+            assert_eq!(feature.visible_pages(), vec!["terminal.font"]);
+            let catalog = settings::catalog();
+            let size = catalog
+                .settings_of("terminal.font")
+                .find(|field| field.key == settings::TERMINAL_FONT_SIZE)
+                .unwrap();
+            let family = catalog
+                .settings_of("terminal.font")
+                .find(|field| field.key == settings::TERMINAL_FONT_FAMILY)
+                .unwrap();
+            assert!(feature.field_matches_search(size));
+            assert!(!feature.field_matches_search(family));
+        });
+        cx.update(|cx| {
+            let search = feature.read(cx).search.clone();
+            search.update(cx, |search, cx| {
+                search.set_text("no-such-setting-xyz".into(), cx)
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|cx| assert!(feature.read(cx).visible_pages().is_empty()));
+        cx.update(|cx| {
+            let search = feature.read(cx).search.clone();
+            search.update(cx, |search, cx| search.set_text(String::new(), cx));
+        });
+        cx.run_until_parked();
+        cx.update(|cx| assert!(feature.read(cx).visible_pages().len() > 1));
+    }
+
+    #[cfg(debug_assertions)]
+    #[gpui::test]
+    fn custom_choice_opens_and_saves_a_value(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            SettingsCoordinator::init(settings, cx);
+        });
+        let (feature, visual) = cx.add_window_view(|_, cx| SettingsFeature::new(cx));
+        let expected = visual.update(|_, cx| {
+            feature.update(cx, |feature, cx| {
+                let definition = settings::catalog()
+                    .settings_of("appearance.theme")
+                    .next()
+                    .unwrap();
+                feature.options(definition, cx)[1].0.clone()
+            })
+        });
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        assert!(visual.debug_bounds("settings-search").is_some());
+        let choice = visual
+            .debug_bounds("settings-choice-ui.theme")
+            .expect("theme choice");
+        visual.simulate_click(choice.center(), gpui::Modifiers::none());
+        visual.update(|window, cx| {
+            window.refresh();
+            window.draw(cx).clear();
+        });
+        let option = visual.debug_bounds("ui.theme-1").expect("second theme");
+        visual.simulate_click(option.center(), gpui::Modifiers::none());
+        feature.read_with(visual, |feature, _| assert!(feature.open_choice.is_none()));
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                feature.read(cx).values.value(settings::UI_THEME),
+                Some(&expected)
+            )
+        });
+    }
 
     #[cfg(debug_assertions)]
     #[gpui::test]
@@ -1827,6 +2146,11 @@ mod tests {
             visual.debug_bounds("main-settings-nav").is_some(),
             "settings navigation missing"
         );
+        visual.update(|window, cx| {
+            feature.read(cx).nav_scroll.handle().scroll_to_bottom();
+            window.refresh();
+            window.draw(cx).clear();
+        });
         let button = visual
             .debug_bounds("settings-host-web")
             .expect("Web navigation");

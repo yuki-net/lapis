@@ -61,6 +61,12 @@ impl SearchInput {
         cx.emit(SearchInputEvent::Changed(self.text.clone()));
         cx.notify();
     }
+    pub(crate) fn set_placeholder(&mut self, placeholder: String, cx: &mut Context<Self>) {
+        if self.placeholder != placeholder {
+            self.placeholder = placeholder;
+            cx.notify();
+        }
+    }
     fn replace(&mut self, range: Range<usize>, text: &str, cx: &mut Context<Self>) {
         let text = text.replace(['\r', '\n'], " ");
         self.text.replace_range(range.clone(), &text);
