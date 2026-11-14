@@ -80,32 +80,32 @@ Tailscale の候補は、Tailscale と確認できるインターフェースま
 
 Tailscale アドレスの `http://` はブラウザー上では secure context ではなく、Clipboard API や WebGPU などが利用できない場合があります。WebGPU が使えない場合は `?backend=webgl` を指定してください（例: `http://<host>/?backend=webgl#/invite?token=<token>`）。`#` より後ろに足すと token が壊れるため、必ず `#` の前のクエリ部分へ追加します。通信は Tailscale の経路で保護されますが、Web サーバー自体は TLS を提供しません。localhost はブラウザー上の扱いが異なります。
 
-1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます。
+1. `Run Host` を押し、コンソールで `pair-user` を打って token を控えます（1時間・1回限り）。
 2. `Run Web` を押すと、bridge のログに `open http://127.0.0.1:4747/` が出ます。その URL を開きます。接続先と token は URL に含まれません。
-3. 初回は一覧が空なので、ログインフォームに Host URL（bridge の `ws://127.0.0.1:4757/remote`）、Workspace ID（接続情報の `workspace_id` か Host ログの `workspace=`）、手順1の pairing token を入力します。
-4. 接続すると `/<host>/<workspace>` のパスで Workspace が開き、credential がブラウザーの `localStorage` に保存されます。次回は一覧から選ぶか、同じ URL を開くだけで接続できます。
+3. ブラウザーの入力欄は招待リンクだけです。`http://127.0.0.1:4747/#/invite?token=<token>` の形で、手順1の token から招待リンクを作って貼り付けます。Host URL・Workspace ID・pairing token を個別に入力する欄はありません。接続先の WebSocket は開いたページと同じ入口から解決し、Workspace は Host が決めます。
+4. token は読み取り後に URL から消えます。接続すると `/<host>/<workspace>` のパスで Workspace が開き、credential がブラウザーの `localStorage` に保存されます。次回は一覧から選ぶか、同じ URL を開くだけで接続できます。
 
 `?demo=1` を付けると Host なしのサンプル Workspace で UI だけを確認できます。
 
-Desktop からは設定 → 接続 → Web 接続で、いま使える候補（この端末 / LAN / Tailscale）を選び、ページ URL と Host URL をコピーできます。ページ URL は「ブラウザーで開く」の対象で、Host URL はログインフォームへ入力する URL です（ブラウザーで開く対象ではありません）。アドレスは保存されず表示のたびに集め直すため、Tailscale の IP が変わっても開き直せば現在の値になります。
+Desktop からは設定 → 接続 → Web 接続で、いま使える候補（この端末 / LAN / Tailscale）を選び、ページ URL と Host URL をコピーできます。公開を開始すると「招待リンクをコピー」で `#/invite?token=<token>` 形式の URL を取得でき、これをブラウザーで開くか入力欄へ貼り付けます。Host URL と Workspace ID は表示と確認用で、ログインの入力には使いません。アドレスは保存されず表示のたびに集め直すため、Tailscale の IP が変わっても開き直せば現在の値になります。
 
 ### ポートの決め方
 
 | 用途 | 値 | 理由 |
 | --- | --- | --- |
-| ページ | `4747` 固定 | ブラウザーで開く URL。バインドに失敗したら明示的に終了する |
-| bridge | `4757` 固定 | ログインフォームに入力する URL |
+| ページと WebSocket | `4747` 固定 | `Run Web (Bridge)` は `--listen 127.0.0.1:4747 --dist clients/web/dist` で同じ入口から両方を配信する。ブラウザーはこの URL だけを開く |
+| bridge 単体の既定 | `4757` | `--listen` を省いたときの待受。ページと別プロセス・別ポートに分ける場合に使う |
 | Host | `4787` 固定 | Desktop の保存済み profile と Workspace ID が変わらないようにする |
 
-bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4757`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。
+bridge は CLI 引数、環境変数、既定値の順に設定を解決します。`--listen` / `--origin` を省くと `LAPIS_WEB_BRIDGE_LISTEN`（既定 `127.0.0.1:4757`）と `LAPIS_WEB_BRIDGE_ORIGIN`（既定 `http://127.0.0.1:4747`）を使います。`Run Web (Bridge)` は `--dist` を渡してページと WebSocket を `4747` の同一入口にまとめるため、この既定ポートは使いません。
 
 外部公開は `--host`（ページ）と `--allow-remote`（bridge）で行います。
 
 - `lapis-web --host` は `0.0.0.0:4747` で待ち受けます。
 - `web-bridge --allow-remote` は `0.0.0.0:4757` で待ち受けます。`--listen` を併用した場合は明示したアドレスを使います。
 - Host を `0.0.0.0` で起動した場合、bridge は接続情報の `0.0.0.0` をこのマシン自身として `127.0.0.1` に読み替えます。
-- bridge は Origin がリクエストの Host と同じホスト名なら許可するため、IP やホスト名が変わっても同じページから接続できます。
-- `--origin` を指定した場合は、その Origin も追加で許可します。
+- bridge に `--dist` を渡してページも配信する場合、Origin はリクエストの Host とスキーム・ポートまで含めて照合します（`--origin` より優先）。
+- `--dist` を渡さずページを別プロセスで配る場合、bridge は Origin がリクエストの Host と同じホスト名なら許可するため、IP やホスト名が変わっても同じページから接続できます。`--origin` を指定した場合は、その Origin も追加で許可します。
 
 外部公開時は起動ログに接続候補が出ます。
 
