@@ -359,7 +359,6 @@ impl ExtensionLoader {
             .get(id)
             .cloned()
             .ok_or_else(|| PackageError::Malformed(format!("目録に {id} がない")))?;
-        let backup = swap_path(catalog.root(), id);
         // 退避より先に記録する。退避したまま落ちても回復が実体を戻せるようにするため。
         crate::journal::begin(
             catalog.root(),
@@ -367,39 +366,34 @@ impl ExtensionLoader {
             PendingOperation::Remove,
             Some(entry.clone()),
         )?;
-        if let Err(error) = backup_removal(catalog, id) {
-            let _ = crate::journal::finish(catalog.root(), id);
-            return Err(error);
-        }
-        if let Err(error) = crate::journal::advance(catalog.root(), id, PendingPhase::BackedUp) {
-            // 段階を記録できないまま進むと、回復が退避を認識できない。実体を戻して失敗する。
-            let restored = fs::rename(&backup, catalog.installed_directory(id)?);
-            if restored.is_ok() {
-                let _ = crate::journal::finish(catalog.root(), id);
+        let result = (|| -> Result<(), PackageError> {
+            backup_removal(catalog, id)?;
+            crate::journal::advance(catalog.root(), id, PendingPhase::BackedUp)?;
+            catalog.register(ExtensionEntry::new(
+                entry.id.clone(),
+                entry.version,
+                ExtensionState::unavailable(),
+            ))?;
+            crate::journal::advance(catalog.root(), id, PendingPhase::Swapped)?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                remove_directory(&swap_path(catalog.root(), id))?;
+                crate::journal::finish(catalog.root(), id)?;
+                Ok(())
             }
-            return Err(PackageError::Catalog(error));
-        }
-        if let Err(error) = catalog.register(ExtensionEntry::new(
-            entry.id.clone(),
-            entry.version,
-            ExtensionState::unavailable(),
-        )) {
-            // 目録を書けなかった。退避した実体を戻す。
-            if fs::rename(&backup, catalog.installed_directory(id)?).is_err() {
-                eprintln!(
-                    "拡張 {id} の実体を戻せませんでした。退避先は {} に残っています",
-                    backup.display()
-                );
-                // 記録を残し、次の起動で回復させる。
-                return Err(PackageError::Catalog(error));
+            Err(error) => {
+                // 導入と同じ回復経路に委ねる。段階に応じて実体と宣言を操作前へ戻す。
+                // 回復に失敗したら記録を残し、次の起動で再試行する。
+                if crate::journal::recover_locked(catalog).is_err() {
+                    eprintln!(
+                        "拡張 {id} の中断した除去を回復できませんでした。次の起動で再試行します"
+                    );
+                }
+                Err(error)
             }
-            crate::journal::finish(catalog.root(), id)?;
-            return Err(PackageError::Catalog(error));
         }
-        crate::journal::advance(catalog.root(), id, PendingPhase::Swapped)?;
-        remove_directory(&backup)?;
-        crate::journal::finish(catalog.root(), id)?;
-        Ok(())
     }
 }
 

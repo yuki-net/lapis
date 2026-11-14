@@ -989,6 +989,70 @@ fn removing_a_package_keeps_the_files_when_the_catalog_write_fails() {
 }
 
 #[test]
+fn a_removal_interrupted_before_the_catalog_write_restores_the_files() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let package = write_package(workspace.path(), "terminal.lapis", &manifest, files);
+    let loader = loader();
+    loader.install(&mut catalog, &package, true).unwrap();
+
+    // 実体を退避した直後、目録を書く前に落ちた状態を作る。
+    let installed = catalog
+        .installed_directory(&id("dev.example.terminal"))
+        .unwrap();
+    let backup = workspace
+        .path()
+        .join("extensions")
+        .join(".swap")
+        .join("dev.example.terminal");
+    std::fs::create_dir_all(backup.parent().unwrap()).unwrap();
+    std::fs::rename(&installed, &backup).unwrap();
+    std::fs::write(
+        workspace.path().join("extensions").join("journal.json"),
+        serde_json::to_vec(&json!({
+            "schema": 1,
+            "pending": [{
+                "id": "dev.example.terminal",
+                "operation": "remove",
+                "phase": "backed_up",
+                "previous": {
+                    "id": "dev.example.terminal",
+                    "version": "0.2.0",
+                    "installed": true,
+                    "enabled": true,
+                    "incompatible": false,
+                },
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    drop(catalog);
+
+    let mut recovered = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    extensions_entry::recover_pending_installs(&mut recovered).unwrap();
+    let entry = recovered.get(&id("dev.example.terminal")).unwrap();
+    assert!(entry.state.is_installed(), "除去の中断は宣言を戻す");
+    assert_eq!(
+        std::fs::read(
+            recovered
+                .installed_directory(&id("dev.example.terminal"))
+                .unwrap()
+                .join("extension.wasm")
+        )
+        .unwrap(),
+        b"\0asm",
+        "退避した実体を戻す"
+    );
+    assert!(!backup.exists());
+}
+
+#[test]
 fn removing_a_package_keeps_the_extension_data() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
