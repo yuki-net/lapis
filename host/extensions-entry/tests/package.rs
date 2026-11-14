@@ -814,6 +814,7 @@ fn an_interrupted_install_right_after_the_catalog_write_restores_the_old_version
                 "id": "dev.example.terminal",
                 "operation": "install",
                 "phase": "catalog_written",
+                "target_existed": true,
                 "previous": {
                     "id": "dev.example.terminal",
                     "version": "0.2.0",

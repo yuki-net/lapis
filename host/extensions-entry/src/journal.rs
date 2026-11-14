@@ -77,6 +77,12 @@ pub struct PendingInstall {
     /// 操作前の宣言。取り消すときに戻す。`None` は目録に無かった（新規）。
     #[serde(default)]
     pub previous: Option<ExtensionEntry>,
+    /// 操作の開始時に `installed/<id>/` があったか。
+    ///
+    /// rollback で実体を消してよいかの判断にだけ使う。開始時に無かった実体は、中断した
+    /// 導入が置いた新しいものだけである。あった実体は、宣言が無くても勝手に消さない。
+    #[serde(default)]
+    pub target_existed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,6 +123,7 @@ pub(crate) fn begin(
     operation: PendingOperation,
     previous: Option<ExtensionEntry>,
 ) -> Result<(), ExtensionCatalogError> {
+    let target_existed = resolve_existing(root, id)?.is_dir();
     let mut pending = load(root)?;
     pending.insert(
         id.clone(),
@@ -125,9 +132,21 @@ pub(crate) fn begin(
             operation,
             phase: PendingPhase::Prepared,
             previous,
+            target_existed,
         },
     );
     store(root, &pending)
+}
+
+/// `installed/<id>/` を、目録を開かずに解決する。
+fn resolve_existing(
+    root: &Path,
+    id: &ExtensionPackageId,
+) -> Result<PathBuf, ExtensionCatalogError> {
+    if ExtensionPackageId::try_new(id.as_str()).is_err() {
+        return Err(ExtensionCatalogError::InvalidEntry);
+    }
+    Ok(root.join("installed").join(id.as_str()))
 }
 
 /// 操作の段階を進める。記録が無ければ何もしない（完了済み）。
@@ -203,6 +222,11 @@ fn apply(
                     fs::remove_dir_all(&target).map_err(ExtensionCatalogError::Io)?;
                 }
                 move_directory(&backup, &target)?;
+            } else if !record.target_existed && target.is_dir() {
+                // 開始時に実体が無く、退避も無い。`target` にあるのは中断した導入が
+                // 置いた新しい実体だけである（`place` 後、`swapped` 記録前）。
+                // 宣言を戻すだけでは孤児として残るので、実体も消す。
+                fs::remove_dir_all(&target).map_err(ExtensionCatalogError::Io)?;
             }
             restore_declaration(catalog, id, record.previous.clone())?;
         }
@@ -515,13 +539,28 @@ mod tests {
         // 退避した直後、段階を `backed_up` へ進める前に落ちた状態。
         begin_install(catalog.root(), "a", Some(entry("a", true)));
         advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
+        // 実際の導入は目録を先に新版へ書き、その後に退避する。ここでも新版の宣言を
+        // 書いてから退避し、「目録は新版・実体は旧版」の中断を作る。
+        catalog
+            .register(ExtensionEntry::new(
+                id("a"),
+                ExtensionVersion::parse("0.2.0").unwrap(),
+                ExtensionState::installed(true),
+            ))
+            .unwrap();
         let backup = swap_path(catalog.root(), &id("a"));
         fs::create_dir_all(backup.parent().unwrap()).unwrap();
         fs::rename(&installed, &backup).unwrap();
         // 段階は `catalog_written` のまま。
 
         recover(&mut catalog).unwrap();
-        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
+        let restored = catalog.get(&id("a")).unwrap();
+        assert_eq!(
+            restored.version,
+            ExtensionVersion::parse("0.1.0").unwrap(),
+            "新版の宣言を旧版へ戻す"
+        );
+        assert!(restored.state.is_installed());
         assert_eq!(
             fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
             b"old"
@@ -590,6 +629,84 @@ mod tests {
         assert_eq!(
             fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
             b"old"
+        );
+    }
+
+    #[test]
+    fn a_crash_after_placing_the_first_version_removes_the_orphan_files() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        // 初回導入で `place` まで進み、`swapped` を記録する前に落ちた状態。
+        catalog.register(entry("a", true)).unwrap();
+        begin_install(catalog.root(), "a", None);
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
+        advance(catalog.root(), &id("a"), PendingPhase::BackedUp).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"new").unwrap();
+
+        recover(&mut catalog).unwrap();
+        assert!(catalog.get(&id("a")).is_none(), "宣言を残さない");
+        assert!(
+            !catalog.installed_directory(&id("a")).unwrap().exists(),
+            "置いたばかりの実体を孤児として残さない"
+        );
+    }
+
+    #[test]
+    fn a_crash_after_placing_an_upgrade_restores_the_old_version() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+
+        // 目録を新版へ書き、旧版を退避し、新版を置いたが `swapped` を記録する前に落ちた。
+        catalog
+            .register(ExtensionEntry::new(
+                id("a"),
+                ExtensionVersion::parse("0.2.0").unwrap(),
+                ExtensionState::installed(true),
+            ))
+            .unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
+        let backup = swap_path(catalog.root(), &id("a"));
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::rename(&installed, &backup).unwrap();
+        advance(catalog.root(), &id("a"), PendingPhase::BackedUp).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"new").unwrap();
+
+        recover(&mut catalog).unwrap();
+        let restored = catalog.get(&id("a")).unwrap();
+        assert_eq!(restored.version, ExtensionVersion::parse("0.1.0").unwrap());
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old",
+            "置いたばかりの新版ではなく、退避した旧版を戻す"
+        );
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn rollback_does_not_delete_files_that_existed_before_the_operation() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        // 目録に載っていないが実体だけある directory（手動配置など）。
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"kept").unwrap();
+        catalog.register(entry("a", true)).unwrap();
+        // 開始時に実体があったことを記録したうえで、`place` 前に落ちる。
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+
+        recover(&mut catalog).unwrap();
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"kept",
+            "開始時からある実体を rollback が消さない"
         );
     }
 
@@ -712,6 +829,7 @@ mod tests {
                     operation: PendingOperation::Install,
                     phase: PendingPhase::BackedUp,
                     previous: Some(entry("a", true)),
+                    target_existed: true,
                 },
             )]),
         )
