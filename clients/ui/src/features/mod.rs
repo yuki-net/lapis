@@ -1,4 +1,5 @@
-use crate::extension_ui::{FeatureDescriptor, FeatureRegistry};
+use crate::extension_ui::FeatureRegistry;
+use extension_ui_contract::FeatureDescriptor;
 
 pub(crate) mod command_search;
 pub(crate) mod conversation;
@@ -86,10 +87,10 @@ pub fn bundled_registry() -> FeatureRegistry {
     let descriptors = vec![
         FeatureDescriptor::core(id::FEATURE_SHELL)
             .contributes(
-                crate::extension_ui::UiContribution::panel_view(
+                extension_ui_contract::UiContribution::panel_view(
                     id::VIEW_NOTIFICATIONS,
-                    crate::extension_ui::ZonePosition::Right,
-                    [crate::extension_ui::ZonePosition::Right],
+                    extension_ui_contract::ZonePosition::Right,
+                    [extension_ui_contract::ZonePosition::Right],
                     "view.notifications",
                     "problems",
                     0,
@@ -97,77 +98,77 @@ pub fn bundled_registry() -> FeatureRegistry {
                 .hidden_in_picker(),
             )
             .contributes(
-                crate::extension_ui::UiContribution::settings_view(
+                extension_ui_contract::UiContribution::settings_view(
                     id::VIEW_SETTINGS,
                     "view.settings",
                     "settings",
                 )
                 .feature_owned_scroll(),
             )
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_TOGGLE_PANEL_CONTROLS,
                 "command.toggle-panel-controls",
                 "panel",
                 40,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_WORKBENCH_IDE,
                 "command.workbench-ide",
                 "panel",
                 41,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_WORKBENCH_AGENT,
                 "command.workbench-agent",
                 "panel",
                 42,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_BIND_VIEW_SHARED,
                 "command.bind-view-shared",
                 "panel",
                 43,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_BIND_VIEW_TASK,
                 "command.bind-view-task",
                 "panel",
                 44,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_ACCEPT_REMOTE_WORKBENCH,
                 "command.accept-remote-workbench",
                 "panel",
                 45,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_RETRY_LOCAL_WORKBENCH,
                 "command.retry-local-workbench",
                 "panel",
                 46,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_TOGGLE_BOTTOM_ZONE,
                 "command.toggle-bottom-zone",
                 "bottom-panel",
                 50,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_TOGGLE_LEFT_ZONE,
                 "command.toggle-left-zone",
                 "left-panel",
                 51,
             ))
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_TOGGLE_RIGHT_ZONE,
                 "command.toggle-right-zone",
                 "right-panel",
                 52,
             )),
         FeatureDescriptor::core(id::FEATURE_COMMAND_SEARCH).contributes(
-            crate::extension_ui::UiContribution::view(
+            extension_ui_contract::UiContribution::view(
                 id::VIEW_COMMAND_SEARCH,
-                crate::extension_ui::UiSlot::SideDock,
+                extension_ui_contract::UiSlot::SideDock,
                 "view.command-search",
                 "search",
                 5,
@@ -194,11 +195,11 @@ pub fn bundled_registry() -> FeatureRegistry {
         descriptors.push(
             FeatureDescriptor::bundled(
                 id::FEATURE_DEVTOOLS,
-                [crate::extension_ui::ActivationCondition::OnCommand(
+                [extension_ui_contract::ActivationCondition::OnCommand(
                     id::COMMAND_TOGGLE_DEVTOOL.into(),
                 )],
             )
-            .contributes(crate::extension_ui::UiContribution::command(
+            .contributes(extension_ui_contract::UiContribution::command(
                 id::COMMAND_TOGGLE_DEVTOOL,
                 "command.dev.toggle-devtool",
                 "search",
@@ -218,8 +219,9 @@ pub fn bundled_registry() -> FeatureRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension_ui::{
-        ActivationEvent, CommandId, PanelScrollPolicy, ScrollAxis, UiSlot, ViewId, ZonePosition,
+    use crate::extension_ui::ActivationEvent;
+    use extension_ui_contract::{
+        CommandId, PanelScrollPolicy, ScrollAxis, UiSlot, ViewId, ZonePosition,
     };
 
     #[test]
@@ -272,7 +274,7 @@ mod tests {
         // Terminal だけをタブ単位の個体にする。他の Tool は単一実体を共有する。
         assert_eq!(
             policy(id::VIEW_TERMINAL),
-            crate::extension_ui::ToolInstancePolicy::Multiple
+            extension_ui_contract::ToolInstancePolicy::Multiple
         );
         for view in [
             id::VIEW_FILES,
@@ -288,7 +290,7 @@ mod tests {
         ] {
             assert_eq!(
                 policy(view),
-                crate::extension_ui::ToolInstancePolicy::Shared,
+                extension_ui_contract::ToolInstancePolicy::Shared,
                 "{view}"
             );
         }
@@ -367,7 +369,7 @@ mod tests {
     fn settings_view_is_available_only_in_main_panel() {
         let registry = bundled_registry();
         let contribution = registry
-            .zone_contributions(crate::extension_ui::ZonePosition::Main)
+            .zone_contributions(extension_ui_contract::ZonePosition::Main)
             .into_iter()
             .find(|contribution| {
                 contribution
@@ -379,11 +381,11 @@ mod tests {
 
         assert_eq!(
             contribution.allowed_zones,
-            [crate::extension_ui::ZonePosition::Main]
+            [extension_ui_contract::ZonePosition::Main]
         );
         assert!(
             registry
-                .zone_contributions(crate::extension_ui::ZonePosition::Left)
+                .zone_contributions(extension_ui_contract::ZonePosition::Left)
                 .into_iter()
                 .all(|candidate| candidate
                     .view

@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use acp_contract::ACP_RUNNER;
 use editor_core::ExecutionId;
 use local_fs::atomic_json_write;
 use notify::Watcher;
@@ -21,6 +22,8 @@ use task_runner::{
     CodexExecutionSpec, ExecutionStatus, RunnerUpdate, TaskBackend, TaskControl, TaskError,
     TaskEvent, TaskRecord, run_codex_app_server,
 };
+
+use local_acp::{AcpAgentSpec, AcpUpdate, opencode_spec, run_acp_session};
 
 #[derive(Clone)]
 pub struct LocalTaskBackend {
@@ -146,6 +149,7 @@ impl TaskBackend for LocalTaskBackend {
                 prompt: record.task.prompt.clone(),
                 workspace_root: record.execution.workspace_root.clone(),
                 mode: record.execution.mode,
+                runner: Some(record.execution.runner.clone()),
             },
         };
         let spec_path = self.spec_path(&record.execution.id);
@@ -234,36 +238,68 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
     });
 
     let mut last_persist = Instant::now();
-    let run_result = run_codex_app_server(&spec.runner, control_rx, |update| {
-        let urgent = match update {
-            RunnerUpdate::Status(status) => {
-                record.set_status(status);
-                true
-            }
-            RunnerUpdate::Event(event) => {
-                let urgent = matches!(
-                    event,
-                    TaskEvent::InputRequested { .. }
-                        | TaskEvent::ApprovalRequested { .. }
-                        | TaskEvent::Error { .. }
-                );
-                record.push_event(event);
-                urgent
-            }
-            RunnerUpdate::ExternalThread(id) => {
-                record.execution.external_thread_id = Some(id);
-                true
-            }
-            RunnerUpdate::Failure(message) => {
-                record.execution.failure = Some(message);
-                true
-            }
+    let runner_id = spec.runner.runner.as_deref();
+    let run_result = if is_acp_runner_id(runner_id) {
+        let acp_spec = AcpAgentSpec {
+            executable: opencode_spec(),
+            prompt: spec.runner.prompt.clone(),
+            workspace_root: spec.runner.workspace_root.clone(),
         };
-        if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
-            let _ = backend.persist_record(&record);
-            last_persist = Instant::now();
+        let mut persist_error = None;
+        let result = run_acp_session(&acp_spec, control_rx, |update| {
+            let urgent = apply_acp_update(&mut record, update);
+            if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
+                // 保存失敗は最後にまとめて返す。途中では実行を止めない。
+                if let Err(error) = backend.persist_record(&record) {
+                    persist_error.get_or_insert(error);
+                }
+                last_persist = Instant::now();
+            }
+        })
+        .map_err(|error| TaskError::new(error.to_string()));
+        match (result, persist_error) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Some(error)) => Err(error),
+            (Ok(()), None) => Ok(()),
         }
-    });
+    } else if is_codex_runner_id(runner_id) {
+        run_codex_app_server(&spec.runner, control_rx, |update| {
+            let urgent = match update {
+                RunnerUpdate::Status(status) => {
+                    record.set_status(status);
+                    true
+                }
+                RunnerUpdate::Event(event) => {
+                    let urgent = matches!(
+                        event,
+                        TaskEvent::InputRequested { .. }
+                            | TaskEvent::ApprovalRequested { .. }
+                            | TaskEvent::Error { .. }
+                    );
+                    record.push_event(event);
+                    urgent
+                }
+                RunnerUpdate::ExternalThread(id) => {
+                    record.execution.external_thread_id = Some(id);
+                    true
+                }
+                RunnerUpdate::Failure(message) => {
+                    record.execution.failure = Some(message);
+                    true
+                }
+            };
+            if urgent || last_persist.elapsed() >= Duration::from_millis(75) {
+                let _ = backend.persist_record(&record);
+                last_persist = Instant::now();
+            }
+        })
+    } else {
+        // 未知の runner を別の実行系として起動しない。記録と実行を一致させる。
+        Err(TaskError::new(format!(
+            "未対応の runner です: {}",
+            spec.runner.runner.as_deref().unwrap_or("(default)")
+        )))
+    };
     finished.store(true, Ordering::Relaxed);
     let _ = poller.join();
     if let Err(error) = &run_result {
@@ -272,11 +308,49 @@ pub fn run_task_worker(spec_path: &Path) -> Result<(), TaskError> {
             message: error.to_string(),
         });
         record.set_status(ExecutionStatus::Failed);
+        // 失敗時の保存まで失敗したら、開始仕様を残して再実行の手掛かりにする。
+        backend.persist_record(&record)?;
+    } else {
+        // 正常終了でも、終端状態の保存成功を確認してから完了とする。
         backend.persist_record(&record)?;
     }
     let _ = fs::remove_file(spec_path);
     let _ = fs::remove_file(backend.control_path(&execution_id));
     run_result
+}
+
+/// 実行系の識別子から分岐する。ACP でも Codex でもない識別子は起動しない。
+fn is_acp_runner_id(runner: Option<&str>) -> bool {
+    runner == Some(ACP_RUNNER)
+}
+
+fn is_codex_runner_id(runner: Option<&str>) -> bool {
+    matches!(runner, None | Some("codex-app-server"))
+}
+
+fn apply_acp_update(record: &mut TaskRecord, update: AcpUpdate) -> bool {
+    match update {
+        AcpUpdate::Status(status) => {
+            record.set_status(status);
+            true
+        }
+        AcpUpdate::Event(event) => {
+            let urgent = matches!(
+                event,
+                TaskEvent::ApprovalRequested { .. } | TaskEvent::Error { .. }
+            );
+            record.push_event(event);
+            urgent
+        }
+        AcpUpdate::ExternalThread(id) => {
+            record.execution.external_thread_id = Some(id);
+            true
+        }
+        AcpUpdate::Failure(message) => {
+            record.execution.failure = Some(message);
+            true
+        }
+    }
 }
 
 fn default_codex_executable() -> PathBuf {
@@ -301,3 +375,149 @@ fn configure_detached_process(command: &mut Command) {
 
 #[cfg(not(windows))]
 fn configure_detached_process(_command: &mut Command) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use editor_core::{ConversationId, TaskId};
+    use task::{Execution, Task};
+
+    fn record() -> TaskRecord {
+        let task_id = TaskId::new("task-acp");
+        TaskRecord::new(
+            Task {
+                id: task_id.clone(),
+                conversation_id: ConversationId::new("conversation-acp"),
+                title: "agent".to_owned(),
+                prompt: "hi".to_owned(),
+                created_at_ms: 1,
+            },
+            Execution {
+                id: ExecutionId::new("execution-acp"),
+                task_id,
+                workspace_id: editor_core::WorkspaceId::new("workspace-acp"),
+                workspace_root: PathBuf::from("workspace"),
+                runner: ACP_RUNNER.to_owned(),
+                mode: task::TaskMode::Default,
+                status: ExecutionStatus::Queued,
+                started_at_ms: None,
+                completed_at_ms: None,
+                external_thread_id: None,
+                failure: None,
+            },
+        )
+    }
+
+    #[test]
+    fn acp_status_and_thread_updates_reach_the_record() {
+        let mut record = record();
+        assert!(apply_acp_update(
+            &mut record,
+            AcpUpdate::ExternalThread("ses-1".to_owned())
+        ));
+        assert!(apply_acp_update(
+            &mut record,
+            AcpUpdate::Status(ExecutionStatus::Running)
+        ));
+        assert_eq!(
+            record.execution.external_thread_id.as_deref(),
+            Some("ses-1")
+        );
+        assert_eq!(record.execution.status, ExecutionStatus::Running);
+        assert!(record.execution.started_at_ms.is_some());
+    }
+
+    #[test]
+    fn acp_message_chunks_become_displayable_events() {
+        let mut record = record();
+        apply_acp_update(
+            &mut record,
+            AcpUpdate::Event(TaskEvent::MessageDelta {
+                text: "pong".to_owned(),
+            }),
+        );
+        assert_eq!(record.events.len(), 1);
+        assert_eq!(record.events[0].event.display_text(), "pong");
+
+        // 連続する delta は1件のイベントへ合成される。
+        apply_acp_update(
+            &mut record,
+            AcpUpdate::Event(TaskEvent::MessageDelta {
+                text: "!".to_owned(),
+            }),
+        );
+        assert_eq!(record.events.len(), 1);
+        assert_eq!(record.events[0].event.display_text(), "pong!");
+    }
+
+    #[test]
+    fn acp_approval_requests_are_persisted_immediately() {
+        let mut record = record();
+        let urgent = apply_acp_update(
+            &mut record,
+            AcpUpdate::Event(TaskEvent::ApprovalRequested {
+                request_id: "call-1".to_owned(),
+                summary: "write file".to_owned(),
+            }),
+        );
+        assert!(urgent);
+        assert!(matches!(
+            record.events[0].event,
+            TaskEvent::ApprovalRequested { .. }
+        ));
+    }
+
+    #[test]
+    fn acp_failures_are_recorded_on_the_execution() {
+        let mut record = record();
+        assert!(apply_acp_update(
+            &mut record,
+            AcpUpdate::Failure("boom".to_owned())
+        ));
+        assert_eq!(record.execution.failure.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn only_the_acp_runner_selects_the_acp_path() {
+        assert_eq!(record().execution.runner, ACP_RUNNER);
+        assert_ne!(record().execution.runner, "codex-app-server");
+    }
+
+    #[test]
+    fn unknown_runners_do_not_fall_back_to_codex() {
+        assert!(!is_acp_runner_id(Some("acp-opencod")));
+        assert!(!is_codex_runner_id(Some("acp-opencod")));
+
+        assert!(is_codex_runner_id(Some("codex-app-server")));
+        assert!(is_codex_runner_id(None));
+    }
+
+    #[test]
+    fn a_typo_of_the_acp_runner_is_not_treated_as_acp() {
+        assert!(is_acp_runner_id(Some(ACP_RUNNER)));
+        assert!(!is_codex_runner_id(Some(ACP_RUNNER)));
+    }
+
+    /// 未知の runner は Codex でも ACP でもないため、開始仕様から分岐できない。
+    #[test]
+    fn an_unknown_runner_selects_no_execution_path() {
+        let spec = worker_spec("acp-opencod");
+        let runner_id = spec.runner.runner.as_deref();
+        assert!(!is_acp_runner_id(runner_id));
+        assert!(!is_codex_runner_id(runner_id));
+    }
+
+    fn worker_spec(runner: &str) -> TaskWorkerSpec {
+        TaskWorkerSpec {
+            root: PathBuf::from("tasks"),
+            record: record(),
+            runner: CodexExecutionSpec {
+                executable: PathBuf::from("agent"),
+                prompt: "hi".to_owned(),
+                workspace_root: PathBuf::from("workspace"),
+                mode: task::TaskMode::Default,
+                runner: Some(runner.to_owned()),
+            },
+        }
+    }
+}

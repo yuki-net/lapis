@@ -1,7 +1,5 @@
-use crate::{
-    extension_ui::{FeatureDescriptor, UiContribution, UiSlot},
-    features::id,
-};
+use crate::features::id;
+use extension_ui_contract::{FeatureDescriptor, UiContribution, UiSlot};
 
 mod state;
 mod view_state;

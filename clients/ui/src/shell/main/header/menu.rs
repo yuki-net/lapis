@@ -185,7 +185,7 @@ mod tests {
 
     fn setup(cx: &mut TestAppContext) -> (gpui::Entity<Shell>, &mut VisualTestContext) {
         cx.add_window_view(|_, cx| {
-            theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let document = cx.new(|_| Empty);
             Shell::new(document.into(), HashMap::new(), cx)
         })

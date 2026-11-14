@@ -1,12 +1,11 @@
 [package]
-name = "terminal"
+name = "terminal-contract"
 version.workspace = true
 edition.workspace = true
 description.workspace = true
 license.workspace = true
 
 [dependencies]
-editor-core = { path = "../editor-core" }
 futures-channel = "0.3"
 serde.workspace = true
 

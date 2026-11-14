@@ -1,4 +1,8 @@
-//! Hostが所有するTerminal状態とClientへ公開する共通Model。
+//! Terminal 拡張の契約。Host が所有する Terminal 状態と Client へ公開する共通 Model、
+//! および PTY 実装が満たす `TerminalBackend` port の正本。
+//!
+//! Terminal の型・port はこの crate だけが定義する。参照側は crate 名 `terminal`
+//! （package `terminal-contract`）で依存し、`contracts/domain` へ正本を戻さない。
 
 use std::{collections::BTreeMap, fmt, path::PathBuf};
 

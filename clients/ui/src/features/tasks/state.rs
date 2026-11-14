@@ -1,12 +1,12 @@
 use crate::timer::Timer;
 use crate::{
     client_adapter::{ClientWorker, ResponseGate},
-    components::ScrollState,
+    components::{ScrollState, SearchInput, SearchInputEvent},
     theme,
 };
 use desktop_client::TaskSession;
 use editor_core::{ExecutionId, WorkspaceId};
-use gpui::Context;
+use gpui::{Context, Entity, Subscription, prelude::*};
 use std::{sync::Arc, time::Duration};
 use task::{ExecutionStatus, TaskControl, TaskMode, TaskSnapshot};
 pub(crate) struct TasksFeature {
@@ -24,14 +24,24 @@ pub(crate) struct TasksFeature {
     pub(super) message: String,
     message_from_refresh: bool,
     pub(super) scroll_states: TaskScrollStates,
+    /// agent へ送る prompt の入力欄。Task とは独立した表示状態。
+    input: Entity<SearchInput>,
+    prompt: String,
+    _input_subscription: Subscription,
 }
 pub(super) struct TaskScrollStates {
     pub(super) task_list: ScrollState,
     pub(super) task_events: ScrollState,
 }
 impl TasksFeature {
-    pub(crate) fn new(session: TaskSession, _cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(session: TaskSession, cx: &mut Context<Self>) -> Self {
         let backend = session.backend();
+        let input = cx.new(|cx| SearchInput::new("エージェントへ指示…", cx));
+        let _input_subscription = cx.subscribe(&input, |this, _, event, cx| {
+            let SearchInputEvent::Changed(prompt) = event;
+            this.prompt = prompt.clone();
+            cx.notify();
+        });
         Self {
             worker: ClientWorker::new(session),
             backend,
@@ -50,7 +60,15 @@ impl TasksFeature {
                 task_list: ScrollState::new(),
                 task_events: ScrollState::new(),
             },
+            input,
+            prompt: String::new(),
+            _input_subscription,
         }
+    }
+
+    /// prompt 入力欄。Feature が所有し、Shell は描画に使うだけ。
+    pub(super) fn prompt_input(&self) -> Entity<SearchInput> {
+        self.input.clone()
     }
     pub(crate) fn set_conversation(&mut self, conversation: editor_core::ConversationId) {
         if self.conversation.as_ref() != Some(&conversation) {
@@ -179,6 +197,26 @@ impl TasksFeature {
         })
         .detach();
     }
+    /// 入力欄の prompt を ACP 経由のエージェントへ送る。
+    pub(super) fn start_agent_task(&mut self, cx: &mut Context<Self>) {
+        let prompt = self.prompt.trim().to_owned();
+        if prompt.is_empty() {
+            self.message = "指示を入力してください".to_owned();
+            self.message_from_refresh = false;
+            cx.notify();
+            return;
+        }
+        self.operation(
+            move |session, workspace| {
+                session
+                    .start_agent(workspace, prompt, TaskMode::Default)
+                    .map(Some)
+                    .map_err(|error| error.to_string())
+            },
+            cx,
+        );
+    }
+
     pub(super) fn start_codex_task(
         &mut self,
         mode: TaskMode,

@@ -19,7 +19,7 @@ pub fn run(session: EditorSession, services: DesktopServices, initial_view: Init
         .run(move |cx: &mut App| {
             let settings = services.settings.settings();
             crate::theme::init(
-                &crate::extension_ui::ThemeId::new(settings.theme().to_owned()),
+                &extension_ui_contract::ThemeId::new(settings.theme().to_owned()),
                 settings.syntax_theme(),
                 cx,
             );

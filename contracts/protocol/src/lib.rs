@@ -18,6 +18,7 @@ mod document;
 mod envelope;
 mod error;
 mod event;
+mod extensions;
 mod files;
 mod handshake;
 mod host;
@@ -60,6 +61,7 @@ pub use error::{
     WORKSPACE_UNAVAILABLE,
 };
 pub use event::EventBody;
+pub use extensions::{HostExtension, HostExtensionsListRequest, HostExtensionsListResponse};
 pub use files::{
     CreateDirectoryRequest, CreateDirectoryResponse, FileTreeEntry, FileTreeKind, FileTreeRequest,
     FileTreeResponse,

@@ -25,10 +25,8 @@ pub fn unregister_preset(cx: &mut ::gpui::App, id: &KeymapId) -> Result<(), Stri
     })
 }
 
-use crate::{
-    extension_ui::{CommandId, KeymapId},
-    features::id,
-};
+use crate::features::id;
+use extension_ui_contract::{CommandId, KeymapId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyBindingDefinition {

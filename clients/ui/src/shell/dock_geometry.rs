@@ -7,7 +7,7 @@ use super::PanelDrop;
 use super::panel_layout::Axis;
 use super::panel_layout::{EdgeCandidate, PanelEdge, insertion_edges, nearest_edge};
 use super::{DockLayout, PanelId};
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct DockRect {

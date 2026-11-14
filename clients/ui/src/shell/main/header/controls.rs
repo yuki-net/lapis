@@ -50,12 +50,12 @@ impl gpui::RenderOnce for PanelToggleIcon {
     }
 }
 
-pub(crate) fn open_panel_icon(position: crate::extension_ui::ZonePosition) -> PanelToggleIcon {
+pub(crate) fn open_panel_icon(position: extension_ui_contract::ZonePosition) -> PanelToggleIcon {
     let position = match position {
-        crate::extension_ui::ZonePosition::Left => ZonePosition::Left,
-        crate::extension_ui::ZonePosition::Bottom => ZonePosition::Bottom,
-        crate::extension_ui::ZonePosition::Right => ZonePosition::Right,
-        crate::extension_ui::ZonePosition::Main => ZonePosition::Left,
+        extension_ui_contract::ZonePosition::Left => ZonePosition::Left,
+        extension_ui_contract::ZonePosition::Bottom => ZonePosition::Bottom,
+        extension_ui_contract::ZonePosition::Right => ZonePosition::Right,
+        extension_ui_contract::ZonePosition::Main => ZonePosition::Left,
     };
     PanelToggleIcon::new(position, PanelState::Open)
 }

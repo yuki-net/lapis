@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::extension_ui::{IconId, IconThemeId};
+use extension_ui_contract::{IconId, IconThemeId};
 
 pub mod id {
     pub const MENU: &str = "ui.menu";

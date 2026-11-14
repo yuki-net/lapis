@@ -172,7 +172,10 @@ impl TaskOperations {
                     .as_ref()
                     .map(|tree| tree.path.clone())
                     .unwrap_or_else(|| root.to_owned()),
-                runner: "codex-app-server".to_owned(),
+                runner: input
+                    .runner
+                    .clone()
+                    .unwrap_or_else(|| "codex-app-server".to_owned()),
                 mode: input.mode,
                 status: ExecutionStatus::Queued,
                 started_at_ms: None,
@@ -224,6 +227,11 @@ impl TaskOperations {
 /// Task 開始要求を、副作用のない範囲で検証する。
 pub fn validate_start(input: &TaskStart) -> Result<(), TaskStateError> {
     if input.prompt.trim().is_empty() {
+        return Err(TaskStateError::Denied);
+    }
+    if let Some(runner) = &input.runner
+        && runner.len() > 64
+    {
         return Err(TaskStateError::Denied);
     }
     require_safe_id(input.conversation_id.as_str())
@@ -303,6 +311,7 @@ mod tests {
             mode: task::TaskMode::Plan,
             isolated,
             conversation_id: editor_core::ConversationId::new("conversation-1"),
+            runner: None,
         }
     }
 

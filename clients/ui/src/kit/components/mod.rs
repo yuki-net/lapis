@@ -10,8 +10,8 @@ mod search_input;
 mod separator;
 mod surface;
 
-pub(crate) use crate::extension_ui::ScrollAxis;
 pub(crate) use empty_state::{panel_empty_state, panel_empty_state_element};
+pub(crate) use extension_ui_contract::ScrollAxis;
 pub(crate) use floating::{floating_panel, floating_tree};
 pub(crate) use icon::{FileIcon, FileIconId, Icon, IconAssets, IconName};
 pub(crate) use icon_button::{ButtonSize, action_button, button, header_button, icon_button};

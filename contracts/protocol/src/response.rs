@@ -31,6 +31,8 @@ pub enum ResponseBody {
     HostWebStart(crate::HostWebStatus),
     #[serde(rename = "host.web.stop")]
     HostWebStop(crate::HostWebStatus),
+    #[serde(rename = "host.extensions.list")]
+    HostExtensions(crate::HostExtensionsListResponse),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentCloseResponse),
     #[serde(rename = "files.create_directory")]
@@ -112,6 +114,7 @@ impl ResponseBody {
             Self::HostWebStatus(_) => Some("host.web.status"),
             Self::HostWebStart(_) => Some("host.web.start"),
             Self::HostWebStop(_) => Some("host.web.stop"),
+            Self::HostExtensions(_) => Some("host.extensions.list"),
             Self::DocumentRelocate(_) => Some("document.relocate"),
             Self::CreateDirectory(_) => Some("files.create_directory"),
             Self::DocumentInspect(_) => Some("document.inspect"),

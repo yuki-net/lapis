@@ -144,6 +144,7 @@ mod tests {
             mode: TaskMode::Plan,
             isolated: false,
             conversation_id: ConversationId::new("conversation-1"),
+            runner: None,
         }
     }
     fn task(status: ExecutionStatus) -> TaskSnapshot {

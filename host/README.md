@@ -15,7 +15,7 @@ Lapisの状態・実行・外部環境への接続を扱う実装領域です。
 
 - `application/`：操作判断とユースケース。
 - `runtime/`：Workspace 等の正規状態と実行リソースの寿命。
-- `infrastructure/`：ファイルシステム、Git CLI、PTY、Agent、永続化の具体実装。
+- `infrastructure/`：ファイルシステム、Git CLI、PTY、Agent、永続化の具体実装。自己完結した拡張の実装は `extensions/<機能>/` に置く。
 - `transport/`：認証と通信経路。独立した正規状態を作らない。
 - `host/`：Runtime と具体実装の組み立て、Desktop向けport、実行リソースの起動・終了。Desktop の接続を破棄しても Host 自体は終了しない。
 

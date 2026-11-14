@@ -88,7 +88,7 @@ mod tests {
     #[gpui::test]
     fn action_buttons_do_not_install_hover_styles_twice(test_cx: &mut gpui::TestAppContext) {
         test_cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let _ = action_button("primary", true, cx);
             let _ = action_button("secondary", false, cx);
         });

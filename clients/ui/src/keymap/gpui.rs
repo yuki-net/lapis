@@ -54,7 +54,7 @@ fn resolved_bindings(registry: &crate::keymap::KeymapRegistry) -> Result<Vec<Key
     let mut split_defaults = std::collections::HashSet::new();
     macro_rules! command_binding {
         ($primary:expr, $action:expr, $context:expr, $id:expr) => {{
-            let id = crate::extension_ui::CommandId::new($id);
+            let id = extension_ui_contract::CommandId::new($id);
             let resolved = registry.bindings_for(&id);
             let layer = registry.binding_layer(&id);
             if !$primary { split_defaults.insert(id.clone()); }

@@ -256,7 +256,7 @@ impl WorkbenchState {
 
     pub(crate) fn hidden_views(
         &self,
-    ) -> std::collections::HashSet<crate::extension_ui::ViewInstanceId> {
+    ) -> std::collections::HashSet<extension_ui_contract::ViewInstanceId> {
         self.bindings
             .iter()
             .filter_map(|(view, scope)| match scope {
@@ -264,7 +264,7 @@ impl WorkbenchState {
                     if self.mode == WorkbenchMode::Agent
                         && self.selected_task.as_ref() != Some(task) =>
                 {
-                    Some(crate::extension_ui::ViewInstanceId::new(view.0.clone()))
+                    Some(extension_ui_contract::ViewInstanceId::new(view.0.clone()))
                 }
                 _ => None,
             })
@@ -273,11 +273,11 @@ impl WorkbenchState {
 
     pub(crate) fn retained_views(
         &self,
-    ) -> std::collections::HashSet<crate::extension_ui::ViewInstanceId> {
+    ) -> std::collections::HashSet<extension_ui_contract::ViewInstanceId> {
         self.bindings
             .iter()
             .filter(|(_, scope)| !matches!(scope, ViewScope::Task(_)))
-            .map(|(view, _)| crate::extension_ui::ViewInstanceId::new(view.0.clone()))
+            .map(|(view, _)| extension_ui_contract::ViewInstanceId::new(view.0.clone()))
             .collect()
     }
 
@@ -340,11 +340,9 @@ mod tests {
     #[test]
     fn ordered_panel_layouts_keep_view_identity_across_tasks_modes_and_restart() {
         use crate::features::conversation::{apply_view_state, capture_view_state};
-        use crate::{
-            extension_ui::ZonePosition,
-            shell::{PanelDrop, PanelEdge, PanelTab, ShellState},
-        };
+        use crate::shell::{PanelDrop, PanelEdge, PanelTab, ShellState};
         use desktop_client::DocumentTab;
+        use extension_ui_contract::ZonePosition;
 
         fn fixture(name: &str, direction: PanelEdge) -> (ConversationViewState, DocumentTab) {
             let document = DocumentTab {
@@ -530,7 +528,7 @@ mod tests {
         let mut layout = crate::shell::DockLayout::default();
         layout
             .open_tab(
-                crate::extension_ui::ZonePosition::Main,
+                extension_ui_contract::ZonePosition::Main,
                 crate::shell::PanelTab::tool_instance("fixture", format!("instance-{tool}")),
             )
             .unwrap();
@@ -746,8 +744,8 @@ mod tests {
 
     #[test]
     fn task_scope_filters_presentation_while_shared_follow_and_resource_keep_identity() {
-        use crate::extension_ui::ZonePosition;
         use crate::shell::{PanelTab, ShellState};
+        use extension_ui_contract::ZonePosition;
         let a = ConversationId::new("task-a");
         let b = ConversationId::new("task-b");
         let mut state = WorkbenchState::default();

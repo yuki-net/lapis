@@ -162,7 +162,7 @@ impl Preset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension_ui::ThemeId;
+    use extension_ui_contract::ThemeId;
 
     #[test]
     fn five_families_have_ten_scoped_palettes() {
@@ -207,7 +207,7 @@ mod tests {
         test_cx: &mut gpui::TestAppContext,
     ) {
         test_cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let original = super::super::active_id(cx);
             for (family, _) in FAMILIES {
                 let previous_ui = super::super::active_id(cx);
@@ -239,7 +239,7 @@ mod tests {
     #[gpui::test]
     fn custom_light_theme_uses_light_syntax_palette(test_cx: &mut gpui::TestAppContext) {
         test_cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let original = super::super::active_id(cx);
             let custom_id = ThemeId::new("test.light.syntax");
             let colors = super::super::colors(cx);

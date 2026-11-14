@@ -12,10 +12,10 @@ editor-core = { path = "../../contracts/domain/editor-core" }
 client-api = { path = "../../contracts/protocol" }
 document = { path = "../../contracts/domain/document" }
 text = { path = "../../contracts/domain/text" }
-terminal = { path = "../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workbench = { path = "../../contracts/domain/workbench" }
 workbench-state = { path = "../workbench" }
-terminal-state = { path = "../terminal" }
+terminal-state = { path = "../../extensions/terminal/host" }
 document-state = { path = "../documents" }
 workspace-state = { path = "../workspaces" }
 auth-state = { path = "../auth" }

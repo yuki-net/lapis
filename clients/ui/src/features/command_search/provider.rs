@@ -1,8 +1,5 @@
-use crate::{
-    extension_ui::{CommandId, FeatureRegistry, UiSlot},
-    keymap::KeymapRegistry,
-    localization::Localizer,
-};
+use crate::{extension_ui::FeatureRegistry, keymap::KeymapRegistry, localization::Localizer};
+use extension_ui_contract::{CommandId, UiSlot};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SearchItem {

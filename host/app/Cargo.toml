@@ -19,10 +19,11 @@ task = { path = "../../contracts/domain/task" }
 process = { path = "../../contracts/domain/process" }
 editor-core = { path = "../../contracts/domain/editor-core" }
 backend-state = { path = "../runtime" }
+extensions-entry = { path = "../extensions-entry" }
 client-api = { path = "../../contracts/protocol" }
 platform = { path = "../adapters/local" }
 local-process = { path = "../adapters/process" }
-terminal = { path = "../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 remote = { path = "../transport/remote" }
 wire = { path = "../../contracts/transport/wire" }
 tokio = { workspace = true, features = ["signal"] }

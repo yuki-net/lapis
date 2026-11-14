@@ -20,14 +20,14 @@ mod tests {
     use gpui::rgb;
 
     use super::*;
-    use crate::extension_ui::ThemeId;
+    use extension_ui_contract::ThemeId;
 
     #[gpui::test]
     fn registered_theme_can_be_activated_without_changing_token_callers(
         test_cx: &mut gpui::TestAppContext,
     ) {
         test_cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let original_id = active_id(cx);
             let original_colors = colors(cx);
 

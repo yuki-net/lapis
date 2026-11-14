@@ -47,6 +47,40 @@ class TestPathRouting(unittest.TestCase):
     def test_desktop_path_runs_desktop(self):
         self.assertIn("desktop", jobs_for_paths(["clients/desktop/app/src/main.rs"]))
 
+    def test_extension_paths_run_both_backends(self):
+        """ACP などの拡張は Host と Client の両方から参照するため両方の job を実行する。"""
+        self.assertEqual(
+            jobs_for_paths(["host/extensions/acp/src/session.rs"]),
+            {"rust_core", "host", "desktop"},
+        )
+        self.assertEqual(
+            jobs_for_paths(["extensions/acp/contract/src/lib.rs"]),
+            {"rust_core", "host", "desktop", "web"},
+        )
+
+    def test_terminal_extension_runs_only_the_surfaces_it_affects(self):
+        """Terminal 拡張は契約と実装で影響する surface が分かれる。"""
+        # 契約は Client からも参照するため wasm を含む Web も検証する。
+        self.assertEqual(
+            jobs_for_paths(["extensions/terminal/contract/src/lib.rs"]),
+            {"rust_core", "host", "desktop", "web"},
+        )
+        # Host 状態サービスと PTY 実装は wasm でビルドしないため Web を除外する。
+        for path in (
+            "extensions/terminal/host/src/lib.rs",
+            "extensions/terminal/adapter/src/lib.rs",
+            "extensions/terminal/adapter/Cargo.toml",
+        ):
+            self.assertEqual(
+                jobs_for_paths([path]), {"rust_core", "host", "desktop"}, path
+            )
+
+    def test_terminal_extension_non_contract_paths_stay_off_web(self):
+        """契約以外の拡張ファイルは wasm ビルドの対象外として扱う。"""
+        self.assertEqual(
+            jobs_for_paths(["extensions/terminal/README.md"]), {"rust_core", "host", "desktop"}
+        )
+
     def test_ui_path_runs_desktop_and_web(self):
         """clients/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
         for path in ("clients/ui/src/shell/layout.rs", "clients/ui/assets/themes/dark.json"):
@@ -65,12 +99,24 @@ class TestPathRouting(unittest.TestCase):
             "contracts/protocol/src/lib.rs",
             "contracts/transport/wire/src/lib.rs",
             "contracts/domain/document/src/lib.rs",
+            "contracts/domain/extension-ui/src/lib.rs",
         ):
             self.assertIn("web", jobs_for_paths([path]), path)
 
     def test_host_internal_path_runs_only_host(self):
         self.assertEqual(jobs_for_paths(["host/app/src/main.rs"]), {"host"})
         self.assertEqual(jobs_for_paths(["host/app/src/terminal.rs"]), {"host"})
+
+    def test_host_readme_runs_only_repository(self):
+        """Host の README は記述だけなので、コードの job を起こさない。"""
+        self.assertEqual(jobs_for_paths(["host/README.md"]), {"repository"})
+
+    def test_deleted_host_crate_paths_stay_in_the_rust_surfaces(self):
+        """移動で消えた旧 path でも全 job を起こさない。"""
+        for path in ("host/terminal/src/lib.rs", "host/adapters/terminal/src/lib.rs"):
+            self.assertEqual(
+                jobs_for_paths([path]), {"rust_core", "host", "desktop"}, path
+            )
 
     def test_host_public_boundary_runs_desktop(self):
         for path in (
