@@ -13,19 +13,24 @@ const RESERVED_IDENTIFIERS: [&str; 3] = ["catalog.json", "data", "installed"];
 /// package が宣言する拡張の識別子。配置 directory 名にそのまま使う。
 ///
 /// 大文字を許さないのは、case を区別しないファイルシステムで別 ID が同じ
-/// directory を指すのを避けるため。`/`・`\`・`..` なども受け付けない。
+/// directory を指すのを避けるため。末尾の `.` を許さないのは、Windows が path の
+/// 各要素から末尾の `.` を取り除くため。`/`・`\`・`..` なども受け付けない。
 pub struct ExtensionPackageId(String);
 
 impl ExtensionPackageId {
     pub fn try_new(value: impl Into<String>) -> Result<Self, InvalidExtensionPackageId> {
         let value = value.into();
+        // 末尾の `.` を拒否する。Windows は path の各要素から末尾の `.` と空白を
+        // 取り除いて扱うため、`a.` と `a` が同じ directory を指してしまう。配置先は
+        // ID をそのまま directory 名にするので、ここで断つ。`.` と `..` も
+        // 末尾 `.` に含まれる。空白は許可する文字に含まれないため、末尾の空白は
+        // この条件より前に弾かれる。
         if value.is_empty()
             || value.len() > MAX_ID_BYTES
             || !value
                 .bytes()
                 .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_'))
-            || value == "."
-            || value == ".."
+            || value.ends_with('.')
             || RESERVED_IDENTIFIERS.contains(&value.as_str())
         {
             return Err(InvalidExtensionPackageId);
@@ -61,7 +66,7 @@ impl fmt::Display for InvalidExtensionPackageId {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "extension package ID must be 1 to {MAX_ID_BYTES} lowercase ASCII bytes (a-z, 0-9, '.', '-', '_')"
+            "extension package ID must be 1 to {MAX_ID_BYTES} lowercase ASCII bytes (a-z, 0-9, '.', '-', '_') without a trailing '.'"
         )
     }
 }
@@ -109,8 +114,29 @@ mod tests {
         assert!(ExtensionPackageId::try_new("a".repeat(MAX_ID_BYTES + 1)).is_err());
     }
 
+    /// Windows は path の各要素から末尾の `.` を取り除くため、`a.` と `a` が同じ
+    /// directory を指す。配置先は ID をそのまま directory 名にするので、末尾 `.` を
+    /// 受け入れると別の拡張が同じ場所を共有してしまう。
+    #[test]
+    fn ids_with_a_trailing_dot_are_rejected_on_every_platform() {
+        for value in ["a.", "a..", "dev.example.terminal.", "1.", "a.b."] {
+            assert!(
+                ExtensionPackageId::try_new(value).is_err(),
+                "must reject trailing dot: {value:?}"
+            );
+        }
+        // 末尾以外の `.` は区切りとして使い続けられる。
+        for value in ["a.b", "a-b", "a_b", "a.1", "1.a"] {
+            assert!(
+                ExtensionPackageId::try_new(value).is_ok(),
+                "must accept {value:?}"
+            );
+        }
+    }
+
     #[test]
     fn deserialization_rejects_invalid_ids() {
         assert!(serde_json::from_str::<ExtensionPackageId>(r#""Bad/Id""#).is_err());
+        assert!(serde_json::from_str::<ExtensionPackageId>(r#""a.""#).is_err());
     }
 }
