@@ -216,6 +216,33 @@ class ArchitectureTests(unittest.TestCase):
         ])
         self.assertEqual(check(self.metadata, {}), [])
 
+    def test_extension_role_directories_keep_their_layer(self):
+        """自己完結した拡張でも `host` は runtime、`adapter` は infrastructure として検査する。"""
+        self.metadata["workspace_members"].extend(
+            ["terminal-contract", "terminal-state", "local-terminal"]
+        )
+        self.metadata["packages"].extend([
+            package("terminal-contract", "extensions/terminal/contract"),
+            package("terminal-state", "extensions/terminal/host", ["terminal-contract"]),
+            package(
+                "local-terminal",
+                "extensions/terminal/adapter",
+                ["terminal-contract"],
+            ),
+        ])
+        self.assertEqual(check(self.metadata, {}), [])
+
+    def test_extension_contract_cannot_depend_on_host_state(self):
+        self.metadata["workspace_members"].extend(["terminal-contract", "terminal-state"])
+        self.metadata["packages"].extend([
+            package("terminal-contract", "extensions/terminal/contract", ["terminal-state"]),
+            package("terminal-state", "extensions/terminal/host"),
+        ])
+        self.assertIn(
+            "terminal-contract -> terminal-state",
+            "\n".join(check(self.metadata, {})),
+        )
+
     def test_desktop_ui_cannot_depend_on_infrastructure(self):
         self.metadata["workspace_members"].append("infra")
         self.metadata["packages"].append(package("infra", "host/adapters/local"))

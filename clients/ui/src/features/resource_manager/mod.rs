@@ -1,7 +1,6 @@
-use crate::{
-    client_adapter::ClientWorker,
-    extension_ui::{ActivationCondition, FeatureDescriptor, UiContribution, UiSlot, ViewId},
-    features::id,
+use crate::{client_adapter::ClientWorker, features::id};
+use extension_ui_contract::{
+    ActivationCondition, FeatureDescriptor, UiContribution, UiSlot, ViewId,
 };
 use process::{ProcessKind, ProcessOrigin, ProcessRoot, ProcessRootId, ProcessSnapshot};
 

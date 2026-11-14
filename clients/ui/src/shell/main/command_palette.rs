@@ -76,7 +76,7 @@ impl Shell {
 
     pub(crate) fn execute_command(
         &mut self,
-        command: crate::extension_ui::CommandId,
+        command: extension_ui_contract::CommandId,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {

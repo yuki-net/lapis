@@ -25,10 +25,10 @@ mod syntax;
 mod widths;
 use canvas::{EditorElement, EditorLineLayout};
 
-pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
-    use crate::extension_ui::UiContribution;
+pub(super) fn descriptor() -> extension_ui_contract::FeatureDescriptor {
+    use extension_ui_contract::UiContribution;
 
-    crate::extension_ui::FeatureDescriptor::core(id::FEATURE_EDITOR)
+    extension_ui_contract::FeatureDescriptor::core(id::FEATURE_EDITOR)
         .contributes(UiContribution::command(
             id::COMMAND_NEW_DOCUMENT,
             "command.new-document",
@@ -67,10 +67,10 @@ pub(super) fn descriptor() -> crate::extension_ui::FeatureDescriptor {
         ))
 }
 
-pub(super) fn rust_descriptor() -> crate::extension_ui::FeatureDescriptor {
-    crate::extension_ui::FeatureDescriptor::bundled(
+pub(super) fn rust_descriptor() -> extension_ui_contract::FeatureDescriptor {
+    extension_ui_contract::FeatureDescriptor::bundled(
         id::FEATURE_RUST,
-        [crate::extension_ui::ActivationCondition::OnLanguage(
+        [extension_ui_contract::ActivationCondition::OnLanguage(
             "rust".into(),
         )],
     )

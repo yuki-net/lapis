@@ -9,17 +9,17 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
 | `clients/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
+| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
-| `extensions/terminal/contract/` | Terminal 拡張の契約（Terminal の型・wire DTO・`TerminalBackend` port の正本） | PTY 実装、Host の状態所有、Client の画面構成 |
+| `extensions/terminal/` | Terminal 拡張の自己完結した実装。`contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` は Host の正規状態、`adapter/` は PTY 実装 | 拡張の外に置くターミナル固有の実装、Client の画面構成 |
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
 | `host/workbench/` | Workbench の wire 境界・容量検証・永続化 port | 画面描画、Workspace の正規状態全体 |
-| `host/terminal/` | Terminal の正規状態・画面差分・接続 session | PTY の具体実装、画面描画 |
 | `host/documents/` | Document 資源・未保存状態・snapshot | ファイル I/O、Workspace の正規状態全体 |
-| `host/adapters/` | FS、PTY、LSP、runner、検索、永続化 | 画面の判断 |
+| `host/adapters/` | FS、LSP、runner、検索、永続化 | 画面の判断 |
 | `host/extensions/git/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
 | `host/extensions/acp/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
 | `host/extensions-entry/` | 拡張の入口（導入済み拡張の目録・状態、package と拡張データの置き場所） | `.lapis` package の読み込み・互換照合・署名検証、画面の判断 |
@@ -39,13 +39,15 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 - ID は `contracts/domain/editor-core` に集約する（`ProjectId` / `WorkspaceId` / `ConversationId` / `DocumentId` / `TaskId` / `ExecutionId`）。複数機能が同じ ID を参照するため、機能別 crate へ分散させない。
 - 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
 - 拡張へ自己完結させる機能は、型・port を自分の contract crate が正本として持つ。Terminal は `extensions/terminal/contract` が型・wire DTO・`TerminalBackend` port を所有し、`contracts/domain/terminal` は置かない。実装を移す前後で正本が二重にならないよう、移動は正本の移送と同じ PR で完結させる。
-- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*` と `host/extensions/*` が持つ。
+- 自己完結した拡張は `extensions/<機能>/` の下を役割ディレクトリで分ける。`contract/` は契約、`host/` は Host 側の正規状態、`adapter/` は OS に触れる具体実装、`assets/` は拡張が配布する固定データを置く。役割を追加するときは、その領域の README に「誰が何を判断するために置くか」を書いてから増やす。層の意味は拡張の中でも変えない（`host/` は runtime、`adapter/` は infrastructure として依存検査する）。
+- Terminal の Host 実装は Host の build 時にリンクして注入する。`host/adapters/terminal` のような旧位置には re-export を置かない。旧位置と新位置の両方が実装を持つと正本が読めなくなるため、参照側の Cargo 依存を新しい配置へ向けるだけにする。
+- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*`、`host/extensions/*`、および自己完結した拡張の `extensions/<機能>/host` / `extensions/<機能>/adapter` が持つ。
 - 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
 
 ### `host/application` を独立させない
 
 - 操作の判断は `host/runtime`（`state` / `operations` / `state/*`）が持ち、`runtime` を application とみなす。`host/application` は作らない。
-- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/workbench` / `host/terminal` / `host/documents` / `host/workspaces` として既に切り出している。
+- 理由: 判断と正規状態が同じ lock と寿命を共有しており、crate を分けると状態の受け渡しだけの層が増える。実際の境界は `host/workbench` / `extensions/terminal/host` / `host/documents` / `host/workspaces` として既に切り出している。
 - 将来、外部 I/O を伴わない純粋な判断が増え、`runtime` から独立した寿命を持つ場合だけ再検討する。
 
 ### Runtime を分割しない
@@ -178,7 +180,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の共通Tab操作
 
-- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
+- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `contracts/domain/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `clients/ui` 側で所有する。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - タブは種類ごとの単一実体ではなく、個体（`ViewInstanceId`）ごとの実体として扱う。`UiContribution`の複数起動方針で個体化するか単一実体を共有するかを決める。Terminalは`multiple_instances`で個体化し、2つ目のタブは新しいSessionを起動する。同じDocumentは`DocumentId`で同一タブを指すため、開き直しは複製せず既存タブの選択になる。状態を持たない単一表示のToolは共有実体のままとする。

@@ -2,7 +2,6 @@ use crate::{
     app::{ConnectionIdentity, DesktopServices, InitialView},
     client_adapter::{ClientSnapshot, ClientWorker, DocumentClient, PersistedView},
     commands::UiCommand,
-    extension_ui::{ViewId, ZonePosition},
     features::{
         self,
         command_search::{
@@ -25,6 +24,7 @@ use crate::{
     workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
 };
 use desktop_client::EditorSession;
+use extension_ui_contract::{ViewId, ZonePosition};
 use gpui::{
     AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
 };

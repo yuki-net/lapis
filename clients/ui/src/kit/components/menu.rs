@@ -328,7 +328,7 @@ mod tests {
     ) {
         cx.update(|cx| {
             for id in ["lapis.dark", "lapis.white"] {
-                theme::init(&crate::extension_ui::ThemeId::new(id), None, cx);
+                theme::init(&extension_ui_contract::ThemeId::new(id), None, cx);
                 let colors = theme::colors(cx);
                 let mut spec = MenuItemSpec {
                     id: "selection".into(),
@@ -370,7 +370,7 @@ mod tests {
     #[gpui::test]
     fn width_tracks_longest_entry_trailing_content_padding_and_viewport(cx: &mut TestAppContext) {
         let (fixture, visual) = cx.add_window_view(|_, cx| {
-            theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             Fixture {
                 label: "Tiny".into(),
                 shortcut: None,

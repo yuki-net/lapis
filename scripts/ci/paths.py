@@ -26,6 +26,9 @@ PATH_RULES = [
     (["patches/gpui-"], {"desktop"}),
     
     # Host関連
+    # 領域の README はコード変更ではないため repository だけで検証する
+    # （未分類のままだと全 job が走る）。
+    (["host/README.md"], {"repository"}),
     # Desktopが直接利用する公開境界は両surfaceを検証する。
     (["host/app/Cargo.toml", "host/app/src/lib.rs", "host/app/src/client.rs", "host/app/src/profile.rs"], {"host", "desktop"}),
     (["host/app/"], {"host"}),
@@ -38,6 +41,9 @@ PATH_RULES = [
     (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
     (["host/application/"], {"rust_core", "host", "desktop"}),
+    # 上記より狭い規則に当たらない Host 配下（削除された crate の path を含む）。
+    # 未分類のままにすると全 job が走るため、Host の面へ割り当てる。
+    (["host/"], {"rust_core", "host", "desktop"}),
     
     # Contracts / Client transport
     (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
@@ -47,6 +53,10 @@ PATH_RULES = [
 
     # Extensions
     # 拡張の contract は Client からも参照するため両surfaceを検証する。
+    # Terminal 拡張は役割ごとに影響する surface が異なるため、契約と実装を分ける。
+    # （実装は PTY を含み wasm でビルドしない）
+    (["extensions/terminal/contract/"], {"rust_core", "host", "desktop", "web"}),
+    (["extensions/terminal/"], {"rust_core", "host", "desktop"}),
     (["extensions/"], {"rust_core", "host", "desktop", "web"}),
     
     # Mobile

@@ -1,6 +1,6 @@
-use crate::{
-    extension_ui::{ActivationCondition, FeatureDescriptor, UiContribution, UiSlot, ViewId},
-    features::id,
+use crate::features::id;
+use extension_ui_contract::{
+    ActivationCondition, FeatureDescriptor, UiContribution, UiSlot, ViewId,
 };
 
 mod branch_picker;

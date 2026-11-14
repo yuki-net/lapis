@@ -1323,6 +1323,7 @@ mod reachability_tests {
     use super::*;
     use desktop_client::GitSession;
     use editor_core::{TaskId, WorkspaceId};
+    use extension_ui_contract::ThemeId;
     use git::{GitDiffSnapshot, GitRepositorySnapshot, GitSnapshot, WorktreeSnapshot};
 
     struct Backend;
@@ -1469,9 +1470,7 @@ mod reachability_tests {
 
     #[gpui::test]
     fn every_git_operation_stays_reachable_from_the_new_layout(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (feature, visual) = cx.add_window_view(|_, cx| feature(cx));
         visual.simulate_resize(gpui::size(px(1000.), px(1100.)));
         feature.update(visual, |feature, cx| {
@@ -1535,9 +1534,7 @@ mod reachability_tests {
 
     #[gpui::test]
     fn command_output_is_collapsed_by_default_and_opens_on_demand(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (feature, visual) = cx.add_window_view(|_, cx| {
             let mut feature = feature(cx);
             feature.snapshot.output = (0..120)
@@ -1573,9 +1570,7 @@ mod reachability_tests {
 
     #[gpui::test]
     fn command_output_frame_is_absent_without_output(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (_, visual) = cx.add_window_view(|_, cx| feature(cx));
         visual.simulate_resize(gpui::size(px(1000.), px(1100.)));
         draw(visual);
@@ -1587,9 +1582,7 @@ mod reachability_tests {
 
     #[gpui::test]
     fn status_bar_reports_context_branch_head_and_conflicts(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (_, visual) = cx.add_window_view(|_, cx| feature(cx));
         visual.simulate_resize(gpui::size(px(1000.), px(1100.)));
         draw(visual);
@@ -1599,9 +1592,7 @@ mod reachability_tests {
 
     #[gpui::test]
     fn a_long_work_target_path_does_not_force_horizontal_overflow(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (feature, visual) = cx.add_window_view(|_, cx| {
             let mut feature = feature(cx);
             // context_label は root.rs が実パスから作る。長いパスでも横スクロールを強制しない。
@@ -1634,9 +1625,7 @@ mod reachability_tests {
             }
         }
 
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (_, visual) = cx.add_window_view(|_, cx| PanelBody(cx.new(feature)));
         visual.simulate_resize(gpui::size(px(1000.), px(1100.)));
         draw(visual);
@@ -1654,9 +1643,7 @@ mod reachability_tests {
 
     #[gpui::test]
     fn commit_stays_the_first_operation_before_the_other_groups(cx: &mut gpui::TestAppContext) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (_, visual) = cx.add_window_view(|_, cx| feature(cx));
         visual.simulate_resize(gpui::size(px(1000.), px(700.)));
         draw(visual);
@@ -1671,9 +1658,7 @@ mod reachability_tests {
     fn files_and_diff_panes_sit_side_by_side_when_wide_and_stack_when_narrow(
         cx: &mut gpui::TestAppContext,
     ) {
-        cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
-        });
+        cx.update(|cx| crate::theme::init(&ThemeId::new("lapis.dark"), None, cx));
         let (_, visual) = cx.add_window_view(|_, cx| feature(cx));
         visual.simulate_resize(gpui::size(px(1100.), px(700.)));
         draw(visual);

@@ -1,7 +1,7 @@
 use gpui::Rgba;
 use serde::Deserialize;
 
-use crate::extension_ui::ThemeId;
+use extension_ui_contract::ThemeId;
 
 /// 構文配色の明暗を決めるテーマ属性。
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]

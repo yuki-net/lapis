@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use desktop_client::DocumentTab;
 
-use crate::extension_ui::{FeatureRegistry, ZonePosition};
+use crate::extension_ui::FeatureRegistry;
+use extension_ui_contract::ZonePosition;
 
 use super::{DockLayout, PanelHost, PanelId, PanelTab, ViewInstanceId};
 
@@ -336,7 +337,7 @@ impl ShellState {
 
     pub(crate) fn next_tool_instance(
         &mut self,
-        view: &crate::extension_ui::ViewId,
+        view: &extension_ui_contract::ViewId,
     ) -> Result<ViewInstanceId, getrandom::Error> {
         // 復元・移動・非表示の経路に依存せず、Layout全体の個体IDと照合する。
         loop {
@@ -409,8 +410,9 @@ impl ShellState {
 
 #[cfg(test)]
 mod tests {
+    use crate::features::id;
     use crate::time::Instant;
-    use crate::{extension_ui::ViewId, features::id};
+    use extension_ui_contract::ViewId;
     use std::time::Duration;
 
     use super::*;

@@ -1,5 +1,9 @@
 use super::ShellState;
 use crate::shell::ViewInstanceId;
+use crate::shell::{
+    DraggedPanelTab, PanelDrop, PanelEdge, PanelHost, PanelId, PanelSpanTransition, PanelTab,
+    PickerTarget, ResizeMode, ResizeTarget,
+};
 use crate::timer::Timer;
 pub(crate) use crate::tokens;
 use crate::{
@@ -9,18 +13,12 @@ use crate::{
         Icon, IconName, ScrollAxis, ScrollState, SurfaceVariant, panel_content, panel_empty_state,
         panel_empty_state_element, scroll_viewport,
     },
-    extension_ui::{ActivationEvent, FeatureRegistry, PanelScrollPolicy, UiSlot, ViewId},
+    extension_ui::{ActivationEvent, FeatureRegistry},
     features::{self, id},
     localization::Localizer,
     theme,
 };
-use crate::{
-    extension_ui::ZonePosition,
-    shell::{
-        DraggedPanelTab, PanelDrop, PanelEdge, PanelHost, PanelId, PanelSpanTransition, PanelTab,
-        PickerTarget, ResizeMode, ResizeTarget,
-    },
-};
+use extension_ui_contract::{PanelScrollPolicy, UiSlot, ViewId, ZonePosition};
 use gpui::{
     AnyView, App, ClickEvent, Context, CursorStyle, ElementId, FocusHandle, Focusable,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, Point, Render, SharedString,
@@ -335,7 +333,7 @@ impl Shell {
     }
     pub(crate) fn apply_scope_visibility(
         &mut self,
-        hidden: std::collections::HashSet<crate::extension_ui::ViewInstanceId>,
+        hidden: std::collections::HashSet<extension_ui_contract::ViewInstanceId>,
         cx: &mut Context<Self>,
     ) {
         if self.shell.hidden_views != hidden {
@@ -348,7 +346,7 @@ impl Shell {
     pub(crate) fn restore_workbench_view(
         &mut self,
         view: desktop_client::ConversationViewState,
-        retained: &std::collections::HashSet<crate::extension_ui::ViewInstanceId>,
+        retained: &std::collections::HashSet<extension_ui_contract::ViewInstanceId>,
         cx: &mut Context<Self>,
     ) {
         let tabs = self

@@ -58,7 +58,7 @@ impl Shell {
     pub(super) fn render_tool_content(
         &self,
         view: &ViewId,
-        instance: &crate::extension_ui::ViewInstanceId,
+        instance: &extension_ui_contract::ViewInstanceId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
         match self.feature_registry.instance_view(instance) {

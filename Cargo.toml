@@ -7,7 +7,6 @@ members = [
     "clients/web/wasm",
     "host/runtime",
     "host/workbench",
-    "host/terminal",
     "host/documents",
     "host/workspaces",
     "host/auth",
