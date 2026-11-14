@@ -666,6 +666,58 @@ fn a_version_upgrade_replaces_the_installed_package() {
 }
 
 #[test]
+fn a_failed_catalog_write_keeps_the_previous_install_intact() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let loader = loader();
+    let old: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let manifest = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        old,
+        |_| {},
+    );
+    let package = write_package(workspace.path(), "old.lapis", &manifest, old);
+    loader.install(&mut catalog, &package, true).unwrap();
+
+    // 目録の書き込みを失敗させる。データの置き場所を file で塞ぐと、登録は配置を
+    // 用意できずに失敗する。
+    let data = catalog.data_directory(&id("dev.example.terminal")).unwrap();
+    std::fs::remove_dir_all(&data).unwrap();
+    std::fs::write(&data, b"blocked").unwrap();
+
+    let new: &[(&str, &[u8])] = &[("extension.wasm", b"new")];
+    let upgraded = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        new,
+        |manifest| manifest["version"] = json!("0.3.0"),
+    );
+    let package = write_package(workspace.path(), "new.lapis", &upgraded, new);
+    assert!(loader.install(&mut catalog, &package, true).is_err());
+
+    // 動いている版の宣言と実体はそのまま。書きかけの実体も残さない。
+    let entry = catalog.get(&id("dev.example.terminal")).unwrap();
+    assert!(entry.state.is_installed());
+    assert_eq!(entry.version, ExtensionVersion::parse("0.2.0").unwrap());
+    let installed = catalog
+        .installed_directory(&id("dev.example.terminal"))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(installed.join("extension.wasm")).unwrap(),
+        b"old"
+    );
+    let staging: Vec<_> = std::fs::read_dir(workspace.path().join("extensions").join("installed"))
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(".staging-"))
+        .collect();
+    assert!(staging.is_empty(), "書きかけの実体を残さない");
+}
+
+#[test]
 fn removing_a_package_keeps_the_extension_data() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();

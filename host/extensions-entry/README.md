@@ -49,7 +49,11 @@ package の種別は manifest の `kind`（`extension` / `host`）が決める�
 3. `key_id` が信頼済み registry にあることを確認し、Ed25519 署名を検証する
 4. manifest が宣言する全 file の SHA-256 を zip の内容と照合し、宣言外の file を拒否する
 5. `requires` の契約と版の範囲を Host の提供値と照合する
-6. 導入済みの置き場所へ展開し、目録へ宣言を登録する
+6. 一時 directory へ書き、目録を書けたら実体を置き換える（旧版は退避してから消す）
+
+目録の書き込みを実体の置き換えより先に行う。逆順にすると、目録を書けなかったときに
+「実体はあるが宣言は未導入」の状態を残す。置き換えに失敗した場合は目録を元の宣言へ戻し、
+退避した旧版を元の場所へ戻す。
 
 manifest の形は次のとおり。
 
@@ -97,6 +101,7 @@ JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と�
   extensions/
     catalog.json              目録（宣言の正本）
     installed.lock            読み込みの排他
+    .swap/<id>/               置き換え中の旧版の退避先（完了時に消す）
     installed/<id>/           導入済み package の展開先
     data/<id>/                拡張データの正本
 ```

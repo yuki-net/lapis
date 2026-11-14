@@ -35,6 +35,9 @@ pub const PACKAGE_SCHEMA: i64 = 1;
 /// package 内で manifest を置く名前。manifest が宣言する file には使えない。
 pub const MANIFEST_NAME: &str = "manifest.json";
 
+/// 置き換え中の旧版を退避する directory。拡張 ID の namespace の外に置く。
+const SWAP_DIR: &str = ".swap";
+
 /// package 1 つと、その展開後の合計の上限。読み込み時に確保する memory を決める。
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -605,14 +608,42 @@ fn stage(
 }
 
 /// 用意した一時 directory を導入済みの置き場所へ置き換える。
+///
+/// 旧版の実体は消さずに退避し、新しい実体の配置が成功してから削除する。`rename` が
+/// 失敗しても旧版へ戻せるため、置き換えの途中で動いている版を失わない。
+///
+/// 退避先は `<root>/.swap/<id>` とする。`installed/<id>` の隣に固定名で置くと、その名前が
+/// 別の拡張 ID と衝突し得るため、ID の namespace の外へ逃がす。名前は導入の lock 内で
+/// だけ使うので固定でよい。
 fn swap(
     catalog: &ExtensionCatalog,
     id: &ExtensionPackageId,
     staged: &Path,
 ) -> Result<(), PackageError> {
     let target = catalog.installed_directory(id)?;
-    remove_directory(&target)?;
-    fs::rename(staged, &target).map_err(PackageError::Io)
+    let previous = catalog.root().join(SWAP_DIR).join(id.as_str());
+    if let Some(parent) = previous.parent() {
+        fs::create_dir_all(parent).map_err(PackageError::Io)?;
+    }
+    remove_directory(&previous)?;
+    let had_previous = target.is_dir();
+    if had_previous {
+        fs::rename(&target, &previous).map_err(PackageError::Io)?;
+    }
+    if let Err(error) = fs::rename(staged, &target) {
+        if had_previous {
+            // 新しい実体を置けなかった。退避した旧版を元の場所へ戻す。
+            if fs::rename(&previous, &target).is_err() {
+                eprintln!(
+                    "拡張 {id} の旧版を戻せませんでした。退避先は {} に残っています",
+                    previous.display()
+                );
+            }
+        }
+        return Err(PackageError::Io(error));
+    }
+    remove_directory(&previous)?;
+    Ok(())
 }
 
 /// 同じ package の同時導入を直列化する。目録の排他（`catalog.json.lock`）とは別の file を
