@@ -1,0 +1,13 @@
+[package]
+name = "terminal-state"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+futures-channel = "0.3"
+client-api = { path = "../../../contracts/protocol" }
+editor-core = { path = "../../../contracts/domain/editor-core" }
+process = { path = "../../../contracts/domain/process" }
+terminal = { package = "terminal-contract", path = "../contract" }

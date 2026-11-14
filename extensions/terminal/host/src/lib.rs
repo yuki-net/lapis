@@ -1,3 +1,8 @@
+//! Terminal 拡張の Host 側状態サービス。
+//!
+//! Terminal の正規状態・画面差分・接続 Session の正本はこの crate
+//! （`extensions/terminal/host`）だけ。PTY の具体実装は `extensions/terminal/adapter` が持つ。
+
 use std::{
     collections::{BTreeMap, HashSet},
     error::Error,
