@@ -34,6 +34,23 @@ pub(crate) fn serialize_tab(tab: &PanelTab) -> desktop_client::TabRef {
     }
 }
 
+/// 保存された参照が、復元したタブと同じ個体・Resource を指すか。
+///
+/// 保存値と復元後のタブは、旧形式の読み替えで `view` の有無が変わり得る。
+/// ピン留めの一致は、参照の表記ではなく個体・Resource の同一性で判定する。
+pub(crate) fn tab_refers_to(reference: &desktop_client::TabRef, tab: &PanelTab) -> bool {
+    match (reference, tab) {
+        (desktop_client::TabRef::Document { id }, PanelTab::Document(tab_id)) => id == tab_id,
+        (desktop_client::TabRef::Resource { id, .. }, PanelTab::Tool { .. }) => {
+            tab.resource() == Some(id.as_str())
+        }
+        (desktop_client::TabRef::View { id }, PanelTab::Tool { .. }) => {
+            tab.instance_id().as_str() == id
+        }
+        _ => false,
+    }
+}
+
 pub(crate) fn zone_position(value: &str) -> Option<ZonePosition> {
     match value {
         "main" => Some(ZonePosition::Main),
@@ -1238,6 +1255,34 @@ mod tests {
             serialize_tab(&started),
             desktop_client::TabRef::Resource { .. }
         ));
+    }
+
+    /// 旧 terminal 形式のピン留めは、読み替えた外部 Resource タブへ引き継がれる。
+    #[test]
+    fn legacy_terminal_pin_moves_to_the_restored_resource_tab() {
+        let mut zone = Zone::new(ZonePosition::Bottom);
+        let id = PanelId::new(1);
+        let tab = PanelTab::external(
+            crate::features::id::VIEW_TERMINAL,
+            "terminal:host-terminal",
+            Some("host-terminal".to_owned()),
+        );
+        assert!(zone.add_panel(id.clone(), vec![tab.clone()], None));
+        let saved = zone.capture();
+        // 旧形式の保存値: View を指定しない terminal 参照。
+        let mut legacy = saved.clone();
+        legacy.panels[0].pinned_tabs = vec![desktop_client::TabRef::Resource {
+            view: None,
+            id: "host-terminal".into(),
+        }];
+        let mut parse = |raw: &desktop_client::TabRef| match raw {
+            desktop_client::TabRef::Resource { id, .. } if id == "host-terminal" => {
+                Some(tab.clone())
+            }
+            _ => None,
+        };
+        let restored = Zone::restore(&legacy, &mut parse).unwrap();
+        assert!(restored.panels[&id].pinned.contains(&tab));
     }
 
     #[test]

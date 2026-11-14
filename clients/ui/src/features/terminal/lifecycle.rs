@@ -13,7 +13,7 @@ use extension_ui_contract::{ViewId, ViewInstanceId};
 use gpui::{AnyView, App, Subscription};
 
 use super::{TerminalFeature, TerminalFeatureEvent, TerminalProfileCatalog};
-use crate::extension_ui::{ViewLifecycle, ViewRequest};
+use crate::extension_ui::{ViewLifecycle, ViewNotifier, ViewRequest};
 use crate::features::id;
 
 /// ターミナルタブを作るときのコンテキスト。Task 切替で更新する。
@@ -45,7 +45,7 @@ pub(crate) struct TerminalLifecycle {
     /// 個体のイベントから受け取った Shell への要求。
     requests: Rc<RefCell<Vec<ViewRequest>>>,
     /// 要求が溜まったことを Shell へ知らせる入口。`start` で受け取る。
-    notify: Option<Rc<dyn Fn(&mut App) -> bool>>,
+    notify: Option<ViewNotifier>,
     /// 変更通知を購読済みか。backend は receiver を1度しか返さない。
     changes_started: bool,
 }
@@ -111,7 +111,7 @@ impl TerminalLifecycle {
     /// backend の変更通知を表示中の全タブへ配る。
     ///
     /// `changes()` は1度しか receiver を返さないため、ここで1本に集約する。
-    fn start_changes(&mut self, notify: Rc<dyn Fn(&mut App) -> bool>, cx: &mut App) {
+    fn start_changes(&mut self, notify: ViewNotifier, cx: &mut App) {
         if self.changes_started {
             return;
         }
@@ -154,7 +154,7 @@ impl ViewLifecycle for TerminalLifecycle {
         Some(feature.into())
     }
 
-    fn start(&mut self, notify: Rc<dyn Fn(&mut App) -> bool>, cx: &mut App) {
+    fn start(&mut self, notify: ViewNotifier, cx: &mut App) {
         self.notify = Some(notify.clone());
         self.start_changes(notify, cx);
     }

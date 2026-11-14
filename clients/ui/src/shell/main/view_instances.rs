@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::*;
-use crate::extension_ui::{ViewLifecycle, ViewRequest};
+use crate::extension_ui::{ViewLifecycle, ViewNotifier, ViewRequest};
 
 /// タブの表示状態を1つの View について解決した結果。
 struct TabState {
@@ -37,7 +37,7 @@ impl Shell {
         // 機能の外部変更通知を、Shell の再同期へ繋ぐ。変更は画面全体ではなく
         // 該当 View の個体だけに配る。
         let shell = cx.entity().downgrade();
-        let notify: Rc<dyn Fn(&mut App) -> bool> = Rc::new(move |cx: &mut App| {
+        let notify: ViewNotifier = Rc::new(move |cx: &mut App| {
             shell
                 .update(cx, |shell, cx| {
                     shell.feature_registry.changed(cx);

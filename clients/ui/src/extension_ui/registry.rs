@@ -39,7 +39,7 @@ pub(crate) trait ViewLifecycle {
 
     /// 外部の変更通知を購読し始める。`notify` は Shell へ再同期を促し、
     /// Shell が既に解放されていれば `false` を返す。
-    fn start(&mut self, _notify: Rc<dyn Fn(&mut App) -> bool>, _cx: &mut App) {}
+    fn start(&mut self, _notify: ViewNotifier, _cx: &mut App) {}
 
     /// タブの表示状態と参照先 Resource を個体へ伝える。
     fn activate(
@@ -77,6 +77,9 @@ pub(crate) trait ViewLifecycle {
 }
 
 pub(crate) type SharedLifecycle = Rc<RefCell<dyn ViewLifecycle>>;
+
+/// 機能から Shell への再同期通知。Shell が既に解放されていれば `false`。
+pub(crate) type ViewNotifier = Rc<dyn Fn(&mut App) -> bool>;
 
 /// 単一実体を共有する View の個体 ID。個体の命名は Client 側の配置規則とする。
 pub(crate) fn shared_tool_instance(view: &ViewId) -> ViewInstanceId {
@@ -180,12 +183,7 @@ impl FeatureRegistry {
     }
 
     /// 機能の購読を1回だけ始める。backend の通知は receiver を1度しか返さない。
-    pub(crate) fn ensure_started(
-        &mut self,
-        view: &ViewId,
-        notify: Rc<dyn Fn(&mut App) -> bool>,
-        cx: &mut App,
-    ) {
+    pub(crate) fn ensure_started(&mut self, view: &ViewId, notify: ViewNotifier, cx: &mut App) {
         if !self.started.insert(view.clone()) {
             return;
         }
