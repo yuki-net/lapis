@@ -756,6 +756,92 @@ async fn workbench_write_is_rejected_for_read_only_grant() {
     assert!(matches!(result, ResponseBody::Error(error) if error.code.as_str() == FORBIDDEN));
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extensions_list_reports_the_host_catalog_to_a_reader() {
+    let fixture = Fixture::new().await;
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_owner_pairing(fixture.workspace.clone())
+        .unwrap();
+    let mut owner_hello = hello("extension-owner");
+    owner_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .cloned()
+            .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
+    )
+    .unwrap();
+    let mut owner = fixture.connect().await;
+    owner
+        .send(&ClientMessage::Pair(PairRequest::new(
+            owner_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut owner).await,
+        ServerMessage::Paired(_)
+    ));
+
+    assert_eq!(
+        request(
+            &mut owner,
+            1,
+            RequestBody::HostExtensions(HostExtensionsListRequest {}),
+        )
+        .await,
+        ResponseBody::HostExtensions(HostExtensionsListResponse::default())
+    );
+
+    // Workspace 限定の接続でも、読み取りだけの capability があれば宣言を読める。
+    let (mut reader, _) = fixture.pair("extension-reader").await;
+    assert_eq!(
+        request(
+            &mut reader,
+            2,
+            RequestBody::HostExtensions(HostExtensionsListRequest {}),
+        )
+        .await,
+        ResponseBody::HostExtensions(HostExtensionsListResponse::default())
+    );
+
+    // 宣言を要求しない接続は Host の目録を読めない。
+    let mut unread = fixture.connect().await;
+    let mut unread_hello = hello("extension-unread");
+    unread_hello.requested_capabilities =
+        CapabilitySet::try_new([CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap()])
+            .unwrap();
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    unread
+        .send(&ClientMessage::Pair(PairRequest::new(
+            unread_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut unread).await,
+        ServerMessage::Paired(_)
+    ));
+    assert!(matches!(
+        request(
+            &mut unread,
+            3,
+            RequestBody::HostExtensions(HostExtensionsListRequest {}),
+        )
+        .await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+}
+
 async fn receive(client: &mut QuicClient) -> ServerMessage {
     tokio::time::timeout(Duration::from_secs(10), client.recv())
         .await

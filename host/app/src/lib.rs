@@ -16,6 +16,7 @@ pub use profile::{
 };
 mod document;
 pub use client::BackendClient;
+mod extensions;
 mod features;
 mod session_view;
 mod terminal;
@@ -46,6 +47,7 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             "workspace.tasks.control",
             "workspace.process.read",
             "workspace.process.control",
+            EXTENSIONS_READ,
         ]
         .map(|name| CapabilityId::try_new(name).expect("built-in capability")),
     )
@@ -80,6 +82,8 @@ struct HostInner {
     store: Option<Mutex<platform::WorkspaceStore>>,
     /// Host が起動を許可する Terminal profile。
     terminal_profiles: TerminalProfiles,
+    /// 導入済み拡張の目録。state directory が無い Host は持たない。
+    extensions: crate::extensions::HostExtensions,
     /// Host 自身と Host が spawn したプロセスのレジストリ。
     processes: Arc<dyn process::ProcessRegistry>,
 }
@@ -181,6 +185,7 @@ impl BackendHost {
             None => None,
         };
         let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
+        let extensions = crate::extensions::HostExtensions::load(state_directory.as_deref());
         let processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Host);
         let host = Self {
             inner: Arc::new(HostInner {
@@ -190,6 +195,7 @@ impl BackendHost {
                 state_directory,
                 store,
                 terminal_profiles,
+                extensions,
                 processes,
             }),
         };
@@ -337,6 +343,11 @@ impl BackendHost {
     }
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         BackendClient::from(self.clone()).processes()
+    }
+
+    /// 導入済み拡張の目録を宣言として返す。Host の state directory が正本。
+    pub fn extensions(&self) -> Result<client_api::HostExtensionsListResponse, String> {
+        self.inner.extensions.list()
     }
 }
 

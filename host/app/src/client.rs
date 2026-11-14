@@ -242,6 +242,31 @@ impl BackendClient {
         )
     }
 
+    /// Host の拡張の目録を取得する。呼び出しは worker で行う。
+    ///
+    /// 返す値は Host の正本を写した宣言であり、Client は表示にだけ使う。
+    pub fn extensions(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<client_api::HostExtensionsListResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return host.extensions().map_err(BackendServiceError::Connection);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensions(
+                client_api::HostExtensionsListRequest {},
+            ))? {
+            ResponseBody::HostExtensions(response) => Ok(response),
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
     pub fn start_web(
         &self,
