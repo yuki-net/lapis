@@ -221,10 +221,15 @@ fn restore_declaration(
 ) -> Result<(), ExtensionCatalogError> {
     let target = resolve(catalog.installed_directory(id))?;
     match previous {
-        // 実体があるときだけ「導入済み」へ戻す。無ければ正直に未導入とする。
         Some(entry) if entry.state.is_installed() && target.is_dir() => {
             catalog.register(entry)?;
         }
+        // 操作前から未導入だった宣言は、その状態のまま戻す。`incompatible` の印を
+        // `unavailable` で上書きすると、非互換だった事実を失う。
+        Some(entry) if !entry.state.is_installed() => {
+            catalog.register(entry)?;
+        }
+        // 導入済みだったが実体を戻せなかった。実体が無いのに「導入済み」とは言えない。
         Some(entry) => {
             catalog.register(ExtensionEntry::new(
                 entry.id,
@@ -428,6 +433,27 @@ mod tests {
         );
         // 記録の無い操作の段階更新は失敗しない。
         assert!(advance(root.path(), &id("b"), PendingPhase::Swapped).is_ok());
+    }
+
+    #[test]
+    fn rolling_back_keeps_an_incompatible_declaration_intact() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        let incompatible = ExtensionEntry::new(
+            id("a"),
+            ExtensionVersion::parse("0.1.0").unwrap(),
+            ExtensionState::incompatible(),
+        );
+        catalog.register(incompatible.clone()).unwrap();
+        begin_install(catalog.root(), "a", Some(incompatible.clone()));
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
+
+        recover(&mut catalog).unwrap();
+        assert_eq!(
+            catalog.get(&id("a")).unwrap(),
+            &incompatible,
+            "非互換の印を unavailable で上書きしない"
+        );
     }
 
     #[test]
