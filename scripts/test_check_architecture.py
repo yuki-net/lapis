@@ -96,13 +96,32 @@ class ArchitectureTests(unittest.TestCase):
             root = Path(directory)
             first = root / "contracts/domain/example/src/lib.rs"
             second = root / "host/runtime/src/lib.rs"
-            for path in (first, second):
+            for path, name in ((first, "example"), (second, "runtime")):
                 path.parent.mkdir(parents=True, exist_ok=True)
-                (path.parents[1] / "Cargo.toml").write_text("[package]\nname = \"x\"\n", encoding="utf-8")
+                (path.parents[1] / "Cargo.toml").write_text(
+                    f"[package]\nname = \"{name}\"\n", encoding="utf-8"
+                )
 
             first.write_text("pub struct Shared;\n", encoding="utf-8")
             self.assertEqual(check_duplicate_type_names(root), [])
 
+            second.write_text("pub struct Shared;\n", encoding="utf-8")
+            self.assertTrue(
+                any("Shared" in error for error in check_duplicate_type_names(root))
+            )
+
+    def test_duplicate_type_names_use_package_names_not_directories(self):
+        """`extensions/*/contract` のようにディレクトリ名が同じ crate を区別する。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = root / "extensions/alpha/contract/src/lib.rs"
+            second = root / "extensions/beta/contract/src/lib.rs"
+            for path, name in ((first, "alpha-contract"), (second, "beta-contract")):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                (path.parents[1] / "Cargo.toml").write_text(
+                    f"[package]\nname = \"{name}\"\n", encoding="utf-8"
+                )
+            first.write_text("pub struct Shared;\n", encoding="utf-8")
             second.write_text("pub struct Shared;\n", encoding="utf-8")
             self.assertTrue(
                 any("Shared" in error for error in check_duplicate_type_names(root))

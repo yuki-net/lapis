@@ -28,7 +28,7 @@ process = { path = "../../contracts/domain/process" }
 lsp = { path = "../../contracts/domain/lsp" }
 settings = { path = "../../contracts/domain/settings" }
 task = { path = "../../contracts/domain/task" }
-terminal = { path = "../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workspace = { path = "../../contracts/domain/workspace" }
 serde_json.workspace = true
 syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-fancy"] }

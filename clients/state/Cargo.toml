@@ -17,7 +17,7 @@ process = { path = "../../contracts/domain/process" }
 localization = { path = "../../contracts/domain/localization" }
 settings = { path = "../../contracts/domain/settings" }
 task = { path = "../../contracts/domain/task" }
-terminal = { path = "../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 workspace = { path = "../../contracts/domain/workspace" }
 workbench = { path = "../../contracts/domain/workbench" }
 wire = { path = "../../contracts/transport/wire" }

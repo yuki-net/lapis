@@ -17,4 +17,4 @@ tempfile.workspace = true
 
 [dev-dependencies]
 localization = { path = "../../../contracts/domain/localization" }
-terminal = { path = "../../../contracts/domain/terminal" }
+terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }

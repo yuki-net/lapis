@@ -12,6 +12,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
+| `extensions/terminal/contract/` | Terminal 拡張の契約（Terminal の型・wire DTO・`TerminalBackend` port の正本） | PTY 実装、Host の状態所有、Client の画面構成 |
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
@@ -35,8 +36,9 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 ### `contracts/domain` の集約方針
 
 - ID は `contracts/domain/editor-core` に集約する（`ProjectId` / `WorkspaceId` / `ConversationId` / `DocumentId` / `TaskId` / `ExecutionId`）。複数機能が同じ ID を参照するため、機能別 crate へ分散させない。
-- 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `terminal` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
-- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側の domain crate に置く。実装は `host/adapters/*` と `host/extensions/*` が持つ。
+- 状態・値・エラーは各機能の domain crate（`document` / `git` / `task` / `workspace` / `workbench` / `lsp` / `settings` など）が所有する。機能をまたぐ移動は、複数 crate が同じ型を必要とする場合だけ行う。
+- 拡張へ自己完結させる機能は、型・port を自分の contract crate が正本として持つ。Terminal は `extensions/terminal/contract` が型・wire DTO・`TerminalBackend` port を所有し、`contracts/domain/terminal` は置かない。実装を移す前後で正本が二重にならないよう、移動は正本の移送と同じ PR で完結させる。
+- port（`WorkspaceRepository` / `TerminalBackend` / `GitBackend` / `TaskBackend` / `LanguageServerBackend` / `WorkspaceSearchBackend` / `DocumentRepository` / `WorkbenchConnection` / `SettingsRepository`）は、実装ではなく利用側が正本を持つ crate に置く。`TerminalBackend` は `extensions/terminal/contract`、それ以外は各機能の domain crate が持つ。実装は `host/adapters/*` と `host/extensions/*` が持つ。
 - 追加の集約は行わない。現状の配置で「どの crate が正本か」が一意になっており、統合すると domain 間の依存が増えるだけで判断材料が増えない。
 
 ### `host/application` を独立させない
