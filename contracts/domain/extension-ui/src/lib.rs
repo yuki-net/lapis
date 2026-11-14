@@ -19,4 +19,4 @@ pub use ids::{
     CommandId, FeatureId, IconId, IconThemeId, KeymapId, ThemeId, ViewId, ViewInstanceId,
     WorkspaceCapabilityId,
 };
-pub use localization::{LocaleId, MessageId};
+pub use localization::MessageId;
