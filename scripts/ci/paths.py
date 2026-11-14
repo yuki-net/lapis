@@ -26,6 +26,9 @@ PATH_RULES = [
     (["patches/gpui-"], {"desktop"}),
     
     # Host関連
+    # 領域の README はコード変更ではないため repository だけで検証する
+    # （未分類のままだと全 job が走る）。
+    (["host/README.md"], {"repository"}),
     # Desktopが直接利用する公開境界は両surfaceを検証する。
     (["host/app/Cargo.toml", "host/app/src/lib.rs", "host/app/src/client.rs", "host/app/src/profile.rs"], {"host", "desktop"}),
     (["host/app/"], {"host"}),

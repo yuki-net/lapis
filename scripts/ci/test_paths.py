@@ -106,6 +106,10 @@ class TestPathRouting(unittest.TestCase):
         self.assertEqual(jobs_for_paths(["host/app/src/main.rs"]), {"host"})
         self.assertEqual(jobs_for_paths(["host/app/src/terminal.rs"]), {"host"})
 
+    def test_host_readme_runs_only_repository(self):
+        """Host の README は記述だけなので、コードの job を起こさない。"""
+        self.assertEqual(jobs_for_paths(["host/README.md"]), {"repository"})
+
     def test_host_public_boundary_runs_desktop(self):
         for path in (
             "host/app/Cargo.toml",
