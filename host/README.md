@@ -39,6 +39,8 @@ Hostの標準入力で `invite <Clientから到達可能なip:port> <新規の�
 
 `--state-directory` の `terminal-profiles.json` で、Client が起動できる Terminal profile を制限できます。形式は `{"profiles":[{"id":"bash","name":"bash","program":"/bin/bash","args":["-l"],"env":{"TERM":"xterm-256color"}}],"default":"bash"}` です。未指定なら OS ごとの既定 profile（Windows: PowerShell / cmd、macOS・Linux: login shell と bash / zsh / fish / pwsh）を使います。Host は `terminal.list_profiles` でこの一覧だけを公開し、一覧にない ID の `terminal.start` を拒否します。
 
+`.lapis` package の読み込みは標準入力の `ext-install <file.lapis> [--disabled]` で行います。manifest の署名・SHA-256・`requires` の契約と版を検証し、合わなければ読み込まずに「非互換」として目録へ宣言します。署名が一致しない package は目録にも載せません。`ext-enable <id>` / `ext-disable <id>` は目録の状態を変えるだけで、反映は Host の再起動です。`ext-remove <id>` は導入済み package を取り除き、拡張データは残します。宣言は `host.extensions.list` に現れます。形式と配置は [拡張の入口](extensions-entry/README.md) を参照してください。
+
 Host は自分が spawn したプロセスとその子孫だけを Resource Manager 用に計測します。Terminal は起動時の PID を、Task Run は worker の PID を root として登録し、子孫は PID の親子関係から解決します。計測は1秒間隔・60サンプル保持、終了した root は60秒後に一覧から削除します。終了操作は root とその子孫だけを対象とし、Host 自身は終了できません。Desktop 側の Resource Manager は Host のレジストリと Desktop 自身のローカル計測を別の所有元として表示します。
 
 Desktopの通常起動は `lapis-host.exe` の `--managed-host` modeを独立processで起動し、loopback QUICで接続します。同じユーザーのstate directoryで一つのHostを共有し、複数のフォルダを登録できます。所有者credentialは匿名pipeで渡し、DPAPIで保護した `hosts/local-v1.host` に保存します。Local所有者の鍵はHostの寿命に紐付き、Remoteの招待には配布しません。通信失敗だけで既存Hostを終了・置換しません。Desktopを閉じてもHostのDocument・Terminalは残ります。Host自体の終了後は実行状態を復元しません。

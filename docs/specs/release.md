@@ -86,6 +86,33 @@ manifest の他の項目から推測しない。
 - CD では GitHub Actions の secret `LAPIS_RELEASE_SIGNING_KEY` から鍵 file を復元する。
   secret が無ければ release workflow は失敗させ、鍵なしの署名に fallback しない。
 
+## 拡張 package
+
+`.lapis` package はリリース package と同じ「zip + manifest + Ed25519 署名」の形を取るが、
+manifest の schema と検証の順は別である。種別は manifest の `kind`（`extension` / `host`）
+だけで決め、拡張子や招待ファイル（`.lapis-host`）の名前で区別しない。
+
+署名の規則はこの schema と共通とする。信頼の起点は `release/trusted-keys.json` だけで、
+`signature` を除いた manifest を key 順に並べ、区切りを詰めた UTF-8 の JSON bytes に
+署名する（上の「署名対象と検証」と同じ）。恒等元・小位数点の鍵は鍵として拒否する。
+
+| field | 型 | 意味 |
+| --- | --- | --- |
+| `schema` | integer | 拡張 manifest は常に `1` |
+| `kind` | string | `extension` または `host`。拡張子では判断しない |
+| `id` | string | 配置 directory 名に使える拡張 ID（`host/extensions-entry/README.md`） |
+| `version` | string | 拡張の版 |
+| `requires` | array | `{ "contract", "minimum", "maximum" }`。版の範囲は両端を含む |
+| `files` | array | `{ "path", "sha256" }`。package 内の全 file を宣言する |
+| `key_id` | string | 署名鍵の識別子。`trusted-keys.json` の key と対応する |
+| `signature` | string | base64。上記の署名対象に Ed25519 署名した 64 byte |
+
+読み込みは manifest の形 → 署名 → `files` の SHA-256 → `requires` の互換照合 →
+展開と目録への登録の順で行う。署名が一致しない package は manifest の `id` も信頼
+できないため、目録に載せない。互換性がない package は展開せず「非互換」として宣言する。
+実装と検証は `host/extensions-entry/`、表現と配置の判断は
+[責務と依存方向](architecture.md#拡張の入口) を参照する。
+
 ## インストール layout
 
 per-user 配置とし、管理者権限を要求しない。初回は package を置いて launcher を起動する
@@ -227,6 +254,10 @@ manifest の解釈・更新モードの設定を持たず、変更のたびに�
 - launcher は `cargo test -p lapis-launcher` で、`scripts.release` が生成・署名した fixture
   配布物を検証する。Python 側の正規化 bytes・署名・layout の規則と Rust 実装が食い違うと
   落ちる。fixture を更新するときは `scripts.release` で作り直す。
+- 拡張 package は `cargo test -p extensions-entry` で、署名済み package の読み込み、
+  非互換 package・署名不正 package・改竄 file が読み込まれないこと、有効化・無効化が
+  目録の宣言として残ることを確認する。`cargo test -p host --test extensions` が Host の
+  state directory からの宣言の読み取りと、署名不正 package の拒否を確認する。
 - アプリ側の更新は `cargo test -p lapis` で、署名済み fixture の download・検証・staging、
   `notify` / `off` の分岐、軸B の同意前後の世代を確認する。実 network を使わず、
   folder の取得元で同じ経路を通す。
