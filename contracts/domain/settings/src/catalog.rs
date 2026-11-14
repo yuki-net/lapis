@@ -188,7 +188,7 @@ fn settings() -> Vec<SettingDefinition> {
             page: "terminal.font",
             label: "settings.field.terminal-font",
             description: None,
-            control: SettingControl::Choice(OptionSource::TerminalFonts),
+            control: SettingControl::Choice(OptionSource::Provided),
             value_kind: ValueKind::Text,
             scopes: ALL_SCOPES,
             default: None,
@@ -198,7 +198,7 @@ fn settings() -> Vec<SettingDefinition> {
             page: "terminal.font",
             label: "settings.field.terminal-size",
             description: None,
-            control: SettingControl::Choice(OptionSource::TerminalFontSizes),
+            control: SettingControl::Choice(OptionSource::Provided),
             value_kind: ValueKind::Integer,
             scopes: ALL_SCOPES,
             default: None,
@@ -208,7 +208,7 @@ fn settings() -> Vec<SettingDefinition> {
             page: "terminal.font",
             label: "settings.field.terminal-line-height",
             description: None,
-            control: SettingControl::Choice(OptionSource::TerminalLineHeights),
+            control: SettingControl::Choice(OptionSource::Provided),
             value_kind: ValueKind::Integer,
             scopes: ALL_SCOPES,
             default: None,
@@ -228,7 +228,7 @@ fn settings() -> Vec<SettingDefinition> {
             page: "terminal.startup",
             label: "settings.field.terminal-default-profile",
             description: Some("settings.field.terminal-default-profile.description"),
-            control: SettingControl::Choice(OptionSource::TerminalProfiles),
+            control: SettingControl::Choice(OptionSource::Provided),
             value_kind: ValueKind::Text,
             scopes: ALL_SCOPES,
             default: None,
@@ -429,7 +429,7 @@ mod tests {
             .expect("既定 Terminal profile の定義がある");
         assert_eq!(
             definition.control,
-            SettingControl::Choice(OptionSource::TerminalProfiles),
+            SettingControl::Choice(OptionSource::Provided),
             "候補は Host が公開する profile から供給する"
         );
         assert_eq!(definition.page, "terminal.startup");

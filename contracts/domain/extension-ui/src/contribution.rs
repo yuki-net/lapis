@@ -17,6 +17,19 @@ pub enum ToolInstancePolicy {
     Multiple,
 }
 
+/// タブが指す実体の種類。
+///
+/// 通常の View タブは表示個体そのものを指す。機能が外部の Resource（Host の
+/// Session など）をタブに結び付ける場合は `ExternalResource` を宣言し、タブは
+/// 個体 ID とは別に外部 Resource の ID を持つ。Resource の解決と寿命は
+/// 宣言した機能が所有し、Layout は ID を保持するだけにする。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TabReference {
+    #[default]
+    ViewInstance,
+    ExternalResource,
+}
+
 /// Viewを配置できる範囲を登録する。PanelやWindow側で機能別の例外を作らないための宣言。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ViewPlacementCapabilities {
@@ -73,6 +86,7 @@ pub struct UiContribution {
     pub placement: ViewPlacementCapabilities,
     pub visibility: ViewVisibility,
     pub scroll_policy: PanelScrollPolicy,
+    pub tab_reference: TabReference,
 }
 
 impl UiContribution {
@@ -96,6 +110,7 @@ impl UiContribution {
             placement: ViewPlacementCapabilities::default(),
             visibility: ViewVisibility::Always,
             scroll_policy: PanelScrollPolicy::Panel(ScrollAxis::Both),
+            tab_reference: TabReference::ViewInstance,
         }
     }
 
@@ -121,6 +136,7 @@ impl UiContribution {
             placement: ViewPlacementCapabilities::default(),
             visibility: ViewVisibility::Always,
             scroll_policy: PanelScrollPolicy::Panel(ScrollAxis::Both),
+            tab_reference: TabReference::ViewInstance,
         }
     }
 
@@ -148,6 +164,7 @@ impl UiContribution {
             placement: ViewPlacementCapabilities::default(),
             visibility: ViewVisibility::Always,
             scroll_policy: PanelScrollPolicy::Panel(ScrollAxis::Both),
+            tab_reference: TabReference::ViewInstance,
         }
     }
 
@@ -172,6 +189,7 @@ impl UiContribution {
             placement: ViewPlacementCapabilities::default(),
             visibility: ViewVisibility::Always,
             scroll_policy: PanelScrollPolicy::Disabled,
+            tab_reference: TabReference::ViewInstance,
         }
     }
 
@@ -197,6 +215,15 @@ impl UiContribution {
 
     pub fn supports_independent_window(mut self) -> Self {
         self.placement.independent_window = true;
+        self
+    }
+
+    /// タブが外部 Resource（Host の Session など）を参照する宣言。
+    ///
+    /// 個体 ID とは別に Resource ID を持つタブになり、Layout は ID を保持する
+    /// だけになる。Resource の生成・解決・終了は宣言した機能が所有する。
+    pub fn references_external_resource(mut self) -> Self {
+        self.tab_reference = TabReference::ExternalResource;
         self
     }
 

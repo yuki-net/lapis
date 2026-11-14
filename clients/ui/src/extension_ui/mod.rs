@@ -12,4 +12,4 @@ mod registry;
 pub use activation::ActivationEvent;
 pub use registry::{FeatureRegistry, FeatureState};
 
-pub(crate) use registry::shared_tool_instance;
+pub(crate) use registry::{ViewLifecycle, ViewRequest, shared_tool_instance};

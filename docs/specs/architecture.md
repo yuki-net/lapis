@@ -9,8 +9,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
 | `clients/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
-| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
-| `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
+| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 || `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
 | `extensions/terminal/` | Terminal 拡張の自己完結した実装。`contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` は Host の正規状態、`adapter/` は PTY 実装 | 拡張の外に置くターミナル固有の実装、Client の画面構成 |
@@ -179,11 +178,13 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の共通Tab操作
 
-- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `contracts/domain/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `clients/ui` 側で所有する。
+- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件・タブの参照方法を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `contracts/domain/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `clients/ui` 側で所有する。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - タブは種類ごとの単一実体ではなく、個体（`ViewInstanceId`）ごとの実体として扱う。`UiContribution`の複数起動方針で個体化するか単一実体を共有するかを決める。Terminalは`multiple_instances`で個体化し、2つ目のタブは新しいSessionを起動する。同じDocumentは`DocumentId`で同一タブを指すため、開き直しは複製せず既存タブの選択になる。状態を持たない単一表示のToolは共有実体のままとする。
-- TerminalタブのCloseはそのタブが所有するSessionだけを終了し、他のタブのPTYには触れない。
+- 個体を所有する機能は内部契約 `ViewLifecycle` を実装して `FeatureRegistry` へ登録し、個体の生成・表示状態と Resource の反映・終了を自分で行う。Shell は Layout 上のタブと表示状態だけを見て `ViewLifecycle` を呼び、View の種類で分岐しない。`multiple_instances` を宣言した View は、この登録が無ければタブを作らない。
+- `UiContribution::references_external_resource` を宣言した View のタブは、個体 ID とは別に外部 Resource（Host の Session など）の ID を保持する。Resource の生成・解決・寿命は宣言した機能が所有し、Layout と保存値は ID を保持するだけにする。機能はタブの Resource 差し替えやタブ追加を `ViewRequest` として Shell へ返し、Layout への適用は Shell が行う。
+- TerminalタブのCloseはそのタブが所有するSessionだけを終了し、他のタブのPTYには触れない。Task切替やLayoutの置き換えでタブが消えただけの場合は detach として扱い、Sessionを終了しない。
 - ピン留めはPanelの共通Tab状態として保存し、左側に配置する。タブの単独・一括Closeではピン留め済みを対象から外すが、Windowやアプリの終了は妨げない。移動時はPINを維持する。
 - ボタン起点のPopupは`components::Popup`でボタン直下へ、サブメニューは起点行の横へ配置する。クリック座標やShellに保存した位置は使わない。`PopupScope`は親子の表示範囲と起点ボタンを一つの操作範囲として外側クリックを判定する。Window端補正は共通部品、開閉・選択状態とEscape・Focus復帰は呼び出し側が所有する。`components::Menu`は`MenuEntry`の配列から行・アイコン・区切りを描画し、表示フォントで計測したラベル・ショートカット・矢印の最大行幅にpadding・borderを加えて幅を決める。呼び出し側に固定幅や文字数による幅推定を置かず、Window幅を上限にする。
 - HeaderのZone操作ボタン群を非表示にしても、ViewメニューまたはCommand Searchから同じZone Commandを実行できる。

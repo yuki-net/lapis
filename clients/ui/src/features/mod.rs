@@ -12,6 +12,7 @@ pub(crate) mod resource_manager;
 pub(crate) mod search;
 pub(crate) mod settings;
 pub(crate) mod settings_coordinator;
+pub(crate) mod settings_sources;
 pub(crate) mod tasks;
 pub(crate) mod terminal;
 pub(crate) mod update;

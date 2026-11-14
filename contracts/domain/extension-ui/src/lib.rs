@@ -11,7 +11,7 @@ mod ids;
 
 pub use activation::ActivationCondition;
 pub use contribution::{
-    PanelScrollPolicy, ScrollAxis, ToolInstancePolicy, UiContribution, UiSlot,
+    PanelScrollPolicy, ScrollAxis, TabReference, ToolInstancePolicy, UiContribution, UiSlot,
     ViewPlacementCapabilities, ViewVisibility, ZonePosition,
 };
 pub use feature::{FeatureDescriptor, FeatureKind};
