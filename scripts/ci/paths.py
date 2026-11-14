@@ -46,6 +46,10 @@ PATH_RULES = [
 
     # Extensions
     # 拡張の contract は Client からも参照するため両surfaceを検証する。
+    # Terminal 拡張は役割ごとに影響する surface が異なるため、契約と実装を分ける。
+    # （実装は PTY を含み wasm でビルドしない）
+    (["extensions/terminal/contract/"], {"rust_core", "host", "desktop", "web"}),
+    (["extensions/terminal/"], {"rust_core", "host", "desktop"}),
     (["extensions/"], {"rust_core", "host", "desktop", "web"}),
     
     # Mobile

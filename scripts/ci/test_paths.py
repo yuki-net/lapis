@@ -58,6 +58,29 @@ class TestPathRouting(unittest.TestCase):
             {"rust_core", "host", "desktop", "web"},
         )
 
+    def test_terminal_extension_runs_only_the_surfaces_it_affects(self):
+        """Terminal 拡張は契約と実装で影響する surface が分かれる。"""
+        # 契約は Client からも参照するため wasm を含む Web も検証する。
+        self.assertEqual(
+            jobs_for_paths(["extensions/terminal/contract/src/lib.rs"]),
+            {"rust_core", "host", "desktop", "web"},
+        )
+        # Host 状態サービスと PTY 実装は wasm でビルドしないため Web を除外する。
+        for path in (
+            "extensions/terminal/host/src/lib.rs",
+            "extensions/terminal/adapter/src/lib.rs",
+            "extensions/terminal/adapter/Cargo.toml",
+        ):
+            self.assertEqual(
+                jobs_for_paths([path]), {"rust_core", "host", "desktop"}, path
+            )
+
+    def test_terminal_extension_non_contract_paths_stay_off_web(self):
+        """契約以外の拡張ファイルは wasm ビルドの対象外として扱う。"""
+        self.assertEqual(
+            jobs_for_paths(["extensions/terminal/README.md"]), {"rust_core", "host", "desktop"}
+        )
+
     def test_ui_path_runs_desktop_and_web(self):
         """clients/ui は desktop-ui として wasm でもビルドされるため Web ジョブも実行する。"""
         for path in ("clients/ui/src/shell/layout.rs", "clients/ui/assets/themes/dark.json"):

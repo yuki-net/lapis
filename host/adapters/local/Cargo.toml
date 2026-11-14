@@ -15,7 +15,7 @@ local-git = { path = "../../extensions/git" }
 local-lsp = { path = "../lsp" }
 local-tasks = { path = "../tasks" }
 local-search = { path = "../search" }
-local-terminal = { path = "../terminal" }
+local-terminal = { path = "../../../extensions/terminal/adapter" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 local-workspace-store = { path = "../workspace-store" }

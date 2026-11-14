@@ -1,4 +1,8 @@
 //! Local Host の PTY を使う Terminal backend。
+//!
+//! Terminal 拡張の PTY 実装の正本はこの crate（`extensions/terminal/adapter`）だけ。
+//! 参照側は crate 名 `local_terminal`（package `local-terminal`）で依存し、
+//! `host/adapters/terminal` のような複製を置かない。
 
 use std::{
     collections::{HashMap, VecDeque},
