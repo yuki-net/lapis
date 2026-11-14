@@ -781,6 +781,86 @@ fn write_duplicate_member_package(path: &Path, manifest: &Value, files: &[(&str,
 }
 
 #[test]
+fn an_interrupted_install_right_after_the_catalog_write_restores_the_old_version() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let loader = loader();
+    let old: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let old_manifest = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        old,
+        |_| {},
+    );
+    let package = write_package(workspace.path(), "old.lapis", &old_manifest, old);
+    loader.install(&mut catalog, &package, true).unwrap();
+
+    // 新版を目録へ書き、退避の前に落ちた状態を再現する。
+    let mut journal_catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    journal_catalog
+        .register(ExtensionEntry::new(
+            id("dev.example.terminal"),
+            ExtensionVersion::parse("0.3.0").unwrap(),
+            ExtensionState::installed(true),
+        ))
+        .unwrap();
+    let root = journal_catalog.root().to_path_buf();
+    std::fs::write(
+        root.join("journal.json"),
+        serde_json::to_vec(&json!({
+            "schema": 1,
+            "pending": [{
+                "id": "dev.example.terminal",
+                "operation": "install",
+                "phase": "catalog_written",
+                "previous": {
+                    "id": "dev.example.terminal",
+                    "version": "0.2.0",
+                    "installed": true,
+                    "enabled": true,
+                    "incompatible": false,
+                },
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    drop(journal_catalog);
+
+    let mut recovered = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    extensions_entry::recover_pending_installs(&mut recovered).unwrap();
+    let entry = recovered.get(&id("dev.example.terminal")).unwrap();
+    assert_eq!(entry.version, ExtensionVersion::parse("0.2.0").unwrap());
+    assert!(entry.state.is_installed());
+    assert_eq!(
+        std::fs::read(
+            recovered
+                .installed_directory(&id("dev.example.terminal"))
+                .unwrap()
+                .join("extension.wasm")
+        )
+        .unwrap(),
+        b"old",
+        "退避前の中断でも、目録と実体を旧版で揃える"
+    );
+}
+
+#[test]
+fn a_legacy_journal_without_a_phase_is_not_silently_ignored() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    std::fs::create_dir_all(catalog.root()).unwrap();
+    // 段階を持たない記録は解釈できない。黙って捨てずに失敗させる。
+    std::fs::write(
+        catalog.root().join("journal.json"),
+        br#"{"schema":1,"pending":[{"id":"dev.example.x","previous":null}]}"#,
+    )
+    .unwrap();
+    assert!(extensions_entry::recover_pending_installs(&mut catalog).is_err());
+}
+
+#[test]
 fn a_failed_catalog_write_keeps_the_previous_install_intact() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
@@ -851,6 +931,8 @@ fn an_interrupted_install_is_recovered_before_the_catalog_is_published() {
             "schema": 1,
             "pending": [{
                 "id": "dev.example.partial",
+                "operation": "install",
+                "phase": "catalog_written",
                 "previous": null,
             }],
         }))

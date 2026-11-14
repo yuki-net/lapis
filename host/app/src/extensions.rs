@@ -66,15 +66,22 @@ impl HostExtensions {
         let catalog = match catalog {
             Catalog::Ready(catalog) => {
                 // 前回の導入・除去が中断していれば、目録を公開する前に完了／取り消しする。
-                // 実体の無い「導入済み」を宣言として配らないため。
-                let mut guard = catalog
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if let Err(error) = extensions_entry::recover_pending_installs(&mut guard) {
-                    eprintln!("拡張の中断した導入を回復できません: {error}");
+                // 実体の無い「導入済み」を宣言として配らないため、回復に失敗した場合は
+                // 目録を公開しない（file は残し、次の起動で再試行する）。
+                let recovered = {
+                    let mut guard = catalog
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    extensions_entry::recover_pending_installs(&mut guard)
+                };
+                match recovered {
+                    Ok(_) => Catalog::Ready(catalog),
+                    Err(error) => {
+                        let message = format!("中断した拡張の導入を回復できません: {error}");
+                        eprintln!("{message}");
+                        Catalog::Unreadable(message)
+                    }
                 }
-                drop(guard);
-                Catalog::Ready(catalog)
             }
             other => other,
         };

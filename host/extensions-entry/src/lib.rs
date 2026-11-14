@@ -25,7 +25,7 @@ pub use compatibility::{
 };
 pub use declaration::{ExtensionDeclaration, ExtensionDeclarations};
 pub use id::{ExtensionPackageId, InvalidExtensionPackageId};
-pub use journal::{JOURNAL_SCHEMA, PendingInstall};
+pub use journal::{JOURNAL_SCHEMA, PendingInstall, PendingOperation, PendingPhase};
 pub use package::{
     ExtensionLoader, InstallOutcome, MANIFEST_NAME, PACKAGE_SCHEMA, PackageError, PackageFile,
     PackageKind, PackageManifest,
@@ -34,7 +34,8 @@ pub use package::{
 /// Host の起動時に、中断した導入・除去を完了または取り消す。
 ///
 /// 目録と `installed/<id>/` の書き込みの間で Host が終了しても、次の起動で
-/// 食い違いを残さない。目録を公開する前に呼ぶ。
+/// 食い違いを残さない。目録を公開する前に呼び、失敗した場合は目録を公開しない。
+/// 回復に失敗したまま宣言を配ると、実体の無い「導入済み」を Client に見せる。
 pub fn recover_pending_installs(
     catalog: &mut ExtensionCatalog,
 ) -> Result<usize, ExtensionCatalogError> {

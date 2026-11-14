@@ -121,7 +121,12 @@ fn an_interrupted_install_is_recovered_before_the_host_publishes_it() {
         directory.join("journal.json"),
         serde_json::to_vec(&serde_json::json!({
             "schema": 1,
-            "pending": [{ "id": "dev.example.partial", "previous": null }],
+            "pending": [{
+                "id": "dev.example.partial",
+                "operation": "install",
+                "phase": "catalog_written",
+                "previous": null,
+            }],
         }))
         .unwrap(),
     )
@@ -138,6 +143,27 @@ fn an_interrupted_install_is_recovered_before_the_host_publishes_it() {
             .unwrap()
             .get(&ExtensionPackageId::try_new("dev.example.partial").unwrap())
             .is_none()
+    );
+}
+
+#[test]
+fn the_host_does_not_publish_declarations_when_recovery_fails() {
+    let state = tempfile::tempdir().unwrap();
+    let directory = state.path().join("extensions");
+    let mut catalog = ExtensionCatalog::open(directory.clone()).unwrap();
+    catalog.register(entry("dev.example.one", true)).unwrap();
+    drop(catalog);
+    // 解釈できない journal。回復できないため、目録を宣言として配らない。
+    std::fs::write(directory.join("journal.json"), b"not json").unwrap();
+
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        host.extensions().is_err(),
+        "回復できない中断を残したまま宣言を配らない"
+    );
+    assert_eq!(
+        std::fs::read(directory.join("journal.json")).unwrap(),
+        b"not json"
     );
 }
 

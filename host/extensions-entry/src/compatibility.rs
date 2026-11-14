@@ -89,7 +89,7 @@ impl ContractRequirement {
         maximum: Version,
     ) -> Result<Self, InvalidContractRequirement> {
         // SemVer の precedence で比べる。`Version` の既定順序は build metadata も比べるため、
-        // `1.0.0+a` から `1.0.0+b` を逆転と誤判定する。
+        // `1.0.0+b` から `1.0.0+a` のような範囲を逆転と誤判定する。
         if minimum.cmp_precedence(&maximum).is_gt() {
             return Err(InvalidContractRequirement);
         }
@@ -315,6 +315,13 @@ mod tests {
             host.check(&[requirement(EXTENSION_CONTRACT, "1.0.0+a", "1.0.0+b")])
                 .is_ok(),
             "build metadata だけが違う範囲を逆転と判定しない"
+        );
+        // precedence が同じなら、build metadata の大小に関わらず逆転ではない。
+        // `1.0.0+b` から `1.0.0+a` は既定順序では逆転だが、precedence では等しい。
+        assert!(
+            host.check(&[requirement(EXTENSION_CONTRACT, "1.0.0+b", "1.0.0+a")])
+                .is_ok(),
+            "既定順序が逆転と判定する範囲を、precedence は逆転としない"
         );
         // precedence が違えば従来どおり非互換。
         assert!(

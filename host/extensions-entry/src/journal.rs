@@ -1,10 +1,19 @@
 //! 導入・除去の途中経過を記録し、中断した操作を起動時に回復する。
 //!
 //! 目録（宣言）と `installed/<id>/`（実体）は別の file なので、2 つの書き込みの間で
-//! Host が終了すると食い違う。ここでは操作の開始時に「前の宣言」を journal へ記録し、
-//! 完了時に消す。起動時に [`recover`] が残った記録と実体を見て、完了または取り消しを
-//! 行う。これにより「宣言は導入済みだが実体が無い」「実体は旧版だが宣言は新版」の
-//! ような状態を次の起動で残さない。
+//! Host が終了すると食い違う。ここでは操作の開始時に「何をどこまで進めたか」と
+//! 「操作前の宣言」を journal へ記録し、完了時に消す。起動時に [`recover`] が残った
+//! 記録を見て、段階に応じて完了または取り消しを行う。
+//!
+//! 段階を持つのは、中断した位置によって戻すべき状態が違うため。
+//!
+//! - `Prepared`: 目録も実体も変えていない。記録を消すだけ。
+//! - `CatalogWritten`: 目録だけ新しい。実体は旧版のまま（または無い）。宣言を取り消す。
+//! - `BackedUp`: 旧実体を `.swap/<id>` へ退避した。実体を戻してから宣言を取り消す。
+//! - `Swapped`: 新しい実体を置いた（除去なら実体を退避し終えた）。そのまま完了する。
+//!
+//! 回復は導入の lock を取得して行う。別の Host が導入中の操作を中断済みと誤認しない。
+//! 同じ段階からの回復は冪等であり、回復中に再度落ちても次の起動で同じ結果になる。
 
 use std::{
     collections::BTreeMap,
@@ -24,6 +33,8 @@ const JOURNAL_FILE: &str = "journal.json";
 pub(crate) const SWAP_DIR: &str = ".swap";
 /// 展開中の一時 directory の接頭辞。
 const STAGING_PREFIX: &str = ".staging-";
+/// 導入の排他 file。
+const LOCK_FILE: &str = "installed.lock";
 
 /// 目録が返す配置解決の失敗は、そのまま目録の誤りとして扱う。
 fn resolve<T>(
@@ -32,10 +43,34 @@ fn resolve<T>(
     result.map_err(|_| ExtensionCatalogError::InvalidEntry)
 }
 
+/// 進行中の操作の種類。回復時に「実体を戻す」か「実体を捨てる」かを決める。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingOperation {
+    Install,
+    Remove,
+}
+
+/// 操作の進み具合。回復の判断はこの段階だけで決まる。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingPhase {
+    /// 目録も実体も変えていない。
+    Prepared,
+    /// 目録を書いた。実体はまだ置き換えていない。
+    CatalogWritten,
+    /// 旧実体を `.swap/<id>` へ退避した。新しい実体はまだ置いていない。
+    BackedUp,
+    /// 新しい実体を置いた（除去なら実体を退避し終えた）。後片付けだけが残る。
+    Swapped,
+}
+
 /// 1 件の未完了操作。`previous` は操作前の宣言（無ければ新規導入）。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingInstall {
     pub id: ExtensionPackageId,
+    pub operation: PendingOperation,
+    pub phase: PendingPhase,
     /// 操作前の宣言。取り消すときに戻す。`None` は目録に無かった（新規）。
     #[serde(default)]
     pub previous: Option<ExtensionEntry>,
@@ -48,10 +83,35 @@ struct JournalDocument {
     pending: Vec<PendingInstall>,
 }
 
+/// 導入の排他。同じ state directory を複数の入口が使っても、導入・回復を直列化する。
+pub(crate) struct InstallLock(fs::File);
+
+impl InstallLock {
+    pub(crate) fn acquire(root: &Path) -> Result<Self, ExtensionCatalogError> {
+        fs::create_dir_all(root).map_err(ExtensionCatalogError::Io)?;
+        let file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join(LOCK_FILE))
+            .map_err(ExtensionCatalogError::Io)?;
+        file.lock().map_err(ExtensionCatalogError::Io)?;
+        Ok(Self(file))
+    }
+}
+
+impl Drop for InstallLock {
+    fn drop(&mut self) {
+        let _ = self.0.unlock();
+    }
+}
+
 /// 操作の開始を記録する。同じ `id` の記録は置き換える。
 pub(crate) fn begin(
     root: &Path,
     id: &ExtensionPackageId,
+    operation: PendingOperation,
     previous: Option<ExtensionEntry>,
 ) -> Result<(), ExtensionCatalogError> {
     let mut pending = load(root)?;
@@ -59,9 +119,28 @@ pub(crate) fn begin(
         id.clone(),
         PendingInstall {
             id: id.clone(),
+            operation,
+            phase: PendingPhase::Prepared,
             previous,
         },
     );
+    store(root, &pending)
+}
+
+/// 操作の段階を進める。記録が無ければ何もしない（完了済み）。
+pub(crate) fn advance(
+    root: &Path,
+    id: &ExtensionPackageId,
+    phase: PendingPhase,
+) -> Result<(), ExtensionCatalogError> {
+    let mut pending = load(root)?;
+    let Some(record) = pending.get_mut(id) else {
+        return Ok(());
+    };
+    // 段階は戻さない。呼び出し順の取り違えで回復の判断を揺らさないため。
+    if phase > record.phase {
+        record.phase = phase;
+    }
     store(root, &pending)
 }
 
@@ -74,14 +153,21 @@ pub(crate) fn finish(root: &Path, id: &ExtensionPackageId) -> Result<(), Extensi
     store(root, &pending)
 }
 
-/// 中断した操作を回復する。journal に記録の無い宣言には触れない。
+/// 中断した操作を回復する。導入の lock を取得してから行う。
 pub(crate) fn recover(catalog: &mut ExtensionCatalog) -> Result<usize, ExtensionCatalogError> {
+    let _lock = InstallLock::acquire(catalog.root())?;
+    recover_locked(catalog)
+}
+
+/// lock を取得済みの呼び出し元向けの回復。
+pub(crate) fn recover_locked(
+    catalog: &mut ExtensionCatalog,
+) -> Result<usize, ExtensionCatalogError> {
     let root = catalog.root().to_path_buf();
     let pending = load(&root)?;
-    let mut recovered = 0;
+    let recovered = pending.len();
     for (id, record) in pending {
-        recover_one(catalog, &id, record.previous)?;
-        recovered += 1;
+        apply(catalog, &id, &record)?;
     }
     // 記録の無い残骸（journal を書く前後で落ちた場合）も片付ける。
     clean_leftovers(catalog)?;
@@ -92,28 +178,35 @@ pub(crate) fn recover(catalog: &mut ExtensionCatalog) -> Result<usize, Extension
     Ok(recovered)
 }
 
-fn recover_one(
+fn apply(
     catalog: &mut ExtensionCatalog,
     id: &ExtensionPackageId,
-    previous: Option<ExtensionEntry>,
+    record: &PendingInstall,
 ) -> Result<(), ExtensionCatalogError> {
     let target = resolve(catalog.installed_directory(id))?;
     let backup = swap_path(catalog.root(), id);
-    if backup.is_dir() {
-        if target.is_dir() {
-            // 新しい実体の配置まで終わっている。退避は不要。
-            let _ = fs::remove_dir_all(&backup);
-        } else {
-            // 旧版を退避した後、新しい実体を置けずに落ちた。旧版へ戻し、
-            // 宣言も操作前へ戻す。
-            move_directory(&backup, &target)?;
-            restore_declaration(catalog, id, previous)?;
+    match record.phase {
+        PendingPhase::Prepared => {}
+        PendingPhase::CatalogWritten => {
+            restore_declaration(catalog, id, record.previous.clone())?;
         }
-        return Ok(());
-    }
-    // 退避は無い。実体が無ければ初回導入の途中で落ちている。
-    if !target.is_dir() {
-        restore_declaration(catalog, id, previous)?;
+        PendingPhase::BackedUp => {
+            // 旧実体が退避先にある。新しい実体はまだ置いていないので戻す。
+            if backup.is_dir() {
+                if target.is_dir() {
+                    fs::remove_dir_all(&target).map_err(ExtensionCatalogError::Io)?;
+                }
+                move_directory(&backup, &target)?;
+            }
+            restore_declaration(catalog, id, record.previous.clone())?;
+        }
+        PendingPhase::Swapped => {
+            // 実体と宣言は確定している。退避した旧版だけを片付ける。除去も同じ段階を
+            // 使うため、ここで宣言を触らない（既に「未導入」で書かれている）。
+            if backup.is_dir() {
+                fs::remove_dir_all(&backup).map_err(ExtensionCatalogError::Io)?;
+            }
+        }
     }
     Ok(())
 }
@@ -162,7 +255,7 @@ fn clean_leftovers(catalog: &mut ExtensionCatalog) -> Result<(), ExtensionCatalo
             let backup = swap_path(&root, &id);
             let target = resolve(catalog.installed_directory(&id))?;
             if target.is_dir() {
-                let _ = fs::remove_dir_all(&backup);
+                fs::remove_dir_all(&backup).map_err(ExtensionCatalogError::Io)?;
             } else {
                 move_directory(&backup, &target)?;
             }
@@ -177,7 +270,7 @@ fn clean_leftovers(catalog: &mut ExtensionCatalog) -> Result<(), ExtensionCatalo
                 .to_string_lossy()
                 .starts_with(STAGING_PREFIX)
             {
-                let _ = fs::remove_dir_all(entry.path());
+                fs::remove_dir_all(entry.path()).map_err(ExtensionCatalogError::Io)?;
             }
         }
     }
@@ -295,6 +388,10 @@ mod tests {
         ExtensionCatalog::open(root.join("extensions")).unwrap()
     }
 
+    fn begin_install(root: &Path, name: &str, previous: Option<ExtensionEntry>) {
+        begin(root, &id(name), PendingOperation::Install, previous).unwrap();
+    }
+
     #[test]
     fn a_missing_journal_is_empty_and_creates_nothing() {
         let root = tempfile::tempdir().unwrap();
@@ -305,7 +402,7 @@ mod tests {
     #[test]
     fn a_finished_operation_removes_the_journal() {
         let root = tempfile::tempdir().unwrap();
-        begin(root.path(), &id("a"), None).unwrap();
+        begin_install(root.path(), "a", None);
         assert!(journal_path(root.path()).is_file());
         finish(root.path(), &id("a")).unwrap();
         assert!(!journal_path(root.path()).exists());
@@ -316,12 +413,28 @@ mod tests {
     }
 
     #[test]
+    fn phases_only_move_forward() {
+        let root = tempfile::tempdir().unwrap();
+        begin_install(root.path(), "a", None);
+        advance(root.path(), &id("a"), PendingPhase::BackedUp).unwrap();
+        // 古い段階への後退は無視する。
+        advance(root.path(), &id("a"), PendingPhase::Prepared).unwrap();
+        assert_eq!(
+            load(root.path()).unwrap()[&id("a")].phase,
+            PendingPhase::BackedUp
+        );
+        // 記録の無い操作の段階更新は失敗しない。
+        assert!(advance(root.path(), &id("b"), PendingPhase::Swapped).is_ok());
+    }
+
+    #[test]
     fn an_interrupted_first_install_is_rolled_back_to_no_declaration() {
         let root = tempfile::tempdir().unwrap();
         let mut catalog = catalog(root.path());
         // 目録だけが先へ進み、実体が無い状態で落ちた。
         catalog.register(entry("a", true)).unwrap();
-        begin(catalog.root(), &id("a"), None).unwrap();
+        begin_install(catalog.root(), "a", None);
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
 
         assert_eq!(recover(&mut catalog).unwrap(), 1);
         assert!(catalog.get(&id("a")).is_none(), "実体の無い宣言は残さない");
@@ -329,13 +442,33 @@ mod tests {
     }
 
     #[test]
-    fn a_declaration_without_a_journal_entry_is_left_alone() {
+    fn an_interruption_after_the_catalog_write_restores_the_old_declaration() {
         let root = tempfile::tempdir().unwrap();
         let mut catalog = catalog(root.path());
-        // 宣言だけを登録する段階（PR1 の配置解決）を、回復が書き換えない。
         catalog.register(entry("a", true)).unwrap();
-        assert_eq!(recover(&mut catalog).unwrap(), 0);
-        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+
+        // 新版を目録へ書いたが、旧版の退避はまだ。旧実体は installed/ に残っている。
+        catalog
+            .register(ExtensionEntry::new(
+                id("a"),
+                ExtensionVersion::parse("0.2.0").unwrap(),
+                ExtensionState::installed(true),
+            ))
+            .unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
+
+        recover(&mut catalog).unwrap();
+        let restored = catalog.get(&id("a")).unwrap();
+        assert_eq!(restored.version, ExtensionVersion::parse("0.1.0").unwrap());
+        assert!(restored.state.is_installed());
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old"
+        );
     }
 
     #[test]
@@ -355,10 +488,12 @@ mod tests {
                 ExtensionState::installed(true),
             ))
             .unwrap();
-        begin(catalog.root(), &id("a"), Some(entry("a", true))).unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
         let backup = swap_path(catalog.root(), &id("a"));
         fs::create_dir_all(backup.parent().unwrap()).unwrap();
         fs::rename(&installed, &backup).unwrap();
+        advance(catalog.root(), &id("a"), PendingPhase::BackedUp).unwrap();
 
         recover(&mut catalog).unwrap();
         let restored = catalog.get(&id("a")).unwrap();
@@ -372,7 +507,7 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_swap_only_cleans_the_backup() {
+    fn a_finished_swap_keeps_the_new_version_and_cleans_the_backup() {
         let root = tempfile::tempdir().unwrap();
         let mut catalog = catalog(root.path());
         catalog
@@ -385,7 +520,8 @@ mod tests {
         let installed = catalog.installed_directory(&id("a")).unwrap();
         fs::create_dir_all(&installed).unwrap();
         fs::write(installed.join("f"), b"new").unwrap();
-        begin(catalog.root(), &id("a"), Some(entry("a", true))).unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::Swapped).unwrap();
         let backup = swap_path(catalog.root(), &id("a"));
         fs::create_dir_all(&backup).unwrap();
         fs::write(backup.join("f"), b"old").unwrap();
@@ -400,6 +536,139 @@ mod tests {
             b"new"
         );
         assert!(!backup.exists());
+    }
+
+    #[test]
+    fn an_interrupted_remove_restores_the_files_and_declaration() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+
+        // 実体を退避したが、目録はまだ「未導入」へ変えていない。
+        let backup = swap_path(catalog.root(), &id("a"));
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::rename(&installed, &backup).unwrap();
+        begin(
+            catalog.root(),
+            &id("a"),
+            PendingOperation::Remove,
+            Some(entry("a", true)),
+        )
+        .unwrap();
+        advance(catalog.root(), &id("a"), PendingPhase::BackedUp).unwrap();
+
+        recover(&mut catalog).unwrap();
+        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old"
+        );
+    }
+
+    #[test]
+    fn recovery_is_idempotent_when_interrupted_again() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::BackedUp).unwrap();
+
+        // 1 回目の回復で落ちた状況を、同じ段階のまま 2 回回復して確かめる。
+        recover(&mut catalog).unwrap();
+        store(
+            catalog.root(),
+            &BTreeMap::from([(
+                id("a"),
+                PendingInstall {
+                    id: id("a"),
+                    operation: PendingOperation::Install,
+                    phase: PendingPhase::BackedUp,
+                    previous: Some(entry("a", true)),
+                },
+            )]),
+        )
+        .unwrap();
+        recover(&mut catalog).unwrap();
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old"
+        );
+        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
+    }
+
+    #[test]
+    fn concurrent_recovery_leaves_a_consistent_state() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::BackedUp).unwrap();
+
+        // 2 つの入口が同時に起動しても、lock で直列化され同じ結果になる。
+        let directory = catalog.root().to_path_buf();
+        drop(catalog);
+        let first = std::thread::spawn({
+            let directory = directory.clone();
+            move || {
+                let mut catalog = ExtensionCatalog::open(directory).unwrap();
+                recover(&mut catalog).map(|_| ())
+            }
+        });
+        let second = std::thread::spawn({
+            let directory = directory.clone();
+            move || {
+                let mut catalog = ExtensionCatalog::open(directory).unwrap();
+                recover(&mut catalog).map(|_| ())
+            }
+        });
+        first.join().unwrap().unwrap();
+        second.join().unwrap().unwrap();
+
+        let reopened = ExtensionCatalog::open(directory).unwrap();
+        let restored = reopened.get(&id("a")).unwrap();
+        assert!(restored.state.is_installed());
+        assert_eq!(restored.version, ExtensionVersion::parse("0.1.0").unwrap());
+    }
+
+    #[test]
+    fn an_unreadable_journal_is_reported_instead_of_ignored() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        fs::create_dir_all(catalog.root()).unwrap();
+        fs::write(
+            catalog.root().join(JOURNAL_FILE),
+            br#"{"schema":99,"pending":[]}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            recover(&mut catalog),
+            Err(ExtensionCatalogError::UnsupportedSchema(99))
+        ));
+
+        fs::write(catalog.root().join(JOURNAL_FILE), b"not json").unwrap();
+        assert!(matches!(
+            recover(&mut catalog),
+            Err(ExtensionCatalogError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn a_declaration_without_a_journal_entry_is_left_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        // 宣言だけを登録する段階（PR1 の配置解決）を、回復が書き換えない。
+        catalog.register(entry("a", true)).unwrap();
+        assert_eq!(recover(&mut catalog).unwrap(), 0);
+        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
     }
 
     #[test]

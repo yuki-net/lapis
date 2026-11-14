@@ -359,29 +359,14 @@ fn run() -> Result<(), Error> {
                     } else if let Some(input) = line.strip_prefix("ext-install ") {
                         // `ext-install <file.lapis> [--disabled]`。読み込んだ宣言は
                         // `host.extensions.list` に現れ、有効な拡張は入口の再起動で反映する。
-                        //
-                        // 末尾の `--disabled` だけを option として分離し、残りは空白を含めて
-                        // そのままパスとして扱う。`split_whitespace` で分割すると
-                        // `/tmp/Lapis Packages/a.lapis` のパスが途中で切れる。
-                        let input = input.trim();
-                        // `--disabled` は独立した語のときだけ option として扱う。
-                        // `a--disabled.lapis` のようなパスの一部を切り落とさないため。
-                        let (path, enabled) = match input.strip_suffix("--disabled") {
-                            Some(rest)
-                                if rest.is_empty() || rest.ends_with(char::is_whitespace) =>
-                            {
-                                (rest.trim(), false)
+                        match parse_ext_install(input) {
+                            Some((path, enabled)) => {
+                                match host.install_extension(std::path::Path::new(&path), enabled) {
+                                    Ok(outcome) => println!("{}", describe_outcome(&outcome)),
+                                    Err(error) => eprintln!("拡張を読み込めません: {error}"),
+                                }
                             }
-                            _ => (input, true),
-                        };
-                        let path = path.trim_matches('"');
-                        if path.is_empty() {
-                            eprintln!("Usage: ext-install <file.lapis> [--disabled]");
-                        } else {
-                            match host.install_extension(std::path::Path::new(path), enabled) {
-                                Ok(outcome) => println!("{}", describe_outcome(&outcome)),
-                                Err(error) => eprintln!("拡張を読み込めません: {error}"),
-                            }
+                            None => eprintln!("Usage: ext-install <file.lapis> [--disabled]"),
                         }
                     } else if let Some(input) = line.strip_prefix("ext-enable ") {
                         let id = input.trim();
@@ -475,6 +460,27 @@ fn auto_approve_oidc_devices() -> bool {
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
+/// `ext-install` の引数を `(path, enabled)` にする。パスが空なら `None`。
+///
+/// 末尾の独立した `--disabled` だけを option として分離し、残りは空白を含めてそのまま
+/// パスとして扱う。`split_whitespace` で分割すると `/tmp/Lapis Packages/a.lapis` の
+/// パスが途中で切れる。`a--disabled.lapis` のような語を含むパスを切り落とさないよう、
+/// `--disabled` の直前が空白か先頭のときだけ option とみなす。
+fn parse_ext_install(input: &str) -> Option<(String, bool)> {
+    let input = input.trim();
+    let (path, enabled) = match input.strip_suffix("--disabled") {
+        Some(rest) if rest.is_empty() || rest.ends_with(char::is_whitespace) => {
+            (rest.trim(), false)
+        }
+        _ => (input, true),
+    };
+    let path = path.trim_matches('"');
+    if path.is_empty() {
+        return None;
+    }
+    Some((path.to_owned(), enabled))
+}
+
 /// `ext-install` の結果を console 向けの 1 行にする。
 fn describe_outcome(outcome: &extensions_entry::InstallOutcome) -> String {
     match outcome {
@@ -549,6 +555,42 @@ fn write_public_certificate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ext_install_keeps_spaces_in_the_package_path() {
+        // 空白を含むパスを分割しない。
+        assert_eq!(
+            parse_ext_install("/tmp/Lapis Packages/a.lapis"),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), true))
+        );
+        assert_eq!(
+            parse_ext_install("/tmp/Lapis Packages/a.lapis --disabled"),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), false))
+        );
+        // 引用符付きでも同じ。
+        assert_eq!(
+            parse_ext_install("\"/tmp/Lapis Packages/a.lapis\""),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), true))
+        );
+        assert_eq!(
+            parse_ext_install("\"/tmp/Lapis Packages/a.lapis\" --disabled"),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), false))
+        );
+        // `--disabled` を語の一部に含むパスは option とみなさない。
+        assert_eq!(
+            parse_ext_install("/tmp/a--disabled.lapis"),
+            Some(("/tmp/a--disabled.lapis".to_owned(), true))
+        );
+        // Windows のパスもそのまま。
+        assert_eq!(
+            parse_ext_install(r"C:\Users\me\Lapis Ext\a.lapis --disabled"),
+            Some((r"C:\Users\me\Lapis Ext\a.lapis".to_owned(), false))
+        );
+        // パスが無ければ usage。
+        assert_eq!(parse_ext_install("   "), None);
+        assert_eq!(parse_ext_install("--disabled"), None);
+    }
+
     #[test]
     fn public_certificate_is_replaced_only_when_requested() {
         let directory = tempfile::tempdir().unwrap();

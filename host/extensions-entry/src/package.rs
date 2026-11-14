@@ -26,6 +26,7 @@ use crate::{
     ExtensionCatalog, ExtensionCatalogError, ExtensionEntry, ExtensionPackageId, ExtensionState,
     ExtensionVersion, Registration,
     compatibility::{ContractRequirement, HostContracts, Incompatibility},
+    journal::{PendingOperation, PendingPhase},
     signature::{SignatureError, TrustedKeys},
 };
 
@@ -224,7 +225,8 @@ impl ExtensionLoader {
 
         let _lock = lock_install(catalog.root())?;
         // 前回の中断を先に回復する。目録と実体が食い違ったまま判断しない。
-        crate::journal::recover(catalog)?;
+        // lock は取得済みなので、入れ子にせず `recover_locked` を呼ぶ。
+        crate::journal::recover_locked(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
         match self.contracts.check(&manifest.requires) {
@@ -234,11 +236,14 @@ impl ExtensionLoader {
                 // させるため、置き換えは目録の書き込み後に行う。
                 let previous = catalog.get(&manifest.id).cloned();
                 let staged = stage(catalog, &manifest, &archive)?;
-                // ここから先で終了しても、次の起動が journal を見て完了／取り消しする。
+                // ここから先で終了しても、次の起動が journal を見て段階に応じて回復する。
                 // 記録は「前の宣言」であり、取り消すときに戻す値になる。
-                if let Err(error) =
-                    crate::journal::begin(catalog.root(), &manifest.id, previous.clone())
-                {
+                if let Err(error) = crate::journal::begin(
+                    catalog.root(),
+                    &manifest.id,
+                    PendingOperation::Install,
+                    previous.clone(),
+                ) {
                     let _ = fs::remove_dir_all(&staged);
                     return Err(PackageError::Catalog(error));
                 }
@@ -248,11 +253,28 @@ impl ExtensionLoader {
                         manifest.version.clone(),
                         ExtensionState::installed(enabled),
                     ))?;
-                    swap(catalog, &manifest.id, &staged)?;
+                    crate::journal::advance(
+                        catalog.root(),
+                        &manifest.id,
+                        PendingPhase::CatalogWritten,
+                    )?;
+                    // 退避まで進めたら段階を記録し、その後で新しい実体を置く。
+                    // 退避したまま落ちても、回復が旧版を戻せるようにするため。
+                    backup(catalog, &manifest.id)?;
+                    crate::journal::advance(catalog.root(), &manifest.id, PendingPhase::BackedUp)?;
+                    place(catalog, &manifest.id, &staged)?;
+                    crate::journal::advance(catalog.root(), &manifest.id, PendingPhase::Swapped)?;
                     Ok(())
                 })();
                 match result {
                     Ok(()) => {
+                        // 確定後に退避した旧版を片付ける。失敗しても実体は新しく、
+                        // 次の回復が `.swap` を掃除する。
+                        if let Err(error) =
+                            remove_directory(&swap_path(catalog.root(), &manifest.id))
+                        {
+                            eprintln!("拡張 {} の退避した旧版を消せません: {error}", manifest.id);
+                        }
                         crate::journal::finish(catalog.root(), &manifest.id)?;
                         Ok(InstallOutcome::Installed {
                             id: manifest.id,
@@ -261,19 +283,14 @@ impl ExtensionLoader {
                         })
                     }
                     Err(error) => {
-                        // 実体を置き換えられなかった。宣言だけが先へ進まないよう戻す。
+                        // 実体を置き換えられなかった。今の段階から回復して、目録と実体を
+                        // 操作前へ戻す。回復が失敗したら journal を残し、次の起動で再試行する。
                         let _ = fs::remove_dir_all(&staged);
-                        let restored = match previous {
-                            Some(entry) => catalog.register(entry).map(|_| ()),
-                            None => catalog.forget(&manifest.id),
-                        };
-                        if restored.is_err() {
+                        if crate::journal::recover_locked(catalog).is_err() {
                             eprintln!(
-                                "拡張 {} の目録を戻せませんでした。実体と宣言が食い違っています",
+                                "拡張 {} の中断した導入を回復できませんでした。次の起動で再試行します",
                                 manifest.id
                             );
-                        } else {
-                            let _ = crate::journal::finish(catalog.root(), &manifest.id);
                         }
                         Err(error)
                     }
@@ -334,7 +351,8 @@ impl ExtensionLoader {
     ) -> Result<(), PackageError> {
         let _lock = lock_install(catalog.root())?;
         // 前回の中断を先に回復する。目録と実体が食い違ったまま判断しない。
-        crate::journal::recover(catalog)?;
+        // lock は取得済みなので、入れ子にせず `recover_locked` を呼ぶ。
+        crate::journal::recover_locked(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
         let entry = catalog
@@ -342,31 +360,61 @@ impl ExtensionLoader {
             .cloned()
             .ok_or_else(|| PackageError::Malformed(format!("目録に {id} がない")))?;
         let backup = swap_path(catalog.root(), id);
-        let had_files = catalog.installed_directory(id)?.is_dir();
-        if had_files {
-            if let Some(parent) = backup.parent() {
-                fs::create_dir_all(parent).map_err(PackageError::Io)?;
-            }
-            remove_directory(&backup)?;
-            fs::rename(catalog.installed_directory(id)?, &backup).map_err(PackageError::Io)?;
+        // 退避より先に記録する。退避したまま落ちても回復が実体を戻せるようにするため。
+        crate::journal::begin(
+            catalog.root(),
+            id,
+            PendingOperation::Remove,
+            Some(entry.clone()),
+        )?;
+        if let Err(error) = backup_removal(catalog, id) {
+            let _ = crate::journal::finish(catalog.root(), id);
+            return Err(error);
         }
-        crate::journal::begin(catalog.root(), id, Some(entry.clone()))?;
+        if let Err(error) = crate::journal::advance(catalog.root(), id, PendingPhase::BackedUp) {
+            // 段階を記録できないまま進むと、回復が退避を認識できない。実体を戻して失敗する。
+            let restored = fs::rename(&backup, catalog.installed_directory(id)?);
+            if restored.is_ok() {
+                let _ = crate::journal::finish(catalog.root(), id);
+            }
+            return Err(PackageError::Catalog(error));
+        }
         if let Err(error) = catalog.register(ExtensionEntry::new(
             entry.id.clone(),
             entry.version,
             ExtensionState::unavailable(),
         )) {
             // 目録を書けなかった。退避した実体を戻す。
-            if had_files {
-                let _ = fs::rename(&backup, catalog.installed_directory(id)?);
+            if fs::rename(&backup, catalog.installed_directory(id)?).is_err() {
+                eprintln!(
+                    "拡張 {id} の実体を戻せませんでした。退避先は {} に残っています",
+                    backup.display()
+                );
+                // 記録を残し、次の起動で回復させる。
+                return Err(PackageError::Catalog(error));
             }
-            let _ = crate::journal::finish(catalog.root(), id);
+            crate::journal::finish(catalog.root(), id)?;
             return Err(PackageError::Catalog(error));
         }
+        crate::journal::advance(catalog.root(), id, PendingPhase::Swapped)?;
         remove_directory(&backup)?;
         crate::journal::finish(catalog.root(), id)?;
         Ok(())
     }
+}
+
+/// 除去のために実体を `.swap/<id>` へ退避する。実体が無ければ何もしない。
+fn backup_removal(catalog: &ExtensionCatalog, id: &ExtensionPackageId) -> Result<(), PackageError> {
+    let target = catalog.installed_directory(id)?;
+    if !target.is_dir() {
+        return Ok(());
+    }
+    let backup = swap_path(catalog.root(), id);
+    if let Some(parent) = backup.parent() {
+        fs::create_dir_all(parent).map_err(PackageError::Io)?;
+    }
+    remove_directory(&backup)?;
+    fs::rename(&target, &backup).map_err(PackageError::Io)
 }
 
 fn remove_directory(path: &Path) -> Result<(), PackageError> {
@@ -656,31 +704,37 @@ fn stage(
     Ok(staging.keep())
 }
 
-/// 用意した一時 directory を導入済みの置き場所へ置き換える。
-///
-/// 旧版の実体は消さずに退避し、新しい実体の配置が成功してから削除する。`rename` が
-/// 失敗しても旧版へ戻せるため、置き換えの途中で動いている版を失わない。
+/// 旧版の実体を `.swap/<id>` へ退避する。新しい実体はまだ置かない。
 ///
 /// 退避先は `<root>/.swap/<id>` とする。`installed/<id>` の隣に固定名で置くと、その名前が
 /// 別の拡張 ID と衝突し得るため、ID の namespace の外へ逃がす。名前は導入の lock 内で
 /// だけ使うので固定でよい。
-fn swap(
-    catalog: &ExtensionCatalog,
-    id: &ExtensionPackageId,
-    staged: &Path,
-) -> Result<(), PackageError> {
+fn backup(catalog: &ExtensionCatalog, id: &ExtensionPackageId) -> Result<(), PackageError> {
     let target = catalog.installed_directory(id)?;
     let previous = swap_path(catalog.root(), id);
     if let Some(parent) = previous.parent() {
         fs::create_dir_all(parent).map_err(PackageError::Io)?;
     }
     remove_directory(&previous)?;
-    let had_previous = target.is_dir();
-    if had_previous {
+    if target.is_dir() {
         fs::rename(&target, &previous).map_err(PackageError::Io)?;
     }
+    Ok(())
+}
+
+/// 用意した一時 directory を導入済みの置き場所へ置く。
+///
+/// 先に [`backup`] で旧版を退避しておく。置けなかった場合は退避した旧版を元の場所へ
+/// 戻し、失敗を返す。呼び出し側は journal の段階を使って同じ復元をやり直せる。
+fn place(
+    catalog: &ExtensionCatalog,
+    id: &ExtensionPackageId,
+    staged: &Path,
+) -> Result<(), PackageError> {
+    let target = catalog.installed_directory(id)?;
+    let previous = swap_path(catalog.root(), id);
     if let Err(error) = fs::rename(staged, &target) {
-        if had_previous {
+        if previous.is_dir() {
             // 新しい実体を置けなかった。退避した旧版を元の場所へ戻す。
             if fs::rename(&previous, &target).is_err() {
                 eprintln!(
@@ -691,7 +745,6 @@ fn swap(
         }
         return Err(PackageError::Io(error));
     }
-    remove_directory(&previous)?;
     Ok(())
 }
 
@@ -699,27 +752,10 @@ fn swap_path(root: &Path, id: &ExtensionPackageId) -> PathBuf {
     crate::journal::swap_path(root, id)
 }
 
-/// 同じ package の同時導入を直列化する。目録の排他（`catalog.json.lock`）とは別の file を
-/// 使い、`register` の lock と入れ子にしない。
-fn lock_install(root: &Path) -> Result<InstallLock, PackageError> {
-    fs::create_dir_all(root).map_err(PackageError::Io)?;
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(root.join("installed.lock"))
-        .map_err(PackageError::Io)?;
-    file.lock().map_err(PackageError::Io)?;
-    Ok(InstallLock(file))
-}
-
-struct InstallLock(fs::File);
-
-impl Drop for InstallLock {
-    fn drop(&mut self) {
-        let _ = self.0.unlock();
-    }
+/// 同じ package の同時導入を直列化する。回復と同じ lock を使い、導入中の操作を
+/// 別の入口が中断済みと誤認しないようにする。
+fn lock_install(root: &Path) -> Result<crate::journal::InstallLock, PackageError> {
+    crate::journal::InstallLock::acquire(root).map_err(PackageError::Catalog)
 }
 
 fn validate_member_path(path: &str) -> Result<(), PackageError> {
