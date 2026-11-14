@@ -162,11 +162,18 @@ impl ExtensionCatalog {
     /// package の展開は別段階なので `installed/<id>/` はここで作らない。空の
     /// directory を置くと「package が入っている」と誤認させるため、実体を置く
     /// 段階（PR2）が作る。データの置き場所だけを先に用意する。
+    ///
+    /// `create_dir_all` の成功だけでは実際に作られたと判断しない。Windows の予約
+    /// デバイス名など、作成したように見せて何も作らない path があり、その状態で
+    /// 目録を書くと拡張データの置き場所を失う。作成後に実在を確かめる。
     fn prepare_placement(&self, entry: &ExtensionEntry) -> Result<(), ExtensionCatalogError> {
         let data = self
             .data_directory(&entry.id)
             .map_err(|_| ExtensionCatalogError::InvalidEntry)?;
-        fs::create_dir_all(data).map_err(ExtensionCatalogError::Io)?;
+        fs::create_dir_all(&data).map_err(ExtensionCatalogError::Io)?;
+        if !data.is_dir() {
+            return Err(ExtensionCatalogError::InvalidEntry);
+        }
         Ok(())
     }
 }
@@ -467,6 +474,27 @@ mod tests {
         let id = id("dev.example.terminal");
         assert!(!catalog.installed_directory(&id).unwrap().exists());
         assert!(catalog.data_directory(&id).unwrap().is_dir());
+    }
+
+    #[test]
+    fn a_placement_failure_leaves_the_catalog_untouched() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("extensions");
+        fs::create_dir_all(&directory).unwrap();
+        // `data` を file で塞ぎ、`data/<id>/` を作れない状態にする。
+        fs::write(directory.join("data"), b"not a directory").unwrap();
+
+        let mut catalog = ExtensionCatalog::open(directory.clone()).unwrap();
+        assert!(catalog.register(entry("dev.example.one", true)).is_err());
+        assert!(
+            !directory.join(CATALOG_FILE).exists(),
+            "配置を作れない登録は目録を書かない"
+        );
+        assert_eq!(
+            fs::read(directory.join("data")).unwrap(),
+            b"not a directory"
+        );
+        assert_eq!(catalog.entries().count(), 0);
     }
 
     #[test]
