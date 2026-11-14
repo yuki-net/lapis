@@ -8,8 +8,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ExtensionPackageId, ExtensionState, ExtensionVersion, InvalidExtensionPackageId};
 
-/// 目録 file の schema。項目を増やすときは schema を上げ、旧 schema は受理しない。
-pub const CATALOG_SCHEMA: u32 = 1;
+/// 目録 file の schema。
+///
+/// 項目を増やすときは schema を上げる。version 2 は `incompatible` を足したもので、
+/// 省略時の意味（false）が決まっているため version 1 も読める。読めない目録を空として
+/// 扱わず、未知の schema は拒否する。これにより、新しい項目を書けない旧い入口へ
+/// 目録を渡しても、宣言を黙って失わない。
+pub const CATALOG_SCHEMA: u32 = 2;
+
+/// 読める目録 schema。新しい順に並べる。
+const READABLE_SCHEMAS: [u32; 2] = [2, 1];
 
 const CATALOG_FILE: &str = "catalog.json";
 const LOCK_FILE: &str = "catalog.json.lock";
@@ -18,8 +26,10 @@ const DATA_DIR: &str = "data";
 
 /// 目録に載る 1 件。package の実体とデータの置き場所は `id` から決まる。
 ///
-/// 保存形式は `id` / `version` に `installed` / `enabled` を並べた平坦な object と
-/// する。読むときに未知の field と `enabled` かつ未導入の組み合わせを拒否する。
+/// 保存形式は `id` / `version` に `installed` / `enabled` / `incompatible` を並べた
+/// 平坦な object とする。`incompatible` は互換照合に失敗した package を表し、
+/// 導入前の目録を読めるよう省略時は `false` とみなす。
+/// 読むときに未知の field と `enabled` かつ未導入の組み合わせを拒否する。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ExtensionEntry {
     pub id: ExtensionPackageId,
@@ -46,10 +56,12 @@ impl<'de> Deserialize<'de> for ExtensionEntry {
             version: ExtensionVersion,
             installed: bool,
             enabled: bool,
+            #[serde(default)]
+            incompatible: bool,
         }
 
         let repr = Repr::deserialize(deserializer)?;
-        let state = ExtensionState::from_parts(repr.installed, repr.enabled)
+        let state = ExtensionState::from_parts(repr.installed, repr.enabled, repr.incompatible)
             .ok_or_else(|| serde::de::Error::custom("未導入の拡張を有効にはできません"))?;
         Ok(Self {
             id: repr.id,
@@ -122,23 +134,67 @@ impl ExtensionCatalog {
         fs::create_dir_all(&self.root).map_err(ExtensionCatalogError::Io)?;
         let _lock = ExclusiveFile::acquire(&self.root.join(LOCK_FILE))?;
         let mut entries = load_entries(&self.root)?;
-        let result = match entries.get(&entry.id) {
-            Some(current) if current == &entry => Registration::Unchanged,
-            Some(_) => {
-                entries.insert(entry.id.clone(), entry.clone());
-                Registration::Updated
-            }
-            None => {
-                entries.insert(entry.id.clone(), entry.clone());
-                Registration::Created
-            }
-        };
+        let result = Self::insert(&mut entries, entry.clone());
         self.prepare_placement(&entry)?;
         if result != Registration::Unchanged {
             write_entries(&self.root, &entries)?;
         }
         self.entries = entries;
         Ok(result)
+    }
+
+    /// 有効状態だけを変える。
+    ///
+    /// 反映は入口の再起動で行う。未導入・非互換の拡張は有効にできないため `None` を
+    /// 返し、目録を書き換えない。同じ状態への変更は `Registration::Unchanged`。
+    ///
+    /// 目録は memory の写しではなく lock 内で file から読み直す。別の入口が書いた
+    /// 宣言を、古い memory の写しで上書きしないため。
+    pub fn set_enabled(
+        &mut self,
+        id: &ExtensionPackageId,
+        enabled: bool,
+    ) -> Result<Option<Registration>, ExtensionCatalogError> {
+        fs::create_dir_all(&self.root).map_err(ExtensionCatalogError::Io)?;
+        let _lock = ExclusiveFile::acquire(&self.root.join(LOCK_FILE))?;
+        let mut entries = load_entries(&self.root)?;
+        let Some(current) = entries.get(id) else {
+            self.entries = entries;
+            return Ok(None);
+        };
+        if !current.state.is_installed() {
+            self.entries = entries;
+            return Ok(None);
+        }
+        let entry = ExtensionEntry::new(
+            current.id.clone(),
+            current.version.clone(),
+            current.state.with_enabled(enabled),
+        );
+        let result = Self::insert(&mut entries, entry.clone());
+        self.prepare_placement(&entry)?;
+        if result != Registration::Unchanged {
+            write_entries(&self.root, &entries)?;
+        }
+        self.entries = entries;
+        Ok(Some(result))
+    }
+
+    fn insert(
+        entries: &mut BTreeMap<ExtensionPackageId, ExtensionEntry>,
+        entry: ExtensionEntry,
+    ) -> Registration {
+        match entries.get(&entry.id) {
+            Some(current) if current == &entry => Registration::Unchanged,
+            Some(_) => {
+                entries.insert(entry.id.clone(), entry);
+                Registration::Updated
+            }
+            None => {
+                entries.insert(entry.id.clone(), entry);
+                Registration::Created
+            }
+        }
     }
 
     /// 導入済み package の展開先。読み書きは行わない。
@@ -199,7 +255,7 @@ fn load_entries(
     };
     let document: CatalogDocument =
         serde_json::from_slice(&bytes).map_err(ExtensionCatalogError::Invalid)?;
-    if document.schema != CATALOG_SCHEMA {
+    if !READABLE_SCHEMAS.contains(&document.schema) {
         return Err(ExtensionCatalogError::UnsupportedSchema(document.schema));
     }
     // ID の検証は目録全体に掛かる。保存済みの ID が現在の規則（末尾 `.`・Windows
@@ -401,15 +457,49 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&saved).unwrap(),
             serde_json::json!({
-                "schema": 1,
+                "schema": 2,
                 "extensions": [{
                     "id": "dev.example.terminal",
                     "version": "0.1.0",
                     "installed": true,
                     "enabled": false,
+                    "incompatible": false,
                 }],
             })
         );
+    }
+
+    #[test]
+    fn a_version_1_catalog_is_read_as_the_current_shape() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("extensions");
+        fs::create_dir_all(&directory).unwrap();
+        // PR1 が書いた目録。`incompatible` が無いので false として読む。
+        fs::write(
+            directory.join(CATALOG_FILE),
+            r#"{"schema":1,"extensions":[{"id":"dev.example.terminal","version":"0.1.0","installed":true,"enabled":true}]}"#,
+        )
+        .unwrap();
+
+        let mut catalog = ExtensionCatalog::open(directory.clone()).unwrap();
+        let stored = catalog.get(&id("dev.example.terminal")).unwrap().clone();
+        assert_eq!(
+            stored,
+            ExtensionEntry::new(
+                id("dev.example.terminal"),
+                version("0.1.0"),
+                ExtensionState::installed(true),
+            )
+        );
+
+        // 書き換えると現在の schema で保存する。旧い入口は未知の schema として
+        // 読み込みを拒否するため、宣言を書き換えて失うことがない。
+        catalog
+            .register(entry("dev.example.terminal", false))
+            .unwrap();
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(directory.join(CATALOG_FILE)).unwrap()).unwrap();
+        assert_eq!(saved["schema"], 2);
     }
 
     #[test]
@@ -551,13 +641,13 @@ mod tests {
         fs::create_dir_all(&directory).unwrap();
         fs::write(
             directory.join(CATALOG_FILE),
-            br#"{"schema":2,"extensions":[]}"#,
+            br#"{"schema":3,"extensions":[]}"#,
         )
         .unwrap();
 
         assert!(matches!(
             ExtensionCatalog::open(directory),
-            Err(ExtensionCatalogError::UnsupportedSchema(2))
+            Err(ExtensionCatalogError::UnsupportedSchema(3))
         ));
     }
 
@@ -581,6 +671,36 @@ mod tests {
                 "must reject {payload}"
             );
         }
+    }
+
+    #[test]
+    fn enabling_reads_the_current_file_instead_of_a_stale_copy() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("extensions");
+        let mut first = ExtensionCatalog::open(directory.clone()).unwrap();
+        first.register(entry("dev.example.one", true)).unwrap();
+
+        // 別の入口が同じ目録へ宣言を足す。
+        let mut second = ExtensionCatalog::open(directory.clone()).unwrap();
+        second.register(entry("dev.example.two", true)).unwrap();
+
+        // 古い写しを持つ入口の変更で、後から足した宣言を失わない。
+        assert_eq!(
+            first.set_enabled(&id("dev.example.one"), false).unwrap(),
+            Some(Registration::Updated)
+        );
+        let entries: Vec<_> = ExtensionCatalog::open(directory)
+            .unwrap()
+            .entries()
+            .map(|entry| (entry.id.as_str().to_owned(), entry.state.is_enabled()))
+            .collect();
+        assert_eq!(
+            entries,
+            vec![
+                ("dev.example.one".to_owned(), false),
+                ("dev.example.two".to_owned(), true),
+            ]
+        );
     }
 
     #[test]

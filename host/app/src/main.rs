@@ -231,7 +231,7 @@ fn run() -> Result<(), Error> {
             host::write_invitation_replacing(path, &invitation)?;
             println!("invitation={}", path.display());
         }
-        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / quit");
+        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / ext-install <file.lapis> [--disabled] / ext-enable <id> / ext-disable <id> / ext-remove <id> / quit");
         std::io::stdout().flush()?;
         let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
         credential_save.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -356,6 +356,55 @@ fn run() -> Result<(), Error> {
                                     .revoke_device(id)
                             );
                         }
+                    } else if let Some(input) = line.strip_prefix("ext-install ") {
+                        // `ext-install <file.lapis> [--disabled]`。読み込んだ宣言は
+                        // `host.extensions.list` に現れ、有効な拡張は入口の再起動で反映する。
+                        let mut parts = input.split_whitespace();
+                        let path = parts.next();
+                        let enabled = !parts.any(|argument| argument == "--disabled");
+                        match path {
+                            Some(path) => match host.install_extension(std::path::Path::new(path), enabled) {
+                                Ok(outcome) => println!("{}", describe_outcome(&outcome)),
+                                Err(error) => eprintln!("拡張を読み込めません: {error}"),
+                            },
+                            None => eprintln!("Usage: ext-install <file.lapis> [--disabled]"),
+                        }
+                    } else if let Some(input) = line.strip_prefix("ext-enable ") {
+                        let id = input.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: ext-enable <extension-id>");
+                        } else {
+                            match host.set_extension_enabled(id, true) {
+                                Ok(Some(registration)) => println!(
+                                    "enabled={id} registration={registration:?}（入口の再起動で反映）"
+                                ),
+                                Ok(None) => eprintln!("有効にできない拡張です: {id}"),
+                                Err(error) => eprintln!("拡張を有効にできません: {error}"),
+                            }
+                        }
+                    } else if let Some(input) = line.strip_prefix("ext-disable ") {
+                        let id = input.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: ext-disable <extension-id>");
+                        } else {
+                            match host.set_extension_enabled(id, false) {
+                                Ok(Some(registration)) => println!(
+                                    "disabled={id} registration={registration:?}（入口の再起動で反映）"
+                                ),
+                                Ok(None) => eprintln!("無効にできない拡張です: {id}"),
+                                Err(error) => eprintln!("拡張を無効にできません: {error}"),
+                            }
+                        }
+                    } else if let Some(input) = line.strip_prefix("ext-remove ") {
+                        let id = input.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: ext-remove <extension-id>");
+                        } else {
+                            match host.remove_extension(id) {
+                                Ok(()) => println!("removed={id}（拡張データは残します）"),
+                                Err(error) => eprintln!("拡張を取り除けません: {error}"),
+                            }
+                        }
                     } else { eprintln!("Unknown command"); }
                     std::io::stdout().flush()?;
                 }
@@ -410,6 +459,33 @@ fn save_credentials(
 fn auto_approve_oidc_devices() -> bool {
     std::env::var("LAPIS_AUTO_APPROVE_OIDC_DEVICES")
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
+/// `ext-install` の結果を console 向けの 1 行にする。
+fn describe_outcome(outcome: &extensions_entry::InstallOutcome) -> String {
+    match outcome {
+        extensions_entry::InstallOutcome::Installed {
+            id,
+            version,
+            enabled,
+        } => format!(
+            "installed={id} version={version} enabled={enabled}（有効なら入口の再起動で反映）"
+        ),
+        extensions_entry::InstallOutcome::Incompatible {
+            id,
+            version,
+            reason,
+            kept_previous,
+        } => {
+            if *kept_previous {
+                format!(
+                    "incompatible={id} version={version}: {reason}（読み込まず、導入済みの版を残します）"
+                )
+            } else {
+                format!("incompatible={id} version={version}: {reason}（読み込みません）")
+            }
+        }
+    }
 }
 
 fn write_connection_info(

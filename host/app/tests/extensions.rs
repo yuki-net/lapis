@@ -13,6 +13,29 @@ fn entry(id: &str, enabled: bool) -> ExtensionEntry {
     )
 }
 
+/// 署名済みの `.lapis` package を作る。repository の署名鍵は持たないため、Host の
+/// 読み込み経路のうち目録・配置だけを確かめるときに使う。
+fn write_package(
+    directory: &std::path::Path,
+    files: &[(&str, &[u8])],
+    manifest: &serde_json::Value,
+) -> std::path::PathBuf {
+    use std::io::Write as _;
+    let path = directory.join("package.lapis");
+    let mut writer = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+    let options = zip::write::SimpleFileOptions::default();
+    writer.start_file("manifest.json", options).unwrap();
+    writer
+        .write_all(&serde_json::to_vec(manifest).unwrap())
+        .unwrap();
+    for (name, bytes) in files {
+        writer.start_file(*name, options).unwrap();
+        writer.write_all(bytes).unwrap();
+    }
+    writer.finish().unwrap();
+    path
+}
+
 #[test]
 fn a_host_without_a_state_directory_has_no_extensions() {
     let host = BackendHost::start().unwrap();
@@ -98,5 +121,105 @@ fn embedded_and_local_clients_read_the_same_declaration() {
             .unwrap()
             .extensions,
         host.extensions().unwrap().extensions
+    );
+}
+
+#[test]
+fn an_incompatible_extension_is_declared_apart_from_installed_ones() {
+    let state = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(state.path().join("extensions")).unwrap();
+    catalog.register(entry("dev.example.one", true)).unwrap();
+    catalog
+        .register(ExtensionEntry::new(
+            ExtensionPackageId::try_new("dev.example.future").unwrap(),
+            ExtensionVersion::parse("1.0.0").unwrap(),
+            ExtensionState::incompatible(),
+        ))
+        .unwrap();
+    drop(catalog);
+
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let listed = host.extensions().unwrap().extensions;
+    let installed = listed
+        .iter()
+        .find(|extension| extension.id == "dev.example.one")
+        .unwrap();
+    assert!(installed.installed && installed.enabled && !installed.incompatible);
+    let future = listed
+        .iter()
+        .find(|extension| extension.id == "dev.example.future")
+        .unwrap();
+    assert!(!future.installed && !future.enabled && future.incompatible);
+}
+
+#[test]
+fn enabling_and_disabling_change_only_the_declaration_until_restart() {
+    let state = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(state.path().join("extensions")).unwrap();
+    catalog.register(entry("dev.example.one", true)).unwrap();
+    drop(catalog);
+
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        host.set_extension_enabled("dev.example.one", false)
+            .unwrap()
+            .is_some()
+    );
+    assert!(!host.extensions().unwrap().extensions[0].enabled);
+
+    // 未導入の拡張は有効にできない。
+    assert!(
+        host.set_extension_enabled("dev.example.none", true)
+            .unwrap()
+            .is_none()
+    );
+
+    // 再起動すると目録から同じ宣言を読む。
+    drop(host);
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let listed = restarted.extensions().unwrap().extensions;
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].installed);
+    assert!(!listed[0].enabled);
+}
+
+#[test]
+fn a_package_without_a_trusted_signature_is_rejected_and_not_declared() {
+    let state = tempfile::tempdir().unwrap();
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let manifest = serde_json::json!({
+        "schema": 1,
+        "kind": "extension",
+        "id": "dev.example.unsigned",
+        "version": "0.1.0",
+        "requires": [{
+            "contract": "lapis.extension",
+            "minimum": "1.0.0",
+            "maximum": "1.0.0",
+        }],
+        "files": [{
+            "path": "extension.wasm",
+            "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+        }],
+        "key_id": "not-a-trusted-key",
+        "signature": "AA==",
+    });
+    let package = write_package(state.path(), &[("extension.wasm", b"\0asm")], &manifest);
+
+    let error = host
+        .install_extension(&package, true)
+        .expect_err("信頼していない署名の package は読み込まない");
+    assert!(error.contains("署名"), "{error}");
+    assert!(
+        host.extensions().unwrap().extensions.is_empty(),
+        "署名が不正な package は目録に載せない"
+    );
+    assert!(
+        !state
+            .path()
+            .join("extensions")
+            .join("installed")
+            .join("dev.example.unsigned")
+            .exists()
     );
 }
