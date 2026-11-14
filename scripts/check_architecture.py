@@ -115,6 +115,7 @@ def layer(manifest, root):
         ("host/workbench/", "runtime"),
         ("host/documents/", "runtime"),
         ("host/adapters/", "infrastructure"), ("host/extensions/", "infrastructure"),
+        ("host/extensions-entry/", "infrastructure"),
         ("host/workspaces/", "runtime"),
         ("host/auth/", "runtime"),
         ("host/tasks/", "runtime"),

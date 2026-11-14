@@ -22,6 +22,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `host/adapters/` | FS、LSP、runner、検索、永続化 | 画面の判断 |
 | `host/extensions/git/` | Git 拡張の Host 実装（CLI 操作・監視） | 画面の判断、Workspace の正規状態 |
 | `host/extensions/acp/` | ACP client 境界（ハーネス起動、ACP 送受信、`TaskEvent` への変換） | Task の正規状態、core の型 |
+| `host/extensions-entry/` | 拡張の入口（導入済み拡張の目録・状態、package と拡張データの置き場所） | `.lapis` package の読み込み・互換照合・署名検証、画面の判断 |
 | `host/transport/` | 認証・wire・接続と共通 Runtime への配送 | 独立した Workspace/Document 正本 |
 | `host/app/` | Runtime と具体実装の組み立て、開始・終了 | UI |
 
@@ -204,6 +205,14 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - Task所属のViewはAgentで別Taskを選択すると非表示にし、IDEでは現在の配置を維持する。共有Toolの配置はTask Layoutの復元時にも個体IDを維持する。Terminalの表示コンテキストはViewのTask/Resource Bindingから解決し、共有Terminalは現在の接続先を維持する。Terminal参照はEditorや選択中Taskへ移さず、実際の接続先Taskへ保存する。再Attach・操作待ち・接続失敗の未確定表示を空のTerminal一覧として保存しない。Resource固定参照は対応済みFeatureと実在するIDに限定し、対象がなければ別Resourceへフォールバックしない。
 - Agent 実行エンジンは `runner` 識別子で選び、core に固有の型や分岐を置かない。未対応機能を表示だけのButtonで完了扱いにせず、既存能力の範囲を共通RegistryとCommandで表現する。Task一覧は選択中Taskに属するAgent表示だけを描画する。別TaskのSessionを自動起動・自動追加せず、既存のTask / Worktree / Terminal / Agent開始操作を明示的な入口として再利用する。
 - ACP client は `host/extensions/acp`（crate `local-acp`）が境界を持ち、ACP の型・起動・`session/update` の解釈を `task` の値へ変換する。対象は安定面の最小セット（`initialize` / `session/new` / `session/prompt` / `session/update` / `session/request_permission` / `session/cancel`）に限る。最初のハーネスは OpenCode（`opencode acp`）とする。ACP Registry・複数プロバイダ同時接続・Subagent Sessions RFD は対象外。
+
+## 拡張の入口
+
+- `host/extensions-entry/`（crate `extensions-entry`）は拡張の入口として、導入済み拡張の目録と状態、package と拡張データの置き場所だけを持つ。「配布・販売」を意味する `store` は使わない。
+- 目録は Host の正本で、`<state>/extensions/catalog.json`（`schema: 1`）に置く。1 件は `id` / `version` / `installed` / `enabled` を持ち、`enabled` は `installed` を含意する。壊れた目録・未知の schema・重複 ID・規則に合わない ID（末尾 `.`、Windows 予約デバイス名など）は読み込み時に拒否し、空として作り直さない。項目だけを黙って捨てず、file も上書きしない（宣言を無言で失わないため）。
+- Client への提示は `host.extensions.list` の宣言に限る。要求 capability は読み取り専用の `extensions.read` とし、`host.manage` は要求しない（表示に使う通常の Client が読めるようにするため）。Client は受け取った値を表示にだけ使い、保存値を正本にしない。状態の変更は入口の再起動で反映する前提とし、登録は同じ宣言の再登録で file を書き換えない冪等な操作にする。
+- 拡張データの正本は Host 側の `<state>/extensions/data/<id>/` に置く。Client は再取得可能な cache だけを持つ。package の展開先は `<state>/extensions/installed/<id>/` とし、`.lapis` package の読み込み・互換照合・署名検証は読み込み段階の責務にする。
+- state directory を持たない Host は拡張を持たない。目録を一時 directory へ逃がすと、同じ OS ユーザーの別 Host と状態を共有してしまうため、空の宣言を返す。
 
 ## Desktop の Command / Keymap
 

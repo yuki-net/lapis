@@ -32,6 +32,8 @@ pub enum RequestBody {
     HostWebStart(crate::HostWebStartRequest),
     #[serde(rename = "host.web.stop")]
     HostWebStop(crate::HostWebStopRequest),
+    #[serde(rename = "host.extensions.list")]
+    HostExtensions(crate::HostExtensionsListRequest),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentRelocateRequest),
     #[serde(rename = "files.create_directory")]
@@ -111,6 +113,7 @@ impl RequestBody {
             Self::HostWebStatus(_) => "host.web.status",
             Self::HostWebStart(_) => "host.web.start",
             Self::HostWebStop(_) => "host.web.stop",
+            Self::HostExtensions(_) => "host.extensions.list",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
@@ -159,6 +162,7 @@ impl RequestBody {
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
             | Self::HostWebStop(_) => capability::HOST_MANAGE,
+            Self::HostExtensions(_) => capability::EXTENSIONS_READ,
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)
@@ -204,6 +208,7 @@ impl RequestBody {
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
             | Self::HostWebStop(_)
+            | Self::HostExtensions(_)
             | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),

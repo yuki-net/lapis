@@ -18,6 +18,11 @@ pub const DOCUMENTS_READ: &str = "workspace.documents.read";
 pub const DOCUMENTS_WRITE: &str = "workspace.documents.write";
 pub const TERMINAL_START: &str = "workspace.terminal.start";
 pub const TERMINAL_CONTROL: &str = "workspace.terminal.control";
+/// 導入済み拡張の宣言を読む。有効化・無効化は含まない。
+///
+/// `host.` を付けないのは、Host 管理権限ではなく、拡張の宣言を表示する通常の
+/// Client が要求する読み取りだから。Workspace 限定の pairing でも付与される。
+pub const EXTENSIONS_READ: &str = "extensions.read";
 
 const MAX_CAPABILITY_ID_BYTES: usize = 128;
 const MAX_CAPABILITIES: usize = 64;

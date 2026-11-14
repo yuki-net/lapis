@@ -53,6 +53,7 @@ impl RemoteRequestHandler for HostRemoteHandler {
                 | RequestBody::HostWebStatus(_)
                 | RequestBody::HostWebStart(_)
                 | RequestBody::HostWebStop(_)
+                | RequestBody::HostExtensions(_)
                 | RequestBody::DocumentRelocate(_)
         ) {
             return self.inner.handle(grant, request);
@@ -62,16 +63,24 @@ impl RemoteRequestHandler for HostRemoteHandler {
         let web = self.web.as_ref().and_then(|holder| holder.get()).cloned();
         Box::pin(async move {
             let id = request.request_id.clone();
-            let owner = grant
-                .capabilities()
-                .iter()
-                .any(|capability| capability.as_str() == capability::HOST_MANAGE);
-            let allowed = owner
-                || (matches!(request.body, RequestBody::HostRegister(_))
-                    && grant
-                        .capabilities()
-                        .iter()
-                        .any(|capability| capability.as_str() == capability::WORKSPACES_REGISTER));
+            // 拡張の宣言は通常の Client が表示に使う。`host.manage` は要求せず、
+            // 読み取り専用の capability だけで許可する。
+            let allowed = if matches!(request.body, RequestBody::HostExtensions(_)) {
+                grant
+                    .capabilities()
+                    .iter()
+                    .any(|capability| capability.as_str() == capability::EXTENSIONS_READ)
+            } else {
+                let owner = grant
+                    .capabilities()
+                    .iter()
+                    .any(|capability| capability.as_str() == capability::HOST_MANAGE);
+                owner
+                    || (matches!(request.body, RequestBody::HostRegister(_))
+                        && grant.capabilities().iter().any(|capability| {
+                            capability.as_str() == capability::WORKSPACES_REGISTER
+                        }))
+            };
             if !allowed {
                 return ResponseEnvelope {
                     request_id: id,
@@ -186,6 +195,10 @@ impl RemoteRequestHandler for HostRemoteHandler {
                             Err(_) => error(INTERNAL),
                         }
                     }
+                    RequestBody::HostExtensions(_) => match host.extensions() {
+                        Ok(list) => ResponseBody::HostExtensions(list),
+                        Err(message) => web_error(message),
+                    },
                     RequestBody::HostWorktree(worktree) => {
                         match host
                             .service()

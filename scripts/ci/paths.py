@@ -35,6 +35,7 @@ PATH_RULES = [
     
     # Backend共通（Host以外）
     (["host/extensions/"], {"rust_core", "host", "desktop"}),
+    (["host/extensions-entry/"], {"rust_core", "host", "desktop"}),
     (["host/runtime/"], {"rust_core", "host", "desktop"}),    (["host/adapters/"], {"rust_core", "host", "desktop"}),
     (["host/transport/web/"], {"rust_core", "host", "desktop", "web"}),
     (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
