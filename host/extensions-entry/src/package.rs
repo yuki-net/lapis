@@ -35,9 +35,6 @@ pub const PACKAGE_SCHEMA: i64 = 1;
 /// package 内で manifest を置く名前。manifest が宣言する file には使えない。
 pub const MANIFEST_NAME: &str = "manifest.json";
 
-/// 置き換え中の旧版を退避する directory。拡張 ID の namespace の外に置く。
-const SWAP_DIR: &str = ".swap";
-
 /// package 1 つと、その展開後の合計の上限。読み込み時に確保する memory を決める。
 const MAX_PACKAGE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -226,6 +223,8 @@ impl ExtensionLoader {
         verify_files(&manifest, &archive)?;
 
         let _lock = lock_install(catalog.root())?;
+        // 前回の中断を先に回復する。目録と実体が食い違ったまま判断しない。
+        crate::journal::recover(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
         match self.contracts.check(&manifest.requires) {
@@ -235,34 +234,50 @@ impl ExtensionLoader {
                 // させるため、置き換えは目録の書き込み後に行う。
                 let previous = catalog.get(&manifest.id).cloned();
                 let staged = stage(catalog, &manifest, &archive)?;
-                if let Err(error) = catalog.register(ExtensionEntry::new(
-                    manifest.id.clone(),
-                    manifest.version.clone(),
-                    ExtensionState::installed(enabled),
-                )) {
+                // ここから先で終了しても、次の起動が journal を見て完了／取り消しする。
+                // 記録は「前の宣言」であり、取り消すときに戻す値になる。
+                if let Err(error) =
+                    crate::journal::begin(catalog.root(), &manifest.id, previous.clone())
+                {
                     let _ = fs::remove_dir_all(&staged);
                     return Err(PackageError::Catalog(error));
                 }
-                if let Err(error) = swap(catalog, &manifest.id, &staged) {
-                    // 実体を置き換えられなかった。宣言だけが先へ進まないよう戻す。
-                    let _ = fs::remove_dir_all(&staged);
-                    let restored = match previous {
-                        Some(entry) => catalog.register(entry).map(|_| ()),
-                        None => catalog.forget(&manifest.id),
-                    };
-                    if restored.is_err() {
-                        eprintln!(
-                            "拡張 {} の目録を戻せませんでした。実体と宣言が食い違っています",
-                            manifest.id
-                        );
+                let result = (|| -> Result<(), PackageError> {
+                    catalog.register(ExtensionEntry::new(
+                        manifest.id.clone(),
+                        manifest.version.clone(),
+                        ExtensionState::installed(enabled),
+                    ))?;
+                    swap(catalog, &manifest.id, &staged)?;
+                    Ok(())
+                })();
+                match result {
+                    Ok(()) => {
+                        crate::journal::finish(catalog.root(), &manifest.id)?;
+                        Ok(InstallOutcome::Installed {
+                            id: manifest.id,
+                            version: manifest.version,
+                            enabled,
+                        })
                     }
-                    return Err(error);
+                    Err(error) => {
+                        // 実体を置き換えられなかった。宣言だけが先へ進まないよう戻す。
+                        let _ = fs::remove_dir_all(&staged);
+                        let restored = match previous {
+                            Some(entry) => catalog.register(entry).map(|_| ()),
+                            None => catalog.forget(&manifest.id),
+                        };
+                        if restored.is_err() {
+                            eprintln!(
+                                "拡張 {} の目録を戻せませんでした。実体と宣言が食い違っています",
+                                manifest.id
+                            );
+                        } else {
+                            let _ = crate::journal::finish(catalog.root(), &manifest.id);
+                        }
+                        Err(error)
+                    }
                 }
-                Ok(InstallOutcome::Installed {
-                    id: manifest.id,
-                    version: manifest.version,
-                    enabled,
-                })
             }
             Err(reason) => {
                 // 導入済みの版が動いているなら、その宣言と実体を残す。非互換の版を
@@ -309,24 +324,47 @@ impl ExtensionLoader {
     /// 導入済み package を取り除き、宣言を「未導入」にする。
     ///
     /// 拡張データ（`data/<id>/`）は消さない。再導入した拡張が同じデータを引き継ぐ。
+    ///
+    /// 実体は先に退避し、目録の更新が成功してから消す。目録を書けなかったときに
+    /// 実体だけを失わないため。
     pub fn remove(
         &self,
         catalog: &mut ExtensionCatalog,
         id: &ExtensionPackageId,
     ) -> Result<(), PackageError> {
         let _lock = lock_install(catalog.root())?;
+        // 前回の中断を先に回復する。目録と実体が食い違ったまま判断しない。
+        crate::journal::recover(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
         let entry = catalog
             .get(id)
             .cloned()
             .ok_or_else(|| PackageError::Malformed(format!("目録に {id} がない")))?;
-        remove_directory(&catalog.installed_directory(id)?)?;
-        catalog.register(ExtensionEntry::new(
-            entry.id,
+        let backup = swap_path(catalog.root(), id);
+        let had_files = catalog.installed_directory(id)?.is_dir();
+        if had_files {
+            if let Some(parent) = backup.parent() {
+                fs::create_dir_all(parent).map_err(PackageError::Io)?;
+            }
+            remove_directory(&backup)?;
+            fs::rename(catalog.installed_directory(id)?, &backup).map_err(PackageError::Io)?;
+        }
+        crate::journal::begin(catalog.root(), id, Some(entry.clone()))?;
+        if let Err(error) = catalog.register(ExtensionEntry::new(
+            entry.id.clone(),
             entry.version,
             ExtensionState::unavailable(),
-        ))?;
+        )) {
+            // 目録を書けなかった。退避した実体を戻す。
+            if had_files {
+                let _ = fs::rename(&backup, catalog.installed_directory(id)?);
+            }
+            let _ = crate::journal::finish(catalog.root(), id);
+            return Err(PackageError::Catalog(error));
+        }
+        remove_directory(&backup)?;
+        crate::journal::finish(catalog.root(), id)?;
         Ok(())
     }
 }
@@ -353,6 +391,13 @@ fn read_archive(package: &Path) -> Result<BTreeMap<String, Vec<u8>>, PackageErro
     let file = fs::File::open(package).map_err(PackageError::Io)?;
     let mut zip = zip::ZipArchive::new(file)
         .map_err(|error| PackageError::Malformed(format!("zip として読めません: {error}")))?;
+    // `zip` 9.5.1 は同名 member を内部 map に集約するため、`len()` と `by_index()` からは
+    // 2 つ目以降が見えない。後段の重複検査だけでは足りないので、走査前に拒否する。
+    if zip.has_duplicate_names() {
+        return Err(PackageError::Malformed(
+            "package に同名の member がある".to_owned(),
+        ));
+    }
     if zip.len() > MAX_FILES {
         return Err(PackageError::Malformed(format!(
             "package の file 数が多すぎます（上限 {MAX_FILES}）"
@@ -424,9 +469,13 @@ fn member_name(entry: &zip::read::ZipFile<'_, fs::File>) -> Result<String, Packa
         || name.starts_with('/')
         || raw.contains('\\')
         || name.contains(':')
-        || name
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
+        || name.split('/').any(|part| {
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.ends_with('.')
+                || part.ends_with(' ')
+        })
     {
         return Err(PackageError::Malformed(format!(
             "不正な path がある: {raw}"
@@ -621,7 +670,7 @@ fn swap(
     staged: &Path,
 ) -> Result<(), PackageError> {
     let target = catalog.installed_directory(id)?;
-    let previous = catalog.root().join(SWAP_DIR).join(id.as_str());
+    let previous = swap_path(catalog.root(), id);
     if let Some(parent) = previous.parent() {
         fs::create_dir_all(parent).map_err(PackageError::Io)?;
     }
@@ -644,6 +693,10 @@ fn swap(
     }
     remove_directory(&previous)?;
     Ok(())
+}
+
+fn swap_path(root: &Path, id: &ExtensionPackageId) -> PathBuf {
+    crate::journal::swap_path(root, id)
 }
 
 /// 同じ package の同時導入を直列化する。目録の排他（`catalog.json.lock`）とは別の file を
@@ -680,9 +733,15 @@ fn validate_member_path(path: &str) -> Result<(), PackageError> {
         || path.starts_with('/')
         || path.contains('\\')
         || path.contains(':')
-        || path
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
+        || path.split('/').any(|part| {
+            // Windows は path 要素の末尾の `.` と空白を取り除いて解決する。許可すると
+            // `a.txt` と `a.txt.` が同じ file を指し、後から書いた内容で上書きされる。
+            part.is_empty()
+                || part == "."
+                || part == ".."
+                || part.ends_with('.')
+                || part.ends_with(' ')
+        })
     {
         return Err(PackageError::Malformed(format!("不正な path: {path}")));
     }

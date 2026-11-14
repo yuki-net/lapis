@@ -666,6 +666,121 @@ fn a_version_upgrade_replaces_the_installed_package() {
 }
 
 #[test]
+fn a_package_with_a_trailing_dot_path_is_rejected() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("a.txt.", b"x")];
+    let manifest = signed_manifest(
+        "extension",
+        "dev.example.dot",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |_| {},
+    );
+    let package = write_package(workspace.path(), "dot.lapis", &manifest, files);
+
+    let error = loader().install(&mut catalog, &package, true).unwrap_err();
+    assert!(matches!(error, PackageError::Malformed(_)), "{error:?}");
+    assert_eq!(catalog.entries().count(), 0);
+}
+
+#[test]
+fn a_package_with_a_duplicate_member_name_is_rejected() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let manifest = extension_manifest(
+        "dev.example.duplicate",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    // `zip` の writer は同名 member を書けないため、central directory を直接組んで
+    // 同名 member を持つ zip を作る。
+    let path = workspace.path().join("duplicate.lapis");
+    write_duplicate_member_package(&path, &manifest, files);
+
+    let error = loader().install(&mut catalog, &path, true).unwrap_err();
+    assert!(matches!(error, PackageError::Malformed(_)), "{error:?}");
+    assert_eq!(catalog.entries().count(), 0);
+}
+
+/// 同名 member を 2 つ持つ zip を、最小の ZIP 構造で組み立てる。
+///
+/// `zip` crate の writer は同名を拒否するため、central directory と local header を
+/// 手で書き、`ZipArchive::has_duplicate_names` が真になる入力を作る。
+fn write_duplicate_member_package(path: &Path, manifest: &Value, files: &[(&str, &[u8])]) {
+    fn local_header(name: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(&0x0403_4b50u32.to_le_bytes());
+        header.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        header.extend_from_slice(&0u16.to_le_bytes()); // flags
+        header.extend_from_slice(&0u16.to_le_bytes()); // stored
+        header.extend_from_slice(&0u16.to_le_bytes()); // time
+        header.extend_from_slice(&0u16.to_le_bytes()); // date
+        header.extend_from_slice(&[0u8; 4]); // crc32 (未検証)
+        header.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        header.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        header.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        header.extend_from_slice(&0u16.to_le_bytes()); // extra len
+        header.extend_from_slice(name.as_bytes());
+        header.extend_from_slice(bytes);
+        header
+    }
+    fn central_header(name: &str, bytes: &[u8], offset: u32) -> Vec<u8> {
+        let mut header = Vec::new();
+        header.extend_from_slice(&0x0201_4b50u32.to_le_bytes());
+        header.extend_from_slice(&20u16.to_le_bytes()); // version made by
+        header.extend_from_slice(&20u16.to_le_bytes()); // version needed
+        header.extend_from_slice(&0u16.to_le_bytes()); // flags
+        header.extend_from_slice(&0u16.to_le_bytes()); // stored
+        header.extend_from_slice(&0u16.to_le_bytes()); // time
+        header.extend_from_slice(&0u16.to_le_bytes()); // date
+        header.extend_from_slice(&[0u8; 4]); // crc32
+        header.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        header.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        header.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        header.extend_from_slice(&0u16.to_le_bytes()); // extra
+        header.extend_from_slice(&0u16.to_le_bytes()); // comment
+        header.extend_from_slice(&0u16.to_le_bytes()); // disk
+        header.extend_from_slice(&0u16.to_le_bytes()); // internal attrs
+        header.extend_from_slice(&0u32.to_le_bytes()); // external attrs
+        header.extend_from_slice(&offset.to_le_bytes());
+        header.extend_from_slice(name.as_bytes());
+        header
+    }
+
+    let mut body = Vec::new();
+    let mut central = Vec::new();
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    entries.push((
+        MANIFEST_NAME.to_owned(),
+        serde_json::to_vec(manifest).unwrap(),
+    ));
+    for (name, bytes) in files {
+        entries.push(((*name).to_owned(), bytes.to_vec()));
+    }
+    // 最後の file を 2 回入れる。
+    let duplicated = entries.last().unwrap().clone();
+    entries.push(duplicated);
+    for (name, bytes) in &entries {
+        let offset = body.len() as u32;
+        body.extend_from_slice(&local_header(name, bytes));
+        central.extend_from_slice(&central_header(name, bytes, offset));
+    }
+    let mut zip = body;
+    let central_offset = zip.len() as u32;
+    zip.extend_from_slice(&central);
+    zip.extend_from_slice(&0x0605_4b50u32.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes()); // disk
+    zip.extend_from_slice(&0u16.to_le_bytes()); // cd disk
+    zip.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    zip.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    zip.extend_from_slice(&(central.len() as u32).to_le_bytes());
+    zip.extend_from_slice(&central_offset.to_le_bytes());
+    zip.extend_from_slice(&0u16.to_le_bytes()); // comment len
+    std::fs::write(path, zip).unwrap();
+}
+
+#[test]
 fn a_failed_catalog_write_keeps_the_previous_install_intact() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
@@ -715,6 +830,80 @@ fn a_failed_catalog_write_keeps_the_previous_install_intact() {
         .filter(|entry| entry.file_name().to_string_lossy().starts_with(".staging-"))
         .collect();
     assert!(staging.is_empty(), "書きかけの実体を残さない");
+}
+
+#[test]
+fn an_interrupted_install_is_recovered_before_the_catalog_is_published() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    // 目録だけが「導入済み」へ進み、実体を置く前に落ちた状態を作る。
+    catalog
+        .register(ExtensionEntry::new(
+            id("dev.example.partial"),
+            ExtensionVersion::parse("0.1.0").unwrap(),
+            ExtensionState::installed(true),
+        ))
+        .unwrap();
+    let root = catalog.root().to_path_buf();
+    std::fs::write(
+        root.join("journal.json"),
+        serde_json::to_vec(&json!({
+            "schema": 1,
+            "pending": [{
+                "id": "dev.example.partial",
+                "previous": null,
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    drop(catalog);
+
+    // 起動時の回復が、実体の無い「導入済み」を宣言として配らない。
+    let mut reopened = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    extensions_entry::recover_pending_installs(&mut reopened).unwrap();
+    assert!(reopened.get(&id("dev.example.partial")).is_none());
+    assert!(!root.join("journal.json").exists());
+}
+
+#[test]
+fn removing_a_package_keeps_the_files_when_the_catalog_write_fails() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let package = write_package(workspace.path(), "terminal.lapis", &manifest, files);
+    let loader = loader();
+    loader.install(&mut catalog, &package, true).unwrap();
+
+    // 目録の書き込みを失敗させる。`data` を file で塞ぐと配置の用意に失敗する。
+    let data = catalog.data_directory(&id("dev.example.terminal")).unwrap();
+    std::fs::remove_dir_all(&data).unwrap();
+    std::fs::write(&data, b"blocked").unwrap();
+
+    assert!(
+        loader
+            .remove(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    // 実体を失わない。
+    let installed = catalog
+        .installed_directory(&id("dev.example.terminal"))
+        .unwrap();
+    assert_eq!(
+        std::fs::read(installed.join("extension.wasm")).unwrap(),
+        b"\0asm"
+    );
+    assert!(
+        catalog
+            .get(&id("dev.example.terminal"))
+            .unwrap()
+            .state
+            .is_installed()
+    );
 }
 
 #[test]

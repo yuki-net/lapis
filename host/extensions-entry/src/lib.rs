@@ -9,6 +9,7 @@ mod catalog;
 mod compatibility;
 mod declaration;
 mod id;
+mod journal;
 mod package;
 mod signature;
 mod state;
@@ -24,10 +25,21 @@ pub use compatibility::{
 };
 pub use declaration::{ExtensionDeclaration, ExtensionDeclarations};
 pub use id::{ExtensionPackageId, InvalidExtensionPackageId};
+pub use journal::{JOURNAL_SCHEMA, PendingInstall};
 pub use package::{
     ExtensionLoader, InstallOutcome, MANIFEST_NAME, PACKAGE_SCHEMA, PackageError, PackageFile,
     PackageKind, PackageManifest,
 };
+
+/// Host の起動時に、中断した導入・除去を完了または取り消す。
+///
+/// 目録と `installed/<id>/` の書き込みの間で Host が終了しても、次の起動で
+/// 食い違いを残さない。目録を公開する前に呼ぶ。
+pub fn recover_pending_installs(
+    catalog: &mut ExtensionCatalog,
+) -> Result<usize, ExtensionCatalogError> {
+    journal::recover(catalog)
+}
 pub use signature::{SignatureError, TrustedKeys};
 pub use state::ExtensionState;
 pub use version::{ExtensionVersion, InvalidExtensionVersion};

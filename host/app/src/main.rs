@@ -359,15 +359,29 @@ fn run() -> Result<(), Error> {
                     } else if let Some(input) = line.strip_prefix("ext-install ") {
                         // `ext-install <file.lapis> [--disabled]`。読み込んだ宣言は
                         // `host.extensions.list` に現れ、有効な拡張は入口の再起動で反映する。
-                        let mut parts = input.split_whitespace();
-                        let path = parts.next();
-                        let enabled = !parts.any(|argument| argument == "--disabled");
-                        match path {
-                            Some(path) => match host.install_extension(std::path::Path::new(path), enabled) {
+                        //
+                        // 末尾の `--disabled` だけを option として分離し、残りは空白を含めて
+                        // そのままパスとして扱う。`split_whitespace` で分割すると
+                        // `/tmp/Lapis Packages/a.lapis` のパスが途中で切れる。
+                        let input = input.trim();
+                        // `--disabled` は独立した語のときだけ option として扱う。
+                        // `a--disabled.lapis` のようなパスの一部を切り落とさないため。
+                        let (path, enabled) = match input.strip_suffix("--disabled") {
+                            Some(rest)
+                                if rest.is_empty() || rest.ends_with(char::is_whitespace) =>
+                            {
+                                (rest.trim(), false)
+                            }
+                            _ => (input, true),
+                        };
+                        let path = path.trim_matches('"');
+                        if path.is_empty() {
+                            eprintln!("Usage: ext-install <file.lapis> [--disabled]");
+                        } else {
+                            match host.install_extension(std::path::Path::new(path), enabled) {
                                 Ok(outcome) => println!("{}", describe_outcome(&outcome)),
                                 Err(error) => eprintln!("拡張を読み込めません: {error}"),
-                            },
-                            None => eprintln!("Usage: ext-install <file.lapis> [--disabled]"),
+                            }
                         }
                     } else if let Some(input) = line.strip_prefix("ext-enable ") {
                         let id = input.trim();

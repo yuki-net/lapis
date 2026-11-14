@@ -63,6 +63,21 @@ impl HostExtensions {
                 Catalog::Unreadable(message)
             }
         };
+        let catalog = match catalog {
+            Catalog::Ready(catalog) => {
+                // 前回の導入・除去が中断していれば、目録を公開する前に完了／取り消しする。
+                // 実体の無い「導入済み」を宣言として配らないため。
+                let mut guard = catalog
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if let Err(error) = extensions_entry::recover_pending_installs(&mut guard) {
+                    eprintln!("拡張の中断した導入を回復できません: {error}");
+                }
+                drop(guard);
+                Catalog::Ready(catalog)
+            }
+            other => other,
+        };
         Self { catalog, loader }
     }
 

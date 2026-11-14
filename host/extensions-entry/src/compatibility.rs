@@ -88,7 +88,9 @@ impl ContractRequirement {
         minimum: Version,
         maximum: Version,
     ) -> Result<Self, InvalidContractRequirement> {
-        if minimum > maximum {
+        // SemVer の precedence で比べる。`Version` の既定順序は build metadata も比べるため、
+        // `1.0.0+a` から `1.0.0+b` を逆転と誤判定する。
+        if minimum.cmp_precedence(&maximum).is_gt() {
             return Err(InvalidContractRequirement);
         }
         Ok(Self {
@@ -99,7 +101,10 @@ impl ContractRequirement {
     }
 
     fn contains(&self, provided: &Version) -> bool {
-        &self.minimum <= provided && provided <= &self.maximum
+        // build metadata は兼容性に影響しない（SemVer の precedence）。`1.0.0+vendor` を
+        // 要求する package を、Host の `1.0.0` と一致させる。
+        self.minimum.cmp_precedence(provided).is_le()
+            && provided.cmp_precedence(&self.maximum).is_le()
     }
 }
 
@@ -289,6 +294,35 @@ mod tests {
                 version("1.1.0"),
                 version("1.0.0")
             )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn build_metadata_does_not_affect_compatibility() {
+        let host = HostContracts::current();
+        // SemVer の precedence は build metadata を無視する。`1.0.0+vendor` を要求する
+        // package を、Host の `1.0.0` と互換として扱う。
+        assert!(
+            host.check(&[requirement(
+                EXTENSION_CONTRACT,
+                "1.0.0+vendor",
+                "1.0.0+vendor"
+            )])
+            .is_ok()
+        );
+        assert!(
+            host.check(&[requirement(EXTENSION_CONTRACT, "1.0.0+a", "1.0.0+b")])
+                .is_ok(),
+            "build metadata だけが違う範囲を逆転と判定しない"
+        );
+        // precedence が違えば従来どおり非互換。
+        assert!(
+            host.check(&[requirement(
+                EXTENSION_CONTRACT,
+                "1.0.1+vendor",
+                "1.0.1+vendor"
+            )])
             .is_err()
         );
     }

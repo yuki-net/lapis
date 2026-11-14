@@ -21,6 +21,7 @@ Wasm ランタイム上での拡張実行はこの crate の対象外（将来�
 - `package.rs`：`ExtensionLoader`。zip + manifest の読み込み、SHA-256 照合、展開、
   目録への登録、package の取り除き。
 - `declaration.rs`：`ExtensionDeclarations`。目録を Client へ見せる宣言へ集約する。
+- `journal.rs`：`PendingInstall`。導入・除去の未完了を記録し、起動時に回復する。
 
 ## 目録
 
@@ -92,7 +93,22 @@ JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と�
 
 目録の状態だけを変え、package の実体は動かさない。反映は入口の再起動で行う。同じ状態への
 再登録は目録の file を書き換えない。導入済み package を取り除いても
-`<state>/extensions/data/<id>/` は残し、再導入で引き継ぐ。
+`<state>/extensions/data/<id>/` は残し、再導入で引き継ぐ。取り除きでも実体は先に退避し、
+目録を書けたときだけ消す（目録を書けなければ実体を戻す）。
+
+## 中断時の回復
+
+目録（宣言）と `installed/<id>/`（実体）は別の file なので、2 つの書き込みの間で Host が
+終了すると食い違う。`journal.rs` は操作の開始時に「前の宣言」を `.swap/../journal.json`
+へ記録し、完了時に消す。起動時（`recover_pending_installs`）に残った記録と実体を見て、
+完了または取り消しを行う。
+
+- 退避だけが残っている（`swap` の前後で落ちた）: 旧版を元の場所へ戻し、宣言も操作前へ戻す。
+- 退避も実体も無い（初回導入の途中で落ちた）: 宣言を取り除く。
+- `.swap` と `.staging-*` の記録外の残骸も片付ける。
+
+記録に無い宣言には触れない。宣言だけを登録する段階（PR1 の配置解決）を、回復が
+書き換えないため。
 
 ## データの置き場所
 
@@ -101,6 +117,7 @@ JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と�
   extensions/
     catalog.json              目録（宣言の正本）
     installed.lock            読み込みの排他
+    journal.json              未完了の導入・除去の記録
     .swap/<id>/               置き換え中の旧版の退避先（完了時に消す）
     installed/<id>/           導入済み package の展開先
     data/<id>/                拡張データの正本

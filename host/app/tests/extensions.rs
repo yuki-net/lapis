@@ -107,6 +107,41 @@ fn a_broken_catalog_does_not_stop_the_host_and_is_never_replaced() {
 }
 
 #[test]
+fn an_interrupted_install_is_recovered_before_the_host_publishes_it() {
+    let state = tempfile::tempdir().unwrap();
+    let directory = state.path().join("extensions");
+    let mut catalog = ExtensionCatalog::open(directory.clone()).unwrap();
+    // 実体を置く前に落ちた「導入済み」の宣言。
+    catalog
+        .register(entry("dev.example.partial", true))
+        .unwrap();
+    drop(catalog);
+    // 中断した導入の記録。取り消し対象は新規導入（previous なし）。
+    std::fs::write(
+        directory.join("journal.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "pending": [{ "id": "dev.example.partial", "previous": null }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        host.extensions().unwrap().extensions.is_empty(),
+        "実体の無い拡張を宣言として配らない"
+    );
+    assert!(!directory.join("journal.json").exists());
+    assert!(
+        ExtensionCatalog::open(directory)
+            .unwrap()
+            .get(&ExtensionPackageId::try_new("dev.example.partial").unwrap())
+            .is_none()
+    );
+}
+
+#[test]
 fn embedded_and_local_clients_read_the_same_declaration() {
     let state = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
