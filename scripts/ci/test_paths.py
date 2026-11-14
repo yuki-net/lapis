@@ -110,6 +110,13 @@ class TestPathRouting(unittest.TestCase):
         """Host の README は記述だけなので、コードの job を起こさない。"""
         self.assertEqual(jobs_for_paths(["host/README.md"]), {"repository"})
 
+    def test_deleted_host_crate_paths_stay_in_the_rust_surfaces(self):
+        """移動で消えた旧 path でも全 job を起こさない。"""
+        for path in ("host/terminal/src/lib.rs", "host/adapters/terminal/src/lib.rs"):
+            self.assertEqual(
+                jobs_for_paths([path]), {"rust_core", "host", "desktop"}, path
+            )
+
     def test_host_public_boundary_runs_desktop(self):
         for path in (
             "host/app/Cargo.toml",

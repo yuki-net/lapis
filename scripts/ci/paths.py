@@ -40,6 +40,9 @@ PATH_RULES = [
     (["host/transport/web-bridge/"], {"host", "desktop", "web"}),
     (["host/transport/"], {"rust_core", "host", "desktop"}),
     (["host/application/"], {"rust_core", "host", "desktop"}),
+    # 上記より狭い規則に当たらない Host 配下（削除された crate の path を含む）。
+    # 未分類のままにすると全 job が走るため、Host の面へ割り当てる。
+    (["host/"], {"rust_core", "host", "desktop"}),
     
     # Contracts / Client transport
     (["contracts/domain/"], {"rust_core", "host", "desktop", "web"}),
