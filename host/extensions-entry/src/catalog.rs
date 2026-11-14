@@ -427,6 +427,31 @@ mod tests {
     }
 
     #[test]
+    fn data_placements_stay_distinct_for_ids_that_differ_only_by_a_trailing_dot() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("extensions");
+        let mut catalog = ExtensionCatalog::open(directory.clone()).unwrap();
+        catalog.register(entry("a", true)).unwrap();
+
+        // "a." は Windows で "a" と同じ directory を指すため、目録に入れない。
+        for id in ["a.", "a..", "nul", "nul.txt"] {
+            assert!(
+                ExtensionPackageId::try_new(id).is_err(),
+                "登録に使えない ID は {id:?}"
+            );
+        }
+
+        let a = id("a");
+        let data = catalog.data_directory(&a).unwrap();
+        assert!(data.is_dir());
+        assert_eq!(
+            std::fs::read_dir(directory.join("data")).unwrap().count(),
+            1,
+            "衝突する ID を拒否した結果、data の下は 1 件だけになる"
+        );
+    }
+
+    #[test]
     fn a_declaration_without_a_package_keeps_only_the_data_directory() {
         let root = tempfile::tempdir().unwrap();
         let directory = root.path().join("extensions");
