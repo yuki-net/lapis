@@ -202,6 +202,10 @@ fn load_entries(
     if document.schema != CATALOG_SCHEMA {
         return Err(ExtensionCatalogError::UnsupportedSchema(document.schema));
     }
+    // ID の検証は目録全体に掛かる。保存済みの ID が現在の規則（末尾 `.`・Windows
+    // 予約デバイス名など）に合わない場合、その項目だけを黙って捨てずに目録全体を
+    // 読めないものとして扱う。宣言を無言で失わないため。file は上書きしないので、
+    // 規則に合う形へ直すか退避するまで元の値は残る。
     let mut entries = BTreeMap::new();
     for entry in document.extensions {
         if entries.insert(entry.id.clone(), entry).is_some() {
@@ -495,6 +499,31 @@ mod tests {
             b"not a directory"
         );
         assert_eq!(catalog.entries().count(), 0);
+    }
+
+    #[test]
+    fn a_stored_id_that_no_longer_matches_the_rules_keeps_the_catalog_readable() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("extensions");
+        fs::create_dir_all(&directory).unwrap();
+        // 末尾 `.` と予約デバイス名は現在の規則では登録できないが、旧い目録には
+        // 残り得る。項目だけを黙って捨てず、目録全体を読めないものとして扱う。
+        for payload in [
+            r#"{"schema":1,"extensions":[{"id":"a.","version":"1.0.0","installed":true,"enabled":true}]}"#,
+            r#"{"schema":1,"extensions":[{"id":"nul","version":"1.0.0","installed":true,"enabled":true}]}"#,
+        ] {
+            fs::write(directory.join(CATALOG_FILE), payload).unwrap();
+            let result = ExtensionCatalog::open(directory.clone());
+            assert!(
+                matches!(result, Err(ExtensionCatalogError::Invalid(_))),
+                "規則に合わない ID は目録全体の読み込みエラーにする: {payload}"
+            );
+            assert_eq!(
+                fs::read_to_string(directory.join(CATALOG_FILE)).unwrap(),
+                payload,
+                "読めない目録を書き換えない"
+            );
+        }
     }
 
     #[test]

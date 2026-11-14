@@ -209,7 +209,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 ## 拡張の入口
 
 - `host/extensions-entry/`（crate `extensions-entry`）は拡張の入口として、導入済み拡張の目録と状態、package と拡張データの置き場所だけを持つ。「配布・販売」を意味する `store` は使わない。
-- 目録は Host の正本で、`<state>/extensions/catalog.json`（`schema: 1`）に置く。1 件は `id` / `version` / `installed` / `enabled` を持ち、`enabled` は `installed` を含意する。壊れた目録・未知の schema・重複 ID は読み込み時に拒否し、空として作り直さない。
+- 目録は Host の正本で、`<state>/extensions/catalog.json`（`schema: 1`）に置く。1 件は `id` / `version` / `installed` / `enabled` を持ち、`enabled` は `installed` を含意する。壊れた目録・未知の schema・重複 ID・規則に合わない ID（末尾 `.`、Windows 予約デバイス名など）は読み込み時に拒否し、空として作り直さない。項目だけを黙って捨てず、file も上書きしない（宣言を無言で失わないため）。
 - Client への提示は `host.extensions.list` の宣言に限る。要求 capability は読み取り専用の `extensions.read` とし、`host.manage` は要求しない（表示に使う通常の Client が読めるようにするため）。Client は受け取った値を表示にだけ使い、保存値を正本にしない。状態の変更は入口の再起動で反映する前提とし、登録は同じ宣言の再登録で file を書き換えない冪等な操作にする。
 - 拡張データの正本は Host 側の `<state>/extensions/data/<id>/` に置く。Client は再取得可能な cache だけを持つ。package の展開先は `<state>/extensions/installed/<id>/` とし、`.lapis` package の読み込み・互換照合・署名検証は読み込み段階の責務にする。
 - state directory を持たない Host は拡張を持たない。目録を一時 directory へ逃がすと、同じ OS ユーザーの別 Host と状態を共有してしまうため、空の宣言を返す。

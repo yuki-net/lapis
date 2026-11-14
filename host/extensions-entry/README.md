@@ -9,9 +9,18 @@
 
 - `catalog.rs`：`ExtensionCatalog`。目録の読み書き、登録、配置 directory の解決。
 - `id.rs`：`ExtensionPackageId`。配置 directory 名にそのまま使える ID だけを許す。
+  大文字・`/`・`\`・`:`・末尾 `.`（Windows が path 要素から取り除くため `a.` と `a`
+  が衝突する）・Windows の予約デバイス名（`nul`、`nul.txt` など）を拒否する。
 - `version.rs`：`ExtensionVersion`。表示と比較にだけ使い、semver の解釈はしない。
 - `state.rs`：`ExtensionState`。`installed` / `enabled` を持ち、`enabled` は
   `installed` を含意する。
+
+登録は「配置を作る → 目録を書く」順で、配置を作れない場合は目録を書かない。
+`create_dir_all` の成功だけでは判断せず、作成後に directory の実在を確かめる
+（Windows の予約デバイス名は成功を返して何も作らないことがある）。
+
+保存済みの ID が現在の規則に合わない場合、その項目だけを捨てずに目録全体の読み込み
+エラーとする。file は上書きしないため、規則に合う形へ直すか退避するまで元の値が残る。
 
 ## データの置き場所
 
