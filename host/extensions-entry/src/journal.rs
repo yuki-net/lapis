@@ -431,6 +431,20 @@ mod tests {
     }
 
     #[test]
+    fn a_crash_between_the_first_install_write_and_its_phase_record_is_rolled_back() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        // 初回導入で目録を書いた直後、段階を進める前に落ちた状態。
+        // 実体はまだ無く、記録は `prepared` のままである。
+        catalog.register(entry("a", true)).unwrap();
+        begin_install(catalog.root(), "a", None);
+
+        recover(&mut catalog).unwrap();
+        assert!(catalog.get(&id("a")).is_none(), "実体の無い宣言を残さない");
+        assert!(!journal_path(catalog.root()).exists());
+    }
+
+    #[test]
     fn a_crash_between_the_write_and_its_phase_record_still_rolls_back() {
         let root = tempfile::tempdir().unwrap();
         let mut catalog = catalog(root.path());
