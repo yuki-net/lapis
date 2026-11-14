@@ -109,6 +109,8 @@
   "tab.context.pin": "Pin",
   "tab.context.unpin": "Unpin",
   "settings.title": "Settings",
+  "settings.search.placeholder": "Search settings",
+  "settings.search.empty": "No settings found.",
   "settings.web.title": "Web access",
   "settings.web.publish-title": "Web publishing",
   "settings.web.description": "The listen address belongs to this Host. Select Tailscale to connect from this PC and multiple Tailscale devices at once. Copy a separate invitation for each device. Each invitation is single-use and expires after five minutes.",

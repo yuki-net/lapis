@@ -196,6 +196,34 @@ pub(crate) fn scroll_viewport(
     scroll_surface(axis, state, viewport, cx)
 }
 
+/// 可変高さの各項目を直接追跡し、ナビゲーションから位置を指定できる縦スクロール。
+pub(crate) fn scroll_items_viewport(
+    id: impl Into<ElementId>,
+    state: &ScrollState,
+    items: Vec<gpui::Div>,
+    on_scroll: impl Fn(&gpui::ScrollWheelEvent, &mut gpui::Window, &mut gpui::App) + 'static,
+    cx: &gpui::App,
+) -> gpui::Div {
+    let wheel_state = state.clone();
+    let viewport = div()
+        .id(id)
+        .size_full()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .scrollbar_width(px(0.0))
+        .overflow_y_scroll()
+        .track_scroll(&state.handle())
+        .flex()
+        .flex_col()
+        .gap_6()
+        .children(items)
+        .on_scroll_wheel(move |event, window, cx| {
+            wheel_state.reveal();
+            on_scroll(event, window, cx);
+        });
+    scroll_surface(ScrollAxis::Vertical, state, viewport, cx)
+}
+
 /// 独自のスクロール要素（uniform_list等）にも既存のスクロールバーを重ねる。
 pub(crate) fn scroll_surface(
     axis: ScrollAxis,

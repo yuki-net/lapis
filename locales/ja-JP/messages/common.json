@@ -109,6 +109,8 @@
   "tab.context.pin": "ピン留め",
   "tab.context.unpin": "ピン留めを解除",
   "settings.title": "設定",
+  "settings.search.placeholder": "設定を検索",
+  "settings.search.empty": "該当する設定がありません。",
   "settings.web.title": "Web 接続",
   "settings.web.publish-title": "Web 公開",
   "settings.web.description": "公開アドレスは Host の待受先です。Tailscale を選ぶと、この PC と複数の Tailscale 端末から同時に接続できます。端末ごとに招待リンクをコピーしてください。リンクは5分間有効で、一回限りです。",

@@ -20,7 +20,7 @@ pub(crate) use popup::{Popup, PopupPlacement, PopupScope};
 pub(crate) use row::{hover_row, selectable_row};
 #[cfg(all(debug_assertions, not(target_family = "wasm")))]
 pub(crate) use scroll::scroll_surface;
-pub(crate) use scroll::{ScrollState, scroll_viewport};
+pub(crate) use scroll::{ScrollState, scroll_items_viewport, scroll_viewport};
 pub(crate) use search_input::{SearchInput, SearchInputEvent};
 pub(crate) use separator::separator;
 pub(crate) use surface::{SurfaceVariant, panel_content, panel_header, panel_surface, surface};
