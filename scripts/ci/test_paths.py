@@ -99,6 +99,7 @@ class TestPathRouting(unittest.TestCase):
             "contracts/protocol/src/lib.rs",
             "contracts/transport/wire/src/lib.rs",
             "contracts/domain/document/src/lib.rs",
+            "contracts/domain/extension-ui/src/lib.rs",
         ):
             self.assertIn("web", jobs_for_paths([path]), path)
 

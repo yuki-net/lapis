@@ -21,6 +21,7 @@ zeroize.workspace = true
 desktop-client = { path = "../state" }
 document = { path = "../../contracts/domain/document" }
 editor-core = { path = "../../contracts/domain/editor-core" }
+extension-ui-contract = { path = "../../contracts/domain/extension-ui" }
 git = { package = "git-contract", path = "../../extensions/git/contract" }
 language = { path = "../../contracts/domain/language" }
 localization = { path = "../../contracts/domain/localization" }

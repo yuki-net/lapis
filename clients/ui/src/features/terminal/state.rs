@@ -1820,7 +1820,7 @@ mod tests {
         use gpui::AppContext;
 
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
         });
         let window = cx.add_window(|_, cx| {
             let (_, backend) = feature();
@@ -2699,7 +2699,7 @@ mod tests {
     #[gpui::test]
     fn long_session_list_menu_stays_within_the_window(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let (feature, visual) = cx.add_window_view(|_, cx| {
             let (_, backend) = feature();

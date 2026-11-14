@@ -2,7 +2,7 @@
 
 use super::panel_layout::{Axis, PanelLayout};
 use super::{PanelHost, PanelId, PanelTab};
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 
 type VisualBoundary = (PanelId, PanelId, Axis, (f32, f32, f32, f32), f32);
 

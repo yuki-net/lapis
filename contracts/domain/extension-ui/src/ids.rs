@@ -32,12 +32,6 @@ stable_id!(CommandId);
 stable_id!(FeatureId);
 stable_id!(ViewId);
 stable_id!(ViewInstanceId);
-
-impl ViewInstanceId {
-    pub(crate) fn shared_tool(view: &ViewId) -> Self {
-        Self::new(format!("shared:{}", view.as_str()))
-    }
-}
 stable_id!(IconId);
 stable_id!(IconThemeId);
 stable_id!(KeymapId);

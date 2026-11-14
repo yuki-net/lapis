@@ -4,7 +4,8 @@ use desktop_client::{SettingsSession, SettingsWatch};
 use gpui::{App, AppContext, Context, Entity, Global};
 use settings::{ResolvedSettings, SettingKey, SettingValue, SettingsError, SettingsScope};
 
-use crate::{client_adapter::ClientWorker, extension_ui::ThemeId, theme};
+use crate::{client_adapter::ClientWorker, theme};
+use extension_ui_contract::ThemeId;
 
 const CAPACITY: usize = 64;
 

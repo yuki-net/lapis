@@ -9,6 +9,7 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
 | `clients/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
+| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
 | `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
@@ -178,7 +179,7 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## Desktop の共通Tab操作
 
-- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。
+- `UiContribution` がViewの表示名・アイコン・カテゴリ・初期配置・複数起動方針・配置能力・表示条件を宣言し、`FeatureRegistry`が共通Pickerへ提供する。FeatureごとのTabBarやPanel所有者を作らない。宣言の型は `contracts/domain/extension-ui`（crate `extension-ui-contract`）が正本で、`FeatureRegistry` は GPUI の実体と表示状態を `clients/ui` 側で所有する。
 - 通知履歴はGPUI App全体で共有し、Rootごとに分かれるWindowGroupには所有させない。通知種別の既定PolicyがPopupへの配送を決め、発生時のActive Windowだけに最新3件まで一時表示する。Popupの終了と履歴の削除は別操作とする。CenterはPickerへ表示しない通常のTabとして共通Layoutを使う。
 - Tabの追加・選択・非表示・Closeは配置状態を更新する操作であり、HostのDocument・Terminal・Agentを終了する操作ではない。
 - タブは種類ごとの単一実体ではなく、個体（`ViewInstanceId`）ごとの実体として扱う。`UiContribution`の複数起動方針で個体化するか単一実体を共有するかを決める。Terminalは`multiple_instances`で個体化し、2つ目のタブは新しいSessionを起動する。同じDocumentは`DocumentId`で同一タブを指すため、開き直しは複製せず既存タブの選択になる。状態を持たない単一表示のToolは共有実体のままとする。

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use super::{PanelId, PanelTab};
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 
 pub(crate) type HostId = u64;
 pub(crate) const ROOT_HOST: HostId = 0;

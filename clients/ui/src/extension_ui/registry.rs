@@ -2,61 +2,17 @@ use gpui::{AnyView, App};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
-use language::LanguageId;
-
-use super::{
-    ActivationCondition, ActivationEvent, CommandId, FeatureId, UiContribution, UiSlot, ViewId,
-    ViewInstanceId, WorkspaceCapabilityId, ZonePosition,
+use extension_ui_contract::{
+    ActivationCondition, CommandId, FeatureDescriptor, FeatureId, FeatureKind, ToolInstancePolicy,
+    UiContribution, UiSlot, ViewId, ViewInstanceId, ViewVisibility, WorkspaceCapabilityId,
+    ZonePosition,
 };
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FeatureKind {
-    Core,
-    Bundled,
-}
+use super::ActivationEvent;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FeatureDescriptor {
-    pub id: FeatureId,
-    pub kind: FeatureKind,
-    pub activation: Vec<ActivationCondition>,
-    pub contributions: Vec<UiContribution>,
-    pub required_capabilities: Vec<WorkspaceCapabilityId>,
-}
-
-impl FeatureDescriptor {
-    pub fn core(id: impl Into<FeatureId>) -> Self {
-        Self {
-            id: id.into(),
-            kind: FeatureKind::Core,
-            activation: Vec::new(),
-            contributions: Vec::new(),
-            required_capabilities: Vec::new(),
-        }
-    }
-
-    pub fn bundled(
-        id: impl Into<FeatureId>,
-        activation: impl IntoIterator<Item = ActivationCondition>,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            kind: FeatureKind::Bundled,
-            activation: activation.into_iter().collect(),
-            contributions: Vec::new(),
-            required_capabilities: Vec::new(),
-        }
-    }
-
-    pub fn contributes(mut self, contribution: UiContribution) -> Self {
-        self.contributions.push(contribution);
-        self
-    }
-
-    pub fn requires(mut self, capability: impl Into<WorkspaceCapabilityId>) -> Self {
-        self.required_capabilities.push(capability.into());
-        self
-    }
+/// 単一実体を共有する View の個体 ID。個体の命名は Client 側の配置規則とする。
+pub(crate) fn shared_tool_instance(view: &ViewId) -> ViewInstanceId {
+    ViewInstanceId::new(format!("shared:{}", view.as_str()))
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -66,6 +22,7 @@ pub struct FeatureState {
     pub running: bool,
 }
 
+/// 宣言（`FeatureDescriptor`）を受けて、表示状態と GPUI の実体を解決する内部レジストリ。
 #[derive(Default)]
 pub struct FeatureRegistry {
     descriptors: BTreeMap<FeatureId, FeatureDescriptor>,
@@ -74,14 +31,27 @@ pub struct FeatureRegistry {
     visible_views: HashSet<ViewId>,
     shared_views: HashMap<ViewId, AnyView>,
     view_factories: HashMap<ViewId, ViewFactory>,
-    instances: HashMap<super::ViewInstanceId, (ViewId, AnyView)>,
-    active_language: Option<LanguageId>,
+    instances: HashMap<ViewInstanceId, (ViewId, AnyView)>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
+    active_language: Option<language::LanguageId>,
 }
 
 type ViewFactory = Rc<dyn Fn(&ViewInstanceId, &mut App) -> AnyView>;
+
+/// 宣言の表示条件を、Client が持つ現在の状態で評価する。
+fn is_visible(
+    visibility: &ViewVisibility,
+    workspace_open: bool,
+    capabilities: &HashSet<WorkspaceCapabilityId>,
+) -> bool {
+    match visibility {
+        ViewVisibility::Always => true,
+        ViewVisibility::WorkspaceOpen => workspace_open,
+        ViewVisibility::WorkspaceCapability(capability) => capabilities.contains(capability),
+    }
+}
 
 impl FeatureRegistry {
     pub(crate) fn register_shared_view(&mut self, view: ViewId, entity: AnyView) {
@@ -93,17 +63,17 @@ impl FeatureRegistry {
         self.view_factories.insert(view, factory);
     }
 
-    pub(crate) fn can_create_view(&self, view: &ViewId, policy: super::ToolInstancePolicy) -> bool {
+    pub(crate) fn can_create_view(&self, view: &ViewId, policy: ToolInstancePolicy) -> bool {
         match policy {
-            super::ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
-            super::ToolInstancePolicy::Multiple => self.view_factories.contains_key(view),
+            ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
+            ToolInstancePolicy::Multiple => self.view_factories.contains_key(view),
         }
     }
 
     pub(crate) fn ensure_view_instance(
         &mut self,
         view: &ViewId,
-        instance: &super::ViewInstanceId,
+        instance: &ViewInstanceId,
         cx: &mut App,
     ) -> bool {
         if let Some((definition, _)) = self.instances.get(instance) {
@@ -116,11 +86,11 @@ impl FeatureRegistry {
             .find(|contribution| contribution.view.as_ref() == Some(view))
             .map(|contribution| contribution.instance_policy);
         let entity = match policy {
-            Some(super::ToolInstancePolicy::Multiple) => self
+            Some(ToolInstancePolicy::Multiple) => self
                 .view_factories
                 .get(view)
                 .map(|factory| factory(instance, cx)),
-            Some(super::ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
+            Some(ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
             None => None,
         };
         let Some(entity) = entity else {
@@ -131,21 +101,21 @@ impl FeatureRegistry {
         true
     }
 
-    pub(crate) fn instance_view(&self, instance: &super::ViewInstanceId) -> Option<&AnyView> {
+    pub(crate) fn instance_view(&self, instance: &ViewInstanceId) -> Option<&AnyView> {
         self.instances.get(instance).map(|(_, entity)| entity)
     }
 
     /// 個体IDから型付きの実体を取得する。Feature固有の接続をRootから行うために使う。
     pub(crate) fn instance_entity<T: 'static>(
         &self,
-        instance: &super::ViewInstanceId,
+        instance: &ViewInstanceId,
     ) -> Option<gpui::Entity<T>> {
         self.instances
             .get(instance)
             .and_then(|(_, view)| view.clone().downcast::<T>().ok())
     }
 
-    pub(crate) fn close_view_instance(&mut self, instance: &super::ViewInstanceId) {
+    pub(crate) fn close_view_instance(&mut self, instance: &ViewInstanceId) {
         // 表示Entityへの参照だけを解放する。Resourceの終了APIは呼ばない。
         self.instances.remove(instance);
     }
@@ -210,9 +180,7 @@ impl FeatureRegistry {
             .filter(|contribution| {
                 contribution.view.is_some()
                     && contribution.allowed_zones.contains(&position)
-                    && contribution
-                        .visibility
-                        .is_visible(workspace_open, capabilities)
+                    && is_visible(&contribution.visibility, workspace_open, capabilities)
             })
             .collect::<Vec<_>>();
         contributions.sort_by_key(|contribution| contribution.order);
@@ -319,9 +287,10 @@ impl FeatureRegistry {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn hidden_contributions_remain_available_for_layout() {
-        use super::*;
         let mut registry = FeatureRegistry::default();
         registry
             .register(
@@ -334,8 +303,8 @@ mod tests {
         assert_eq!(registry.zone_contributions(ZonePosition::Right).len(), 1);
         assert!(registry.tool_contributions(ZonePosition::Right).is_empty());
     }
-    use super::*;
-    use crate::extension_ui::{IconId, MessageId};
+
+    use extension_ui_contract::{IconId, MessageId};
 
     struct InstanceCounter(usize);
     impl gpui::Render for InstanceCounter {
@@ -364,19 +333,19 @@ mod tests {
             )
             .unwrap();
         // 宣言だけではMultipleを有効化しない。
-        assert!(!registry.can_create_view(&view, super::super::ToolInstancePolicy::Multiple));
+        assert!(!registry.can_create_view(&view, ToolInstancePolicy::Multiple));
         let entities = Rc::new(std::cell::RefCell::new(Vec::new()));
         let created = entities.clone();
         registry.register_view_factory(
             view.clone(),
-            Rc::new(move |_: &super::super::ViewInstanceId, cx| {
+            Rc::new(move |_: &ViewInstanceId, cx| {
                 let entity = cx.new(|_| InstanceCounter(0));
                 created.borrow_mut().push(entity.clone());
                 entity.into()
             }),
         );
-        let first = super::super::ViewInstanceId::new("one");
-        let second = super::super::ViewInstanceId::new("two");
+        let first = ViewInstanceId::new("one");
+        let second = ViewInstanceId::new("two");
         cx.update(|cx| {
             assert!(registry.ensure_view_instance(&view, &first, cx));
             assert!(registry.ensure_view_instance(&view, &second, cx));
@@ -413,7 +382,7 @@ mod tests {
                 .unwrap();
             let entity = cx.new(|_| InstanceCounter(0));
             registry.register_shared_view(view.clone(), entity.clone().into());
-            let instance = super::super::ViewInstanceId::shared_tool(&view);
+            let instance = shared_tool_instance(&view);
             assert!(registry.ensure_view_instance(&view, &instance, cx));
             assert!(registry.ensure_view_instance(&view, &instance, cx));
             assert_eq!(

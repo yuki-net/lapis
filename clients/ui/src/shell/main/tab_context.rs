@@ -143,7 +143,7 @@ mod tests {
     #[gpui::test]
     fn right_click_pin_protects_tab_from_close_all(cx: &mut TestAppContext) {
         let (shell, visual) = cx.add_window_view(|_, cx| {
-            theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let editor = cx.new(|_| Empty);
             Shell::new(editor.into(), HashMap::new(), cx)
         });

@@ -1,6 +1,6 @@
 use crate::time::SystemTime;
 
-use crate::extension_ui::CommandId;
+use extension_ui_contract::CommandId;
 use gpui::{App, Context as GpuiContext, Render, Subscription, Window, div, prelude::*};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
