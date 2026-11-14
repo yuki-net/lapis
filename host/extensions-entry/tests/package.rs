@@ -521,6 +521,53 @@ fn reinstalling_a_compatible_version_clears_the_incompatible_declaration() {
 }
 
 #[test]
+fn installing_with_a_stale_catalog_keeps_other_declarations() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut stale = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    stale
+        .register(ExtensionEntry::new(
+            id("dev.example.other"),
+            ExtensionVersion::parse("0.1.0").unwrap(),
+            ExtensionState::installed(false),
+        ))
+        .unwrap();
+
+    // 別の入口が同じ目録へ宣言を足す。
+    let mut other = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    other
+        .register(ExtensionEntry::new(
+            id("dev.example.later"),
+            ExtensionVersion::parse("0.1.0").unwrap(),
+            ExtensionState::installed(true),
+        ))
+        .unwrap();
+    drop(other);
+
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let package = write_package(workspace.path(), "terminal.lapis", &manifest, files);
+    loader().install(&mut stale, &package, true).unwrap();
+
+    let entries: Vec<_> = ExtensionCatalog::open(workspace.path().join("extensions"))
+        .unwrap()
+        .entries()
+        .map(|entry| entry.id.as_str().to_owned())
+        .collect();
+    assert_eq!(
+        entries,
+        vec![
+            "dev.example.later",
+            "dev.example.other",
+            "dev.example.terminal"
+        ],
+        "古い写しの読み込みで、別の入口が足した宣言を失わない"
+    );
+}
+
+#[test]
 fn disabling_and_enabling_is_a_declaration_change_reflected_on_restart() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();

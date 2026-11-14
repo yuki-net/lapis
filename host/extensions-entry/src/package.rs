@@ -223,14 +223,38 @@ impl ExtensionLoader {
         verify_files(&manifest, &archive)?;
 
         let _lock = lock_install(catalog.root())?;
+        // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
+        catalog.reload()?;
         match self.contracts.check(&manifest.requires) {
             Ok(()) => {
-                extract(catalog, &manifest, &archive)?;
-                catalog.register(ExtensionEntry::new(
+                // 展開先の実体を先に用意し、目録を書けたときだけ置き換える。目録を
+                // 書けない場合に新しい実体だけを残すと「package が入っている」と誤認
+                // させるため、置き換えは目録の書き込み後に行う。
+                let previous = catalog.get(&manifest.id).cloned();
+                let staged = stage(catalog, &manifest, &archive)?;
+                if let Err(error) = catalog.register(ExtensionEntry::new(
                     manifest.id.clone(),
                     manifest.version.clone(),
                     ExtensionState::installed(enabled),
-                ))?;
+                )) {
+                    let _ = fs::remove_dir_all(&staged);
+                    return Err(PackageError::Catalog(error));
+                }
+                if let Err(error) = swap(catalog, &manifest.id, &staged) {
+                    // 実体を置き換えられなかった。宣言だけが先へ進まないよう戻す。
+                    let _ = fs::remove_dir_all(&staged);
+                    let restored = match previous {
+                        Some(entry) => catalog.register(entry).map(|_| ()),
+                        None => catalog.forget(&manifest.id),
+                    };
+                    if restored.is_err() {
+                        eprintln!(
+                            "拡張 {} の目録を戻せませんでした。実体と宣言が食い違っています",
+                            manifest.id
+                        );
+                    }
+                    return Err(error);
+                }
                 Ok(InstallOutcome::Installed {
                     id: manifest.id,
                     version: manifest.version,
@@ -246,14 +270,15 @@ impl ExtensionLoader {
                     .cloned();
                 let kept_previous = previous.is_some();
                 if previous.is_none() {
-                    // 旧版の実体だけが残っている場合、宣言（非互換）と食い違うため消す。
-                    // 拡張データは再導入で引き継げるよう残す。
-                    remove_directory(&catalog.installed_directory(&manifest.id)?)?;
+                    // 目録を先に「非互換」へ変え、その後に旧版の実体を消す。順序を逆に
+                    // すると、目録を書けなかったときに「導入済みなのに実体が無い」状態を
+                    // 残す。拡張データは再導入で引き継げるよう消さない。
                     catalog.register(ExtensionEntry::new(
                         manifest.id.clone(),
                         manifest.version.clone(),
                         ExtensionState::incompatible(),
                     ))?;
+                    remove_directory(&catalog.installed_directory(&manifest.id)?)?;
                 }
                 Ok(InstallOutcome::Incompatible {
                     id: manifest.id,
@@ -286,11 +311,13 @@ impl ExtensionLoader {
         catalog: &mut ExtensionCatalog,
         id: &ExtensionPackageId,
     ) -> Result<(), PackageError> {
+        let _lock = lock_install(catalog.root())?;
+        // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
+        catalog.reload()?;
         let entry = catalog
             .get(id)
             .cloned()
             .ok_or_else(|| PackageError::Malformed(format!("目録に {id} がない")))?;
-        let _lock = lock_install(catalog.root())?;
         remove_directory(&catalog.installed_directory(id)?)?;
         catalog.register(ExtensionEntry::new(
             entry.id,
@@ -546,15 +573,15 @@ fn verify_files(
     Ok(())
 }
 
-/// 検証済みの内容を導入済みの置き場所へ展開する。
+/// 検証済みの内容を一時 directory に書く。置き換えは [`swap`] で行う。
 ///
-/// 一時 directory に書いてから置き換えるため、途中で失敗した package を導入済みとして
-/// 残さない。
-fn extract(
+/// 一時 directory を導入済みの置き場所と同じ親に作るため、`rename` が同じ volume 内で
+/// 完結する。
+fn stage(
     catalog: &ExtensionCatalog,
     manifest: &PackageManifest,
     archive: &BTreeMap<String, Vec<u8>>,
-) -> Result<(), PackageError> {
+) -> Result<PathBuf, PackageError> {
     let target = catalog.installed_directory(&manifest.id)?;
     let parent = target
         .parent()
@@ -574,12 +601,18 @@ fn extract(
         }
         fs::write(&path, bytes).map_err(PackageError::Io)?;
     }
-    let staged: PathBuf = staging.keep();
-    if let Err(error) = remove_directory(&target) {
-        let _ = fs::remove_dir_all(&staged);
-        return Err(error);
-    }
-    fs::rename(&staged, &target).map_err(PackageError::Io)
+    Ok(staging.keep())
+}
+
+/// 用意した一時 directory を導入済みの置き場所へ置き換える。
+fn swap(
+    catalog: &ExtensionCatalog,
+    id: &ExtensionPackageId,
+    staged: &Path,
+) -> Result<(), PackageError> {
+    let target = catalog.installed_directory(id)?;
+    remove_directory(&target)?;
+    fs::rename(staged, &target).map_err(PackageError::Io)
 }
 
 /// 同じ package の同時導入を直列化する。目録の排他（`catalog.json.lock`）とは別の file を

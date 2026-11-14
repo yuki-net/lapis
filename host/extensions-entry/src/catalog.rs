@@ -122,6 +122,15 @@ impl ExtensionCatalog {
         self.entries.get(id)
     }
 
+    /// file から目録を読み直す。
+    ///
+    /// 同じ state directory を別の入口も使う。memory の写しだけで判断すると、他が書いた
+    /// 宣言を見落とすため、状態を変える操作の前後で file を正本にする。
+    pub fn reload(&mut self) -> Result<(), ExtensionCatalogError> {
+        self.entries = load_entries(&self.root)?;
+        Ok(())
+    }
+
     /// 宣言を登録する。同じ `id`・`version`・状態の再登録は目録を変えない。
     ///
     /// 無効化や版の交代は目録の置き換えとして扱い、反映は入口の再起動で行う。
@@ -195,6 +204,22 @@ impl ExtensionCatalog {
                 Registration::Created
             }
         }
+    }
+
+    /// 目録から宣言を取り除く。導入に失敗した package の宣言を戻すためにだけ使う。
+    ///
+    /// データの置き場所と、その目録を指す file は残す。`register` と違い、失敗しても
+    /// 元の宣言を失わないことを優先し、file を書けなければ memory の写しも変えない。
+    pub(crate) fn forget(&mut self, id: &ExtensionPackageId) -> Result<(), ExtensionCatalogError> {
+        let _lock = ExclusiveFile::acquire(&self.root.join(LOCK_FILE))?;
+        let mut entries = load_entries(&self.root)?;
+        if entries.remove(id).is_none() {
+            self.entries = entries;
+            return Ok(());
+        }
+        write_entries(&self.root, &entries)?;
+        self.entries = entries;
+        Ok(())
     }
 
     /// 導入済み package の展開先。読み書きは行わない。
@@ -500,6 +525,26 @@ mod tests {
         let saved: serde_json::Value =
             serde_json::from_slice(&fs::read(directory.join(CATALOG_FILE)).unwrap()).unwrap();
         assert_eq!(saved["schema"], 2);
+    }
+
+    #[test]
+    fn forget_removes_only_the_declaration() {
+        let root = tempfile::tempdir().unwrap();
+        let directory = root.path().join("extensions");
+        let mut catalog = ExtensionCatalog::open(directory.clone()).unwrap();
+        catalog.register(entry("dev.example.one", true)).unwrap();
+        let data = catalog.data_directory(&id("dev.example.one")).unwrap();
+        assert!(data.is_dir());
+
+        catalog.forget(&id("dev.example.one")).unwrap();
+        assert!(catalog.entries().next().is_none());
+        assert!(data.is_dir(), "拡張データは残す");
+        let reopened = ExtensionCatalog::open(directory).unwrap();
+        assert!(reopened.entries().next().is_none());
+
+        // 無い宣言を取り除いても失敗しない。
+        let mut catalog = reopened;
+        catalog.forget(&id("dev.example.none")).unwrap();
     }
 
     #[test]
