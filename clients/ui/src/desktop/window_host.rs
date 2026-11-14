@@ -18,7 +18,6 @@ use gpui::{
 use crate::{
     client_adapter::ClientSnapshot,
     commands::UiCommand,
-    extension_ui::ZonePosition,
     features::editor::{Editor, EditorEvent},
     root::DesktopRoot,
     shell::{
@@ -27,6 +26,7 @@ use crate::{
         window_group::{GroupLayout, HostId, ROOT_HOST, TabDestination},
     },
 };
+use extension_ui_contract::ZonePosition;
 
 pub(crate) struct HostMember {
     pub handle: gpui::AnyWindowHandle,

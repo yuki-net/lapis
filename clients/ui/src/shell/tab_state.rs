@@ -1,8 +1,8 @@
-use crate::extension_ui::ViewId;
 use editor_core::DocumentId;
+use extension_ui_contract::ViewId;
 use terminal::TerminalId;
 
-pub(crate) use crate::extension_ui::ViewInstanceId;
+pub(crate) use extension_ui_contract::ViewInstanceId;
 
 /// Host Terminalを参照するタブのInstance接頭辞。Resource IDと表示個体を分離する。
 const TERMINAL_INSTANCE_PREFIX: &str = "terminal:";
@@ -81,7 +81,7 @@ impl PanelTab {
     pub(crate) fn tool(view: impl Into<ViewId>) -> Self {
         let view = view.into();
         Self::Tool {
-            instance: ViewInstanceId::shared_tool(&view),
+            instance: crate::extension_ui::shared_tool_instance(&view),
             view,
             resource: None,
         }

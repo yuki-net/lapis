@@ -1,6 +1,6 @@
-use std::collections::HashSet;
+use localization::MessageId;
 
-use super::{CommandId, IconId, MessageId, ViewId, WorkspaceCapabilityId};
+use crate::{CommandId, IconId, ViewId, WorkspaceCapabilityId};
 
 /// DesktopのZone位置。Viewの種類ではなくレイアウト上の所属です。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -30,20 +30,6 @@ pub enum ViewVisibility {
     Always,
     WorkspaceOpen,
     WorkspaceCapability(WorkspaceCapabilityId),
-}
-
-impl ViewVisibility {
-    pub(crate) fn is_visible(
-        &self,
-        workspace_open: bool,
-        capabilities: &HashSet<WorkspaceCapabilityId>,
-    ) -> bool {
-        match self {
-            Self::Always => true,
-            Self::WorkspaceOpen => workspace_open,
-            Self::WorkspaceCapability(capability) => capabilities.contains(capability),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

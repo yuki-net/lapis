@@ -273,7 +273,7 @@ mod tests {
     #[gpui::test]
     fn gpui_panels_fit_after_window_shrink_and_restore(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
@@ -391,7 +391,7 @@ mod tests {
         }
 
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let (shell, visual) = cx.add_window_view(|_, cx| {
             let document = cx.new(|_| Empty);
@@ -461,7 +461,7 @@ mod tests {
         }
 
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let (view, visual) = cx.add_window_view(|_, _| Content {
             state: crate::components::ScrollState::new(),
@@ -489,7 +489,7 @@ mod tests {
     #[gpui::test]
     fn preview_rectangle_matches_the_committed_gpui_panel(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);

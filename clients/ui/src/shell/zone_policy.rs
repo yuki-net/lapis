@@ -1,7 +1,7 @@
 //! Zoneごとの配置と操作の方針。状態とResourceの寿命は保持しない。
 
 use super::panel_layout::{Axis, PanelEdge};
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ZoneSizing {

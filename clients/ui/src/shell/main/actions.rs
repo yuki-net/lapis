@@ -1,5 +1,5 @@
 use super::*;
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 use terminal::TerminalId;
 
 impl Shell {
@@ -141,7 +141,7 @@ impl Shell {
         let tab = if view.as_str() == id::VIEW_TERMINAL {
             if !self
                 .feature_registry
-                .can_create_view(&view, crate::extension_ui::ToolInstancePolicy::Multiple)
+                .can_create_view(&view, extension_ui_contract::ToolInstancePolicy::Multiple)
             {
                 return;
             }
@@ -431,8 +431,8 @@ impl Shell {
             PanelTab::terminal_instance(instance)
         } else {
             match instance_policy {
-                crate::extension_ui::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
-                crate::extension_ui::ToolInstancePolicy::Multiple => {
+                extension_ui_contract::ToolInstancePolicy::Shared => PanelTab::tool(view.clone()),
+                extension_ui_contract::ToolInstancePolicy::Multiple => {
                     let Ok(instance) = self.shell.next_tool_instance(&view) else {
                         return;
                     };
@@ -539,7 +539,7 @@ impl Shell {
         }
     }
 
-    fn tool_matches(&self, contribution: &crate::extension_ui::UiContribution) -> bool {
+    fn tool_matches(&self, contribution: &extension_ui_contract::UiContribution) -> bool {
         let query = self.shell.tool_picker_query.trim().to_lowercase();
         if query.is_empty() {
             return true;
@@ -557,7 +557,7 @@ impl Shell {
     fn picker_views(
         &self,
         target: &PickerTarget,
-    ) -> Vec<(ViewId, crate::extension_ui::ToolInstancePolicy)> {
+    ) -> Vec<(ViewId, extension_ui_contract::ToolInstancePolicy)> {
         self.picker_contributions(target)
             .into_iter()
             .filter_map(|contribution| {
@@ -569,7 +569,7 @@ impl Shell {
     pub(super) fn picker_contributions(
         &self,
         target: &PickerTarget,
-    ) -> Vec<&crate::extension_ui::UiContribution> {
+    ) -> Vec<&extension_ui_contract::UiContribution> {
         let Some(position) = self.picker_position(target) else {
             return Vec::new();
         };
@@ -722,7 +722,7 @@ mod visibility_tests {
     #[gpui::test]
     fn notification_open_reuses_and_activates_the_right_zone_tab(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);
@@ -786,7 +786,7 @@ mod visibility_tests {
     #[gpui::test]
     fn header_notification_button_opens_and_reuses_tab(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let (shell, visual) = cx.add_window_view(|_, cx| {
             let document = cx.new(|_| Empty);
@@ -827,7 +827,7 @@ mod visibility_tests {
     #[gpui::test]
     fn empty_side_zones_reopen_by_command_without_opening_picker(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx)
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
         });
         let window = cx.add_window(|_, cx| {
             let document = cx.new(|_| Empty);

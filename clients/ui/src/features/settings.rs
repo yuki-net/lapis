@@ -1375,7 +1375,7 @@ impl Render for SettingsFeature {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extension_ui::ThemeId;
+    use extension_ui_contract::ThemeId;
     use gpui::AppContext;
     use settings::{SettingsDocument, SettingsError, SettingsRepository, SyntaxTheme};
     use std::sync::Arc;

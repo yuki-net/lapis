@@ -8,9 +8,9 @@ use gpui::{
     ScrollHandle, canvas, div, point, prelude::*, px,
 };
 
-use crate::extension_ui::ScrollAxis;
 use crate::theme;
 use crate::tokens;
+use extension_ui_contract::ScrollAxis;
 
 const SCROLLBAR_VISIBLE_DURATION: Duration = Duration::from_millis(2_500);
 const THUMB_MIN_LENGTH: Pixels = px(24.0);

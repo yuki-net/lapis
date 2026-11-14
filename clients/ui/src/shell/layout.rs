@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 use super::panel_layout::{Axis, PanelEdge};
 use super::zone::Zone;
 use super::{PanelHost, PanelId, PanelTab};
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 
 const POSITIONS: [ZonePosition; 4] = [
     ZonePosition::Left,

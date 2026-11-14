@@ -1,16 +1,8 @@
 use language::LanguageId;
 
-use super::{CommandId, ViewId, WorkspaceCapabilityId};
+use extension_ui_contract::{CommandId, WorkspaceCapabilityId};
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ActivationCondition {
-    OnWorkspaceOpen,
-    OnLanguage(LanguageId),
-    OnCommand(CommandId),
-    OnView(ViewId),
-    OnWorkspaceCapability(WorkspaceCapabilityId),
-}
-
+/// Client がレジストリへ渡す実行時の出来事。宣言（契約層）ではなく状態遷移。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ActivationEvent {
     WorkspaceOpened,

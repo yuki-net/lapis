@@ -1,6 +1,6 @@
 //! Zone内のPanel順序と比率。ViewやResourceの寿命は扱わない。
 
-use crate::extension_ui::ZonePosition;
+use extension_ui_contract::ZonePosition;
 
 use super::PanelId;
 

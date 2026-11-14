@@ -1,9 +1,10 @@
 use crate::{
-    extension_ui::{FeatureRegistry, ViewId, ZonePosition},
+    extension_ui::FeatureRegistry,
     kit::layout_profile::LayoutProfile,
     shell::{DockLayout, PanelTab, ShellState},
 };
 use desktop_client::{ConversationViewState, DocumentTab, TabRef};
+use extension_ui_contract::{ViewId, ZonePosition};
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {

@@ -2,7 +2,7 @@ use gpui::{App, Global};
 use settings::SyntaxTheme;
 use std::collections::BTreeMap;
 
-use crate::extension_ui::ThemeId;
+use extension_ui_contract::ThemeId;
 
 use super::definition::{ThemeAppearance, ThemeColors, ThemeDefinition};
 
@@ -151,7 +151,7 @@ mod tests {
     #[gpui::test]
     fn bundled_themes_are_available(test_cx: &mut gpui::TestAppContext) {
         test_cx.update(|cx| {
-            crate::theme::init(&crate::extension_ui::ThemeId::new("lapis.dark"), None, cx);
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx);
             let themes = available(cx);
             assert!(
                 themes

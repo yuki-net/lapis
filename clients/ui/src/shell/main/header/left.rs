@@ -43,7 +43,7 @@ impl Shell {
                             panel_state(
                                 self.shell
                                     .layout
-                                    .zone_open(crate::extension_ui::ZonePosition::Left),
+                                    .zone_open(extension_ui_contract::ZonePosition::Left),
                             ),
                             cx,
                         )
@@ -58,7 +58,7 @@ impl Shell {
                             panel_state(
                                 self.shell
                                     .layout
-                                    .zone_open(crate::extension_ui::ZonePosition::Bottom),
+                                    .zone_open(extension_ui_contract::ZonePosition::Bottom),
                             ),
                             cx,
                         )
@@ -73,7 +73,7 @@ impl Shell {
                             panel_state(
                                 self.shell
                                     .layout
-                                    .zone_open(crate::extension_ui::ZonePosition::Right),
+                                    .zone_open(extension_ui_contract::ZonePosition::Right),
                             ),
                             cx,
                         )

@@ -11,10 +11,10 @@ use gpui::{
 
 use crate::{
     components::{Icon, IconName, ScrollAxis, ScrollState, scroll_viewport},
-    extension_ui::CommandId,
     features::command_search::provider::{CommandSearchProvider, SearchItem, SearchProvider},
     theme,
 };
+use extension_ui_contract::CommandId;
 
 actions!(
     quick_search,

@@ -2004,6 +2004,7 @@ dependencies = [
  "dioxus-devtools",
  "document",
  "editor-core",
+ "extension-ui-contract",
  "futures-util",
  "getrandom 0.3.4",
  "git-contract",
@@ -2491,6 +2492,15 @@ dependencies = [
  "rayon-core",
  "smallvec",
  "zune-inflate",
+]
+
+[[package]]
+name = "extension-ui-contract"
+version = "0.1.0"
+dependencies = [
+ "language",
+ "localization",
+ "serde",
 ]
 
 [[package]]

@@ -1,0 +1,11 @@
+[package]
+name = "extension-ui-contract"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+language = { path = "../language" }
+localization = { path = "../localization" }
+serde.workspace = true
