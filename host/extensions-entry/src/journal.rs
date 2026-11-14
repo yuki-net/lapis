@@ -186,12 +186,15 @@ fn apply(
     let target = resolve(catalog.installed_directory(id))?;
     let backup = swap_path(catalog.root(), id);
     match record.phase {
-        PendingPhase::Prepared => {}
-        PendingPhase::CatalogWritten => {
-            restore_declaration(catalog, id, record.previous.clone())?;
-        }
-        PendingPhase::BackedUp => {
-            // 旧実体が退避先にある。新しい実体はまだ置いていないので戻す。
+        // `swapped` より前は、すべて「操作前へ戻す」で揃える。
+        //
+        // 段階の記録と実際の書き込みの間で落ちると、記録は実際より 1 段階前になる
+        // （例: 目録を書いた直後、`catalog_written` を記録する前に落ちる）。段階ごとに
+        // 違う処理をすると、その窓で取り残す。どの段階からでも同じ rollback を行えば、
+        // 記録が実際より遅れていても操作前の状態に戻せる。
+        PendingPhase::Prepared | PendingPhase::CatalogWritten | PendingPhase::BackedUp => {
+            // 退避した旧実体があれば戻す。`target` に新しい実体の一部が残っていても、
+            // 旧版で置き換える。
             if backup.is_dir() {
                 if target.is_dir() {
                     fs::remove_dir_all(&target).map_err(ExtensionCatalogError::Io)?;
@@ -425,6 +428,82 @@ mod tests {
         );
         // 記録の無い操作の段階更新は失敗しない。
         assert!(advance(root.path(), &id("b"), PendingPhase::Swapped).is_ok());
+    }
+
+    #[test]
+    fn a_crash_between_the_write_and_its_phase_record_still_rolls_back() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+
+        // 目録を書いた直後、段階を `catalog_written` へ進める前に落ちた状態。
+        // 記録は `prepared` のままである。
+        catalog
+            .register(ExtensionEntry::new(
+                id("a"),
+                ExtensionVersion::parse("0.2.0").unwrap(),
+                ExtensionState::installed(true),
+            ))
+            .unwrap();
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+
+        recover(&mut catalog).unwrap();
+        let restored = catalog.get(&id("a")).unwrap();
+        assert_eq!(restored.version, ExtensionVersion::parse("0.1.0").unwrap());
+        assert!(restored.state.is_installed());
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old"
+        );
+    }
+
+    #[test]
+    fn a_crash_between_the_backup_and_its_phase_record_still_rolls_back() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+
+        // 退避した直後、段階を `backed_up` へ進める前に落ちた状態。
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+        advance(catalog.root(), &id("a"), PendingPhase::CatalogWritten).unwrap();
+        let backup = swap_path(catalog.root(), &id("a"));
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::rename(&installed, &backup).unwrap();
+        // 段階は `catalog_written` のまま。
+
+        recover(&mut catalog).unwrap();
+        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old"
+        );
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn a_journal_at_prepared_does_not_touch_a_consistent_install() {
+        let root = tempfile::tempdir().unwrap();
+        let mut catalog = catalog(root.path());
+        catalog.register(entry("a", true)).unwrap();
+        let installed = catalog.installed_directory(&id("a")).unwrap();
+        fs::create_dir_all(&installed).unwrap();
+        fs::write(installed.join("f"), b"old").unwrap();
+        // 何も書き換えていない状態で落ちた（`begin` の直後）。
+        begin_install(catalog.root(), "a", Some(entry("a", true)));
+
+        recover(&mut catalog).unwrap();
+        assert!(catalog.get(&id("a")).unwrap().state.is_installed());
+        assert_eq!(
+            fs::read(catalog.installed_directory(&id("a")).unwrap().join("f")).unwrap(),
+            b"old"
+        );
+        assert!(!journal_path(catalog.root()).exists());
     }
 
     #[test]
