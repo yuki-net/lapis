@@ -10,6 +10,7 @@ pub mod document;
 pub mod error;
 pub mod resolve;
 pub mod scope;
+pub mod source;
 pub mod syntax;
 pub mod update;
 pub mod value;
@@ -28,6 +29,7 @@ pub use document::{
 pub use error::SettingsError;
 pub use resolve::{ResolvedSetting, ResolvedSettings};
 pub use scope::{HostId, ProjectId, ScopeKind, SettingsContext, SettingsScope};
+pub use source::SettingsSourceProvider;
 pub use syntax::{SyntaxTheme, TerminalCaretShape};
 pub use update::{UpdateMode, UpdateSource};
 pub use value::{Label, SettingOption, SettingValue, ValueKind};

@@ -34,7 +34,8 @@
 - ページ本文の供給元は `SettingPageContent` で宣言する。`Settings` は定義データの設定項目から組み立て、`Feature` は保存値を持たない実行時の状態（現在の接続情報など）を機能側が表示する。`Feature` ページは項目を持たないため、定義の検証でも項目を要求しない。
 - 値は選択時に即時保存し、共有 state の更新購読で画面・テーマ・言語を反映する。保存を待つ間は選択だけを先行表示する。
 - 定義に無いキーの保存は拒否する。UI 側の分岐で新しい設定を追加しない。
-- Terminal の既定プロファイルの候補は Terminal Feature が Host から取得して公開した一覧を読む。Settings は Terminal Feature の entity に依存せず、公開された一覧だけを使う。
+- Terminal の既定プロファイルの候補は Terminal Feature が Host から取得して登録した設定の供給元（`SettingsSourceProvider`）を読む。Settings は Terminal Feature の型や entity に依存せず、キーで登録された供給元だけを使う。
+- 候補や既定値が実行時の状態に依存する設定は、定義データで `OptionSource::Provided` と宣言し、その状態を所有する Feature が供給元として登録する。供給元を持つキーの登録・通知は `clients/ui` の設定ソース置き場が担い、Settings 側にキー固有の直読みを置かない。
 - Host の Web 公開や端末失効のような操作は永続設定値ではないため、設定画面内の独立した管理ページとして扱う。状態の正本は Host が持ち、UI は worker を介して取得・操作する。
 - 接続ページ（`connection.web`）は `Feature` ページで、ローカル Web のページ URL・Host URL・Workspace ID と、コピー／ブラウザーで開く操作を出す。アドレスは保存値にせず表示のたびに供給元から集めるため、Tailscale の IP 変更などの後も現在の接続情報へ追随する。ページを https で配信している場合は `https` / `wss` を保ち、平文へ落とさない。供給元が接続情報を取得できない起動構成では、このページをナビへ出さない。
 

@@ -40,10 +40,8 @@ mod render;
 mod resize;
 mod tab_context;
 mod tab_drag;
-mod terminal_tabs;
 mod tool_picker;
-
-pub(crate) use terminal_tabs::{TerminalContext, TerminalTabSource};
+mod view_instances;
 
 pub(crate) struct Shell {
     pub(crate) branch_picker: Option<gpui::Entity<crate::features::git::BranchPicker>>,
@@ -68,12 +66,6 @@ pub(crate) struct Shell {
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
     notification_center: gpui::Entity<crate::notification::Center>,
-    /// タブごとのターミナル購読。個体IDごとに1本だけ持つ。
-    terminal_subscriptions: HashMap<ViewInstanceId, gpui::Subscription>,
-    /// ターミナルタブの実体を作るための情報。
-    terminal_source: Option<TerminalTabSource>,
-    /// 変更通知を購読済みか。backend は receiver を1度しか返さない。
-    terminal_changes_started: bool,
     locale: Localizer,
     languages: language::LanguageRegistry,
     scroll_states: ShellScrollStates,
@@ -251,9 +243,6 @@ impl Shell {
             focus_handle: cx.focus_handle(),
             feature_registry,
             notification_center: center,
-            terminal_subscriptions: HashMap::new(),
-            terminal_source: None,
-            terminal_changes_started: false,
             locale: Localizer::bundled(),
             languages: language::LanguageRegistry::bundled(),
             scroll_states: ShellScrollStates::default(),
@@ -285,6 +274,45 @@ impl Shell {
     pub(crate) fn t(&self, key: &str) -> String {
         self.locale.resolve(&localization::MessageId::new(key))
     }
+
+    /// 個体を所有する機能へ、View 単位の操作を行う。
+    ///
+    /// Shell は Terminal などの型を知らないため、永続化やコンテキスト切替は
+    /// この入口から View の所有者へ委ねる。
+    pub(crate) fn with_lifecycle<R>(
+        &self,
+        view: &ViewId,
+        f: impl FnOnce(&mut dyn crate::extension_ui::ViewLifecycle) -> R,
+    ) -> Option<R> {
+        let lifecycle = self.feature_registry.lifecycle(view)?;
+        Some(f(&mut *lifecycle.borrow_mut()))
+    }
+
+    /// タブの Resource を個体へ再適用する。復元したタブと実体を一致させる。
+    pub(crate) fn bind_view_resources(&mut self, cx: &mut Context<Self>) {
+        self.synchronize_view_instances(cx);
+        self.refresh_feature_activation(cx);
+    }
+
+    /// 個体を所有する機能が持つ Resource の永続化用サマリー。
+    pub(crate) fn persisted_view_resources(
+        &self,
+        view: &ViewId,
+        cx: &gpui::App,
+    ) -> Vec<desktop_client::RestoredTerminal> {
+        self.with_lifecycle(view, |lifecycle| lifecycle.persisted_resources(cx))
+            .unwrap_or_default()
+    }
+
+    /// 個体を所有する機能が持つ Resource の所有者。
+    pub(crate) fn view_resource_owner(
+        &self,
+        view: &ViewId,
+        cx: &gpui::App,
+    ) -> Option<editor_core::ConversationId> {
+        self.with_lifecycle(view, |lifecycle| lifecycle.resource_owner(cx))
+            .flatten()
+    }
     fn refresh_feature_activation(&mut self, cx: &mut Context<Self>) {
         self.synchronize_view_instances(cx);
         self.shell
@@ -293,16 +321,39 @@ impl Shell {
     fn synchronize_view_instances(&mut self, cx: &mut Context<Self>) {
         for (tab, _) in self.shell.layout.placements() {
             if let PanelTab::Tool { view, instance, .. } = tab {
-                // Terminal は factory と購読を Shell が管理する。
-                if view.as_str() == id::VIEW_TERMINAL {
+                // 個体を所有する機能は宣言から解決する。ここでは生成しない。
+                if self
+                    .feature_registry
+                    .declaration(&view)
+                    .is_some_and(|declaration| {
+                        declaration.instance_policy
+                            == extension_ui_contract::ToolInstancePolicy::Multiple
+                    })
+                {
                     continue;
                 }
                 self.feature_registry
                     .ensure_view_instance(&view, &instance, cx);
             }
         }
-        self.synchronize_terminal_tabs(cx);
+        self.synchronize_owned_instances(cx);
     }
+    /// 個体を所有する機能から、表示中タブの代表個体を引く。
+    ///
+    /// Terminal のようにタブごとに個体が異なる View は、代表として表示中の
+    /// タブの所属を使う。Resource 固定の参照先は各タブ自身が保持する。
+    pub(crate) fn first_active_tab_of(&self, view: &str) -> Option<PanelTab> {
+        self.shell
+            .layout
+            .placements()
+            .into_iter()
+            .find(|(tab, _)| {
+                tab.view_id()
+                    .is_some_and(|candidate| candidate.as_str() == view)
+            })
+            .map(|(tab, _)| tab)
+    }
+
     pub(crate) fn preview_visible(&self) -> bool {
         self.shell.layout.visible_panels().any(|panel| {
             matches!(

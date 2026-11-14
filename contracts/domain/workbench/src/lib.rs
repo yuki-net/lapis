@@ -2,7 +2,6 @@
 
 use editor_core::{ConversationId, DocumentId, WorkspaceId};
 use serde::{Deserialize, Deserializer, Serialize};
-use terminal::TerminalId;
 use workspace::WorkspaceRelativePath;
 
 mod replica;
@@ -292,8 +291,11 @@ pub enum TabRef {
     Document {
         id: DocumentId,
     },
-    Terminal {
-        id: TerminalId,
+    /// 外部 Resource を参照するタブ。`view` は参照する View の種類で、Resource の
+    /// 解決と寿命はその View を宣言した機能が所有する。
+    Resource {
+        view: Option<String>,
+        id: String,
     },
     /// ViewInstanceId。同じViewを複数開いても個体を区別できる。
     View {
@@ -314,6 +316,14 @@ impl TabRef {
             id: instance.to_owned(),
         })
     }
+
+    /// Terminal タブとして保存された旧形式の Resource ID。読み込み時だけ使う。
+    pub fn legacy_terminal_id(&self) -> Option<&str> {
+        match self {
+            Self::Resource { id, view } if view.is_none() => Some(id),
+            _ => None,
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for TabRef {
@@ -325,20 +335,25 @@ impl<'de> Deserialize<'de> for TabRef {
         #[serde(untagged)]
         enum Encoded {
             Legacy(String),
-            Current { kind: String, id: String },
+            Current {
+                kind: String,
+                id: String,
+                #[serde(default)]
+                view: Option<String>,
+            },
         }
 
         match Encoded::deserialize(deserializer)? {
             Encoded::Legacy(value) => {
                 Self::from_legacy(&value).ok_or_else(|| serde::de::Error::custom("不正なタブ参照"))
             }
-            Encoded::Current { kind, id } => match kind.as_str() {
+            Encoded::Current { kind, id, view } => match kind.as_str() {
                 "document" if !id.is_empty() => Ok(Self::Document {
                     id: DocumentId::new(id),
                 }),
-                "terminal" if !id.is_empty() => Ok(Self::Terminal {
-                    id: TerminalId::new(id),
-                }),
+                // 旧形式の terminal タブは View 未指定の外部 Resource として読む。
+                "terminal" if !id.is_empty() => Ok(Self::Resource { view: None, id }),
+                "resource" if !id.is_empty() => Ok(Self::Resource { view, id }),
                 "view" if !id.is_empty() => Ok(Self::View { id }),
                 _ => Err(serde::de::Error::custom("不正なタブ参照")),
             },
@@ -429,8 +444,9 @@ mod tests {
 
         let encoded = serde_json::to_value(ZonePanelViewState {
             id: "panel-2".into(),
-            tabs: vec![TabRef::Terminal {
-                id: TerminalId::new("host-terminal"),
+            tabs: vec![TabRef::Resource {
+                view: Some("lapis.view.terminal".into()),
+                id: "host-terminal".into(),
             }],
             pinned_tabs: Vec::new(),
             active_tab: None,
@@ -439,8 +455,24 @@ mod tests {
         .unwrap();
         assert_eq!(
             encoded["tabs"][0],
-            serde_json::json!({"kind": "terminal", "id": "host-terminal"})
+            serde_json::json!({
+                "kind": "resource",
+                "view": "lapis.view.terminal",
+                "id": "host-terminal"
+            })
         );
+        // 旧形式の terminal タブは View 未指定の外部 Resource として読む。
+        let legacy: TabRef =
+            serde_json::from_value(serde_json::json!({"kind": "terminal", "id": "host-terminal"}))
+                .unwrap();
+        assert_eq!(
+            legacy,
+            TabRef::Resource {
+                view: None,
+                id: "host-terminal".into()
+            }
+        );
+        assert_eq!(legacy.legacy_terminal_id(), Some("host-terminal"));
     }
 
     fn tabs_layout(active: Option<TabRef>) -> ZoneLayoutViewState {
