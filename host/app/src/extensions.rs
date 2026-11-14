@@ -19,6 +19,11 @@ use extensions_entry::{
 pub(crate) struct HostExtensions {
     catalog: Catalog,
     loader: Loader,
+    /// 回復に失敗して、目録と実体が食い違ったまま残っている理由。
+    ///
+    /// ここが `Some` の間は目録を宣言として配らない。実体の無い「導入済み」や、
+    /// 実体が旧版なのに宣言が新版、という状態を Client に見せないため。
+    inconsistent: Mutex<Option<String>>,
 }
 
 enum Catalog {
@@ -53,6 +58,7 @@ impl HostExtensions {
             return Self {
                 catalog: Catalog::Absent,
                 loader,
+                inconsistent: Mutex::new(None),
             };
         };
         let catalog = match ExtensionCatalog::open(directory.join("extensions")) {
@@ -63,6 +69,7 @@ impl HostExtensions {
                 Catalog::Unreadable(message)
             }
         };
+        let mut inconsistent = None;
         let catalog = match catalog {
             Catalog::Ready(catalog) => {
                 // 前回の導入・除去が中断していれば、目録を公開する前に完了／取り消しする。
@@ -79,17 +86,26 @@ impl HostExtensions {
                     Err(error) => {
                         let message = format!("中断した拡張の導入を回復できません: {error}");
                         eprintln!("{message}");
+                        inconsistent = Some(message.clone());
                         Catalog::Unreadable(message)
                     }
                 }
             }
             other => other,
         };
-        Self { catalog, loader }
+        Self {
+            catalog,
+            loader,
+            inconsistent: Mutex::new(inconsistent),
+        }
     }
 
     /// 現在の目録を宣言として返す。
     pub(crate) fn list(&self) -> Result<HostExtensionsListResponse, String> {
+        // 目録と実体が食い違ったままなら、宣言を配らない。
+        if let Some(reason) = self.inconsistent() {
+            return Err(reason);
+        }
         let catalog = match &self.catalog {
             Catalog::Absent => return Ok(HostExtensionsListResponse::default()),
             Catalog::Ready(catalog) => catalog,
@@ -124,9 +140,13 @@ impl HostExtensions {
     ) -> Result<InstallOutcome, String> {
         let loader = self.loader()?;
         let mut catalog = self.catalog_mut()?;
-        loader
-            .install(&mut catalog, package, enabled)
-            .map_err(|error| error.to_string())
+        match loader.install(&mut catalog, package, enabled) {
+            Ok(outcome) => Ok(outcome),
+            Err(error) => {
+                self.record_recovery_failure(&error);
+                Err(error.to_string())
+            }
+        }
     }
 
     /// 有効化・無効化を目録の宣言として登録する。`None` は変更できない対象。
@@ -148,9 +168,13 @@ impl HostExtensions {
         let id = ExtensionPackageId::try_new(id).map_err(|error| error.to_string())?;
         let loader = self.loader()?;
         let mut catalog = self.catalog_mut()?;
-        loader
-            .remove(&mut catalog, &id)
-            .map_err(|error| error.to_string())
+        match loader.remove(&mut catalog, &id) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                self.record_recovery_failure(&error);
+                Err(error.to_string())
+            }
+        }
     }
 
     fn catalog_mut(&self) -> Result<std::sync::MutexGuard<'_, ExtensionCatalog>, String> {
@@ -169,6 +193,24 @@ impl HostExtensions {
             Loader::Unavailable(message) => Err(message.clone()),
         }
     }
+
+    fn inconsistent(&self) -> Option<String> {
+        self.inconsistent
+            .lock()
+            .ok()
+            .and_then(|reason| reason.clone())
+    }
+
+    /// 回復に失敗した操作を記録し、以後の宣言公開を止める。
+    ///
+    /// 次に起動して回復が成功するまで、実体と宣言が食い違ったままである。
+    fn record_recovery_failure(&self, error: &extensions_entry::PackageError) {
+        if error.leaves_inconsistent_state()
+            && let Ok(mut reason) = self.inconsistent.lock()
+        {
+            *reason = Some(error.to_string());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -182,6 +224,34 @@ mod tests {
             ExtensionVersion::parse("0.1.0").unwrap(),
             ExtensionState::installed(enabled),
         )
+    }
+
+    #[test]
+    fn an_unrecovered_error_stops_the_declaration_list() {
+        let directory = tempfile::tempdir().unwrap();
+        let extensions = HostExtensions::load(Some(directory.path()));
+        assert!(extensions.list().is_ok());
+
+        // 回復に失敗した操作を記録すると、以後の宣言公開を止める。
+        extensions.record_recovery_failure(&extensions_entry::PackageError::Unrecovered {
+            cause: "配置に失敗".to_owned(),
+            recovery: "旧版を戻せない".to_owned(),
+        });
+        assert!(
+            extensions.list().is_err(),
+            "実体と宣言が食い違ったまま宣言を配らない"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_install_error_keeps_publishing_the_declaration() {
+        let directory = tempfile::tempdir().unwrap();
+        let extensions = HostExtensions::load(Some(directory.path()));
+        // 目録を変更していない失敗では、宣言の公開を止めない。
+        extensions.record_recovery_failure(&extensions_entry::PackageError::Malformed(
+            "manifest がない".to_owned(),
+        ));
+        assert!(extensions.list().unwrap().extensions.is_empty());
     }
 
     #[test]

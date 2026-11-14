@@ -138,6 +138,20 @@ pub enum PackageError {
     NotAnExtension(PackageKind),
     /// 目録の読み書きに失敗した。
     Catalog(ExtensionCatalogError),
+    /// 中断した導入・除去の回復に失敗した。目録と実体が食い違ったままである。
+    ///
+    /// 呼び出し側は目録を宣言として公開してはいけない。journal は残っているので、
+    /// 次の起動で回復を再試行できる。
+    Unrecovered { cause: String, recovery: String },
+}
+
+impl PackageError {
+    /// 目録と実体が食い違ったまま残っているか。
+    ///
+    /// true の間は、目録を宣言として Client へ配ってはいけない。
+    pub fn leaves_inconsistent_state(&self) -> bool {
+        matches!(self, Self::Unrecovered { .. })
+    }
 }
 
 impl std::fmt::Display for PackageError {
@@ -152,6 +166,10 @@ impl std::fmt::Display for PackageError {
                 write!(formatter, "拡張 package ではありません: {kind:?}")
             }
             Self::Catalog(error) => write!(formatter, "{error}"),
+            Self::Unrecovered { cause, recovery } => write!(
+                formatter,
+                "拡張の状態を回復できません（{recovery}）。元の失敗: {cause}"
+            ),
         }
     }
 }
@@ -162,7 +180,7 @@ impl std::error::Error for PackageError {
             Self::Io(error) => Some(error),
             Self::Signature(error) => Some(error),
             Self::Catalog(error) => Some(error),
-            Self::Malformed(_) | Self::NotAnExtension(_) => None,
+            Self::Malformed(_) | Self::NotAnExtension(_) | Self::Unrecovered { .. } => None,
         }
     }
 }
@@ -284,15 +302,16 @@ impl ExtensionLoader {
                     }
                     Err(error) => {
                         // 実体を置き換えられなかった。今の段階から回復して、目録と実体を
-                        // 操作前へ戻す。回復が失敗したら journal を残し、次の起動で再試行する。
+                        // 操作前へ戻す。回復できなければ、目録を宣言として配ってはいけない
+                        // 状態であることを呼び出し側へ伝える。
                         let _ = fs::remove_dir_all(&staged);
-                        if crate::journal::recover_locked(catalog).is_err() {
-                            eprintln!(
-                                "拡張 {} の中断した導入を回復できませんでした。次の起動で再試行します",
-                                manifest.id
-                            );
+                        match crate::journal::recover_locked(catalog) {
+                            Ok(_) => Err(error),
+                            Err(recovery) => Err(PackageError::Unrecovered {
+                                cause: error.to_string(),
+                                recovery: recovery.to_string(),
+                            }),
                         }
-                        Err(error)
                     }
                 }
             }
@@ -385,13 +404,14 @@ impl ExtensionLoader {
             }
             Err(error) => {
                 // 導入と同じ回復経路に委ねる。段階に応じて実体と宣言を操作前へ戻す。
-                // 回復に失敗したら記録を残し、次の起動で再試行する。
-                if crate::journal::recover_locked(catalog).is_err() {
-                    eprintln!(
-                        "拡張 {id} の中断した除去を回復できませんでした。次の起動で再試行します"
-                    );
+                // 回復できなければ、目録を配ってはいけない状態であることを伝える。
+                match crate::journal::recover_locked(catalog) {
+                    Ok(_) => Err(error),
+                    Err(recovery) => Err(PackageError::Unrecovered {
+                        cause: error.to_string(),
+                        recovery: recovery.to_string(),
+                    }),
                 }
-                Err(error)
             }
         }
     }

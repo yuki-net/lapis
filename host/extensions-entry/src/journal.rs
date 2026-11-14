@@ -32,7 +32,10 @@ const JOURNAL_FILE: &str = "journal.json";
 /// 置き換え中の旧版を退避する directory。拡張 ID の namespace の外に置く。
 pub(crate) const SWAP_DIR: &str = ".swap";
 /// 展開中の一時 directory の接頭辞。
-const STAGING_PREFIX: &str = ".staging-";
+///
+/// `installed/` 直下でこの prefix を持つ directory は、回復処理が残骸として削除する。
+/// 拡張 ID としても予約する。
+pub(crate) const STAGING_PREFIX: &str = ".staging-";
 /// 導入の排他 file。
 const LOCK_FILE: &str = "installed.lock";
 

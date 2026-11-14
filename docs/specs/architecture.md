@@ -216,8 +216,8 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 - 互換照合は manifest の `requires`（契約 ID と、両端を含む版の範囲）を Host が提供する版と突き合わせる。比較は SemVer の precedence で行い、build metadata（`+vendor` など）は無視する。Host が提供する契約は `lapis.extension` だけで、その版は crate の定数が正本である。満たさない package は展開せず、目録に `incompatible` として登録する。非互換の拡張は有効にできない。導入済みの版が動いている場合、非互換の版を入れようとしてもその宣言と実体は残す（入れようとした版の都合で動いている版を壊さない）。
 - 署名検証はリリース署名と同じ規則を使う（Ed25519、`release/trusted-keys.json` を信頼の起点、`signature` を除いた manifest の正規化 bytes への署名、恒等元・小位数点の鍵を拒否）。署名が一致しない package は目録にも載せない。manifest の `id` すら署名で裏付けられていないため、宣言として採用しない。
 - 有効化・無効化は目録の状態だけを変え、package の実体は動かさない。反映は入口の再起動で行う。導入済み package を取り除いても `<state>/extensions/data/<id>/` は残し、再導入で引き継ぐ。
-- package の `files` の path は、空・`.`・`..`・末尾 `.`・末尾空白の要素を拒否する。Windows は path 要素の末尾 `.` と空白を取り除いて解決するため、許可すると別名の member が同じ file を上書きする。同名 member を持つ zip は `ZipArchive::has_duplicate_names` で走査前に拒否する（`zip` は同名を内部 map に畳むため、`len()` と `by_index()` からは見えない）。
-- 目録と `installed/<id>/` は別の file なので、書き込みの間で Host が終了すると食い違う。`<state>/extensions/journal.json` に操作の段階（`prepared` / `catalog_written` / `backed_up` / `swapped`）と操作前の宣言を記録し、次の起動で段階に応じて完了または取り消す（`recover_pending_installs`）。回復は導入の lock を取得して行い、失敗した場合は目録を公開しない。実体は `.swap/` へ退避してから置き換える。
+- package の `files` の path は、空・`.`・`..`・末尾 `.`・末尾空白の要素を拒否する。Windows は path 要素の末尾 `.` と空白を取り除いて解決するため、許可すると別名の member が同じ file を上書きする。同名 member を持つ zip は `ZipArchive::has_duplicate_names` で走査前に拒否する（`zip` は同名を内部 map に畳むため、`len()` と `by_index()` からは見えない）。拡張 ID は `.staging-` で始まってはならない（`installed/` 直下の残骸掃除が同名の実体を消すため）。
+- 目録と `installed/<id>/` は別の file なので、書き込みの間で Host が終了すると食い違う。`<state>/extensions/journal.json` に操作の段階（`prepared` / `catalog_written` / `backed_up` / `swapped`）と操作前の宣言を記録し、次の起動で段階に応じて完了または取り消す（`recover_pending_installs`）。回復は導入の lock を取得して行い、失敗した場合は目録を公開しない（起動時は `Unreadable`、稼働中は `PackageError::Unrecovered` を記録して `host.extensions.list` にエラーを返す）。実体は `.swap/` へ退避してから置き換える。
 - state directory を持たない Host は拡張を持たない。目録を一時 directory へ逃がすと、同じ OS ユーザーの別 Host と状態を共有してしまうため、空の宣言を返す。
 
 ## Desktop の Command / Keymap

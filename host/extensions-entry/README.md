@@ -113,8 +113,10 @@ JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と�
 - 回復は導入の lock（`installed.lock`）を取得して行う。別の Host が導入中の操作を
   中断済みと誤認しない。
 - 同じ段階からの回復は冪等である。回復中に再度落ちても、次の起動で同じ結果になる。
-- 回復に失敗した場合、`HostExtensions::load` は目録を公開しない（file は残し、次の起動で
-  再試行する）。実体の無い「導入済み」を宣言として Client に見せないため。
+- 回復に失敗した場合、`HostExtensions` は目録を公開しない（file は残し、次の起動で
+  再試行する）。起動時の回復失敗は `Catalog::Unreadable`、稼働中の導入・除去の回復失敗は
+  `PackageError::Unrecovered` を記録して `host.extensions.list` にエラーを返す。実体と
+  宣言が食い違ったまま「導入済み」を宣言として Client に見せないため。
 - 記録に無い宣言には触れない。宣言だけを登録する段階（PR1 の配置解決）を、回復が
   書き換えないため。
 
