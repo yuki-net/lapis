@@ -231,7 +231,7 @@ fn run() -> Result<(), Error> {
             host::write_invitation_replacing(path, &invitation)?;
             println!("invitation={}", path.display());
         }
-        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / quit");
+        println!("Commands: pair / pair-user / register <directory> / invite <address:port> <new-file.json> / devices / approve <device-id> / revoke-device <device-id> / revoke <credential-id> / ext-install <file.lapis> [--disabled] / ext-enable <id> / ext-disable <id> / ext-remove <id> / quit");
         std::io::stdout().flush()?;
         let mut credential_save = tokio::time::interval(CREDENTIAL_SAVE_INTERVAL);
         credential_save.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -356,6 +356,54 @@ fn run() -> Result<(), Error> {
                                     .revoke_device(id)
                             );
                         }
+                    } else if let Some(input) = line.strip_prefix("ext-install ") {
+                        // `ext-install <file.lapis> [--disabled]`。読み込んだ宣言は
+                        // `host.extensions.list` に現れ、有効な拡張は入口の再起動で反映する。
+                        match parse_ext_install(input) {
+                            Some((path, enabled)) => {
+                                match host.install_extension(std::path::Path::new(&path), enabled) {
+                                    Ok(outcome) => println!("{}", describe_outcome(&outcome)),
+                                    Err(error) => eprintln!("拡張を読み込めません: {error}"),
+                                }
+                            }
+                            None => eprintln!("Usage: ext-install <file.lapis> [--disabled]"),
+                        }
+                    } else if let Some(input) = line.strip_prefix("ext-enable ") {
+                        let id = input.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: ext-enable <extension-id>");
+                        } else {
+                            match host.set_extension_enabled(id, true) {
+                                Ok(Some(registration)) => println!(
+                                    "enabled={id} registration={registration:?}（入口の再起動で反映）"
+                                ),
+                                Ok(None) => eprintln!("有効にできない拡張です: {id}"),
+                                Err(error) => eprintln!("拡張を有効にできません: {error}"),
+                            }
+                        }
+                    } else if let Some(input) = line.strip_prefix("ext-disable ") {
+                        let id = input.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: ext-disable <extension-id>");
+                        } else {
+                            match host.set_extension_enabled(id, false) {
+                                Ok(Some(registration)) => println!(
+                                    "disabled={id} registration={registration:?}（入口の再起動で反映）"
+                                ),
+                                Ok(None) => eprintln!("無効にできない拡張です: {id}"),
+                                Err(error) => eprintln!("拡張を無効にできません: {error}"),
+                            }
+                        }
+                    } else if let Some(input) = line.strip_prefix("ext-remove ") {
+                        let id = input.trim();
+                        if id.is_empty() {
+                            eprintln!("Usage: ext-remove <extension-id>");
+                        } else {
+                            match host.remove_extension(id) {
+                                Ok(()) => println!("removed={id}（拡張データは残します）"),
+                                Err(error) => eprintln!("拡張を取り除けません: {error}"),
+                            }
+                        }
                     } else { eprintln!("Unknown command"); }
                     std::io::stdout().flush()?;
                 }
@@ -412,6 +460,54 @@ fn auto_approve_oidc_devices() -> bool {
         .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
+/// `ext-install` の引数を `(path, enabled)` にする。パスが空なら `None`。
+///
+/// 末尾の独立した `--disabled` だけを option として分離し、残りは空白を含めてそのまま
+/// パスとして扱う。`split_whitespace` で分割すると `/tmp/Lapis Packages/a.lapis` の
+/// パスが途中で切れる。`a--disabled.lapis` のような語を含むパスを切り落とさないよう、
+/// `--disabled` の直前が空白か先頭のときだけ option とみなす。
+fn parse_ext_install(input: &str) -> Option<(String, bool)> {
+    let input = input.trim();
+    let (path, enabled) = match input.strip_suffix("--disabled") {
+        Some(rest) if rest.is_empty() || rest.ends_with(char::is_whitespace) => {
+            (rest.trim(), false)
+        }
+        _ => (input, true),
+    };
+    let path = path.trim_matches('"');
+    if path.is_empty() {
+        return None;
+    }
+    Some((path.to_owned(), enabled))
+}
+
+/// `ext-install` の結果を console 向けの 1 行にする。
+fn describe_outcome(outcome: &extensions_entry::InstallOutcome) -> String {
+    match outcome {
+        extensions_entry::InstallOutcome::Installed {
+            id,
+            version,
+            enabled,
+        } => format!(
+            "installed={id} version={version} enabled={enabled}（有効なら入口の再起動で反映）"
+        ),
+        extensions_entry::InstallOutcome::Incompatible {
+            id,
+            version,
+            reason,
+            kept_previous,
+        } => {
+            if *kept_previous {
+                format!(
+                    "incompatible={id} version={version}: {reason}（読み込まず、導入済みの版を残します）"
+                )
+            } else {
+                format!("incompatible={id} version={version}: {reason}（読み込みません）")
+            }
+        }
+    }
+}
+
 fn write_connection_info(
     path: &std::path::Path,
     connection: &wire::HostConnection,
@@ -459,6 +555,42 @@ fn write_public_certificate(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ext_install_keeps_spaces_in_the_package_path() {
+        // 空白を含むパスを分割しない。
+        assert_eq!(
+            parse_ext_install("/tmp/Lapis Packages/a.lapis"),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), true))
+        );
+        assert_eq!(
+            parse_ext_install("/tmp/Lapis Packages/a.lapis --disabled"),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), false))
+        );
+        // 引用符付きでも同じ。
+        assert_eq!(
+            parse_ext_install("\"/tmp/Lapis Packages/a.lapis\""),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), true))
+        );
+        assert_eq!(
+            parse_ext_install("\"/tmp/Lapis Packages/a.lapis\" --disabled"),
+            Some(("/tmp/Lapis Packages/a.lapis".to_owned(), false))
+        );
+        // `--disabled` を語の一部に含むパスは option とみなさない。
+        assert_eq!(
+            parse_ext_install("/tmp/a--disabled.lapis"),
+            Some(("/tmp/a--disabled.lapis".to_owned(), true))
+        );
+        // Windows のパスもそのまま。
+        assert_eq!(
+            parse_ext_install(r"C:\Users\me\Lapis Ext\a.lapis --disabled"),
+            Some((r"C:\Users\me\Lapis Ext\a.lapis".to_owned(), false))
+        );
+        // パスが無ければ usage。
+        assert_eq!(parse_ext_install("   "), None);
+        assert_eq!(parse_ext_install("--disabled"), None);
+    }
+
     #[test]
     fn public_certificate_is_replaced_only_when_requested() {
         let directory = tempfile::tempdir().unwrap();

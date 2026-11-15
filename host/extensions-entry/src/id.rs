@@ -42,6 +42,7 @@ impl ExtensionPackageId {
                 .bytes()
                 .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b'_'))
             || value.ends_with('.')
+            || value.starts_with(crate::journal::STAGING_PREFIX)
             || RESERVED_IDENTIFIERS.contains(&value.as_str())
             || is_windows_device_name(&value)
         {
@@ -94,6 +95,27 @@ impl Error for InvalidExtensionPackageId {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn staging_prefixed_ids_are_reserved_for_leftover_cleanup() {
+        // `installed/.staging-*` は回復処理が残骸として消す。その名前を拡張 ID に
+        // 許すと、導入済みの実体が掃除で消える。
+        for value in [".staging-a", ".staging-extension", ".staging"] {
+            if value.starts_with(".staging-") {
+                assert!(
+                    ExtensionPackageId::try_new(value).is_err(),
+                    "must reject staging prefix: {value:?}"
+                );
+            }
+        }
+        // prefix を部分文字列として含むだけの ID は使える。
+        for value in ["a.staging-b", "staging-a", ".stagingx"] {
+            assert!(
+                ExtensionPackageId::try_new(value).is_ok(),
+                "must accept {value:?}"
+            );
+        }
+    }
 
     #[test]
     fn ids_are_lowercase_path_safe_and_round_trip_as_strings() {

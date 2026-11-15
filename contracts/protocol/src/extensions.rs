@@ -17,6 +17,12 @@ pub struct HostExtension {
     pub version: String,
     pub installed: bool,
     pub enabled: bool,
+    /// package は読めたが、要求された契約と版を Host が満たさない。
+    ///
+    /// `installed` / `enabled` とは排他であり、このとき実体は置いていない。
+    /// この field を書かない旧い Host の宣言は `false` として読む。
+    #[serde(default)]
+    pub incompatible: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,6 +50,7 @@ mod tests {
                 version: "0.2.0".to_owned(),
                 installed: true,
                 enabled: false,
+                incompatible: false,
             }],
         };
         let body = ResponseBody::HostExtensions(response.clone());
@@ -54,5 +61,15 @@ mod tests {
             serde_json::from_value::<ResponseBody>(encoded).unwrap(),
             body
         );
+    }
+
+    #[test]
+    fn a_declaration_without_the_incompatible_field_is_read_as_compatible() {
+        // この field を書かない旧い Host の宣言も読める。
+        let declaration: HostExtension = serde_json::from_str(
+            r#"{"id":"dev.example.one","version":"0.1.0","installed":true,"enabled":true}"#,
+        )
+        .unwrap();
+        assert!(!declaration.incompatible);
     }
 }

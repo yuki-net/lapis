@@ -349,6 +349,32 @@ impl BackendHost {
     pub fn extensions(&self) -> Result<client_api::HostExtensionsListResponse, String> {
         self.inner.extensions.list()
     }
+
+    /// `.lapis` package を読み込み、目録へ宣言を登録する。
+    ///
+    /// Host の管理操作であり、リモートの Client には公開しない。反映（有効な拡張の
+    /// 読み込み）は入口の再起動で行う。
+    pub fn install_extension(
+        &self,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<extensions_entry::InstallOutcome, String> {
+        self.inner.extensions.install(package, enabled)
+    }
+
+    /// 拡張を有効化・無効化する。反映は入口の再起動で行う。
+    pub fn set_extension_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+    ) -> Result<Option<extensions_entry::Registration>, String> {
+        self.inner.extensions.set_enabled(id, enabled)
+    }
+
+    /// 導入済み package を取り除く。拡張データは残す。
+    pub fn remove_extension(&self, id: &str) -> Result<(), String> {
+        self.inner.extensions.remove(id)
+    }
 }
 
 #[cfg(test)]
