@@ -91,6 +91,14 @@ pub struct PackageManifest {
     pub files: Vec<PackageFile>,
 }
 
+/// 署名と内容を検証した導入済み package のスナップショット。
+/// 実行側は検証後に path を読み直さず、この bytes を使用する。
+#[derive(Debug)]
+pub struct VerifiedPackage {
+    pub manifest: PackageManifest,
+    pub files: BTreeMap<String, Vec<u8>>,
+}
+
 /// 読み込みの結果。目録に載った宣言の内容を返す。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InstallOutcome {
@@ -219,6 +227,59 @@ impl ExtensionLoader {
     /// 信頼済み公開鍵と提供する契約を明示して作る。検証規則を確かめるテストが使う。
     pub fn new(keys: TrustedKeys, contracts: HostContracts) -> Self {
         Self { keys, contracts }
+    }
+
+    /// 導入済み package の署名・目録・契約・各 file を再検証する。
+    /// 旧版で manifest を保存していない package は再導入が必要。
+    pub fn load_installed(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        id: &ExtensionPackageId,
+    ) -> Result<VerifiedPackage, PackageError> {
+        let _lock = lock_install(catalog.root())?;
+        crate::journal::recover_locked(catalog)?;
+        catalog.reload()?;
+        let entry = catalog
+            .get(id)
+            .ok_or_else(|| PackageError::Malformed(format!("拡張が目録にありません: {id}")))?;
+        if !entry.state.is_installed() {
+            return Err(PackageError::Malformed(format!(
+                "拡張が導入されていません: {id}"
+            )));
+        }
+        let directory = catalog.installed_directory(id)?;
+        let raw = read_installed_file(&directory, MANIFEST_NAME)?;
+        let manifest = parse_manifest(&raw, &self.keys)?;
+        if manifest.kind != PackageKind::Extension {
+            return Err(PackageError::NotAnExtension(manifest.kind));
+        }
+        if &manifest.id != id || manifest.version != entry.version {
+            return Err(PackageError::Malformed(
+                "目録と manifest が一致しません".to_owned(),
+            ));
+        }
+        if manifest.files.len() >= MAX_FILES {
+            return Err(PackageError::Malformed(
+                "package の file 数が上限を超えています".to_owned(),
+            ));
+        }
+        self.contracts
+            .check(&manifest.requires)
+            .map_err(|error| PackageError::Malformed(format!("拡張が非互換です: {error}")))?;
+        let mut total = raw.len() as u64;
+        let mut files = BTreeMap::new();
+        for file in &manifest.files {
+            let bytes = read_installed_file(&directory, &file.path)?;
+            total += bytes.len() as u64;
+            if total > MAX_PACKAGE_BYTES {
+                return Err(PackageError::Malformed(
+                    "package の展開後の大きさが上限を超えています".to_owned(),
+                ));
+            }
+            files.insert(file.path.clone(), bytes);
+        }
+        verify_files(&manifest, &files)?;
+        Ok(VerifiedPackage { manifest, files })
     }
 
     /// package を検証して導入し、目録へ宣言を登録する。
@@ -437,6 +498,47 @@ fn remove_directory(path: &Path) -> Result<(), PackageError> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(PackageError::Io(error)),
     }
+}
+
+fn read_installed_file(directory: &Path, name: &str) -> Result<Vec<u8>, PackageError> {
+    if name != MANIFEST_NAME {
+        validate_member_path(name)?;
+    }
+    let mut path = directory.to_path_buf();
+    if fs::symlink_metadata(&path)
+        .map_err(PackageError::Io)?
+        .file_type()
+        .is_symlink()
+    {
+        return Err(PackageError::Malformed("導入先が symlink です".to_owned()));
+    }
+    for part in name.split('/') {
+        path.push(part);
+        if fs::symlink_metadata(&path)
+            .map_err(PackageError::Io)?
+            .file_type()
+            .is_symlink()
+        {
+            return Err(PackageError::Malformed(format!(
+                "symlink は読み込めません: {name}"
+            )));
+        }
+    }
+    let file = fs::File::open(&path).map_err(PackageError::Io)?;
+    if !file.metadata().map_err(PackageError::Io)?.is_file() {
+        return Err(PackageError::Malformed(format!(
+            "file ではありません: {name}"
+        )));
+    }
+    let mut bytes = Vec::new();
+    io::Read::read_to_end(&mut io::Read::take(file, MAX_FILE_BYTES + 1), &mut bytes)
+        .map_err(PackageError::Io)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(PackageError::Malformed(format!(
+            "file が大きすぎます: {name}"
+        )));
+    }
+    Ok(bytes)
 }
 
 /// package の file 名 → 内容。zip member の検証をここで済ませる。
@@ -705,6 +807,11 @@ fn stage(
         .prefix(".staging-")
         .tempdir_in(parent)
         .map_err(PackageError::Io)?;
+    // 起動時に署名と契約を再検証できるよう、検証済み manifest も実体と保存する。
+    let manifest_bytes = archive
+        .get(MANIFEST_NAME)
+        .ok_or_else(|| PackageError::Malformed(format!("{MANIFEST_NAME} がない")))?;
+    fs::write(staging.path().join(MANIFEST_NAME), manifest_bytes).map_err(PackageError::Io)?;
     for file in &manifest.files {
         let bytes = archive
             .get(&file.path)

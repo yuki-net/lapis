@@ -28,7 +28,7 @@ pub use id::{ExtensionPackageId, InvalidExtensionPackageId};
 pub use journal::{JOURNAL_SCHEMA, PendingInstall, PendingOperation, PendingPhase};
 pub use package::{
     ExtensionLoader, InstallOutcome, MANIFEST_NAME, PACKAGE_SCHEMA, PackageError, PackageFile,
-    PackageKind, PackageManifest,
+    PackageKind, PackageManifest, VerifiedPackage,
 };
 
 /// Host の起動時に、中断した導入・除去を完了または取り消す。

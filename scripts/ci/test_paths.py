@@ -55,8 +55,21 @@ class TestPathRouting(unittest.TestCase):
         )
         self.assertEqual(
             jobs_for_paths(["extensions/acp/contract/src/lib.rs"]),
-            {"rust_core", "host", "desktop", "web"},
+            {"repository", "rust_core", "host", "desktop", "web"},
         )
+
+    def test_new_extension_paths_run_repository_and_all_rust_surfaces(self):
+        """拡張の事前登録がなくても、コードと宣言・アセットを検証する。"""
+        expected = {"repository", "rust_core", "host", "desktop", "web"}
+        for path in (
+            "extensions/new-plugin/manifest.json",
+            "extensions/new-plugin/host/src/lib.rs",
+            "extensions/new-plugin/assets/messages/ja.json",
+            "extensions/terminal/manifest.json",
+            "extensions/terminal/ui/src/lib.rs",
+            "extensions/terminal/assets/messages/ja.json",
+        ):
+            self.assertEqual(jobs_for_paths([path]), expected, path)
 
     def test_terminal_extension_runs_only_the_surfaces_it_affects(self):
         """Terminal 拡張は契約と実装で影響する surface が分かれる。"""

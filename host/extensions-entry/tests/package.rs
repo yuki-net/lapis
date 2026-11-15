@@ -173,7 +173,7 @@ fn an_extension_package_is_verified_extracted_and_declared() {
     assert!(outcome.is_installed());
 
     // 宣言は目録の状態を写す。
-    let entry = catalog.get(&id("dev.example.terminal")).unwrap();
+    let entry = catalog.get(&id("dev.example.terminal")).unwrap().clone();
     assert!(entry.state.is_installed());
     assert!(entry.state.is_enabled());
     assert!(!entry.state.is_incompatible());
@@ -186,6 +186,13 @@ fn an_extension_package_is_verified_extracted_and_declared() {
         std::fs::read(installed.join("extension.wasm")).unwrap(),
         b"\0asm"
     );
+    let installed_manifest: Value =
+        serde_json::from_slice(&std::fs::read(installed.join(MANIFEST_NAME)).unwrap()).unwrap();
+    assert_eq!(installed_manifest, manifest);
+    let verified = loader()
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    assert_eq!(verified.files["extension.wasm"], b"\0asm");
     assert!(
         catalog
             .data_directory(&id("dev.example.terminal"))
@@ -195,7 +202,109 @@ fn an_extension_package_is_verified_extracted_and_declared() {
 
     // 再起動しても同じ宣言を読める。
     let reopened = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
-    assert_eq!(reopened.entries().next().unwrap(), entry);
+    assert_eq!(reopened.entries().next().unwrap(), &entry);
+}
+
+#[test]
+fn installed_package_is_rechecked_before_use() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    let loader = loader();
+    loader.install(&mut catalog, &package, true).unwrap();
+    let directory = catalog
+        .installed_directory(&id("dev.example.terminal"))
+        .unwrap();
+    std::fs::write(directory.join("extension.wasm"), b"tampered").unwrap();
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    std::fs::write(directory.join("extension.wasm"), b"\0asm").unwrap();
+    let mut tampered = manifest;
+    tampered["version"] = json!("1.0.0");
+    std::fs::write(
+        directory.join(MANIFEST_NAME),
+        serde_json::to_vec(&tampered).unwrap(),
+    )
+    .unwrap();
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    std::fs::remove_file(directory.join(MANIFEST_NAME)).unwrap();
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+}
+
+#[test]
+fn installed_package_must_match_catalog_and_current_contracts() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    loader().install(&mut catalog, &package, true).unwrap();
+    let id = id("dev.example.terminal");
+    let incompatible = ExtensionLoader::new(trusted_keys(), HostContracts::new([]));
+    assert!(incompatible.load_installed(&mut catalog, &id).is_err());
+
+    let directory = catalog.installed_directory(&id).unwrap();
+    let other = extension_manifest(
+        "dev.example.other",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    std::fs::write(
+        directory.join(MANIFEST_NAME),
+        serde_json::to_vec(&other).unwrap(),
+    )
+    .unwrap();
+    assert!(loader().load_installed(&mut catalog, &id).is_err());
+}
+
+#[test]
+fn reinstall_restores_manifest_for_legacy_packages() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    let loader = loader();
+    let id = id("dev.example.terminal");
+    loader.install(&mut catalog, &package, true).unwrap();
+    let directory = catalog.installed_directory(&id).unwrap();
+    std::fs::remove_file(directory.join(MANIFEST_NAME)).unwrap();
+    assert!(loader.load_installed(&mut catalog, &id).is_err());
+    loader.install(&mut catalog, &package, true).unwrap();
+    assert!(loader.load_installed(&mut catalog, &id).is_ok());
 }
 
 #[test]

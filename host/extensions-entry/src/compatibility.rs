@@ -123,7 +123,7 @@ impl Error for InvalidContractRequirement {}
 /// Host が提供する契約と版。読み込み時の照合にだけ使う。
 #[derive(Clone, Debug)]
 pub struct HostContracts {
-    provided: BTreeMap<ContractId, Version>,
+    provided: BTreeMap<ContractId, Vec<Version>>,
 }
 
 impl Default for HostContracts {
@@ -137,34 +137,43 @@ impl HostContracts {
     pub fn current() -> Self {
         let (major, minor, patch) = HOST_EXTENSION_CONTRACT_VERSION;
         let version = Version::new(major, minor, patch);
-        Self {
-            provided: BTreeMap::from([(
-                ContractId::try_new(EXTENSION_CONTRACT).expect("valid contract id"),
-                version,
-            )]),
-        }
+        Self::new([(
+            ContractId::try_new(EXTENSION_CONTRACT).expect("valid contract id"),
+            version,
+        )])
     }
 
     /// 提供する契約を明示して作る。検証規則を確かめるテストが使う。
     pub fn new(provided: impl IntoIterator<Item = (ContractId, Version)>) -> Self {
+        let mut contracts = BTreeMap::<ContractId, Vec<Version>>::new();
+        for (contract, version) in provided {
+            contracts.entry(contract).or_default().push(version);
+        }
         Self {
-            provided: provided.into_iter().collect(),
+            provided: contracts,
         }
     }
 
     /// 要求された契約と版の範囲をすべて満たすか。
     pub fn check(&self, requirements: &[ContractRequirement]) -> Result<(), Incompatibility> {
         for requirement in requirements {
-            let Some(provided) = self.provided.get(&requirement.contract) else {
-                return Err(Incompatibility::UnprovidedContract {
-                    contract: requirement.contract.clone(),
-                });
-            };
-            if !requirement.contains(provided) {
-                return Err(Incompatibility::out_of_range(requirement, provided));
-            }
+            self.resolve(requirement)?;
         }
         Ok(())
+    }
+
+    /// 範囲に入る提供版のうち、SemVer の優先順位が最も高い版を選ぶ。
+    pub fn resolve(&self, requirement: &ContractRequirement) -> Result<&Version, Incompatibility> {
+        let Some(provided) = self.provided.get(&requirement.contract) else {
+            return Err(Incompatibility::UnprovidedContract {
+                contract: requirement.contract.clone(),
+            });
+        };
+        provided
+            .iter()
+            .filter(|version| requirement.contains(version))
+            .max_by(|left, right| left.cmp_precedence(right))
+            .ok_or_else(|| Incompatibility::out_of_range(requirement, provided))
     }
 }
 
@@ -181,17 +190,17 @@ pub enum Incompatibility {
         contract: ContractId,
         minimum: Box<Version>,
         maximum: Box<Version>,
-        provided: Box<Version>,
+        provided: Vec<Version>,
     },
 }
 
 impl Incompatibility {
-    fn out_of_range(requirement: &ContractRequirement, provided: &Version) -> Self {
+    fn out_of_range(requirement: &ContractRequirement, provided: &[Version]) -> Self {
         Self::VersionOutOfRange {
             contract: requirement.contract.clone(),
             minimum: Box::new(requirement.minimum.clone()),
             maximum: Box::new(requirement.maximum.clone()),
-            provided: Box::new(provided.clone()),
+            provided: provided.to_vec(),
         }
     }
 }
@@ -212,7 +221,12 @@ impl fmt::Display for Incompatibility {
                 provided,
             } => write!(
                 formatter,
-                "契約 {contract} は {minimum} 以上 {maximum} 以下が必要ですが、Host は {provided} です"
+                "契約 {contract} は {minimum} 以上 {maximum} 以下が必要ですが、Host の提供版は {} です",
+                provided
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ),
         }
     }
@@ -246,6 +260,34 @@ mod tests {
         assert!(
             host.check(&[requirement(EXTENSION_CONTRACT, "0.9.0", "1.2.0")])
                 .is_ok()
+        );
+    }
+
+    #[test]
+    fn multiple_versions_of_a_contract_can_coexist() {
+        for versions in [["1.0.0", "2.0.0"], ["2.0.0", "1.0.0"]] {
+            let host = HostContracts::new(versions.map(|v| (contract("lapis.pty"), version(v))));
+            assert!(
+                host.check(&[requirement("lapis.pty", "1.0.0", "1.9.0")])
+                    .is_ok()
+            );
+            assert!(
+                host.check(&[requirement("lapis.pty", "2.0.0", "2.9.0")])
+                    .is_ok()
+            );
+            assert!(matches!(
+                host.check(&[requirement("lapis.pty", "3.0.0", "3.9.0")]),
+                Err(Incompatibility::VersionOutOfRange { provided, .. }) if provided.len() == 2
+            ));
+        }
+        let host = HostContracts::new([
+            (contract("lapis.pty"), version("1.0.0")),
+            (contract("lapis.pty"), version("1.2.0")),
+            (contract("lapis.pty"), version("2.0.0")),
+        ]);
+        assert_eq!(
+            host.resolve(&requirement("lapis.pty", "1.0.0", "1.9.0")),
+            Ok(&version("1.2.0"))
         );
     }
 
