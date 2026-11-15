@@ -18,12 +18,36 @@ const POSITIONS: [ZonePosition; 4] = [
 pub(crate) fn serialize_tab(tab: &PanelTab) -> desktop_client::TabRef {
     match tab {
         PanelTab::Document(id) => desktop_client::TabRef::Document { id: id.clone() },
-        PanelTab::Tool { instance, .. } => match tab.terminal_id() {
-            Some(id) => desktop_client::TabRef::Terminal { id },
+        PanelTab::Tool {
+            instance, resource, ..
+        } => match resource {
+            // 外部 Resource を参照するタブは、Resource ID を保存して復元する。
+            // Resource の種類（Host の Session など）は View の宣言が決める。
+            Some(resource) => desktop_client::TabRef::Resource {
+                view: tab.view_id().map(|view| view.as_str().to_owned()),
+                id: resource.clone(),
+            },
             None => desktop_client::TabRef::View {
                 id: instance.as_str().to_owned(),
             },
         },
+    }
+}
+
+/// 保存された参照が、復元したタブと同じ個体・Resource を指すか。
+///
+/// 保存値と復元後のタブは、旧形式の読み替えで `view` の有無が変わり得る。
+/// ピン留めの一致は、参照の表記ではなく個体・Resource の同一性で判定する。
+pub(crate) fn tab_refers_to(reference: &desktop_client::TabRef, tab: &PanelTab) -> bool {
+    match (reference, tab) {
+        (desktop_client::TabRef::Document { id }, PanelTab::Document(tab_id)) => id == tab_id,
+        (desktop_client::TabRef::Resource { id, .. }, PanelTab::Tool { .. }) => {
+            tab.resource() == Some(id.as_str())
+        }
+        (desktop_client::TabRef::View { id }, PanelTab::Tool { .. }) => {
+            tab.instance_id().as_str() == id
+        }
+        _ => false,
     }
 }
 
@@ -1124,10 +1148,13 @@ mod tests {
     }
 
     #[test]
-    fn terminal_tab_persists_the_host_id_and_restores_the_same_resource() {
+    fn resource_tab_persists_the_host_id_and_restores_the_same_resource() {
         let mut layout = DockLayout::default();
-        let id = terminal::TerminalId::new("host-terminal");
-        let tab = PanelTab::terminal(id.clone());
+        let tab = PanelTab::external(
+            crate::features::id::VIEW_TERMINAL,
+            "terminal:host-terminal",
+            Some("host-terminal".to_owned()),
+        );
         layout.open_tab(ZonePosition::Bottom, tab.clone()).unwrap();
         let saved = layout.capture();
         assert!(
@@ -1136,7 +1163,10 @@ mod tests {
                 .iter()
                 .flat_map(|zone| &zone.panels)
                 .flat_map(|panel| &panel.tabs)
-                .any(|reference| reference == &desktop_client::TabRef::Terminal { id: id.clone() })
+                .any(|reference| matches!(
+                    reference,
+                    desktop_client::TabRef::Resource { id, .. } if id == "host-terminal"
+                ))
         );
         let tabs = layout
             .placements()
@@ -1157,8 +1187,8 @@ mod tests {
     fn two_terminal_tabs_stay_independent_until_they_reference_the_same_session() {
         let mut layout = DockLayout::default();
         // 開くたびに別の個体。1つ目と2つ目が同じタブとして畳まれない。
-        let first = PanelTab::terminal_instance("terminal:one");
-        let second = PanelTab::terminal_instance("terminal:two");
+        let first = PanelTab::external(crate::features::id::VIEW_TERMINAL, "terminal:one", None);
+        let second = PanelTab::external(crate::features::id::VIEW_TERMINAL, "terminal:two", None);
         let panel = layout
             .open_tab(ZonePosition::Bottom, first.clone())
             .unwrap();
@@ -1169,16 +1199,17 @@ mod tests {
         assert_ne!(first.instance_id(), second.instance_id());
 
         // 起動で Resource が決まっても、タブの個体は保たれる。
-        let bound = first.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        let bound = first.with_resource(Some("terminal-a".to_owned()));
         assert_eq!(bound.instance_id(), first.instance_id());
-        assert_eq!(
-            bound.terminal_id(),
-            Some(terminal::TerminalId::new("terminal-a"))
-        );
+        assert_eq!(bound.resource(), Some("terminal-a"));
         assert!(layout.rebind_tab(&first, bound.clone()));
         assert_eq!(layout.find_tab(&bound), Some(panel.clone()));
         // 別のセッションを参照するタブを開いても、既存タブは畳まれない。
-        let other = PanelTab::terminal(terminal::TerminalId::new("terminal-b"));
+        let other = PanelTab::external(
+            crate::features::id::VIEW_TERMINAL,
+            "terminal:b",
+            Some("terminal-b".to_owned()),
+        );
         layout
             .open_tab(ZonePosition::Bottom, other.clone())
             .unwrap();
@@ -1189,7 +1220,7 @@ mod tests {
     #[test]
     fn rebinding_a_terminal_tab_keeps_pin_and_active_selection() {
         let mut layout = DockLayout::default();
-        let first = PanelTab::terminal_instance("terminal:one");
+        let first = PanelTab::external(crate::features::id::VIEW_TERMINAL, "terminal:one", None);
         let other = PanelTab::tool(crate::features::id::VIEW_FILES);
         let panel = layout
             .open_tab(ZonePosition::Bottom, first.clone())
@@ -1200,7 +1231,7 @@ mod tests {
         assert!(layout.set_tab_pinned(&first, true));
         layout.activate_existing_tab(&first);
 
-        let bound = first.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        let bound = first.with_resource(Some("terminal-a".to_owned()));
         assert!(layout.rebind_tab(&first, bound.clone()));
         assert!(layout.tab_is_pinned(&bound));
         assert_eq!(layout.panel(&panel).unwrap().active, Some(bound.clone()));
@@ -1211,19 +1242,47 @@ mod tests {
     #[test]
     fn unstarted_terminal_tab_is_not_persisted_as_a_host_session() {
         let mut layout = DockLayout::default();
-        let unstarted = PanelTab::terminal_instance("terminal:one");
+        let unstarted =
+            PanelTab::external(crate::features::id::VIEW_TERMINAL, "terminal:one", None);
         layout
             .open_tab(ZonePosition::Bottom, unstarted.clone())
             .unwrap();
         let saved = serialize_tab(&unstarted);
         // Resource 未確定のタブは View 参照として保存し、存在しない PTY を指さない。
         assert!(matches!(saved, desktop_client::TabRef::View { .. }));
-        let started =
-            unstarted.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        let started = unstarted.with_resource(Some("terminal-a".to_owned()));
         assert!(matches!(
             serialize_tab(&started),
-            desktop_client::TabRef::Terminal { .. }
+            desktop_client::TabRef::Resource { .. }
         ));
+    }
+
+    /// 旧 terminal 形式のピン留めは、読み替えた外部 Resource タブへ引き継がれる。
+    #[test]
+    fn legacy_terminal_pin_moves_to_the_restored_resource_tab() {
+        let mut zone = Zone::new(ZonePosition::Bottom);
+        let id = PanelId::new(1);
+        let tab = PanelTab::external(
+            crate::features::id::VIEW_TERMINAL,
+            "terminal:host-terminal",
+            Some("host-terminal".to_owned()),
+        );
+        assert!(zone.add_panel(id.clone(), vec![tab.clone()], None));
+        let saved = zone.capture();
+        // 旧形式の保存値: View を指定しない terminal 参照。
+        let mut legacy = saved.clone();
+        legacy.panels[0].pinned_tabs = vec![desktop_client::TabRef::Resource {
+            view: None,
+            id: "host-terminal".into(),
+        }];
+        let mut parse = |raw: &desktop_client::TabRef| match raw {
+            desktop_client::TabRef::Resource { id, .. } if id == "host-terminal" => {
+                Some(tab.clone())
+            }
+            _ => None,
+        };
+        let restored = Zone::restore(&legacy, &mut parse).unwrap();
+        assert!(restored.panels[&id].pinned.contains(&tab));
     }
 
     #[test]

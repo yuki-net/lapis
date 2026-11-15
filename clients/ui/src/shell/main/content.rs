@@ -61,6 +61,7 @@ impl Shell {
         instance: &extension_ui_contract::ViewInstanceId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
+        // 個体の実体は View の種類に依存せずレジストリが解決する。
         match self.feature_registry.instance_view(instance) {
             Some(entity) => div().flex().flex_1().min_h(px(0.0)).child(entity.clone()),
             None => panel_empty_state("?", "Unknown view", view.as_str().to_owned(), cx),

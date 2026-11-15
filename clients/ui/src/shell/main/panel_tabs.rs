@@ -211,15 +211,19 @@ impl Shell {
                         }),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| match tab.clone() {
-                        PanelTab::Tool { .. } => {
+                        PanelTab::Tool { view, .. } => {
                             this.select_tab_in_panel(
                                 select_panel.clone(),
                                 position,
                                 tab.clone(),
                                 cx,
                             );
-                            if let Some(id) = tab.terminal_id() {
-                                cx.emit(UiCommand::ActivateTerminal(id));
+                            // 外部 Resource を参照するタブは、その Resource を操作対象にする。
+                            if let Some(resource) = tab.resource() {
+                                cx.emit(UiCommand::ActivateViewResource {
+                                    view,
+                                    resource: resource.to_owned(),
+                                });
                             }
                         }
                         PanelTab::Document(document_id) => {

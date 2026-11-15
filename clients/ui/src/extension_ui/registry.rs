@@ -1,4 +1,5 @@
 use gpui::{AnyView, App};
+use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
@@ -9,6 +10,76 @@ use extension_ui_contract::{
 };
 
 use super::ActivationEvent;
+
+/// タブの表示状態と Resource を扱う機能からの要求。
+///
+/// 機能は Layout を所有しない。タブの Resource 差し替えや新しいタブの追加は
+/// 要求として返し、Shell が Layout に適用する。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ViewRequest {
+    /// タブの参照先 Resource を差し替える。個体 ID は変えない。
+    BindResource {
+        instance: ViewInstanceId,
+        resource: Option<String>,
+    },
+    /// 同じ View のタブを1つ増やす。
+    OpenTab(ViewId),
+}
+
+/// 宣言された View の個体を所有する機能が実装する内部契約。
+///
+/// [`FeatureRegistry`] は個体 ID と表示状態を解決し、Entity の生成・表示状態の
+/// 反映・Resource の接続と終了はこの契約の実装（feature 自身）が行う。
+/// Shell は View の種類で分岐せず、この契約だけを呼ぶ。
+pub(crate) trait ViewLifecycle {
+    /// 個体の実体を作る。作れない場合は `None`。
+    fn create(&mut self, _instance: &ViewInstanceId, _cx: &mut App) -> Option<AnyView> {
+        None
+    }
+
+    /// 外部の変更通知を購読し始める。`notify` は Shell へ再同期を促し、
+    /// Shell が既に解放されていれば `false` を返す。
+    fn start(&mut self, _notify: ViewNotifier, _cx: &mut App) {}
+
+    /// タブの表示状態と参照先 Resource を個体へ伝える。
+    fn activate(
+        &mut self,
+        _instance: &ViewInstanceId,
+        _resource: Option<&str>,
+        _visible: bool,
+        _cx: &mut App,
+    ) {
+    }
+
+    /// タブが Layout から消えた。所有 Resource は終了せず、個体への配線だけを外す。
+    fn release(&mut self, _instance: &ViewInstanceId) {}
+
+    /// タブを閉じた。この個体が所有する Resource を終了する。
+    fn deactivate(&mut self, _instance: &ViewInstanceId, _cx: &mut App) {}
+
+    /// 外部の変更通知を受けた。表示中の個体へ再取得を促す。
+    fn changed(&mut self, _cx: &mut App) {}
+
+    /// タブの表示状態と Resource を扱う機能からの要求を取り出す。
+    fn take_requests(&mut self) -> Vec<ViewRequest> {
+        Vec::new()
+    }
+
+    /// 機能が所有する Resource の永続化用サマリー。
+    fn persisted_resources(&self, _cx: &App) -> Vec<desktop_client::RestoredTerminal> {
+        Vec::new()
+    }
+
+    /// 機能が所有する Resource の所有者（Task）。
+    fn resource_owner(&self, _cx: &App) -> Option<editor_core::ConversationId> {
+        None
+    }
+}
+
+pub(crate) type SharedLifecycle = Rc<RefCell<dyn ViewLifecycle>>;
+
+/// 機能から Shell への再同期通知。Shell が既に解放されていれば `false`。
+pub(crate) type ViewNotifier = Rc<dyn Fn(&mut App) -> bool>;
 
 /// 単一実体を共有する View の個体 ID。個体の命名は Client 側の配置規則とする。
 pub(crate) fn shared_tool_instance(view: &ViewId) -> ViewInstanceId {
@@ -30,15 +101,14 @@ pub struct FeatureRegistry {
     active_views: HashMap<UiSlot, ViewId>,
     visible_views: HashSet<ViewId>,
     shared_views: HashMap<ViewId, AnyView>,
-    view_factories: HashMap<ViewId, ViewFactory>,
+    lifecycles: HashMap<ViewId, SharedLifecycle>,
+    started: HashSet<ViewId>,
     instances: HashMap<ViewInstanceId, (ViewId, AnyView)>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
     active_language: Option<language::LanguageId>,
 }
-
-type ViewFactory = Rc<dyn Fn(&ViewInstanceId, &mut App) -> AnyView>;
 
 /// 宣言の表示条件を、Client が持つ現在の状態で評価する。
 fn is_visible(
@@ -58,15 +128,67 @@ impl FeatureRegistry {
         self.shared_views.insert(view, entity);
     }
 
-    /// MultipleはFactoryが提供する独立Entityだけで描画する。
-    pub(crate) fn register_view_factory(&mut self, view: ViewId, factory: ViewFactory) {
-        self.view_factories.insert(view, factory);
+    /// 個体を所有する機能の実体を登録する。Multiple はこの実体が作る Entity だけで描画する。
+    pub(crate) fn register_view_lifecycle(
+        &mut self,
+        view: ViewId,
+        lifecycle: Rc<RefCell<dyn ViewLifecycle>>,
+    ) {
+        self.lifecycles.insert(view, lifecycle);
     }
 
     pub(crate) fn can_create_view(&self, view: &ViewId, policy: ToolInstancePolicy) -> bool {
         match policy {
             ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
-            ToolInstancePolicy::Multiple => self.view_factories.contains_key(view),
+            ToolInstancePolicy::Multiple => self.lifecycles.contains_key(view),
+        }
+    }
+
+    /// View の宣言。タブの追加方針や Resource 参照の宣言を Shell が読む。
+    pub(crate) fn declaration(&self, view: &ViewId) -> Option<&UiContribution> {
+        self.descriptors
+            .values()
+            .flat_map(|feature| &feature.contributions)
+            .find(|contribution| contribution.view.as_ref() == Some(view))
+    }
+
+    /// 個体を所有する機能が登録された View。
+    pub(crate) fn lifecycle_views(&self) -> Vec<ViewId> {
+        self.lifecycles.keys().cloned().collect()
+    }
+
+    /// 個体を所有する機能を引く。
+    pub(crate) fn lifecycle(&self, view: &ViewId) -> Option<&SharedLifecycle> {
+        self.lifecycles.get(view)
+    }
+
+    /// 外部 Resource を参照するタブを宣言した View。タブの復元に使う。
+    pub(crate) fn external_resource_view(&self) -> Option<ViewId> {
+        self.descriptors
+            .values()
+            .flat_map(|feature| &feature.contributions)
+            .find(|contribution| {
+                contribution.tab_reference == extension_ui_contract::TabReference::ExternalResource
+            })
+            .and_then(|contribution| contribution.view.clone())
+    }
+
+    /// 機能が現在持っている個体。Layout から消えた個体の解放に使う。
+    pub(crate) fn view_instances(&self, view: &ViewId) -> Vec<ViewInstanceId> {
+        self.instances
+            .iter()
+            .filter(|(_, (owner, _))| owner == view)
+            .map(|(instance, _)| instance.clone())
+            .collect()
+    }
+
+    /// 機能の購読を1回だけ始める。backend の通知は receiver を1度しか返さない。
+    pub(crate) fn ensure_started(&mut self, view: &ViewId, notify: ViewNotifier, cx: &mut App) {
+        if !self.started.insert(view.clone()) {
+            return;
+        }
+        if let Some(lifecycle) = self.lifecycles.get_mut(view) {
+            lifecycle.borrow_mut().start(notify, cx);
         }
     }
 
@@ -87,9 +209,9 @@ impl FeatureRegistry {
             .map(|contribution| contribution.instance_policy);
         let entity = match policy {
             Some(ToolInstancePolicy::Multiple) => self
-                .view_factories
+                .lifecycles
                 .get(view)
-                .map(|factory| factory(instance, cx)),
+                .and_then(|lifecycle| lifecycle.borrow_mut().create(instance, cx)),
             Some(ToolInstancePolicy::Shared) => self.shared_views.get(view).cloned(),
             None => None,
         };
@@ -101,18 +223,72 @@ impl FeatureRegistry {
         true
     }
 
-    pub(crate) fn instance_view(&self, instance: &ViewInstanceId) -> Option<&AnyView> {
-        self.instances.get(instance).map(|(_, entity)| entity)
+    /// タブの表示状態と参照先 Resource を個体へ伝える。
+    pub(crate) fn activate_instance(
+        &mut self,
+        view: &ViewId,
+        instance: &ViewInstanceId,
+        resource: Option<&str>,
+        visible: bool,
+        cx: &mut App,
+    ) {
+        if let Some(lifecycle) = self.lifecycles.get_mut(view) {
+            lifecycle
+                .borrow_mut()
+                .activate(instance, resource, visible, cx);
+        }
     }
 
-    /// 個体IDから型付きの実体を取得する。Feature固有の接続をRootから行うために使う。
-    pub(crate) fn instance_entity<T: 'static>(
-        &self,
+    /// タブが Layout から消えた。個体を所有する機能から配線を外す。
+    ///
+    /// Resource の終了は行わない。Task 切替や Layout の置き換えでタブが消えただけの
+    /// 場合に Session を止めないため、終了は明示的な close 経路だけが行う。
+    pub(crate) fn release_instance(
+        &mut self,
+        view: &ViewId,
         instance: &ViewInstanceId,
-    ) -> Option<gpui::Entity<T>> {
-        self.instances
-            .get(instance)
-            .and_then(|(_, view)| view.clone().downcast::<T>().ok())
+        cx: &mut App,
+    ) {
+        if let Some(lifecycle) = self.lifecycles.get_mut(view) {
+            lifecycle.borrow_mut().release(instance);
+        }
+        self.instances.remove(instance);
+        let _ = cx;
+    }
+
+    /// タブを閉じた。個体を所有する機能へ終了を伝える。
+    pub(crate) fn deactivate_instance(
+        &mut self,
+        view: &ViewId,
+        instance: &ViewInstanceId,
+        cx: &mut App,
+    ) {
+        if let Some(lifecycle) = self.lifecycles.get_mut(view) {
+            lifecycle.borrow_mut().deactivate(instance, cx);
+        }
+        self.instances.remove(instance);
+    }
+
+    /// 個体を所有する機能から Layout への要求を取り出す。
+    pub(crate) fn take_view_requests(&mut self) -> Vec<(ViewId, ViewRequest)> {
+        let mut requests = Vec::new();
+        for (view, lifecycle) in &self.lifecycles {
+            for request in lifecycle.borrow_mut().take_requests() {
+                requests.push((view.clone(), request));
+            }
+        }
+        requests
+    }
+
+    /// 外部の変更通知を受けた。個体を所有する機能へ再取得を促す。
+    pub(crate) fn changed(&mut self, cx: &mut App) {
+        for lifecycle in self.lifecycles.values() {
+            lifecycle.borrow_mut().changed(cx);
+        }
+    }
+
+    pub(crate) fn instance_view(&self, instance: &ViewInstanceId) -> Option<&AnyView> {
+        self.instances.get(instance).map(|(_, entity)| entity)
     }
 
     pub(crate) fn close_view_instance(&mut self, instance: &ViewInstanceId) {
@@ -317,11 +493,25 @@ mod tests {
         }
     }
 
+    /// 個体を作る機能の最小実装。作った Entity を記録する。
+    #[derive(Default)]
+    struct CounterLifecycle {
+        created: Vec<gpui::Entity<InstanceCounter>>,
+    }
+
+    impl ViewLifecycle for CounterLifecycle {
+        fn create(&mut self, _: &ViewInstanceId, cx: &mut App) -> Option<AnyView> {
+            use gpui::AppContext;
+            let entity = cx.new(|_| InstanceCounter(0));
+            self.created.push(entity.clone());
+            Some(entity.into())
+        }
+    }
+
     #[gpui::test]
     fn multiple_views_own_independent_entities_and_reuse_the_same_instance(
         cx: &mut gpui::TestAppContext,
     ) {
-        use gpui::AppContext;
         let mut registry = FeatureRegistry::default();
         let view = ViewId::new("counter");
         registry
@@ -332,27 +522,21 @@ mod tests {
                 ),
             )
             .unwrap();
-        // 宣言だけではMultipleを有効化しない。
+        // 宣言だけではMultipleを有効化しない。個体を所有する機能の登録が要る。
         assert!(!registry.can_create_view(&view, ToolInstancePolicy::Multiple));
-        let entities = Rc::new(std::cell::RefCell::new(Vec::new()));
-        let created = entities.clone();
-        registry.register_view_factory(
-            view.clone(),
-            Rc::new(move |_: &ViewInstanceId, cx| {
-                let entity = cx.new(|_| InstanceCounter(0));
-                created.borrow_mut().push(entity.clone());
-                entity.into()
-            }),
-        );
+        let lifecycle = Rc::new(RefCell::new(CounterLifecycle::default()));
+        registry.register_view_lifecycle(view.clone(), lifecycle.clone());
+        assert!(registry.can_create_view(&view, ToolInstancePolicy::Multiple));
         let first = ViewInstanceId::new("one");
         let second = ViewInstanceId::new("two");
         cx.update(|cx| {
             assert!(registry.ensure_view_instance(&view, &first, cx));
             assert!(registry.ensure_view_instance(&view, &second, cx));
             assert!(registry.ensure_view_instance(&view, &first, cx));
-            assert_eq!(entities.borrow().len(), 2);
-            let first_entity = entities.borrow()[0].clone();
-            let second_entity = entities.borrow()[1].clone();
+            let created = &lifecycle.borrow().created;
+            assert_eq!(created.len(), 2);
+            let first_entity = created[0].clone();
+            let second_entity = created[1].clone();
             first_entity.update(cx, |counter, _| counter.0 = 7);
             assert_eq!(first_entity.read(cx).0, 7);
             assert_eq!(second_entity.read(cx).0, 0);

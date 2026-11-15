@@ -127,7 +127,8 @@ Scrollback は Host の Model に含まれる履歴を画面の前に描画し�
 ## 共通Tab操作
 
 - TabBar、TabItem、追加PickerはPanel固有の実装にせず、Shellの共通描画・`FeatureRegistry`の`UiContribution`を使う。Featureが独自のTab管理やPickerを持たない。
-- `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。宣言の型は `contracts/domain/extension-ui` が正本で、`FeatureRegistry`（GPUI の実体解決）は `clients/ui/src/extension_ui` に残す。
+- `UiContribution`は表示名、アイコン、カテゴリ、初期配置、複数起動方針、配置能力、表示条件、タブの参照方法を宣言する。Pickerは登録情報から表示し、未登録のダミー操作を追加しない。宣言の型は `contracts/domain/extension-ui` が正本で、`FeatureRegistry`（GPUI の実体解決）は `clients/ui/src/extension_ui` に残す。
+- タブの個体を所有する機能は `ViewLifecycle` を実装して `FeatureRegistry` へ登録する。Terminalはこの形で「宣言の供給者」と「個体とSessionの所有者」を兼ね、Shellにターミナル固有の分岐を持たない。`references_external_resource` を宣言したタブは、Session IDを保存値へ持ち、Resourceの開始・接続・終了を所有する機能が行う。
 - Tool Pickerはクリックされた`+`の座標をアンカーにし、共通PopupのWindow端補正、外側クリック、Escape、上下キー、Enter、ShellへのFocus復帰を使う。
 - HeaderのZone開閉ボタン群は表示設定で隠せるが、ViewメニューとCommand Searchから同じZone Commandを実行できる。個別Panelの非表示はタブとHost Resourceを保持する。
 - Headerの左・下・右ボタンはZone全体を開閉し、個別に隠したPanelは再表示しない。Viewメニューには非表示を含む各Panelの開閉を表示し、全列を隠しても個別に復元できる。空Zoneは開閉でき、空Surfaceの共通Pickerから最初のPanelを作成する。

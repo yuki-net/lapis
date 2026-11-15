@@ -35,6 +35,14 @@ workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `host` / `
 - Workspace の切断は detach で、PTY は残ります。
 - タブごとに個別のセッションを持ちます。
 
+## Client 側の載せ方
+
+Terminal の Client UI は、共通 Layout の宣言と内部レジストリを通して載ります。
+
+- 宣言（`clients/ui/src/features/terminal/mod.rs` の `descriptor()`）が、BottomDock への View、`multiple_instances`、`references_external_resource` を供給します。タブ単位の Session はこの宣言で個体化されます。
+- 個体と Session の所有者（`clients/ui/src/features/terminal/lifecycle.rs`）が `ViewLifecycle` を実装し、`FeatureRegistry` へ登録します。Shell はターミナル固有の分岐を持たず、Layout 上のタブと表示状態だけを見て個体の生成・表示の反映・終了を委ねます。
+- 設定への候補供給（フォント・既定 profile）は `SettingsSourceProvider` として登録します。設定画面は Terminal Feature の型を読まず、登録された供給元をキーで引きます。
+
 ## 検証
 
 - `cargo test -p terminal-contract -p terminal-state -p local-terminal`

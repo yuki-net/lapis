@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn terminal_tab_presence_distinguishes_hidden_panels_from_closed_tabs() {
         let mut state = ShellState::default();
-        let terminal = PanelTab::terminal_instance("terminal:one");
+        let terminal = PanelTab::external(id::VIEW_TERMINAL, "terminal:one", None);
         let panel = state
             .layout
             .open_tab(ZonePosition::Bottom, terminal.clone())
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn terminal_tab_visibility_follows_the_selected_tab_of_each_panel() {
         let mut state = ShellState::default();
-        let terminal = PanelTab::terminal_instance("terminal:visible-test");
+        let terminal = PanelTab::external(id::VIEW_TERMINAL, "terminal:visible-test", None);
         let panel = state
             .layout
             .open_tab(ZonePosition::Bottom, terminal.clone())

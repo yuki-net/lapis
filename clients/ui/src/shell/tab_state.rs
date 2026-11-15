@@ -1,11 +1,7 @@
 use editor_core::DocumentId;
 use extension_ui_contract::ViewId;
-use terminal::TerminalId;
 
 pub(crate) use extension_ui_contract::ViewInstanceId;
-
-/// Host Terminalを参照するタブのInstance接頭辞。Resource IDと表示個体を分離する。
-const TERMINAL_INSTANCE_PREFIX: &str = "terminal:";
 
 /// Panel内のTabの所属を識別する。ZoneやResourceの識別子とは独立する。
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -32,8 +28,11 @@ pub(crate) enum PanelTab {
         view: ViewId,
         /// タブの個体。Resource ID とは独立し、同じ種類のタブを複数持てる。
         instance: ViewInstanceId,
-        /// Host Terminal を参照するタブの Resource。未起動のタブは None。
-        resource: Option<TerminalId>,
+        /// 機能が所有する外部 Resource を参照するタブの Resource ID。
+        ///
+        /// `UiContribution::references_external_resource` を宣言した View だけが持つ。
+        /// Resource の生成・解決・終了は宣言した機能が行い、Layout は ID を保持するだけ。
+        resource: Option<String>,
     },
 }
 
@@ -98,50 +97,40 @@ impl PanelTab {
         }
     }
 
-    /// Host Terminal を参照するタブ。Instance はタブごとに独立し、同じ PTY へは
-    /// `resource` で戻す。再起動後も同じ PTY を復元できるよう両方を保存する。
-    pub(crate) fn terminal(id: TerminalId) -> Self {
+    /// 機能が所有する外部 Resource を参照するタブ。
+    ///
+    /// 個体はタブごとに独立し、同じ Resource へは `resource` で戻す。
+    /// Resource ID の意味は宣言した機能が決める。
+    pub(crate) fn external(
+        view: impl Into<ViewId>,
+        instance: impl Into<ViewInstanceId>,
+        resource: Option<String>,
+    ) -> Self {
         Self::Tool {
-            view: ViewId::new(crate::features::id::VIEW_TERMINAL),
-            instance: ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{}", id.as_str())),
-            resource: Some(id),
-        }
-    }
-
-    /// 未起動の Terminal タブ。開くたびに独立した個体を作り、起動後に resource を結ぶ。
-    pub(crate) fn terminal_instance(instance: impl Into<ViewInstanceId>) -> Self {
-        Self::Tool {
-            view: ViewId::new(crate::features::id::VIEW_TERMINAL),
+            view: view.into(),
             instance: instance.into(),
-            resource: None,
+            resource,
         }
     }
 
     /// タブの参照先 Resource を差し替える。個体 ID は変えない。
-    pub(crate) fn with_terminal_resource(&self, id: Option<TerminalId>) -> Self {
+    pub(crate) fn with_resource(&self, resource: Option<String>) -> Self {
         match self {
             Self::Tool { view, instance, .. } => Self::Tool {
                 view: view.clone(),
                 instance: instance.clone(),
-                resource: id,
+                resource,
             },
             Self::Document(_) => self.clone(),
         }
     }
 
-    pub(crate) fn terminal_id(&self) -> Option<TerminalId> {
-        let Self::Tool { view, resource, .. } = self else {
-            return None;
-        };
-        (view.as_str() == crate::features::id::VIEW_TERMINAL)
-            .then(|| resource.clone())
-            .flatten()
-    }
-
-    /// Terminal タブかどうか。起動前で Resource が未確定でも判定できる。
-    pub(crate) fn is_terminal(&self) -> bool {
-        self.view_id()
-            .is_some_and(|view| view.as_str() == crate::features::id::VIEW_TERMINAL)
+    /// 外部 Resource を参照するタブの Resource ID。未確定なら `None`。
+    pub(crate) fn resource(&self) -> Option<&str> {
+        match self {
+            Self::Tool { resource, .. } => resource.as_deref(),
+            Self::Document(_) => None,
+        }
     }
 
     pub(crate) fn view_id(&self) -> Option<&ViewId> {
@@ -198,5 +187,18 @@ mod tests {
         state.begin(drag);
         assert!(state.release(true).is_some());
         assert!(state.release(true).is_none());
+    }
+
+    #[test]
+    fn external_tabs_rebind_their_resource_without_changing_the_instance() {
+        let tab = PanelTab::external("lapis.view.terminal", "terminal:one", None);
+        let bound = tab.with_resource(Some("terminal-a".into()));
+        assert_eq!(tab.resource(), None);
+        assert_eq!(bound.resource(), Some("terminal-a"));
+        assert_eq!(tab.instance_id(), bound.instance_id());
+        assert_eq!(
+            bound.view_id().map(ViewId::as_str),
+            Some("lapis.view.terminal")
+        );
     }
 }

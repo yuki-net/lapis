@@ -127,9 +127,10 @@ impl SettingsFeature {
             cx.emit(this.values.clone());
             cx.notify();
         });
-        // Terminal Feature が Host の profile 一覧を公開したら選択肢を作り直す。
-        let catalogs =
-            vec![cx.observe_global::<super::terminal::TerminalProfileCatalog>(|_, cx| cx.notify())];
+        // 設定の供給元が更新されたら選択肢を作り直す。
+        let catalogs = vec![
+            cx.observe_global::<super::settings_sources::SettingsSources>(|_, cx| cx.notify()),
+        ];
         let web = web_control.map(|control| WebState {
             worker: ClientWorker::new(control),
             status: None,
@@ -1508,7 +1509,7 @@ impl SettingsFeature {
             )
     }
 
-    /// 未保存の項目は、UI が持つ実行時の既定値を選択状態として見せる。
+    /// 未保存の項目は、供給元が示す実行時の既定値を選択状態として見せる。
     fn effective_value(
         &self,
         definition: &SettingDefinition,
@@ -1517,26 +1518,15 @@ impl SettingsFeature {
         if let Some(value) = self.values.value(definition.key) {
             return Some(value.clone());
         }
-        if definition.key == settings::TERMINAL_FONT_FAMILY {
-            return Some(SettingValue::text(super::terminal::default_font_family()));
-        }
-        if definition.key == settings::TERMINAL_FONT_SIZE {
-            return Some(SettingValue::integer(i64::from(
-                super::terminal::default_font_size(),
-            )));
-        }
-        if definition.key == settings::TERMINAL_LINE_HEIGHT {
-            return Some(SettingValue::integer(i64::from(
-                super::terminal::default_line_height_percent(),
-            )));
+        // 実行時の既定値を持つキーは、その機能が登録した供給元から取る。
+        if let Some(value) =
+            super::settings_sources::SettingsSources::default_value(cx, definition.key)
+        {
+            return Some(value);
         }
         if definition.key == settings::TERMINAL_CARET_SHAPE {
             let default = settings::TerminalCaretShape::default();
             return Some(SettingValue::text(default.as_id()));
-        }
-        if definition.key == settings::TERMINAL_DEFAULT_PROFILE {
-            // 未保存なら Host の既定 profile を選択状態として見せる。
-            return host_terminal_default_profile(cx).map(SettingValue::text);
         }
         None
     }
@@ -1563,30 +1553,10 @@ impl SettingsFeature {
                 (SettingValue::text("ja-JP"), "日本語 (Japanese)".to_owned()),
                 (SettingValue::text("en-US"), "English (英語)".to_owned()),
             ],
-            OptionSource::TerminalFonts => super::terminal::font_choices()
-                .iter()
-                .map(|family| (SettingValue::text(*family), (*family).to_owned()))
-                .collect(),
-            OptionSource::TerminalFontSizes => super::terminal::font_size_choices()
-                .iter()
-                .map(|size| (SettingValue::integer(i64::from(*size)), size.to_string()))
-                .collect(),
-            OptionSource::TerminalLineHeights => super::terminal::line_height_choices()
-                .iter()
-                .map(|percent| {
-                    (
-                        SettingValue::integer(i64::from(*percent)),
-                        format!("{percent}%"),
-                    )
-                })
-                .collect(),
-            OptionSource::TerminalProfiles => {
-                let catalog = super::terminal::profile_catalog(cx);
-                catalog
-                    .profiles
-                    .into_iter()
-                    .map(|(id, name)| (SettingValue::text(id), name))
-                    .collect()
+            // 候補が実行時の状態に依存するキーは、機能が登録した供給元から取る。
+            // 設定 UI は供給元の型を知らない。
+            OptionSource::Provided => {
+                super::settings_sources::SettingsSources::options(cx, definition.key)
             }
         }
     }
@@ -1636,11 +1606,6 @@ fn default_page() -> &'static str {
     settings::catalog()
         .first_page()
         .map_or("appearance.theme", |page| page.id)
-}
-
-/// Host が既定として公開している Terminal profile ID。未取得なら `None`。
-fn host_terminal_default_profile(cx: &gpui::App) -> Option<String> {
-    super::terminal::profile_catalog(cx).default
 }
 
 fn scope_label(scope: &SettingsScope) -> &'static str {
@@ -1977,7 +1942,10 @@ mod tests {
             theme::init(&ThemeId::new("lapis.dark"), None, cx);
             let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
             SettingsCoordinator::init(settings, cx);
-            crate::features::terminal::publish_profile_catalog(
+            crate::features::settings_sources::SettingsSources::init(cx);
+            // Terminal は Host の profile 一覧を設定の供給元として公開する。
+            let catalog = crate::features::terminal::register_settings_source(cx);
+            crate::features::terminal::publish_test_profile_catalog(
                 &terminal::TerminalProfiles::new(
                     vec![
                         terminal::TerminalProfile::new(
@@ -1989,6 +1957,7 @@ mod tests {
                     ],
                     Some(terminal::TerminalProfileId::new("powershell")),
                 ),
+                &catalog,
                 cx,
             );
         });

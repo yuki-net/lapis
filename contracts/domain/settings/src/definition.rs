@@ -38,14 +38,11 @@ pub enum OptionSource {
     Themes,
     /// 対応ロケール。
     Locales,
-    /// ターミナルの等幅フォント。
-    TerminalFonts,
-    /// ターミナルのフォントサイズ。
-    TerminalFontSizes,
-    /// ターミナルの行送り。
-    TerminalLineHeights,
-    /// Host が公開するターミナル profile。
-    TerminalProfiles,
+    /// 機能が登録した供給元（[`crate::source::SettingsSourceProvider`]）から取る。
+    ///
+    /// 候補や既定値が Host の公開情報など実行時の状態に依存する設定は、
+    /// その機能が供給者として登録する。定義データは供給元の型を知らない。
+    Provided,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

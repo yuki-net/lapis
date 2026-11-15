@@ -231,6 +231,8 @@ pub(crate) struct TerminalFeature {
     pub(super) caret_shape: settings::TerminalCaretShape,
     /// Host が許可する Terminal profile。既定プロファイルの解決と例外操作に使う。
     pub(super) profiles: terminal::TerminalProfiles,
+    /// 設定画面へ公開する profile 一覧。設定の供給元と共有する。
+    pub(super) profiles_catalog: std::rc::Rc<std::cell::RefCell<super::TerminalProfileCatalog>>,
     /// 設定で選ばれた既定 profile ID。`None` は Host の既定に従う。
     pub(super) default_profile: Option<terminal::TerminalProfileId>,
     /// ターミナルタブを初めて開いたときの自動起動状態。
@@ -400,12 +402,13 @@ impl TerminalFeature {
     }
     /// タブ1つ分の実体を作る。
     ///
-    /// タブは1セッションを持つ。Host の変更通知は Shell が1本だけ購読して
-    /// 全タブへ配るため、ここでは購読しない。
+    /// タブは1セッションを持つ。Host の変更通知は機能側の Lifecycle が1本だけ
+    /// 購読して全タブへ配るため、ここでは購読しない。
     pub(crate) fn new(
         session: TerminalSession,
         root: Option<PathBuf>,
         conversation: ConversationId,
+        settings_catalog: std::rc::Rc<std::cell::RefCell<super::TerminalProfileCatalog>>,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
         let terminals = session.terminals().to_vec();
@@ -461,6 +464,7 @@ impl TerminalFeature {
             line_height_percent,
             caret_shape,
             profiles: terminal::TerminalProfiles::default(),
+            profiles_catalog: settings_catalog,
             default_profile,
             auto_start: AutoStart::Idle,
             pending_auto_start: false,
@@ -489,12 +493,31 @@ impl TerminalFeature {
         feature
     }
 
+    /// テスト用: profile の供給元を共有しない実体を作る。
+    #[cfg(test)]
+    pub(crate) fn test_new(
+        session: TerminalSession,
+        root: Option<PathBuf>,
+        conversation: ConversationId,
+        cx: &mut gpui::Context<Self>,
+    ) -> Self {
+        Self::new(
+            session,
+            root,
+            conversation,
+            std::rc::Rc::new(std::cell::RefCell::new(
+                super::TerminalProfileCatalog::default(),
+            )),
+            cx,
+        )
+    }
+
     /// Host が許可する profile を worker 経由で取得する。UI thread を止めない。
     fn load_profiles(&mut self, cx: &mut gpui::Context<Self>) {
         self.profiles_loaded = false;
         let Some(root) = self.root.clone() else {
             self.profiles = terminal::TerminalProfiles::default();
-            super::publish_profile_catalog(&self.profiles, cx);
+            super::publish_profile_catalog(&self.profiles, &self.profiles_catalog, cx);
             self.profiles_loaded = true;
             return;
         };
@@ -510,7 +533,7 @@ impl TerminalFeature {
                     Ok(Ok(profiles)) => feature.profiles = profiles,
                     Ok(Err(_)) | Err(_) => feature.profiles = terminal::TerminalProfiles::default(),
                 }
-                super::publish_profile_catalog(&feature.profiles, cx);
+                super::publish_profile_catalog(&feature.profiles, &feature.profiles_catalog, cx);
                 feature.profiles_loaded = true;
                 // profile が揃ってから既定 profile を解決する。
                 feature.ensure_auto_start(cx);
@@ -1269,7 +1292,7 @@ mod tests {
         cx.update(|cx| {
             let (_, backend) = feature();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(backend),
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -1311,7 +1334,7 @@ mod tests {
         cx.update(|cx| {
             let (_, backend) = feature();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(backend),
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -1419,7 +1442,7 @@ mod tests {
         cx.update(|cx| {
             let (_, backend) = feature();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(backend),
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -1487,7 +1510,7 @@ mod tests {
 
         cx.update(|cx| {
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(Arc::new(Backend::default())),
                     None,
                     ConversationId::new("task-a"),
@@ -1824,7 +1847,7 @@ mod tests {
         });
         let window = cx.add_window(|_, cx| {
             let (_, backend) = feature();
-            let mut feature = TerminalFeature::new(
+            let mut feature = TerminalFeature::test_new(
                 TerminalSession::new(backend),
                 Some("workspace".into()),
                 ConversationId::new("task-a"),
@@ -1917,7 +1940,7 @@ mod tests {
             let mut session = TerminalSession::new(backend.clone());
             session.start(Path::new("workspace"), 80, 24).unwrap();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -1969,7 +1992,7 @@ mod tests {
             // 1 回目の batch で Text だけ受理し、Key と再送 Key を失敗させる。
             *backend.fail_input_calls.lock().unwrap() = vec![1, 2];
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2046,7 +2069,7 @@ mod tests {
             let mut session = TerminalSession::new(backend.clone());
             session.start(Path::new("workspace"), 80, 24).unwrap();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2409,7 +2432,7 @@ mod tests {
                 Some(terminal::TerminalProfileId::new("powershell")),
             );
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(backend.clone()),
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2463,7 +2486,7 @@ mod tests {
                 Some(terminal::TerminalProfileId::new("powershell")),
             );
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(backend.clone()),
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2503,7 +2526,7 @@ mod tests {
                 .start(Path::new("workspace"), 80, 24)
                 .unwrap();
             let first = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     first_session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2511,7 +2534,7 @@ mod tests {
                 )
             });
             let second = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     second_session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2556,7 +2579,7 @@ mod tests {
             let mut session = TerminalSession::new(backend.clone());
             session.start(Path::new("workspace"), 80, 24).unwrap();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2624,7 +2647,7 @@ mod tests {
             let mut session = TerminalSession::new(backend.clone());
             session.start(Path::new("workspace"), 80, 24).unwrap();
             let entity = cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     session,
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2663,7 +2686,7 @@ mod tests {
         let feature = cx.update(|cx| {
             let (_, backend) = feature();
             cx.new(|cx| {
-                TerminalFeature::new(
+                TerminalFeature::test_new(
                     TerminalSession::new(backend),
                     Some("workspace".into()),
                     ConversationId::new("task-a"),
@@ -2703,7 +2726,7 @@ mod tests {
         });
         let (feature, visual) = cx.add_window_view(|_, cx| {
             let (_, backend) = feature();
-            TerminalFeature::new(
+            TerminalFeature::test_new(
                 TerminalSession::new(backend),
                 Some("workspace".into()),
                 ConversationId::new("task-a"),

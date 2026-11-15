@@ -68,6 +68,8 @@ pub(crate) struct SettingsCoordinator {
 
 impl SettingsCoordinator {
     pub(crate) fn init(session: SettingsSession, cx: &mut App) {
+        // 供給元の置き場を設定画面より先に用意する。
+        crate::features::settings_sources::SettingsSources::init(cx);
         let values = session.settings();
         let watch = session.subscribe();
         let entity = cx.new(|cx: &mut Context<Self>| {

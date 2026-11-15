@@ -1,10 +1,16 @@
 use crate::{
     extension_ui::FeatureRegistry,
     kit::layout_profile::LayoutProfile,
-    shell::{DockLayout, PanelTab, ShellState},
+    shell::{DockLayout, PanelTab, ShellState, ViewInstanceId},
 };
 use desktop_client::{ConversationViewState, DocumentTab, TabRef};
 use extension_ui_contract::{ViewId, ZonePosition};
+
+/// Host Terminal を参照する旧 Terminal タブの個体接頭辞。
+///
+/// 旧保存値は Resource の種類を View 名で持たないため、読み込み時だけこの
+/// 接頭辞で個体を作る。新形式は View の宣言から個体名を決める。
+const TERMINAL_INSTANCE_PREFIX: &str = "terminal:";
 
 pub(crate) fn capture_view_state(shell: &ShellState) -> ConversationViewState {
     ConversationViewState {
@@ -29,13 +35,12 @@ pub(crate) fn apply_view_state(
     }
     let restored = view.layout.as_ref().and_then(|layout| {
         DockLayout::restore(layout, |reference| {
-            let tab = deserialize_panel_tab(reference)?;
+            let tab = deserialize_panel_tab(reference, registry)?;
             match &tab {
                 PanelTab::Document(id) => documents.iter().any(|document| &document.id == id),
-                // TerminalはHost側の存在確認を再アタッチ時に任せ、参照IDだけで復元する。
-                PanelTab::Tool { view, .. } if tab.terminal_id().is_some() => {
-                    view.as_str() == crate::features::id::VIEW_TERMINAL
-                }
+                // 外部 Resource を参照するタブは、Resource の実在確認を再アタッチ時に任せ、
+                // 参照 ID だけで復元する。どの View が参照するかは宣言から決まる。
+                PanelTab::Tool { resource, .. } if resource.is_some() => true,
                 PanelTab::Tool { view, .. } => [
                     ZonePosition::Main,
                     ZonePosition::Left,
@@ -54,10 +59,19 @@ pub(crate) fn apply_view_state(
     shell.synchronize_documents(documents);
 }
 
-fn deserialize_panel_tab(value: &TabRef) -> Option<PanelTab> {
+fn deserialize_panel_tab(value: &TabRef, registry: &FeatureRegistry) -> Option<PanelTab> {
     match value {
         TabRef::Document { id } => Some(PanelTab::Document(id.clone())),
-        TabRef::Terminal { id } => Some(PanelTab::terminal(id.clone())),
+        TabRef::Resource { view, id } => {
+            // View 未指定の旧 Terminal タブは、外部 Resource を宣言した View へ戻す。
+            let view = view.as_deref().map(ViewId::new).or_else(|| {
+                registry
+                    .external_resource_view()
+                    .filter(|_| value.legacy_terminal_id().is_some())
+            })?;
+            let instance = ViewInstanceId::new(format!("{TERMINAL_INSTANCE_PREFIX}{id}"));
+            Some(PanelTab::external(view, instance, Some(id.clone())))
+        }
         TabRef::View { id } => {
             if id.is_empty() {
                 return None;

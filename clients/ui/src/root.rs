@@ -17,10 +17,12 @@ use crate::{
         resource_manager::{ProcessWorker, ResourceManagerFeature},
         search::SearchFeature,
         settings::SettingsFeature,
+        settings_sources::SettingsSources,
         tasks::TasksFeature,
+        terminal::TerminalContext,
         update::UpdateFeature,
     },
-    shell::main::{Shell, ShellPresentation, TerminalContext, TerminalTabSource},
+    shell::main::{Shell, ShellPresentation},
     workbench::{ViewInstanceKey, ViewScope, WorkbenchMode, WorkbenchState},
 };
 use desktop_client::EditorSession;
@@ -85,6 +87,8 @@ type PersistSignature = (
 pub(crate) struct DesktopRoot {
     pub(crate) shell: Entity<Shell>,
     pub(crate) group: Entity<crate::window_host::WindowGroup>,
+    /// Terminal のタブ個体と Session を所有する機能。Composition Root だけが具体型を知る。
+    terminal: std::rc::Rc<std::cell::RefCell<features::terminal::TerminalLifecycle>>,
     pub(crate) editor: Entity<Editor>,
     files: Entity<FilesFeature>,
     git: Entity<GitFeature>,
@@ -232,6 +236,8 @@ impl DesktopRoot {
         let search = cx.new(|cx| SearchFeature::new(services.search, cx));
         let conversation = cx.new(|_| ConversationFeature::new());
         let preview = cx.new(|_| PreviewFeature::new());
+        // 設定画面より先に供給元の置き場を用意する。Settings はここだけを購読する。
+        SettingsSources::init(cx);
         let settings = cx.new(|cx| {
             SettingsFeature::with_web_access(
                 cx,
@@ -306,10 +312,18 @@ impl DesktopRoot {
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
         let branch_picker = cx.new(|cx| features::git::BranchPicker::new(git.clone(), window, cx));
         let terminal_backend = services.terminal.backend();
+        // Terminal を設定の供給元として登録する。
+        let terminal_settings = features::terminal::register_settings_source(cx);
         let terminal_context = std::rc::Rc::new(std::cell::RefCell::new(TerminalContext {
             root: terminal_root.clone(),
             conversation: terminal_context,
         }));
+        let terminal =
+            features::terminal::terminal_lifecycle(crate::features::terminal::TerminalTabSource {
+                backend: terminal_backend,
+                context: terminal_context,
+                settings: terminal_settings,
+            });
         shell.update(cx, |shell, cx| {
             shell.branch_picker = Some(branch_picker);
             shell.set_locale(initial_locale.clone(), cx);
@@ -318,13 +332,9 @@ impl DesktopRoot {
                     update.set_locale(initial_locale.clone(), cx)
                 });
             }
-            shell.configure_terminal_tabs(
-                TerminalTabSource {
-                    backend: terminal_backend,
-                    context: terminal_context,
-                },
-                cx,
-            );
+            // Terminal を「宣言の供給者＋個体の所有者」として登録する。Shell は
+            // ターミナル固有の分岐を持たず、宣言された状態だけを扱う。
+            shell.configure_view_lifecycles(terminal.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
                 shell.open_view_in_zone(ZonePosition::Right, id::VIEW_ASSISTANT.into(), cx);
@@ -345,7 +355,6 @@ impl DesktopRoot {
             if let Some(view) = desktop_client::web_host::restore_view() {
                 shell.restore_view(view, cx);
             }
-            shell.start_terminal_changes(cx);
         });
         // Resource Manager は表示中だけ取得する。初期 Layout の表示状態を反映する。
         resources.update(cx, |resources, cx| {
@@ -589,7 +598,7 @@ impl DesktopRoot {
                 root.record_window_layout(cx);
                 root.sync_preview(cx);
                 // Layout のターミナルタブと実体を一致させ、表示中のタブだけ自動起動する。
-                root.sync_terminal_tab(cx);
+                root.sync_resource_tabs(cx);
                 root.sync_resource_manager_visibility(cx);
                 root.schedule_persist(cx);
             }),
@@ -709,6 +718,7 @@ impl DesktopRoot {
         Self {
             group,
             shell,
+            terminal,
             editor,
             files,
             git,
@@ -874,12 +884,8 @@ impl DesktopRoot {
         let terminal_key = self
             .shell
             .read(cx)
-            .shell
-            .layout
-            .placements()
-            .into_iter()
-            .find(|(tab, _)| tab.is_terminal())
-            .and_then(|(tab, _)| ViewInstanceKey::new(tab.stable_view_key()));
+            .first_active_tab_of(id::VIEW_TERMINAL)
+            .and_then(|tab| ViewInstanceKey::new(tab.stable_view_key()));
         let terminal_scope = terminal_key
             .as_ref()
             .and_then(|key| self.workbench.view_scope(key));
@@ -897,12 +903,19 @@ impl DesktopRoot {
                 .record
                 .map(|record| record.terminals.clone())
                 .unwrap_or_default();
-            self.shell.update(cx, |shell, cx| {
-                shell.set_terminal_context(root, target.task, summaries, cx)
+            let conversation = target.task;
+            self.terminal.borrow_mut().set_context(TerminalContext {
+                root: root.clone(),
+                conversation: conversation.clone(),
             });
+            for entity in self.terminal.borrow().entities() {
+                entity.update(cx, |feature, cx| {
+                    feature.set_context(root.clone(), conversation.clone(), summaries.clone(), cx)
+                });
+            }
         }
         self.shell
-            .update(cx, |shell, cx| shell.bind_terminal_resources(cx));
+            .update(cx, |shell, cx| shell.bind_view_resources(cx));
         self.conversation.update(cx, |conversation, cx| {
             conversation.context = Some(snapshot.conversation.clone());
             conversation.update(
@@ -962,7 +975,7 @@ impl DesktopRoot {
             }
             shell.apply_scope_visibility(hidden, cx);
         });
-        self.sync_terminal_tab(cx);
+        self.sync_resource_tabs(cx);
         self.sync_resource_manager_visibility(cx);
         self.sync_preview(cx);
     }
@@ -1041,18 +1054,13 @@ impl DesktopRoot {
         self.workbench.prepare_task_switch(task.as_ref(), &view);
     }
 
-    /// Terminalタブの参照先をShellへ反映する。
-    fn activate_terminal(&mut self, id: terminal::TerminalId, cx: &mut Context<Self>) {
-        self.shell
-            .update(cx, |shell, cx| shell.open_terminal_tab(id.clone(), cx));
-        self.sync_terminal_tab(cx);
+    /// 外部 Resource を参照するタブを開く。Resource の意味は View の宣言が決める。
+    fn activate_view_resource(&mut self, view: ViewId, resource: String, cx: &mut Context<Self>) {
+        self.shell.update(cx, |shell, cx| {
+            shell.open_resource_tab(view.clone(), resource, cx)
+        });
+        self.sync_resource_tabs(cx);
         cx.notify();
-    }
-
-    /// ターミナルタブの表示状態を各実体へ伝える。表示中のタブだけ自動起動する。
-    fn sync_terminal_auto_start(&mut self, cx: &mut Context<Self>) {
-        self.shell
-            .update(cx, |shell, cx| shell.sync_terminal_tab_presence(cx));
     }
 
     /// Resource Manager パネルの表示状態を Feature へ伝える。非表示の間は取得を止める。
@@ -1069,11 +1077,10 @@ impl DesktopRoot {
     /// 復元したLayoutのタブと実体を一致させ、表示中のタブへ自動起動を促す。
     ///
     /// 参照先 Resource はタブ自身が保持するため、ここで別のタブへ付け替えない。
-    /// 一致させるのは Layout 上のタブと実体だけ。
-    fn sync_terminal_tab(&mut self, cx: &mut Context<Self>) {
+    /// 一致させるのは Layout 上のタブと実体だけ。View の種類には依存しない。
+    fn sync_resource_tabs(&mut self, cx: &mut Context<Self>) {
         self.shell
-            .update(cx, |shell, cx| shell.synchronize_terminal_tabs(cx));
-        self.sync_terminal_auto_start(cx);
+            .update(cx, |shell, cx| shell.bind_view_resources(cx));
     }
 
     /// HostのWorkbench変更を、未確定の入力を待ってからUIへ反映する。
@@ -1101,7 +1108,7 @@ impl DesktopRoot {
         self.workbench_publish_signature = Some(workbench_publish_view(&layout));
         self.shell
             .update(cx, |shell, cx| shell.restore_view(layout, cx));
-        self.sync_terminal_tab(cx);
+        self.sync_resource_tabs(cx);
         let worker = self.worker.clone();
         let _ = worker.submit(
             cx,
@@ -1582,9 +1589,9 @@ impl DesktopRoot {
             return;
         }
         if let ViewScope::Resource(resource) = &scope {
-            // Terminal タブだけが Resource 固定参照を持つ。個体IDはタブごとに異なるため、
-            // 種別はタブの View で判定する。
-            let terminal_tab = self
+            // 外部 Resource を参照するタブだけが Resource 固定参照を持つ。個体IDは
+            // タブごとに異なるため、種別はタブの View ではなく Resource の有無で判定する。
+            let resource_tab = self
                 .shell
                 .read(cx)
                 .shell
@@ -1593,13 +1600,14 @@ impl DesktopRoot {
                 .into_iter()
                 .find(|(tab, _)| tab.stable_view_key() == view.as_str())
                 .map(|(tab, _)| tab)
-                .is_some_and(|tab| tab.is_terminal());
-            let supported = terminal_tab
+                .is_some_and(|tab| tab.resource().is_some());
+            let supported = resource_tab
                 && (self
-                    .shell
-                    .read(cx)
-                    .terminal_summaries(cx)
+                    .terminal
+                    .borrow()
+                    .entities()
                     .iter()
+                    .flat_map(|tab| tab.read(cx).summaries())
                     .any(|terminal| terminal.id.as_str() == resource)
                     || self.conversation.read(cx).records.iter().any(|record| {
                         record.terminals.iter().any(|terminal| {
@@ -1637,12 +1645,24 @@ impl DesktopRoot {
         )
     }
 
-    /// ターミナルタブの永続化先 Task。全タブが同じコンテキストを共有する。
+    /// 外部 Resource を所有する機能の永続化用サマリー。全タブが同じコンテキストを共有する。
     fn terminal_owner_for_persistence(
         &self,
         cx: &gpui::App,
     ) -> Option<editor_core::ConversationId> {
-        self.shell.read(cx).terminal_owner(cx)
+        self.shell
+            .read(cx)
+            .view_resource_owner(&ViewId::new(id::VIEW_TERMINAL), cx)
+    }
+
+    /// 外部 Resource の永続化用サマリー。Resource の意味は所有する機能が決める。
+    fn terminal_persistence_summaries(
+        &self,
+        cx: &gpui::App,
+    ) -> Vec<desktop_client::RestoredTerminal> {
+        self.shell
+            .read(cx)
+            .persisted_view_resources(&ViewId::new(id::VIEW_TERMINAL), cx)
     }
 
     /// Captures this root's editor, layout, task, terminal, and draft state for later persistence.
@@ -1653,7 +1673,13 @@ impl DesktopRoot {
             document: self.editor.read(cx).view_state(),
             layout,
             execution: self.execution_for_persistence(cx),
-            terminals: self.shell.read(cx).terminal_summaries(cx),
+            terminals: self
+                .terminal
+                .borrow()
+                .entities()
+                .iter()
+                .flat_map(|tab| tab.read(cx).summaries())
+                .collect(),
             terminal_owner: self.terminal_owner_for_persistence(cx),
             input: self
                 .editor
@@ -1722,7 +1748,7 @@ impl DesktopRoot {
         self.schedule_session_view_publish(cx);
         let owner = self.terminal_owner_for_persistence(cx);
         let summaries = if owner.is_some() {
-            self.shell.read(cx).terminal_persistence_summaries(cx)
+            self.terminal_persistence_summaries(cx)
         } else {
             Vec::new()
         };
@@ -2021,8 +2047,8 @@ impl DesktopRoot {
                 self.editor.update(cx, |editor, cx| editor.activate(id, cx));
                 crate::gpui_compat::focus(window, &self.editor.focus_handle(cx), cx);
             }
-            UiCommand::ActivateTerminal(id) => {
-                self.activate_terminal(id, cx);
+            UiCommand::ActivateViewResource { view, resource } => {
+                self.activate_view_resource(view, resource, cx);
                 self.schedule_persist(cx);
             }
             UiCommand::CloseDocument(id) => self.close_hosts(0, Some(id), window, cx),
@@ -2638,18 +2664,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_tabs_track_their_own_resource_without_rebinding_others() {
+    fn resource_tabs_track_their_own_resource_without_rebinding_others() {
         // タブは自身の Resource を持ち、起動で個体IDが変わらないことを固定する。
-        let tab = crate::shell::PanelTab::terminal_instance("terminal:one");
-        let bound = tab.with_terminal_resource(Some(terminal::TerminalId::new("terminal-a")));
+        let tab = crate::shell::PanelTab::external(id::VIEW_TERMINAL, "terminal:one", None);
+        let bound = tab.with_resource(Some("terminal-a".to_owned()));
         assert_eq!(tab.instance_id(), bound.instance_id());
-        assert!(tab.terminal_id().is_none());
-        assert_eq!(
-            bound.terminal_id(),
-            Some(terminal::TerminalId::new("terminal-a"))
-        );
+        assert!(tab.resource().is_none());
+        assert_eq!(bound.resource(), Some("terminal-a"));
         // 別のセッションを参照するタブは、独立したタブのまま共存する。
-        let other = crate::shell::PanelTab::terminal(terminal::TerminalId::new("terminal-b"));
+        let other = crate::shell::PanelTab::external(
+            id::VIEW_TERMINAL,
+            "terminal:two",
+            Some("terminal-b".to_owned()),
+        );
         assert_ne!(bound.instance_id(), other.instance_id());
     }
 

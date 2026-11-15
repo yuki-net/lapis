@@ -474,7 +474,8 @@ impl Zone {
                 .iter()
                 .filter(|tab| {
                     item.pinned_tabs
-                        .contains(&super::layout::serialize_tab(tab))
+                        .iter()
+                        .any(|reference| super::layout::tab_refers_to(reference, tab))
                 })
                 .cloned()
                 .collect::<Vec<_>>();

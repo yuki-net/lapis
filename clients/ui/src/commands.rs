@@ -1,4 +1,5 @@
 use editor_core::DocumentId;
+use extension_ui_contract::ViewId;
 use std::path::PathBuf;
 
 use crate::workbench::{ViewInstanceKey, ViewScope, WorkbenchMode};
@@ -37,7 +38,11 @@ pub(crate) enum UiCommand {
     Copy,
     Paste,
     ActivateDocument(DocumentId),
-    ActivateTerminal(terminal::TerminalId),
+    /// 外部 Resource を参照するタブを操作対象にする。Resource の意味は View が決める。
+    ActivateViewResource {
+        view: ViewId,
+        resource: String,
+    },
     CloseDocument(DocumentId),
     CloseTabs(Vec<crate::shell::PanelTab>),
     SelectTask(editor_core::ConversationId),
