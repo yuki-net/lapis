@@ -10,15 +10,17 @@
 use std::sync::Mutex;
 
 use client_api::{HostExtension, HostExtensionsListResponse};
+use extension_runtime::supervisor::ComponentImage;
 use extensions_entry::{
-    ExtensionCatalog, ExtensionDeclarations, ExtensionLoader, ExtensionPackageId, InstallOutcome,
-    Registration,
+    ContractId, ExtensionCatalog, ExtensionDeclarations, ExtensionLoader, ExtensionPackageId,
+    HostContracts, InstallOutcome, Registration, TrustedKeys,
 };
 
 /// Host が起動時に読み込んだ拡張の目録。
 pub(crate) struct HostExtensions {
     catalog: Catalog,
     loader: Loader,
+    worker_executable: Option<std::path::PathBuf>,
     /// 回復に失敗して、目録と実体が食い違ったまま残っている理由。
     ///
     /// ここが `Some` の間は目録を宣言として配らない。実体の無い「導入済み」や、
@@ -41,23 +43,112 @@ enum Loader {
 }
 
 impl HostExtensions {
+    /// 起動時に有効な package の署名と内容を再検証し、その bytes を固定する。
+    /// 無効化などの目録変更は次の Host 起動までこのスナップショットへ影響しない。
+    pub(crate) fn startup_components(
+        &self,
+    ) -> (
+        Vec<ComponentImage>,
+        std::collections::BTreeMap<String, String>,
+    ) {
+        let mut failures = std::collections::BTreeMap::new();
+        let loader = match self.loader() {
+            Ok(loader) => loader,
+            Err(error) => {
+                failures.insert("host".to_owned(), error);
+                return (Vec::new(), failures);
+            }
+        };
+        let mut catalog = match &self.catalog {
+            Catalog::Absent => return (Vec::new(), failures),
+            Catalog::Unreadable(error) => {
+                failures.insert("host".to_owned(), error.clone());
+                return (Vec::new(), failures);
+            }
+            Catalog::Ready(catalog) => match catalog.lock() {
+                Ok(catalog) => catalog,
+                Err(_) => {
+                    failures.insert("host".to_owned(), "拡張の目録を取得できません".to_owned());
+                    return (Vec::new(), failures);
+                }
+            },
+        };
+        let ids: Vec<_> = catalog
+            .entries()
+            .filter(|entry| entry.state.is_installed() && entry.state.is_enabled())
+            .map(|entry| entry.id.clone())
+            .collect();
+        let mut components = Vec::new();
+        for id in ids {
+            match loader.load_installed(&mut catalog, &id) {
+                Ok(mut package) => {
+                    // package 契約だけの既存拡張とデータは、実行可能な宣言ではない。
+                    if !package.manifest.requires.iter().any(|requirement| {
+                        requirement.contract.as_str() == extension_runtime::LIFECYCLE_CONTRACT
+                    }) {
+                        continue;
+                    }
+                    match package.files.remove("extension.wasm") {
+                        Some(bytes) => components.push(ComponentImage {
+                            id: id.as_str().to_owned(),
+                            bytes,
+                        }),
+                        None => {
+                            failures.insert(
+                                id.as_str().to_owned(),
+                                "ライフサイクル契約を要求する component がありません".to_owned(),
+                            );
+                        }
+                    }
+                }
+                Err(error) => {
+                    failures.insert(id.as_str().to_owned(), error.to_string());
+                }
+            }
+        }
+        (components, failures)
+    }
     /// 目録を開く。Host の起動は妨げない。
     ///
     /// 壊れた目録を空として扱うと、導入済み拡張の宣言を失う。上書きもしないため、
     /// 読めない間は宣言の要求にエラーを返し、file はそのまま残す。
     pub(crate) fn load(directory: Option<&std::path::Path>) -> Self {
-        let loader = match ExtensionLoader::repository() {
-            Ok(loader) => Loader::Ready(loader),
-            Err(error) => {
-                let message = error.to_string();
-                eprintln!("拡張の署名鍵を読めないため、package を読み込めません: {message}");
-                Loader::Unavailable(message)
-            }
-        };
+        // 実行可能な worker の handshake を確認した場合にだけ、その実行契約を提供する。
+        let worker_executable = directory
+            .and_then(|_| std::env::current_exe().ok())
+            .and_then(|exe| {
+                exe.parent().map(|parent| {
+                    parent.join(format!(
+                        "lapis-extension-host{}",
+                        std::env::consts::EXE_SUFFIX
+                    ))
+                })
+            })
+            .filter(|path| path.is_file())
+            .filter(|path| extension_runtime::supervisor::probe_worker(path).is_ok());
+        let mut contracts = HostContracts::current();
+        if worker_executable.is_some() {
+            contracts.add_version(
+                ContractId::try_new(extension_runtime::LIFECYCLE_CONTRACT)
+                    .expect("valid contract id"),
+                semver::Version::parse(extension_runtime::LIFECYCLE_VERSION)
+                    .expect("valid contract version"),
+            );
+        }
+        let loader =
+            match TrustedKeys::repository().map(|keys| ExtensionLoader::new(keys, contracts)) {
+                Ok(loader) => Loader::Ready(loader),
+                Err(error) => {
+                    let message = error.to_string();
+                    eprintln!("拡張の署名鍵を読めないため、package を読み込めません: {message}");
+                    Loader::Unavailable(message)
+                }
+            };
         let Some(directory) = directory else {
             return Self {
                 catalog: Catalog::Absent,
                 loader,
+                worker_executable,
                 inconsistent: Mutex::new(None),
             };
         };
@@ -96,8 +187,13 @@ impl HostExtensions {
         Self {
             catalog,
             loader,
+            worker_executable,
             inconsistent: Mutex::new(inconsistent),
         }
+    }
+
+    pub(crate) fn worker_executable(&self) -> Option<&std::path::Path> {
+        self.worker_executable.as_deref()
     }
 
     /// 現在の目録を宣言として返す。

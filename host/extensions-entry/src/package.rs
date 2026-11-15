@@ -224,6 +224,16 @@ impl ExtensionLoader {
         })
     }
 
+    /// Host 管理者が明示した発行者鍵を、組み込みの信頼済み鍵に追加する。
+    pub fn repository_with_additional_keys(raw: &[u8]) -> Result<Self, SignatureError> {
+        let mut keys = TrustedKeys::repository()?;
+        keys.add_registry(raw)?;
+        Ok(Self {
+            keys,
+            contracts: HostContracts::current(),
+        })
+    }
+
     /// 信頼済み公開鍵と提供する契約を明示して作る。検証規則を確かめるテストが使う。
     pub fn new(keys: TrustedKeys, contracts: HostContracts) -> Self {
         Self { keys, contracts }

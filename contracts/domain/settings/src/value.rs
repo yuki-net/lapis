@@ -48,7 +48,8 @@ impl SettingValue {
 }
 
 /// 保存値の種類。動的な候補でも型を検証できるように定義が明示する。
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum ValueKind {
     Text,
     Integer,

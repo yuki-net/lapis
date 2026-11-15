@@ -287,6 +287,15 @@ mod tests {
             ),
             Err(ExtensionLocalizationError::DuplicateTranslation { .. })
         ));
+        translations
+            .register_translations(
+                "french",
+                [(
+                    "terminal".to_owned(),
+                    pack("fr-FR", &[("title", "Terminal FR")]),
+                )],
+            )
+            .unwrap();
         translations.unregister_translations("japanese");
         assert_eq!(
             translations.resolve("terminal", &ja, &MessageId::new("title")),
@@ -295,6 +304,14 @@ mod tests {
         assert_eq!(
             translations.resolve("other", &ja, &MessageId::new("title")),
             "Other"
+        );
+        assert_eq!(
+            translations.resolve(
+                "terminal",
+                &LocaleId::new("fr-FR"),
+                &MessageId::new("title")
+            ),
+            "Terminal FR"
         );
     }
 }

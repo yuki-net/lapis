@@ -38,6 +38,7 @@ impl ResolvedSetting {
 pub struct ResolvedSettings {
     context: SettingsContext,
     settings: BTreeMap<SettingKey, ResolvedSetting>,
+    extension_settings: BTreeMap<String, ResolvedSetting>,
 }
 
 impl ResolvedSettings {
@@ -45,6 +46,20 @@ impl ResolvedSettings {
     pub fn resolve(
         context: &SettingsContext,
         catalog: &'static DefinitionCatalog,
+        documents: &[&SettingsDocument],
+    ) -> Self {
+        Self::resolve_with_extensions(
+            context,
+            catalog,
+            &crate::ExtensionSettingsCatalog::default(),
+            documents,
+        )
+    }
+
+    pub fn resolve_with_extensions(
+        context: &SettingsContext,
+        catalog: &'static DefinitionCatalog,
+        extensions: &crate::ExtensionSettingsCatalog,
         documents: &[&SettingsDocument],
     ) -> Self {
         let scopes = context.scopes();
@@ -68,9 +83,30 @@ impl ResolvedSettings {
             }
             settings.insert(definition.key, resolved);
         }
+        let mut extension_settings = BTreeMap::new();
+        for (key, definition) in extensions.definitions() {
+            let mut resolved = ResolvedSetting {
+                value: definition.default.clone(),
+                origin: None,
+            };
+            for scope in &scopes {
+                if let Some(document) = documents.iter().find(|document| document.scope() == scope)
+                    && let Some(value) = document.values().get(key)
+                    && definition.accepts(value)
+                    && definition.allows_scope(scope)
+                {
+                    resolved = ResolvedSetting {
+                        value: Some(value.clone()),
+                        origin: Some(scope.clone()),
+                    };
+                }
+            }
+            extension_settings.insert(key.to_owned(), resolved);
+        }
         Self {
             context: context.clone(),
             settings,
+            extension_settings,
         }
     }
 
@@ -80,6 +116,11 @@ impl ResolvedSettings {
 
     pub fn setting(&self, key: SettingKey) -> Option<&ResolvedSetting> {
         self.settings.get(&key)
+    }
+
+    /// 有効な拡張の設定のみを返す。無効中の保存値は表示しない。
+    pub fn extension_setting(&self, key: &str) -> Option<&ResolvedSetting> {
+        self.extension_settings.get(key)
     }
 
     pub fn value(&self, key: SettingKey) -> Option<&SettingValue> {

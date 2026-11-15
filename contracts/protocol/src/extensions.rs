@@ -6,6 +6,20 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostExtensionsListRequest {}
 
+/// 拡張の次回起動時の有効状態を変更する。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionSetEnabledRequest {
+    pub id: String,
+    pub enabled: bool,
+}
+
+/// 要求を目録へ保存したことを示す。実行中の状態は変更しない。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionSetEnabledResponse {
+    pub id: String,
+    pub enabled: bool,
+}
+
 /// 導入済み拡張 1 件の宣言。`enabled` は `installed` を含意する。
 ///
 /// 状態は Host の正本をそのまま写した値であり、Client はこれを表示にだけ使い、
@@ -40,6 +54,25 @@ mod tests {
         let request = RequestBody::HostExtensions(HostExtensionsListRequest {});
         assert_eq!(request.method(), "host.extensions.list");
         assert_eq!(request.workspace_id(), None);
+    }
+
+    #[test]
+    fn changing_enabled_state_requires_host_management() {
+        let request = RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+            id: "dev.example.terminal".to_owned(),
+            enabled: false,
+        });
+        assert_eq!(request.method(), "host.extensions.set_enabled");
+        assert_eq!(
+            request.required_capability(),
+            crate::capability::HOST_MANAGE
+        );
+        assert_eq!(request.workspace_id(), None);
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            serde_json::from_value::<RequestBody>(encoded).unwrap(),
+            request
+        );
     }
 
     #[test]

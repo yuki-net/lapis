@@ -51,6 +51,7 @@ fn run() -> Result<i32, Box<dyn std::error::Error>> {
     let bin = session.join("bin");
     fs::create_dir(&bin)?;
     copy_binary(root, &bin, "lapis-host")?;
+    copy_binary(root, &bin, "lapis-extension-host")?;
     let status = if host_only {
         let mut host = Command::new(bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX)));
         host.current_dir(root)
@@ -180,6 +181,8 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
                 "host",
                 "--package",
                 "web-bridge",
+                "--package",
+                "extension-runtime",
                 "--bins",
             ])
             .status();
@@ -201,6 +204,14 @@ fn hot_reload(root: &Path, arguments: &[OsString]) -> Result<i32, Box<dyn std::e
         fs::create_dir(&bin)?;
         let host = bin.join(format!("lapis-host{}", env::consts::EXE_SUFFIX));
         fs::copy(&built, &host)?;
+        let extension_host_name = format!("lapis-extension-host{}", env::consts::EXE_SUFFIX);
+        fs::copy(
+            built
+                .parent()
+                .ok_or("Host build directory is unavailable")?
+                .join(&extension_host_name),
+            bin.join(&extension_host_name),
+        )?;
         let bridge_name = format!("lapis-web-bridge{}", env::consts::EXE_SUFFIX);
         fs::copy(
             built

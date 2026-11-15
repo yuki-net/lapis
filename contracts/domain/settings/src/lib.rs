@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod definition;
 pub mod document;
 pub mod error;
+pub mod extension;
 pub mod resolve;
 pub mod scope;
 pub mod source;
@@ -27,6 +28,7 @@ pub use document::{
     SettingsRepository,
 };
 pub use error::SettingsError;
+pub use extension::{ExtensionSettingDefinition, ExtensionSettingsCatalog};
 pub use resolve::{ResolvedSetting, ResolvedSettings};
 pub use scope::{HostId, ProjectId, ScopeKind, SettingsContext, SettingsScope};
 pub use source::SettingsSourceProvider;

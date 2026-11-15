@@ -267,6 +267,37 @@ impl BackendClient {
         }
     }
 
+    /// 拡張の次回起動時の有効状態を保存する。
+    pub fn set_extension_enabled(
+        &self,
+        workspace: WorkspaceId,
+        id: String,
+        enabled: bool,
+    ) -> Result<client_api::HostExtensionSetEnabledResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return match host.set_extension_enabled(&id, enabled) {
+                Ok(Some(_)) => Ok(client_api::HostExtensionSetEnabledResponse { id, enabled }),
+                Ok(None) => Err(BackendServiceError::Connection(
+                    "extension not found".to_owned(),
+                )),
+                Err(error) => Err(BackendServiceError::Connection(error)),
+            };
+        }
+        let request = client_api::HostExtensionSetEnabledRequest { id, enabled };
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionSetEnabled(request))?
+        {
+            ResponseBody::HostExtensionSetEnabled(response) => Ok(response),
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
     pub fn start_web(
         &self,

@@ -807,6 +807,51 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
         .await,
         ResponseBody::HostExtensions(HostExtensionsListResponse::default())
     );
+    assert!(matches!(
+        request(
+            &mut reader,
+            4,
+            RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+                id: "dev.example.terminal".to_owned(),
+                enabled: false,
+            }),
+        ).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+    let mut catalog =
+        extensions_entry::ExtensionCatalog::open(fixture._state.path().join("extensions")).unwrap();
+    catalog
+        .register(extensions_entry::ExtensionEntry::new(
+            extensions_entry::ExtensionPackageId::try_new("dev.example.one").unwrap(),
+            extensions_entry::ExtensionVersion::parse("0.2.0").unwrap(),
+            extensions_entry::ExtensionState::installed(true),
+        ))
+        .unwrap();
+    let response = request(
+        &mut owner,
+        5,
+        RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+            id: "dev.example.one".to_owned(),
+            enabled: false,
+        }),
+    )
+    .await;
+    assert_eq!(
+        response,
+        ResponseBody::HostExtensionSetEnabled(HostExtensionSetEnabledResponse {
+            id: "dev.example.one".to_owned(),
+            enabled: false,
+        })
+    );
+    let reopened =
+        extensions_entry::ExtensionCatalog::open(fixture._state.path().join("extensions")).unwrap();
+    assert!(
+        !reopened
+            .get(&extensions_entry::ExtensionPackageId::try_new("dev.example.one").unwrap())
+            .unwrap()
+            .state
+            .is_enabled()
+    );
 
     // 宣言を要求しない接続は Host の目録を読めない。
     let mut unread = fixture.connect().await;

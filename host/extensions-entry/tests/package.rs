@@ -35,6 +35,41 @@ fn loader() -> ExtensionLoader {
     ExtensionLoader::new(trusted_keys(), HostContracts::current())
 }
 
+#[test]
+fn explicit_publisher_key_can_authorize_an_external_package() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    assert!(
+        ExtensionLoader::repository()
+            .unwrap()
+            .install(&mut catalog, &package, true)
+            .is_err()
+    );
+    let registry = format!(r#"{{"schema":1,"keys":{{"{KEY_ID}":"{}"}}}}"#, public_key());
+    let loader = ExtensionLoader::repository_with_additional_keys(registry.as_bytes()).unwrap();
+    assert!(
+        loader
+            .install(&mut catalog, &package, true)
+            .unwrap()
+            .is_installed()
+    );
+    assert!(
+        loader
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_ok()
+    );
+}
+
 fn host_version() -> String {
     let (major, minor, patch) = HOST_EXTENSION_CONTRACT_VERSION;
     format!("{major}.{minor}.{patch}")

@@ -54,6 +54,7 @@ impl RemoteRequestHandler for HostRemoteHandler {
                 | RequestBody::HostWebStart(_)
                 | RequestBody::HostWebStop(_)
                 | RequestBody::HostExtensions(_)
+                | RequestBody::HostExtensionSetEnabled(_)
                 | RequestBody::DocumentRelocate(_)
         ) {
             return self.inner.handle(grant, request);
@@ -199,6 +200,21 @@ impl RemoteRequestHandler for HostRemoteHandler {
                         Ok(list) => ResponseBody::HostExtensions(list),
                         Err(message) => web_error(message),
                     },
+                    RequestBody::HostExtensionSetEnabled(request) => {
+                        if extensions_entry::ExtensionPackageId::try_new(&request.id).is_err() {
+                            return error(INVALID_REQUEST);
+                        }
+                        match host.set_extension_enabled(&request.id, request.enabled) {
+                            Ok(Some(_)) => ResponseBody::HostExtensionSetEnabled(
+                                HostExtensionSetEnabledResponse {
+                                    id: request.id,
+                                    enabled: request.enabled,
+                                },
+                            ),
+                            Ok(None) => error(NOT_FOUND),
+                            Err(message) => web_error(message),
+                        }
+                    }
                     RequestBody::HostWorktree(worktree) => {
                         match host
                             .service()

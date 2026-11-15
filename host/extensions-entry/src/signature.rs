@@ -71,6 +71,20 @@ impl TrustedKeys {
         Ok(Self(parsed))
     }
 
+    /// 明示的に信頼する追加鍵を統合する。既存 ID の鍵は置換しない。
+    pub fn add_registry(&mut self, raw: &[u8]) -> Result<(), SignatureError> {
+        let additional = Self::parse(raw)?;
+        for (id, key) in &additional.0 {
+            if self.0.get(id).is_some_and(|existing| existing != key) {
+                return Err(SignatureError::new(format!(
+                    "信頼済み鍵 ID が衝突しています: {id}"
+                )));
+            }
+        }
+        self.0.extend(additional.0);
+        Ok(())
+    }
+
     fn get(&self, key_id: &str) -> Option<&VerifyingKey> {
         self.0.get(key_id)
     }
@@ -246,5 +260,33 @@ mod tests {
     fn repository_registry_is_usable() {
         let keys = TrustedKeys::repository().unwrap();
         assert!(keys.get("lapis-release").is_some());
+    }
+
+    #[test]
+    fn adding_trusted_publishers_never_overwrites_existing_keys() {
+        use ed25519_dalek::SigningKey;
+        fn registry(entries: &[(&str, u8)]) -> Vec<u8> {
+            let keys: BTreeMap<_, _> = entries
+                .iter()
+                .map(|(name, seed)| {
+                    let key = SigningKey::from_bytes(&[*seed; 32]).verifying_key();
+                    (
+                        (*name).to_owned(),
+                        base64::engine::general_purpose::STANDARD.encode(key.to_bytes()),
+                    )
+                })
+                .collect();
+            serde_json::to_vec(&serde_json::json!({"schema": 1, "keys": keys})).unwrap()
+        }
+        let mut keys = TrustedKeys::parse(&registry(&[("original", 1)])).unwrap();
+        keys.add_registry(&registry(&[("publisher", 2)])).unwrap();
+        assert!(keys.get("original").is_some());
+        assert!(keys.get("publisher").is_some());
+        assert!(
+            keys.add_registry(&registry(&[("original", 3), ("another", 4)]))
+                .is_err()
+        );
+        assert!(keys.get("another").is_none());
+        keys.add_registry(&registry(&[("original", 1)])).unwrap();
     }
 }

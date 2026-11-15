@@ -84,6 +84,9 @@ struct HostInner {
     terminal_profiles: TerminalProfiles,
     /// 導入済み拡張の目録。state directory が無い Host は持たない。
     extensions: crate::extensions::HostExtensions,
+    /// 拡張の有効状態と実行中のプロセスは Host 起動時に固定する。
+    extension_host: Option<extension_runtime::supervisor::ExtensionSupervisor>,
+    extension_startup_errors: std::collections::BTreeMap<String, String>,
     /// Host 自身と Host が spawn したプロセスのレジストリ。
     processes: Arc<dyn process::ProcessRegistry>,
 }
@@ -186,6 +189,24 @@ impl BackendHost {
         };
         let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
         let extensions = crate::extensions::HostExtensions::load(state_directory.as_deref());
+        let (components, mut extension_startup_errors) = extensions.startup_components();
+        let extension_host = if components.is_empty() {
+            None
+        } else {
+            match extensions.worker_executable() {
+                Some(path) => Some(extension_runtime::supervisor::ExtensionSupervisor::start(
+                    path.to_path_buf(),
+                    components,
+                )),
+                None => {
+                    extension_startup_errors.insert(
+                        "host".to_owned(),
+                        "拡張ホストの配置を解決できません".to_owned(),
+                    );
+                    None
+                }
+            }
+        };
         let processes = local_process::LocalProcessRegistry::new(process::ProcessOrigin::Host);
         let host = Self {
             inner: Arc::new(HostInner {
@@ -196,6 +217,8 @@ impl BackendHost {
                 store,
                 terminal_profiles,
                 extensions,
+                extension_host,
+                extension_startup_errors,
                 processes,
             }),
         };
@@ -221,6 +244,16 @@ impl BackendHost {
 
     pub fn service(&self) -> BackendService {
         self.inner.service.clone()
+    }
+
+    /// 有効状態の設定とは別に、現在の拡張ホストの実行状態を返す。
+    pub fn extension_host_status(&self) -> Option<extension_runtime::supervisor::SupervisorStatus> {
+        self.inner.extension_host.as_ref().map(|host| host.status())
+    }
+
+    /// 署名不正や旧形式など、起動時に検証できなかった拡張。
+    pub fn extension_startup_errors(&self) -> &std::collections::BTreeMap<String, String> {
+        &self.inner.extension_startup_errors
     }
 
     pub fn register_workspace(&self, root: &Path) -> Result<WorkspaceId, BackendServiceError> {

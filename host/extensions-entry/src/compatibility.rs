@@ -154,6 +154,11 @@ impl HostContracts {
         }
     }
 
+    /// Host が実際に提供可能な契約と版を追加する。
+    pub fn add_version(&mut self, contract: ContractId, version: Version) {
+        self.provided.entry(contract).or_default().push(version);
+    }
+
     /// 要求された契約と版の範囲をすべて満たすか。
     pub fn check(&self, requirements: &[ContractRequirement]) -> Result<(), Incompatibility> {
         for requirement in requirements {

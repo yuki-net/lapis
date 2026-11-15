@@ -186,6 +186,32 @@ fn embedded_and_local_clients_read_the_same_declaration() {
 }
 
 #[test]
+fn embedded_client_saves_extension_state_for_next_restart() {
+    let state = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(state.path().join("extensions")).unwrap();
+    catalog.register(entry("dev.example.one", true)).unwrap();
+    drop(catalog);
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let client = BackendClient::from(host.clone());
+    let response = client
+        .set_extension_enabled(workspace.clone(), "dev.example.one".to_owned(), false)
+        .unwrap();
+    assert!(!response.enabled);
+    assert!(!host.extensions().unwrap().extensions[0].enabled);
+    assert!(
+        client
+            .set_extension_enabled(workspace, "dev.example.missing".to_owned(), false)
+            .is_err()
+    );
+    drop(client);
+    drop(host);
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(!restarted.extensions().unwrap().extensions[0].enabled);
+}
+
+#[test]
 fn an_incompatible_extension_is_declared_apart_from_installed_ones() {
     let state = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(state.path().join("extensions")).unwrap();
