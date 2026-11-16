@@ -115,6 +115,56 @@ fn unsigned_packages_require_explicit_development_mode() {
     assert!(development.install(&mut catalog, &signed, true).is_err());
 }
 
+#[test]
+fn independent_source_directory_can_be_packaged_and_installed() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("external-extension");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("data.json"), br#"{"message":"hello"}"#).unwrap();
+    std::fs::write(
+        source.join("extension.json"),
+        serde_json::to_vec(&json!({
+            "id": "dev.example.external", "version": "0.1.0",
+            "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+            "files": ["data.json"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let output = workspace.path().join("external.lapis");
+    let seed_file = workspace.path().join("test-seed");
+    std::fs::write(&seed_file, SEED).unwrap();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut command = std::process::Command::new("python");
+    command
+        .current_dir(root)
+        .args(["-m", "scripts.extensions.package"])
+        .arg(&source)
+        .arg(&output)
+        .arg("--seed-file")
+        .arg(&seed_file)
+        .arg("--key-id")
+        .arg(KEY_ID);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    assert!(command.status().unwrap().success());
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let loader = loader();
+    assert!(
+        loader
+            .install(&mut catalog, &output, true)
+            .unwrap()
+            .is_installed()
+    );
+    let verified = loader
+        .load_installed(&mut catalog, &id("dev.example.external"))
+        .unwrap();
+    assert_eq!(verified.files["data.json"], br#"{"message":"hello"}"#);
+}
+
 fn host_version() -> String {
     let (major, minor, patch) = HOST_EXTENSION_CONTRACT_VERSION;
     format!("{major}.{minor}.{patch}")
@@ -226,6 +276,153 @@ fn write_package(
 
 fn id(value: &str) -> ExtensionPackageId {
     ExtensionPackageId::try_new(value).unwrap()
+}
+
+#[test]
+fn capability_approval_is_scoped_to_signed_package_and_persists() {
+    use extensions_entry::{CAPABILITY_PACKAGE_SCHEMA, CapabilityApprovals, PackageCapability};
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let manifest = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |value| {
+            value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+            value["capabilities"] = json!([{"id":"process.pty", "version":"1.0.0"}]);
+        },
+    );
+    let path = write_package(root.path(), "terminal.lapis", &manifest, files);
+    let loader = loader();
+    loader.install(&mut catalog, &path, true).unwrap();
+    let package = loader
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    let capability = package.manifest.capabilities[0].clone();
+    let approvals = CapabilityApprovals::new(catalog.root().to_path_buf());
+    assert!(!approvals.is_granted(&package, &capability).unwrap());
+    approvals.set(&package, &capability, true).unwrap();
+    let reopened = CapabilityApprovals::new(catalog.root().to_path_buf());
+    assert!(reopened.is_granted(&package, &capability).unwrap());
+    let other = PackageCapability {
+        id: capability.id.clone(),
+        version: semver::Version::new(2, 0, 0),
+    };
+    assert!(!reopened.is_granted(&package, &other).unwrap());
+    assert!(reopened.set(&package, &other, true).is_err());
+
+    // 同じ ID・version でも署名対象が変われば承認は引き継がれない。
+    let updated = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |value| {
+            value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+            value["capabilities"] =
+                json!([{"id":"process.pty", "version":"1.0.0"}, {"id":"other", "version":"1.0.0"}]);
+        },
+    );
+    let updated_path = write_package(root.path(), "updated.lapis", &updated, files);
+    loader.install(&mut catalog, &updated_path, true).unwrap();
+    let updated_package = loader
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    assert!(!reopened.is_granted(&updated_package, &capability).unwrap());
+    reopened.set(&package, &capability, false).unwrap();
+    assert!(!reopened.is_granted(&package, &capability).unwrap());
+    reopened.set(&updated_package, &capability, true).unwrap();
+    loader
+        .remove(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    loader.install(&mut catalog, &updated_path, true).unwrap();
+    let reinstalled = loader
+        .load_installed(&mut catalog, &id("dev.example.terminal"))
+        .unwrap();
+    assert!(!reopened.is_granted(&reinstalled, &capability).unwrap());
+    std::fs::write(catalog.root().join("capability-approvals.json"), b"broken").unwrap();
+    assert!(reopened.is_granted(&package, &capability).is_err());
+    assert!(
+        loader
+            .remove(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    assert!(
+        catalog
+            .get(&id("dev.example.terminal"))
+            .unwrap()
+            .state
+            .is_installed()
+    );
+}
+
+#[test]
+fn capability_declaration_is_signed_and_legacy_packages_stay_valid() {
+    use extensions_entry::CAPABILITY_PACKAGE_SCHEMA;
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let mut manifest = signed_manifest(
+        "extension",
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+        files,
+        |value| {
+            value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+            value["capabilities"] = json!([{"id":"process.pty", "version":"1.0.0"}]);
+        },
+    );
+    manifest["capabilities"][0]["version"] = json!("2.0.0");
+    let path = write_package(root.path(), "tampered.lapis", &manifest, files);
+    assert!(loader().install(&mut catalog, &path, true).is_err());
+    let legacy = extension_manifest(
+        "dev.example.legacy",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let path = write_package(root.path(), "legacy.lapis", &legacy, files);
+    loader().install(&mut catalog, &path, true).unwrap();
+    assert!(
+        loader()
+            .load_installed(&mut catalog, &id("dev.example.legacy"))
+            .unwrap()
+            .manifest
+            .capabilities
+            .is_empty()
+    );
+}
+
+#[test]
+fn invalid_capability_declarations_are_rejected_even_when_signed() {
+    use extensions_entry::CAPABILITY_PACKAGE_SCHEMA;
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"\0asm")];
+    let malformed = [
+        json!([{"id":"process.pty", "version":"0.1.0"}]),
+        json!([{"id":"process.pty", "version":"1.0.0", "extra":true}]),
+        json!([{"id":"process.pty", "version":"1.0.0"}, {"id":"process.pty", "version":"1.0.0"}]),
+    ];
+    for (index, capabilities) in malformed.into_iter().enumerate() {
+        let manifest = signed_manifest(
+            "extension",
+            "dev.example.terminal",
+            &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+            files,
+            |value| {
+                value["schema"] = json!(CAPABILITY_PACKAGE_SCHEMA);
+                value["capabilities"] = capabilities;
+            },
+        );
+        let path = write_package(
+            root.path(),
+            &format!("invalid-{index}.lapis"),
+            &manifest,
+            files,
+        );
+        assert!(loader().install(&mut catalog, &path, true).is_err());
+    }
 }
 
 #[test]

@@ -195,13 +195,30 @@ impl DesktopRoot {
         }
         let document_connection = Some(session.document_connection());
         let initial_workspace = session.workspace_id().cloned();
-        let worker = ClientWorker::new(DocumentClient::new(
+        #[cfg_attr(target_family = "wasm", allow(unused_mut))]
+        let mut document_client = DocumentClient::new(
             session,
             services.conversation,
             services.lsp,
             services.git.backend(),
             session_view.clone(),
-        ));
+        );
+        #[cfg(not(target_family = "wasm"))]
+        let extension_contributions = services
+            .extension_loader
+            .as_ref()
+            .map(|_| services.settings.extension_contributions());
+        #[cfg(not(target_family = "wasm"))]
+        if let (Some(loader), Some(contributions)) = (
+            services.extension_loader.clone(),
+            extension_contributions.clone(),
+        ) {
+            let mut loading =
+                crate::extension_loading::ExtensionLoading::new(contributions, loader);
+            loading.set_workspace(initial_workspace.clone());
+            document_client.extension_loading = Some(loading);
+        }
+        let worker = ClientWorker::new(document_client);
         let process_worker = ClientWorker::new(ProcessWorker::new(
             services.process.clone(),
             initial_workspace.clone(),
@@ -244,6 +261,15 @@ impl DesktopRoot {
                 services.web_access.clone(),
                 services.web_access_control.clone(),
             )
+        });
+        #[cfg(target_family = "wasm")]
+        let extension_contributions = desktop_client::web_host::extension_contributions();
+        settings.update(cx, |settings, cx| {
+            settings.set_extension_contributions(extension_contributions, cx)
+        });
+        #[cfg(not(target_family = "wasm"))]
+        settings.update(cx, |settings, _| {
+            settings.set_extension_manager(services.extension_manager.clone())
         });
         let update = services
             .updater

@@ -97,6 +97,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy, rust-analyzer, rust-src
+          targets: wasm32-wasip2
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -119,6 +120,12 @@ jobs:
 
       - name: Test Rust Core
         run: python3 scripts/check.py rust_core test
+
+      - name: Test external extension component
+        run: |
+          cargo build --locked --manifest-path examples/external-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/external-extension
+          cargo build --locked -p extension-runtime --bin lapis-extension-host
+          python3 -m scripts.extensions.smoke
 
       - name: Lint Rust Core
         run: python3 scripts/check.py rust_core lint

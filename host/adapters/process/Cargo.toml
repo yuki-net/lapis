@@ -9,3 +9,5 @@ license.workspace = true
 process = { path = "../../../contracts/domain/process" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 sysinfo.workspace = true
+portable-pty.workspace = true
+getrandom.workspace = true

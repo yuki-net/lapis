@@ -9,10 +9,11 @@ scripts/check_architecture.py は crate 間の依存方向に加え、Desktop La
 | `clients/` | Client の Window、Panel、Tab、focus、selection、表示 cache | Host 上の実行資源 |
 | `clients/desktop/launcher/` | staging 済み package の適用と本体の起動、および検証・staging の共通実装 | 更新モードの設定、同意の判断、アプリの実行 |
 | `contracts/domain/` | Transport 非依存の値・ドメイン規則・port | GPUI、通信、外部プロセスの具体実装 |
-| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 || `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
+| `contracts/domain/extension-ui/` | 拡張が公開する UI 宣言の語彙（配置・表示名・アイコン・表示条件、`UiContribution` / `FeatureDescriptor`） | GPUI の View・Entity 生成、表示状態の解決、Feature の実装 |
+| `contracts/protocol/` | request/response/event、revision、認可可能な操作契約 | OS 実装、Client の画面構成 |
 | `contracts/transport/wire/` | Transport 固有の wire DTO | domain の規則、Client の画面構成 |
 | `extensions/git/contract/` | Git 拡張の wire 契約（domain git の DTO を再エクスポート） | 拡張の実装、Client の画面構成 |
-| `extensions/terminal/` | Terminal 拡張の自己完結した実装。`contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` は Host の正規状態、`adapter/` は PTY 実装 | 拡張の外に置くターミナル固有の実装、Client の画面構成 |
+| `extensions/terminal/` | Terminal の `contract/` は型・wire DTO・`TerminalBackend` port の正本、`host/` は Host の正規状態、`adapter/` は PTY 実装 | Client の画面構成。Terminal 固有の配線を拡張境界へ移す作業は未完了 |
 | `clients/transport/` | Client共通の非同期要求・応答照合と接続世代 | UI、具体的な通信経路 |
 | `host/application/` | 操作と判断、port による外部連携 | GPUI、OS 固有 API |
 | `host/runtime/` | 正規状態、操作の直列化、購読・revision・実行資源の寿命 | Window、Panel、focus |
@@ -209,13 +210,14 @@ WindowGroup の再起動復元は未実装。後続では group / window の永�
 
 ## 拡張の入口
 
-- `host/extensions-entry/`（crate `extensions-entry`）は拡張の入口として、導入済み拡張の目録と状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所を持つ。「配布・販売」を意味する `store` は使わない。Wasm ランタイム上での拡張実行は将来段階であり、ここでは扱わない。
+- `host/extensions-entry/`（crate `extensions-entry`）は拡張の入口として、導入済み拡張の目録と状態、`.lapis` package の読み込み・互換照合・署名検証、package と拡張データの置き場所を持つ。「配布・販売」を意味する `store` は使わない。Wasm component の実行は別プロセスの `extension-runtime` が担当する。
 - 目録は Host の正本で、`<state>/extensions/catalog.json`（`schema: 2`）に置く。1 件は `id` / `version` / `installed` / `enabled` / `incompatible` を持ち、`enabled` は `installed` を含意し、`incompatible` は `installed` と同時に立たない。`incompatible` を欠く `schema: 1`（PR1 の目録）は「非互換でない」として読む。書き換えは常に現在の schema で行うため、旧い入口は未知の schema として読み込みを拒否し、宣言を黙って失わない。壊れた目録・未知の schema・重複 ID・規則に合わない ID（末尾 `.`、Windows 予約デバイス名など）は読み込み時に拒否し、空として作り直さない。項目だけを黙って捨てず、file も上書きしない。
 - Client は `host.extensions.list` で目録を読み、`host.extensions.set_enabled` で次回起動時の有効状態を保存する。一覧には `extensions.read`、変更には `host.manage` を要求する。Client は受け取った値を表示にだけ使い、保存値を正本にしない。状態の変更は入口の再起動で反映する前提とし、登録は同じ宣言の再登録で file を書き換えない冪等な操作にする。
+- 静的な設定・翻訳宣言は `lapis.extension.contributions` 1.0.0 の契約を要求し、署名済み manifest の `files` に含む `contributions.json` で提供する。提供元 ID は manifest から付与し、翻訳対象 ID と区別する。Host は起動時に署名と内容を再検証して宣言を固定する。無効な拡張は公開せず、実行を要する拡張は component の起動成功中だけ公開する。宣言は合計 256 KiB までとし、目録応答に含める。Client の表示・登録と変更通知は別途実装する。
 - 拡張データの正本は Host 側の `<state>/extensions/data/<id>/` に置く。Client は再取得可能な cache だけを持つ。package の展開先は `<state>/extensions/installed/<id>/` とし、読み込みは一時 directory に書いてから置き換える。
 - `.lapis` package は zip + `manifest.json` であり、種別を manifest の `kind`（`extension` / `host`）だけで決める。拡張子や招待ファイル（`.lapis-host`）の名前で区別しない。manifest は `schema` / `kind` / `id` / `version` / `requires` / `files` / `key_id` / `signature` を持ち、未知・欠落 field は拒否する。
-- 互換照合は manifest の `requires`（契約 ID と、両端を含む版の範囲）を Host が提供する版と突き合わせる。同じ契約の複数版を併存でき、範囲内に複数ある場合は SemVer の precedence が最も高い版を選ぶ。比較では build metadata（`+vendor` など）を無視する。現在 Host が提供する契約は package 形式の `lapis.extension` だけで、その版は crate の定数が正本である。能力 API の実装や実行を意味しない。満たさない package は展開せず、目録に `incompatible` として登録する。非互換の拡張は有効にできない。導入済みの版が動いている場合、非互換の版を入れようとしてもその宣言と実体は残す（入れようとした版の都合で動いている版を壊さない）。
-- 署名検証はリリース署名と同じ規則を使う（Ed25519、`release/trusted-keys.json` を信頼の起点、`signature` を除いた manifest の正規化 bytes への署名、恒等元・小位数点の鍵を拒否）。署名が一致しない package は目録にも載せない。manifest の `id` すら署名で裏付けられていないため、宣言として採用しない。
+- 互換照合は manifest の `requires`（契約 ID と、両端を含む版の範囲）を Host が提供する版と突き合わせる。同じ契約の複数版を併存でき、範囲内に複数ある場合は SemVer の precedence が最も高い版を選ぶ。比較では build metadata（`+vendor` など）を無視する。`lapis.extension` は package 形式の契約であり、実行 API を意味しない。静的宣言の契約は `lapis.extension.contributions` とし、Wasm の lifecycle 契約は使用可能な worker の検証に成功した場合だけ提供する。満たさない package は展開せず、目録に `incompatible` として登録する。非互換の拡張は有効にできない。導入済みの版が動いている場合、非互換の版を入れようとしてもその宣言と実体は残す（入れようとした版の都合で動いている版を壊さない）。
+- 署名検証はリリース署名と同じ規則を使う（Ed25519、`signature` を除いた manifest の正規化 bytes への署名、恒等元・小位数点の鍵を拒否）。信頼鍵は Host の `<state>/extensions/trusted-keys.json` で管理する。明示的なローカル開発モードでは未署名 package も許可するが、署名の不一致は許可しない。
 - 有効化・無効化は目録の状態だけを変え、package の実体は動かさない。反映は入口の再起動で行う。導入済み package を取り除いても `<state>/extensions/data/<id>/` は残し、再導入で引き継ぐ。
 - package の `files` の path は、空・`.`・`..`・末尾 `.`・末尾空白の要素を拒否する。Windows は path 要素の末尾 `.` と空白を取り除いて解決するため、許可すると別名の member が同じ file を上書きする。同名 member を持つ zip は `ZipArchive::has_duplicate_names` で走査前に拒否する（`zip` は同名を内部 map に畳むため、`len()` と `by_index()` からは見えない）。拡張 ID は `.staging-` で始まってはならない（`installed/` 直下の残骸掃除が同名の実体を消すため）。
 - 目録と `installed/<id>/` は別の file なので、書き込みの間で Host が終了すると食い違う。`<state>/extensions/journal.json` に操作の段階（`prepared` / `catalog_written` / `backed_up` / `swapped`）と操作前の宣言を記録し、次の起動で段階に応じて完了または取り消す（`recover_pending_installs`）。回復は導入の lock を取得して行い、失敗した場合は目録を公開しない（起動時は `Unreadable`、稼働中は `PackageError::Unrecovered` を記録して `host.extensions.list` にエラーを返す）。実体は `.swap/` へ退避してから置き換える。

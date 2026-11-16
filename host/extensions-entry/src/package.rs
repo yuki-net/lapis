@@ -33,6 +33,9 @@ use crate::{
 /// manifest の schema。項目を増やすときは schema を上げ、旧 schema は受理しない。
 pub const PACKAGE_SCHEMA: i64 = 1;
 
+/// capability 宣言を含む package schema。schema 1 も読み取る。
+pub const CAPABILITY_PACKAGE_SCHEMA: i64 = 2;
+
 /// package 内で manifest を置く名前。manifest が宣言する file には使えない。
 pub const MANIFEST_NAME: &str = "manifest.json";
 
@@ -88,7 +91,15 @@ pub struct PackageManifest {
     pub id: ExtensionPackageId,
     pub version: ExtensionVersion,
     pub requires: Vec<ContractRequirement>,
+    /// 拡張が利用を希望する能力。宣言だけでは権限を与えない。
+    pub capabilities: Vec<PackageCapability>,
     pub files: Vec<PackageFile>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackageCapability {
+    pub id: crate::ContractId,
+    pub version: semver::Version,
 }
 
 /// 署名と内容を検証した導入済み package のスナップショット。
@@ -97,6 +108,23 @@ pub struct PackageManifest {
 pub struct VerifiedPackage {
     pub manifest: PackageManifest,
     pub files: BTreeMap<String, Vec<u8>>,
+    manifest_digest: String,
+    verified_id: ExtensionPackageId,
+    verified_capabilities: Vec<PackageCapability>,
+}
+
+impl VerifiedPackage {
+    /// 署名とファイルを検証した manifest の digest。承認を正確な package に結び付ける。
+    pub fn manifest_digest(&self) -> &str {
+        &self.manifest_digest
+    }
+
+    pub(crate) fn verified_id(&self) -> &ExtensionPackageId {
+        &self.verified_id
+    }
+    pub(crate) fn declares(&self, capability: &PackageCapability) -> bool {
+        self.verified_capabilities.contains(capability)
+    }
 }
 
 /// 読み込みの結果。目録に載った宣言の内容を返す。
@@ -303,7 +331,13 @@ impl ExtensionLoader {
             files.insert(file.path.clone(), bytes);
         }
         verify_files(&manifest, &files)?;
-        Ok(VerifiedPackage { manifest, files })
+        Ok(VerifiedPackage {
+            verified_id: manifest.id.clone(),
+            verified_capabilities: manifest.capabilities.clone(),
+            manifest,
+            files,
+            manifest_digest: format!("{:x}", Sha256::digest(&raw)),
+        })
     }
 
     /// package を検証して導入し、目録へ宣言を登録する。
@@ -463,6 +497,10 @@ impl ExtensionLoader {
             .get(id)
             .cloned()
             .ok_or_else(|| PackageError::Malformed(format!("目録に {id} がない")))?;
+        // 除去が途中で失敗しても承認は取り消したままにする（安全側に倒す）。
+        crate::CapabilityApprovals::new(catalog.root().to_owned())
+            .revoke_extension(id)
+            .map_err(PackageError::Io)?;
         // 退避より先に記録する。退避したまま落ちても回復が実体を戻せるようにするため。
         crate::journal::begin(
             catalog.root(),
@@ -683,17 +721,22 @@ fn parse_manifest(
         .as_object()
         .ok_or_else(|| PackageError::Malformed("manifest が object でない".to_owned()))?;
     let unsigned = !object.contains_key("key_id") && !object.contains_key("signature");
-    if unsigned && allow_unsigned {
-        reject_unknown_and_missing(object, &MANIFEST_FIELDS[..6], "manifest")?;
-    } else {
-        reject_unknown_and_missing(object, &MANIFEST_FIELDS, "manifest")?;
-    }
-    if object["schema"].as_i64() != Some(PACKAGE_SCHEMA) {
+    let schema = object.get("schema").and_then(Value::as_i64);
+    if !matches!(schema, Some(PACKAGE_SCHEMA | CAPABILITY_PACKAGE_SCHEMA)) {
         return Err(PackageError::Malformed(format!(
             "未対応の schema: {}",
-            object["schema"]
+            object.get("schema").unwrap_or(&Value::Null)
         )));
     }
+    let mut fields = if unsigned && allow_unsigned {
+        MANIFEST_FIELDS[..6].to_vec()
+    } else {
+        MANIFEST_FIELDS.to_vec()
+    };
+    if schema == Some(CAPABILITY_PACKAGE_SCHEMA) {
+        fields.push("capabilities");
+    }
+    reject_unknown_and_missing(object, &fields, "manifest")?;
     if !unsigned || !allow_unsigned {
         let key_id = object["key_id"]
             .as_str()
@@ -717,14 +760,63 @@ fn parse_manifest(
     let version: ExtensionVersion = serde_json::from_value(object["version"].clone())
         .map_err(|error| PackageError::Malformed(format!("version が不正: {error}")))?;
     let requires = parse_requirements(&object["requires"])?;
+    let capabilities = if schema == Some(CAPABILITY_PACKAGE_SCHEMA) {
+        parse_capabilities(&object["capabilities"])?
+    } else {
+        Vec::new()
+    };
     let files = parse_files(&object["files"])?;
     Ok(PackageManifest {
         kind,
         id,
         version,
         requires,
+        capabilities,
         files,
     })
+}
+
+fn parse_capabilities(value: &Value) -> Result<Vec<PackageCapability>, PackageError> {
+    let entries = value
+        .as_array()
+        .filter(|entries| entries.len() <= 64)
+        .ok_or_else(|| {
+            PackageError::Malformed("capabilities は 64 件以下の配列が必要です".into())
+        })?;
+    let mut capabilities = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let object = entry
+            .as_object()
+            .ok_or_else(|| PackageError::Malformed("capability は object が必要です".into()))?;
+        reject_unknown_and_missing(object, &["id", "version"], "capability")?;
+        let id: crate::ContractId =
+            serde_json::from_value(object["id"].clone()).map_err(|error| {
+                PackageError::Malformed(format!("capability ID が不正です: {error}"))
+            })?;
+        let raw_version = object["version"]
+            .as_str()
+            .ok_or_else(|| PackageError::Malformed("capability version が不正です".into()))?;
+        let version = semver::Version::parse(raw_version).map_err(|error| {
+            PackageError::Malformed(format!("capability version が不正です: {error}"))
+        })?;
+        if version.to_string() != raw_version
+            || !version.pre.is_empty()
+            || !version.build.is_empty()
+            || version.major == 0
+        {
+            return Err(PackageError::Malformed(
+                "capability version は正式な SemVer が必要です".into(),
+            ));
+        }
+        let capability = PackageCapability { id, version };
+        if capabilities.contains(&capability) {
+            return Err(PackageError::Malformed(
+                "capability が重複しています".into(),
+            ));
+        }
+        capabilities.push(capability);
+    }
+    Ok(capabilities)
 }
 
 fn parse_requirements(value: &Value) -> Result<Vec<ContractRequirement>, PackageError> {

@@ -31,6 +31,9 @@ pub struct HostExtension {
     pub version: String,
     pub installed: bool,
     pub enabled: bool,
+    /// 現在の稼働状態。旧 Host や起動中は不明。
+    #[serde(default)]
+    pub active: Option<bool>,
     /// package は読めたが、要求された契約と版を Host が満たさない。
     ///
     /// `installed` / `enabled` とは排他であり、このとき実体は置いていない。
@@ -42,6 +45,16 @@ pub struct HostExtension {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostExtensionsListResponse {
     pub extensions: Vec<HostExtension>,
+    /// 起動時に検証され、現在利用できる拡張の静的宣言。
+    #[serde(default)]
+    pub contributions: Vec<HostExtensionContributions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionContributions {
+    /// Host が署名済み manifest から付与した提供元 ID。
+    pub extension_id: String,
+    pub declaration: extension_ui_contract::StaticContributions,
 }
 
 #[cfg(test)]
@@ -83,7 +96,23 @@ mod tests {
                 version: "0.2.0".to_owned(),
                 installed: true,
                 enabled: false,
+                active: None,
                 incompatible: false,
+            }],
+            contributions: vec![HostExtensionContributions {
+                extension_id: "dev.example.terminal".to_owned(),
+                declaration: extension_ui_contract::StaticContributions {
+                    schema: 1,
+                    default_locale: "en-US".to_owned(),
+                    settings: Vec::new(),
+                    translations: vec![extension_ui_contract::ContributedTranslation {
+                        target: "dev.example.terminal".to_owned(),
+                        locale: "ja-JP".to_owned(),
+                        messages: [("title".to_owned(), "端末".to_owned())]
+                            .into_iter()
+                            .collect(),
+                    }],
+                },
             }],
         };
         let body = ResponseBody::HostExtensions(response.clone());
@@ -104,5 +133,8 @@ mod tests {
         )
         .unwrap();
         assert!(!declaration.incompatible);
+        let old_response: HostExtensionsListResponse =
+            serde_json::from_str(r#"{"extensions":[]}"#).unwrap();
+        assert!(old_response.contributions.is_empty());
     }
 }

@@ -1,6 +1,6 @@
 # Terminal 拡張
 
-Terminal を自己完結した拡張として扱う領域です。Terminal に関するソースはすべてこのディレクトリの中にあり、以後の Terminal 変更は原則としてここだけで閉じます（API との同時改修だけが例外）。
+Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Client UI や Host の配線には Terminal 固有のコードが残っており、拡張 API を使った独立実行への移行は未完了です。
 
 ## 構成
 

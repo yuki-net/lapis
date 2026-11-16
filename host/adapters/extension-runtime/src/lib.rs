@@ -13,8 +13,10 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "worker")]
 use wasmtime::{
     Config, Engine, Store, StoreLimits, StoreLimitsBuilder,
-    component::{Component, Instance, Linker},
+    component::{Component, Instance, Linker, ResourceTable},
 };
+#[cfg(feature = "worker")]
+use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 pub mod supervisor;
 
@@ -52,8 +54,25 @@ pub struct Response {
 }
 
 #[cfg(feature = "worker")]
+struct WorkerState {
+    limits: StoreLimits,
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+#[cfg(feature = "worker")]
+impl WasiView for WorkerState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+#[cfg(feature = "worker")]
 struct Loaded {
-    store: Store<StoreLimits>,
+    store: Store<WorkerState>,
     instance: Instance,
 }
 
@@ -101,12 +120,19 @@ impl ExtensionRuntime {
             .tables(32)
             .table_elements(100_000)
             .build();
-        let mut store = Store::new(&self.engine, limits);
-        store.limiter(|limits| limits);
+        // WASI の既定値は環境変数・ファイル・ネットワークを公開しない。
+        let state = WorkerState {
+            limits,
+            wasi: WasiCtxBuilder::new().build(),
+            table: ResourceTable::new(),
+        };
+        let mut store = Store::new(&self.engine, state);
+        store.limiter(|state| &mut state.limits);
         store
             .set_fuel(CALL_FUEL)
             .map_err(|error| error.to_string())?;
-        let linker = Linker::<StoreLimits>::new(&self.engine);
+        let mut linker = Linker::<WorkerState>::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|error| error.to_string())?;
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|error| error.to_string())?;

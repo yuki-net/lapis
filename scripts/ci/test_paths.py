@@ -71,6 +71,9 @@ class TestPathRouting(unittest.TestCase):
         ):
             self.assertEqual(jobs_for_paths([path]), expected, path)
 
+    def test_extension_packaging_scripts_also_run_host_tests(self):
+        self.assertEqual(jobs_for_paths(["scripts/extensions/package.py"]), {"repository", "rust_core", "host"})
+
     def test_terminal_extension_runs_only_the_surfaces_it_affects(self):
         """Terminal 拡張は契約と実装で影響する surface が分かれる。"""
         # 契約は Client からも参照するため wasm を含む Web も検証する。

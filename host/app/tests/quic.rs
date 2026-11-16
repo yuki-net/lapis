@@ -36,9 +36,17 @@ impl Fixture {
         }
     }
     async fn new() -> Self {
+        Self::with_setup(|_| {}, false).await
+    }
+    async fn with_setup(setup: impl FnOnce(&std::path::Path), development: bool) -> Self {
         let root = tempfile::tempdir().unwrap();
         let state = tempfile::tempdir().unwrap();
-        let host = BackendHost::start_with_state_directory(state.path().to_path_buf()).unwrap();
+        setup(state.path());
+        let host = if development {
+            BackendHost::start_development_with_state_directory(state.path().to_path_buf()).unwrap()
+        } else {
+            BackendHost::start_with_state_directory(state.path().to_path_buf()).unwrap()
+        };
         let workspace = host.register_workspace(root.path()).unwrap();
         let mut auth = RemoteAuth::system(
             AuthConfig::new(
@@ -885,6 +893,53 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
         .await,
         ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extension_contributions_reach_a_remote_reader_after_restart() {
+    let fixture = Fixture::with_setup(|state| {
+        use sha2::Digest as _;
+        use std::io::Write as _;
+        let contents = r#"{"schema":1,"translations":[{"target":"dev.example.terminal","locale":"ja-JP","messages":{"title":"端末"}}]}"#.as_bytes();
+        let manifest = serde_json::json!({
+            "schema": 1, "kind": "extension", "id": "dev.example.japanese", "version": "0.1.0",
+            "requires": [{"contract":"lapis.extension.contributions", "minimum":"1.0.0", "maximum":"1.0.0"}],
+            "files": [{"path":"contributions.json", "sha256":format!("{:x}", sha2::Sha256::digest(contents))}]
+        });
+        let path = state.join("japanese.lapis");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("manifest.json", options).unwrap();
+        archive.write_all(&serde_json::to_vec(&manifest).unwrap()).unwrap();
+        archive.start_file("contributions.json", options).unwrap();
+        archive.write_all(contents).unwrap();
+        archive.finish().unwrap();
+        let host = BackendHost::start_development_with_state_directory(state.to_owned()).unwrap();
+        host.install_extension(&path, true).unwrap();
+    }, true).await;
+    let (mut reader, _) = fixture.pair("extension-translation-reader").await;
+    let response = request(
+        &mut reader,
+        1,
+        RequestBody::HostExtensions(HostExtensionsListRequest {}),
+    )
+    .await;
+    let ResponseBody::HostExtensions(response) = response else {
+        panic!("expected extension declarations")
+    };
+    assert_eq!(response.contributions.len(), 1);
+    assert_eq!(
+        response.contributions[0].extension_id,
+        "dev.example.japanese"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[0].target,
+        "dev.example.terminal"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[0].messages["title"],
+        "端末"
+    );
 }
 
 async fn receive(client: &mut QuicClient) -> ServerMessage {

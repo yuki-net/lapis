@@ -28,6 +28,8 @@ def commands(surface, stage):
         cmds = []
         if surface == "repository":
             cmds.append([sys.executable, "-m", "unittest", "discover", "-s", "scripts/ci", "-p", "test_*.py"])
+            cmds.append([sys.executable, "-m", "unittest", "scripts.extensions.test_package"])
+            cmds.append([sys.executable, "-m", "scripts.extensions.check"])
         if surface in ("repository", "desktop"):
             cmds.append([sys.executable, "-m", "unittest", "discover", "-s", "scripts", "-p", "test_dev_commands.py"])
         if surface in ("repository", "backend", "rust_core", "host"):

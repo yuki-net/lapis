@@ -21,6 +21,8 @@ use process::{
 };
 use sysinfo::{Pid, ProcessesToUpdate, System};
 
+pub mod pty;
+
 /// 既定の計測間隔。Resource Manager の表示更新より十分細かく、OS 負荷を抑える。
 pub const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 /// 1 root あたりの保持サンプル数（既定間隔で 60 秒分）。

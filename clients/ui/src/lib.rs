@@ -9,6 +9,8 @@ mod commands;
 mod desktop;
 #[cfg(all(debug_assertions, not(target_family = "wasm")))]
 mod devtools;
+#[cfg(not(target_family = "wasm"))]
+mod extension_loading;
 pub mod extension_ui;
 mod features;
 mod gpui_compat;

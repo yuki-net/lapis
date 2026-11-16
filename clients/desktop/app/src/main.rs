@@ -1,4 +1,5 @@
 mod connection;
+mod extension_poll;
 mod install;
 mod update_fetch;
 mod updater;
@@ -242,6 +243,38 @@ fn main() {
     )
     .with_workbench_watch(workbench_watch)
     .with_session_view(session_view)
+    .with_extension_loader({
+        let host = host.clone();
+        move |workspace, generation, contributions, cancelled| {
+            let host = host.clone();
+            let _worker = std::thread::spawn(move || {
+                extension_poll::run(
+                    contributions,
+                    generation,
+                    cancelled,
+                    Duration::from_secs(2),
+                    || {
+                        client_api::WorkspaceId::try_from(&workspace)
+                            .map_err(|error| error.to_string())
+                            .and_then(|workspace| {
+                                host.extensions(workspace)
+                                    .map_err(|error| error.to_string())
+                            })
+                    },
+                );
+            });
+        }
+    })
+    .with_extension_manager({
+        let host = host.clone();
+        move |workspace, id, enabled| {
+            let workspace =
+                client_api::WorkspaceId::try_from(&workspace).map_err(|error| error.to_string())?;
+            host.set_extension_enabled(workspace, id, enabled)
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        }
+    })
     .with_process_session(ProcessSession::new(host.processes(), {
         let local: Arc<dyn process::ProcessRegistry> = local_processes;
         Some(local)

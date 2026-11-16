@@ -38,6 +38,8 @@ pub(crate) struct DocumentClient {
     session_view_open: Option<WorkspaceId>,
     /// 参加直後に一度だけ snapshot を返した Workspace。shell の表示を揃える。
     session_view_reconciled: Option<WorkspaceId>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) extension_loading: Option<crate::extension_loading::ExtensionLoading>,
 }
 
 impl DocumentClient {
@@ -62,6 +64,7 @@ impl DocumentClient {
             session_view_sequence: 0,
             session_view_open: None,
             session_view_reconciled: None,
+            extension_loading: None,
         }
     }
 
@@ -162,6 +165,10 @@ impl DocumentClient {
     /// Workspace を閉じたときに購読を解除する。以後の delta は適用しない。
     /// 解除は 1 回だけ送る。Workspace が無い状態で繰り返し呼ばれても何もしない。
     pub(crate) fn close_session_view(&mut self) {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(loading) = &mut self.extension_loading {
+            loading.set_workspace(None);
+        }
         self.session_view_signature = None;
         self.session_view_open = None;
         self.session_view_reconciled = None;
@@ -325,6 +332,10 @@ impl DocumentClient {
 
     /// 正本の再取得が失敗しても確認済み所属を返す。未確認cacheは復旧まで編集しない。
     pub(crate) fn reconcile_snapshot(&mut self) -> ClientSnapshot {
+        #[cfg(not(target_family = "wasm"))]
+        if let Some(loading) = &mut self.extension_loading {
+            loading.set_workspace(self.editor.workspace_id().cloned());
+        }
         self.editor.poll_external_changes();
         let synchronization_error = self.editor.refresh_documents().err().map(|e| e.to_string());
         let tabs = self.editor.tabs();

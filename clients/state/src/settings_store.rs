@@ -19,6 +19,8 @@ struct Owner {
 struct Inner {
     context: SettingsContext,
     extensions: ExtensionSettingsCatalog,
+    contribution_catalogs: BTreeMap<u64, ExtensionSettingsCatalog>,
+    next_contribution_source: u64,
     owners: BTreeMap<SettingsScope, Owner>,
     subscribers: Vec<mpsc::Sender<ResolvedSettings>>,
 }
@@ -43,6 +45,8 @@ impl SettingsModel {
             inner: Mutex::new(Inner {
                 context,
                 extensions: ExtensionSettingsCatalog::default(),
+                contribution_catalogs: BTreeMap::new(),
+                next_contribution_source: 1,
                 owners: BTreeMap::new(),
                 subscribers: Vec::new(),
             }),
@@ -68,6 +72,17 @@ impl SettingsModel {
             let mut inner = self.inner.lock().unwrap();
             let mut extensions = inner.extensions.clone();
             extensions.register(owner, definitions)?;
+            for (key, definition) in extensions.definitions() {
+                if inner.contribution_catalogs.values().any(|catalog| {
+                    catalog
+                        .definition(key)
+                        .is_some_and(|existing| existing != definition)
+                }) {
+                    return Err(SettingsError::new(format!(
+                        "Host 間で拡張設定の定義が競合しています: {key}"
+                    )));
+                }
+            }
             if extensions.definitions().any(|(key, _)| {
                 self.catalog
                     .settings()
@@ -102,6 +117,125 @@ impl SettingsModel {
     /// 現在有効な拡張設定の定義。呼び出し側はスナップショットを得る。
     pub fn extension_settings(&self) -> ExtensionSettingsCatalog {
         self.inner.lock().unwrap().extensions.clone()
+    }
+
+    /// 接続ごとの定義を保存済み文書に照らす。既存 state は変更しない。
+    pub(crate) fn new_contribution_source(&self) -> u64 {
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_contribution_source;
+        inner.next_contribution_source = id.checked_add(1).expect("contribution source overflow");
+        id
+    }
+
+    pub(crate) fn remove_contribution_source(&self, id: u64) {
+        let _writer = self.writer.lock().unwrap();
+        self.inner.lock().unwrap().contribution_catalogs.remove(&id);
+    }
+
+    pub(crate) fn with_validated_extension_catalog<T>(
+        &self,
+        source: u64,
+        extensions: &ExtensionSettingsCatalog,
+        commit: impl FnOnce() -> T,
+    ) -> Result<T, SettingsError> {
+        let _writer = self.writer.lock().unwrap();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            for (key, definition) in extensions.definitions() {
+                if self
+                    .catalog
+                    .settings()
+                    .iter()
+                    .any(|existing| existing.key.as_str() == key)
+                {
+                    return Err(SettingsError::new(format!(
+                        "拡張設定が既存の設定キーと重複しています: {key}"
+                    )));
+                }
+                if inner
+                    .extensions
+                    .definition(key)
+                    .is_some_and(|existing| existing != definition)
+                {
+                    return Err(SettingsError::new(format!(
+                        "既存の拡張設定と定義が競合しています: {key}"
+                    )));
+                }
+            }
+            for (other_id, other) in &inner.contribution_catalogs {
+                if *other_id == source {
+                    continue;
+                }
+                for (key, definition) in extensions.definitions() {
+                    if other
+                        .definition(key)
+                        .is_some_and(|existing| existing != definition)
+                    {
+                        return Err(SettingsError::new(format!(
+                            "Host 間で拡張設定の定義が競合しています: {key}"
+                        )));
+                    }
+                }
+            }
+            for owner in inner.owners.values() {
+                owner
+                    .document
+                    .validate_with_extensions(self.catalog, extensions, true)?;
+            }
+            inner
+                .contribution_catalogs
+                .insert(source, extensions.clone());
+        }
+        Ok(commit())
+    }
+
+    /// 接続の宣言で解決し、他の Host の宣言に触れない。
+    pub(crate) fn resolved_with_extension_catalog(
+        &self,
+        extensions: &ExtensionSettingsCatalog,
+    ) -> ResolvedSettings {
+        let inner = self.inner.lock().unwrap();
+        let documents = inner
+            .owners
+            .values()
+            .map(|owner| &owner.document)
+            .collect::<Vec<_>>();
+        ResolvedSettings::resolve_with_extensions(
+            &inner.context,
+            self.catalog,
+            extensions,
+            &documents,
+        )
+    }
+
+    /// 接続に固定された定義でスコープと値を検証し、既存の repository へ保存する。
+    pub(crate) fn update_with_extension_catalog(
+        &self,
+        extensions: &ExtensionSettingsCatalog,
+        scope: SettingsScope,
+        values: &[(&str, Option<SettingValue>)],
+    ) -> Result<(), SettingsError> {
+        let _writer = self.writer.lock().unwrap();
+        if !self.inner.lock().unwrap().context.contains(&scope) {
+            return Err(SettingsError::new(
+                "現在の接続で利用できない設定スコープです",
+            ));
+        }
+        for (key, value) in values {
+            let definition = extensions
+                .definition(key)
+                .ok_or_else(|| SettingsError::new(format!("未登録の拡張設定: {key}")))?;
+            if !definition.allows_scope(&scope)
+                || value
+                    .as_ref()
+                    .is_some_and(|value| !definition.accepts(value))
+            {
+                return Err(SettingsError::new(format!(
+                    "拡張設定の値またはスコープが不正です: {key}"
+                )));
+            }
+        }
+        self.persist_updates(scope, values)
     }
 
     /// スコープの保存先を登録し、保存済みの値を読み込む。

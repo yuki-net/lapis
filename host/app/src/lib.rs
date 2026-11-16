@@ -86,6 +86,9 @@ struct HostInner {
     extensions: crate::extensions::HostExtensions,
     /// 拡張の有効状態と実行中のプロセスは Host 起動時に固定する。
     extension_host: Option<extension_runtime::supervisor::ExtensionSupervisor>,
+    extension_contributions: Vec<crate::extensions::StartupContribution>,
+    extension_data_active: Vec<String>,
+    extension_runtime_ids: Vec<String>,
     extension_startup_errors: std::collections::BTreeMap<String, String>,
     /// Host 自身と Host が spawn したプロセスのレジストリ。
     processes: Arc<dyn process::ProcessRegistry>,
@@ -206,7 +209,13 @@ impl BackendHost {
         } else {
             crate::extensions::HostExtensions::load(state_directory.as_deref())
         };
-        let (components, mut extension_startup_errors) = extensions.startup_components();
+        let (
+            components,
+            extension_contributions,
+            extension_data_active,
+            extension_runtime_ids,
+            mut extension_startup_errors,
+        ) = extensions.startup_components();
         let extension_host = if components.is_empty() {
             None
         } else {
@@ -235,6 +244,9 @@ impl BackendHost {
                 terminal_profiles,
                 extensions,
                 extension_host,
+                extension_contributions,
+                extension_data_active,
+                extension_runtime_ids,
                 extension_startup_errors,
                 processes,
             }),
@@ -397,7 +409,34 @@ impl BackendHost {
 
     /// 導入済み拡張の目録を宣言として返す。Host の state directory が正本。
     pub fn extensions(&self) -> Result<client_api::HostExtensionsListResponse, String> {
-        self.inner.extensions.list()
+        let mut response = self.inner.extensions.list()?;
+        let status = self.extension_host_status();
+        let active = match &status {
+            Some(extension_runtime::supervisor::SupervisorStatus::Running { active, .. }) => {
+                active.clone()
+            }
+            _ => Vec::new(),
+        };
+        for entry in &mut response.extensions {
+            entry.active = if self.inner.extension_data_active.contains(&entry.id) {
+                Some(true)
+            } else if self.inner.extension_runtime_ids.contains(&entry.id) {
+                match &status {
+                    Some(extension_runtime::supervisor::SupervisorStatus::Starting) => None,
+                    _ => Some(active.contains(&entry.id)),
+                }
+            } else {
+                Some(false)
+            };
+        }
+        response.contributions = self
+            .inner
+            .extension_contributions
+            .iter()
+            .filter(|item| item.available(&active))
+            .map(|item| item.payload.clone())
+            .collect();
+        Ok(response)
     }
 
     /// `.lapis` package を読み込み、目録へ宣言を登録する。

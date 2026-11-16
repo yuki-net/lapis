@@ -11,6 +11,7 @@ mod declaration;
 mod id;
 mod journal;
 mod package;
+mod permissions;
 mod signature;
 mod state;
 mod version;
@@ -27,9 +28,10 @@ pub use declaration::{ExtensionDeclaration, ExtensionDeclarations};
 pub use id::{ExtensionPackageId, InvalidExtensionPackageId};
 pub use journal::{JOURNAL_SCHEMA, PendingInstall, PendingOperation, PendingPhase};
 pub use package::{
-    ExtensionLoader, InstallOutcome, MANIFEST_NAME, PACKAGE_SCHEMA, PackageError, PackageFile,
-    PackageKind, PackageManifest, VerifiedPackage,
+    CAPABILITY_PACKAGE_SCHEMA, ExtensionLoader, InstallOutcome, MANIFEST_NAME, PACKAGE_SCHEMA,
+    PackageCapability, PackageError, PackageFile, PackageKind, PackageManifest, VerifiedPackage,
 };
+pub use permissions::CapabilityApprovals;
 
 /// Host の起動時に、中断した導入・除去を完了または取り消す。
 ///

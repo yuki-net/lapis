@@ -241,6 +241,9 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
         let _ = session.open_path(path);
     }
     let settings = SettingsSession::load(backend.clone()).map_err(|error| error.to_string())?;
+    if let Err(error) = desktop_client::web_host::bind_extension_contributions(&settings) {
+        web_sys::console::warn_1(&format!("拡張宣言を登録できません: {error}").into());
+    }
     let mut services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),

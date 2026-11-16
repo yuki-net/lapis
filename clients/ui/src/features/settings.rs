@@ -72,6 +72,31 @@ pub(crate) struct SettingsFeature {
     selected_web_host: Option<String>,
     /// コピーやブラウザー起動の結果を一時的に示す。
     web_message: String,
+    extension: Option<desktop_client::ExtensionContributionSession>,
+    extension_worker: Option<ClientWorker<desktop_client::ExtensionContributionSession>>,
+    extension_generation: u64,
+    extension_edit: Option<ExtensionTextEdit>,
+    #[cfg(not(target_family = "wasm"))]
+    extension_manager: Option<ClientWorker<crate::app::ExtensionManager>>,
+    extension_management_busy: bool,
+}
+
+struct ExtensionTextEdit {
+    key: String,
+    kind: settings::ValueKind,
+    input: gpui::Entity<crate::components::SearchInput>,
+    draft: String,
+    _subscription: gpui::Subscription,
+}
+
+type ExtensionRow = (String, String, String, settings::ExtensionSettingDefinition);
+
+fn extension_value_text(value: &SettingValue) -> String {
+    match value {
+        SettingValue::Text(value) => value.clone(),
+        SettingValue::Integer(value) => value.to_string(),
+        SettingValue::Flag(value) => value.to_string(),
+    }
 }
 
 /// 単一行の値編集。IME 対応は共通の入力部品に任せる。
@@ -166,7 +191,103 @@ impl SettingsFeature {
             workspace_id: None,
             selected_web_host: None,
             web_message: String::new(),
+            extension: None,
+            extension_worker: None,
+            extension_generation: 0,
+            extension_edit: None,
+            #[cfg(not(target_family = "wasm"))]
+            extension_manager: None,
+            extension_management_busy: false,
         }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_extension_manager(&mut self, manager: Option<crate::app::ExtensionManager>) {
+        self.extension_manager = manager.map(ClientWorker::new);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn set_extension_enabled(&mut self, id: String, enabled: bool, cx: &mut Context<Self>) {
+        if self.extension_management_busy {
+            return;
+        }
+        let Some(workspace) = self
+            .workspace_id
+            .as_ref()
+            .map(editor_core::WorkspaceId::new)
+        else {
+            self.message = self.t("settings.extensions.workspace-required");
+            cx.notify();
+            return;
+        };
+        let Some(worker) = &self.extension_manager else {
+            self.message = self.t("settings.extensions.read-only");
+            cx.notify();
+            return;
+        };
+        self.extension_management_busy = true;
+        let generation = self.extension_generation;
+        if let Err(error) = worker.submit(
+            cx,
+            move |manager| manager(workspace, id, enabled),
+            move |this, result, cx| {
+                if this.extension_generation != generation {
+                    return;
+                }
+                this.extension_management_busy = false;
+                this.message = result
+                    .err()
+                    .unwrap_or_else(|| this.t("settings.extensions.saved"));
+                cx.notify();
+            },
+        ) {
+            self.extension_management_busy = false;
+            self.message = error;
+        }
+        cx.notify();
+    }
+
+    /// 接続単位の宣言を設定画面に反映する。古い接続の通知は無視する。
+    pub(crate) fn set_extension_contributions(
+        &mut self,
+        session: Option<desktop_client::ExtensionContributionSession>,
+        cx: &mut Context<Self>,
+    ) {
+        self.extension_generation = self.extension_generation.wrapping_add(1);
+        let generation = self.extension_generation;
+        self.extension_edit = None;
+        self.extension_management_busy = false;
+        self.extension_worker = session.clone().map(ClientWorker::new);
+        self.extension = session;
+        if let Some(session) = &self.extension {
+            let receiver = session.subscribe();
+            cx.spawn(async move |this, cx| {
+                loop {
+                    // Web には blocking receiver を待つ thread がない。
+                    crate::timer::Timer::after(std::time::Duration::from_millis(200)).await;
+                    let mut changed = false;
+                    while receiver.try_recv().is_ok() {
+                        changed = true;
+                    }
+                    let alive = this
+                        .update(cx, |this, cx| {
+                            if this.extension_generation != generation {
+                                return false;
+                            }
+                            if changed {
+                                cx.notify();
+                            }
+                            true
+                        })
+                        .unwrap_or(false);
+                    if !alive {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        cx.notify();
     }
 
     /// 候補を持たない値を編集する。確定するまで保存しない。
@@ -237,6 +358,144 @@ impl SettingsFeature {
 
     fn t(&self, key: &str) -> String {
         self.locale.resolve(&localization::MessageId::new(key))
+    }
+
+    fn extension_rows(&self) -> Vec<ExtensionRow> {
+        let Some(snapshot) = self
+            .extension
+            .as_ref()
+            .and_then(|session| session.snapshot())
+        else {
+            return Vec::new();
+        };
+        let locale = self.values.locale();
+        snapshot
+            .contributions()
+            .iter()
+            .flat_map(|contribution| {
+                contribution
+                    .declaration
+                    .settings
+                    .iter()
+                    .map(|setting| {
+                        let resolve = |id: &str| {
+                            snapshot.resolve_text(
+                                &contribution.extension_id,
+                                &locale,
+                                &localization::MessageId::new(id),
+                            )
+                        };
+                        (
+                            format!(
+                                "extensions/{}/{}",
+                                contribution.extension_id, setting.definition.name
+                            ),
+                            resolve(&setting.label),
+                            setting
+                                .description
+                                .as_deref()
+                                .map(resolve)
+                                .unwrap_or_default(),
+                            setting.definition.clone(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn save_extension(&mut self, key: String, value: Option<SettingValue>, cx: &mut Context<Self>) {
+        let Some(session) = &self.extension else {
+            return;
+        };
+        let Some(definition) = self
+            .extension_rows()
+            .into_iter()
+            .find(|row| row.0 == key)
+            .map(|row| row.3)
+        else {
+            return;
+        };
+        let Some(values) = session.resolved() else {
+            return;
+        };
+        let Some(scope) = values.context().scopes().into_iter().rev().find(|scope| {
+            definition.allows_scope(scope) && !matches!(scope, SettingsScope::ProjectShared { .. })
+        }) else {
+            self.message = self.t("settings.extensions.no-scope");
+            cx.notify();
+            return;
+        };
+        let Some(worker) = &self.extension_worker else {
+            return;
+        };
+        let generation = self.extension_generation;
+        if let Err(error) = worker.submit(
+            cx,
+            move |session| {
+                session
+                    .update(scope, &[(key.as_str(), value)])
+                    .map_err(|e| e.to_string())
+            },
+            move |this, result, cx| {
+                if this.extension_generation != generation {
+                    return;
+                }
+                this.message = result.err().unwrap_or_default();
+                cx.notify();
+            },
+        ) {
+            self.message = error;
+            cx.notify();
+        }
+    }
+
+    fn edit_extension(
+        &mut self,
+        key: String,
+        kind: settings::ValueKind,
+        value: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let input = cx.new(|cx| crate::components::SearchInput::new("", cx));
+        input.update(cx, |input, cx| input.set_text(value.clone(), cx));
+        crate::gpui_compat::focus(window, &input.read(cx).focus_handle(cx), cx);
+        let subscription = cx.subscribe(&input, |this, _, event, cx| {
+            let crate::components::SearchInputEvent::Changed(text) = event;
+            if let Some(edit) = &mut this.extension_edit {
+                edit.draft = text.clone();
+            }
+            cx.notify();
+        });
+        self.extension_edit = Some(ExtensionTextEdit {
+            key,
+            kind,
+            input,
+            draft: value,
+            _subscription: subscription,
+        });
+        cx.notify();
+    }
+
+    fn commit_extension_edit(&mut self, cx: &mut Context<Self>) {
+        let Some(edit) = self.extension_edit.take() else {
+            return;
+        };
+        let value = match edit.kind {
+            settings::ValueKind::Text => Some(SettingValue::text(edit.draft)),
+            settings::ValueKind::Integer => match edit.draft.parse::<i64>() {
+                Ok(value) => Some(SettingValue::integer(value)),
+                Err(_) => {
+                    self.message = self.t("settings.extensions.invalid-integer");
+                    self.extension_edit = Some(edit);
+                    cx.notify();
+                    return;
+                }
+            },
+            settings::ValueKind::Flag => return,
+        };
+        self.save_extension(edit.key, value, cx);
     }
 
     /// 保存する値は定義データの候補から来るため、UI 側で型を組み立てない。
@@ -321,6 +580,27 @@ impl SettingsFeature {
             ])
         {
             pages.push("host.web");
+        }
+        let catalog_matches = self
+            .extension
+            .as_ref()
+            .and_then(|session| session.snapshot())
+            .is_some_and(|snapshot| {
+                snapshot.extensions().iter().any(|entry| {
+                    self.matches_search(&[
+                        entry.id.clone(),
+                        entry.version.clone(),
+                        self.t("settings.extensions.title"),
+                    ])
+                })
+            });
+        if catalog_matches
+            || self
+                .extension_rows()
+                .iter()
+                .any(|row| self.matches_search(&[row.1.clone(), row.2.clone(), row.0.clone()]))
+        {
+            pages.push("extensions.settings");
         }
         pages
     }
@@ -899,8 +1179,30 @@ impl SettingsFeature {
                         .on_click(cx.listener(|this, _, _, cx| this.select_page("host.web", cx))),
                 )
             })
+            .when(visible.contains(&"extensions.settings"), |nav| {
+                nav.child(
+                    div()
+                        .id("settings-extensions")
+                        .px_5()
+                        .py_2()
+                        .rounded(px(6.0))
+                        .when(self.page == "extensions.settings", |row| {
+                            row.bg(theme::colors(cx).button_background_selected)
+                        })
+                        .hover(|style| style.bg(theme::colors(cx).button_background_hover))
+                        .text_size(px(12.0))
+                        .text_color(theme::colors(cx).text_primary)
+                        .child(self.t("settings.extensions.title"))
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.select_page("extensions.settings", cx)
+                        })),
+                )
+            })
     }
     fn render_page(&self, page_id: &'static str, cx: &mut Context<Self>) -> gpui::Div {
+        if page_id == "extensions.settings" {
+            return self.render_extensions_page(cx);
+        }
         if page_id == "host.web" {
             return self.render_web_page(cx);
         }
@@ -1023,6 +1325,291 @@ impl SettingsFeature {
             );
         }
         container
+    }
+
+    fn render_extensions_page(&self, cx: &mut Context<Self>) -> gpui::Div {
+        let resolved = self
+            .extension
+            .as_ref()
+            .and_then(|session| session.resolved());
+        let rows = self
+            .extension_rows()
+            .into_iter()
+            .filter(|row| self.matches_search(&[row.0.clone(), row.1.clone(), row.2.clone()]))
+            .map(|(key, label, description, definition)| {
+                let current = resolved
+                    .as_ref()
+                    .and_then(|values| values.extension_setting(&key))
+                    .and_then(|value| value.value())
+                    .cloned();
+                let mut options = definition.allowed_values.clone();
+                if options.is_none() && definition.value_kind == settings::ValueKind::Flag {
+                    options = Some(vec![SettingValue::flag(false), SettingValue::flag(true)]);
+                }
+                let control = if let Some(options) = options {
+                    div()
+                        .flex()
+                        .flex_wrap()
+                        .gap_1()
+                        .children(options.into_iter().enumerate().map(|(index, value)| {
+                            let selected = current.as_ref() == Some(&value);
+                            let text = extension_value_text(&value);
+                            let key = key.clone();
+                            div()
+                                .id(gpui::SharedString::from(format!("extension-{key}-{index}")))
+                                .px_3()
+                                .py_2()
+                                .rounded(px(4.0))
+                                .bg(if selected {
+                                    theme::colors(cx).button_background_selected
+                                } else {
+                                    theme::colors(cx).background_secondary
+                                })
+                                .text_size(px(12.0))
+                                .text_color(theme::colors(cx).text_primary)
+                                .child(text)
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.save_extension(key.clone(), Some(value.clone()), cx)
+                                }))
+                        }))
+                        .into_any_element()
+                } else {
+                    let value = current
+                        .as_ref()
+                        .map(extension_value_text)
+                        .unwrap_or_default();
+                    let display = if value.is_empty() {
+                        self.t("settings.value.unset")
+                    } else {
+                        value.clone()
+                    };
+                    let key = key.clone();
+                    let kind = definition.value_kind;
+                    div()
+                        .id(gpui::SharedString::from(format!("extension-edit-{key}")))
+                        .px_3()
+                        .py_2()
+                        .rounded(px(4.0))
+                        .bg(theme::colors(cx).background_secondary)
+                        .text_size(px(12.0))
+                        .text_color(theme::colors(cx).text_primary)
+                        .child(display)
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.edit_extension(key.clone(), kind, value.clone(), window, cx)
+                        }))
+                        .into_any_element()
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_size(px(13.0))
+                            .text_color(theme::colors(cx).text_primary)
+                            .child(label),
+                    )
+                    .when(!description.is_empty(), |row| {
+                        row.child(
+                            div()
+                                .text_size(px(11.0))
+                                .text_color(theme::colors(cx).text_tertiary)
+                                .child(description),
+                        )
+                    })
+                    .child(
+                        div().flex().items_center().gap_2().child(control).child(
+                            div()
+                                .id(gpui::SharedString::from(format!("extension-reset-{key}")))
+                                .px_3()
+                                .py_2()
+                                .text_size(px(12.0))
+                                .text_color(theme::colors(cx).text_tertiary)
+                                .child(self.t("settings.extensions.reset"))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.save_extension(key.clone(), None, cx)
+                                })),
+                        ),
+                    )
+            })
+            .collect::<Vec<_>>();
+        let mut page = div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_4()
+            .child(
+                div()
+                    .text_size(px(16.0))
+                    .font_weight(gpui::FontWeight::BOLD)
+                    .text_color(theme::colors(cx).text_primary)
+                    .child(self.t("settings.extensions.title")),
+            )
+            .child(
+                div()
+                    .p_4()
+                    .rounded(px(8.0))
+                    .bg(theme::colors(cx).background_tertiary)
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(
+                        self.extension
+                            .as_ref()
+                            .and_then(|session| session.snapshot())
+                            .into_iter()
+                            .flat_map(|snapshot| snapshot.extensions().to_vec())
+                            .filter(|entry| {
+                                self.matches_search(&[
+                                    entry.id.clone(),
+                                    entry.version.clone(),
+                                    self.t("settings.extensions.title"),
+                                ])
+                            })
+                            .map(|entry| {
+                                let current = match entry.active {
+                                    Some(true) => self.t("settings.extensions.active"),
+                                    Some(false) => self.t("settings.extensions.inactive"),
+                                    None => self.t("settings.extensions.unknown"),
+                                };
+                                let next = if entry.enabled {
+                                    self.t("settings.extensions.next-on")
+                                } else {
+                                    self.t("settings.extensions.next-off")
+                                };
+                                let action = self.render_extension_action(
+                                    entry.id.clone(),
+                                    entry.enabled,
+                                    entry.installed && !entry.incompatible,
+                                    cx,
+                                );
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_1()
+                                    .child(
+                                        div()
+                                            .text_size(px(13.0))
+                                            .text_color(theme::colors(cx).text_primary)
+                                            .child(format!("{}  {}", entry.id, entry.version)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
+                                            .text_color(theme::colors(cx).text_tertiary)
+                                            .child(format!("{current} · {next}")),
+                                    )
+                                    .child(action)
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .p_4()
+                    .rounded(px(8.0))
+                    .bg(theme::colors(cx).background_tertiary)
+                    .flex()
+                    .flex_col()
+                    .gap_3()
+                    .children(rows),
+            );
+        if let Some(edit) = &self.extension_edit {
+            page =
+                page.child(
+                    div()
+                        .p_4()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .child(edit.input.clone())
+                        .child(
+                            div()
+                                .flex()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("extension-save")
+                                        .px_3()
+                                        .py_2()
+                                        .rounded(px(4.0))
+                                        .bg(theme::colors(cx).button_background_selected)
+                                        .child(self.t("settings.value.save"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.commit_extension_edit(cx)
+                                        })),
+                                )
+                                .child(
+                                    div()
+                                        .id("extension-cancel")
+                                        .px_3()
+                                        .py_2()
+                                        .child(self.t("settings.value.cancel"))
+                                        .on_click(cx.listener(|this, _, _, cx| {
+                                            this.extension_edit = None;
+                                            cx.notify();
+                                        })),
+                                ),
+                        )
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                            if event.keystroke.key == "enter" {
+                                cx.stop_propagation();
+                                this.commit_extension_edit(cx);
+                            }
+                        })),
+                );
+        }
+        page
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn render_extension_action(
+        &self,
+        id: String,
+        enabled: bool,
+        allowed: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if self.extension_manager.is_none() || !allowed {
+            return div()
+                .text_size(px(11.0))
+                .text_color(theme::colors(cx).text_tertiary)
+                .child(self.t("settings.extensions.read-only"))
+                .into_any_element();
+        }
+        div()
+            .id(gpui::SharedString::from(format!("extension-toggle-{id}")))
+            .px_3()
+            .py_2()
+            .rounded(px(4.0))
+            .bg(theme::colors(cx).background_secondary)
+            .text_size(px(12.0))
+            .text_color(theme::colors(cx).text_primary)
+            .child(self.t(if enabled {
+                "settings.extensions.disable"
+            } else {
+                "settings.extensions.enable"
+            }))
+            .when(!self.extension_management_busy, |button| {
+                button.on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_extension_enabled(id.clone(), !enabled, cx)
+                }))
+            })
+            .into_any_element()
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn render_extension_action(
+        &self,
+        _id: String,
+        _enabled: bool,
+        _allowed: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        div()
+            .text_size(px(11.0))
+            .text_color(theme::colors(cx).text_tertiary)
+            .child(self.t("settings.extensions.read-only"))
+            .into_any_element()
     }
 
     /// 現在の接続情報を示すページ。保存値を持たないため、表示のたびに集め直す。
@@ -1672,6 +2259,64 @@ mod tests {
     use std::sync::Arc;
 
     struct MemorySettings;
+
+    #[gpui::test]
+    fn contributed_settings_are_searchable_and_saved(cx: &mut gpui::TestAppContext) {
+        let (feature, session) = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            let session = settings.extension_contributions();
+            let generation = session.begin_reload();
+            session.apply(generation, serde_json::from_value(serde_json::json!({"extensions":[], "contributions":[{
+                "extension_id":"dev.example.terminal",
+                "declaration":{"schema":1,"settings":[{"definition":{"name":"size","value_kind":"integer","scopes":["user"],"default":12},"label":"terminal.size"}],"translations":[{"target":"dev.example.terminal","locale":"en-US","messages":{"terminal.size":"Terminal Size"}}]}
+            }]})).unwrap()).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let feature = cx.new(SettingsFeature::new);
+            feature.update(cx, |feature, cx| feature.set_extension_contributions(Some(session.clone()), cx));
+            (feature, session)
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                feature.query = "terminal size".into();
+                assert!(feature.visible_pages().contains(&"extensions.settings"));
+                assert_eq!(feature.extension_rows()[0].1, "Terminal Size");
+                feature.save_extension(
+                    "extensions/dev.example.terminal/size".into(),
+                    Some(SettingValue::integer(18)),
+                    cx,
+                );
+            });
+        });
+        let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            cx.run_until_parked();
+            let value = session
+                .resolved()
+                .unwrap()
+                .extension_setting("extensions/dev.example.terminal/size")
+                .unwrap()
+                .value()
+                .cloned();
+            if value == Some(SettingValue::integer(18)) {
+                break;
+            }
+            assert!(
+                crate::time::Instant::now() < deadline,
+                "拡張設定が保存されません"
+            );
+            std::thread::yield_now();
+        }
+        session.disconnect();
+        cx.update(|cx| {
+            assert!(
+                !feature
+                    .read(cx)
+                    .visible_pages()
+                    .contains(&"extensions.settings")
+            )
+        });
+    }
 
     #[gpui::test]
     fn search_filters_settings_and_restores_them_when_cleared(cx: &mut gpui::TestAppContext) {

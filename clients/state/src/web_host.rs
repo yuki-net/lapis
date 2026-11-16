@@ -16,10 +16,11 @@ use crate::{
     WorkspaceStateRepository, WorkspaceViewState,
 };
 use client_api::{
-    ClientKind, DocumentInspectRequest, RequestBody, ResponseBody, Revision as ApiRevision,
-    SnapshotReason, SnapshotRequest, TerminalListProfilesRequest, WorkbenchGetRequest,
-    WorkspaceCloseRequest, WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId,
-    WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary, WorkspaceViewUnsubscribeRequest,
+    ClientKind, DocumentInspectRequest, HostExtensionsListRequest, HostExtensionsListResponse,
+    RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason, SnapshotRequest,
+    TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceCloseRequest,
+    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceListRequest,
+    WorkspaceRelativePath, WorkspaceSummary, WorkspaceViewUnsubscribeRequest,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
@@ -95,6 +96,17 @@ struct BackendState {
     document_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
     /// 共有 view state の変更通知。tabs の適用は他の通知と独立させる。
     session_view_changes: Rc<RefCell<Vec<mpsc::UnboundedSender<()>>>>,
+    extensions: HostExtensionsListResponse,
+    extension_session: Option<crate::ExtensionContributionSession>,
+    extensions_connected: bool,
+}
+
+impl Drop for BackendState {
+    fn drop(&mut self) {
+        if let Some(session) = &self.extension_session {
+            session.disconnect();
+        }
+    }
 }
 
 /// Web UI が Host/Workspace の識別子と切り替え可否を表示するための情報。
@@ -172,6 +184,32 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         .iter()
         .any(|capability| capability.as_str() == client_api::capability::WORKSPACES_SWITCH);
     let host_id = connected.host_id.clone();
+    let can_read_extensions = connected
+        .capabilities
+        .iter()
+        .any(|capability| capability.as_str() == client_api::capability::EXTENSIONS_READ);
+    let extensions = if can_read_extensions {
+        match request(
+            &connection,
+            RequestBody::HostExtensions(HostExtensionsListRequest::default()),
+        )
+        .await
+        {
+            Ok(ResponseBody::HostExtensions(response)) => response,
+            Ok(_) => {
+                web_sys::console::warn_1(&"Host の拡張一覧の応答が不正です".into());
+                HostExtensionsListResponse::default()
+            }
+            Err(error) => {
+                web_sys::console::warn_1(
+                    &format!("Host の拡張一覧を取得できません: {error}").into(),
+                );
+                HostExtensionsListResponse::default()
+            }
+        }
+    } else {
+        HostExtensionsListResponse::default()
+    };
     let fresh_credential = connected.credential.clone();
     let workspaces = workspace_list.workspaces;
     // 保持の上限は、接続先が持つ Workspace の数とする。active は含めない。
@@ -265,8 +303,14 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             changes: changes.clone(),
             document_changes: document_changes.clone(),
             session_view_changes: session_view_changes.clone(),
+            extensions,
+            extension_session: None,
+            extensions_connected: true,
         })
     });
+    if can_read_extensions {
+        wasm_bindgen_futures::spawn_local(refresh_extensions(connection.clone()));
+    }
     wasm_bindgen_futures::spawn_local(pump(
         connection.clone(),
         receiver,
@@ -785,6 +829,99 @@ async fn rollback_workspace_inner(
 
 pub(super) fn api_workspace(id: &WorkspaceId) -> ApiWorkspaceId {
     ApiWorkspaceId::try_from(id).expect("workspace id is valid")
+}
+
+/// 現在の接続の宣言をこの UI の設定モデルへ登録する。
+pub fn bind_extension_contributions(
+    settings: &crate::SettingsSession,
+) -> Result<crate::ExtensionContributionSession, String> {
+    BACKEND.with(|backend| {
+        let mut backend = backend.borrow_mut();
+        let state = backend.as_mut().ok_or("Host に接続していません")?;
+        let session = settings.extension_contributions();
+        let generation = session.begin_reload();
+        if let Err(error) = session.apply(generation, state.extensions.clone()) {
+            web_sys::console::warn_1(&format!("拡張宣言を適用できません: {error}").into());
+            session
+                .apply(generation, HostExtensionsListResponse::default())
+                .map_err(|e| e.to_string())?;
+        }
+        if let Some(previous) = state.extension_session.replace(session.clone()) {
+            previous.disconnect();
+        }
+        Ok(session)
+    })
+}
+
+/// 現在の接続に属する宣言を UI が購読するためのハンドル。
+pub fn extension_contributions() -> Option<crate::ExtensionContributionSession> {
+    BACKEND.with(|backend| {
+        backend
+            .borrow()
+            .as_ref()
+            .and_then(|state| state.extension_session.clone())
+    })
+}
+
+/// 古い接続の終了通知で新しい接続を解除しない。
+fn disconnect_extensions(connection: &Rc<BrowserConnection>) {
+    BACKEND.with(|backend| {
+        let mut backend = backend.borrow_mut();
+        if let Some(state) = backend.as_mut()
+            && Rc::ptr_eq(&state.connection, connection)
+        {
+            state.extensions = HostExtensionsListResponse::default();
+            state.extensions_connected = false;
+            if let Some(session) = state.extension_session.take() {
+                session.disconnect();
+            }
+        }
+    });
+}
+
+/// 起動中や再起動後の worker 状態を反映する。接続が置換・切断されたら終了する。
+async fn refresh_extensions(connection: Rc<BrowserConnection>) {
+    loop {
+        gloo_timers::future::TimeoutFuture::new(2_000).await;
+        let current = BACKEND.with(|backend| {
+            backend.borrow().as_ref().is_some_and(|state| {
+                state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+            })
+        });
+        if !current {
+            break;
+        }
+        let Ok(ResponseBody::HostExtensions(response)) = request(
+            &connection,
+            RequestBody::HostExtensions(HostExtensionsListRequest::default()),
+        )
+        .await
+        else {
+            continue;
+        };
+        BACKEND.with(|backend| {
+            let mut backend = backend.borrow_mut();
+            let Some(state) = backend.as_mut() else {
+                return;
+            };
+            if !state.extensions_connected
+                || !Rc::ptr_eq(&state.connection, &connection)
+                || state.extensions == response
+            {
+                return;
+            }
+            if let Some(session) = &state.extension_session {
+                let generation = session.begin_reload();
+                if let Err(error) = session.apply(generation, response.clone()) {
+                    web_sys::console::warn_1(
+                        &format!("Host の拡張宣言を適用できません: {error}").into(),
+                    );
+                    return;
+                }
+            }
+            state.extensions = response;
+        });
+    }
 }
 
 /// 接続中の Host/Workspace 識別子と切り替え候補を返す。

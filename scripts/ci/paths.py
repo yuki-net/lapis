@@ -67,6 +67,8 @@ PATH_RULES = [
     (["clients/web/"], {"web"}),
     
     # CI・scripts
+    # package 生成と Host の読み込みを同じ fixture で検証する。
+    (["scripts/extensions/"], {"repository", "rust_core", "host"}),
     (["scripts/"], {"repository"}),
     # launcher は release/trusted-keys.json を build 時に埋め込む。
     (["release/"], {"repository", "desktop"}),

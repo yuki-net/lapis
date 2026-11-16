@@ -3,7 +3,7 @@
 導入済み拡張の目録・状態、`.lapis` package の読み込み、package・拡張データの置き場所を
 持つ crate。配布や販売を意味する `store` ではなく、拡張の入口としての最小実装。
 
-Wasm ランタイム上での拡張実行はこの crate の対象外（将来段階）。
+Wasm component の実行はこの crate の対象外で、別プロセスの `extension-runtime` が担う。
 
 ## 構成
 
@@ -54,8 +54,8 @@ package の種別は manifest の `kind`（`extension` / `host`）が決める�
 
 `ExtensionLoader::load_installed` は保存済み manifest の署名と目録の ID・版を照合し、
 現在の契約と各 file のハッシュを再検証して内容のスナップショットを返す。
-manifest を保存しなかった旧版の package は再導入が必要である。この検証は将来の
-実行側から呼び出すためのものであり、現時点で Wasm 実行を提供するものではない。
+manifest を保存しなかった旧版の package は再導入が必要である。Host はこの検証後の
+スナップショットを拡張ホストに渡す。
 
 目録の書き込みを実体の置き換えより先に行う。逆順にすると、目録を書けなかったときに
 「実体はあるが宣言は未導入」の状態を残す。置き換えに失敗した場合は目録を元の宣言へ戻し、
@@ -83,15 +83,50 @@ manifest の形は次のとおり。
 署名対象は `signature` を除いた manifest を key 順に並べ、区切りを詰めた UTF-8 の
 JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と同じ。
 
+能力を要求する package は `schema: 2` とし、署名対象に
+`"capabilities": [{"id": "process.pty", "version": "1.0.0"}]` を追加する。
+能力を宣言しない旧 `schema: 1` はそのまま読める。能力の宣言と承認は別であり、
+未承認が既定である。`CapabilityApprovals` は `<state>/extensions/capability-approvals.json`
+に能力の ID・版と検証済み manifest のハッシュを保存し、package が変われば再承認が必要。
+拡張の削除時にも承認を取り消し、同じ package を再導入しても承認を引き継がない。
+この記録は現在、管理 UI と Wasm 実行時の能力付与に未接続である。
+
 Host 管理者は `<host state>/extensions/trusted-keys.json` に、リリース鍵と同じ
 `schema` / `keys` 形式で信頼する発行者鍵を明示的に追加できる。package に同梱された鍵は
 信頼しない。組み込み鍵と同じ ID に異なる鍵を指定した場合やファイルが不正な場合は、
 鍵の読み込みに失敗し、package の導入・実行を拒否する。目録の読み取りは維持する。
+鍵の変更は次回の Host 起動時に読み込む。
 
 ローカル開発用の Host は `--development-extensions` を明示した場合に限り、
 署名のない package を受け入れる。この場合は state directory が必須で、待受は loopback に
 限る。署名のある package は開発時も検証し、不正な署名を黙って許可しない。開発時に導入した
 未署名 package は通常モードでは実行されない。
+
+## 静的な設定・表示文言
+
+`lapis.extension.contributions` 1.0.0 を要求する package は、署名対象の `files` に
+`contributions.json` を含められる。設定名とスコープ・値の定義、翻訳メッセージ ID、
+翻訳対象の拡張 ID・ロケール・文言を記載する。宣言の提供元 ID は manifest から決まり、
+ファイル内では指定できない。`default_locale` を省略した場合は `en-US` となる。
+設定のラベルと説明には、提供元拡張の既定言語の文言が必要である。
+
+```json
+{
+  "schema": 1,
+  "settings": [{
+    "definition": {"name": "size", "value_kind": "integer", "scopes": ["user"], "default": 12, "allowed_values": null},
+    "label": "terminal.size"
+  }],
+  "translations": [{
+    "target": "dev.example.terminal", "locale": "en-US", "messages": {"terminal.size": "Size"}
+  }]
+}
+```
+
+Host は起動時に検証済み bytes から宣言を固定し、`host.extensions.list` に載せる。
+設定変更・拡張の更新は次回起動までその固定値を変えない。コードを伴う拡張はその component
+が起動に成功した間だけ宣言を公開する。全拡張の宣言は合計 256 KiB を上限とする。
+Client の設定画面と翻訳への適用は未接続である。
 
 ## 非互換・署名不正の扱い
 

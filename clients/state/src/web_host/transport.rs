@@ -417,6 +417,7 @@ pub(super) async fn event_pump(
         }
     }
     // 接続が切れて event が来なくなった。共有中のタブ構成は最新ではない可能性がある。
+    super::disconnect_extensions(&connection);
     super::SESSION_VIEW.with(|session| session.borrow().watch().mark_stale());
     notify_session_view(&session_view_changes);
 }

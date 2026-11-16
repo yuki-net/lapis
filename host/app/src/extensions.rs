@@ -42,6 +42,17 @@ enum Loader {
     Unavailable(String),
 }
 
+pub(crate) struct StartupContribution {
+    pub(crate) payload: client_api::HostExtensionContributions,
+    pub(crate) requires_runtime: bool,
+}
+
+impl StartupContribution {
+    pub(crate) fn available(&self, active: &[String]) -> bool {
+        !self.requires_runtime || active.contains(&self.payload.extension_id)
+    }
+}
+
 /// ローカル管理者が指定した発行者鍵だけを組み込み鍵へ追加する。
 fn trusted_keys(directory: Option<&std::path::Path>) -> Result<TrustedKeys, String> {
     use std::io::Read;
@@ -75,6 +86,9 @@ impl HostExtensions {
         &self,
     ) -> (
         Vec<ComponentImage>,
+        Vec<StartupContribution>,
+        Vec<String>,
+        Vec<String>,
         std::collections::BTreeMap<String, String>,
     ) {
         let mut failures = std::collections::BTreeMap::new();
@@ -82,20 +96,20 @@ impl HostExtensions {
             Ok(loader) => loader,
             Err(error) => {
                 failures.insert("host".to_owned(), error);
-                return (Vec::new(), failures);
+                return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures);
             }
         };
         let mut catalog = match &self.catalog {
-            Catalog::Absent => return (Vec::new(), failures),
+            Catalog::Absent => return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures),
             Catalog::Unreadable(error) => {
                 failures.insert("host".to_owned(), error.clone());
-                return (Vec::new(), failures);
+                return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures);
             }
             Catalog::Ready(catalog) => match catalog.lock() {
                 Ok(catalog) => catalog,
                 Err(_) => {
                     failures.insert("host".to_owned(), "拡張の目録を取得できません".to_owned());
-                    return (Vec::new(), failures);
+                    return (Vec::new(), Vec::new(), Vec::new(), Vec::new(), failures);
                 }
             },
         };
@@ -105,26 +119,96 @@ impl HostExtensions {
             .map(|entry| entry.id.clone())
             .collect();
         let mut components = Vec::new();
+        let mut contributions = Vec::new();
+        let mut data_active = Vec::new();
+        let mut runtime_ids = Vec::new();
+        let mut total_declaration_bytes = 0usize;
         for id in ids {
             match loader.load_installed(&mut catalog, &id) {
                 Ok(mut package) => {
-                    // package 契約だけの既存拡張とデータは、実行可能な宣言ではない。
-                    if !package.manifest.requires.iter().any(|requirement| {
+                    let requires_runtime = package.manifest.requires.iter().any(|requirement| {
                         requirement.contract.as_str() == extension_runtime::LIFECYCLE_CONTRACT
-                    }) {
-                        continue;
-                    }
-                    match package.files.remove("extension.wasm") {
-                        Some(bytes) => components.push(ComponentImage {
-                            id: id.as_str().to_owned(),
-                            bytes,
-                        }),
-                        None => {
-                            failures.insert(
-                                id.as_str().to_owned(),
-                                "ライフサイクル契約を要求する component がありません".to_owned(),
-                            );
+                    });
+                    let contribution = match package.files.remove("contributions.json") {
+                        None => None,
+                        Some(bytes) => {
+                            if !package.manifest.requires.iter().any(|requirement| {
+                                requirement.contract.as_str()
+                                    == extension_ui_contract::STATIC_CONTRIBUTIONS_CONTRACT
+                            }) {
+                                failures.insert(
+                                    id.as_str().to_owned(),
+                                    "拡張宣言の契約が指定されていません".to_owned(),
+                                );
+                                continue;
+                            }
+                            if bytes.len() > 256 * 1024 {
+                                failures.insert(
+                                    id.as_str().to_owned(),
+                                    "拡張宣言のサイズが上限を超えています".to_owned(),
+                                );
+                                continue;
+                            }
+                            let parsed: Result<extension_ui_contract::StaticContributions, _> =
+                                serde_json::from_slice(&bytes);
+                            match parsed {
+                                Ok(declaration) if declaration.validate(id.as_str()).is_ok() => {
+                                    let payload = client_api::HostExtensionContributions {
+                                        extension_id: id.as_str().to_owned(),
+                                        declaration,
+                                    };
+                                    let encoded_size = serde_json::to_vec(&payload)
+                                        .map_or(usize::MAX, |encoded| {
+                                            encoded.len().saturating_add(1)
+                                        });
+                                    if total_declaration_bytes.saturating_add(encoded_size)
+                                        > 256 * 1024
+                                    {
+                                        failures.insert(
+                                            id.as_str().to_owned(),
+                                            "拡張宣言のサイズが上限を超えています".to_owned(),
+                                        );
+                                        continue;
+                                    }
+                                    total_declaration_bytes += encoded_size;
+                                    Some(payload)
+                                }
+                                _ => {
+                                    failures.insert(
+                                        id.as_str().to_owned(),
+                                        "拡張宣言が不正です".to_owned(),
+                                    );
+                                    continue;
+                                }
+                            }
                         }
+                    };
+                    if requires_runtime {
+                        match package.files.remove("extension.wasm") {
+                            Some(bytes) => {
+                                runtime_ids.push(id.as_str().to_owned());
+                                components.push(ComponentImage {
+                                    id: id.as_str().to_owned(),
+                                    bytes,
+                                });
+                            }
+                            None => {
+                                failures.insert(
+                                    id.as_str().to_owned(),
+                                    "ライフサイクル契約を要求する component がありません"
+                                        .to_owned(),
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        data_active.push(id.as_str().to_owned());
+                    }
+                    if let Some(payload) = contribution {
+                        contributions.push(StartupContribution {
+                            payload,
+                            requires_runtime,
+                        });
                     }
                 }
                 Err(error) => {
@@ -132,7 +216,13 @@ impl HostExtensions {
                 }
             }
         }
-        (components, failures)
+        (
+            components,
+            contributions,
+            data_active,
+            runtime_ids,
+            failures,
+        )
     }
     /// 目録を開く。Host の起動は妨げない。
     ///
@@ -160,6 +250,12 @@ impl HostExtensions {
             .filter(|path| path.is_file())
             .filter(|path| extension_runtime::supervisor::probe_worker(path).is_ok());
         let mut contracts = HostContracts::current();
+        contracts.add_version(
+            ContractId::try_new(extension_ui_contract::STATIC_CONTRIBUTIONS_CONTRACT)
+                .expect("valid contract id"),
+            semver::Version::parse(extension_ui_contract::STATIC_CONTRIBUTIONS_VERSION)
+                .expect("valid contract version"),
+        );
         if worker_executable.is_some() {
             contracts.add_version(
                 ContractId::try_new(extension_runtime::LIFECYCLE_CONTRACT)
@@ -261,9 +357,11 @@ impl HostExtensions {
                     version: declaration.version.clone(),
                     installed: declaration.installed,
                     enabled: declaration.enabled,
+                    active: None,
                     incompatible: declaration.incompatible,
                 })
                 .collect(),
+            contributions: Vec::new(),
         })
     }
 
@@ -354,6 +452,30 @@ mod tests {
     use extensions_entry::{ExtensionEntry, ExtensionState, ExtensionVersion};
 
     #[test]
+    fn runtime_contributions_require_a_successfully_active_instance() {
+        let contribution = StartupContribution {
+            payload: client_api::HostExtensionContributions {
+                extension_id: "dev.example.extension".into(),
+                declaration: extension_ui_contract::StaticContributions {
+                    schema: 1,
+                    default_locale: "en-US".into(),
+                    settings: Vec::new(),
+                    translations: Vec::new(),
+                },
+            },
+            requires_runtime: true,
+        };
+        assert!(!contribution.available(&[]));
+        assert!(!contribution.available(&["other".into()]));
+        assert!(contribution.available(&["dev.example.extension".into()]));
+        let data_only = StartupContribution {
+            requires_runtime: false,
+            ..contribution
+        };
+        assert!(data_only.available(&[]));
+    }
+
+    #[test]
     fn explicitly_configured_publisher_keys_fail_closed_when_invalid() {
         let directory = tempfile::tempdir().unwrap();
         let registry_dir = directory.path().join("extensions");
@@ -437,6 +559,7 @@ mod tests {
                     version: "0.1.0".to_owned(),
                     installed: true,
                     enabled: true,
+                    active: None,
                     incompatible: false,
                 },
                 HostExtension {
@@ -444,6 +567,7 @@ mod tests {
                     version: "0.1.0".to_owned(),
                     installed: true,
                     enabled: false,
+                    active: None,
                     incompatible: false,
                 },
             ]

@@ -8,6 +8,8 @@ use std::fmt;
 use editor_core::WorkspaceId;
 use serde::{Deserialize, Serialize};
 
+pub mod pty;
+
 /// この計測結果を所有する実行環境。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
