@@ -101,6 +101,26 @@ fn error(error: impl std::fmt::Display) -> PtyError {
 }
 
 impl LocalPtyService {
+    /// 拡張の停止時に、その拡張が所有する PTY をまとめて回収する。
+    pub fn close_owner(&self, owner: &PtyOwnerId) -> Result<(), PtyError> {
+        let removed = {
+            let mut sessions = self.sessions.lock().map_err(error)?;
+            let ids: Vec<_> = sessions
+                .iter()
+                .filter(|(_, session)| &session.owner == owner)
+                .map(|(id, _)| id.clone())
+                .collect();
+            let removed: Vec<_> = ids
+                .into_iter()
+                .filter_map(|id| sessions.remove(&id))
+                .collect();
+            self.count.fetch_sub(removed.len(), Ordering::AcqRel);
+            removed
+        };
+        drop(removed);
+        Ok(())
+    }
+
     fn session(&self, owner: &PtyOwnerId, id: &PtySessionId) -> Result<Arc<Session>, PtyError> {
         self.sessions
             .lock()
@@ -185,6 +205,8 @@ impl PtyService for LocalPtyService {
         let mut writer = pty.master.take_writer().map_err(error)?;
         let mut reader = pty.master.try_clone_reader().map_err(error)?;
         let mut builder = portable_pty::CommandBuilder::new(&command.program);
+        #[cfg(windows)]
+        builder.set_owned_process_tree(true);
         for arg in &command.args {
             builder.arg(arg);
         }
@@ -624,6 +646,42 @@ mod tests {
     }
 
     #[test]
+    fn stopping_an_extension_reclaims_only_its_pty_sessions() {
+        let service = LocalPtyService::default();
+        let first = PtyOwnerId("extension.first".into());
+        let second = PtyOwnerId("extension.second".into());
+        let attachment = PtyAttachmentId("client".into());
+        let first_id = service.spawn(&first, command()).unwrap();
+        let second_id = service.spawn(&second, command()).unwrap();
+        service
+            .attach(&first, &first_id, attachment.clone())
+            .unwrap();
+        service
+            .attach(&second, &second_id, attachment.clone())
+            .unwrap();
+        wait_for(&service, &first, &first_id, &attachment, 0, b"pty-ready");
+        let (cursor, _) = wait_for(&service, &second, &second_id, &attachment, 0, b"pty-ready");
+        service.close_owner(&first).unwrap();
+        assert!(
+            service
+                .write(&first, &first_id, &attachment, b"ignored")
+                .is_err()
+        );
+        service
+            .write(&second, &second_id, &attachment, b"continue\r\n")
+            .unwrap();
+        wait_for(
+            &service,
+            &second,
+            &second_id,
+            &attachment,
+            cursor,
+            b"pty-done",
+        );
+        service.close_owner(&second).unwrap();
+    }
+
+    #[test]
     fn kill_reports_exit_after_remaining_output_and_allows_cleanup() {
         let service = LocalPtyService::default();
         let owner = PtyOwnerId("extension.a".into());
@@ -648,5 +706,120 @@ mod tests {
         }
         service.detach(&owner, &id, &attachment).unwrap();
         service.forget(&owner, &id).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn killing_pty_terminates_the_spawned_process_tree() {
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        };
+
+        let directory = tempfile::tempdir().unwrap();
+        let pid_file = directory.path().join("child.pid");
+        let path = pid_file.to_string_lossy().replace('\'', "''");
+        let script = format!(
+            "$p=Start-Process -FilePath cmd.exe -ArgumentList '/D','/C','ping -n 120 127.0.0.1 >nul' -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText('{path}', $p.Id.ToString()); Write-Output 'child-ready'; Start-Sleep -Seconds 120"
+        );
+        let mut spawn = command();
+        spawn.program = "powershell.exe".into();
+        spawn.args = vec!["-NoProfile".into(), "-Command".into(), script];
+        let service = LocalPtyService::default();
+        let owner = PtyOwnerId("extension.example".into());
+        let attachment = PtyAttachmentId("client".into());
+        let id = service.spawn(&owner, spawn).unwrap();
+        service.attach(&owner, &id, attachment.clone()).unwrap();
+        wait_for(&service, &owner, &id, &attachment, 0, b"child-ready");
+        let pid: u32 = std::fs::read_to_string(pid_file).unwrap().parse().unwrap();
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(!handle.is_null(), "child process must exist");
+        assert_eq!(unsafe { WaitForSingleObject(handle, 0) }, WAIT_TIMEOUT);
+        let result = service.kill(&owner, &id, &attachment);
+        let exited = unsafe { WaitForSingleObject(handle, 10_000) };
+        unsafe { CloseHandle(handle) };
+        result.unwrap();
+        assert_eq!(
+            exited, WAIT_OBJECT_0,
+            "child process survived PTY termination"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn crashed_host_fixture() {
+        let Some(directory) = std::env::var_os("LAPIS_PTY_TEST_DIRECTORY") else {
+            return;
+        };
+        let directory = std::path::PathBuf::from(directory);
+        let path = directory
+            .join("child.pid")
+            .to_string_lossy()
+            .replace('\'', "''");
+        let script = format!(
+            "$p=Start-Process -FilePath cmd.exe -ArgumentList '/D','/C','ping -n 120 127.0.0.1 >nul' -WindowStyle Hidden -PassThru; [IO.File]::WriteAllText('{path}', $p.Id.ToString()); Write-Output 'child-ready'; Start-Sleep -Seconds 120"
+        );
+        let mut spawn = command();
+        spawn.program = "powershell.exe".into();
+        spawn.args = vec!["-NoProfile".into(), "-Command".into(), script];
+        let service = LocalPtyService::default();
+        let owner = PtyOwnerId("extension.example".into());
+        let attachment = PtyAttachmentId("client".into());
+        let id = service.spawn(&owner, spawn).unwrap();
+        service.attach(&owner, &id, attachment.clone()).unwrap();
+        wait_for(&service, &owner, &id, &attachment, 0, b"child-ready");
+        std::fs::write(directory.join("ready"), b"ready").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(120));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn host_crash_terminates_pty_process_tree() {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::Foundation::{CloseHandle, WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+        };
+
+        struct KillOnDrop(std::process::Child);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let mut host = KillOnDrop(
+            std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "pty::tests::crashed_host_fixture"])
+                .env("LAPIS_PTY_TEST_DIRECTORY", directory.path())
+                .creation_flags(0x08000000)
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while !directory.path().join("ready").exists() {
+            assert!(
+                host.0.try_wait().unwrap().is_none(),
+                "fixture exited before starting PTY"
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "fixture did not start PTY"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        let pid: u32 = std::fs::read_to_string(directory.path().join("child.pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+        assert!(!handle.is_null());
+        assert_eq!(unsafe { WaitForSingleObject(handle, 0) }, WAIT_TIMEOUT);
+        host.0.kill().unwrap();
+        host.0.wait().unwrap();
+        let exited = unsafe { WaitForSingleObject(handle, 10_000) };
+        unsafe { CloseHandle(handle) };
+        assert_eq!(exited, WAIT_OBJECT_0, "PTY descendant survived Host crash");
     }
 }
