@@ -604,6 +604,60 @@ mod tests {
     }
 
     #[test]
+    fn bundled_language_is_loaded_once_and_respects_user_disable() {
+        use base64::Engine as _;
+
+        let state = tempfile::tempdir().unwrap();
+        let bundled = tempfile::tempdir().unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let seed = [23u8; 32];
+        let seed_file = state.path().join("test-seed");
+        std::fs::write(&seed_file, seed).unwrap();
+        let keys = state.path().join("extensions");
+        std::fs::create_dir_all(&keys).unwrap();
+        let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+            .verifying_key()
+            .to_bytes();
+        std::fs::write(keys.join("trusted-keys.json"), serde_json::to_vec(&serde_json::json!({
+            "schema": 1, "keys": {"test-publisher": base64::engine::general_purpose::STANDARD.encode(public)}
+        })).unwrap()).unwrap();
+        let mut command = std::process::Command::new("python");
+        command
+            .current_dir(&root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(root.join("extensions/language-ja"))
+            .arg(bundled.path().join("language.lapis"))
+            .arg("--seed-file")
+            .arg(seed_file)
+            .args(["--key-id", "test-publisher"]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        assert!(command.status().unwrap().success());
+        let host = HostExtensions::load(Some(state.path()));
+        host.install_bundled(bundled.path()).unwrap();
+        let (_, contributions, _, _, failures) = host.startup_components();
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(contributions.iter().any(|item| {
+            item.payload.extension_id == "lapis.language.ja"
+                && item
+                    .payload
+                    .declaration
+                    .translations
+                    .iter()
+                    .any(|translation| {
+                        translation.target == "lapis.core" && translation.locale == "ja-JP"
+                    })
+        }));
+        host.set_enabled("lapis.language.ja", false).unwrap();
+        host.install_bundled(bundled.path()).unwrap();
+        assert!(!host.list().unwrap().extensions[0].enabled);
+        assert!(host.startup_components().1.is_empty());
+    }
+
+    #[test]
     fn a_host_without_a_state_directory_declares_no_extensions() {
         let extensions = HostExtensions::load(None);
         assert!(extensions.list().unwrap().extensions.is_empty());

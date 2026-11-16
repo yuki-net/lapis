@@ -92,18 +92,20 @@ manifest の他の項目から推測しない。
 manifest の schema と検証の順は別である。種別は manifest の `kind`（`extension` / `host`）
 だけで決め、拡張子や招待ファイル（`.lapis-host`）の名前で区別しない。
 
-署名の規則はこの schema と共通とする。信頼の起点は `release/trusted-keys.json` だけで、
+署名の規則はこの schema と共通とする。信頼の起点には `release/trusted-keys.json` と、
+Host 管理者が追加した `<state>/extensions/trusted-keys.json` を使い、
 `signature` を除いた manifest を key 順に並べ、区切りを詰めた UTF-8 の JSON bytes に
 署名する（上の「署名対象と検証」と同じ）。恒等元・小位数点の鍵は鍵として拒否する。
 
 | field | 型 | 意味 |
 | --- | --- | --- |
-| `schema` | integer | 拡張 manifest は常に `1` |
+| `schema` | integer | 権限宣言のない従来形式は `1`、能力を宣言する形式は `2` |
 | `kind` | string | `extension` または `host`。拡張子では判断しない |
 | `id` | string | 配置 directory 名に使える拡張 ID（`host/extensions-entry/README.md`） |
 | `version` | string | 拡張の版 |
 | `requires` | array | `{ "contract", "minimum", "maximum" }`。版の範囲は両端を含む |
 | `files` | array | `{ "path", "sha256" }`。package 内の全 file を宣言する |
+| `capabilities` | array | schema 2 のみ。要求する能力の `{ "id", "version" }` |
 | `key_id` | string | 署名鍵の識別子。`trusted-keys.json` の key と対応する |
 | `signature` | string | base64。上記の署名対象に Ed25519 署名した 64 byte |
 
@@ -112,6 +114,10 @@ manifest の schema と検証の順は別である。種別は manifest の `kin
 できないため、目録に載せない。互換性がない package は展開せず「非互換」として宣言する。
 実装と検証は `host/extensions-entry/`、表現と配置の判断は
 [責務と依存方向](architecture.md#拡張の入口) を参照する。
+
+リリース時は `extensions/` 配下の宣言を発見し、リリース鍵で各 `.lapis` を署名して
+Host 実行ファイルに隣接する `bundled-extensions/` に収める。Host は外部 package と同じ
+検証を通して初回導入し、削除・無効化済みの目録を再導入で上書きしない。
 
 ## インストール layout
 
