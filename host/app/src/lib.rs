@@ -16,6 +16,8 @@ pub use profile::{
 };
 mod document;
 pub use client::BackendClient;
+#[cfg(windows)]
+mod extension_pty;
 mod extensions;
 mod features;
 mod session_view;
@@ -84,9 +86,11 @@ struct HostInner {
     /// Host が起動を許可する Terminal profile。
     terminal_profiles: TerminalProfiles,
     /// 導入済み拡張の目録。state directory が無い Host は持たない。
-    extensions: crate::extensions::HostExtensions,
+    extensions: Arc<crate::extensions::HostExtensions>,
     /// 拡張の有効状態と実行中のプロセスは Host 起動時に固定する。
     extension_host: Option<extension_runtime::supervisor::ExtensionSupervisor>,
+    #[cfg(windows)]
+    extension_pty: Arc<crate::extension_pty::PtyBroker>,
     extension_contributions: Vec<crate::extensions::StartupContribution>,
     extension_data_active: Vec<String>,
     extension_runtime_ids: Vec<String>,
@@ -202,14 +206,14 @@ impl BackendHost {
             None => None,
         };
         let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
-        let extensions = if development {
+        let extensions = Arc::new(if development {
             crate::extensions::HostExtensions::load_with_development(
                 state_directory.as_deref(),
                 true,
             )
         } else {
             crate::extensions::HostExtensions::load(state_directory.as_deref())
-        };
+        });
         let bundled_failure = if state_directory.is_some() {
             std::env::current_exe()
                 .ok()
@@ -232,14 +236,29 @@ impl BackendHost {
         if let Some(error) = bundled_failure {
             extension_startup_errors.insert("bundled".to_owned(), error);
         }
+        #[cfg(windows)]
+        let extension_pty = Arc::new(crate::extension_pty::PtyBroker::new(Arc::clone(
+            &extensions,
+        )));
         let extension_host = if components.is_empty() {
             None
         } else {
             match extensions.worker_executable() {
-                Some(path) => Some(extension_runtime::supervisor::ExtensionSupervisor::start(
-                    path.to_path_buf(),
-                    components,
-                )),
+                Some(path) => {
+                    #[cfg(windows)]
+                    let supervisor =
+                        extension_runtime::supervisor::ExtensionSupervisor::start_with_handler(
+                            path.to_path_buf(),
+                            components,
+                            Some(extension_pty.clone()),
+                        );
+                    #[cfg(not(windows))]
+                    let supervisor = extension_runtime::supervisor::ExtensionSupervisor::start(
+                        path.to_path_buf(),
+                        components,
+                    );
+                    Some(supervisor)
+                }
                 None => {
                     extension_startup_errors.insert(
                         "host".to_owned(),
@@ -260,6 +279,8 @@ impl BackendHost {
                 terminal_profiles,
                 extensions,
                 extension_host,
+                #[cfg(windows)]
+                extension_pty,
                 extension_contributions,
                 extension_data_active,
                 extension_runtime_ids,
@@ -474,6 +495,12 @@ impl BackendHost {
         enabled: bool,
     ) -> Result<Option<extensions_entry::Registration>, String> {
         self.inner.extensions.set_enabled(id, enabled)
+    }
+
+    /// 導入済み拡張の PTY 能力を承認する。取消時は同拡張の PTY を終了する。
+    #[cfg(windows)]
+    pub fn set_extension_pty_approval(&self, id: &str, granted: bool) -> Result<(), String> {
+        self.inner.extension_pty.set_approval(id, granted)
     }
 
     /// 導入済み package を取り除く。拡張データは残す。

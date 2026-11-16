@@ -6,6 +6,17 @@ use std::{
 
 use extension_runtime::supervisor::{ComponentImage, ExtensionSupervisor, SupervisorStatus};
 
+#[test]
+fn worker_reports_each_supported_contract_version() {
+    let worker = PathBuf::from(env!("CARGO_BIN_EXE_lapis-extension-host"));
+    let capabilities = extension_runtime::supervisor::probe_worker(&worker).unwrap();
+    assert_eq!(capabilities.lifecycle_version.as_deref(), Some("1.0.0"));
+    assert_eq!(capabilities.pty_version.as_deref(), Some("1.0.0"));
+    let legacy: extension_runtime::Response =
+        serde_json::from_str(r#"{"ok":true,"lifecycle_version":"1.0.0"}"#).unwrap();
+    assert!(legacy.pty_version.is_none());
+}
+
 fn component() -> Vec<u8> {
     wat::parse_str(
         r#"

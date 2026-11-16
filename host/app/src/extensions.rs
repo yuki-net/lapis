@@ -26,6 +26,10 @@ pub(crate) struct HostExtensions {
     /// ここが `Some` の間は目録を宣言として配らない。実体の無い「導入済み」や、
     /// 実体が旧版なのに宣言が新版、という状態を Client に見せないため。
     inconsistent: Mutex<Option<String>>,
+    #[cfg(windows)]
+    runtime_packages: Mutex<std::collections::BTreeMap<String, extensions_entry::VerifiedPackage>>,
+    #[cfg(windows)]
+    permissions_directory: Option<std::path::PathBuf>,
 }
 
 enum Catalog {
@@ -54,6 +58,16 @@ type StartupExtensions = (
     Vec<String>,
     std::collections::BTreeMap<String, String>,
 );
+
+#[cfg(windows)]
+fn declares_pty_contract(package: &extensions_entry::VerifiedPackage) -> bool {
+    let version = semver::Version::new(1, 0, 0);
+    package.manifest.requires.iter().any(|requirement| {
+        requirement.contract.as_str() == "lapis.process.pty"
+            && requirement.minimum.cmp_precedence(&version).is_le()
+            && requirement.maximum.cmp_precedence(&version).is_ge()
+    })
+}
 
 impl StartupContribution {
     pub(crate) fn available(&self, active: &[String]) -> bool {
@@ -131,6 +145,10 @@ impl HostExtensions {
     /// 起動時に有効な package の署名と内容を再検証し、その bytes を固定する。
     /// 無効化などの目録変更は次の Host 起動までこのスナップショットへ影響しない。
     pub(crate) fn startup_components(&self) -> StartupExtensions {
+        #[cfg(windows)]
+        if let Ok(mut packages) = self.runtime_packages.lock() {
+            packages.clear();
+        }
         let mut failures = std::collections::BTreeMap::new();
         let loader = match self.loader() {
             Ok(loader) => loader,
@@ -250,6 +268,14 @@ impl HostExtensions {
                             requires_runtime,
                         });
                     }
+                    #[cfg(windows)]
+                    if requires_runtime {
+                        // 認可に必要なのは署名検証済み manifest の識別情報だけ。
+                        package.files.clear();
+                        if let Ok(mut packages) = self.runtime_packages.lock() {
+                            packages.insert(id.as_str().to_owned(), package);
+                        }
+                    }
                 }
                 Err(error) => {
                     failures.insert(id.as_str().to_owned(), error.to_string());
@@ -277,7 +303,7 @@ impl HostExtensions {
         development: bool,
     ) -> Self {
         // 実行可能な worker の handshake を確認した場合にだけ、その実行契約を提供する。
-        let worker_executable = directory
+        let worker = directory
             .and_then(|_| std::env::current_exe().ok())
             .and_then(|exe| {
                 exe.parent().map(|parent| {
@@ -288,7 +314,16 @@ impl HostExtensions {
                 })
             })
             .filter(|path| path.is_file())
-            .filter(|path| extension_runtime::supervisor::probe_worker(path).is_ok());
+            .and_then(|path| {
+                extension_runtime::supervisor::probe_worker(&path)
+                    .ok()
+                    .map(|capabilities| (path, capabilities))
+            });
+        #[cfg(windows)]
+        let supports_pty = worker.as_ref().is_some_and(|(_, capabilities)| {
+            capabilities.pty_version.as_deref() == Some(extension_runtime::PTY_VERSION)
+        });
+        let worker_executable = worker.map(|(path, _)| path);
         let mut contracts = HostContracts::current();
         contracts.add_version(
             ContractId::try_new(extension_ui_contract::STATIC_CONTRIBUTIONS_CONTRACT)
@@ -303,6 +338,13 @@ impl HostExtensions {
                 semver::Version::parse(extension_runtime::LIFECYCLE_VERSION)
                     .expect("valid contract version"),
             );
+            #[cfg(windows)]
+            if supports_pty {
+                contracts.add_version(
+                    ContractId::try_new("lapis.process.pty").expect("valid contract id"),
+                    semver::Version::new(1, 0, 0),
+                );
+            }
         }
         let loader = match trusted_keys(directory).map(|keys| {
             let loader = ExtensionLoader::new(keys, contracts);
@@ -325,6 +367,10 @@ impl HostExtensions {
                 loader,
                 worker_executable,
                 inconsistent: Mutex::new(None),
+                #[cfg(windows)]
+                runtime_packages: Mutex::new(std::collections::BTreeMap::new()),
+                #[cfg(windows)]
+                permissions_directory: None,
             };
         };
         let catalog = match ExtensionCatalog::open(directory.join("extensions")) {
@@ -364,11 +410,78 @@ impl HostExtensions {
             loader,
             worker_executable,
             inconsistent: Mutex::new(inconsistent),
+            #[cfg(windows)]
+            runtime_packages: Mutex::new(std::collections::BTreeMap::new()),
+            #[cfg(windows)]
+            permissions_directory: Some(directory.join("extensions")),
         }
     }
 
     pub(crate) fn worker_executable(&self) -> Option<&std::path::Path> {
         self.worker_executable.as_deref()
+    }
+
+    /// 起動時に検証した package の能力承認を毎回照合する。
+    #[cfg(windows)]
+    pub(crate) fn pty_approved(&self, id: &str) -> Result<bool, String> {
+        let packages = self
+            .runtime_packages
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let package = packages.get(id).ok_or("実行中の拡張がありません")?;
+        if !declares_pty_contract(package) {
+            return Ok(false);
+        }
+        let capability = extensions_entry::PackageCapability {
+            id: ContractId::try_new("process.pty").expect("valid capability"),
+            version: semver::Version::new(1, 0, 0),
+        };
+        let directory = self
+            .permissions_directory
+            .as_ref()
+            .ok_or("拡張の状態ディレクトリがありません")?;
+        extensions_entry::CapabilityApprovals::new(directory.clone())
+            .is_granted(package, &capability)
+            .map_err(|error| error.to_string())
+    }
+
+    /// 検証済みの導入 package が宣言した能力だけを承認・取消する。
+    #[cfg(windows)]
+    pub(crate) fn set_pty_approval(&self, id: &str, granted: bool) -> Result<(), String> {
+        let id = ExtensionPackageId::try_new(id).map_err(|error| error.to_string())?;
+        let capability_id = ContractId::try_new("process.pty").expect("valid capability");
+        if !granted {
+            let directory = self
+                .permissions_directory
+                .as_ref()
+                .ok_or("拡張の状態ディレクトリがありません")?;
+            return extensions_entry::CapabilityApprovals::new(directory.clone())
+                .revoke_capability(&id, &capability_id)
+                .map_err(|error| error.to_string());
+        }
+        let loader = self.loader()?;
+        let mut catalog = self.catalog_mut()?;
+        let package = loader
+            .load_installed(&mut catalog, &id)
+            .map_err(|error| error.to_string())?;
+        if !declares_pty_contract(&package) {
+            return Err("PTY v1 契約が宣言されていません".into());
+        }
+        let capability = extensions_entry::PackageCapability {
+            id: capability_id,
+            version: semver::Version::new(1, 0, 0),
+        };
+        extensions_entry::CapabilityApprovals::new(catalog.root().to_owned())
+            .set(&package, &capability, granted)
+            .map_err(|error| error.to_string())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn runtime_ids(&self) -> Vec<String> {
+        self.runtime_packages
+            .lock()
+            .map(|packages| packages.keys().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// 現在の目録を宣言として返す。
@@ -655,6 +768,199 @@ mod tests {
         host.install_bundled(bundled.path()).unwrap();
         assert!(!host.list().unwrap().extensions[0].enabled);
         assert!(host.startup_components().1.is_empty());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pty_requires_approval_and_revocation_reclaims_sessions() {
+        use extension_runtime::supervisor::HostCallHandler;
+        use std::sync::Arc;
+
+        let state = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("extension.wasm"), b"component").unwrap();
+        std::fs::write(source.path().join("extension.json"), serde_json::to_vec(&serde_json::json!({
+            "id": "dev.example.pty", "version": "1.0.0",
+            "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
+                         {"contract": "lapis.process.pty", "minimum": "1.0.0", "maximum": "1.0.0"}],
+            "capabilities": [{"id": "process.pty", "version": "1.0.0"}],
+            "files": ["extension.wasm"]
+        })).unwrap()).unwrap();
+        let archive = state.path().join("fixture.lapis");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut command = std::process::Command::new("python");
+        command
+            .current_dir(root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(source.path())
+            .arg(&archive)
+            .arg("--development");
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+        assert!(command.status().unwrap().success());
+        let mut extensions = HostExtensions::load_with_development(Some(state.path()), true);
+        let mut contracts = HostContracts::current();
+        contracts.add_version(
+            ContractId::try_new("lapis.process.pty").unwrap(),
+            semver::Version::new(1, 0, 0),
+        );
+        extensions.loader = Loader::Ready(
+            ExtensionLoader::new(TrustedKeys::repository().unwrap(), contracts)
+                .allow_unsigned_local_development(),
+        );
+        let extensions = Arc::new(extensions);
+        extensions.install(&archive, true).unwrap();
+        let mut package = {
+            let mut catalog = extensions.catalog_mut().unwrap();
+            extensions
+                .loader()
+                .unwrap()
+                .load_installed(
+                    &mut catalog,
+                    &ExtensionPackageId::try_new("dev.example.pty").unwrap(),
+                )
+                .unwrap()
+        };
+        let required = package
+            .manifest
+            .requires
+            .iter()
+            .position(|item| item.contract.as_str() == "lapis.process.pty")
+            .unwrap();
+        let contract = package.manifest.requires.remove(required);
+        assert!(!declares_pty_contract(&package));
+        package.manifest.requires.insert(required, contract);
+        extensions
+            .runtime_packages
+            .lock()
+            .unwrap()
+            .insert("dev.example.pty".into(), package);
+        let broker = crate::extension_pty::PtyBroker::new(extensions);
+        let spawn = serde_json::json!({"program":"cmd.exe", "args":["/D", "/C", "ping -n 60 127.0.0.1 >nul"],
+            "env":{}, "cwd": state.path().to_string_lossy(), "size":{"columns":80,"rows":24}});
+        assert!(
+            broker
+                .call("dev.example.pty", "pty.v1.spawn", spawn.clone())
+                .is_err()
+        );
+        broker.set_approval("dev.example.pty", true).unwrap();
+        let id = broker
+            .call("dev.example.pty", "pty.v1.spawn", spawn)
+            .unwrap();
+        broker
+            .call(
+                "dev.example.pty",
+                "pty.v1.attach",
+                serde_json::json!({"id":id}),
+            )
+            .unwrap();
+        broker.set_approval("dev.example.pty", false).unwrap();
+        assert!(
+            broker
+                .call(
+                    "dev.example.pty",
+                    "pty.v1.attach",
+                    serde_json::json!({"id":id})
+                )
+                .is_err()
+        );
+        broker.set_approval("dev.example.pty", true).unwrap();
+        assert!(
+            broker
+                .call(
+                    "dev.example.pty",
+                    "pty.v1.attach",
+                    serde_json::json!({"id":id})
+                )
+                .is_err()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Wasm fixture と拡張ホストの事前ビルドが必要"]
+    fn approved_wasm_uses_host_pty_and_shutdown_reclaims_it() {
+        use extension_runtime::supervisor::{ExtensionSupervisor, SupervisorStatus};
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let component = std::fs::read(
+            root.join("target/pty-extension/wasm32-wasip2/debug/example_pty_extension.wasm"),
+        )
+        .unwrap();
+        let executable = root.join("target/debug/lapis-extension-host.exe");
+        let state = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("extension.wasm"), component).unwrap();
+        std::fs::write(source.path().join("extension.json"), serde_json::to_vec(&serde_json::json!({
+            "id":"dev.example.pty", "version":"1.0.0",
+            "requires":[{"contract":"lapis.extension", "minimum":"1.0.0", "maximum":"1.0.0"},
+                        {"contract":"lapis.extension.lifecycle", "minimum":"1.0.0", "maximum":"1.0.0"},
+                        {"contract":"lapis.process.pty", "minimum":"1.0.0", "maximum":"1.0.0"}],
+            "capabilities":[{"id":"process.pty", "version":"1.0.0"}], "files":["extension.wasm"]
+        })).unwrap()).unwrap();
+        let archive = state.path().join("fixture.lapis");
+        let mut command = std::process::Command::new("python");
+        command
+            .current_dir(&root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(source.path())
+            .arg(&archive)
+            .arg("--development");
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+        assert!(command.status().unwrap().success());
+
+        let mut extensions = HostExtensions::load_with_development(Some(state.path()), true);
+        let mut contracts = HostContracts::current();
+        for id in ["lapis.extension.lifecycle", "lapis.process.pty"] {
+            contracts.add_version(
+                ContractId::try_new(id).unwrap(),
+                semver::Version::new(1, 0, 0),
+            );
+        }
+        extensions.loader = Loader::Ready(
+            ExtensionLoader::new(TrustedKeys::repository().unwrap(), contracts)
+                .allow_unsigned_local_development(),
+        );
+        extensions.install(&archive, true).unwrap();
+        let (components, _, _, _, failures) = extensions.startup_components();
+        assert!(failures.is_empty(), "{failures:?}");
+        let broker = Arc::new(crate::extension_pty::PtyBroker::new(Arc::new(extensions)));
+        let wait_for_running = |supervisor: &ExtensionSupervisor| {
+            let deadline = Instant::now() + Duration::from_secs(20);
+            loop {
+                match supervisor.status() {
+                    SupervisorStatus::Running { active, failed, .. } => return (active, failed),
+                    SupervisorStatus::Stopped { reason } => panic!("{reason}"),
+                    SupervisorStatus::Starting => {}
+                }
+                assert!(Instant::now() < deadline, "extension host did not start");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        let denied = ExtensionSupervisor::start_with_handler(
+            executable.clone(),
+            components.clone(),
+            Some(broker.clone()),
+        );
+        let (active, failed) = wait_for_running(&denied);
+        assert!(active.is_empty());
+        assert!(failed.contains_key("dev.example.pty"));
+        assert_eq!(broker.session_count("dev.example.pty"), 0);
+        drop(denied);
+        broker.set_approval("dev.example.pty", true).unwrap();
+        let supervisor =
+            ExtensionSupervisor::start_with_handler(executable, components, Some(broker.clone()));
+        let (active, failed) = wait_for_running(&supervisor);
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(active, ["dev.example.pty"]);
+        assert_eq!(broker.session_count("dev.example.pty"), 1);
+        drop(supervisor);
+        assert_eq!(broker.session_count("dev.example.pty"), 0);
     }
 
     #[test]

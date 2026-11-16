@@ -20,6 +20,10 @@ class PackageTests(unittest.TestCase):
             (root / "examples/external-extension/wit/extension.wit").read_bytes(),
             (root / "contracts/extension-api/wit/v1/extension.wit").read_bytes(),
         )
+        self.assertEqual(
+            (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
+            (root / "contracts/extension-api/wit/pty-v1/pty.wit").read_bytes(),
+        )
 
     def test_japanese_package_matches_current_bundled_messages(self):
         root = Path(__file__).resolve().parents[2]

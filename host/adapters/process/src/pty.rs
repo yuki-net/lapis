@@ -101,6 +101,15 @@ fn error(error: impl std::fmt::Display) -> PtyError {
 }
 
 impl LocalPtyService {
+    /// 所有者が保持するセッション数。終了済みでも回収されるまでは含む。
+    pub fn session_count(&self, owner: &PtyOwnerId) -> Result<usize, PtyError> {
+        let sessions = self.sessions.lock().map_err(error)?;
+        Ok(sessions
+            .values()
+            .filter(|session| &session.owner == owner)
+            .count())
+    }
+
     /// 拡張の停止時に、その拡張が所有する PTY をまとめて回収する。
     pub fn close_owner(&self, owner: &PtyOwnerId) -> Result<(), PtyError> {
         let removed = {

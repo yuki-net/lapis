@@ -477,6 +477,25 @@ fn capability_approval_is_scoped_to_signed_package_and_persists() {
     reopened.set(&package, &capability, false).unwrap();
     assert!(!reopened.is_granted(&package, &capability).unwrap());
     reopened.set(&updated_package, &capability, true).unwrap();
+    let other_capability = updated_package
+        .manifest
+        .capabilities
+        .iter()
+        .find(|item| item.id.as_str() == "other")
+        .unwrap();
+    reopened
+        .set(&updated_package, other_capability, true)
+        .unwrap();
+    reopened
+        .revoke_capability(&id("dev.example.terminal"), &capability.id)
+        .unwrap();
+    assert!(!reopened.is_granted(&updated_package, &capability).unwrap());
+    assert!(
+        reopened
+            .is_granted(&updated_package, other_capability)
+            .unwrap()
+    );
+    reopened.set(&updated_package, &capability, true).unwrap();
     loader
         .remove(&mut catalog, &id("dev.example.terminal"))
         .unwrap();

@@ -77,6 +77,19 @@ impl CapabilityApprovals {
         })
     }
 
+    /// package が読み込めない場合でも、特定能力の全バージョンの承認を取り消せる。
+    pub fn revoke_capability(
+        &self,
+        id: &crate::ExtensionPackageId,
+        capability: &crate::ContractId,
+    ) -> io::Result<()> {
+        self.update(|document| {
+            document.approvals.retain(|entry| {
+                entry.extension != id.as_str() || entry.capability != capability.as_str()
+            })
+        })
+    }
+
     /// 再導入時に過去の承認を引き継がない。失敗時は削除処理を始めない。
     pub(crate) fn revoke_extension(&self, id: &crate::ExtensionPackageId) -> io::Result<()> {
         self.update(|document| {

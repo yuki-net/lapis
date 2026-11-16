@@ -61,7 +61,7 @@ pub struct ExtensionSupervisor {
 }
 
 /// 実行ファイルの存在だけで能力を宣言せず、別プロセスと版を照合する。
-pub fn probe_worker(executable: &Path) -> Result<(), String> {
+pub fn probe_worker(executable: &Path) -> Result<Response, String> {
     let mut worker = Worker::spawn(executable)?;
     let result = worker.handshake(None);
     worker.shutdown(None);
@@ -234,7 +234,7 @@ enum WorkerEvent {
 }
 
 impl Worker {
-    fn handshake(&mut self, cancelled: Option<&AtomicBool>) -> Result<(), String> {
+    fn handshake(&mut self, cancelled: Option<&AtomicBool>) -> Result<Response, String> {
         let response = self.request(
             Request::Handshake,
             Duration::from_secs(3),
@@ -243,7 +243,7 @@ impl Worker {
             None,
         )?;
         if response.ok && response.lifecycle_version.as_deref() == Some(LIFECYCLE_VERSION) {
-            Ok(())
+            Ok(response)
         } else {
             Err("拡張ホストのライフサイクル契約が一致しません".to_owned())
         }

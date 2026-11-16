@@ -89,7 +89,8 @@ JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と�
 未承認が既定である。`CapabilityApprovals` は `<state>/extensions/capability-approvals.json`
 に能力の ID・版と検証済み manifest のハッシュを保存し、package が変われば再承認が必要。
 拡張の削除時にも承認を取り消し、同じ package を再導入しても承認を引き継がない。
-この記録は現在、管理 UI と Wasm 実行時の能力付与に未接続である。
+Windows の Wasm 実行時はこの記録を PTY 呼び出しごとに照合する。承認操作を行う
+管理 UI は未接続である。
 
 Host 管理者は `<host state>/extensions/trusted-keys.json` に、リリース鍵と同じ
 `schema` / `keys` 形式で信頼する発行者鍵を明示的に追加できる。package に同梱された鍵は

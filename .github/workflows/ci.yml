@@ -149,6 +149,7 @@ jobs:
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
+          targets: wasm32-wasip2
 
       - name: Cache Cargo artifacts
         uses: actions/cache@v4
@@ -171,6 +172,18 @@ jobs:
 
       - name: Test Host
         run: python scripts/check.py host test
+
+      - name: Test approved Wasm PTY
+        shell: pwsh
+        run: |
+          cargo test --locked -p local-process pty::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p extension-runtime --bin lapis-extension-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --manifest-path examples/pty-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/pty-extension
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host approved_wasm_uses_host_pty_and_shutdown_reclaims_it -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test managed Web publication
         shell: pwsh

@@ -57,6 +57,7 @@ pub struct HostReply {
 /// manifest の package 契約とは別の component ライフサイクル契約。
 pub const LIFECYCLE_CONTRACT: &str = "lapis.extension.lifecycle";
 pub const LIFECYCLE_VERSION: &str = "1.0.0";
+pub const PTY_VERSION: &str = "1.0.0";
 
 #[cfg(feature = "worker")]
 const MAX_COMPONENT_BYTES: usize = 8 * 1024 * 1024;
@@ -85,6 +86,8 @@ pub struct Response {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lifecycle_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pty_version: Option<String>,
 }
 
 #[cfg(feature = "worker")]
@@ -229,6 +232,7 @@ impl ExtensionRuntime {
                 ok: true,
                 error: None,
                 lifecycle_version: Some(LIFECYCLE_VERSION.to_owned()),
+                pty_version: Some(PTY_VERSION.to_owned()),
             };
         }
         let result = match request {
@@ -260,11 +264,13 @@ impl ExtensionRuntime {
                 ok: true,
                 error: None,
                 lifecycle_version: None,
+                pty_version: None,
             },
             Err(error) => Response {
                 ok: false,
                 error: Some(error),
                 lifecycle_version: None,
+                pty_version: None,
             },
         }
     }
@@ -347,6 +353,7 @@ pub fn serve(
                     ok: false,
                     error: Some("invalid request".into()),
                     lifecycle_version: None,
+                    pty_version: None,
                 },
                 false,
             ),
