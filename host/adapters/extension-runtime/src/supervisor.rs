@@ -14,12 +14,23 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{LIFECYCLE_VERSION, Request, Response};
+use crate::{HostCall, HostReply, LIFECYCLE_VERSION, Request, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
-const RESPONSE_LIMIT: u64 = 64 * 1024;
+const RESPONSE_LIMIT: u64 = 512 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(100);
+
+/// Host 側で検証済みの capability を処理する。未対応の操作は拒否する。
+pub trait HostCallHandler: Send + Sync {
+    fn call(
+        &self,
+        extension: &str,
+        method: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String>;
+    fn release(&self, _extension: Option<&str>) {}
+}
 
 /// 署名と互換性を呼び出し側で確認した component の起動時スナップショット。
 #[derive(Clone, Debug)]
@@ -53,13 +64,21 @@ pub struct ExtensionSupervisor {
 pub fn probe_worker(executable: &Path) -> Result<(), String> {
     let mut worker = Worker::spawn(executable)?;
     let result = worker.handshake(None);
-    worker.shutdown();
+    worker.shutdown(None);
     result
 }
 
 impl ExtensionSupervisor {
     /// UI スレッドを待たせないよう、起動・再起動と IPC は監督スレッドで行う。
     pub fn start(executable: PathBuf, components: Vec<ComponentImage>) -> Self {
+        Self::start_with_handler(executable, components, None)
+    }
+
+    pub fn start_with_handler(
+        executable: PathBuf,
+        components: Vec<ComponentImage>,
+        handler: Option<Arc<dyn HostCallHandler>>,
+    ) -> Self {
         let (stop, receiver) = mpsc::channel();
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
@@ -72,6 +91,7 @@ impl ExtensionSupervisor {
                 receiver,
                 &worker_cancelled,
                 &state,
+                handler.as_deref(),
             )
         });
         Self {
@@ -115,6 +135,7 @@ fn supervise(
     stop: mpsc::Receiver<()>,
     cancelled: &AtomicBool,
     status: &Mutex<SupervisorStatus>,
+    handler: Option<&dyn HostCallHandler>,
 ) {
     let mut retries = 0;
     loop {
@@ -129,7 +150,7 @@ fn supervise(
             let mut failed = BTreeMap::new();
             for component in components {
                 if stop.try_recv().is_ok() {
-                    worker.shutdown();
+                    worker.shutdown(handler);
                     return Ok(());
                 }
                 let response = worker.request(
@@ -139,10 +160,16 @@ fn supervise(
                     },
                     REQUEST_TIMEOUT,
                     Some(cancelled),
+                    handler,
+                    Some(&component.id),
                 )?;
                 if response.ok {
                     active.push(component.id.clone());
+                    worker.active.push(component.id.clone());
                 } else {
+                    if let Some(handler) = handler {
+                        handler.release(Some(&component.id));
+                    }
                     failed.insert(
                         component.id.clone(),
                         response
@@ -162,7 +189,7 @@ fn supervise(
             loop {
                 match stop.recv_timeout(POLL) {
                     Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        worker.shutdown();
+                        worker.shutdown(handler);
                         return Ok(());
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -172,6 +199,9 @@ fn supervise(
                 }
             }
         })();
+        if let Some(handler) = handler {
+            handler.release(None);
+        }
         if cancelled.load(Ordering::Acquire) {
             return;
         }
@@ -192,12 +222,26 @@ fn supervise(
 struct Worker {
     child: Child,
     requests: mpsc::Sender<Vec<u8>>,
-    responses: mpsc::Receiver<Result<Response, String>>,
+    responses: mpsc::Receiver<Result<WorkerEvent, String>>,
+    active: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum WorkerEvent {
+    Call(HostCall),
+    Response(Response),
 }
 
 impl Worker {
     fn handshake(&mut self, cancelled: Option<&AtomicBool>) -> Result<(), String> {
-        let response = self.request(Request::Handshake, Duration::from_secs(3), cancelled)?;
+        let response = self.request(
+            Request::Handshake,
+            Duration::from_secs(3),
+            cancelled,
+            None,
+            None,
+        )?;
         if response.ok && response.lifecycle_version.as_deref() == Some(LIFECYCLE_VERSION) {
             Ok(())
         } else {
@@ -245,7 +289,7 @@ impl Worker {
                 {
                     Ok(0) => break,
                     Ok(size) if size as u64 <= RESPONSE_LIMIT => {
-                        serde_json::from_slice::<Response>(&line)
+                        serde_json::from_slice::<WorkerEvent>(&line)
                             .map_err(|_| "拡張ホストの応答が不正です".to_owned())
                     }
                     Ok(_) => Err("拡張ホストの応答が大きすぎます".to_owned()),
@@ -261,6 +305,7 @@ impl Worker {
             child,
             requests,
             responses,
+            active: Vec::new(),
         })
     }
 
@@ -269,6 +314,8 @@ impl Worker {
         request: Request,
         timeout: Duration,
         cancelled: Option<&AtomicBool>,
+        handler: Option<&dyn HostCallHandler>,
+        invoking: Option<&str>,
     ) -> Result<Response, String> {
         let mut bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
@@ -285,7 +332,29 @@ impl Worker {
                 return Err("拡張ホストが応答しません".to_owned());
             }
             match self.responses.recv_timeout(remaining.min(POLL)) {
-                Ok(response) => return response,
+                Ok(Ok(WorkerEvent::Response(response))) => return Ok(response),
+                Ok(Ok(WorkerEvent::Call(call))) => {
+                    let result = if call.kind != "call" || invoking != Some(call.extension.as_str())
+                    {
+                        Err("能力呼び出しの所有者が一致しません".into())
+                    } else if let Some(handler) = handler {
+                        handler.call(&call.extension, &call.method, call.payload)
+                    } else {
+                        Err("Host capability unavailable".into())
+                    };
+                    let reply = HostReply {
+                        kind: "reply".into(),
+                        id: call.id,
+                        result,
+                    };
+                    let mut bytes =
+                        serde_json::to_vec(&reply).map_err(|error| error.to_string())?;
+                    bytes.push(b'\n');
+                    self.requests
+                        .send(bytes)
+                        .map_err(|_| "能力応答を送信できません".to_owned())?;
+                }
+                Ok(Err(error)) => return Err(error),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     return Err("拡張ホストが切断されました".to_owned());
@@ -294,8 +363,23 @@ impl Worker {
         }
     }
 
-    fn shutdown(&mut self) {
-        let _ = self.request(Request::Shutdown, Duration::from_millis(500), None);
+    fn shutdown(&mut self, handler: Option<&dyn HostCallHandler>) {
+        for id in std::mem::take(&mut self.active) {
+            let _ = self.request(
+                Request::Deactivate { id: id.clone() },
+                Duration::from_millis(500),
+                None,
+                handler,
+                Some(&id),
+            );
+        }
+        let _ = self.request(
+            Request::Shutdown,
+            Duration::from_millis(500),
+            None,
+            None,
+            None,
+        );
         self.terminate();
     }
 

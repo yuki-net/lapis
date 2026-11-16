@@ -105,6 +105,7 @@ mod tests {
                     schema: 1,
                     default_locale: "en-US".to_owned(),
                     settings: Vec::new(),
+                    themes: Vec::new(),
                     translations: vec![extension_ui_contract::ContributedTranslation {
                         target: "dev.example.terminal".to_owned(),
                         locale: "ja-JP".to_owned(),

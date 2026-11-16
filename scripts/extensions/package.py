@@ -27,6 +27,8 @@ def package(source: Path, output: Path, *, seed: bytes | None, key_id: str | Non
         raise ValueError("extension.json の項目が不正です")
     if not isinstance(metadata["id"], str) or not isinstance(metadata["version"], str):
         raise ValueError("拡張 ID と version は文字列が必要です")
+    if metadata["id"] == "lapis.core":
+        raise ValueError("lapis.core は本体の翻訳先として予約されています")
     if not isinstance(metadata["requires"], list) or not metadata["requires"]:
         raise ValueError("requires は空でない配列が必要です")
     if (seed is None) != (key_id is None) or (key_id is not None and not key_id):
@@ -106,9 +108,16 @@ def package(source: Path, output: Path, *, seed: bytes | None, key_id: str | Non
     try:
         with os.fdopen(fd, "w+b") as file:
             with zipfile.ZipFile(file, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-                archive.writestr("manifest.json", manifest_bytes)
+                def write(name: str, data: bytes) -> None:
+                    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                    info.create_system = 3
+                    info.external_attr = 0o100644 << 16
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    archive.writestr(info, data)
+
+                write("manifest.json", manifest_bytes)
                 for path, data in sorted(entries.items()):
-                    archive.writestr(path, data)
+                    write(path, data)
         if os.path.getsize(name) > 64 * 1024 * 1024:
             raise ValueError("圧縮後の package が大きすぎます")
         os.replace(name, output)

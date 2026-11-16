@@ -25,6 +25,10 @@ Ed25519 seed を file から読む。秘密鍵を repository や package に含�
 同梱拡張は `extensions/<name>/extension.json` の存在で自動発見し、repository check で
 package 作成を検証する。まだ package 化していない既存のディレクトリは対象にしない。
 
+リリース時は `python -m scripts.extensions.bundle extensions <同梱先>` で発見した拡張を
+リリース署名鍵で署名する。署名鍵はリリース処理と同じ `LAPIS_RELEASE_SIGNING_KEY` の
+ファイルから読み、配布物には含めない。Host は通常の外部拡張と同じ検証を通して初回導入する。
+
 `extension.json` に `"capabilities": [{"id": "process.pty", "version": "1.0.0"}]`
 を追加すると schema 2 の署名対象として記録する。能力は申請だけでは使えず、Host の
 承認が必要。現在、承認操作と実行時の能力付与は未接続。

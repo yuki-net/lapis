@@ -5,6 +5,10 @@
 use std::{
     collections::BTreeMap,
     io::{self, BufRead, Write},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
 #[cfg(feature = "worker")]
@@ -19,6 +23,36 @@ use wasmtime::{
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 pub mod supervisor;
+
+#[cfg(feature = "worker")]
+#[allow(dead_code)]
+mod pty_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../../contracts/extension-api/wit/pty-v1",
+        world: "pty-host",
+    });
+}
+#[cfg(feature = "worker")]
+mod pty_worker;
+
+/// 双方向の能力呼び出し。操作名と payload は能力契約側が定める。
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostCall {
+    pub kind: String,
+    pub id: u64,
+    pub extension: String,
+    pub method: String,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostReply {
+    pub kind: String,
+    pub id: u64,
+    pub result: Result<serde_json::Value, String>,
+}
 
 /// manifest の package 契約とは別の component ライフサイクル契約。
 pub const LIFECYCLE_CONTRACT: &str = "lapis.extension.lifecycle";
@@ -58,7 +92,13 @@ struct WorkerState {
     limits: StoreLimits,
     wasi: WasiCtx,
     table: ResourceTable,
+    extension: String,
+    broker: Option<Broker>,
 }
+
+#[cfg(feature = "worker")]
+type Broker =
+    Arc<dyn Fn(&str, &str, serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
 
 #[cfg(feature = "worker")]
 impl WasiView for WorkerState {
@@ -81,6 +121,7 @@ struct Loaded {
 pub struct ExtensionRuntime {
     engine: Engine,
     loaded: BTreeMap<String, Loaded>,
+    broker: Option<Broker>,
 }
 
 #[cfg(feature = "worker")]
@@ -92,6 +133,7 @@ impl ExtensionRuntime {
         Ok(Self {
             engine,
             loaded: BTreeMap::new(),
+            broker: None,
         })
     }
 
@@ -125,6 +167,8 @@ impl ExtensionRuntime {
             limits,
             wasi: WasiCtxBuilder::new().build(),
             table: ResourceTable::new(),
+            extension: id.to_owned(),
+            broker: self.broker.clone(),
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| &mut state.limits);
@@ -133,6 +177,11 @@ impl ExtensionRuntime {
             .map_err(|error| error.to_string())?;
         let mut linker = Linker::<WorkerState>::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_sync(&mut linker).map_err(|error| error.to_string())?;
+        pty_bindings::lapis::pty::sessions::add_to_linker::<
+            WorkerState,
+            wasmtime::component::HasSelf<WorkerState>,
+        >(&mut linker, |state| state)
+        .map_err(|error| error.to_string())?;
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|error| error.to_string())?;
@@ -223,13 +272,62 @@ impl ExtensionRuntime {
 
 /// 1 行 1 request / response。長すぎる入力は処理せず接続を閉じる。
 #[cfg(feature = "worker")]
-pub fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
-    let mut input = input;
+pub fn serve(
+    input: impl BufRead + Send + 'static,
+    output: impl Write + Send + 'static,
+) -> io::Result<()> {
+    let input = Arc::new(Mutex::new(input));
+    let output = Arc::new(Mutex::new(output));
+    let next_id = AtomicU64::new(1);
+    let broker_input = Arc::clone(&input);
+    let broker_output = Arc::clone(&output);
+    let broker: Broker = Arc::new(move |extension, method, payload| {
+        let id = next_id.fetch_add(1, Ordering::Relaxed);
+        let call = HostCall {
+            kind: "call".into(),
+            id,
+            extension: extension.into(),
+            method: method.into(),
+            payload,
+        };
+        {
+            let mut output = broker_output
+                .lock()
+                .map_err(|_| "能力応答を送信できません".to_owned())?;
+            serde_json::to_writer(&mut *output, &call).map_err(|e| e.to_string())?;
+            output
+                .write_all(b"\n")
+                .and_then(|_| output.flush())
+                .map_err(|e| e.to_string())?;
+        }
+        let mut line = Vec::new();
+        let mut input = broker_input
+            .lock()
+            .map_err(|_| "能力応答を取得できません".to_owned())?;
+        let read = std::io::Read::take(&mut *input, MAX_LINE_BYTES + 1)
+            .read_until(b'\n', &mut line)
+            .map_err(|e| e.to_string())?;
+        if read == 0 || read as u64 > MAX_LINE_BYTES {
+            return Err("能力応答が不正です".into());
+        }
+        let reply: HostReply =
+            serde_json::from_slice(&line).map_err(|_| "能力応答が不正です".to_owned())?;
+        if reply.kind != "reply" || reply.id != id {
+            return Err("能力応答が一致しません".into());
+        }
+        reply.result
+    });
     let mut runtime = ExtensionRuntime::new().map_err(io::Error::other)?;
+    runtime.broker = Some(broker);
     loop {
         let mut line = Vec::new();
-        let read =
-            std::io::Read::take(&mut input, MAX_LINE_BYTES + 1).read_until(b'\n', &mut line)?;
+        let read = std::io::Read::take(
+            &mut *input
+                .lock()
+                .map_err(|_| io::Error::other("入力 lock 失敗"))?,
+            MAX_LINE_BYTES + 1,
+        )
+        .read_until(b'\n', &mut line)?;
         if read == 0 {
             break;
         }
@@ -253,7 +351,10 @@ pub fn serve(input: impl BufRead, mut output: impl Write) -> io::Result<()> {
                 false,
             ),
         };
-        serde_json::to_writer(&mut output, &response)?;
+        let mut output = output
+            .lock()
+            .map_err(|_| io::Error::other("出力 lock 失敗"))?;
+        serde_json::to_writer(&mut *output, &response)?;
         output.write_all(b"\n")?;
         output.flush()?;
         if shutdown {

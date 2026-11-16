@@ -19,6 +19,16 @@ pub struct StaticContributions {
     pub settings: Vec<ContributedSetting>,
     #[serde(default)]
     pub translations: Vec<ContributedTranslation>,
+    /// 提供元拡張の名前空間に属する、クライアント向けテーマ定義。
+    #[serde(default)]
+    pub themes: Vec<ContributedTheme>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContributedTheme {
+    pub id: String,
+    pub definition: serde_json::Value,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,7 +65,7 @@ fn valid_identifier(value: &str) -> bool {
 impl StaticContributions {
     /// 認証済みの提供元に設定を束縛し、表示に必要な既定文言も検証する。
     pub fn validate(&self, owner: &str) -> Result<(), String> {
-        if self.schema != 1 || !valid_identifier(&self.default_locale) {
+        if owner == "lapis.core" || self.schema != 1 || !valid_identifier(&self.default_locale) {
             return Err("未対応の宣言 schema または不正な既定言語".into());
         }
         let mut catalog = ExtensionSettingsCatalog::default();
@@ -65,10 +75,32 @@ impl StaticContributions {
                 self.settings.iter().map(|s| s.definition.clone()).collect(),
             )
             .map_err(|error| error.to_string())?;
+        let mut theme_ids = BTreeSet::new();
+        for theme in &self.themes {
+            if !valid_identifier(&theme.id)
+                || !theme.id.starts_with(&format!("{owner}."))
+                || theme.id.len() <= owner.len() + 1
+                || !theme_ids.insert(&theme.id)
+                || theme
+                    .definition
+                    .get("id")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(theme.id.as_str())
+                || theme
+                    .definition
+                    .get("version")
+                    .and_then(serde_json::Value::as_u64)
+                    != Some(1)
+            {
+                return Err("テーマ宣言が不正または重複しています".into());
+            }
+        }
         let mut languages = BTreeSet::new();
         for translation in &self.translations {
             if !valid_identifier(&translation.target)
                 || !valid_identifier(&translation.locale)
+                || (translation.target == "lapis.core"
+                    && translation.locale.eq_ignore_ascii_case("en-US"))
                 || !languages.insert((&translation.target, &translation.locale))
                 || translation
                     .messages
@@ -122,5 +154,37 @@ mod tests {
             serde_json::from_str::<StaticContributions>(r#"{"schema":1,"owner":"forged"}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn core_english_is_reserved_but_other_core_translations_are_allowed() {
+        let english = r#"{"schema":1,"translations":[{"target":"lapis.core","locale":"en-US","messages":{"title":"Title"}}]}"#;
+        let mut declaration: StaticContributions = serde_json::from_str(english).unwrap();
+        assert!(declaration.validate("dev.example.language").is_err());
+        declaration.translations[0].locale = "ja-JP".to_owned();
+        assert!(declaration.validate("dev.example.language").is_ok());
+        assert!(declaration.validate("lapis.core").is_err());
+    }
+
+    #[test]
+    fn theme_ids_belong_to_the_signed_extension() {
+        let source = r#"{"schema":1,"themes":[{"id":"dev.example.night","definition":{"version":1,"id":"dev.example.night"}}]}"#;
+        let mut declaration: StaticContributions = serde_json::from_str(source).unwrap();
+        assert!(declaration.validate("dev.example").is_ok());
+        assert!(declaration.validate("dev.other").is_err());
+        declaration.themes[0].definition["id"] = "lapis.dark".into();
+        assert!(declaration.validate("dev.example").is_err());
+    }
+
+    #[test]
+    fn bundled_japanese_package_has_valid_core_translations() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../extensions/language-ja/contributions.json");
+        let declaration: StaticContributions =
+            serde_json::from_slice(&std::fs::read(source).unwrap()).unwrap();
+        declaration.validate("lapis.language.ja").unwrap();
+        assert!(declaration.translations.iter().any(|translation| {
+            translation.target == "lapis.core" && translation.locale == "ja-JP"
+        }));
     }
 }

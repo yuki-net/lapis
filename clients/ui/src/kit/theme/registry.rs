@@ -11,6 +11,7 @@ struct ThemeRegistry {
     fallback: ThemeId,
     active: ThemeId,
     definitions: BTreeMap<ThemeId, ThemeDefinition>,
+    sources: BTreeMap<u64, Vec<ThemeId>>,
 }
 
 impl ThemeRegistry {
@@ -44,6 +45,7 @@ impl ThemeRegistry {
             fallback: id.clone(),
             active: id.clone(),
             definitions,
+            sources: BTreeMap::new(),
         }
     }
 
@@ -53,6 +55,63 @@ impl ThemeRegistry {
             .or_else(|| self.definitions.get(&self.fallback))
             .expect("fallback theme is always registered")
     }
+}
+
+/// 接続単位のテーマを一括交換する。別の接続や組み込みと ID が衝突した場合は変更しない。
+pub(crate) fn replace_source(
+    source: u64,
+    definitions: Vec<ThemeDefinition>,
+    selected: &ThemeId,
+    cx: &mut App,
+) -> Result<(), ThemeId> {
+    let registry = &mut cx.global_mut::<ThemeState>().registry;
+    let old = registry.sources.get(&source).cloned().unwrap_or_default();
+    let mut seen = std::collections::BTreeSet::new();
+    for definition in &definitions {
+        let shared = registry
+            .sources
+            .iter()
+            .any(|(owner, ids)| *owner != source && ids.contains(&definition.id));
+        let builtin = registry.definitions.contains_key(&definition.id)
+            && !old.contains(&definition.id)
+            && !shared;
+        if !seen.insert(definition.id.clone())
+            || builtin
+            || (shared && registry.definitions.get(&definition.id) != Some(definition))
+        {
+            return Err(definition.id.clone());
+        }
+    }
+    for id in old {
+        if !registry
+            .sources
+            .iter()
+            .any(|(owner, ids)| *owner != source && ids.contains(&id))
+        {
+            registry.definitions.remove(&id);
+        }
+    }
+    let ids: Vec<ThemeId> = definitions
+        .iter()
+        .map(|definition| definition.id.clone())
+        .collect();
+    for definition in definitions {
+        registry
+            .definitions
+            .insert(definition.id.clone(), definition);
+    }
+    if ids.is_empty() {
+        registry.sources.remove(&source);
+    } else {
+        registry.sources.insert(source, ids);
+    }
+    if registry.definitions.contains_key(selected) {
+        registry.active = selected.clone();
+    } else if !registry.definitions.contains_key(&registry.active) {
+        registry.active = registry.fallback.clone();
+    }
+    cx.refresh_windows();
+    Ok(())
 }
 
 pub(super) struct ThemeState {
@@ -163,6 +222,27 @@ mod tests {
                     .iter()
                     .any(|(id, name)| { id.as_str() == "lapis.white" && name == "White" })
             );
+        });
+    }
+
+    #[gpui::test]
+    fn connection_themes_are_atomic_and_removed_with_their_source(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| {
+            init(&ThemeId::new("lapis.dark"), None, cx);
+            let id = ThemeId::new("dev.example.night");
+            let definition = ThemeDefinition::new(id.clone(), active_colors(cx));
+            replace_source(1, vec![definition.clone()], &id, cx).unwrap();
+            assert_eq!(active_id(cx), id);
+            replace_source(2, vec![definition.clone()], &id, cx).unwrap();
+            let mut conflicting = definition;
+            conflicting.name = "different".into();
+            assert!(replace_source(3, vec![conflicting], &id, cx).is_err());
+            assert_eq!(active_id(cx), id);
+            replace_source(1, Vec::new(), &id, cx).unwrap();
+            assert_eq!(active_id(cx), id);
+            replace_source(2, Vec::new(), &id, cx).unwrap();
+            assert_eq!(active_id(cx).as_str(), "lapis.dark");
+            assert!(name(&id, cx).is_none());
         });
     }
 }

@@ -1,0 +1,7 @@
+package lapis:pty-example@1.0.0;
+
+world extension {
+    import lapis:pty/sessions@1.0.0;
+    export activate: func();
+    export deactivate: func();
+}

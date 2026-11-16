@@ -164,8 +164,8 @@ impl RequestBody {
             | Self::HostDeviceRevoke(_)
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
-            | Self::HostWebStop(_)
-            | Self::HostExtensionSetEnabled(_) => capability::HOST_MANAGE,
+            | Self::HostWebStop(_) => capability::HOST_MANAGE,
+            Self::HostExtensionSetEnabled(_) => capability::EXTENSIONS_MANAGE,
             Self::HostExtensions(_) => capability::EXTENSIONS_READ,
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,

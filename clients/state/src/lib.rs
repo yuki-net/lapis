@@ -36,6 +36,8 @@ use workspace::{
 
 mod connection_display;
 mod extension_contributions;
+#[cfg(any(target_arch = "wasm32", test))]
+mod extension_management;
 mod extensions;
 mod process;
 mod settings_store;

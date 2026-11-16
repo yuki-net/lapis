@@ -227,11 +227,15 @@ impl SettingsFeature {
         };
         self.extension_management_busy = true;
         let generation = self.extension_generation;
+        let issued_workspace = self.workspace_id.clone();
         if let Err(error) = worker.submit(
             cx,
             move |manager| manager(workspace, id, enabled),
             move |this, result, cx| {
-                if this.extension_generation != generation {
+                if this.extension_generation != generation || this.workspace_id != issued_workspace
+                {
+                    this.extension_management_busy = false;
+                    cx.notify();
                     return;
                 }
                 this.extension_management_busy = false;
@@ -247,6 +251,35 @@ impl SettingsFeature {
         cx.notify();
     }
 
+    #[cfg(target_family = "wasm")]
+    fn set_extension_enabled(&mut self, id: String, enabled: bool, cx: &mut Context<Self>) {
+        if self.extension_management_busy {
+            return;
+        }
+        if !desktop_client::web_host::can_manage_extensions() {
+            self.message = self.t("settings.extensions.read-only");
+            cx.notify();
+            return;
+        }
+        self.extension_management_busy = true;
+        let generation = self.extension_generation;
+        cx.spawn(async move |this, cx| {
+            let result = desktop_client::web_host::set_extension_enabled(id, enabled).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.extension_generation != generation {
+                    return;
+                }
+                this.extension_management_busy = false;
+                this.message = result
+                    .err()
+                    .unwrap_or_else(|| this.t("settings.extensions.saved"));
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     /// 接続単位の宣言を設定画面に反映する。古い接続の通知は無視する。
     pub(crate) fn set_extension_contributions(
         &mut self,
@@ -259,6 +292,7 @@ impl SettingsFeature {
         self.extension_management_busy = false;
         self.extension_worker = session.clone().map(ClientWorker::new);
         self.extension = session;
+        self.refresh_extension_locales(cx);
         if let Some(session) = &self.extension {
             let receiver = session.subscribe();
             cx.spawn(async move |this, cx| {
@@ -275,7 +309,7 @@ impl SettingsFeature {
                                 return false;
                             }
                             if changed {
-                                cx.notify();
+                                this.refresh_extension_locales(cx);
                             }
                             true
                         })
@@ -287,6 +321,25 @@ impl SettingsFeature {
             })
             .detach();
         }
+        cx.notify();
+    }
+
+    fn refresh_extension_locales(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self
+            .extension
+            .as_ref()
+            .and_then(|session| session.snapshot());
+        let packs = snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.core_locales())
+            .unwrap_or_default();
+        if let Err(error) = self.locale.replace_external(packs) {
+            tracing::warn!("拡張の言語を反映できません: {error:?}");
+        }
+        self.locale.set_active(&self.values.locale());
+        let placeholder = self.t("settings.search.placeholder");
+        self.search
+            .update(cx, |search, cx| search.set_placeholder(placeholder, cx));
         cx.notify();
     }
 
@@ -1605,10 +1658,33 @@ impl SettingsFeature {
         _allowed: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
+        if !desktop_client::web_host::can_manage_extensions() || !_allowed {
+            return div()
+                .text_size(px(11.0))
+                .text_color(theme::colors(cx).text_tertiary)
+                .child(self.t("settings.extensions.read-only"))
+                .into_any_element();
+        }
+        let id = _id;
+        let enabled = _enabled;
         div()
-            .text_size(px(11.0))
-            .text_color(theme::colors(cx).text_tertiary)
-            .child(self.t("settings.extensions.read-only"))
+            .id(gpui::SharedString::from(format!("extension-toggle-{id}")))
+            .px_3()
+            .py_2()
+            .rounded(px(4.0))
+            .bg(theme::colors(cx).background_secondary)
+            .text_size(px(12.0))
+            .text_color(theme::colors(cx).text_primary)
+            .child(self.t(if enabled {
+                "settings.extensions.disable"
+            } else {
+                "settings.extensions.enable"
+            }))
+            .when(!self.extension_management_busy, |button| {
+                button.on_click(cx.listener(move |this, _, _, cx| {
+                    this.set_extension_enabled(id.clone(), !enabled, cx)
+                }))
+            })
             .into_any_element()
     }
 
@@ -2136,10 +2212,12 @@ impl SettingsFeature {
                 .into_iter()
                 .map(|(id, name)| (SettingValue::text(id.as_str()), name))
                 .collect(),
-            OptionSource::Locales => vec![
-                (SettingValue::text("ja-JP"), "日本語 (Japanese)".to_owned()),
-                (SettingValue::text("en-US"), "English (英語)".to_owned()),
-            ],
+            OptionSource::Locales => self
+                .locale
+                .available()
+                .into_iter()
+                .map(|(id, name)| (SettingValue::text(id.as_str()), name))
+                .collect(),
             // 候補が実行時の状態に依存するキーは、機能が登録した供給元から取る。
             // 設定 UI は供給元の型を知らない。
             OptionSource::Provided => {
@@ -2259,6 +2337,97 @@ mod tests {
     use std::sync::Arc;
 
     struct MemorySettings;
+
+    #[gpui::test]
+    fn extension_locale_is_selectable_and_falls_back_when_disconnected(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (feature, session) = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            let session = settings.extension_contributions();
+            let generation = session.begin_reload();
+            session.apply(generation, serde_json::from_value(serde_json::json!({"extensions":[], "contributions":[{
+                "extension_id":"dev.example.french", "declaration":{"schema":1,"translations":[{"target":"lapis.core","locale":"fr-FR","messages":{"settings.search.placeholder":"Rechercher"}}]}
+            }]})).unwrap()).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let feature = cx.new(SettingsFeature::new);
+            feature.update(cx, |feature, cx| feature.set_extension_contributions(Some(session.clone()), cx));
+            (feature, session)
+        });
+        cx.update(|cx| {
+            feature.update(cx, |feature, cx| {
+                let definition = settings::catalog()
+                    .settings_of("language.locale")
+                    .find(|definition| definition.key == settings::UI_LOCALE)
+                    .unwrap();
+                assert!(
+                    feature
+                        .options(definition, cx)
+                        .iter()
+                        .any(|(value, _)| value.as_text() == Some("fr-FR"))
+                );
+                feature.choose(settings::UI_LOCALE, SettingValue::text("fr-FR"), cx);
+            });
+        });
+        wait_for_settings(cx);
+        cx.update(|cx| {
+            assert_eq!(
+                feature.read(cx).t("settings.search.placeholder"),
+                "Rechercher"
+            )
+        });
+        session.disconnect();
+        cx.update(|cx| feature.update(cx, |feature, cx| feature.refresh_extension_locales(cx)));
+        cx.update(|cx| {
+            assert_eq!(
+                feature.read(cx).t("settings.search.placeholder"),
+                "Search settings"
+            )
+        });
+    }
+
+    #[gpui::test]
+    fn failed_management_keeps_current_and_next_state(cx: &mut gpui::TestAppContext) {
+        let (feature, session) = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            let session = settings.extension_contributions();
+            let generation = session.begin_reload();
+            session.apply(generation, serde_json::from_value(serde_json::json!({"extensions":[{
+                "id":"dev.example.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true
+            }], "contributions":[]})).unwrap()).unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let feature = cx.new(SettingsFeature::new);
+            feature.update(cx, |feature, cx| {
+                feature.set_extension_contributions(Some(session.clone()), cx);
+                feature.set_extension_manager(Some(Arc::new(|_, _, _| Err("forbidden".into()))));
+                feature.set_workspace(None, Some("workspace-1".into()), cx);
+                assert!(feature.visible_pages().contains(&"extensions.settings"));
+                feature.set_extension_enabled("dev.example.terminal".into(), false, cx);
+            });
+            (feature, session)
+        });
+        let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(3);
+        while cx.update(|cx| feature.read(cx).extension_management_busy) {
+            cx.run_until_parked();
+            assert!(crate::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        cx.update(|cx| assert_eq!(feature.read(cx).message, "forbidden"));
+        let snapshot = session.snapshot().unwrap();
+        assert_eq!(snapshot.extensions()[0].active, Some(true));
+        assert!(snapshot.extensions()[0].enabled);
+        session.disconnect();
+        cx.update(|cx| {
+            assert!(
+                !feature
+                    .read(cx)
+                    .visible_pages()
+                    .contains(&"extensions.settings")
+            )
+        });
+    }
 
     #[gpui::test]
     fn contributed_settings_are_searchable_and_saved(cx: &mut gpui::TestAppContext) {

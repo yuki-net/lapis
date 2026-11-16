@@ -126,6 +126,8 @@ jobs:
           cargo build --locked --manifest-path examples/external-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/external-extension
           cargo build --locked -p extension-runtime --bin lapis-extension-host
           python3 -m scripts.extensions.smoke
+          python3 -m scripts.extensions.smoke_pty
+          cargo test --locked -p extensions-entry --test package independent_component_is_packaged_installed_and_activated -- --ignored
 
       - name: Lint Rust Core
         run: python3 scripts/check.py rust_core lint

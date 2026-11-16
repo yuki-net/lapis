@@ -8,6 +8,7 @@ import zipfile
 
 from scripts.extensions.package import package
 from scripts.extensions.check import check
+from scripts.extensions.bundle import bundle
 from scripts.release import ed25519
 from scripts.release.manifest import canonical_bytes
 
@@ -18,6 +19,16 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(
             (root / "examples/external-extension/wit/extension.wit").read_bytes(),
             (root / "contracts/extension-api/wit/v1/extension.wit").read_bytes(),
+        )
+
+    def test_japanese_package_matches_current_bundled_messages(self):
+        root = Path(__file__).resolve().parents[2]
+        package = json.loads((root / "extensions/language-ja/contributions.json").read_text(encoding="utf-8"))
+        messages = json.loads((root / "locales/ja-JP/messages/common.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["translations"][0]["messages"], messages)
+        self.assertEqual(
+            (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
+            (root / "contracts/extension-api/wit/pty-v1/pty.wit").read_bytes(),
         )
 
     def setUp(self):
@@ -116,6 +127,27 @@ class PackageTests(unittest.TestCase):
         (second / "extension.wasm").write_bytes(b"second")
         with self.assertRaises(ValueError):
             check(extensions)
+
+    def test_release_bundle_contains_signed_discovered_extensions(self):
+        extensions = self.root / "extensions"
+        extensions.mkdir()
+        source = extensions / "language"
+        source.mkdir()
+        (source / "extension.json").write_text(json.dumps(self.metadata), encoding="utf-8")
+        (source / "extension.wasm").write_bytes(b"component")
+        output = self.root / "bundled"
+        seed = bytes(range(32))
+        bundle(extensions, output, key_id="publisher", seed=seed)
+        with zipfile.ZipFile(output / "0000.lapis") as archive:
+            manifest = json.loads(archive.read("manifest.json"))
+            signature = base64.b64decode(manifest.pop("signature"))
+            self.assertTrue(ed25519.verify(ed25519.public_key(seed), canonical_bytes(manifest), signature))
+            self.assertEqual(manifest["id"], "dev.example.hello")
+        second = self.root / "bundled-second"
+        bundle(extensions, second, key_id="publisher", seed=seed)
+        self.assertEqual((output / "0000.lapis").read_bytes(), (second / "0000.lapis").read_bytes())
+        with self.assertRaises(ValueError):
+            bundle(extensions, output, key_id="publisher", seed=seed)
 
 
 if __name__ == "__main__":

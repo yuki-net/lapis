@@ -455,6 +455,18 @@ impl Shell {
             .update(cx, |center, cx| center.set_locale(&locale, cx));
         cx.notify();
     }
+    pub(crate) fn set_locale_packs(
+        &mut self,
+        packs: &[localization::LocalePack],
+        locale: &localization::LocaleId,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = self.locale.replace_external(packs);
+        let _ = self.locale.set_active(locale);
+        self.notification_center
+            .update(cx, |center, cx| center.set_locale_packs(packs, locale, cx));
+        cx.notify();
+    }
     pub(crate) fn request_document_close(
         &mut self,
         id: editor_core::DocumentId,

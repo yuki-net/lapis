@@ -46,3 +46,8 @@ interface sessions {
     /// 終了し、detach 済みの資源を取り除く。
     forget: func(id: string) -> result<_, string>;
 }
+
+/// ライフサイクルとは独立した Host 能力の契約。
+world pty-host {
+    import sessions;
+}

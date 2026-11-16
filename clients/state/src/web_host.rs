@@ -99,6 +99,7 @@ struct BackendState {
     extensions: HostExtensionsListResponse,
     extension_session: Option<crate::ExtensionContributionSession>,
     extensions_connected: bool,
+    can_manage_extensions: bool,
 }
 
 impl Drop for BackendState {
@@ -188,6 +189,10 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         .capabilities
         .iter()
         .any(|capability| capability.as_str() == client_api::capability::EXTENSIONS_READ);
+    let can_manage_extensions = connected
+        .capabilities
+        .iter()
+        .any(|capability| capability.as_str() == client_api::capability::EXTENSIONS_MANAGE);
     let extensions = if can_read_extensions {
         match request(
             &connection,
@@ -306,6 +311,7 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
             extensions,
             extension_session: None,
             extensions_connected: true,
+            can_manage_extensions,
         })
     });
     if can_read_extensions {
@@ -861,6 +867,43 @@ pub fn extension_contributions() -> Option<crate::ExtensionContributionSession> 
             .as_ref()
             .and_then(|state| state.extension_session.clone())
     })
+}
+
+/// 管理権限は現在接続中の credential に付与されたものだけを使う。
+pub fn can_manage_extensions() -> bool {
+    BACKEND.with(|backend| {
+        backend
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.extensions_connected && state.can_manage_extensions)
+    })
+}
+
+pub async fn set_extension_enabled(id: String, enabled: bool) -> Result<(), String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected || !state.can_manage_extensions {
+                return Err("拡張の管理権限がありません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionSetEnabled(client_api::HostExtensionSetEnabledRequest {
+            id: id.clone(),
+            enabled,
+        }),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_response(response, current, &id, enabled)
 }
 
 /// 古い接続の終了通知で新しい接続を解除しない。

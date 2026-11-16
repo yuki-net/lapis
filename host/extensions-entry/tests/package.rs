@@ -36,6 +36,48 @@ fn loader() -> ExtensionLoader {
 }
 
 #[test]
+fn bundled_first_install_never_overwrites_disabled_or_removed_catalog_entries() {
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path().join("extensions");
+    let mut first = ExtensionCatalog::open(root.clone()).unwrap();
+    let mut stale = ExtensionCatalog::open(root).unwrap();
+    let manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    let package = write_package(
+        workspace.path(),
+        "bundled.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    let loader = loader();
+    assert!(
+        loader
+            .install_if_missing(&mut first, &package, true)
+            .unwrap()
+            .is_some()
+    );
+    let id = id("dev.example.terminal");
+    loader.set_enabled(&mut first, &id, false).unwrap();
+    assert!(
+        loader
+            .install_if_missing(&mut stale, &package, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!stale.get(&id).unwrap().state.is_enabled());
+    loader.remove(&mut first, &id).unwrap();
+    assert!(
+        loader
+            .install_if_missing(&mut stale, &package, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!stale.get(&id).unwrap().state.is_installed());
+}
+
+#[test]
 fn explicit_publisher_key_can_authorize_an_external_package() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
@@ -163,6 +205,107 @@ fn independent_source_directory_can_be_packaged_and_installed() {
         .load_installed(&mut catalog, &id("dev.example.external"))
         .unwrap();
     assert_eq!(verified.files["data.json"], br#"{"message":"hello"}"#);
+}
+
+/// CI が別 workspace の Wasm と worker をビルドした後に実行する。
+#[test]
+#[ignore = "外部 workspace の Wasm と拡張ホストの事前ビルドが必要"]
+fn independent_component_is_packaged_installed_and_activated() {
+    use base64::Engine as _;
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let component = std::fs::read(
+        root.join("target/external-extension/wasm32-wasip2/debug/example_lapis_extension.wasm"),
+    )
+    .unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("external");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("extension.wasm"), &component).unwrap();
+    std::fs::write(
+        source.join("extension.json"),
+        serde_json::to_vec(&json!({
+            "id": "dev.example.external", "version": "0.1.0",
+            "requires": [
+                {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
+                {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"}
+            ],
+            "files": ["extension.wasm"]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let seed_file = workspace.path().join("seed");
+    std::fs::write(&seed_file, SEED).unwrap();
+    let archive = workspace.path().join("external.lapis");
+    assert!(
+        Command::new("python")
+            .current_dir(&root)
+            .args(["-m", "scripts.extensions.package"])
+            .arg(&source)
+            .arg(&archive)
+            .arg("--seed-file")
+            .arg(seed_file)
+            .args(["--key-id", KEY_ID])
+            .status()
+            .unwrap()
+            .success()
+    );
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let mut contracts = HostContracts::current();
+    contracts.add_version(
+        ContractId::try_new("lapis.extension.lifecycle").unwrap(),
+        semver::Version::new(1, 0, 0),
+    );
+    let loader = ExtensionLoader::new(trusted_keys(), contracts);
+    loader.install(&mut catalog, &archive, true).unwrap();
+    let verified = loader
+        .load_installed(&mut catalog, &id("dev.example.external"))
+        .unwrap();
+    assert_eq!(verified.files["extension.wasm"], component);
+
+    let executable = root.join("target/debug").join(format!(
+        "lapis-extension-host{}",
+        std::env::consts::EXE_SUFFIX
+    ));
+    let mut command = Command::new(executable);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut worker = command.spawn().unwrap();
+    let mut input = worker.stdin.take().unwrap();
+    for request in [
+        json!({"command": "activate", "id": "dev.example.external", "component": base64::engine::general_purpose::STANDARD.encode(&verified.files["extension.wasm"])}),
+        json!({"command": "deactivate", "id": "dev.example.external"}),
+        json!({"command": "shutdown"}),
+    ] {
+        writeln!(input, "{request}").unwrap();
+    }
+    drop(input);
+    let output = worker.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let responses: Vec<Value> = std::str::from_utf8(&output.stdout)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(responses.len(), 3);
+    assert!(
+        responses.iter().all(|response| response["ok"] == true),
+        "{responses:?}"
+    );
 }
 
 fn host_version() -> String {

@@ -47,6 +47,14 @@ pub(crate) struct StartupContribution {
     pub(crate) requires_runtime: bool,
 }
 
+type StartupExtensions = (
+    Vec<ComponentImage>,
+    Vec<StartupContribution>,
+    Vec<String>,
+    Vec<String>,
+    std::collections::BTreeMap<String, String>,
+);
+
 impl StartupContribution {
     pub(crate) fn available(&self, active: &[String]) -> bool {
         !self.requires_runtime || active.contains(&self.payload.extension_id)
@@ -80,17 +88,49 @@ fn trusted_keys(directory: Option<&std::path::Path>) -> Result<TrustedKeys, Stri
 }
 
 impl HostExtensions {
+    /// 同梱物も通常と同じ署名・互換性検証を通し、初回だけ導入する。
+    pub(crate) fn install_bundled(&self, directory: &std::path::Path) -> Result<(), String> {
+        let entries = match std::fs::read_dir(directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error.to_string()),
+        };
+        let mut paths = Vec::new();
+        for entry in entries {
+            let entry = entry.map_err(|error| error.to_string())?;
+            let kind = entry.file_type().map_err(|error| error.to_string())?;
+            if kind.is_file() && entry.path().extension().is_some_and(|ext| ext == "lapis") {
+                paths.push(entry.path());
+                if paths.len() > 64 {
+                    return Err("同梱拡張が多すぎます".to_owned());
+                }
+            }
+        }
+        paths.sort();
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let loader = self.loader()?;
+        let mut catalog = self.catalog_mut()?;
+        let mut failures = Vec::new();
+        for path in paths {
+            if let Err(error) = loader.install_if_missing(&mut catalog, &path, true) {
+                self.record_recovery_failure(&error);
+                if error.leaves_inconsistent_state() {
+                    return Err(error.to_string());
+                }
+                failures.push(error.to_string());
+            }
+        }
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.join("; "))
+        }
+    }
     /// 起動時に有効な package の署名と内容を再検証し、その bytes を固定する。
     /// 無効化などの目録変更は次の Host 起動までこのスナップショットへ影響しない。
-    pub(crate) fn startup_components(
-        &self,
-    ) -> (
-        Vec<ComponentImage>,
-        Vec<StartupContribution>,
-        Vec<String>,
-        Vec<String>,
-        std::collections::BTreeMap<String, String>,
-    ) {
+    pub(crate) fn startup_components(&self) -> StartupExtensions {
         let mut failures = std::collections::BTreeMap::new();
         let loader = match self.loader() {
             Ok(loader) => loader,
@@ -460,6 +500,7 @@ mod tests {
                     schema: 1,
                     default_locale: "en-US".into(),
                     settings: Vec::new(),
+                    themes: Vec::new(),
                     translations: Vec::new(),
                 },
             },
@@ -528,6 +569,38 @@ mod tests {
             "manifest がない".to_owned(),
         ));
         assert!(extensions.list().unwrap().extensions.is_empty());
+    }
+
+    #[test]
+    fn invalid_bundled_package_does_not_hide_a_later_valid_package() {
+        use sha2::Digest as _;
+        use std::io::Write as _;
+
+        let state = tempfile::tempdir().unwrap();
+        let bundled = tempfile::tempdir().unwrap();
+        std::fs::write(bundled.path().join("00-bad.lapis"), b"invalid").unwrap();
+        let data = b"{}";
+        let manifest = serde_json::json!({
+            "schema": 1, "kind": "extension", "id": "dev.example.good", "version": "1.0.0",
+            "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+            "files": [{"path": "data.json", "sha256": format!("{:x}", sha2::Sha256::digest(data))}]
+        });
+        let file = std::fs::File::create(bundled.path().join("01-good.lapis")).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        let options = zip::write::SimpleFileOptions::default();
+        archive.start_file("manifest.json", options).unwrap();
+        archive
+            .write_all(&serde_json::to_vec(&manifest).unwrap())
+            .unwrap();
+        archive.start_file("data.json", options).unwrap();
+        archive.write_all(data).unwrap();
+        archive.finish().unwrap();
+
+        let host = HostExtensions::load_with_development(Some(state.path()), true);
+        assert!(host.install_bundled(bundled.path()).is_err());
+        let list = host.list().unwrap();
+        assert_eq!(list.extensions.len(), 1);
+        assert_eq!(list.extensions[0].id, "dev.example.good");
     }
 
     #[test]

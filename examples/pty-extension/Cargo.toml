@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "example-pty-extension"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+expect-denied = []
+
+[dependencies]
+wit-bindgen = "=0.57.1"

@@ -10,6 +10,4 @@ language = { path = "../language" }
 localization = { path = "../localization" }
 settings = { path = "../settings" }
 serde.workspace = true
-
-[dev-dependencies]
 serde_json.workspace = true

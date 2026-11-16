@@ -350,6 +350,27 @@ impl ExtensionLoader {
         package: &Path,
         enabled: bool,
     ) -> Result<InstallOutcome, PackageError> {
+        self.install_inner(catalog, package, enabled, false)
+            .map(|outcome| outcome.expect("通常の導入は必ず結果を返す"))
+    }
+
+    /// 同梱の初回導入。削除済みを含む既存の目録を上書きしない。
+    pub fn install_if_missing(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
+        self.install_inner(catalog, package, enabled, true)
+    }
+
+    fn install_inner(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+        only_missing: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
         let archive = read_archive(package)?;
         let manifest_value = archive
             .get(MANIFEST_NAME)
@@ -366,6 +387,9 @@ impl ExtensionLoader {
         crate::journal::recover_locked(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
+        if only_missing && catalog.get(&manifest.id).is_some() {
+            return Ok(None);
+        }
         match self.contracts.check(&manifest.requires) {
             Ok(()) => {
                 // 展開先の実体を先に用意し、目録を書けたときだけ置き換える。目録を
@@ -413,11 +437,11 @@ impl ExtensionLoader {
                             eprintln!("拡張 {} の退避した旧版を消せません: {error}", manifest.id);
                         }
                         crate::journal::finish(catalog.root(), &manifest.id)?;
-                        Ok(InstallOutcome::Installed {
+                        Ok(Some(InstallOutcome::Installed {
                             id: manifest.id,
                             version: manifest.version,
                             enabled,
-                        })
+                        }))
                     }
                     Err(error) => {
                         // 実体を置き換えられなかった。今の段階から回復して、目録と実体を
@@ -453,12 +477,12 @@ impl ExtensionLoader {
                     ))?;
                     remove_directory(&catalog.installed_directory(&manifest.id)?)?;
                 }
-                Ok(InstallOutcome::Incompatible {
+                Ok(Some(InstallOutcome::Incompatible {
                     id: manifest.id,
                     version: manifest.version,
                     reason,
                     kept_previous,
-                })
+                }))
             }
         }
     }

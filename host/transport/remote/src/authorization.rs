@@ -73,12 +73,14 @@ impl SessionGrant {
     pub(crate) fn require_request(&self, request: &RequestBody) -> Result<(), AuthorizationError> {
         let capability = CapabilityId::try_new(request.required_capability())
             .expect("built-in request capability must be valid");
-        let owner_registration = matches!(request, RequestBody::HostRegister(_))
-            && self
-                .capabilities
-                .iter()
-                .any(|value| value.as_str() == client_api::capability::HOST_MANAGE);
-        if !owner_registration {
+        let owner_override = matches!(
+            request,
+            RequestBody::HostRegister(_) | RequestBody::HostExtensionSetEnabled(_)
+        ) && self
+            .capabilities
+            .iter()
+            .any(|value| value.as_str() == client_api::capability::HOST_MANAGE);
+        if !owner_override {
             self.require_capability(&capability)?;
         }
         if matches!(request, RequestBody::WorkbenchPut(_)) {

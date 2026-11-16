@@ -23,6 +23,8 @@ pub const TERMINAL_CONTROL: &str = "workspace.terminal.control";
 /// `host.` を付けないのは、Host 管理権限ではなく、拡張の宣言を表示する通常の
 /// Client が要求する読み取りだから。Workspace 限定の pairing でも付与される。
 pub const EXTENSIONS_READ: &str = "extensions.read";
+/// 拡張の次回起動時の状態だけを変更できる。
+pub const EXTENSIONS_MANAGE: &str = "extensions.manage";
 
 const MAX_CAPABILITY_ID_BYTES: usize = 128;
 const MAX_CAPABILITIES: usize = 64;

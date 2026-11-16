@@ -71,6 +71,13 @@ impl RemoteRequestHandler for HostRemoteHandler {
                     .capabilities()
                     .iter()
                     .any(|capability| capability.as_str() == capability::EXTENSIONS_READ)
+            } else if matches!(request.body, RequestBody::HostExtensionSetEnabled(_)) {
+                grant.capabilities().iter().any(|capability| {
+                    matches!(
+                        capability.as_str(),
+                        capability::EXTENSIONS_MANAGE | capability::HOST_MANAGE
+                    )
+                })
             } else {
                 let owner = grant
                     .capabilities()

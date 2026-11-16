@@ -1,0 +1,19 @@
+{
+  "id": "lapis.language.ja",
+  "version": "1.0.0",
+  "requires": [
+    {
+      "contract": "lapis.extension",
+      "minimum": "1.0.0",
+      "maximum": "1.0.0"
+    },
+    {
+      "contract": "lapis.extension.contributions",
+      "minimum": "1.0.0",
+      "maximum": "1.0.0"
+    }
+  ],
+  "files": [
+    "contributions.json"
+  ]
+}

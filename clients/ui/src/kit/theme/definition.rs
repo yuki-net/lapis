@@ -12,7 +12,7 @@ pub enum ThemeAppearance {
 }
 
 /// テーマが提供するセマンティックカラートークン。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ThemeColors {
     // Background & Surface (4段階の面構造)
     pub background_primary: Rgba,
@@ -69,7 +69,7 @@ pub struct ThemeColors {
 }
 
 /// テーマの定義。ID とカラートークンのセット。
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ThemeDefinition {
     pub id: ThemeId,
     pub name: String,

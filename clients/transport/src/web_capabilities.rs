@@ -4,9 +4,9 @@
 //! WebSession は同じ定義を共有する。文字列リテラルを複写しない。
 
 use client_api::capability::{
-    DOCUMENTS_READ, DOCUMENTS_WRITE, EXTENSIONS_READ, FILES_READ, FILES_WRITE, TERMINAL_CONTROL,
-    TERMINAL_START, WORKBENCH_WRITE, WORKSPACE_SYNC, WORKSPACES, WORKSPACES_CONNECT,
-    WORKSPACES_SWITCH,
+    DOCUMENTS_READ, DOCUMENTS_WRITE, EXTENSIONS_MANAGE, EXTENSIONS_READ, FILES_READ, FILES_WRITE,
+    TERMINAL_CONTROL, TERMINAL_START, WORKBENCH_WRITE, WORKSPACE_SYNC, WORKSPACES,
+    WORKSPACES_CONNECT, WORKSPACES_SWITCH,
 };
 
 /// Web Client が Host へ要求する capability。
@@ -21,6 +21,7 @@ pub const CAPABILITIES: &[&str] = &[
     FILES_READ,
     FILES_WRITE,
     EXTENSIONS_READ,
+    EXTENSIONS_MANAGE,
     TERMINAL_START,
     TERMINAL_CONTROL,
 ];
@@ -44,5 +45,7 @@ mod tests {
     #[test]
     fn extension_contributions_are_readable() {
         assert!(CAPABILITIES.contains(&EXTENSIONS_READ));
+        assert!(CAPABILITIES.contains(&EXTENSIONS_MANAGE));
+        assert!(!CAPABILITIES.contains(&client_api::capability::HOST_MANAGE));
     }
 }

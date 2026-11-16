@@ -88,6 +88,8 @@ jobs:
       - name: Build package and signed manifest
         shell: pwsh
         run: |
+          python -m scripts.extensions.bundle extensions target/package/lapis/bundled-extensions
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $url = "https://github.com/${{ github.repository }}/releases/tag/${{ steps.version.outputs.tag }}"
           python -m scripts.release build `
             --version "${{ steps.version.outputs.version }}" `

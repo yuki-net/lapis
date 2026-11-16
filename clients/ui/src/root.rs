@@ -31,6 +31,9 @@ use gpui::{
     AnyView, AppContext, Context, Entity, Focusable, Render, Subscription, Window, div, prelude::*,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static NEXT_THEME_SOURCE: AtomicU64 = AtomicU64::new(1);
 
 /// 共有ハンドルから、適用判定を持つ watch を取り出す。
 fn session_view_watch_of(
@@ -105,6 +108,7 @@ pub(crate) struct DesktopRoot {
     update: Option<Entity<UpdateFeature>>,
     quick_search: Entity<QuickSearch>,
     universal_search: Entity<QuickSearch>,
+    locale_packs: Vec<localization::LocalePack>,
     universal_search_open: bool,
     universal_previous_focus: Option<gpui::FocusHandle>,
     path_request: Option<PathRequest>,
@@ -264,6 +268,7 @@ impl DesktopRoot {
         });
         #[cfg(target_family = "wasm")]
         let extension_contributions = desktop_client::web_host::extension_contributions();
+        let locale_contributions = extension_contributions.clone();
         settings.update(cx, |settings, cx| {
             settings.set_extension_contributions(extension_contributions, cx)
         });
@@ -629,6 +634,11 @@ impl DesktopRoot {
                 root.schedule_persist(cx);
             }),
         ];
+        let theme_source = NEXT_THEME_SOURCE.fetch_add(1, Ordering::Relaxed);
+        subscriptions.push(cx.on_release(move |_, cx| {
+            let selected = crate::theme::active_id(cx);
+            let _ = crate::theme::replace_source(theme_source, Vec::new(), &selected, cx);
+        }));
 
         let weak = cx.entity().downgrade();
         window.on_window_should_close(cx, move |window, cx| {
@@ -668,6 +678,73 @@ impl DesktopRoot {
             }
         }));
         crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
+        if let Some(session) = locale_contributions {
+            let receiver = session.subscribe();
+            cx.spawn(async move |root, cx| {
+                let mut first = true;
+                loop {
+                    let mut changed = first;
+                    first = false;
+                    while receiver.try_recv().is_ok() {
+                        changed = true;
+                    }
+                    let alive = root
+                        .update(cx, |root, cx| {
+                            if changed {
+                                let snapshot = session.snapshot();
+                                let packs = snapshot
+                                    .as_ref()
+                                    .map(|snapshot| snapshot.core_locales())
+                                    .unwrap_or_default();
+                                let definitions = snapshot.as_ref().map(|snapshot| {
+                                    snapshot.contributions().iter()
+                                        .flat_map(|contribution| contribution.declaration.themes.iter())
+                                        .map(|theme| {
+                                            let parsed = crate::theme::ThemeDefinition::from_json(&theme.definition.to_string())?;
+                                            if parsed.id.as_str() != theme.id { return Err("theme id mismatch".to_owned()); }
+                                            Ok(parsed)
+                                        })
+                                        .collect::<Result<Vec<_>, String>>()
+                                }).unwrap_or_else(|| Ok(Vec::new()));
+                                match definitions {
+                                    Ok(definitions) => {
+                                        let selected = crate::features::settings_coordinator::SettingsCoordinator::try_shared(cx)
+                                            .map(|settings| extension_ui_contract::ThemeId::new(settings.read(cx).values.theme().to_owned()))
+                                            .unwrap_or_else(|| crate::theme::active_id(cx));
+                                        if let Err(id) = crate::theme::replace_source(theme_source, definitions, &selected, cx) {
+                                            tracing::warn!(target: "lapis::theme", "テーマ ID が重複しています: {}", id.as_str());
+                                        }
+                                    }
+                                    Err(error) => tracing::warn!(target: "lapis::theme", "テーマ定義が不正です: {error}"),
+                                }
+                                root.locale_packs = packs.to_vec();
+                                let locale = root.group.read(cx).locale.clone();
+                                root.shell.update(cx, |shell, cx| {
+                                    shell.set_locale_packs(packs, &locale, cx)
+                                });
+                                root.quick_search.update(cx, |search, cx| {
+                                    search.set_locale_packs(packs, &locale, cx)
+                                });
+                                root.universal_search.update(cx, |search, cx| {
+                                    search.set_locale_packs(packs, &locale, cx)
+                                });
+                                if let Some(update) = &root.update {
+                                    update.update(cx, |update, cx| {
+                                        update.set_locale_packs(packs, &locale, cx)
+                                    });
+                                }
+                                cx.refresh_windows();
+                            }
+                        })
+                        .is_ok();
+                    if !alive {
+                        break;
+                    }
+                    crate::timer::Timer::after(std::time::Duration::from_millis(200)).await;
+                }
+            })
+            .detach();
+        }
         #[cfg(not(target_family = "wasm"))]
         if let Some(watch) = workbench_watch.clone() {
             cx.spawn(async move |root, cx| {
@@ -760,6 +837,7 @@ impl DesktopRoot {
             update,
             quick_search,
             universal_search,
+            locale_packs: Vec::new(),
             universal_search_open: false,
             universal_previous_focus: None,
             path_request: None,
@@ -2049,6 +2127,7 @@ impl DesktopRoot {
                 self.double_shift.reset();
                 let locale = self.group.read(cx).locale.clone();
                 let mut localizer = crate::localization::Localizer::bundled();
+                let _ = localizer.replace_external(&self.locale_packs);
                 localizer.set_active(&locale);
                 let provider = CommandSearchProvider::from_registry(
                     &features::bundled_registry(),

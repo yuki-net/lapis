@@ -777,6 +777,7 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
     owner_hello.requested_capabilities = CapabilitySet::try_new(
         host::supported_capabilities()
             .iter()
+            .filter(|capability| capability.as_str() != capability::EXTENSIONS_MANAGE)
             .cloned()
             .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
     )
@@ -805,7 +806,32 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
     );
 
     // Workspace 限定の接続でも、読み取りだけの capability があれば宣言を読める。
-    let (mut reader, _) = fixture.pair("extension-reader").await;
+    let mut reader = fixture.connect().await;
+    let mut reader_hello = hello("extension-reader");
+    reader_hello.requested_capabilities = CapabilitySet::try_new(
+        host::supported_capabilities()
+            .iter()
+            .filter(|capability| capability.as_str() != capability::EXTENSIONS_MANAGE)
+            .cloned(),
+    )
+    .unwrap();
+    let reader_token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    reader
+        .send(&ClientMessage::Pair(PairRequest::new(
+            reader_hello,
+            reader_token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut reader).await,
+        ServerMessage::Paired(_)
+    ));
     assert_eq!(
         request(
             &mut reader,
@@ -860,6 +886,36 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
             .state
             .is_enabled()
     );
+    let (mut manager, paired) = fixture.pair("extension-manager").await;
+    assert!(
+        paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .any(|capability| capability.as_str() == capability::EXTENSIONS_MANAGE)
+    );
+    assert!(
+        !paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .any(|capability| capability.as_str() == capability::HOST_MANAGE)
+    );
+    assert_eq!(
+        request(
+            &mut manager,
+            6,
+            RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
+                id: "dev.example.one".to_owned(),
+                enabled: true
+            })
+        )
+        .await,
+        ResponseBody::HostExtensionSetEnabled(HostExtensionSetEnabledResponse {
+            id: "dev.example.one".to_owned(),
+            enabled: true
+        })
+    );
 
     // 宣言を要求しない接続は Host の目録を読めない。
     let mut unread = fixture.connect().await;
@@ -900,7 +956,7 @@ async fn extension_contributions_reach_a_remote_reader_after_restart() {
     let fixture = Fixture::with_setup(|state| {
         use sha2::Digest as _;
         use std::io::Write as _;
-        let contents = r#"{"schema":1,"translations":[{"target":"dev.example.terminal","locale":"ja-JP","messages":{"title":"端末"}}]}"#.as_bytes();
+        let contents = r#"{"schema":1,"translations":[{"target":"dev.example.terminal","locale":"ja-JP","messages":{"title":"端末"}},{"target":"lapis.core","locale":"fr-FR","messages":{"command.save-document":"Enregistrer"}}]}"#.as_bytes();
         let manifest = serde_json::json!({
             "schema": 1, "kind": "extension", "id": "dev.example.japanese", "version": "0.1.0",
             "requires": [{"contract":"lapis.extension.contributions", "minimum":"1.0.0", "maximum":"1.0.0"}],
@@ -939,6 +995,14 @@ async fn extension_contributions_reach_a_remote_reader_after_restart() {
     assert_eq!(
         response.contributions[0].declaration.translations[0].messages["title"],
         "端末"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[1].target,
+        "lapis.core"
+    );
+    assert_eq!(
+        response.contributions[0].declaration.translations[1].messages["command.save-document"],
+        "Enregistrer"
     );
 }
 

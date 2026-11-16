@@ -22,6 +22,6 @@ pub use ids::{
 };
 pub use localization::MessageId;
 pub use static_contributions::{
-    ContributedSetting, ContributedTranslation, STATIC_CONTRIBUTIONS_CONTRACT,
+    ContributedSetting, ContributedTheme, ContributedTranslation, STATIC_CONTRIBUTIONS_CONTRACT,
     STATIC_CONTRIBUTIONS_VERSION, StaticContributions,
 };

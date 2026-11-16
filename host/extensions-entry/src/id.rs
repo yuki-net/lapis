@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 const MAX_ID_BYTES: usize = 64;
 
 /// 目録 directory の中で予約する名前。拡張 ID には使わせない。
-const RESERVED_IDENTIFIERS: [&str; 3] = ["catalog.json", "data", "installed"];
+const RESERVED_IDENTIFIERS: [&str; 4] = ["catalog.json", "data", "installed", "lapis.core"];
 
 /// Windows が予約するデバイス名。先頭の `.` までを名前として比較する。
 ///
@@ -144,6 +144,7 @@ mod tests {
             "installed",
             "data",
             "catalog.json",
+            "lapis.core",
             " leading",
         ] {
             assert!(

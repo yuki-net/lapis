@@ -24,6 +24,7 @@ struct Snapshot {
     contributions: Vec<HostExtensionContributions>,
     settings: ExtensionSettingsCatalog,
     translations: ExtensionLocalizations,
+    core_locales: Vec<LocalePack>,
 }
 
 impl ExtensionContributionSnapshot {
@@ -32,6 +33,10 @@ impl ExtensionContributionSnapshot {
     }
     pub fn contributions(&self) -> &[HostExtensionContributions] {
         &self.0.contributions
+    }
+    /// 拡張が提供する Host 標準 UI の翻訳。
+    pub fn core_locales(&self) -> &[LocalePack] {
+        &self.0.core_locales
     }
 
     pub fn resolve_text(&self, owner: &str, locale: &LocaleId, message: &MessageId) -> String {
@@ -218,10 +223,11 @@ fn build_snapshot(
     }
     let mut settings = ExtensionSettingsCatalog::default();
     let mut translations = ExtensionLocalizations::default();
+    let mut core_locales = Vec::new();
     let mut owners = BTreeSet::new();
     for contribution in &contributions {
         let owner = &contribution.extension_id;
-        if !valid_extension_id(owner) {
+        if !valid_extension_id(owner) || owner == "lapis.core" {
             return Err(SettingsError::new(format!("拡張 ID が不正です: {owner}")));
         }
         if !owners.insert(owner.clone()) {
@@ -280,6 +286,12 @@ fn build_snapshot(
             .iter()
             .filter(|entry| entry.target != contribution.extension_id)
         {
+            if translation.target == "lapis.core" {
+                if translation.locale.eq_ignore_ascii_case("en-US") {
+                    return Err(SettingsError::new("Host の既定言語は置換できません"));
+                }
+                core_locales.push(locale_pack(&translation.locale, &translation.messages)?);
+            }
             packs.push((
                 translation.target.clone(),
                 locale_pack(&translation.locale, &translation.messages)?,
@@ -296,6 +308,7 @@ fn build_snapshot(
         contributions,
         settings,
         translations,
+        core_locales,
     })))
 }
 
@@ -356,6 +369,30 @@ mod tests {
             SettingsSession::load(repository.clone()).unwrap(),
             repository,
         )
+    }
+
+    #[test]
+    fn core_translation_reaches_localizer_and_falls_back_after_disconnect() {
+        let (settings, _) = session();
+        let session = settings.extension_contributions();
+        let generation = session.begin_reload();
+        let response = serde_json::from_value(json!({"extensions":[], "contributions":[{
+            "extension_id":"dev.example.french",
+            "declaration":{"schema":1,"translations":[{"target":"lapis.core","locale":"fr-FR","messages":{"command.save-document":"Enregistrer"}}]}
+        }]})).unwrap();
+        assert!(session.apply(generation, response).unwrap());
+        let mut localizer = localization::Localizer::bundled();
+        localizer
+            .replace_external(session.snapshot().unwrap().core_locales())
+            .unwrap();
+        assert!(localizer.set_active(&LocaleId::new("fr-FR")));
+        assert_eq!(
+            localizer.resolve(&MessageId::new("command.save-document")),
+            "Enregistrer"
+        );
+        session.disconnect();
+        localizer.replace_external(&[]).unwrap();
+        assert_eq!(localizer.active(), &LocaleId::new("en-US"));
     }
 
     #[test]

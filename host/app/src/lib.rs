@@ -48,6 +48,7 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             "workspace.process.read",
             "workspace.process.control",
             EXTENSIONS_READ,
+            EXTENSIONS_MANAGE,
         ]
         .map(|name| CapabilityId::try_new(name).expect("built-in capability")),
     )
@@ -209,6 +210,18 @@ impl BackendHost {
         } else {
             crate::extensions::HostExtensions::load(state_directory.as_deref())
         };
+        let bundled_failure = if state_directory.is_some() {
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| {
+                    exe.parent().map(|parent| {
+                        extensions.install_bundled(&parent.join("bundled-extensions"))
+                    })
+                })
+                .and_then(Result::err)
+        } else {
+            None
+        };
         let (
             components,
             extension_contributions,
@@ -216,6 +229,9 @@ impl BackendHost {
             extension_runtime_ids,
             mut extension_startup_errors,
         ) = extensions.startup_components();
+        if let Some(error) = bundled_failure {
+            extension_startup_errors.insert("bundled".to_owned(), error);
+        }
         let extension_host = if components.is_empty() {
             None
         } else {
