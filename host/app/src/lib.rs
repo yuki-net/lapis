@@ -167,14 +167,24 @@ impl BackendHost {
         BackendClient::from(self.clone()).session_view()
     }
     pub fn start() -> Result<Self, BackendServiceError> {
-        Self::start_inner(None)
+        Self::start_inner(None, false)
     }
 
     pub fn start_with_state_directory(directory: PathBuf) -> Result<Self, BackendServiceError> {
-        Self::start_inner(Some(directory))
+        Self::start_inner(Some(directory), false)
     }
 
-    fn start_inner(state_directory: Option<PathBuf>) -> Result<Self, BackendServiceError> {
+    /// ローカル開発に限り、署名のない拡張 package の導入と実行を許可する。
+    pub fn start_development_with_state_directory(
+        directory: PathBuf,
+    ) -> Result<Self, BackendServiceError> {
+        Self::start_inner(Some(directory), true)
+    }
+
+    fn start_inner(
+        state_directory: Option<PathBuf>,
+        development: bool,
+    ) -> Result<Self, BackendServiceError> {
         let state = BackendState::new([]).map_err(BackendServiceError::State)?;
         let store = match &state_directory {
             Some(directory) => {
@@ -188,7 +198,14 @@ impl BackendHost {
             None => None,
         };
         let terminal_profiles = load_terminal_profiles(state_directory.as_deref());
-        let extensions = crate::extensions::HostExtensions::load(state_directory.as_deref());
+        let extensions = if development {
+            crate::extensions::HostExtensions::load_with_development(
+                state_directory.as_deref(),
+                true,
+            )
+        } else {
+            crate::extensions::HostExtensions::load(state_directory.as_deref())
+        };
         let (components, mut extension_startup_errors) = extensions.startup_components();
         let extension_host = if components.is_empty() {
             None

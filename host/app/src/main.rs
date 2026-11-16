@@ -28,6 +28,7 @@ struct Options {
     connection_info: Option<PathBuf>,
     invitation: Option<PathBuf>,
     replace_certificate: bool,
+    development_extensions: bool,
 }
 
 impl Options {
@@ -40,9 +41,14 @@ impl Options {
         let mut connection_info = None;
         let mut invitation = None;
         let mut replace_certificate = false;
+        let mut development_extensions = false;
         while let Some(argument) = arguments.next() {
             if argument == "--replace-certificate" {
                 replace_certificate = true;
+                continue;
+            }
+            if argument == "--development-extensions" {
+                development_extensions = true;
                 continue;
             }
             let value = arguments.next().ok_or("option requires a value")?;
@@ -56,7 +62,7 @@ impl Options {
                 _ => return Err("unknown option".into()),
             }
         }
-        Ok(Self {
+        let options = Self {
             workspace: workspace.ok_or("--workspace is required")?,
             certificate: certificate.ok_or("--certificate is required")?,
             listen,
@@ -64,7 +70,15 @@ impl Options {
             connection_info,
             invitation,
             replace_certificate,
-        })
+            development_extensions,
+        };
+        if options.development_extensions && !options.listen.ip().is_loopback() {
+            return Err("development extensions require a loopback listen address".into());
+        }
+        if options.development_extensions && options.state_directory.is_none() {
+            return Err("development extensions require a state directory".into());
+        }
+        Ok(options)
     }
 }
 
@@ -107,7 +121,7 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("Host: {error}");
         eprintln!(
-            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>] [--connection-info <file>] [--invitation <file>]"
+            "Usage: lapis-host --workspace <directory> --certificate <public.der> [--replace-certificate] [--listen <ip:port>] [--state-directory <directory>] [--connection-info <file>] [--invitation <file>] [--development-extensions]"
         );
         std::process::exit(1);
     }
@@ -119,6 +133,9 @@ fn run() -> Result<(), Error> {
     // 証明書と秘密鍵は state directory に保存し、再起動しても同じ身元で待ち受ける。
     let identity = host::HostIdentity::load_or_create(state_directory.as_deref())?;
     let host = match options.state_directory {
+        Some(directory) if options.development_extensions => {
+            BackendHost::start_development_with_state_directory(directory)?
+        }
         Some(directory) => BackendHost::start_with_state_directory(directory)?,
         None => BackendHost::start()?,
     };
@@ -636,6 +653,40 @@ mod tests {
             options.connection_info,
             Some(PathBuf::from("dev/connection.json"))
         );
+        let dev_args = [
+            "--workspace",
+            "repo",
+            "--certificate",
+            "host.der",
+            "--state-directory",
+            "state",
+            "--development-extensions",
+        ];
+        assert!(
+            Options::parse(dev_args.map(Into::into).into_iter())
+                .unwrap()
+                .development_extensions
+        );
+        let remote_args = [
+            "--workspace",
+            "repo",
+            "--certificate",
+            "host.der",
+            "--state-directory",
+            "state",
+            "--listen",
+            "0.0.0.0:4787",
+            "--development-extensions",
+        ];
+        assert!(Options::parse(remote_args.map(Into::into).into_iter()).is_err());
+        let no_state = [
+            "--workspace",
+            "repo",
+            "--certificate",
+            "host.der",
+            "--development-extensions",
+        ];
+        assert!(Options::parse(no_state.map(Into::into).into_iter()).is_err());
     }
 
     #[test]

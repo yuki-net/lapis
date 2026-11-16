@@ -83,6 +83,16 @@ manifest の形は次のとおり。
 署名対象は `signature` を除いた manifest を key 順に並べ、区切りを詰めた UTF-8 の
 JSON bytes である。`scripts/release/manifest.py` の `canonical_bytes` と同じ。
 
+Host 管理者は `<host state>/extensions/trusted-keys.json` に、リリース鍵と同じ
+`schema` / `keys` 形式で信頼する発行者鍵を明示的に追加できる。package に同梱された鍵は
+信頼しない。組み込み鍵と同じ ID に異なる鍵を指定した場合やファイルが不正な場合は、
+鍵の読み込みに失敗し、package の導入・実行を拒否する。目録の読み取りは維持する。
+
+ローカル開発用の Host は `--development-extensions` を明示した場合に限り、
+署名のない package を受け入れる。この場合は state directory が必須で、待受は loopback に
+限る。署名のある package は開発時も検証し、不正な署名を黙って許可しない。開発時に導入した
+未署名 package は通常モードでは実行されない。
+
 ## 非互換・署名不正の扱い
 
 - 署名が一致しない package は目録にも載せない。manifest の `id` すら署名で裏付けられて

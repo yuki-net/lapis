@@ -42,6 +42,32 @@ enum Loader {
     Unavailable(String),
 }
 
+/// ローカル管理者が指定した発行者鍵だけを組み込み鍵へ追加する。
+fn trusted_keys(directory: Option<&std::path::Path>) -> Result<TrustedKeys, String> {
+    use std::io::Read;
+    const MAX_REGISTRY_BYTES: u64 = 1024 * 1024;
+    let mut keys = TrustedKeys::repository().map_err(|error| error.to_string())?;
+    let Some(directory) = directory else {
+        return Ok(keys);
+    };
+    let path = directory.join("extensions").join("trusted-keys.json");
+    let file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(keys),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut bytes = Vec::new();
+    file.take(MAX_REGISTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_REGISTRY_BYTES {
+        return Err("拡張の信頼済み鍵一覧が大きすぎます".to_owned());
+    }
+    keys.add_registry(&bytes)
+        .map_err(|error| error.to_string())?;
+    Ok(keys)
+}
+
 impl HostExtensions {
     /// 起動時に有効な package の署名と内容を再検証し、その bytes を固定する。
     /// 無効化などの目録変更は次の Host 起動までこのスナップショットへ影響しない。
@@ -113,6 +139,13 @@ impl HostExtensions {
     /// 壊れた目録を空として扱うと、導入済み拡張の宣言を失う。上書きもしないため、
     /// 読めない間は宣言の要求にエラーを返し、file はそのまま残す。
     pub(crate) fn load(directory: Option<&std::path::Path>) -> Self {
+        Self::load_with_development(directory, false)
+    }
+
+    pub(crate) fn load_with_development(
+        directory: Option<&std::path::Path>,
+        development: bool,
+    ) -> Self {
         // 実行可能な worker の handshake を確認した場合にだけ、その実行契約を提供する。
         let worker_executable = directory
             .and_then(|_| std::env::current_exe().ok())
@@ -135,15 +168,21 @@ impl HostExtensions {
                     .expect("valid contract version"),
             );
         }
-        let loader =
-            match TrustedKeys::repository().map(|keys| ExtensionLoader::new(keys, contracts)) {
-                Ok(loader) => Loader::Ready(loader),
-                Err(error) => {
-                    let message = error.to_string();
-                    eprintln!("拡張の署名鍵を読めないため、package を読み込めません: {message}");
-                    Loader::Unavailable(message)
-                }
-            };
+        let loader = match trusted_keys(directory).map(|keys| {
+            let loader = ExtensionLoader::new(keys, contracts);
+            if development {
+                loader.allow_unsigned_local_development()
+            } else {
+                loader
+            }
+        }) {
+            Ok(loader) => Loader::Ready(loader),
+            Err(error) => {
+                let message = error.to_string();
+                eprintln!("拡張の署名鍵を読めないため、package を読み込めません: {message}");
+                Loader::Unavailable(message)
+            }
+        };
         let Some(directory) = directory else {
             return Self {
                 catalog: Catalog::Absent,
@@ -313,6 +352,25 @@ impl HostExtensions {
 mod tests {
     use super::*;
     use extensions_entry::{ExtensionEntry, ExtensionState, ExtensionVersion};
+
+    #[test]
+    fn explicitly_configured_publisher_keys_fail_closed_when_invalid() {
+        let directory = tempfile::tempdir().unwrap();
+        let registry_dir = directory.path().join("extensions");
+        std::fs::create_dir_all(&registry_dir).unwrap();
+        assert!(trusted_keys(Some(directory.path())).is_ok());
+        std::fs::write(
+            registry_dir.join("trusted-keys.json"),
+            br#"{"schema":1,"keys":{}}"#,
+        )
+        .unwrap();
+        assert!(trusted_keys(Some(directory.path())).is_ok());
+        std::fs::write(registry_dir.join("trusted-keys.json"), b"not json").unwrap();
+        assert!(trusted_keys(Some(directory.path())).is_err());
+        let host = HostExtensions::load(Some(directory.path()));
+        assert!(host.loader().is_err());
+        assert!(host.list().is_ok());
+    }
 
     fn entry(id: &str, enabled: bool) -> ExtensionEntry {
         ExtensionEntry::new(

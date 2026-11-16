@@ -213,6 +213,7 @@ impl From<crate::InvalidExtensionPackageId> for PackageError {
 pub struct ExtensionLoader {
     keys: TrustedKeys,
     contracts: HostContracts,
+    allow_unsigned_development: bool,
 }
 
 impl ExtensionLoader {
@@ -221,6 +222,7 @@ impl ExtensionLoader {
         Ok(Self {
             keys: TrustedKeys::repository()?,
             contracts: HostContracts::current(),
+            allow_unsigned_development: false,
         })
     }
 
@@ -231,12 +233,24 @@ impl ExtensionLoader {
         Ok(Self {
             keys,
             contracts: HostContracts::current(),
+            allow_unsigned_development: false,
         })
     }
 
     /// 信頼済み公開鍵と提供する契約を明示して作る。検証規則を確かめるテストが使う。
     pub fn new(keys: TrustedKeys, contracts: HostContracts) -> Self {
-        Self { keys, contracts }
+        Self {
+            keys,
+            contracts,
+            allow_unsigned_development: false,
+        }
+    }
+
+    /// 明示的なローカル開発時のみ署名のない package を許可する。
+    /// 署名がある場合は開発時も必ず検証する。
+    pub fn allow_unsigned_local_development(mut self) -> Self {
+        self.allow_unsigned_development = true;
+        self
     }
 
     /// 導入済み package の署名・目録・契約・各 file を再検証する。
@@ -259,7 +273,7 @@ impl ExtensionLoader {
         }
         let directory = catalog.installed_directory(id)?;
         let raw = read_installed_file(&directory, MANIFEST_NAME)?;
-        let manifest = parse_manifest(&raw, &self.keys)?;
+        let manifest = parse_manifest(&raw, &self.keys, self.allow_unsigned_development)?;
         if manifest.kind != PackageKind::Extension {
             return Err(PackageError::NotAnExtension(manifest.kind));
         }
@@ -306,7 +320,7 @@ impl ExtensionLoader {
         let manifest_value = archive
             .get(MANIFEST_NAME)
             .ok_or_else(|| PackageError::Malformed(format!("{MANIFEST_NAME} がない")))?;
-        let manifest = parse_manifest(manifest_value, &self.keys)?;
+        let manifest = parse_manifest(manifest_value, &self.keys, self.allow_unsigned_development)?;
         if manifest.kind != PackageKind::Extension {
             return Err(PackageError::NotAnExtension(manifest.kind));
         }
@@ -658,30 +672,41 @@ fn member_name(entry: &zip::read::ZipFile<'_, fs::File>) -> Result<String, Packa
     Ok(name.to_owned())
 }
 
-fn parse_manifest(raw: &[u8], keys: &TrustedKeys) -> Result<PackageManifest, PackageError> {
+fn parse_manifest(
+    raw: &[u8],
+    keys: &TrustedKeys,
+    allow_unsigned: bool,
+) -> Result<PackageManifest, PackageError> {
     let value: Value = serde_json::from_slice(raw)
         .map_err(|error| PackageError::Malformed(format!("manifest が JSON でない: {error}")))?;
     let object = value
         .as_object()
         .ok_or_else(|| PackageError::Malformed("manifest が object でない".to_owned()))?;
-    reject_unknown_and_missing(object, &MANIFEST_FIELDS, "manifest")?;
+    let unsigned = !object.contains_key("key_id") && !object.contains_key("signature");
+    if unsigned && allow_unsigned {
+        reject_unknown_and_missing(object, &MANIFEST_FIELDS[..6], "manifest")?;
+    } else {
+        reject_unknown_and_missing(object, &MANIFEST_FIELDS, "manifest")?;
+    }
     if object["schema"].as_i64() != Some(PACKAGE_SCHEMA) {
         return Err(PackageError::Malformed(format!(
             "未対応の schema: {}",
             object["schema"]
         )));
     }
-    let key_id = object["key_id"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| PackageError::Malformed("key_id が空".to_owned()))?;
-    let signature = object["signature"]
-        .as_str()
-        .ok_or_else(|| PackageError::Malformed("signature が文字列でない".to_owned()))?;
-    let mut payload = object.clone();
-    payload.remove("signature");
-    crate::signature::verify_signature(keys, key_id, signature, &Value::Object(payload))
-        .map_err(PackageError::Signature)?;
+    if !unsigned || !allow_unsigned {
+        let key_id = object["key_id"]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| PackageError::Malformed("key_id が空".to_owned()))?;
+        let signature = object["signature"]
+            .as_str()
+            .ok_or_else(|| PackageError::Malformed("signature が文字列でない".to_owned()))?;
+        let mut payload = object.clone();
+        payload.remove("signature");
+        crate::signature::verify_signature(keys, key_id, signature, &Value::Object(payload))
+            .map_err(PackageError::Signature)?;
+    }
 
     let kind = object["kind"]
         .as_str()

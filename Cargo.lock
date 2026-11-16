@@ -4245,8 +4245,10 @@ name = "host"
 version = "0.1.0"
 dependencies = [
  "backend-state",
+ "base64 0.22.1",
  "client-api",
  "document",
+ "ed25519-dalek",
  "editor-core",
  "extension-runtime",
  "extensions-entry",

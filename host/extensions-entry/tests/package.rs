@@ -70,6 +70,51 @@ fn explicit_publisher_key_can_authorize_an_external_package() {
     );
 }
 
+#[test]
+fn unsigned_packages_require_explicit_development_mode() {
+    let workspace = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();
+    let mut manifest = extension_manifest(
+        "dev.example.terminal",
+        &[(EXTENSION_CONTRACT, &host_version(), &host_version())],
+    );
+    manifest.as_object_mut().unwrap().remove("key_id");
+    manifest.as_object_mut().unwrap().remove("signature");
+    let package = write_package(
+        workspace.path(),
+        "terminal.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    assert!(loader().install(&mut catalog, &package, true).is_err());
+    let development = loader().allow_unsigned_local_development();
+    assert!(
+        development
+            .install(&mut catalog, &package, true)
+            .unwrap()
+            .is_installed()
+    );
+    assert!(
+        development
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_ok()
+    );
+    assert!(
+        loader()
+            .load_installed(&mut catalog, &id("dev.example.terminal"))
+            .is_err()
+    );
+    manifest["key_id"] = json!(KEY_ID);
+    manifest["signature"] = json!("AA==");
+    let signed = write_package(
+        workspace.path(),
+        "bad-signature.lapis",
+        &manifest,
+        &[("extension.wasm", b"\0asm")],
+    );
+    assert!(development.install(&mut catalog, &signed, true).is_err());
+}
+
 fn host_version() -> String {
     let (major, minor, patch) = HOST_EXTENSION_CONTRACT_VERSION;
     format!("{major}.{minor}.{patch}")

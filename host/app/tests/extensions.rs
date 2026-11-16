@@ -310,3 +310,117 @@ fn a_package_without_a_trusted_signature_is_rejected_and_not_declared() {
             .exists()
     );
 }
+
+#[test]
+fn host_accepts_explicitly_trusted_external_publisher() {
+    use base64::Engine as _;
+    use ed25519_dalek::{Signer as _, SigningKey};
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let trusted = state.path().join("extensions");
+    std::fs::create_dir_all(&trusted).unwrap();
+    std::fs::write(
+        trusted.join("trusted-keys.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "schema": 1,
+            "keys": {"external": base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes())}
+        })).unwrap(),
+    ).unwrap();
+    let bytes = b"language data";
+    let mut manifest = serde_json::json!({
+        "schema": 1,
+        "kind": "extension",
+        "id": "dev.example.language",
+        "version": "0.1.0",
+        "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+        "files": [{"path": "language.json", "sha256": format!("{:x}", sha2::Sha256::digest(bytes))}],
+        "key_id": "external"
+    });
+    fn canonical(value: &serde_json::Value, out: &mut String) {
+        match value {
+            serde_json::Value::Object(object) => {
+                let mut keys: Vec<_> = object.keys().collect();
+                keys.sort_unstable();
+                out.push('{');
+                for (index, key) in keys.into_iter().enumerate() {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    out.push_str(&serde_json::to_string(key).unwrap());
+                    out.push(':');
+                    canonical(&object[key], out);
+                }
+                out.push('}');
+            }
+            serde_json::Value::Array(values) => {
+                out.push('[');
+                for (index, value) in values.iter().enumerate() {
+                    if index != 0 {
+                        out.push(',');
+                    }
+                    canonical(value, out);
+                }
+                out.push(']');
+            }
+            other => out.push_str(&serde_json::to_string(other).unwrap()),
+        }
+    }
+    let mut payload = String::new();
+    canonical(&manifest, &mut payload);
+    let signature = key.sign(payload.as_bytes());
+    manifest["signature"] =
+        serde_json::json!(base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()));
+    let package = write_package(state.path(), &[("language.json", bytes)], &manifest);
+    let host = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        host.install_extension(&package, true)
+            .unwrap()
+            .is_installed()
+    );
+    drop(host);
+    let restarted = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(restarted.extension_startup_errors().is_empty());
+    assert_eq!(
+        restarted.extensions().unwrap().extensions[0].id,
+        "dev.example.language"
+    );
+}
+
+#[test]
+fn unsigned_package_is_available_only_in_development_mode() {
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let bytes = b"language data";
+    let manifest = serde_json::json!({
+        "schema": 1,
+        "kind": "extension",
+        "id": "dev.example.unsigned",
+        "version": "0.1.0",
+        "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+        "files": [{"path": "language.json", "sha256": format!("{:x}", sha2::Sha256::digest(bytes))}]
+    });
+    let package = write_package(state.path(), &[("language.json", bytes)], &manifest);
+    let production = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(production.install_extension(&package, true).is_err());
+    drop(production);
+    let development =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        development
+            .install_extension(&package, true)
+            .unwrap()
+            .is_installed()
+    );
+    drop(development);
+    let production = BackendHost::start_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        production
+            .extension_startup_errors()
+            .contains_key("dev.example.unsigned")
+    );
+    drop(production);
+    let development =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(development.extension_startup_errors().is_empty());
+}
