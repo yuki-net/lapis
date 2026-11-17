@@ -13,11 +13,7 @@ pub(crate) fn run(
 ) {
     let mut previous = None;
     let mut failed = false;
-    loop {
-        match cancelled.try_recv() {
-            Err(mpsc::TryRecvError::Empty) => {}
-            _ => break,
-        }
+    while let Err(mpsc::TryRecvError::Empty) = cancelled.try_recv() {
         match fetch() {
             Ok(response) => {
                 failed = false;

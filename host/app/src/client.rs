@@ -520,6 +520,16 @@ impl BackendClient {
             _ => Err(BackendServiceError::Unavailable),
         }
     }
+
+    /// 表示用パスから、その接続で認証する Workspace と表示 root を解決する。
+    pub fn workspace_for_directory(
+        &self,
+        directory: &Path,
+    ) -> Result<(PathBuf, WorkspaceId), BackendServiceError> {
+        let (root, _) = self.directory(directory)?;
+        let workspace = self.register_workspace(&root)?;
+        Ok((root, workspace))
+    }
     pub(crate) fn open_worktree(
         &self,
         workspace: WorkspaceId,

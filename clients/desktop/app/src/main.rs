@@ -1,5 +1,6 @@
 mod connection;
 mod extension_poll;
+mod extension_terminal;
 mod install;
 mod update_fetch;
 mod updater;
@@ -196,7 +197,15 @@ fn main() {
     } else {
         LspSession::new(Arc::new(lsp_backend))
     };
-    let mut terminal_session = TerminalSession::new(host.terminals());
+    let terminal_backend: Arc<dyn terminal::TerminalBackend> = if arguments
+        .iter()
+        .any(|value| value == "--extension-terminal")
+    {
+        Arc::new(extension_terminal::ExtensionTerminals::new(host.clone()))
+    } else {
+        host.terminals()
+    };
+    let mut terminal_session = TerminalSession::new(terminal_backend);
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(
             Arc::new(LocalWorkspaceSearchBackend),

@@ -20,6 +20,7 @@ struct Entry {
     session: NativeSession,
     revision: u64,
     events: Vec<TerminalEvent>,
+    last_owner: Option<Option<String>>,
 }
 
 /// Workspace ごとに認証された拡張 transport を所有する。
@@ -158,6 +159,7 @@ impl TerminalBackend for NativeBackend {
                 session,
                 revision: 0,
                 events: Vec::new(),
+                last_owner: None,
             },
         );
         self.count.fetch_add(1, Ordering::Release);
@@ -193,6 +195,7 @@ impl TerminalBackend for NativeBackend {
                     session,
                     revision: 0,
                     events: Vec::new(),
+                    last_owner: None,
                 },
             );
             self.count.fetch_add(1, Ordering::Release);
@@ -226,9 +229,12 @@ impl TerminalBackend for NativeBackend {
                 entry.revision = delta.revision;
                 entry.events.push(TerminalEvent::Delta(delta));
             }
-            entry.events.push(TerminalEvent::Owner {
-                owner: output.owner,
-            });
+            if entry.last_owner.as_ref() != Some(&output.owner) {
+                entry.last_owner = Some(output.owner.clone());
+                entry.events.push(TerminalEvent::Owner {
+                    owner: output.owner,
+                });
+            }
             if let Some(error) = output.read_error.or(output.write_error) {
                 entry.events.push(TerminalEvent::Failed(error));
             }
