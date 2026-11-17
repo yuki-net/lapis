@@ -134,8 +134,29 @@ impl LocalPtyService {
             self.count.fetch_sub(removed.len(), Ordering::AcqRel);
             removed
         };
+        let mut first_error = None;
+        for session in &removed {
+            // ???? read ???????????????????
+            let result = (|| -> Result<(), PtyError> {
+                session.attachments.lock().map_err(error)?.clear();
+                session.output.1.notify_all();
+                let mut process = session.process.lock().map_err(error)?;
+                if process.refresh_exit()?.is_none()
+                    && let Err(problem) = process.child.kill()
+                {
+                    process.refresh_exit()?;
+                    if process.exit.is_none() {
+                        return Err(error(problem));
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(problem) = result {
+                first_error.get_or_insert(problem);
+            }
+        }
         drop(removed);
-        Ok(())
+        first_error.map_or(Ok(()), Err)
     }
 
     fn session(&self, owner: &PtyOwnerId, id: &PtySessionId) -> Result<Arc<Session>, PtyError> {
@@ -659,6 +680,36 @@ mod tests {
         assert!(service.forget(&other, &id).is_err());
         service.forget(&owner, &id).unwrap();
         assert!(service.attach(&owner, &id, second).is_err());
+    }
+
+    #[test]
+    fn closing_owner_stops_process_even_when_session_is_referenced() {
+        let service = LocalPtyService::default();
+        let owner = PtyOwnerId("extension.a".into());
+        let attachment = PtyAttachmentId("client".into());
+        let id = service.spawn(&owner, command()).unwrap();
+        service.attach(&owner, &id, attachment.clone()).unwrap();
+        wait_for(&service, &owner, &id, &attachment, 0, b"pty-ready");
+        // ????????????????????????????
+        let session = service.session(&owner, &id).unwrap();
+        service.close_owner(&owner).unwrap();
+        assert_eq!(service.session_count(&owner).unwrap(), 0);
+        assert!(session.require_attachment(&attachment).is_err());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if session
+                .process
+                .lock()
+                .unwrap()
+                .refresh_exit()
+                .unwrap()
+                .is_some()
+            {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "child did not exit");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     #[test]

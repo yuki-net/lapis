@@ -142,6 +142,46 @@ impl HostCallHandler for PtyBroker {
     }
 
     fn call(&self, extension: &str, method: &str, payload: Value) -> Result<Value, String> {
+        if method == "pty.v1.read" {
+            let value: Read = parse(payload)?;
+            if value.timeout_ms > 1_000 {
+                return Err("PTY read timeout is too long".into());
+            }
+            let owner = PtyOwnerId(extension.to_owned());
+            let attachment = PtyAttachmentId("extension-host".to_owned());
+            let id = PtySessionId(value.id);
+            {
+                let _guard = self.gate.lock().map_err(|error| error.to_string())?;
+                if !self.extensions.pty_approved(extension)? {
+                    return Err("PTY capability is not approved".into());
+                }
+            }
+            self.sessions
+                .wait_read(
+                    &owner,
+                    &id,
+                    &attachment,
+                    value.offset,
+                    value.max_bytes as usize,
+                    u64::from(value.timeout_ms),
+                )
+                .map_err(|error| error.to_string())?;
+            let _guard = self.gate.lock().map_err(|error| error.to_string())?;
+            if !self.extensions.pty_approved(extension)? {
+                return Err("PTY capability is not approved".into());
+            }
+            let output = self
+                .sessions
+                .read(
+                    &owner,
+                    &id,
+                    &attachment,
+                    value.offset,
+                    value.max_bytes as usize,
+                )
+                .map_err(|error| error.to_string())?;
+            return serde_json::to_value(output).map_err(|error| error.to_string());
+        }
         let _guard = self.gate.lock().map_err(|error| error.to_string())?;
         if !self.extensions.pty_approved(extension)? {
             return Err("PTY capability is not approved".into());
@@ -199,24 +239,6 @@ impl HostCallHandler for PtyBroker {
                     )
                     .map_err(|error| error.to_string())?;
                 Ok(Value::Null)
-            }
-            "pty.v1.read" => {
-                let value: Read = parse(payload)?;
-                if value.timeout_ms > 1_000 {
-                    return Err("PTY read timeout is too long".into());
-                }
-                let output = self
-                    .sessions
-                    .wait_read(
-                        &owner,
-                        &PtySessionId(value.id),
-                        &attachment,
-                        value.offset,
-                        value.max_bytes as usize,
-                        u64::from(value.timeout_ms),
-                    )
-                    .map_err(|error| error.to_string())?;
-                serde_json::to_value(output).map_err(|error| error.to_string())
             }
             _ => Err("unknown Host capability".into()),
         }
