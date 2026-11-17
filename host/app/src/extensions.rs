@@ -186,6 +186,24 @@ impl HostExtensions {
                     let requires_runtime = package.manifest.requires.iter().any(|requirement| {
                         requirement.contract.as_str() == extension_runtime::LIFECYCLE_CONTRACT
                     });
+                    let view_bytes = package.files.remove("views.json");
+                    let views_declared = package.manifest.requires.iter().any(|requirement| {
+                        requirement.contract.as_str()
+                            == extension_ui_contract::STATIC_VIEWS_CONTRACT
+                    });
+                    if view_bytes.is_some() != views_declared
+                        || (view_bytes.is_some()
+                            && !package.files.contains_key("contributions.json"))
+                        || view_bytes
+                            .as_ref()
+                            .is_some_and(|bytes| bytes.len() > 256 * 1024)
+                    {
+                        failures.insert(
+                            id.as_str().to_owned(),
+                            "表示宣言または契約が不正です".into(),
+                        );
+                        continue;
+                    }
                     let contribution = match package.files.remove("contributions.json") {
                         None => None,
                         Some(bytes) => {
@@ -210,9 +228,35 @@ impl HostExtensions {
                                 serde_json::from_slice(&bytes);
                             match parsed {
                                 Ok(declaration) if declaration.validate(id.as_str()).is_ok() => {
+                                    let views = match view_bytes {
+                                        Some(bytes) => {
+                                            let parsed: Result<
+                                                extension_ui_contract::StaticViews,
+                                                _,
+                                            > = serde_json::from_slice(&bytes);
+                                            match parsed {
+                                                Ok(views)
+                                                    if views
+                                                        .validate(id.as_str(), &declaration)
+                                                        .is_ok() =>
+                                                {
+                                                    Some(views)
+                                                }
+                                                _ => {
+                                                    failures.insert(
+                                                        id.as_str().to_owned(),
+                                                        "表示宣言が不正です".into(),
+                                                    );
+                                                    continue;
+                                                }
+                                            }
+                                        }
+                                        None => None,
+                                    };
                                     let payload = client_api::HostExtensionContributions {
                                         extension_id: id.as_str().to_owned(),
                                         declaration,
+                                        views,
                                     };
                                     let encoded_size = serde_json::to_vec(&payload)
                                         .map_or(usize::MAX, |encoded| {
@@ -342,6 +386,12 @@ impl HostExtensions {
             ContractId::try_new(extension_ui_contract::STATIC_CONTRIBUTIONS_CONTRACT)
                 .expect("valid contract id"),
             semver::Version::parse(extension_ui_contract::STATIC_CONTRIBUTIONS_VERSION)
+                .expect("valid contract version"),
+        );
+        contracts.add_version(
+            ContractId::try_new(extension_ui_contract::STATIC_VIEWS_CONTRACT)
+                .expect("valid contract id"),
+            semver::Version::parse(extension_ui_contract::STATIC_VIEWS_VERSION)
                 .expect("valid contract version"),
         );
         if worker_executable.is_some() {
@@ -800,6 +850,7 @@ mod tests {
         let contribution = StartupContribution {
             payload: client_api::HostExtensionContributions {
                 extension_id: "dev.example.extension".into(),
+                views: None,
                 declaration: extension_ui_contract::StaticContributions {
                     schema: 1,
                     default_locale: "en-US".into(),
@@ -1243,6 +1294,16 @@ mod tests {
             source.path().join("extension.json"),
         )
         .unwrap();
+        std::fs::copy(
+            root.join("extensions/terminal/component/contributions.json"),
+            source.path().join("contributions.json"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root.join("extensions/terminal/component/views.json"),
+            source.path().join("views.json"),
+        )
+        .unwrap();
         let archive = state.path().join("terminal.lapis");
         assert!(
             std::process::Command::new("python")
@@ -1262,6 +1323,8 @@ mod tests {
             extension_runtime::LIFECYCLE_CONTRACT,
             extension_runtime::DISPATCH_CONTRACT,
             extension_runtime::PROCESS_INFO_CONTRACT,
+            extension_ui_contract::STATIC_CONTRIBUTIONS_CONTRACT,
+            extension_ui_contract::STATIC_VIEWS_CONTRACT,
             "lapis.process.pty",
         ] {
             contracts.add_version(

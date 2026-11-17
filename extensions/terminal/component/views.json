@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "views": [
+    {
+      "id": "lapis.terminal.view",
+      "content_type": "lapis.content.terminal-grid.v1",
+      "title": "terminal.title",
+      "default_zone": "bottom",
+      "multiple_instances": true,
+      "open_command": "lapis.terminal.open"
+    }
+  ]
+}

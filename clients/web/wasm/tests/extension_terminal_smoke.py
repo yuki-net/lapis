@@ -97,6 +97,8 @@ def main():
         workspace.mkdir()
         source.mkdir()
         shutil.copyfile(ROOT / "extensions/terminal/component/extension.json", source / "extension.json")
+        shutil.copyfile(ROOT / "extensions/terminal/component/contributions.json", source / "contributions.json")
+        shutil.copyfile(ROOT / "extensions/terminal/component/views.json", source / "views.json")
         shutil.copyfile(ROOT / "target/terminal-component/wasm32-wasip2/debug/lapis_terminal_component.wasm", source / "extension.wasm")
         package, certificate = directory / "terminal.lapis", directory / "host.der"
         subprocess.run(["python", "-m", "scripts.extensions.package", str(source), str(package), "--development"],

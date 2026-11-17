@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "default_locale": "en-US",
+  "translations": [
+    {
+      "target": "lapis.terminal",
+      "locale": "en-US",
+      "messages": {
+        "terminal.title": "Terminal"
+      }
+    },
+    {
+      "target": "lapis.terminal",
+      "locale": "ja-JP",
+      "messages": {
+        "terminal.title": "ターミナル"
+      }
+    }
+  ]
+}

@@ -244,6 +244,11 @@ fn build_snapshot(
             return Err(SettingsError::new("翻訳先の拡張 ID が不正です"));
         }
         declaration.validate(owner).map_err(SettingsError::new)?;
+        if let Some(views) = &contribution.views {
+            views
+                .validate(owner, declaration)
+                .map_err(SettingsError::new)?;
+        }
         settings.register(
             owner,
             declaration
@@ -461,6 +466,23 @@ mod tests {
         let mut invalid_id = response(12);
         invalid_id.contributions[0].extension_id = "CON".to_owned();
         assert!(first.apply(generation, invalid_id).is_err());
+        assert_eq!(first.snapshot().unwrap().contributions().len(), 2);
+        let mut invalid_view = response(12);
+        invalid_view.contributions[0].views = Some(
+            serde_json::from_value(json!({
+                "schema": 1,
+                "views": [{
+                    "id": "another.extension.view",
+                    "content_type": "lapis.content.terminal-grid.v1",
+                    "title": "terminal.size",
+                    "default_zone": "bottom",
+                    "multiple_instances": true,
+                    "open_command": "dev.example.terminal.open"
+                }]
+            }))
+            .unwrap(),
+        );
+        assert!(first.apply(generation, invalid_view).is_err());
         assert_eq!(first.snapshot().unwrap().contributions().len(), 2);
         first.disconnect();
         assert!(second.apply(second_generation, response(20)).unwrap());

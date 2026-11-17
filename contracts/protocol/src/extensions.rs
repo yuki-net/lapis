@@ -112,12 +112,32 @@ pub struct HostExtensionContributions {
     /// Host が署名済み manifest から付与した提供元 ID。
     pub extension_id: String,
     pub declaration: extension_ui_contract::StaticContributions,
+    /// 独立した版付き表示契約。旧クライアントはこの項目を無視する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub views: Option<extension_ui_contract::StaticViews>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{RequestBody, ResponseBody};
+
+    #[test]
+    fn older_clients_can_ignore_the_independent_view_contract() {
+        #[derive(serde::Deserialize)]
+        struct LegacyContribution {
+            extension_id: String,
+            declaration: extension_ui_contract::StaticContributions,
+        }
+        let wire = serde_json::json!({
+            "extension_id":"lapis.terminal",
+            "declaration":{"schema":1},
+            "views":{"schema":1,"views":[]}
+        });
+        let old: LegacyContribution = serde_json::from_value(wire).unwrap();
+        assert_eq!(old.extension_id, "lapis.terminal");
+        assert_eq!(old.declaration.schema, 1);
+    }
 
     #[test]
     fn the_list_is_a_host_level_read_without_a_workspace() {
@@ -127,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn changing_enabled_state_requires_host_management() {
+    fn changing_enabled_state_requires_extension_management() {
         let request = RequestBody::HostExtensionSetEnabled(HostExtensionSetEnabledRequest {
             id: "dev.example.terminal".to_owned(),
             enabled: false,
@@ -135,7 +155,7 @@ mod tests {
         assert_eq!(request.method(), "host.extensions.set_enabled");
         assert_eq!(
             request.required_capability(),
-            crate::capability::HOST_MANAGE
+            crate::capability::EXTENSIONS_MANAGE
         );
         assert_eq!(request.workspace_id(), None);
         let encoded = serde_json::to_value(&request).unwrap();
@@ -210,6 +230,7 @@ mod tests {
             }],
             contributions: vec![HostExtensionContributions {
                 extension_id: "dev.example.terminal".to_owned(),
+                views: None,
                 declaration: extension_ui_contract::StaticContributions {
                     schema: 1,
                     default_locale: "en-US".to_owned(),

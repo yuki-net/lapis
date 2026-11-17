@@ -234,6 +234,16 @@ mod tests {
         )
         .unwrap();
         std::fs::copy(
+            root.join("extensions/terminal/component/contributions.json"),
+            input.path().join("contributions.json"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root.join("extensions/terminal/component/views.json"),
+            input.path().join("views.json"),
+        )
+        .unwrap();
+        std::fs::copy(
             root.join(
                 "target/terminal-component/wasm32-wasip2/debug/lapis_terminal_component.wasm",
             ),

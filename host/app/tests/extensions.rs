@@ -506,6 +506,70 @@ fn unsigned_package_is_available_only_in_development_mode() {
 }
 
 #[test]
+fn view_declarations_require_their_own_contract_and_are_published() {
+    use sha2::Digest as _;
+    let state = tempfile::tempdir().unwrap();
+    let host =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    for (id, declared) in [
+        ("dev.example.badview", false),
+        ("dev.example.goodview", true),
+    ] {
+        let data = serde_json::to_vec(&serde_json::json!({
+            "schema":1,
+            "translations":[{"target":id,"locale":"en-US","messages":{"title":"Example"}}]
+        }))
+        .unwrap();
+        let views = serde_json::to_vec(&serde_json::json!({
+            "schema":1,"views":[{"id":format!("{id}.view"),"content_type":"lapis.content.example.v1",
+            "title":"title","default_zone":"bottom"}]
+        })).unwrap();
+        let mut requires = vec![
+            serde_json::json!({"contract":"lapis.extension","minimum":"1.0.0","maximum":"1.0.0"}),
+            serde_json::json!({"contract":"lapis.extension.contributions","minimum":"1.0.0","maximum":"1.0.0"}),
+        ];
+        if declared {
+            requires.push(serde_json::json!({"contract":"lapis.extension.views","minimum":"1.0.0","maximum":"1.0.0"}));
+        }
+        let manifest = serde_json::json!({
+            "schema":1,"kind":"extension","id":id,"version":"1.0.0","requires":requires,
+            "files":[
+                {"path":"contributions.json","sha256":format!("{:x}",sha2::Sha256::digest(&data))},
+                {"path":"views.json","sha256":format!("{:x}",sha2::Sha256::digest(&views))}
+            ]
+        });
+        let package = write_package(
+            state.path(),
+            &[("contributions.json", &data), ("views.json", &views)],
+            &manifest,
+        );
+        host.install_extension(&package, true).unwrap();
+    }
+    drop(host);
+    let restarted =
+        BackendHost::start_development_with_state_directory(state.path().to_owned()).unwrap();
+    assert!(
+        restarted
+            .extension_startup_errors()
+            .contains_key("dev.example.badview")
+    );
+    let published = restarted.extensions().unwrap().contributions;
+    let good = published
+        .iter()
+        .find(|item| item.extension_id == "dev.example.goodview")
+        .unwrap();
+    assert_eq!(
+        good.views.as_ref().unwrap().views[0].id,
+        "dev.example.goodview.view"
+    );
+    assert!(
+        !published
+            .iter()
+            .any(|item| item.extension_id == "dev.example.badview")
+    );
+}
+
+#[test]
 fn contributions_without_versioned_contract_or_over_the_limit_are_not_published() {
     use sha2::Digest as _;
     let state = tempfile::tempdir().unwrap();
