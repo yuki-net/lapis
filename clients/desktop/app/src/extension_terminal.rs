@@ -189,4 +189,148 @@ mod tests {
         assert!(backend.remember(&id, &two).is_err());
         assert_eq!(backend.count.load(Ordering::Acquire), 1);
     }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Wasm component と拡張ホストの事前ビルドが必要"]
+    fn desktop_terminal_runs_real_extension_pty() {
+        use client_api::HostExtensionSetCapabilityRequest;
+        use desktop_client::TerminalSession;
+        use std::{process::Command, time::Instant};
+
+        const CHILD: &str = "LAPIS_TERMINAL_INTEGRATION_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let temp = tempfile::tempdir().unwrap();
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+            let executable = std::env::current_exe().unwrap();
+            let copied_test = temp.path().join("desktop-test.exe");
+            std::fs::copy(executable, &copied_test).unwrap();
+            std::fs::copy(
+                root.join("target/debug/lapis-extension-host.exe"),
+                temp.path().join("lapis-extension-host.exe"),
+            )
+            .unwrap();
+            let status = Command::new(copied_test)
+                .args([
+                    "--exact",
+                    "extension_terminal::tests::desktop_terminal_runs_real_extension_pty",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            return;
+        }
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let state = tempfile::tempdir().unwrap();
+        let workspace = tempfile::tempdir().unwrap();
+        let input = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            root.join("extensions/terminal/component/extension.json"),
+            input.path().join("extension.json"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root.join(
+                "target/terminal-component/wasm32-wasip2/debug/lapis_terminal_component.wasm",
+            ),
+            input.path().join("extension.wasm"),
+        )
+        .unwrap();
+        let package = state.path().join("terminal.lapis");
+        assert!(
+            Command::new("python")
+                .current_dir(&root)
+                .args(["-m", "scripts.extensions.package"])
+                .arg(input.path())
+                .arg(&package)
+                .arg("--development")
+                .status()
+                .unwrap()
+                .success()
+        );
+        let host =
+            host::BackendHost::start_development_with_state_directory(state.path().to_owned())
+                .unwrap();
+        host.install_extension(&package, true).unwrap();
+        let digest = host
+            .extension_capabilities("lapis.terminal")
+            .unwrap()
+            .manifest_digest;
+        host.set_extension_capability(&HostExtensionSetCapabilityRequest {
+            id: "lapis.terminal".into(),
+            manifest_digest: digest,
+            capability: "process.pty".into(),
+            version: "1.0.0".into(),
+            approved: true,
+        })
+        .unwrap();
+        drop(host);
+        let host =
+            host::BackendHost::start_development_with_state_directory(state.path().to_owned())
+                .unwrap();
+        host.register_workspace(workspace.path()).unwrap();
+        let backend = Arc::new(ExtensionTerminals::new(BackendClient::from(host.clone())));
+        let mut terminals = TerminalSession::new(backend);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let id = loop {
+            match terminals.start(workspace.path(), 80, 24) {
+                Ok(id) => break id,
+                Err(error) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "terminal startup failed: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        };
+        terminals
+            .input(&id, "[console]::WriteLine('lapis'+'proof')\r")
+            .unwrap();
+        while !terminals.terminals()[0]
+            .screen
+            .plain_text()
+            .contains("lapisproof")
+        {
+            assert!(Instant::now() < deadline, "terminal output missing");
+            terminals.refresh().unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let original_owner = terminals.owner(&id).unwrap().to_owned();
+        let other = ExtensionTerminals::new(BackendClient::from(host));
+        assert!(
+            other
+                .list(workspace.path())
+                .unwrap()
+                .iter()
+                .any(|item| item.id == id)
+        );
+        other.attach(workspace.path(), &id).unwrap();
+        other.claim(&id).unwrap();
+        terminals.refresh().unwrap();
+        assert_ne!(terminals.owner(&id), Some(original_owner.as_str()));
+        drop(other);
+        let disconnect_deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            terminals.refresh().unwrap();
+            if terminals.owner(&id).is_none() {
+                break;
+            }
+            assert!(
+                Instant::now() < disconnect_deadline,
+                "owner was not released"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        terminals.claim(&id).unwrap();
+        terminals.resize(&id, 100, 30).unwrap();
+        terminals.refresh().unwrap();
+        assert_eq!(terminals.terminals()[0].screen.size.columns, 100);
+        terminals.terminate_and_forget(&id).unwrap();
+        assert!(terminals.terminals().is_empty());
+    }
 }

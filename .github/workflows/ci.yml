@@ -192,6 +192,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p host terminal_component_uses_approved_host_pty -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p lapis desktop_terminal_runs_real_extension_pty -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test managed Web publication
         shell: pwsh

@@ -73,10 +73,21 @@ impl NativeBackend {
     }
 
     fn relative_cwd(&self, cwd: &Path) -> Result<String, TerminalError> {
+        // Local Host の root は canonicalize 済み。Windows の通常パスと \\\\?\\ パスの
+        // 表記差を解消する。Remote の仮想パスは元の文字列で比較する。
+        let canonical;
         let relative = match &self.workspace_root {
-            Some(root) => cwd
-                .strip_prefix(root)
-                .map_err(|_| TerminalError::new("Terminal path is outside workspace"))?,
+            Some(root) => match cwd.strip_prefix(root) {
+                Ok(relative) => relative,
+                Err(_) => {
+                    canonical = cwd
+                        .canonicalize()
+                        .map_err(|_| TerminalError::new("Terminal path is outside workspace"))?;
+                    canonical
+                        .strip_prefix(root)
+                        .map_err(|_| TerminalError::new("Terminal path is outside workspace"))?
+                }
+            },
             None => cwd,
         };
         if relative.components().any(|part| {
@@ -296,6 +307,15 @@ mod tests {
                 .is_err()
         );
         assert!(backend.display_path("../outside").is_err());
+    }
+
+    #[test]
+    fn accepts_original_local_path_for_canonical_workspace_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let transport: NativeTransport = Arc::new(|_| unreachable!());
+        let backend =
+            NativeBackend::for_workspace(transport, directory.path().canonicalize().unwrap());
+        assert_eq!(backend.relative_cwd(directory.path()).unwrap(), ".");
     }
 
     #[test]
