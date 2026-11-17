@@ -4,16 +4,52 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 from scripts.extensions.package import package
 from scripts.extensions.check import check
 from scripts.extensions.bundle import bundle
+from scripts.extensions.stage import stage
 from scripts.release import ed25519
 from scripts.release.manifest import canonical_bytes
 
 
 class PackageTests(unittest.TestCase):
+    def test_stage_discovers_data_and_wasm_components(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source, output, target = root / "extensions", root / "staged", root / "target"
+            data = source / "language"
+            data.mkdir(parents=True)
+            (data / "extension.json").write_text(json.dumps({
+                "id": "example.language", "version": "1.0.0",
+                "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+                "files": ["data.json"]
+            }), encoding="utf-8")
+            (data / "data.json").write_text("{}", encoding="utf-8")
+            component = source / "terminal" / "component"
+            component.mkdir(parents=True)
+            (component / "extension.json").write_text(json.dumps({
+                "id": "example.terminal", "version": "1.0.0",
+                "requires": [{"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"}],
+                "files": ["extension.wasm"]
+            }), encoding="utf-8")
+            (component / "Cargo.toml").write_text(
+                '[package]\nname="example-terminal"\n[lib]\ncrate-type=["cdylib"]\n',
+                encoding="utf-8",
+            )
+            artifact = target / "wasm32-wasip2" / "debug" / "example_terminal.wasm"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"component")
+            with patch("scripts.extensions.stage.subprocess.run") as build:
+                build.return_value.stdout = json.dumps({"reason": "compiler-artifact", "target": {"kind": ["cdylib"]}, "filenames": [str(artifact)]})
+                self.assertEqual(stage(source, output, target, release=False),
+                                 ["example.language", "example.terminal"])
+            build.assert_called_once()
+            self.assertEqual((output / "terminal" / "extension.wasm").read_bytes(), b"component")
+            self.assertEqual((output / "language" / "data.json").read_text(), "{}")
+
     def test_external_example_uses_current_public_wit(self):
         root = Path(__file__).resolve().parents[2]
         self.assertEqual(
@@ -36,6 +72,10 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(
             (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
             (root / "contracts/extension-api/wit/pty-v1/pty.wit").read_bytes(),
+        )
+        self.assertEqual(
+            (root / "examples/pty-extension/wit/deps/dispatch/dispatch.wit").read_bytes(),
+            (root / "contracts/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
         )
 
     def test_japanese_package_matches_current_bundled_messages(self):

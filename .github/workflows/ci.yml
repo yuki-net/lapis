@@ -128,6 +128,7 @@ jobs:
           python3 -m scripts.extensions.smoke
           python3 -m scripts.extensions.smoke_pty
           python3 -m scripts.extensions.smoke_terminal
+          python3 -m scripts.extensions.stage extensions "$RUNNER_TEMP/lapis-bundled-input" --target-dir target/terminal-component --debug
           cargo fmt --manifest-path extensions/terminal/component/Cargo.toml -- --check
           cargo clippy --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component -- -D warnings
           cargo test --locked -p extensions-entry --test package independent_component_is_packaged_installed_and_activated -- --ignored

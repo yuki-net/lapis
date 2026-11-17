@@ -33,7 +33,10 @@ def exchange(denied: bool) -> None:
         except queue.Empty as error:
             raise RuntimeError("拡張ホストが応答しません") from error
     try:
-        send({"command": "activate", "id": "dev.example.pty", "component": base64.b64encode(COMPONENT.read_bytes()).decode("ascii")})
+        send({"command": "activate", "id": "dev.example.pty", "component": base64.b64encode(COMPONENT.read_bytes()).decode("ascii"), "require_dispatch": True})
+        assert receive()["ok"]
+        send({"command": "dispatch", "id": "dev.example.pty", "operation": "example.spawn", "payload": "{}",
+              "context": {"session": "session-1", "workspace": "workspace-1"}})
         call = receive()
         assert call["kind"] == "call" and call["extension"] == "dev.example.pty" and call["method"] == "pty.v1.spawn", call
         result = {"Err": "not approved"} if denied else {"Ok": "pty-1"}

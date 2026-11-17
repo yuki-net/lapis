@@ -1119,6 +1119,7 @@ mod tests {
             "id":"dev.example.pty", "version":"1.0.0",
             "requires":[{"contract":"lapis.extension", "minimum":"1.0.0", "maximum":"1.0.0"},
                         {"contract":"lapis.extension.lifecycle", "minimum":"1.0.0", "maximum":"1.0.0"},
+                        {"contract":"lapis.extension.dispatch", "minimum":"1.0.0", "maximum":"1.0.0"},
                         {"contract":"lapis.process.pty", "minimum":"1.0.0", "maximum":"1.0.0"}],
             "capabilities":[{"id":"process.pty", "version":"1.0.0"}], "files":["extension.wasm"]
         })).unwrap()).unwrap();
@@ -1136,7 +1137,11 @@ mod tests {
 
         let mut extensions = HostExtensions::load_with_development(Some(state.path()), true);
         let mut contracts = HostContracts::current();
-        for id in ["lapis.extension.lifecycle", "lapis.process.pty"] {
+        for id in [
+            "lapis.extension.lifecycle",
+            "lapis.extension.dispatch",
+            "lapis.process.pty",
+        ] {
             contracts.add_version(
                 ContractId::try_new(id).unwrap(),
                 semver::Version::new(1, 0, 0),
@@ -1153,7 +1158,14 @@ mod tests {
             .capabilities("dev.example.pty")
             .unwrap()
             .manifest_digest;
-        let broker = Arc::new(crate::extension_pty::PtyBroker::new(Arc::new(extensions)));
+        let workspace_roots = Arc::new(std::sync::Mutex::new(std::collections::HashMap::from([(
+            state.path().canonicalize().unwrap(),
+            client_api::WorkspaceId::try_new("host").unwrap(),
+        )])));
+        let broker = Arc::new(crate::extension_pty::PtyBroker::with_workspaces(
+            Arc::new(extensions),
+            workspace_roots,
+        ));
         let wait_for_running = |supervisor: &ExtensionSupervisor| {
             let deadline = Instant::now() + Duration::from_secs(20);
             loop {
@@ -1172,8 +1184,13 @@ mod tests {
             Some(broker.clone()),
         );
         let (active, failed) = wait_for_running(&denied);
-        assert!(active.is_empty());
-        assert!(failed.contains_key("dev.example.pty"));
+        assert_eq!(active, ["dev.example.pty"]);
+        assert!(failed.is_empty());
+        assert!(
+            denied
+                .dispatch_host_internal("dev.example.pty", "example.spawn", "{}")
+                .is_err()
+        );
         assert_eq!(broker.session_count("dev.example.pty"), 0);
         drop(denied);
         assert!(
@@ -1189,6 +1206,12 @@ mod tests {
         let (active, failed) = wait_for_running(&supervisor);
         assert!(failed.is_empty(), "{failed:?}");
         assert_eq!(active, ["dev.example.pty"]);
+        assert_eq!(
+            supervisor
+                .dispatch_host_internal("dev.example.pty", "example.spawn", "{}")
+                .unwrap(),
+            "spawned"
+        );
         assert_eq!(broker.session_count("dev.example.pty"), 1);
         drop(supervisor);
         assert_eq!(broker.session_count("dev.example.pty"), 0);

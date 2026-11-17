@@ -54,7 +54,7 @@ fn main() {
         vec![ComponentImage {
             id: "dev.example.pty".into(),
             bytes: component,
-            require_dispatch: false,
+            require_dispatch: true,
         }],
         Some(handler.clone()),
     );
@@ -64,6 +64,12 @@ fn main() {
             SupervisorStatus::Running { active, failed, .. } => {
                 assert!(failed.is_empty(), "{failed:?}");
                 assert_eq!(active, ["dev.example.pty"]);
+                assert_eq!(
+                    supervisor
+                        .dispatch_host_internal("dev.example.pty", "example.spawn", "{}")
+                        .unwrap(),
+                    if denied { "denied" } else { "spawned" }
+                );
                 assert_eq!(
                     handler.calls.load(Ordering::Relaxed),
                     if denied { 1 } else { 2 }
