@@ -7,7 +7,9 @@ import json
 import os
 from pathlib import Path
 import queue
+import shutil
 import subprocess
+import tempfile
 import threading
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -17,8 +19,14 @@ WORKER = ROOT / "target/debug" / ("lapis-extension-host.exe" if os.name == "nt" 
 
 
 def main() -> None:
-    subprocess.run(["cargo", "build", "--locked", "--manifest-path", "extensions/terminal/component/Cargo.toml",
-                    "--target", "wasm32-wasip2", "--target-dir", str(TARGET)], cwd=ROOT, check=True)
+    # root Cargo.toml を持たないコピーを使い、別 repository への移動可能性を検査する。
+    (ROOT / "target").mkdir(exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="terminal-standalone-", dir=ROOT / "target") as temp:
+        standalone = Path(temp)
+        shutil.copytree(ROOT / "extensions/terminal/api", standalone / "api")
+        shutil.copytree(ROOT / "extensions/terminal/component", standalone / "component")
+        subprocess.run(["cargo", "build", "--locked", "--manifest-path", str(standalone / "component/Cargo.toml"),
+                        "--target", "wasm32-wasip2", "--target-dir", str(TARGET)], cwd=ROOT, check=True)
     child = subprocess.Popen([str(WORKER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True,
                              creationflags=0x08000000 if os.name == "nt" else 0)

@@ -10,6 +10,10 @@ Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Cl
 - `host/`（crate `terminal-state`）: Host 側の正規状態、画面差分、接続 Session。`TerminalRegistry` がこれを持つ。
 - `adapter/`（crate `local-terminal`）: OS の PTY を使う `TerminalBackend` 実装。VT/ANSI の解釈もここに閉じる。
 
+`component/` と `api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
+ビルドできる。`python -m scripts.extensions.smoke_terminal` はその状態をコピーで再現し、
+Wasm のビルドと PTY 操作を検証する。
+
 ## ディレクトリ規約の判断
 
 役割ディレクトリで分けます。機能ごとの `src/` を平坦に並べると、契約と OS 依存実装と Host 状態のどれが正本か読み取れなくなるためです。
