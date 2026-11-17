@@ -9,6 +9,10 @@ pub use terminal_session_api::v1;
 mod native_session;
 #[cfg(not(target_arch = "wasm32"))]
 pub use native_session::{NativeSession, NativeTransport};
+#[cfg(not(target_arch = "wasm32"))]
+mod native_backend;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_backend::NativeBackend;
 
 pub const EXTENSION_ID: &str = "lapis.terminal";
 

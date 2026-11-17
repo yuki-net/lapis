@@ -26,6 +26,7 @@ serde.workspace = true
 serde_json.workspace = true
 getrandom.workspace = true
 zeroize.workspace = true
+futures-channel = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 terminal-renderer = { path = "../../extensions/terminal/renderer" }
@@ -33,7 +34,6 @@ terminal-renderer = { path = "../../extensions/terminal/renderer" }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { workspace = true, features = ["wasm_js"] }
 client-core = { path = "../transport" }
-futures-channel = "0.3"
 futures-util = "0.3"
 gloo-timers = { version = "0.3", features = ["futures"] }
 wasm-bindgen = "=0.2.129"
