@@ -14,7 +14,6 @@ use gpui::{AnyView, App, Subscription};
 
 use super::{TerminalFeature, TerminalFeatureEvent, TerminalProfileCatalog};
 use crate::extension_ui::{ViewLifecycle, ViewNotifier, ViewRequest};
-use crate::features::id;
 
 /// ターミナルタブを作るときのコンテキスト。Task 切替で更新する。
 #[derive(Clone, Debug)]
@@ -39,6 +38,7 @@ pub(crate) struct TerminalTabSource {
 /// Terminal Feature がタブ個体と Session を所有する実装。
 pub(crate) struct TerminalLifecycle {
     source: TerminalTabSource,
+    view: ViewId,
     /// この機能が作ったタブ実体。個体 ID ごとに1つだけ持つ。
     instances: BTreeMap<ViewInstanceId, gpui::Entity<TerminalFeature>>,
     subscriptions: BTreeMap<ViewInstanceId, Subscription>,
@@ -51,9 +51,10 @@ pub(crate) struct TerminalLifecycle {
 }
 
 impl TerminalLifecycle {
-    fn new(source: TerminalTabSource) -> Self {
+    fn new(source: TerminalTabSource, view: ViewId) -> Self {
         Self {
             source,
+            view,
             instances: BTreeMap::new(),
             subscriptions: BTreeMap::new(),
             requests: Rc::new(RefCell::new(Vec::new())),
@@ -85,7 +86,7 @@ impl TerminalLifecycle {
         let subscribed = instance.clone();
         let requests = self.requests.clone();
         let notify = self.notify.clone();
-        let view = ViewId::new(id::VIEW_TERMINAL);
+        let view = self.view.clone();
         let subscription = cx.subscribe(entity, move |_, event: &TerminalFeatureEvent, cx| {
             let mut requests = requests.borrow_mut();
             match event {
@@ -215,8 +216,11 @@ impl ViewLifecycle for TerminalLifecycle {
 }
 
 /// Terminal のタブ個体を所有する実装を作る。
-pub(crate) fn terminal_lifecycle(source: TerminalTabSource) -> Rc<RefCell<TerminalLifecycle>> {
-    Rc::new(RefCell::new(TerminalLifecycle::new(source)))
+pub(crate) fn terminal_lifecycle(
+    source: TerminalTabSource,
+    view: ViewId,
+) -> Rc<RefCell<TerminalLifecycle>> {
+    Rc::new(RefCell::new(TerminalLifecycle::new(source, view)))
 }
 
 #[cfg(test)]
@@ -280,14 +284,17 @@ mod tests {
     }
 
     fn lifecycle() -> Rc<RefCell<TerminalLifecycle>> {
-        terminal_lifecycle(TerminalTabSource {
-            backend: Arc::new(Backend::default()),
-            context: Rc::new(RefCell::new(TerminalContext {
-                root: Some("workspace".into()),
-                conversation: editor_core::ConversationId::new("task-a"),
-            })),
-            settings: Rc::new(RefCell::new(TerminalProfileCatalog::default())),
-        })
+        terminal_lifecycle(
+            TerminalTabSource {
+                backend: Arc::new(Backend::default()),
+                context: Rc::new(RefCell::new(TerminalContext {
+                    root: Some("workspace".into()),
+                    conversation: editor_core::ConversationId::new("task-a"),
+                })),
+                settings: Rc::new(RefCell::new(TerminalProfileCatalog::default())),
+            },
+            ViewId::new("example.extension.view"),
+        )
     }
 
     /// 2つ目のタブは、1つ目とは別の個体・別のセッションになる。
@@ -355,7 +362,7 @@ mod tests {
         assert_eq!(instance, ViewInstanceId::new("terminal:one"));
         assert!(matches!(
             requests.as_slice(),
-            [ViewRequest::OpenTab(view)] if view.as_str() == id::VIEW_TERMINAL
+            [ViewRequest::OpenTab(view)] if view.as_str() == "example.extension.view"
         ));
     }
 }
