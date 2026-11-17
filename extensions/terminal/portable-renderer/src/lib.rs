@@ -1,8 +1,8 @@
 //! Web でも使用できる Terminal の出力描画器。
 
 use terminal::{
-    MAX_SCROLLBACK_LINES, TerminalCell, TerminalColor, TerminalCursor, TerminalModes, TerminalRow,
-    TerminalScreen, TerminalSize,
+    MAX_SCROLLBACK_LINES, TerminalCell, TerminalColor, TerminalCursor, TerminalInput, TerminalKey,
+    TerminalModes, TerminalModifiers, TerminalRow, TerminalScreen, TerminalSize,
 };
 
 #[derive(Default)]
@@ -38,10 +38,15 @@ impl vt100::Callbacks for Replies {
 pub struct Renderer {
     parser: vt100::Parser<Replies>,
     size: TerminalSize,
+    conpty: bool,
 }
 
 impl Renderer {
     pub fn new(size: TerminalSize) -> Result<Self, String> {
+        Self::with_conpty(size, false)
+    }
+
+    pub fn with_conpty(size: TerminalSize, conpty: bool) -> Result<Self, String> {
         validate(size)?;
         Ok(Self {
             parser: vt100::Parser::new_with_callbacks(
@@ -51,6 +56,7 @@ impl Renderer {
                 Replies::default(),
             ),
             size,
+            conpty,
         })
     }
 
@@ -64,6 +70,32 @@ impl Renderer {
         self.parser.screen_mut().set_size(size.rows, size.columns);
         self.size = size;
         Ok(())
+    }
+
+    /// 端末の入力モードを使って UI の入力を PTY bytes に変換する。
+    pub fn input(&self, input: &TerminalInput) -> Result<Vec<u8>, String> {
+        match input {
+            TerminalInput::Text(text) => Ok(text.as_bytes().to_vec()),
+            TerminalInput::Paste(text) => {
+                let clean = text.replace("\x1b[200~", "").replace("\x1b[201~", "");
+                if self.parser.screen().bracketed_paste() {
+                    Ok(format!("\x1b[200~{clean}\x1b[201~").into_bytes())
+                } else {
+                    let normalized = clean.replace("\r\n", "\n").replace('\r', "\n");
+                    Ok(if self.conpty {
+                        normalized.replace('\n', "\r\n")
+                    } else {
+                        normalized
+                    }
+                    .into_bytes())
+                }
+            }
+            TerminalInput::Key(event) => encode_key(
+                &event.key,
+                event.modifiers,
+                self.parser.screen().application_cursor(),
+            ),
+        }
     }
 
     pub fn snapshot(&mut self) -> TerminalScreen {
@@ -100,6 +132,102 @@ impl Renderer {
             scrollback,
         }
     }
+}
+
+fn encode_key(
+    key: &TerminalKey,
+    modifiers: TerminalModifiers,
+    application_cursor: bool,
+) -> Result<Vec<u8>, String> {
+    if modifiers.super_key {
+        return Err("super modifier is not supported by this terminal".into());
+    }
+    let parameter = 1
+        + u8::from(modifiers.shift)
+        + 2 * u8::from(modifiers.alt)
+        + 4 * u8::from(modifiers.control);
+    let modified = parameter != 1;
+    let arrow = |letter: char| {
+        if modified {
+            format!("\x1b[1;{parameter}{letter}").into_bytes()
+        } else if application_cursor {
+            format!("\x1bO{letter}").into_bytes()
+        } else {
+            format!("\x1b[{letter}").into_bytes()
+        }
+    };
+    let tilde = |number: u8| {
+        if modified {
+            format!("\x1b[{number};{parameter}~").into_bytes()
+        } else {
+            format!("\x1b[{number}~").into_bytes()
+        }
+    };
+    let prefix_alt = |mut bytes: Vec<u8>| {
+        if modifiers.alt {
+            bytes.insert(0, 27);
+        }
+        bytes
+    };
+    Ok(match key {
+        TerminalKey::Character(text) => {
+            let mut chars = text.chars();
+            let c = chars.next().ok_or("empty Terminal key")?;
+            if chars.next().is_some() {
+                return Err("Terminal key must be one character".into());
+            }
+            let mut bytes = Vec::new();
+            if modifiers.control {
+                let code = match c {
+                    'a'..='z' => c as u8 - b'a' + 1,
+                    'A'..='Z' => c as u8 - b'A' + 1,
+                    ' ' | '@' | '2' => 0,
+                    '[' | '3' => 27,
+                    '\\' | '4' => 28,
+                    ']' | '5' => 29,
+                    '^' | '6' => 30,
+                    '_' | '7' => 31,
+                    '?' | '8' => 127,
+                    _ => return Err("unsupported control key".into()),
+                };
+                bytes.push(code);
+            } else {
+                let mut buffer = [0; 4];
+                bytes.extend_from_slice(c.encode_utf8(&mut buffer).as_bytes());
+            }
+            prefix_alt(bytes)
+        }
+        TerminalKey::Enter => prefix_alt(vec![b'\r']),
+        TerminalKey::Backspace => prefix_alt(vec![127]),
+        TerminalKey::Tab if modifiers.shift && !modifiers.alt && !modifiers.control => {
+            b"\x1b[Z".to_vec()
+        }
+        TerminalKey::Tab if modifiers.control => format!("\x1b[9;{parameter}u").into_bytes(),
+        TerminalKey::Tab => prefix_alt(vec![b'\t']),
+        TerminalKey::Escape => prefix_alt(vec![27]),
+        TerminalKey::ArrowUp => arrow('A'),
+        TerminalKey::ArrowDown => arrow('B'),
+        TerminalKey::ArrowRight => arrow('C'),
+        TerminalKey::ArrowLeft => arrow('D'),
+        TerminalKey::Home => arrow('H'),
+        TerminalKey::End => arrow('F'),
+        TerminalKey::Insert => tilde(2),
+        TerminalKey::Delete => tilde(3),
+        TerminalKey::PageUp => tilde(5),
+        TerminalKey::PageDown => tilde(6),
+        TerminalKey::Function(index @ 1..=4) => {
+            let letter = (b'P' + index - 1) as char;
+            if modified {
+                format!("\x1b[1;{parameter}{letter}").into_bytes()
+            } else {
+                format!("\x1bO{letter}").into_bytes()
+            }
+        }
+        TerminalKey::Function(index @ 5..=12) => {
+            tilde([15, 17, 18, 19, 20, 21, 23, 24][usize::from(index - 5)])
+        }
+        TerminalKey::Function(_) => return Err("unsupported Terminal function key".into()),
+    })
 }
 
 fn validate(size: TerminalSize) -> Result<(), String> {
@@ -155,6 +283,85 @@ fn read_row(screen: &vt100::Screen, row: u16, columns: u16) -> TerminalRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use terminal::TerminalKeyEvent;
+
+    #[test]
+    fn encodes_keys_and_paste_using_terminal_modes() {
+        let mut renderer = Renderer::new(TerminalSize::new(80, 24)).unwrap();
+        let key = |key, modifiers| TerminalInput::Key(TerminalKeyEvent { key, modifiers });
+        let control = TerminalModifiers {
+            control: true,
+            ..Default::default()
+        };
+        let alt = TerminalModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let shift = TerminalModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            renderer
+                .input(&key(TerminalKey::Character("c".into()), control))
+                .unwrap(),
+            b"\x03"
+        );
+        assert_eq!(
+            renderer.input(&key(TerminalKey::Backspace, alt)).unwrap(),
+            b"\x1b\x7f"
+        );
+        assert_eq!(
+            renderer.input(&key(TerminalKey::Tab, shift)).unwrap(),
+            b"\x1b[Z"
+        );
+        assert_eq!(
+            renderer.input(&key(TerminalKey::ArrowUp, control)).unwrap(),
+            b"\x1b[1;5A"
+        );
+        assert_eq!(
+            renderer
+                .input(&key(TerminalKey::Function(5), control))
+                .unwrap(),
+            b"\x1b[15;5~"
+        );
+        assert_eq!(
+            renderer
+                .input(&TerminalInput::Text("日本語".into()))
+                .unwrap(),
+            "日本語".as_bytes()
+        );
+        renderer.process(b"\x1b[?1h\x1b[?2004h");
+        assert_eq!(
+            renderer
+                .input(&key(TerminalKey::Home, Default::default()))
+                .unwrap(),
+            b"\x1bOH"
+        );
+        assert_eq!(
+            renderer
+                .input(&TerminalInput::Paste("paste\x1b[201~".into()))
+                .unwrap(),
+            b"\x1b[200~paste\x1b[201~"
+        );
+        assert!(
+            renderer
+                .input(&key(
+                    TerminalKey::Character("ab".into()),
+                    Default::default()
+                ))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn paste_newlines_follow_pty_type() {
+        let input = TerminalInput::Paste("a\nb\rc\r\nd".into());
+        let posix = Renderer::with_conpty(TerminalSize::new(80, 24), false).unwrap();
+        let windows = Renderer::with_conpty(TerminalSize::new(80, 24), true).unwrap();
+        assert_eq!(posix.input(&input).unwrap(), b"a\nb\nc\nd");
+        assert_eq!(windows.input(&input).unwrap(), b"a\r\nb\r\nc\r\nd");
+    }
 
     #[test]
     fn renders_styles_wide_characters_modes_and_split_escape_sequences() {

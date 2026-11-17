@@ -74,9 +74,20 @@ pub struct PortableOutput {
 
 impl PortableRenderer {
     pub fn new(id: String, size: terminal::TerminalSize) -> Result<Self, String> {
+        Self::with_pty(id, size, v1::PtyFlavor::Posix)
+    }
+
+    pub fn with_pty(
+        id: String,
+        size: terminal::TerminalSize,
+        pty: v1::PtyFlavor,
+    ) -> Result<Self, String> {
         Ok(Self {
             cursor: OutputCursor::new(id),
-            engine: terminal_portable_renderer::Renderer::new(size)?,
+            engine: terminal_portable_renderer::Renderer::with_conpty(
+                size,
+                pty == v1::PtyFlavor::Conpty,
+            )?,
         })
     }
 
@@ -117,6 +128,10 @@ impl PortableRenderer {
     ) -> Result<terminal::TerminalScreen, String> {
         self.engine.resize(size)?;
         Ok(self.engine.snapshot())
+    }
+
+    pub fn input(&self, input: &terminal::TerminalInput) -> Result<Vec<u8>, String> {
+        self.engine.input(input)
     }
 }
 
@@ -507,6 +522,70 @@ mod tests {
                 .plain_text()
                 .contains("abcd")
         );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn portable_input_matches_native_for_common_keys() {
+        use std::{
+            io::{self, Write},
+            sync::mpsc,
+            time::Duration,
+        };
+        use terminal::{TerminalInput, TerminalKey, TerminalKeyEvent, TerminalModifiers};
+        struct Capture(mpsc::Sender<Vec<u8>>);
+        impl Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.send(bytes.to_vec()).map_err(io::Error::other)?;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let (sender, receiver) = mpsc::channel();
+        let size = terminal::TerminalSize::new(80, 24);
+        let mut native = terminal_renderer::TerminalEngine::new(size, Box::new(Capture(sender)));
+        let portable =
+            terminal_portable_renderer::Renderer::with_conpty(size, cfg!(windows)).unwrap();
+        let key = |key, modifiers| TerminalInput::Key(TerminalKeyEvent { key, modifiers });
+        let control = TerminalModifiers {
+            control: true,
+            ..Default::default()
+        };
+        let alt = TerminalModifiers {
+            alt: true,
+            ..Default::default()
+        };
+        let shift = TerminalModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let inputs = [
+            key(TerminalKey::Character("c".into()), control),
+            key(TerminalKey::Character(" ".into()), control),
+            key(TerminalKey::Backspace, alt),
+            key(TerminalKey::Tab, shift),
+            key(TerminalKey::Tab, control),
+            key(TerminalKey::Tab, alt),
+            key(TerminalKey::ArrowUp, Default::default()),
+            key(TerminalKey::ArrowUp, alt),
+            key(TerminalKey::ArrowUp, control),
+            key(TerminalKey::ArrowDown, shift),
+            key(TerminalKey::Home, Default::default()),
+            key(TerminalKey::Home, alt),
+            key(TerminalKey::Delete, Default::default()),
+            key(TerminalKey::Insert, shift),
+            key(TerminalKey::Function(1), Default::default()),
+            key(TerminalKey::Function(2), alt),
+            key(TerminalKey::Function(5), control),
+            TerminalInput::Paste("one\ntwo".into()),
+        ];
+        for input in inputs {
+            native.input(&input).unwrap();
+            let expected = receiver.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(portable.input(&input).unwrap(), expected, "{input:?}");
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
