@@ -44,6 +44,7 @@ mod extension_management;
 mod extensions;
 mod process;
 mod settings_store;
+pub mod terminal_extension;
 mod update;
 mod view_state;
 mod web_access;

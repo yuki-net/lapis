@@ -987,6 +987,16 @@ pub async fn dispatch_extension(
     crate::extension_management::validate_dispatch_response(response, current, &input)
 }
 
+/// Terminal 拡張の DTO を汎用の拡張操作経路で送る。
+pub async fn terminal_operation<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+    operation: &str,
+    input: &T,
+) -> Result<R, String> {
+    let request = crate::terminal_extension::request(operation, input)?;
+    let response = dispatch_extension(request).await?;
+    crate::terminal_extension::response(operation, response)
+}
+
 /// 古い接続の終了通知で新しい接続を解除しない。
 fn disconnect_extensions(connection: &Rc<BrowserConnection>) {
     BACKEND.with(|backend| {

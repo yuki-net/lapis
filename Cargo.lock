@@ -2219,6 +2219,7 @@ dependencies = [
  "task",
  "tempfile",
  "terminal-contract",
+ "terminal-session-api",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
