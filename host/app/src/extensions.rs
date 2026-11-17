@@ -26,7 +26,6 @@ pub(crate) struct HostExtensions {
     /// ここが `Some` の間は目録を宣言として配らない。実体の無い「導入済み」や、
     /// 実体が旧版なのに宣言が新版、という状態を Client に見せないため。
     inconsistent: Mutex<Option<String>>,
-    #[cfg(windows)]
     runtime_packages: Mutex<std::collections::BTreeMap<String, extensions_entry::VerifiedPackage>>,
     permissions_directory: Option<std::path::PathBuf>,
     #[cfg(windows)]
@@ -146,7 +145,6 @@ impl HostExtensions {
     /// 起動時に有効な package の署名と内容を再検証し、その bytes を固定する。
     /// 無効化などの目録変更は次の Host 起動までこのスナップショットへ影響しない。
     pub(crate) fn startup_components(&self) -> StartupExtensions {
-        #[cfg(windows)]
         if let Ok(mut packages) = self.runtime_packages.lock() {
             packages.clear();
         }
@@ -249,6 +247,12 @@ impl HostExtensions {
                                 components.push(ComponentImage {
                                     id: id.as_str().to_owned(),
                                     bytes,
+                                    require_dispatch: package.manifest.requires.iter().any(
+                                        |requirement| {
+                                            requirement.contract.as_str()
+                                                == extension_runtime::DISPATCH_CONTRACT
+                                        },
+                                    ),
                                 });
                             }
                             None => {
@@ -269,7 +273,6 @@ impl HostExtensions {
                             requires_runtime,
                         });
                     }
-                    #[cfg(windows)]
                     if requires_runtime {
                         // 認可に必要なのは署名検証済み manifest の識別情報だけ。
                         package.files.clear();
@@ -320,6 +323,9 @@ impl HostExtensions {
                     .ok()
                     .map(|capabilities| (path, capabilities))
             });
+        let supports_dispatch = worker.as_ref().is_some_and(|(_, capabilities)| {
+            capabilities.dispatch_version.as_deref() == Some(extension_runtime::DISPATCH_VERSION)
+        });
         #[cfg(windows)]
         let supports_pty = worker.as_ref().is_some_and(|(_, capabilities)| {
             capabilities.pty_version.as_deref() == Some(extension_runtime::PTY_VERSION)
@@ -339,6 +345,14 @@ impl HostExtensions {
                 semver::Version::parse(extension_runtime::LIFECYCLE_VERSION)
                     .expect("valid contract version"),
             );
+            if supports_dispatch {
+                contracts.add_version(
+                    ContractId::try_new(extension_runtime::DISPATCH_CONTRACT)
+                        .expect("valid contract id"),
+                    semver::Version::parse(extension_runtime::DISPATCH_VERSION)
+                        .expect("valid contract version"),
+                );
+            }
             #[cfg(windows)]
             if supports_pty {
                 contracts.add_version(
@@ -368,7 +382,6 @@ impl HostExtensions {
                 loader,
                 worker_executable,
                 inconsistent: Mutex::new(None),
-                #[cfg(windows)]
                 runtime_packages: Mutex::new(std::collections::BTreeMap::new()),
                 permissions_directory: None,
                 #[cfg(windows)]
@@ -412,7 +425,6 @@ impl HostExtensions {
             loader,
             worker_executable,
             inconsistent: Mutex::new(inconsistent),
-            #[cfg(windows)]
             runtime_packages: Mutex::new(std::collections::BTreeMap::new()),
             permissions_directory: Some(directory.join("extensions")),
             #[cfg(windows)]
@@ -422,6 +434,22 @@ impl HostExtensions {
 
     pub(crate) fn worker_executable(&self) -> Option<&std::path::Path> {
         self.worker_executable.as_deref()
+    }
+
+    /// インストール後の変更ではなく、現在実行中の署名済み manifest を参照する。
+    pub(crate) fn declares_dispatch(&self, id: &str) -> Result<bool, String> {
+        let packages = self
+            .runtime_packages
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let package = packages.get(id).ok_or("拡張が実行されていません")?;
+        let version = semver::Version::parse(extension_runtime::DISPATCH_VERSION)
+            .expect("valid contract version");
+        Ok(package.manifest.requires.iter().any(|requirement| {
+            requirement.contract.as_str() == extension_runtime::DISPATCH_CONTRACT
+                && requirement.minimum.cmp_precedence(&version).is_le()
+                && requirement.maximum.cmp_precedence(&version).is_ge()
+        }))
     }
 
     /// 起動時に検証した package の能力承認を毎回照合する。
@@ -659,6 +687,82 @@ impl HostExtensions {
 mod tests {
     use super::*;
     use extensions_entry::{ExtensionEntry, ExtensionState, ExtensionVersion};
+
+    #[test]
+    fn dispatch_contract_is_checked_against_the_startup_package() {
+        use sha2::Digest as _;
+        use std::io::Write as _;
+
+        let state = tempfile::tempdir().unwrap();
+        let mut contracts = HostContracts::current();
+        for name in [
+            extension_runtime::LIFECYCLE_CONTRACT,
+            extension_runtime::DISPATCH_CONTRACT,
+        ] {
+            contracts.add_version(
+                ContractId::try_new(name).unwrap(),
+                semver::Version::new(1, 0, 0),
+            );
+        }
+        let mut extensions = HostExtensions::load_with_development(Some(state.path()), true);
+        extensions.loader = Loader::Ready(
+            ExtensionLoader::new(TrustedKeys::repository().unwrap(), contracts)
+                .allow_unsigned_local_development(),
+        );
+        for (id, dispatch) in [
+            ("dev.example.dispatch", true),
+            ("dev.example.legacy", false),
+        ] {
+            let component = b"fixture component";
+            let mut requires = vec![serde_json::json!({
+                "contract": extension_runtime::LIFECYCLE_CONTRACT, "minimum":"1.0.0", "maximum":"1.0.0"
+            })];
+            if dispatch {
+                requires.push(serde_json::json!({
+                    "contract": extension_runtime::DISPATCH_CONTRACT, "minimum":"1.0.0", "maximum":"1.0.0"
+                }));
+            }
+            let manifest = serde_json::json!({
+                "schema":1, "kind":"extension", "id":id, "version":"1.0.0", "requires":requires,
+                "files":[{"path":"extension.wasm", "sha256":format!("{:x}", sha2::Sha256::digest(component))}]
+            });
+            let path = state.path().join(format!("{id}.lapis"));
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&path).unwrap());
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("manifest.json", options).unwrap();
+            zip.write_all(&serde_json::to_vec(&manifest).unwrap())
+                .unwrap();
+            zip.start_file("extension.wasm", options).unwrap();
+            zip.write_all(component).unwrap();
+            zip.finish().unwrap();
+            extensions.install(&path, true).unwrap();
+        }
+        let (components, _, _, _, failures) = extensions.startup_components();
+        assert!(failures.is_empty(), "{failures:?}");
+        assert_eq!(components.len(), 2);
+        assert_eq!(
+            extensions.declares_dispatch("dev.example.dispatch"),
+            Ok(true)
+        );
+        assert_eq!(
+            extensions.declares_dispatch("dev.example.legacy"),
+            Ok(false)
+        );
+        assert!(extensions.declares_dispatch("dev.example.missing").is_err());
+        extensions
+            .set_enabled("dev.example.dispatch", false)
+            .unwrap();
+        assert_eq!(
+            extensions.declares_dispatch("dev.example.dispatch"),
+            Ok(true)
+        );
+        extensions.startup_components();
+        assert!(
+            extensions
+                .declares_dispatch("dev.example.dispatch")
+                .is_err()
+        );
+    }
 
     #[test]
     fn runtime_contributions_require_a_successfully_active_instance() {

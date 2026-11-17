@@ -57,6 +57,7 @@ impl RemoteRequestHandler for HostRemoteHandler {
                 | RequestBody::HostExtensionSetEnabled(_)
                 | RequestBody::HostExtensionCapabilities(_)
                 | RequestBody::HostExtensionSetCapability(_)
+                | RequestBody::HostExtensionDispatch(_)
                 | RequestBody::DocumentRelocate(_)
         ) {
             return self.inner.handle(grant, request);
@@ -225,6 +226,12 @@ impl RemoteRequestHandler for HostRemoteHandler {
                     RequestBody::HostExtensionSetCapability(request) => {
                         match host.set_extension_capability(&request) {
                             Ok(response) => ResponseBody::HostExtensionSetCapability(response),
+                            Err(message) => web_error(message),
+                        }
+                    }
+                    RequestBody::HostExtensionDispatch(request) => {
+                        match host.dispatch_extension(&request) {
+                            Ok(response) => ResponseBody::HostExtensionDispatch(response),
                             Err(message) => web_error(message),
                         }
                     }

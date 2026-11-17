@@ -317,6 +317,27 @@ impl BackendHost {
         self.inner.extension_host.as_ref().map(|host| host.status())
     }
 
+    /// 呼び出し元の認可は transport が行う。実行中の契約宣言を必ず確認する。
+    pub fn dispatch_extension(
+        &self,
+        request: &client_api::HostExtensionDispatchRequest,
+    ) -> Result<client_api::HostExtensionDispatchResponse, String> {
+        if !self.inner.extensions.declares_dispatch(&request.id)? {
+            return Err("拡張が dispatch 契約を宣言していません".into());
+        }
+        let host = self
+            .inner
+            .extension_host
+            .as_ref()
+            .ok_or("拡張ホストが停止しています")?;
+        let result = host.dispatch(&request.id, &request.operation, &request.payload)?;
+        Ok(client_api::HostExtensionDispatchResponse {
+            id: request.id.clone(),
+            operation: request.operation.clone(),
+            result,
+        })
+    }
+
     /// 署名不正や旧形式など、起動時に検証できなかった拡張。
     pub fn extension_startup_errors(&self) -> &std::collections::BTreeMap<String, String> {
         &self.inner.extension_startup_errors

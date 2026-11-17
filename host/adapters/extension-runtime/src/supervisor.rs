@@ -47,6 +47,7 @@ pub trait HostCallHandler: Send + Sync {
 pub struct ComponentImage {
     pub id: String,
     pub bytes: Vec<u8>,
+    pub require_dispatch: bool,
 }
 
 /// 現在動いているものと、次回起動時の設定を混同しないための実行状態。
@@ -201,6 +202,7 @@ fn supervise(
                     Request::Activate {
                         id: component.id.clone(),
                         component: STANDARD.encode(&component.bytes),
+                        require_dispatch: component.require_dispatch,
                     },
                     REQUEST_TIMEOUT,
                     Some(cancelled),

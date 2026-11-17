@@ -54,6 +54,7 @@ fn main() {
         vec![ComponentImage {
             id: "dev.example.pty".into(),
             bytes: component,
+            require_dispatch: false,
         }],
         Some(handler.clone()),
     );

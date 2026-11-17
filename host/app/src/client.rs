@@ -355,6 +355,35 @@ impl BackendClient {
         }
     }
 
+    /// Host 管理権限を使う拡張操作。呼び出しは worker で行う。
+    pub fn dispatch_extension(
+        &self,
+        workspace: WorkspaceId,
+        request: client_api::HostExtensionDispatchRequest,
+    ) -> Result<client_api::HostExtensionDispatchResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return host
+                .dispatch_extension(&request)
+                .map_err(BackendServiceError::Connection);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionDispatch(request.clone()))?
+        {
+            ResponseBody::HostExtensionDispatch(response)
+                if response.id == request.id && response.operation == request.operation =>
+            {
+                Ok(response)
+            }
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
     pub fn start_web(
         &self,

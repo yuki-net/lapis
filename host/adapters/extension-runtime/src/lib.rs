@@ -80,6 +80,8 @@ pub enum Request {
     Activate {
         id: String,
         component: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        require_dispatch: bool,
     },
     Deactivate {
         id: String,
@@ -158,6 +160,15 @@ impl ExtensionRuntime {
     }
 
     pub fn activate(&mut self, id: &str, bytes: &[u8]) -> Result<(), String> {
+        self.activate_with_contracts(id, bytes, false)
+    }
+
+    fn activate_with_contracts(
+        &mut self,
+        id: &str,
+        bytes: &[u8],
+        require_dispatch: bool,
+    ) -> Result<(), String> {
         if id.is_empty()
             || id.len() > 128
             || !id.bytes().all(|byte| {
@@ -209,6 +220,11 @@ impl ExtensionRuntime {
         instance
             .get_typed_func::<(), ()>(&mut store, "deactivate")
             .map_err(|error| error.to_string())?;
+        if require_dispatch {
+            instance
+                .get_typed_func::<(&str, &str), (Result<String, String>,)>(&mut store, "dispatch")
+                .map_err(|_| "extension does not implement dispatch v1".to_owned())?;
+        }
         let activate = instance
             .get_typed_func::<(), ()>(&mut store, "activate")
             .map_err(|error| error.to_string())?;
@@ -314,14 +330,20 @@ impl ExtensionRuntime {
         }
         let result = match request {
             Request::Handshake | Request::Dispatch { .. } => unreachable!(),
-            Request::Activate { id, component } => {
+            Request::Activate {
+                id,
+                component,
+                require_dispatch,
+            } => {
                 if component.len() > MAX_COMPONENT_BYTES.div_ceil(3) * 4 {
                     Err("component limit exceeded".into())
                 } else {
                     STANDARD
                         .decode(component)
                         .map_err(|_| "invalid component encoding".to_owned())
-                        .and_then(|bytes| self.activate(&id, &bytes))
+                        .and_then(|bytes| {
+                            self.activate_with_contracts(&id, &bytes, require_dispatch)
+                        })
                 }
             }
             Request::Deactivate { id } => self.deactivate(&id),

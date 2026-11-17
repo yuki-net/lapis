@@ -68,10 +68,12 @@ fn dispatch_reaches_only_the_requested_active_component() {
             ComponentImage {
                 id: "test.dispatch".into(),
                 bytes: dispatch_component(),
+                require_dispatch: true,
             },
             ComponentImage {
                 id: "test.legacy".into(),
                 bytes: component(),
+                require_dispatch: false,
             },
         ],
     );
@@ -128,10 +130,17 @@ fn activation_failures_do_not_prevent_other_extensions() {
             ComponentImage {
                 id: "test.invalid".into(),
                 bytes: vec![0],
+                require_dispatch: false,
             },
             ComponentImage {
                 id: "test.ok".into(),
                 bytes: component(),
+                require_dispatch: false,
+            },
+            ComponentImage {
+                id: "test.missing-dispatch".into(),
+                bytes: component(),
+                require_dispatch: true,
             },
         ],
     );
@@ -143,6 +152,7 @@ fn activation_failures_do_not_prevent_other_extensions() {
     };
     assert_eq!(active, vec!["test.ok"]);
     assert!(failed.contains_key("test.invalid"));
+    assert!(failed.contains_key("test.missing-dispatch"));
 }
 
 #[test]
@@ -162,6 +172,7 @@ fn crashed_worker_is_restarted_once_with_the_original_snapshot() {
         vec![ComponentImage {
             id: "test.worker".into(),
             bytes: component(),
+            require_dispatch: false,
         }],
     );
     let running = wait_for(&supervisor, |status| {

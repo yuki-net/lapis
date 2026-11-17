@@ -106,6 +106,7 @@ fn worker_accepts_serialized_component_in_a_separate_process() {
         Request::Activate {
             id: "example.worker".into(),
             component: STANDARD.encode(bytes),
+            require_dispatch: false,
         },
         Request::Deactivate {
             id: "example.worker".into(),
@@ -121,4 +122,23 @@ fn worker_accepts_serialized_component_in_a_separate_process() {
         assert!(response.ok, "{:?}", response.error);
     }
     assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn lifecycle_activation_stays_compatible_with_older_workers() {
+    let legacy = Request::Activate {
+        id: "example.legacy".into(),
+        component: "AA==".into(),
+        require_dispatch: false,
+    };
+    let value = serde_json::to_value(&legacy).unwrap();
+    assert!(value.get("require_dispatch").is_none());
+    let decoded: Request = serde_json::from_value(value).unwrap();
+    assert!(matches!(
+        decoded,
+        Request::Activate {
+            require_dispatch: false,
+            ..
+        }
+    ));
 }

@@ -2,6 +2,24 @@
 
 use client_api::ResponseBody;
 
+pub(crate) fn validate_dispatch_response(
+    response: Result<ResponseBody, String>,
+    current: bool,
+    request: &client_api::HostExtensionDispatchRequest,
+) -> Result<client_api::HostExtensionDispatchResponse, String> {
+    if !current {
+        return Err("Host の接続が変更されました".into());
+    }
+    match response? {
+        ResponseBody::HostExtensionDispatch(value)
+            if value.id == request.id && value.operation == request.operation =>
+        {
+            Ok(value)
+        }
+        _ => Err("Host の拡張操作応答が不正です".into()),
+    }
+}
+
 pub(crate) fn validate_capabilities_response(
     response: Result<ResponseBody, String>,
     current: bool,
@@ -61,6 +79,33 @@ pub(crate) fn validate_response(
 mod tests {
     use super::*;
     use client_api::HostExtensionSetEnabledResponse;
+
+    #[test]
+    fn dispatch_response_requires_current_connection_and_matching_request() {
+        let input = client_api::HostExtensionDispatchRequest {
+            id: "dev.example".into(),
+            operation: "inspect".into(),
+            payload: "{}".into(),
+        };
+        let reply = || {
+            Ok(ResponseBody::HostExtensionDispatch(
+                client_api::HostExtensionDispatchResponse {
+                    id: input.id.clone(),
+                    operation: input.operation.clone(),
+                    result: "ok".into(),
+                },
+            ))
+        };
+        assert!(validate_dispatch_response(reply(), true, &input).is_ok());
+        assert!(validate_dispatch_response(reply(), false, &input).is_err());
+        let mut different = input.clone();
+        different.operation = "delete".into();
+        assert!(validate_dispatch_response(reply(), true, &different).is_err());
+        different.operation = input.operation.clone();
+        different.id = "dev.other".into();
+        assert!(validate_dispatch_response(reply(), true, &different).is_err());
+        assert!(validate_dispatch_response(Err("forbidden".into()), true, &input).is_err());
+    }
 
     #[test]
     fn failed_or_stale_web_responses_never_report_success() {

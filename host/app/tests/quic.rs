@@ -943,6 +943,22 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
         })
     );
 
+    let dispatch = HostExtensionDispatchRequest {
+        id: "dev.example.one".into(),
+        operation: "inspect".into(),
+        payload: "{}".into(),
+    };
+    for client in [&mut reader, &mut manager] {
+        assert!(matches!(
+            request(client, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+            ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+        ));
+    }
+    assert!(matches!(
+        request(&mut owner, 9, RequestBody::HostExtensionDispatch(dispatch)).await,
+        ResponseBody::Error(ref error) if error.code.as_str() != FORBIDDEN
+    ));
+
     // 宣言を要求しない接続は Host の目録を読めない。
     let mut unread = fixture.connect().await;
     let mut unread_hello = hello("extension-unread");

@@ -960,6 +960,33 @@ pub async fn set_extension_capability(
     crate::extension_management::validate_capability_update_response(response, current, &input)
 }
 
+/// Host 管理者用。実際の認可は Host が行う。
+pub async fn dispatch_extension(
+    input: client_api::HostExtensionDispatchRequest,
+) -> Result<client_api::HostExtensionDispatchResponse, String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected {
+                return Err("Host に接続していません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionDispatch(input.clone()),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_dispatch_response(response, current, &input)
+}
+
 /// 古い接続の終了通知で新しい接続を解除しない。
 fn disconnect_extensions(connection: &Rc<BrowserConnection>) {
     BACKEND.with(|backend| {

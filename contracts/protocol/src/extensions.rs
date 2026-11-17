@@ -61,6 +61,21 @@ pub struct HostExtensionSetCapabilityResponse {
     pub approved: bool,
 }
 
+/// Host 管理者が、起動時に検証済みの拡張に操作を送る。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionDispatchRequest {
+    pub id: String,
+    pub operation: String,
+    pub payload: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionDispatchResponse {
+    pub id: String,
+    pub operation: String,
+    pub result: String,
+}
+
 /// 導入済み拡張 1 件の宣言。`enabled` は `installed` を含意する。
 ///
 /// 状態は Host の正本をそのまま写した値であり、Client はこれを表示にだけ使い、
@@ -154,6 +169,24 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<RequestBody>(&serde_json::to_string(&write).unwrap()).unwrap(),
             write
+        );
+    }
+
+    #[test]
+    fn extension_dispatch_requires_host_management() {
+        let request = RequestBody::HostExtensionDispatch(HostExtensionDispatchRequest {
+            id: "dev.example".into(),
+            operation: "inspect".into(),
+            payload: "{}".into(),
+        });
+        assert_eq!(
+            request.required_capability(),
+            crate::capability::HOST_MANAGE
+        );
+        assert_eq!(request.workspace_id(), None);
+        assert_eq!(
+            serde_json::from_value::<RequestBody>(serde_json::to_value(&request).unwrap()).unwrap(),
+            request
         );
     }
 

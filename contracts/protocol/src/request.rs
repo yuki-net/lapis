@@ -40,6 +40,8 @@ pub enum RequestBody {
     HostExtensionCapabilities(crate::HostExtensionCapabilitiesRequest),
     #[serde(rename = "host.extensions.set_capability")]
     HostExtensionSetCapability(crate::HostExtensionSetCapabilityRequest),
+    #[serde(rename = "host.extensions.dispatch")]
+    HostExtensionDispatch(crate::HostExtensionDispatchRequest),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentRelocateRequest),
     #[serde(rename = "files.create_directory")]
@@ -123,6 +125,7 @@ impl RequestBody {
             Self::HostExtensionSetEnabled(_) => "host.extensions.set_enabled",
             Self::HostExtensionCapabilities(_) => "host.extensions.capabilities",
             Self::HostExtensionSetCapability(_) => "host.extensions.set_capability",
+            Self::HostExtensionDispatch(_) => "host.extensions.dispatch",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
@@ -170,7 +173,8 @@ impl RequestBody {
             | Self::HostDeviceRevoke(_)
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
-            | Self::HostWebStop(_) => capability::HOST_MANAGE,
+            | Self::HostWebStop(_)
+            | Self::HostExtensionDispatch(_) => capability::HOST_MANAGE,
             Self::HostExtensionSetEnabled(_) | Self::HostExtensionSetCapability(_) => {
                 capability::EXTENSIONS_MANAGE
             }
@@ -226,6 +230,7 @@ impl RequestBody {
             | Self::HostExtensionSetEnabled(_)
             | Self::HostExtensionCapabilities(_)
             | Self::HostExtensionSetCapability(_)
+            | Self::HostExtensionDispatch(_)
             | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),
