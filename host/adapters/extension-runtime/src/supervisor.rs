@@ -101,6 +101,16 @@ pub trait HostCallHandler: Send + Sync {
         method: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, String>;
+    /// dispatch 中の能力呼び出しに Host が認証した接続情報を付与する。
+    fn call_in_context(
+        &self,
+        extension: &str,
+        method: &str,
+        payload: serde_json::Value,
+        _context: Option<&InvocationContext>,
+    ) -> Result<serde_json::Value, String> {
+        self.call(extension, method, payload)
+    }
     fn release(&self, _extension: Option<&str>) {}
 }
 
@@ -538,6 +548,10 @@ impl Worker {
         handler: Option<&dyn HostCallHandler>,
         invoking: Option<&str>,
     ) -> Result<Response, String> {
+        let context = match &request {
+            Request::Dispatch { context, .. } => Some(context.clone()),
+            _ => None,
+        };
         let mut bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
         bytes.push(b'\n');
         self.requests
@@ -559,7 +573,12 @@ impl Worker {
                     {
                         Err("能力呼び出しの所有者が一致しません".into())
                     } else if let Some(handler) = handler {
-                        handler.call(&call.extension, &call.method, call.payload)
+                        handler.call_in_context(
+                            &call.extension,
+                            &call.method,
+                            call.payload,
+                            context.as_ref(),
+                        )
                     } else {
                         Err("Host capability unavailable".into())
                     };

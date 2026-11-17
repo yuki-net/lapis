@@ -16,6 +16,7 @@ interface sessions {
         program: string,
         arguments: list<string>,
         environment: list<environment-entry>,
+        /// 認証済み Workspace からの相対パス。Host が実パスへ解決する。
         working-directory: string,
         initial-size: size,
     }

@@ -80,7 +80,7 @@ pub struct BackendHost {
 
 struct HostInner {
     service: BackendService,
-    workspaces: Mutex<HashMap<PathBuf, WorkspaceId>>,
+    workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
     next_session: AtomicU64,
     state_directory: Option<PathBuf>,
     store: Option<Mutex<platform::WorkspaceStore>>,
@@ -237,10 +237,12 @@ impl BackendHost {
         if let Some(error) = bundled_failure {
             extension_startup_errors.insert("bundled".to_owned(), error);
         }
+        let workspaces = Arc::new(Mutex::new(HashMap::new()));
         #[cfg(windows)]
-        let extension_pty = Arc::new(crate::extension_pty::PtyBroker::new(Arc::clone(
-            &extensions,
-        )));
+        let extension_pty = Arc::new(crate::extension_pty::PtyBroker::with_workspaces(
+            Arc::clone(&extensions),
+            Arc::clone(&workspaces),
+        ));
         let extension_host = if components.is_empty() {
             None
         } else {
@@ -273,7 +275,7 @@ impl BackendHost {
         let host = Self {
             inner: Arc::new(HostInner {
                 service: BackendService::start(state)?,
-                workspaces: Mutex::new(HashMap::new()),
+                workspaces,
                 next_session: AtomicU64::new(1),
                 state_directory,
                 store,

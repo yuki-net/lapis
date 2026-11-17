@@ -5,6 +5,8 @@
 `lapis.process.pty` 1.0.0 を、`capabilities` に `process.pty` 1.0.0 を宣言する。
 能力は承認が必要で、現在は Windows Host だけが提供する。拡張固有の Rust 型や Host の
 内部参照は境界を越えない。互換性を壊す変更は既存の v1 を書き換えず、別の版を追加する。
+PTY の作業ディレクトリは認証済み Workspace からの相対パスとし、Host が実パスへ解決する。
+Workspace 外へ出るパスは拒否し、接続情報のないライフサイクル呼び出しでは起動できない。
 
 `wit/process-info-v1` は Host の PTY 種別と既定シェルを返す汎用プロセス契約。
 利用には `lapis.process.info` 1.0.0 と `process.pty` 能力の宣言・承認が必要。

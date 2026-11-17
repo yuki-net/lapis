@@ -1,6 +1,12 @@
 //! 承認された拡張だけが使う Host 所有の PTY 能力。
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::HashMap,
+    path::{Component, Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
+use client_api::WorkspaceId;
+use extension_runtime::InvocationContext;
 use extension_runtime::supervisor::HostCallHandler;
 use process::pty::{PtyAttachmentId, PtyOwnerId, PtyService, PtySessionId, PtySize, PtySpawn};
 use serde::Deserialize;
@@ -12,14 +18,24 @@ pub(crate) struct PtyBroker {
     extensions: Arc<HostExtensions>,
     sessions: local_process::pty::LocalPtyService,
     gate: Mutex<()>,
+    workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
 }
 
 impl PtyBroker {
+    #[cfg(test)]
     pub(crate) fn new(extensions: Arc<HostExtensions>) -> Self {
+        Self::with_workspaces(extensions, Arc::new(Mutex::new(HashMap::new())))
+    }
+
+    pub(crate) fn with_workspaces(
+        extensions: Arc<HostExtensions>,
+        workspaces: Arc<Mutex<HashMap<PathBuf, WorkspaceId>>>,
+    ) -> Self {
         Self {
             extensions,
             sessions: local_process::pty::LocalPtyService::default(),
             gate: Mutex::new(()),
+            workspaces,
         }
     }
 
@@ -80,6 +96,51 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, String> {
 }
 
 impl HostCallHandler for PtyBroker {
+    fn call_in_context(
+        &self,
+        extension: &str,
+        method: &str,
+        payload: Value,
+        context: Option<&InvocationContext>,
+    ) -> Result<Value, String> {
+        if method != "pty.v1.spawn" {
+            return self.call(extension, method, payload);
+        }
+        let context = context.ok_or("PTY spawn requires an authenticated workspace")?;
+        let mut command: PtySpawn = parse(payload)?;
+        let path = Path::new(&command.cwd);
+        if path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_) | Component::CurDir))
+        {
+            return Err("PTY working directory must be workspace-relative".into());
+        }
+        let root = self
+            .workspaces
+            .lock()
+            .map_err(|_| "workspace state unavailable")?
+            .iter()
+            .find(|(_, id)| id.as_str() == context.workspace)
+            .map(|(root, _)| root.clone())
+            .ok_or("workspace not found")?;
+        let resolved = root
+            .join(path)
+            .canonicalize()
+            .map_err(|_| "working directory not found")?;
+        if !resolved.starts_with(&root) {
+            return Err("working directory escapes workspace".into());
+        }
+        command.cwd = resolved
+            .to_str()
+            .ok_or("working directory is not UTF-8")?
+            .to_owned();
+        self.call(
+            extension,
+            method,
+            serde_json::to_value(command).map_err(|error| error.to_string())?,
+        )
+    }
+
     fn call(&self, extension: &str, method: &str, payload: Value) -> Result<Value, String> {
         let _guard = self.gate.lock().map_err(|error| error.to_string())?;
         if !self.extensions.pty_approved(extension)? {

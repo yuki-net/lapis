@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -25,6 +25,7 @@ struct Entry {
 /// Workspace ごとに認証された拡張 transport を所有する。
 pub struct NativeBackend {
     transport: NativeTransport,
+    workspace_root: Option<PathBuf>,
     sessions: Mutex<HashMap<String, Entry>>,
     count: Arc<AtomicUsize>,
     notification_pending: Arc<AtomicBool>,
@@ -54,12 +55,57 @@ impl NativeBackend {
         });
         Self {
             transport,
+            workspace_root: None,
             sessions: Mutex::new(HashMap::new()),
             count,
             notification_pending,
             changes: Mutex::new(Some(receiver)),
             _lifetime: lifetime,
         }
+    }
+
+    /// UI の仮想 root を Workspace 相対パスに変換する。
+    pub fn for_workspace(transport: NativeTransport, root: PathBuf) -> Self {
+        let mut backend = Self::new(transport);
+        backend.workspace_root = Some(root);
+        backend
+    }
+
+    fn relative_cwd(&self, cwd: &Path) -> Result<String, TerminalError> {
+        let relative = match &self.workspace_root {
+            Some(root) => cwd
+                .strip_prefix(root)
+                .map_err(|_| TerminalError::new("Terminal path is outside workspace"))?,
+            None => cwd,
+        };
+        if relative.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            return Err(TerminalError::new("invalid Terminal working directory"));
+        }
+        let value = relative
+            .to_str()
+            .ok_or_else(|| TerminalError::new("Terminal path is not UTF-8"))?;
+        Ok(if value.is_empty() { "." } else { value }.into())
+    }
+
+    fn display_path(&self, cwd: &str) -> Result<PathBuf, TerminalError> {
+        let relative = Path::new(cwd);
+        if relative.components().any(|part| {
+            !matches!(
+                part,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        }) {
+            return Err(TerminalError::new("invalid Terminal working directory"));
+        }
+        Ok(self
+            .workspace_root
+            .as_ref()
+            .map_or_else(|| relative.to_owned(), |root| root.join(relative)))
     }
 
     fn with_entry<T>(
@@ -78,10 +124,10 @@ impl NativeBackend {
     }
 }
 
-fn snapshot(id: &TerminalId, entry: &Entry) -> TerminalSnapshot {
+fn snapshot(id: &TerminalId, entry: &Entry, cwd: PathBuf) -> TerminalSnapshot {
     TerminalSnapshot {
         id: id.clone(),
-        cwd: entry.session.working_directory().into(),
+        cwd,
         status: TerminalStatus::Running,
         revision: entry.revision,
         screen: entry.session.snapshot().clone(),
@@ -90,12 +136,10 @@ fn snapshot(id: &TerminalId, entry: &Entry) -> TerminalSnapshot {
 
 impl TerminalBackend for NativeBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
-        let cwd = cwd
-            .to_str()
-            .ok_or_else(|| TerminalError::new("Terminal path is not UTF-8"))?;
+        let cwd = self.relative_cwd(cwd)?;
         let session = NativeSession::start(
             self.transport.clone(),
-            cwd.into(),
+            cwd,
             TerminalSize::new(columns, rows),
             None,
         )
@@ -122,17 +166,17 @@ impl TerminalBackend for NativeBackend {
 
     fn list(&self, _cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
         let listed = NativeSession::list(&self.transport).map_err(TerminalError::new)?;
-        Ok(listed
+        listed
             .into_iter()
             .map(|session| {
-                TerminalSnapshot::empty(
+                Ok(TerminalSnapshot::empty(
                     TerminalId::new(session.id),
-                    session.working_directory.into(),
+                    self.display_path(&session.working_directory)?,
                     TerminalStatus::Running,
                     TerminalSize::new(session.columns, session.rows),
-                )
+                ))
             })
-            .collect())
+            .collect::<Result<Vec<_>, TerminalError>>()
     }
 
     fn attach(&self, _cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
@@ -154,7 +198,11 @@ impl TerminalBackend for NativeBackend {
             self.count.fetch_add(1, Ordering::Release);
         }
         let entry = sessions.get(id.as_str()).expect("session inserted");
-        Ok(snapshot(id, entry))
+        Ok(snapshot(
+            id,
+            entry,
+            self.display_path(entry.session.working_directory())?,
+        ))
     }
 
     fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
@@ -227,6 +275,22 @@ mod tests {
     use crate::terminal_extension::v1;
     use client_api::HostExtensionDispatchResponse;
     use std::sync::Arc;
+
+    #[test]
+    fn translates_and_validates_workspace_paths() {
+        let transport: NativeTransport = Arc::new(|_| unreachable!());
+        let root = std::env::current_dir().unwrap().join("workspace");
+        let backend = NativeBackend::for_workspace(transport, root.clone());
+        assert_eq!(backend.relative_cwd(&root).unwrap(), ".");
+        assert_eq!(backend.relative_cwd(&root.join("sub")).unwrap(), "sub");
+        assert_eq!(backend.display_path("sub").unwrap(), root.join("sub"));
+        assert!(
+            backend
+                .relative_cwd(&root.join("..").join("outside"))
+                .is_err()
+        );
+        assert!(backend.display_path("../outside").is_err());
+    }
 
     #[test]
     fn adapts_extension_output_and_keeps_resize_order() {

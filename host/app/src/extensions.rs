@@ -1257,7 +1257,14 @@ mod tests {
             .capabilities("lapis.terminal")
             .unwrap()
             .manifest_digest;
-        let broker = Arc::new(crate::extension_pty::PtyBroker::new(Arc::new(extensions)));
+        let workspace_roots = Arc::new(std::sync::Mutex::new(std::collections::HashMap::from([(
+            state.path().canonicalize().unwrap(),
+            client_api::WorkspaceId::try_new("host").unwrap(),
+        )])));
+        let broker = Arc::new(crate::extension_pty::PtyBroker::with_workspaces(
+            Arc::new(extensions),
+            workspace_roots,
+        ));
         let supervisor = ExtensionSupervisor::start_with_handler(
             root.join("target/debug/lapis-extension-host.exe"),
             components,
@@ -1279,7 +1286,7 @@ mod tests {
         }
         let start = serde_json::json!({
             "program":"cmd.exe", "arguments":["/D","/C","echo LapisTerminal & ping -n 30 127.0.0.1 >nul"],
-            "working_directory":state.path().to_string_lossy(), "columns":80, "rows":24
+            "working_directory":".", "columns":80, "rows":24
         }).to_string();
         assert!(
             supervisor
@@ -1295,6 +1302,18 @@ mod tests {
         broker
             .set_approval("lapis.terminal", true, &digest)
             .unwrap();
+        for directory in ["..", "../outside"] {
+            let bad_start = serde_json::json!({
+                "program":"cmd.exe", "working_directory":directory, "columns":80, "rows":24
+            })
+            .to_string();
+            assert!(
+                supervisor
+                    .dispatch_host_internal("lapis.terminal", "terminal.v1.start", &bad_start)
+                    .is_err()
+            );
+        }
+        assert_eq!(broker.session_count("lapis.terminal"), 0);
         let information: serde_json::Value = serde_json::from_str(
             &supervisor
                 .dispatch_host_internal("lapis.terminal", "terminal.v1.info", "{}")
