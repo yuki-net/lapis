@@ -14,12 +14,20 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{HostCall, HostReply, LIFECYCLE_VERSION, Request, Response};
+use crate::{HostCall, HostReply, LIFECYCLE_VERSION, MAX_DISPATCH_BYTES, Request, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 const RESPONSE_LIMIT: u64 = 512 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(100);
+
+struct Dispatch {
+    id: String,
+    operation: String,
+    payload: String,
+    abandoned: Arc<AtomicBool>,
+    reply: mpsc::Sender<Result<String, String>>,
+}
 
 /// Host 側で検証済みの capability を処理する。未対応の操作は拒否する。
 pub trait HostCallHandler: Send + Sync {
@@ -55,6 +63,7 @@ pub enum SupervisorStatus {
 
 pub struct ExtensionSupervisor {
     stop: mpsc::Sender<()>,
+    calls: mpsc::SyncSender<Dispatch>,
     cancelled: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     status: Arc<Mutex<SupervisorStatus>>,
@@ -80,6 +89,7 @@ impl ExtensionSupervisor {
         handler: Option<Arc<dyn HostCallHandler>>,
     ) -> Self {
         let (stop, receiver) = mpsc::channel();
+        let (calls, call_receiver) = mpsc::sync_channel(16);
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
         let status = Arc::new(Mutex::new(SupervisorStatus::Starting));
@@ -89,6 +99,7 @@ impl ExtensionSupervisor {
                 &executable,
                 &components,
                 receiver,
+                call_receiver,
                 &worker_cancelled,
                 &state,
                 handler.as_deref(),
@@ -96,9 +107,39 @@ impl ExtensionSupervisor {
         });
         Self {
             stop,
+            calls,
             cancelled,
             thread: Some(thread),
             status,
+        }
+    }
+
+    /// 同期呼び出しのため UI スレッドから直接実行しない。
+    pub fn dispatch(&self, id: &str, operation: &str, payload: &str) -> Result<String, String> {
+        if id.len() > 128
+            || operation.is_empty()
+            || operation.len() > 256
+            || payload.len() > MAX_DISPATCH_BYTES
+        {
+            return Err("invalid dispatch request".into());
+        }
+        let (reply, receiver) = mpsc::channel();
+        let abandoned = Arc::new(AtomicBool::new(false));
+        self.calls
+            .try_send(Dispatch {
+                id: id.into(),
+                operation: operation.into(),
+                payload: payload.into(),
+                abandoned: Arc::clone(&abandoned),
+                reply,
+            })
+            .map_err(|_| "extension dispatch queue unavailable".to_owned())?;
+        match receiver.recv_timeout(REQUEST_TIMEOUT + Duration::from_secs(1)) {
+            Ok(result) => result,
+            Err(_) => {
+                abandoned.store(true, Ordering::Release);
+                Err("extension dispatch timed out; operation may have executed".into())
+            }
         }
     }
 
@@ -133,6 +174,7 @@ fn supervise(
     executable: &Path,
     components: &[ComponentImage],
     stop: mpsc::Receiver<()>,
+    calls: mpsc::Receiver<Dispatch>,
     cancelled: &AtomicBool,
     status: &Mutex<SupervisorStatus>,
     handler: Option<&dyn HostCallHandler>,
@@ -193,6 +235,44 @@ fn supervise(
                         return Ok(());
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                if let Ok(call) = calls.try_recv() {
+                    if call.abandoned.load(Ordering::Acquire) {
+                        continue;
+                    }
+                    if !worker.active.contains(&call.id) {
+                        let _ = call.reply.send(Err("extension is not active".into()));
+                        continue;
+                    }
+                    let result = worker.request(
+                        Request::Dispatch {
+                            id: call.id.clone(),
+                            operation: call.operation,
+                            payload: call.payload,
+                        },
+                        REQUEST_TIMEOUT,
+                        Some(cancelled),
+                        handler,
+                        Some(&call.id),
+                    );
+                    match result {
+                        Ok(response) => {
+                            let outcome = if response.ok {
+                                response
+                                    .result
+                                    .ok_or("dispatch response missing result".to_owned())
+                            } else {
+                                Err(response
+                                    .error
+                                    .unwrap_or_else(|| "dispatch failed".to_owned()))
+                            };
+                            let _ = call.reply.send(outcome);
+                        }
+                        Err(error) => {
+                            let _ = call.reply.send(Err(error.clone()));
+                            return Err(error);
+                        }
+                    }
                 }
                 if let Some(exit) = worker.child.try_wait().map_err(|error| error.to_string())? {
                     return Err(format!("拡張ホストが終了しました: {exit}"));

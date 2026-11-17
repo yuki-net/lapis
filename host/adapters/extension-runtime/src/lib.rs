@@ -58,6 +58,7 @@ pub struct HostReply {
 pub const LIFECYCLE_CONTRACT: &str = "lapis.extension.lifecycle";
 pub const LIFECYCLE_VERSION: &str = "1.0.0";
 pub const PTY_VERSION: &str = "1.0.0";
+pub const MAX_DISPATCH_BYTES: usize = 64 * 1024;
 
 #[cfg(feature = "worker")]
 const MAX_COMPONENT_BYTES: usize = 8 * 1024 * 1024;
@@ -74,8 +75,18 @@ const CALL_FUEL: u64 = 10_000_000;
 #[serde(tag = "command", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Handshake,
-    Activate { id: String, component: String },
-    Deactivate { id: String },
+    Activate {
+        id: String,
+        component: String,
+    },
+    Deactivate {
+        id: String,
+    },
+    Dispatch {
+        id: String,
+        operation: String,
+        payload: String,
+    },
     Shutdown,
 }
 
@@ -88,6 +99,8 @@ pub struct Response {
     pub lifecycle_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result: Option<String>,
 }
 
 #[cfg(feature = "worker")]
@@ -226,6 +239,39 @@ impl ExtensionRuntime {
         Ok(())
     }
 
+    /// 拡張操作を実行する。payload の検証と操作権限は呼び出し元の契約が担う。
+    pub fn dispatch(&mut self, id: &str, operation: &str, payload: &str) -> Result<String, String> {
+        if operation.is_empty() || operation.len() > 256 || payload.len() > MAX_DISPATCH_BYTES {
+            return Err("invalid dispatch request".into());
+        }
+        let loaded = self.loaded.get_mut(id).ok_or("extension is not active")?;
+        loaded
+            .store
+            .set_fuel(CALL_FUEL)
+            .map_err(|error| error.to_string())?;
+        let function = loaded
+            .instance
+            .get_typed_func::<(&str, &str), (Result<String, String>,)>(
+                &mut loaded.store,
+                "dispatch",
+            )
+            .map_err(|_| "extension does not support dispatch v1".to_owned())?;
+        let (result,) = function
+            .call(&mut loaded.store, (operation, payload))
+            .map_err(|error| error.to_string())?;
+        function
+            .post_return(&mut loaded.store)
+            .map_err(|error| error.to_string())?;
+        if result
+            .as_ref()
+            .map_or_else(|error| error.len(), |value| value.len())
+            > MAX_DISPATCH_BYTES
+        {
+            return Err("dispatch response too large".into());
+        }
+        result
+    }
+
     pub fn handle(&mut self, request: Request) -> Response {
         if matches!(request, Request::Handshake) {
             return Response {
@@ -233,10 +279,34 @@ impl ExtensionRuntime {
                 error: None,
                 lifecycle_version: Some(LIFECYCLE_VERSION.to_owned()),
                 pty_version: Some(PTY_VERSION.to_owned()),
+                result: None,
+            };
+        }
+        if let Request::Dispatch {
+            id,
+            operation,
+            payload,
+        } = request
+        {
+            return match self.dispatch(&id, &operation, &payload) {
+                Ok(result) => Response {
+                    ok: true,
+                    error: None,
+                    lifecycle_version: None,
+                    pty_version: None,
+                    result: Some(result),
+                },
+                Err(error) => Response {
+                    ok: false,
+                    error: Some(error),
+                    lifecycle_version: None,
+                    pty_version: None,
+                    result: None,
+                },
             };
         }
         let result = match request {
-            Request::Handshake => unreachable!(),
+            Request::Handshake | Request::Dispatch { .. } => unreachable!(),
             Request::Activate { id, component } => {
                 if component.len() > MAX_COMPONENT_BYTES.div_ceil(3) * 4 {
                     Err("component limit exceeded".into())
@@ -265,12 +335,14 @@ impl ExtensionRuntime {
                 error: None,
                 lifecycle_version: None,
                 pty_version: None,
+                result: None,
             },
             Err(error) => Response {
                 ok: false,
                 error: Some(error),
                 lifecycle_version: None,
                 pty_version: None,
+                result: None,
             },
         }
     }
@@ -354,6 +426,7 @@ pub fn serve(
                     error: Some("invalid request".into()),
                     lifecycle_version: None,
                     pty_version: None,
+                    result: None,
                 },
                 false,
             ),

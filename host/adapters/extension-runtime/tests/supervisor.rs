@@ -30,6 +30,75 @@ fn component() -> Vec<u8> {
     .unwrap()
 }
 
+fn dispatch_component() -> Vec<u8> {
+    wat::parse_str(
+        r#"
+        (component
+          (core module $m
+            (memory (export "memory") 1)
+            (data (i32.const 0) "\00\00\00\00\10\00\00\00\02\00\00\00")
+            (data (i32.const 16) "ok")
+            (func (export "activate"))
+            (func (export "deactivate"))
+            (func (export "realloc") (param i32 i32 i32 i32) (result i32)
+              (i32.const 128))
+            (func (export "dispatch") (param i32 i32 i32 i32) (result i32)
+              (i32.const 0)))
+          (core instance $i (instantiate $m))
+          (func (export "activate") (canon lift (core func $i "activate")))
+          (func (export "deactivate") (canon lift (core func $i "deactivate")))
+          (func (export "dispatch")
+            (param "operation" string) (param "payload" string)
+            (result (result string (error string)))
+            (canon lift (core func $i "dispatch")
+              (memory (core memory $i "memory")) (realloc (core func $i "realloc")))))
+        "#,
+    )
+    .unwrap()
+}
+
+#[test]
+fn dispatch_reaches_only_the_requested_active_component() {
+    let supervisor = ExtensionSupervisor::start(
+        PathBuf::from(env!("CARGO_BIN_EXE_lapis-extension-host")),
+        vec![
+            ComponentImage {
+                id: "test.dispatch".into(),
+                bytes: dispatch_component(),
+            },
+            ComponentImage {
+                id: "test.legacy".into(),
+                bytes: component(),
+            },
+        ],
+    );
+    wait_for(&supervisor, |status| {
+        matches!(status, SupervisorStatus::Running { .. })
+    });
+    assert_eq!(
+        supervisor
+            .dispatch("test.dispatch", "inspect", "{}")
+            .unwrap(),
+        "ok"
+    );
+    assert!(supervisor.dispatch("test.legacy", "inspect", "{}").is_err());
+    assert!(
+        supervisor
+            .dispatch("test.missing", "inspect", "{}")
+            .is_err()
+    );
+    assert!(supervisor.dispatch("test.dispatch", "", "{}").is_err());
+    assert!(
+        supervisor
+            .dispatch(
+                "test.dispatch",
+                "inspect",
+                &"x".repeat(extension_runtime::MAX_DISPATCH_BYTES + 1)
+            )
+            .is_err()
+    );
+}
+
 fn wait_for(
     supervisor: &ExtensionSupervisor,
     condition: impl Fn(&SupervisorStatus) -> bool,
