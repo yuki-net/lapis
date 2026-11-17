@@ -14,7 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{HostCall, HostReply, LIFECYCLE_VERSION, MAX_DISPATCH_BYTES, Request, Response};
+use crate::{
+    DISPATCH_VERSION, HostCall, HostReply, LIFECYCLE_VERSION, MAX_DISPATCH_BYTES, Request, Response,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 const RESPONSE_LIMIT: u64 = 512 * 1024;
@@ -240,6 +242,12 @@ fn supervise(
                     if call.abandoned.load(Ordering::Acquire) {
                         continue;
                     }
+                    if !worker.supports_dispatch {
+                        let _ = call
+                            .reply
+                            .send(Err("extension host does not support dispatch v1".into()));
+                        continue;
+                    }
                     if !worker.active.contains(&call.id) {
                         let _ = call.reply.send(Err("extension is not active".into()));
                         continue;
@@ -304,6 +312,7 @@ struct Worker {
     requests: mpsc::Sender<Vec<u8>>,
     responses: mpsc::Receiver<Result<WorkerEvent, String>>,
     active: Vec<String>,
+    supports_dispatch: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -323,6 +332,7 @@ impl Worker {
             None,
         )?;
         if response.ok && response.lifecycle_version.as_deref() == Some(LIFECYCLE_VERSION) {
+            self.supports_dispatch = response.dispatch_version.as_deref() == Some(DISPATCH_VERSION);
             Ok(response)
         } else {
             Err("拡張ホストのライフサイクル契約が一致しません".to_owned())
@@ -386,6 +396,7 @@ impl Worker {
             requests,
             responses,
             active: Vec::new(),
+            supports_dispatch: false,
         })
     }
 

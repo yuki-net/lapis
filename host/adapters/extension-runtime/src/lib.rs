@@ -58,6 +58,8 @@ pub struct HostReply {
 pub const LIFECYCLE_CONTRACT: &str = "lapis.extension.lifecycle";
 pub const LIFECYCLE_VERSION: &str = "1.0.0";
 pub const PTY_VERSION: &str = "1.0.0";
+pub const DISPATCH_CONTRACT: &str = "lapis.extension.dispatch";
+pub const DISPATCH_VERSION: &str = "1.0.0";
 pub const MAX_DISPATCH_BYTES: usize = 64 * 1024;
 
 #[cfg(feature = "worker")]
@@ -99,6 +101,8 @@ pub struct Response {
     pub lifecycle_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
 }
@@ -279,6 +283,7 @@ impl ExtensionRuntime {
                 error: None,
                 lifecycle_version: Some(LIFECYCLE_VERSION.to_owned()),
                 pty_version: Some(PTY_VERSION.to_owned()),
+                dispatch_version: Some(DISPATCH_VERSION.to_owned()),
                 result: None,
             };
         }
@@ -294,6 +299,7 @@ impl ExtensionRuntime {
                     error: None,
                     lifecycle_version: None,
                     pty_version: None,
+                    dispatch_version: None,
                     result: Some(result),
                 },
                 Err(error) => Response {
@@ -301,6 +307,7 @@ impl ExtensionRuntime {
                     error: Some(error),
                     lifecycle_version: None,
                     pty_version: None,
+                    dispatch_version: None,
                     result: None,
                 },
             };
@@ -335,6 +342,7 @@ impl ExtensionRuntime {
                 error: None,
                 lifecycle_version: None,
                 pty_version: None,
+                dispatch_version: None,
                 result: None,
             },
             Err(error) => Response {
@@ -342,6 +350,7 @@ impl ExtensionRuntime {
                 error: Some(error),
                 lifecycle_version: None,
                 pty_version: None,
+                dispatch_version: None,
                 result: None,
             },
         }
@@ -426,6 +435,7 @@ pub fn serve(
                     error: Some("invalid request".into()),
                     lifecycle_version: None,
                     pty_version: None,
+                    dispatch_version: None,
                     result: None,
                 },
                 false,

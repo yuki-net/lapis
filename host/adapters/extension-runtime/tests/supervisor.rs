@@ -12,9 +12,11 @@ fn worker_reports_each_supported_contract_version() {
     let capabilities = extension_runtime::supervisor::probe_worker(&worker).unwrap();
     assert_eq!(capabilities.lifecycle_version.as_deref(), Some("1.0.0"));
     assert_eq!(capabilities.pty_version.as_deref(), Some("1.0.0"));
+    assert_eq!(capabilities.dispatch_version.as_deref(), Some("1.0.0"));
     let legacy: extension_runtime::Response =
         serde_json::from_str(r#"{"ok":true,"lifecycle_version":"1.0.0"}"#).unwrap();
     assert!(legacy.pty_version.is_none());
+    assert!(legacy.dispatch_version.is_none());
 }
 
 fn component() -> Vec<u8> {
@@ -37,12 +39,13 @@ fn dispatch_component() -> Vec<u8> {
           (core module $m
             (memory (export "memory") 1)
             (data (i32.const 0) "\00\00\00\00\10\00\00\00\02\00\00\00")
-            (data (i32.const 16) "ok")
             (func (export "activate"))
             (func (export "deactivate"))
             (func (export "realloc") (param i32 i32 i32 i32) (result i32)
               (i32.const 128))
             (func (export "dispatch") (param i32 i32 i32 i32) (result i32)
+              (i32.store (i32.const 4) (local.get 2))
+              (i32.store (i32.const 8) (local.get 3))
               (i32.const 0)))
           (core instance $i (instantiate $m))
           (func (export "activate") (canon lift (core func $i "activate")))
@@ -79,7 +82,7 @@ fn dispatch_reaches_only_the_requested_active_component() {
         supervisor
             .dispatch("test.dispatch", "inspect", "{}")
             .unwrap(),
-        "ok"
+        "{}"
     );
     assert!(supervisor.dispatch("test.legacy", "inspect", "{}").is_err());
     assert!(
