@@ -32,6 +32,95 @@ pub enum ReadError {
     },
 }
 
+/// Desktop のネイティブ描画器。通信と process は拡張側が所有する。
+#[cfg(not(target_arch = "wasm32"))]
+pub struct NativeRenderer {
+    cursor: OutputCursor,
+    engine: terminal_renderer::TerminalEngine,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub struct NativeOutput {
+    pub delta: Option<terminal::TerminalDelta>,
+    pub exit: Option<v1::Exit>,
+    pub read_error: Option<String>,
+    pub write_error: Option<String>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl NativeRenderer {
+    /// writer は非同期に Host へ送る入力キューとする。
+    pub fn new(
+        id: String,
+        size: terminal::TerminalSize,
+        writer: Box<dyn std::io::Write + Send>,
+        conpty_quirks: bool,
+    ) -> Self {
+        Self {
+            cursor: OutputCursor::new(id),
+            engine: terminal_renderer::TerminalEngine::with_conpty_quirks(
+                size,
+                writer,
+                conpty_quirks,
+            ),
+        }
+    }
+
+    pub fn begin(
+        &mut self,
+        max_bytes: u32,
+        timeout_ms: u32,
+    ) -> Result<(ReadTicket, v1::ReadRequest), ReadError> {
+        self.cursor.begin(max_bytes, timeout_ms)
+    }
+
+    pub fn cancel(&mut self) {
+        self.cursor.cancel();
+    }
+
+    pub fn accept(
+        &mut self,
+        ticket: ReadTicket,
+        output: v1::ReadResponse,
+    ) -> Result<NativeOutput, ReadError> {
+        let output = self.cursor.accept(ticket, output)?;
+        let delta = if output.bytes.is_empty() {
+            None
+        } else {
+            Some(self.engine.process(&output.bytes))
+        };
+        self.cursor.commit(ticket)?;
+        Ok(NativeOutput {
+            delta,
+            exit: output.exit,
+            read_error: output.read_error,
+            write_error: output.write_error,
+        })
+    }
+
+    pub fn snapshot(&self) -> &terminal::TerminalScreen {
+        self.engine.snapshot()
+    }
+
+    pub fn resize(
+        &mut self,
+        size: terminal::TerminalSize,
+    ) -> (terminal::TerminalScreen, terminal::TerminalDelta) {
+        self.engine.resize(size)
+    }
+
+    pub fn input(
+        &mut self,
+        input: &terminal::TerminalInput,
+    ) -> Result<(), terminal::TerminalError> {
+        self.engine.input(input)
+    }
+
+    pub fn take_write_failures(&self) -> impl Iterator<Item = String> + '_ {
+        self.engine.take_failures()
+    }
+}
+
 impl std::fmt::Display for ReadError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -282,5 +371,70 @@ mod tests {
         assert_eq!(cursor.commit(seventh), Err(ReadError::Stale));
         assert_eq!(cursor.offset(), 5);
         assert_eq!(cursor.begin(2, 0).unwrap().1.offset, 5);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_renderer_applies_only_contiguous_extension_output() {
+        let mut renderer = NativeRenderer::new(
+            "pty-1".into(),
+            terminal::TerminalSize::new(20, 3),
+            Box::new(std::io::sink()),
+            false,
+        );
+        let (ticket, request) = renderer.begin(32, 0).unwrap();
+        assert_eq!(request.offset, 0);
+        let applied = renderer.accept(ticket, output(b"hello", 5, None)).unwrap();
+        assert!(applied.delta.is_some());
+        assert!(renderer.snapshot().plain_text().contains("hello"));
+        let before = renderer.snapshot().clone();
+        let (ticket, request) = renderer.begin(32, 0).unwrap();
+        assert_eq!(request.offset, 5);
+        assert!(matches!(
+            renderer.accept(ticket, output(b"x", 11, Some(10))),
+            Err(ReadError::OutputLost {
+                expected: 5,
+                available_from: 10
+            })
+        ));
+        assert_eq!(renderer.snapshot(), &before);
+        let (ticket, request) = renderer.begin(32, 0).unwrap();
+        assert_eq!(request.offset, 5);
+        renderer
+            .accept(ticket, output(b" world", 11, None))
+            .unwrap();
+        assert!(renderer.snapshot().plain_text().contains("hello world"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn native_renderer_answers_remote_pty_cursor_queries() {
+        struct Capture(std::sync::mpsc::Sender<Vec<u8>>);
+        impl std::io::Write for Capture {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.send(bytes.to_vec()).map_err(std::io::Error::other)?;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut renderer = NativeRenderer::new(
+            "pty-1".into(),
+            terminal::TerminalSize::new(20, 3),
+            Box::new(Capture(sender)),
+            true,
+        );
+        let (ticket, _) = renderer.begin(32, 0).unwrap();
+        renderer
+            .accept(ticket, output(b"\x1b[6n", 4, None))
+            .unwrap();
+        assert_eq!(
+            receiver
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap(),
+            b"\x1b[1;1R"
+        );
     }
 }

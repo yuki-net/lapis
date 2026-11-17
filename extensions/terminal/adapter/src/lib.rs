@@ -22,8 +22,7 @@ use terminal::{
     TerminalProfile, TerminalProfileId, TerminalProfiles, TerminalSize,
 };
 
-mod terminal_engine;
-use terminal_engine::{TerminalEngine, normalized_size};
+use terminal_renderer::{TerminalEngine, normalized_size};
 
 /// OS ごとの既定 profile。Host はこれを設定として差し替えられる。
 pub fn default_profiles() -> TerminalProfiles {

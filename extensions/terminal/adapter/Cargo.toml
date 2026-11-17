@@ -8,6 +8,5 @@ license.workspace = true
 [dependencies]
 futures-channel = "0.3"
 terminal = { package = "terminal-contract", path = "../contract" }
+terminal-renderer = { path = "../renderer" }
 portable-pty.workspace = true
-wezterm-term.workspace = true
-wezterm-surface.workspace = true

@@ -53,7 +53,7 @@ impl Write for PtyWriter {
     }
 }
 
-pub(crate) struct TerminalEngine {
+pub struct TerminalEngine {
     term: Terminal,
     failures: mpsc::Receiver<String>,
     size: TerminalSize,
@@ -62,7 +62,16 @@ pub(crate) struct TerminalEngine {
 }
 
 impl TerminalEngine {
-    pub(crate) fn new(size: TerminalSize, writer: Box<dyn Write + Send>) -> Self {
+    pub fn new(size: TerminalSize, writer: Box<dyn Write + Send>) -> Self {
+        Self::with_conpty_quirks(size, writer, cfg!(windows))
+    }
+
+    /// PTY が動く Host の種類を指定する。描画する Client の OS とは限らない。
+    pub fn with_conpty_quirks(
+        size: TerminalSize,
+        writer: Box<dyn Write + Send>,
+        conpty_quirks: bool,
+    ) -> Self {
         let size = normalized_size(size);
         let (sender, failures) = mpsc::channel();
         let term = Terminal::new(
@@ -75,10 +84,11 @@ impl TerminalEngine {
                 failures: sender,
             }),
         );
-        #[cfg(windows)]
-        let term = {
+        let term = if conpty_quirks {
             let mut term = term;
             term.enable_conpty_quirks();
+            term
+        } else {
             term
         };
         let mut engine = Self {
@@ -92,7 +102,7 @@ impl TerminalEngine {
         engine
     }
 
-    pub(crate) fn process(&mut self, data: &[u8]) -> TerminalDelta {
+    pub fn process(&mut self, data: &[u8]) -> TerminalDelta {
         self.term.advance_bytes(data);
         self.revision += 1;
         let screen = self.screen();
@@ -122,7 +132,7 @@ impl TerminalEngine {
         delta
     }
 
-    pub(crate) fn resize(&mut self, size: TerminalSize) -> (TerminalScreen, TerminalDelta) {
+    pub fn resize(&mut self, size: TerminalSize) -> (TerminalScreen, TerminalDelta) {
         self.size = normalized_size(size);
         self.term.resize(engine_size(self.size));
         self.revision += 1;
@@ -159,7 +169,7 @@ impl TerminalEngine {
         (screen, delta)
     }
 
-    pub(crate) fn input(&mut self, input: &TerminalInput) -> Result<(), TerminalError> {
+    pub fn input(&mut self, input: &TerminalInput) -> Result<(), TerminalError> {
         let result = match input {
             TerminalInput::Text(text) => text.chars().try_for_each(|character| {
                 self.term
@@ -173,8 +183,13 @@ impl TerminalEngine {
         result.map_err(|error| TerminalError::new(error.to_string()))
     }
 
-    pub(crate) fn take_failures(&self) -> impl Iterator<Item = String> + '_ {
+    pub fn take_failures(&self) -> impl Iterator<Item = String> + '_ {
         self.failures.try_iter()
+    }
+
+    /// 最後に処理した出力を反映した画面。
+    pub fn snapshot(&self) -> &TerminalScreen {
+        &self.last_screen
     }
 
     fn screen(&self) -> TerminalScreen {
@@ -226,7 +241,7 @@ impl TerminalEngine {
     }
 }
 
-pub(crate) fn normalized_size(size: TerminalSize) -> TerminalSize {
+pub fn normalized_size(size: TerminalSize) -> TerminalSize {
     TerminalSize::new(size.columns.max(2), size.rows.max(1))
 }
 

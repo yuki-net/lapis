@@ -99,12 +99,12 @@ ALLOWED = {
 
 def layer(manifest, root):
     relative = Path(manifest).resolve().relative_to(root.resolve()).as_posix()
-    # 拡張は役割ディレクトリで構成する（`contract` / `host` / `adapter`）。
+    # 拡張は役割ディレクトリで構成する（`contract` / `host` / `adapter` / `renderer`）。
     # Host 状態サービスは runtime、OS に触れる実装は infrastructure として扱い、
     # 拡張の中にあっても層の意味を変えない。
     parts = relative.split("/")
     if len(parts) >= 3 and parts[0] == "extensions":
-        roles = {"contract": "models", "host": "runtime", "adapter": "infrastructure"}
+        roles = {"contract": "models", "renderer": "models", "host": "runtime", "adapter": "infrastructure"}
         if parts[2] in roles:
             return roles[parts[2]]
     for prefix, value in [

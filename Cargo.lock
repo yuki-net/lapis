@@ -2219,6 +2219,7 @@ dependencies = [
  "task",
  "tempfile",
  "terminal-contract",
+ "terminal-renderer",
  "terminal-session-api",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -5400,8 +5401,7 @@ dependencies = [
  "futures-channel",
  "portable-pty",
  "terminal-contract",
- "wezterm-surface",
- "wezterm-term",
+ "terminal-renderer",
 ]
 
 [[package]]
@@ -9120,6 +9120,15 @@ dependencies = [
  "futures-channel",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "terminal-renderer"
+version = "0.1.0"
+dependencies = [
+ "terminal-contract",
+ "wezterm-surface",
+ "wezterm-term",
 ]
 
 [[package]]
