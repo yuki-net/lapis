@@ -8,8 +8,8 @@ use editor_core::WorkspaceId;
 use futures_channel::mpsc;
 use futures_util::{FutureExt, StreamExt};
 use terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalScreen,
-    TerminalSize, TerminalSnapshot, TerminalStatus,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalProfileId,
+    TerminalProfiles, TerminalScreen, TerminalSize, TerminalSnapshot, TerminalStatus,
 };
 
 use super::{BACKEND, SWITCHING, TerminalOutputStream, terminal_operation};
@@ -46,6 +46,7 @@ struct UiRegistry {
     workspace: WorkspaceId,
     entries: HashMap<String, UiEntry>,
     discovered: Vec<TerminalSnapshot>,
+    profiles: Option<TerminalProfiles>,
     changes: Vec<mpsc::UnboundedSender<()>>,
 }
 
@@ -78,6 +79,7 @@ fn registry() -> Result<Rc<RefCell<UiRegistry>>, TerminalError> {
             workspace,
             entries: HashMap::new(),
             discovered: Vec::new(),
+            profiles: None,
             changes: Vec::new(),
         }));
         *slot = Some(state.clone());
@@ -90,6 +92,15 @@ fn registry() -> Result<Rc<RefCell<UiRegistry>>, TerminalError> {
                 };
                 if ensure_current(&connection, &workspace).is_err() {
                     break;
+                }
+                if let Ok(profiles) = ExtensionTerminal::profiles().await
+                    && ensure_current(&connection, &workspace).is_ok()
+                {
+                    let mut state = active.borrow_mut();
+                    if state.profiles.as_ref() != Some(&profiles) {
+                        state.profiles = Some(profiles);
+                        notify(&mut state);
+                    }
                 }
                 if let Ok(sessions) = ExtensionTerminal::list().await
                     && ensure_current(&connection, &workspace).is_ok()
@@ -151,6 +162,7 @@ fn create_actor(
     cwd: &Path,
     size: TerminalSize,
     attach: bool,
+    profile: Option<String>,
 ) -> Result<TerminalSnapshot, TerminalError> {
     terminal_relative_cwd(cwd).map_err(TerminalError::new)?;
     if size.columns == 0 || size.rows == 0 || size.columns > 512 || size.rows > 256 {
@@ -178,7 +190,8 @@ fn create_actor(
         let result = if attach {
             ExtensionTerminal::attach(id.as_str()).await
         } else {
-            ExtensionTerminal::start_with_id(&path, size, None, Some(id.as_str().into())).await
+            ExtensionTerminal::start_profile_with_id(&path, size, profile, Some(id.as_str().into()))
+                .await
         };
         match result {
             Ok(session) => run_actor(state, id, session, receiver).await,
@@ -296,8 +309,39 @@ fn publish_screen(
 impl TerminalBackend for ExtensionTerminalBackend {
     fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
         let id = random_id()?;
-        create_actor(id.clone(), cwd, TerminalSize::new(columns, rows), false)?;
+        create_actor(
+            id.clone(),
+            cwd,
+            TerminalSize::new(columns, rows),
+            false,
+            None,
+        )?;
         Ok(id)
+    }
+    fn start_profile(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        profile: Option<&TerminalProfileId>,
+    ) -> Result<TerminalId, TerminalError> {
+        let id = random_id()?;
+        create_actor(
+            id.clone(),
+            cwd,
+            TerminalSize::new(columns, rows),
+            false,
+            profile.map(|id| id.as_str().to_owned()),
+        )?;
+        Ok(id)
+    }
+    fn profiles(&self, cwd: &Path) -> Result<TerminalProfiles, TerminalError> {
+        terminal_relative_cwd(cwd).map_err(TerminalError::new)?;
+        registry()?
+            .borrow()
+            .profiles
+            .clone()
+            .ok_or_else(|| TerminalError::new("Terminal profile の取得中です"))
     }
     fn list(&self, _cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
         let registry = registry()?;
@@ -313,7 +357,7 @@ impl TerminalBackend for ExtensionTerminalBackend {
             .find(|item| item.id == *id)
             .map(|item| item.screen.size)
             .unwrap_or(TerminalSize::new(80, 24));
-        create_actor(id.clone(), cwd, size, true)
+        create_actor(id.clone(), cwd, size, true, None)
     }
     fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
         send(id, UiCommand::Input(input.clone()))
@@ -408,6 +452,18 @@ async fn call<T: serde::Serialize, R: serde::de::DeserializeOwned>(
 }
 
 impl ExtensionTerminal {
+    pub async fn profiles() -> Result<TerminalProfiles, String> {
+        let (connection, workspace) = connected()?;
+        let response: v1::ProfilesResponse = call(
+            &connection,
+            &workspace,
+            v1::PROFILES,
+            &v1::ProfilesRequest {},
+        )
+        .await?;
+        crate::terminal_extension::profiles_from_wire(response)
+    }
+
     pub async fn list() -> Result<Vec<v1::Session>, String> {
         let (connection, workspace) = connected()?;
         let response: v1::ListResponse =
@@ -459,6 +515,36 @@ impl ExtensionTerminal {
         Self::start_with_id(path, size, shell, None).await
     }
 
+    pub async fn start_profile_with_id(
+        path: &Path,
+        size: TerminalSize,
+        profile: Option<String>,
+        requested_id: Option<String>,
+    ) -> Result<Self, String> {
+        let cwd = terminal_relative_cwd(path)?;
+        let (connection, workspace) = connected()?;
+        let info: v1::InfoResponse =
+            call(&connection, &workspace, v1::INFO, &v1::InfoRequest {}).await?;
+        let renderer = terminal_portable_renderer::Renderer::with_conpty(
+            size,
+            info.pty == v1::PtyFlavor::Conpty,
+        )?;
+        let started: v1::StartResponse = call(
+            &connection,
+            &workspace,
+            v1::START_PROFILE,
+            &v1::StartProfileRequest {
+                requested_id: requested_id.clone(),
+                profile,
+                working_directory: cwd.clone(),
+                columns: size.columns,
+                rows: size.rows,
+            },
+        )
+        .await?;
+        Self::from_started(connection, workspace, cwd, renderer, started, requested_id)
+    }
+
     pub async fn start_with_id(
         path: &Path,
         size: TerminalSize,
@@ -489,6 +575,17 @@ impl ExtensionTerminal {
             },
         )
         .await?;
+        Self::from_started(connection, workspace, cwd, renderer, started, requested_id)
+    }
+
+    fn from_started(
+        connection: Rc<BrowserConnection>,
+        workspace: WorkspaceId,
+        cwd: String,
+        renderer: terminal_portable_renderer::Renderer,
+        started: v1::StartResponse,
+        requested_id: Option<String>,
+    ) -> Result<Self, String> {
         if started.id.is_empty()
             || started.id.len() > 256
             || requested_id.as_ref().is_some_and(|id| id != &started.id)

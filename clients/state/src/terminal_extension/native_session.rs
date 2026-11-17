@@ -184,26 +184,10 @@ impl NativeSession {
         })
     }
 
-    pub fn profiles(transport: &NativeTransport) -> Result<v1::ProfilesResponse, String> {
+    pub fn profiles(transport: &NativeTransport) -> Result<terminal::TerminalProfiles, String> {
         let profiles: v1::ProfilesResponse =
             call(transport, v1::PROFILES, &v1::ProfilesRequest {})?;
-        let mut ids = std::collections::BTreeSet::new();
-        if profiles.profiles.len() > 64
-            || profiles.profiles.iter().any(|profile| {
-                profile.id.is_empty()
-                    || profile.id.len() > 128
-                    || profile.name.is_empty()
-                    || profile.name.len() > 256
-                    || !ids.insert(&profile.id)
-            })
-            || profiles
-                .default
-                .as_ref()
-                .is_some_and(|id| !ids.contains(id))
-        {
-            return Err("Terminal profile 一覧が不正です".into());
-        }
-        Ok(profiles)
+        super::profiles_from_wire(profiles)
     }
 
     pub fn id(&self) -> &str {

@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 use terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalProfile,
-    TerminalProfileId, TerminalProfiles, TerminalSize, TerminalSnapshot, TerminalStatus,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalProfileId,
+    TerminalProfiles, TerminalSize, TerminalSnapshot, TerminalStatus,
 };
 
 use super::{NativeSession, NativeTransport};
@@ -200,19 +200,7 @@ impl TerminalBackend for NativeBackend {
     }
 
     fn profiles(&self, _cwd: &Path) -> Result<TerminalProfiles, TerminalError> {
-        let result = NativeSession::profiles(&self.transport).map_err(TerminalError::new)?;
-        Ok(TerminalProfiles::new(
-            result
-                .profiles
-                .into_iter()
-                .map(|profile| {
-                    TerminalProfile::new(profile.id, profile.name, profile.command.program)
-                        .with_args(profile.command.arguments)
-                        .with_env(profile.command.environment)
-                })
-                .collect(),
-            result.default.map(TerminalProfileId::new),
-        ))
+        NativeSession::profiles(&self.transport).map_err(TerminalError::new)
     }
 
     fn list(&self, _cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {

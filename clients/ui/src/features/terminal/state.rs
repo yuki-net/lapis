@@ -243,6 +243,8 @@ pub(crate) struct TerminalFeature {
     tab_visible: bool,
     /// Host の profile 一覧を読み終えたか。読み終えるまで既定 profile は決めない。
     profiles_loaded: bool,
+    /// 非同期 backend が一時的に一覧を返せなかった場合、次の変更通知で再取得する。
+    profiles_retry: bool,
     pub(super) last_metrics: Option<super::view::TerminalMetrics>,
     pub(super) last_size: Option<(terminal::TerminalId, (u16, u16))>,
     /// 行の内容から shaped line を引き当てるキャッシュ。フォント変更時に捨てる。
@@ -470,6 +472,7 @@ impl TerminalFeature {
             pending_auto_start: false,
             tab_visible: false,
             profiles_loaded: false,
+            profiles_retry: false,
             last_metrics: None,
             last_size: None,
             line_cache: Default::default(),
@@ -517,6 +520,7 @@ impl TerminalFeature {
         self.profiles_loaded = false;
         let Some(root) = self.root.clone() else {
             self.profiles = terminal::TerminalProfiles::default();
+            self.profiles_retry = false;
             super::publish_profile_catalog(&self.profiles, &self.profiles_catalog, cx);
             self.profiles_loaded = true;
             return;
@@ -530,11 +534,18 @@ impl TerminalFeature {
                     return;
                 }
                 match result {
-                    Ok(Ok(profiles)) => feature.profiles = profiles,
-                    Ok(Err(_)) | Err(_) => feature.profiles = terminal::TerminalProfiles::default(),
+                    Ok(Ok(profiles)) => {
+                        feature.profiles = profiles;
+                        feature.profiles_retry = false;
+                        feature.profiles_loaded = true;
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        feature.profiles = terminal::TerminalProfiles::default();
+                        feature.profiles_retry = true;
+                        feature.profiles_loaded = false;
+                    }
                 }
                 super::publish_profile_catalog(&feature.profiles, &feature.profiles_catalog, cx);
-                feature.profiles_loaded = true;
                 // profile が揃ってから既定 profile を解決する。
                 feature.ensure_auto_start(cx);
                 cx.notify();
@@ -639,6 +650,10 @@ impl TerminalFeature {
     /// Host の変更通知を受けたときに、この実体の表示を更新する。
     /// Shell が1本の通知を全タブへ配るため、複数タブでも購読は1回で済む。
     pub(crate) fn note_change(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.profiles_retry {
+            self.profiles_retry = false;
+            self.load_profiles(cx);
+        }
         self.poll(cx);
     }
 
@@ -1764,6 +1779,7 @@ mod tests {
         started_profiles: Mutex<Vec<Option<terminal::TerminalProfileId>>>,
         /// Host が公開する profile 一覧。
         profiles: Mutex<terminal::TerminalProfiles>,
+        fail_profiles: std::sync::atomic::AtomicBool,
     }
 
     impl TerminalBackend for Backend {
@@ -1784,6 +1800,9 @@ mod tests {
             )))
         }
         fn profiles(&self, _: &Path) -> Result<terminal::TerminalProfiles, TerminalError> {
+            if self.fail_profiles.load(Ordering::Relaxed) {
+                return Err(TerminalError::new("profiles unavailable"));
+            }
             Ok(self.profiles.lock().unwrap().clone())
         }
         fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
@@ -2415,6 +2434,53 @@ mod tests {
         assert_eq!(feature.session.terminals()[0].id, terminal);
         drop(feature);
         assert_eq!(backend.terminated.load(Ordering::Relaxed), 0);
+    }
+
+    #[gpui::test]
+    fn retries_a_temporarily_unavailable_profile_catalog(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let (entity, backend) = cx.update(|cx| {
+            let (_, backend) = feature();
+            backend.fail_profiles.store(true, Ordering::Relaxed);
+            *backend.profiles.lock().unwrap() = terminal::TerminalProfiles::new(
+                vec![terminal::TerminalProfile::new(
+                    "cmd",
+                    "Command Prompt",
+                    "cmd.exe",
+                )],
+                Some(terminal::TerminalProfileId::new("cmd")),
+            );
+            let entity = cx.new(|cx| {
+                TerminalFeature::test_new(
+                    TerminalSession::new(backend.clone()),
+                    Some("workspace".into()),
+                    ConversationId::new("task-a"),
+                    cx,
+                )
+            });
+            entity.update(cx, |feature, cx| {
+                feature.default_profile = Some(terminal::TerminalProfileId::new("cmd"));
+                feature.sync_tab_presence(true, cx);
+            });
+            (entity, backend)
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            assert!(entity.read(cx).profiles_retry);
+            assert!(backend.started_profiles.lock().unwrap().is_empty());
+            backend.fail_profiles.store(false, Ordering::Relaxed);
+            entity.update(cx, |feature, cx| feature.note_change(cx));
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            let feature = entity.read(cx);
+            assert!(!feature.profiles_retry);
+            assert_eq!(feature.profiles.profiles[0].id.as_str(), "cmd");
+        });
+        assert_eq!(
+            *backend.started_profiles.lock().unwrap(),
+            vec![Some(terminal::TerminalProfileId::new("cmd"))]
+        );
     }
 
     #[gpui::test]

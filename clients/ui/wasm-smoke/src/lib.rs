@@ -63,7 +63,34 @@ pub async fn extension_terminal_smoke(
     .map_err(failure)?;
     let backend = Arc::new(ExtensionTerminalBackend);
     let mut first = TerminalSession::new(backend.clone());
-    let id = first.start(Path::new(ROOT), 80, 24).map_err(failure)?;
+    let mut found_profiles = false;
+    for _ in 0..100 {
+        if let Ok(profiles) = first.profiles(Path::new(ROOT))
+            && profiles
+                .default
+                .as_ref()
+                .is_some_and(|id| id.as_str() == "powershell")
+            && profiles
+                .profiles
+                .iter()
+                .any(|profile| profile.id.as_str() == "cmd")
+        {
+            found_profiles = true;
+            break;
+        }
+        TimeoutFuture::new(100).await;
+    }
+    if !found_profiles {
+        return Err(JsValue::from_str("Terminal profiles unavailable"));
+    }
+    let id = first
+        .start_profile(
+            Path::new(ROOT),
+            80,
+            24,
+            Some(terminal::TerminalProfileId::new("powershell")),
+        )
+        .map_err(failure)?;
     if !id.as_str().starts_with("client-") {
         return Err(JsValue::from_str("invalid session ID"));
     }
@@ -88,6 +115,7 @@ pub async fn extension_terminal_smoke(
         .map_err(failure)?;
     wait_for_text(&mut second, "webproof").await?;
     let mut released = false;
+    let mut closed = false;
     for _ in 0..100 {
         second.refresh().map_err(failure)?;
         if second.owner(&id).is_none() {
@@ -114,9 +142,26 @@ pub async fn extension_terminal_smoke(
             .iter()
             .any(|item| item.id == id.as_str())
         {
-            return Ok("ok".into());
+            closed = true;
+            break;
         }
         TimeoutFuture::new(100).await;
     }
-    Err(JsValue::from_str("Terminal did not close"))
+    if !closed {
+        return Err(JsValue::from_str("Terminal did not close"));
+    }
+    let cmd = second
+        .start_profile(
+            Path::new(ROOT),
+            80,
+            24,
+            Some(terminal::TerminalProfileId::new("cmd")),
+        )
+        .map_err(failure)?;
+    second
+        .input(&cmd, "echo web-cmd-proof\r")
+        .map_err(failure)?;
+    wait_for_text(&mut second, "web-cmd-proof").await?;
+    second.terminate_and_forget(&cmd).map_err(failure)?;
+    Ok("ok".into())
 }

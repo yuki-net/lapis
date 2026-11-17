@@ -46,7 +46,7 @@ workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `host` / `
 - タブごとに個別のセッションを持ちます。
 - 試験用の拡張経路では `terminal.v1.profiles` で選択肢を取得し、
   `terminal.v1.start-profile` に profile ID を渡す。起動 command は拡張側で決定し、
-  未知の ID を拒否する。Web 側の profile 選択は未接続。
+  未知の ID を拒否する。Desktop・Web は接続ごとに同じ操作を使用する。
 
 ## Client 側の載せ方
 

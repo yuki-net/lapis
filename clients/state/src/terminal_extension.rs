@@ -16,6 +16,36 @@ pub use native_backend::NativeBackend;
 
 pub const EXTENSION_ID: &str = "lapis.terminal";
 
+pub(crate) fn profiles_from_wire(
+    value: v1::ProfilesResponse,
+) -> Result<terminal::TerminalProfiles, String> {
+    let mut ids = std::collections::BTreeSet::new();
+    if value.profiles.len() > 64
+        || value.profiles.iter().any(|profile| {
+            profile.id.is_empty()
+                || profile.id.len() > 128
+                || profile.name.is_empty()
+                || profile.name.len() > 256
+                || !ids.insert(&profile.id)
+        })
+        || value.default.as_ref().is_some_and(|id| !ids.contains(id))
+    {
+        return Err("Terminal profile 一覧が不正です".into());
+    }
+    Ok(terminal::TerminalProfiles::new(
+        value
+            .profiles
+            .into_iter()
+            .map(|profile| {
+                terminal::TerminalProfile::new(profile.id, profile.name, profile.command.program)
+                    .with_args(profile.command.arguments)
+                    .with_env(profile.command.environment)
+            })
+            .collect(),
+        value.default.map(terminal::TerminalProfileId::new),
+    ))
+}
+
 #[cfg(any(target_arch = "wasm32", test))]
 pub(crate) mod web_projection;
 
@@ -360,6 +390,34 @@ pub fn response<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn profile_catalog_rejects_duplicate_ids_and_unknown_default() {
+        let profile = v1::Profile {
+            id: "shell".into(),
+            name: "Shell".into(),
+            command: v1::ShellCommand {
+                program: "sh".into(),
+                arguments: Vec::new(),
+                environment: Default::default(),
+            },
+        };
+        let valid = v1::ProfilesResponse {
+            profiles: vec![profile.clone()],
+            default: Some("shell".into()),
+        };
+        assert!(profiles_from_wire(valid.clone()).is_ok());
+        let duplicate = v1::ProfilesResponse {
+            profiles: vec![profile.clone(), profile],
+            default: None,
+        };
+        assert!(profiles_from_wire(duplicate).is_err());
+        let invalid_default = v1::ProfilesResponse {
+            default: Some("missing".into()),
+            ..valid
+        };
+        assert!(profiles_from_wire(invalid_default).is_err());
+    }
 
     #[test]
     fn terminal_wire_codec_checks_identity_operation_and_body() {
