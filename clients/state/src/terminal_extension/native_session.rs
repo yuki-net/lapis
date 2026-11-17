@@ -77,6 +77,7 @@ impl NativeSession {
             &transport,
             v1::START,
             &v1::StartRequest {
+                requested_id: None,
                 program: shell.program,
                 arguments: shell.arguments,
                 environment: shell.environment,

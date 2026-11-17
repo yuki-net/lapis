@@ -53,6 +53,8 @@ def main() -> None:
             assert response["extension"] == "lapis.terminal", response
             method = response["method"]
             calls.append(method)
+            if method.startswith("pty.v1.") and method != "pty.v1.spawn":
+                assert response["payload"]["id"] == "pty-1", response
             if method == "pty.v1.spawn":
                 result = "pty-1"
             elif method == "process.info.v1.get":
@@ -124,6 +126,19 @@ def main() -> None:
         assert not dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
         assert calls == ["process.info.v1.get", "pty.v1.spawn", "pty.v1.attach", "pty.v1.write", "pty.v1.resize",
                          "pty.v1.read", "pty.v1.kill", "pty.v1.detach", "pty.v1.forget"], calls
+        stable = "client-" + "a" * 32
+        start = {"requested_id": stable, "program": "shell", "working_directory": ".", "columns": 80, "rows": 24}
+        assert json.loads(dispatch("start", start)["result"])["id"] == stable
+        before = len(calls)
+        assert not dispatch("start", start)["ok"]
+        assert not dispatch("start", start, workspace="workspace-2")["ok"]
+        assert len(calls) == before
+        assert json.loads(dispatch("list", {})["result"])["sessions"][0]["id"] == stable
+        assert not dispatch("write", {"id": stable, "bytes": [65]}, workspace="workspace-2")["ok"]
+        assert dispatch("write", {"id": stable, "bytes": [65]})["ok"]
+        assert dispatch("close", {"id": stable})["ok"]
+        start["requested_id"] = "../unsafe"
+        assert not dispatch("start", start)["ok"]
         assert request({"command": "shutdown"})["ok"]
         assert child.wait(timeout=15) == 0
     finally:

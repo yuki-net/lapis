@@ -272,7 +272,7 @@ mod tests {
         let host =
             host::BackendHost::start_development_with_state_directory(state.path().to_owned())
                 .unwrap();
-        host.register_workspace(workspace.path()).unwrap();
+        let workspace_id = host.register_workspace(workspace.path()).unwrap();
         let backend = Arc::new(ExtensionTerminals::new(BackendClient::from(host.clone())));
         let mut terminals = TerminalSession::new(backend);
         let deadline = Instant::now() + Duration::from_secs(20);
@@ -301,7 +301,7 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         let original_owner = terminals.owner(&id).unwrap().to_owned();
-        let other = ExtensionTerminals::new(BackendClient::from(host));
+        let other = ExtensionTerminals::new(BackendClient::from(host.clone()));
         assert!(
             other
                 .list(workspace.path())
@@ -332,5 +332,36 @@ mod tests {
         assert_eq!(terminals.terminals()[0].screen.size.columns, 100);
         terminals.terminate_and_forget(&id).unwrap();
         assert!(terminals.terminals().is_empty());
+
+        use desktop_client::terminal_extension::{request, response, v1};
+        let connection = BackendClient::from(host)
+            .open_extension_connection(workspace_id)
+            .unwrap();
+        let stable = format!("client-{}", "a".repeat(32));
+        let start = v1::StartRequest {
+            requested_id: Some(stable.clone()),
+            program: "cmd.exe".into(),
+            arguments: vec!["/D".into(), "/C".into(), "ping -n 30 127.0.0.1 >nul".into()],
+            environment: Default::default(),
+            working_directory: ".".into(),
+            columns: 80,
+            rows: 24,
+        };
+        let result: v1::StartResponse = response(
+            v1::START,
+            connection
+                .dispatch(request(v1::START, &start).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result.id, stable);
+        let end = v1::IdRequest { id: stable };
+        let _: () = response(
+            v1::CLOSE,
+            connection
+                .dispatch(request(v1::CLOSE, &end).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
     }
 }

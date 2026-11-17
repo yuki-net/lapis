@@ -1,5 +1,7 @@
 //! PTY の所有は Host に置き、ターミナル拡張はセッションの操作と状態を持つ。
 
+#![allow(clippy::too_many_arguments)] // wit-bindgen の生成 ABI
+
 wit_bindgen::generate!({ path: "wit", world: "terminal", generate_all });
 
 use std::{
@@ -17,6 +19,7 @@ use terminal_session_api::v1::{
 };
 
 struct Session {
+    pty_id: String,
     attached: bool,
     columns: u16,
     rows: u16,
@@ -70,6 +73,15 @@ fn owner(id: &str, workspace: &str) -> Result<Option<String>, String> {
     })
 }
 
+fn pty_id(id: &str, workspace: &str) -> Result<String, String> {
+    SESSIONS.with(|sessions| match sessions.borrow().get(id) {
+        Some(session) if session.attached && session.workspace == workspace => {
+            Ok(session.pty_id.clone())
+        }
+        _ => Err("terminal session is not attached".into()),
+    })
+}
+
 fn require_owner(id: &str, workspace: &str, caller: &str) -> Result<(), String> {
     if owner(id, workspace)?.is_some_and(|owner| owner != caller) {
         return Err("terminal is owned by another session".into());
@@ -101,7 +113,7 @@ fn reap_closed() {
     SESSIONS.with(|sessions| {
         sessions
             .borrow_mut()
-            .retain(|id, session| session.attached || sessions::forget(id).is_err());
+            .retain(|_, session| session.attached || sessions::forget(&session.pty_id).is_err());
     });
 }
 
@@ -158,6 +170,17 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
         }
         v1::START => {
             let input: StartRequest = decode(payload)?;
+            if let Some(id) = &input.requested_id {
+                let valid = id.strip_prefix("client-").is_some_and(|suffix| {
+                    suffix.len() == 32
+                        && suffix
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+                });
+                if !valid || SESSIONS.with(|sessions| sessions.borrow().contains_key(id)) {
+                    return Err("invalid or duplicate terminal session ID".into());
+                }
+            }
             check_directory_budget(&input.working_directory)?;
             if input.columns == 0 || input.rows == 0 {
                 return Err("invalid terminal size".into());
@@ -176,12 +199,14 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
                     rows: input.rows,
                 },
             };
-            let id = sessions::spawn(&command)?;
-            sessions::attach(&id)?;
+            let pty = sessions::spawn(&command)?;
+            sessions::attach(&pty)?;
+            let id = input.requested_id.unwrap_or_else(|| pty.clone());
             SESSIONS.with(|sessions| {
                 sessions.borrow_mut().insert(
                     id.clone(),
                     Session {
+                        pty_id: pty,
                         attached: true,
                         columns: input.columns,
                         rows: input.rows,
@@ -200,7 +225,7 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
         v1::WRITE => {
             let input: WriteRequest = decode(payload)?;
             require_owner(&input.id, workspace, caller)?;
-            sessions::write(&input.id, &input.bytes)?;
+            sessions::write(&pty_id(&input.id, workspace)?, &input.bytes)?;
             touch(&input.id);
             Ok(Value::Null)
         }
@@ -208,7 +233,7 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
             let input: ResizeRequest = decode(payload)?;
             require_owner(&input.id, workspace, caller)?;
             sessions::resize(
-                &input.id,
+                &pty_id(&input.id, workspace)?,
                 Size {
                     columns: input.columns,
                     rows: input.rows,
@@ -233,8 +258,12 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
             {
                 return Err("invalid terminal read limit".into());
             }
-            let output =
-                sessions::read(&input.id, input.offset, input.max_bytes, input.timeout_ms)?;
+            let output = sessions::read(
+                &pty_id(&input.id, workspace)?,
+                input.offset,
+                input.max_bytes,
+                input.timeout_ms,
+            )?;
             encode(ReadResponse {
                 bytes: output.bytes,
                 next: output.next,
@@ -248,8 +277,9 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
         v1::CLOSE => {
             let input: IdRequest = decode(payload)?;
             require_owner(&input.id, workspace, caller)?;
-            sessions::kill(&input.id)?;
-            sessions::detach(&input.id)?;
+            let pty = pty_id(&input.id, workspace)?;
+            sessions::kill(&pty)?;
+            sessions::detach(&pty)?;
             SESSIONS.with(|sessions| {
                 if let Some(session) = sessions.borrow_mut().get_mut(&input.id) {
                     session.attached = false;
@@ -300,7 +330,7 @@ impl Guest for Terminal {
                 .borrow()
                 .iter()
                 .filter(|(_, session)| session.attached)
-                .map(|(id, _)| id.clone())
+                .map(|(_, session)| session.pty_id.clone())
                 .collect::<Vec<_>>()
         });
         for id in ids {

@@ -50,6 +50,9 @@ pub mod v1 {
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct StartRequest {
+        /// 同期 UI が先に保持する `client-` と 32 桁の小文字 hex。未指定なら拡張が割り当てる。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub requested_id: Option<String>,
         pub program: String,
         #[serde(default)]
         pub arguments: Vec<String>,
@@ -146,6 +149,7 @@ mod tests {
             r#"{"program":"shell","working_directory":".","columns":80,"rows":24}"#,
         )
         .unwrap();
+        assert!(request.requested_id.is_none());
         assert!(request.arguments.is_empty());
         assert!(request.environment.is_empty());
         assert!(serde_json::from_str::<ListRequest>(r#"{"unknown":true}"#).is_err());

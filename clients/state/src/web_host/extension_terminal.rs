@@ -122,6 +122,15 @@ impl ExtensionTerminal {
         size: TerminalSize,
         shell: Option<v1::ShellCommand>,
     ) -> Result<Self, String> {
+        Self::start_with_id(path, size, shell, None).await
+    }
+
+    pub async fn start_with_id(
+        path: &Path,
+        size: TerminalSize,
+        shell: Option<v1::ShellCommand>,
+        requested_id: Option<String>,
+    ) -> Result<Self, String> {
         let cwd = terminal_relative_cwd(path)?;
         let (connection, workspace) = connected()?;
         let info: v1::InfoResponse =
@@ -136,6 +145,7 @@ impl ExtensionTerminal {
             &workspace,
             v1::START,
             &v1::StartRequest {
+                requested_id: requested_id.clone(),
                 program: shell.program,
                 arguments: shell.arguments,
                 environment: shell.environment,
@@ -145,7 +155,10 @@ impl ExtensionTerminal {
             },
         )
         .await?;
-        if started.id.is_empty() || started.id.len() > 256 {
+        if started.id.is_empty()
+            || started.id.len() > 256
+            || requested_id.as_ref().is_some_and(|id| id != &started.id)
+        {
             return Err("Terminal session ID が不正です".into());
         }
         let stream = TerminalOutputStream::new(started.id.clone())?;
