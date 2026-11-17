@@ -1257,6 +1257,10 @@ mod tests {
         .unwrap();
         let id = opened["id"].as_str().unwrap();
         assert_eq!(broker.session_count("lapis.terminal"), 1);
+        let listed: serde_json::Value =
+            serde_json::from_str(&supervisor.dispatch("lapis.terminal", "list", "{}").unwrap())
+                .unwrap();
+        assert_eq!(listed["sessions"][0]["id"], id);
         let mut offset = 0u64;
         let mut output = Vec::new();
         let mut answered_cursor_query = false;

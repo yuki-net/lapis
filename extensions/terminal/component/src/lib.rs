@@ -8,10 +8,20 @@ use lapis::pty::sessions::{self, EnvironmentEntry, Size, SpawnRequest};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-// false は停止済み・detach 済みで、Host の後片付け待ち。
-thread_local! {
-    static SESSIONS: RefCell<BTreeMap<String, bool>> = const { RefCell::new(BTreeMap::new()) };
+struct Session {
+    attached: bool,
+    columns: u16,
+    rows: u16,
 }
+
+// attached が false のものは停止・detach 済みで Host の後片付け待ち。
+thread_local! {
+    static SESSIONS: RefCell<BTreeMap<String, Session>> = const { RefCell::new(BTreeMap::new()) };
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct List {}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,7 +72,7 @@ fn decode<T: serde::de::DeserializeOwned>(payload: &str) -> Result<T, String> {
 
 fn attached(id: &str) -> Result<(), String> {
     SESSIONS.with(|sessions| match sessions.borrow().get(id) {
-        Some(true) => Ok(()),
+        Some(session) if session.attached => Ok(()),
         _ => Err("terminal session is not attached".into()),
     })
 }
@@ -71,13 +81,23 @@ fn reap_closed() {
     SESSIONS.with(|sessions| {
         sessions
             .borrow_mut()
-            .retain(|id, attached| *attached || sessions::forget(id).is_err());
+            .retain(|id, session| session.attached || sessions::forget(id).is_err());
     });
 }
 
 fn run(operation: &str, payload: &str) -> Result<Value, String> {
     reap_closed();
     match operation {
+        "list" => {
+            let _: List = decode(payload)?;
+            let active = SESSIONS.with(|sessions| {
+                sessions.borrow().iter()
+                .filter(|(_, session)| session.attached)
+                .map(|(id, session)| json!({"id":id,"columns":session.columns,"rows":session.rows}))
+                .collect::<Vec<_>>()
+            });
+            Ok(json!({"sessions": active}))
+        }
         "start" => {
             let input: Start = decode(payload)?;
             if input.columns == 0 || input.rows == 0 {
@@ -99,7 +119,16 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
             };
             let id = sessions::spawn(&command)?;
             sessions::attach(&id)?;
-            SESSIONS.with(|sessions| sessions.borrow_mut().insert(id.clone(), true));
+            SESSIONS.with(|sessions| {
+                sessions.borrow_mut().insert(
+                    id.clone(),
+                    Session {
+                        attached: true,
+                        columns: input.columns,
+                        rows: input.rows,
+                    },
+                )
+            });
             Ok(json!({ "id": id }))
         }
         "write" => {
@@ -118,6 +147,12 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                     rows: input.rows,
                 },
             )?;
+            SESSIONS.with(|sessions| {
+                if let Some(session) = sessions.borrow_mut().get_mut(&input.id) {
+                    session.columns = input.columns;
+                    session.rows = input.rows;
+                }
+            });
             Ok(Value::Null)
         }
         "read" => {
@@ -140,7 +175,11 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
             attached(&input.id)?;
             sessions::kill(&input.id)?;
             sessions::detach(&input.id)?;
-            SESSIONS.with(|sessions| sessions.borrow_mut().insert(input.id, false));
+            SESSIONS.with(|sessions| {
+                if let Some(session) = sessions.borrow_mut().get_mut(&input.id) {
+                    session.attached = false;
+                }
+            });
             reap_closed();
             Ok(Value::Null)
         }
@@ -158,7 +197,7 @@ impl Guest for Terminal {
             sessions
                 .borrow()
                 .iter()
-                .filter(|(_, attached)| **attached)
+                .filter(|(_, session)| session.attached)
                 .map(|(id, _)| id.clone())
                 .collect::<Vec<_>>()
         });

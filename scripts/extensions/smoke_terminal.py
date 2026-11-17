@@ -63,15 +63,21 @@ def main() -> None:
                             "component": base64.b64encode(COMPONENT.read_bytes()).decode("ascii"),
                             "require_dispatch": True})
         assert response["ok"], response
+        assert json.loads(dispatch("list", {})["result"]) == {"sessions": []}
         result = dispatch("start", {"program": "shell", "working_directory": ".",
                                     "columns": 80, "rows": 24})
         assert result["ok"] and json.loads(result["result"]) == {"id": "pty-1"}, result
+        assert json.loads(dispatch("list", {})["result"]) == {
+            "sessions": [{"id": "pty-1", "columns": 80, "rows": 24}]
+        }
         assert dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
         assert dispatch("resize", {"id": "pty-1", "columns": 100, "rows": 30})["ok"]
+        assert json.loads(dispatch("list", {})["result"])["sessions"][0]["columns"] == 100
         output = dispatch("read", {"id": "pty-1", "offset": 0, "max_bytes": 8, "timeout_ms": 0})
         assert output["ok"] and json.loads(output["result"])["bytes"] == [65, 66], output
         assert not dispatch("read", {"id": "pty-1", "offset": 0, "max_bytes": 100000, "timeout_ms": 0})["ok"]
         assert dispatch("close", {"id": "pty-1"})["ok"]
+        assert json.loads(dispatch("list", {})["result"]) == {"sessions": []}
         assert not dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
         assert calls == ["pty.v1.spawn", "pty.v1.attach", "pty.v1.write", "pty.v1.resize",
                          "pty.v1.read", "pty.v1.kill", "pty.v1.detach", "pty.v1.forget"], calls
