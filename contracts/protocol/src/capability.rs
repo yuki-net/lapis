@@ -25,6 +25,8 @@ pub const TERMINAL_CONTROL: &str = "workspace.terminal.control";
 pub const EXTENSIONS_READ: &str = "extensions.read";
 /// 拡張の次回起動時の状態だけを変更できる。
 pub const EXTENSIONS_MANAGE: &str = "extensions.manage";
+/// Host 全体の有効な拡張を操作する。Workspace 限定の読み取り権限とは独立。
+pub const EXTENSIONS_EXECUTE: &str = "extensions.execute";
 
 const MAX_CAPABILITY_ID_BYTES: usize = 128;
 const MAX_CAPABILITIES: usize = 64;

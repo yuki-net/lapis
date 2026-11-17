@@ -78,6 +78,7 @@ impl SessionGrant {
             RequestBody::HostRegister(_)
                 | RequestBody::HostExtensionSetEnabled(_)
                 | RequestBody::HostExtensionSetCapability(_)
+                | RequestBody::HostExtensionDispatch(_)
         ) && self
             .capabilities
             .iter()

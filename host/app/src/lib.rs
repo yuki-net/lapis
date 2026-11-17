@@ -51,6 +51,7 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
             "workspace.process.control",
             EXTENSIONS_READ,
             EXTENSIONS_MANAGE,
+            EXTENSIONS_EXECUTE,
         ]
         .map(|name| CapabilityId::try_new(name).expect("built-in capability")),
     )

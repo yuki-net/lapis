@@ -61,7 +61,7 @@ pub struct HostExtensionSetCapabilityResponse {
     pub approved: bool,
 }
 
-/// Host 管理者が、起動時に検証済みの拡張に操作を送る。
+/// Host 全体の拡張操作権限で、起動時に検証済みの拡張に操作を送る。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HostExtensionDispatchRequest {
     pub id: String,
@@ -173,7 +173,7 @@ mod tests {
     }
 
     #[test]
-    fn extension_dispatch_requires_host_management() {
+    fn extension_dispatch_requires_explicit_host_wide_capability() {
         let request = RequestBody::HostExtensionDispatch(HostExtensionDispatchRequest {
             id: "dev.example".into(),
             operation: "inspect".into(),
@@ -181,7 +181,7 @@ mod tests {
         });
         assert_eq!(
             request.required_capability(),
-            crate::capability::HOST_MANAGE
+            crate::capability::EXTENSIONS_EXECUTE
         );
         assert_eq!(request.workspace_id(), None);
         assert_eq!(

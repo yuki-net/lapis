@@ -960,7 +960,7 @@ pub async fn set_extension_capability(
     crate::extension_management::validate_capability_update_response(response, current, &input)
 }
 
-/// Host 管理者用。実際の認可は Host が行う。
+/// Host 全体の拡張操作。実際の認可は Host が行う。
 pub async fn dispatch_extension(
     input: client_api::HostExtensionDispatchRequest,
 ) -> Result<client_api::HostExtensionDispatchResponse, String> {

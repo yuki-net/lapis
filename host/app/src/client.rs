@@ -355,7 +355,7 @@ impl BackendClient {
         }
     }
 
-    /// Host 管理権限を使う拡張操作。呼び出しは worker で行う。
+    /// Host 全体の拡張操作権限を使う。呼び出しは worker で行う。
     pub fn dispatch_extension(
         &self,
         workspace: WorkspaceId,

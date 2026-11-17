@@ -173,8 +173,8 @@ impl RequestBody {
             | Self::HostDeviceRevoke(_)
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
-            | Self::HostWebStop(_)
-            | Self::HostExtensionDispatch(_) => capability::HOST_MANAGE,
+            | Self::HostWebStop(_) => capability::HOST_MANAGE,
+            Self::HostExtensionDispatch(_) => capability::EXTENSIONS_EXECUTE,
             Self::HostExtensionSetEnabled(_) | Self::HostExtensionSetCapability(_) => {
                 capability::EXTENSIONS_MANAGE
             }

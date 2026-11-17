@@ -77,6 +77,13 @@ impl RemoteRequestHandler for HostRemoteHandler {
                     .capabilities()
                     .iter()
                     .any(|capability| capability.as_str() == capability::EXTENSIONS_READ)
+            } else if matches!(request.body, RequestBody::HostExtensionDispatch(_)) {
+                grant.capabilities().iter().any(|capability| {
+                    matches!(
+                        capability.as_str(),
+                        capability::EXTENSIONS_EXECUTE | capability::HOST_MANAGE
+                    )
+                })
             } else if matches!(
                 request.body,
                 RequestBody::HostExtensionSetEnabled(_)

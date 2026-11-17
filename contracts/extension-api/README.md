@@ -8,4 +8,5 @@
 
 `wit/dispatch-v1` は拡張への汎用操作の契約で、操作名とデータの意味は個別の契約が定める。
 実行中の署名済み manifest が `lapis.extension.dispatch` 1.0.0 を要求する場合に使える。
-現時点では Workspace 間の拡張状態が分離されていないため、Host 管理者のみ呼び出せる。
+Workspace 間の拡張状態はまだ分離されていないため、Host 全体の拡張を操作する
+`extensions.execute` 権限、または Host 管理権限が必要。Workspace 限定の読み取り権限では呼び出せない。

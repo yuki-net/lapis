@@ -777,7 +777,12 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
     owner_hello.requested_capabilities = CapabilitySet::try_new(
         host::supported_capabilities()
             .iter()
-            .filter(|capability| capability.as_str() != capability::EXTENSIONS_MANAGE)
+            .filter(|capability| {
+                !matches!(
+                    capability.as_str(),
+                    capability::EXTENSIONS_MANAGE | capability::EXTENSIONS_EXECUTE
+                )
+            })
             .cloned()
             .chain([CapabilityId::try_new(capability::HOST_MANAGE).unwrap()]),
     )
@@ -811,7 +816,12 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
     reader_hello.requested_capabilities = CapabilitySet::try_new(
         host::supported_capabilities()
             .iter()
-            .filter(|capability| capability.as_str() != capability::EXTENSIONS_MANAGE)
+            .filter(|capability| {
+                !matches!(
+                    capability.as_str(),
+                    capability::EXTENSIONS_MANAGE | capability::EXTENSIONS_EXECUTE
+                )
+            })
             .cloned(),
     )
     .unwrap();
@@ -948,12 +958,49 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
         operation: "inspect".into(),
         payload: "{}".into(),
     };
-    for client in [&mut reader, &mut manager] {
-        assert!(matches!(
-            request(client, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
-            ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
-        ));
-    }
+    assert!(matches!(
+        request(&mut reader, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
+    assert!(
+        paired
+            .hello
+            .granted_capabilities
+            .iter()
+            .any(|value| value.as_str() == capability::EXTENSIONS_EXECUTE)
+    );
+    assert!(matches!(
+        request(&mut manager, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() != FORBIDDEN
+    ));
+    let mut manage_only = fixture.connect().await;
+    let mut manage_hello = hello("extension-manage-only");
+    manage_hello.requested_capabilities = CapabilitySet::try_new([
+        CapabilityId::try_new(capability::WORKSPACES_CONNECT).unwrap(),
+        CapabilityId::try_new(capability::EXTENSIONS_MANAGE).unwrap(),
+    ])
+    .unwrap();
+    let token = fixture
+        .auth
+        .lock()
+        .unwrap()
+        .begin_pairing(fixture.workspace.clone())
+        .unwrap();
+    manage_only
+        .send(&ClientMessage::Pair(PairRequest::new(
+            manage_hello,
+            token.secret_bytes(),
+        )))
+        .await
+        .unwrap();
+    assert!(matches!(
+        receive(&mut manage_only).await,
+        ServerMessage::Paired(_)
+    ));
+    assert!(matches!(
+        request(&mut manage_only, 9, RequestBody::HostExtensionDispatch(dispatch.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN
+    ));
     assert!(matches!(
         request(&mut owner, 9, RequestBody::HostExtensionDispatch(dispatch)).await,
         ResponseBody::Error(ref error) if error.code.as_str() != FORBIDDEN
