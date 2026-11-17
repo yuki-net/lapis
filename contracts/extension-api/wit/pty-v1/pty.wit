@@ -39,6 +39,7 @@ interface sessions {
     detach: func(id: string) -> result<_, string>;
     /// 成功は上限付き入力キューへの受理を示す。
     write: func(id: string, bytes: list<u8>) -> result<_, string>;
+    /// 画面面積の上限は Host が決め、超過時は拒否する。
     resize: func(id: string, new-size: size) -> result<_, string>;
     /// 出力または EOF まで待つ。timeout-ms の上限は Host が決める。
     read: func(id: string, offset: u64, max-bytes: u32, timeout-ms: u32) -> result<output, string>;

@@ -20,6 +20,14 @@ use process::pty::{
 const MAX_SESSIONS: usize = 64;
 const OUTPUT_CAPACITY: usize = 1024 * 1024;
 const MAX_TRANSFER: usize = 64 * 1024;
+/// 1 session の PTY が確保する画面の上限。UI 固有の寸法には依存しない。
+const MAX_PTY_CELLS: u32 = 256 * 1024;
+
+fn valid_size(size: PtySize) -> bool {
+    size.columns > 0
+        && size.rows > 0
+        && u32::from(size.columns) * u32::from(size.rows) <= MAX_PTY_CELLS
+}
 
 /// PTY と子プロセスは Host が保持し、接続の detach では終了しない。
 pub struct LocalPtyService {
@@ -186,8 +194,7 @@ impl PtyService for LocalPtyService {
             || owner.0.len() > 256
             || command.program.is_empty()
             || command.cwd.is_empty()
-            || command.size.columns == 0
-            || command.size.rows == 0
+            || !valid_size(command.size)
         {
             return Err(PtyError("invalid PTY command or size".into()));
         }
@@ -372,7 +379,7 @@ impl PtyService for LocalPtyService {
         attachment: &PtyAttachmentId,
         size: PtySize,
     ) -> Result<(), PtyError> {
-        if size.columns == 0 || size.rows == 0 {
+        if !valid_size(size) {
             return Err(PtyError("invalid PTY size".into()));
         }
         let session = self.session(owner, id)?;
@@ -652,6 +659,39 @@ mod tests {
         assert!(service.forget(&other, &id).is_err());
         service.forget(&owner, &id).unwrap();
         assert!(service.attach(&owner, &id, second).is_err());
+    }
+
+    #[test]
+    fn invalid_pty_area_is_rejected_before_start_or_resize() {
+        let service = LocalPtyService::default();
+        let owner = PtyOwnerId("extension.a".into());
+        let mut oversized = command();
+        oversized.size = PtySize {
+            columns: 4096,
+            rows: 4096,
+        };
+        assert!(service.spawn(&owner, oversized).is_err());
+        assert_eq!(service.session_count(&owner).unwrap(), 0);
+        let error = service
+            .resize(
+                &owner,
+                &PtySessionId("missing".into()),
+                &PtyAttachmentId("client".into()),
+                PtySize {
+                    columns: 4096,
+                    rows: 4096,
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.0, "invalid PTY size");
+        assert!(valid_size(PtySize {
+            columns: 1024,
+            rows: 256
+        }));
+        assert!(!valid_size(PtySize {
+            columns: 1025,
+            rows: 256
+        }));
     }
 
     #[test]
