@@ -344,7 +344,7 @@ mod tests {
         assert!(terminals.terminals().is_empty());
 
         use desktop_client::terminal_extension::{request, response, v1};
-        let connection = BackendClient::from(host)
+        let connection = BackendClient::from(host.clone())
             .open_extension_connection(workspace_id)
             .unwrap();
         let stable = format!("client-{}", "a".repeat(32));
@@ -365,6 +365,30 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.id, stable);
+        host.set_extension_enabled("lapis.terminal", false).unwrap();
+        let listing = host.extensions().unwrap();
+        let terminal = listing
+            .extensions
+            .iter()
+            .find(|entry| entry.id == "lapis.terminal")
+            .unwrap();
+        assert!(!terminal.enabled);
+        assert_eq!(terminal.active, Some(true));
+        assert!(
+            listing
+                .contributions
+                .iter()
+                .any(|entry| entry.extension_id == "lapis.terminal" && entry.views.is_some())
+        );
+        // 次回起動までは、既存の接続と実行中セッションをそのまま使える。
+        let listed: v1::ListResponse = response(
+            v1::LIST,
+            connection
+                .dispatch(request(v1::LIST, &v1::ListRequest {}).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(listed.sessions.iter().any(|session| session.id == stable));
         let end = v1::IdRequest { id: stable };
         let _: () = response(
             v1::CLOSE,
@@ -373,5 +397,70 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
+        drop(connection);
+        drop(terminals);
+        drop(host);
+
+        let disabled =
+            host::BackendHost::start_development_with_state_directory(state.path().to_owned())
+                .unwrap();
+        let listing = disabled.extensions().unwrap();
+        let terminal = listing
+            .extensions
+            .iter()
+            .find(|entry| entry.id == "lapis.terminal")
+            .unwrap();
+        assert!(!terminal.enabled);
+        assert_eq!(terminal.active, Some(false));
+        assert!(
+            listing
+                .contributions
+                .iter()
+                .all(|entry| entry.extension_id != "lapis.terminal")
+        );
+        disabled.register_workspace(workspace.path()).unwrap();
+        let backend = ExtensionTerminals::new(BackendClient::from(disabled.clone()));
+        assert!(backend.start(workspace.path(), 80, 24).is_err());
+        drop(backend);
+        disabled
+            .set_extension_enabled("lapis.terminal", true)
+            .unwrap();
+        drop(disabled);
+
+        let enabled =
+            host::BackendHost::start_development_with_state_directory(state.path().to_owned())
+                .unwrap();
+        enabled.register_workspace(workspace.path()).unwrap();
+        let backend = ExtensionTerminals::new(BackendClient::from(enabled.clone()));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let id = loop {
+            match backend.start(workspace.path(), 80, 24) {
+                Ok(id) => break id,
+                Err(error) => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "terminal restart failed: {error}"
+                    );
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        };
+        let listing = enabled.extensions().unwrap();
+        assert_eq!(
+            listing
+                .extensions
+                .iter()
+                .find(|entry| entry.id == "lapis.terminal")
+                .unwrap()
+                .active,
+            Some(true)
+        );
+        assert!(
+            listing
+                .contributions
+                .iter()
+                .any(|entry| entry.extension_id == "lapis.terminal" && entry.views.is_some())
+        );
+        backend.terminate(&id).unwrap();
     }
 }
