@@ -997,6 +997,123 @@ pub async fn terminal_operation<T: serde::Serialize, R: serde::de::DeserializeOw
     crate::terminal_extension::response(operation, response)
 }
 
+/// 接続に束縛された出力位置。別 Host の同名 ID に古い位置を流用しない。
+pub struct TerminalOutputStream {
+    cursor: crate::terminal_extension::OutputCursor,
+    connection: Rc<BrowserConnection>,
+}
+
+pub struct TerminalOutputBatch {
+    ticket: crate::terminal_extension::ReadTicket,
+    output: crate::terminal_extension::v1::ReadResponse,
+}
+
+struct CancelTerminalRead<'a> {
+    cursor: &'a mut crate::terminal_extension::OutputCursor,
+    armed: bool,
+}
+
+impl Drop for CancelTerminalRead<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.cursor.cancel();
+        }
+    }
+}
+
+impl TerminalOutputStream {
+    pub fn new(id: String) -> Result<Self, String> {
+        let connection = BACKEND
+            .with(|backend| {
+                let backend = backend.borrow();
+                let state = backend.as_ref().ok_or("Host に接続していません")?;
+                if !state.extensions_connected {
+                    return Err("Host に接続していません");
+                }
+                Ok(state.connection.clone())
+            })
+            .map_err(str::to_owned)?;
+        Ok(Self {
+            cursor: crate::terminal_extension::OutputCursor::new(id),
+            connection,
+        })
+    }
+
+    pub fn offset(&self) -> u64 {
+        self.cursor.offset()
+    }
+
+    pub async fn read(
+        &mut self,
+        max_bytes: u32,
+        timeout_ms: u32,
+    ) -> Result<TerminalOutputBatch, String> {
+        let current = BACKEND.with(|backend| {
+            backend.borrow().as_ref().is_some_and(|state| {
+                state.extensions_connected && Rc::ptr_eq(&state.connection, &self.connection)
+            })
+        });
+        if !current {
+            return Err("Host の接続が変更されました".into());
+        }
+        let (ticket, request) = self
+            .cursor
+            .begin(max_bytes, timeout_ms)
+            .map_err(|error| error.to_string())?;
+        // Future が途中で破棄されても、次の要求を開始できる。
+        let mut guard = CancelTerminalRead {
+            cursor: &mut self.cursor,
+            armed: true,
+        };
+        let result = terminal_operation(crate::terminal_extension::v1::READ, &request).await?;
+        let output = guard
+            .cursor
+            .accept(ticket, result)
+            .map_err(|error| error.to_string())?;
+        guard.armed = false;
+        Ok(TerminalOutputBatch { ticket, output })
+    }
+
+    /// apply は失敗時に画面状態を変更しないこと。成功後に位置を確定する。
+    pub fn apply(
+        &mut self,
+        batch: TerminalOutputBatch,
+        apply: impl FnOnce(&crate::terminal_extension::v1::ReadResponse) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let current = BACKEND.with(|backend| {
+            backend.borrow().as_ref().is_some_and(|state| {
+                state.extensions_connected && Rc::ptr_eq(&state.connection, &self.connection)
+            })
+        });
+        if !current {
+            let _ = self.cursor.discard(batch.ticket);
+            return Err("Host の接続が変更されました".into());
+        }
+        if !self.cursor.ready(batch.ticket) {
+            return Err("古い Terminal の出力を破棄しました".into());
+        }
+        if let Err(error) = apply(&batch.output) {
+            let _ = self.cursor.discard(batch.ticket);
+            return Err(error);
+        }
+        self.cursor
+            .commit(batch.ticket)
+            .map_err(|error| error.to_string())
+    }
+
+    /// 画面への反映を中止して、同じ位置から読み直せるようにする。
+    pub fn discard(&mut self, batch: TerminalOutputBatch) -> Result<(), String> {
+        self.cursor
+            .discard(batch.ticket)
+            .map_err(|error| error.to_string())
+    }
+
+    /// 応答を破棄した後でも明示的に読み取りを再開できる。
+    pub fn cancel(&mut self) {
+        self.cursor.cancel();
+    }
+}
+
 /// 古い接続の終了通知で新しい接続を解除しない。
 fn disconnect_extensions(connection: &Rc<BrowserConnection>) {
     BACKEND.with(|backend| {
