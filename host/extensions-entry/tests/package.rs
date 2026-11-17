@@ -230,7 +230,8 @@ fn independent_component_is_packaged_installed_and_activated() {
             "id": "dev.example.external", "version": "0.1.0",
             "requires": [
                 {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
-                {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"}
+                {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"},
+                {"contract": "lapis.extension.dispatch", "minimum": "1.0.0", "maximum": "1.0.0"}
             ],
             "files": ["extension.wasm"]
         }))
@@ -259,6 +260,10 @@ fn independent_component_is_packaged_installed_and_activated() {
         ContractId::try_new("lapis.extension.lifecycle").unwrap(),
         semver::Version::new(1, 0, 0),
     );
+    contracts.add_version(
+        ContractId::try_new("lapis.extension.dispatch").unwrap(),
+        semver::Version::new(1, 0, 0),
+    );
     let loader = ExtensionLoader::new(trusted_keys(), contracts);
     loader.install(&mut catalog, &archive, true).unwrap();
     let verified = loader
@@ -283,7 +288,8 @@ fn independent_component_is_packaged_installed_and_activated() {
     let mut worker = command.spawn().unwrap();
     let mut input = worker.stdin.take().unwrap();
     for request in [
-        json!({"command": "activate", "id": "dev.example.external", "component": base64::engine::general_purpose::STANDARD.encode(&verified.files["extension.wasm"])}),
+        json!({"command": "activate", "id": "dev.example.external", "component": base64::engine::general_purpose::STANDARD.encode(&verified.files["extension.wasm"]), "require_dispatch": true}),
+        json!({"command": "dispatch", "id": "dev.example.external", "operation": "echo", "payload": "hello"}),
         json!({"command": "deactivate", "id": "dev.example.external"}),
         json!({"command": "shutdown"}),
     ] {
@@ -301,11 +307,12 @@ fn independent_component_is_packaged_installed_and_activated() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(responses.len(), 3);
+    assert_eq!(responses.len(), 4);
     assert!(
         responses.iter().all(|response| response["ok"] == true),
         "{responses:?}"
     );
+    assert_eq!(responses[1]["result"], "hello");
 }
 
 fn host_version() -> String {

@@ -13,6 +13,13 @@ impl Guest for Example {
         assert!(std::net::TcpListener::bind("127.0.0.1:0").is_err());
     }
     fn deactivate() {}
+
+    fn dispatch(operation: String, payload: String) -> Result<String, String> {
+        match operation.as_str() {
+            "echo" => Ok(payload),
+            _ => Err("unknown operation".into()),
+        }
+    }
 }
 
 export!(Example);

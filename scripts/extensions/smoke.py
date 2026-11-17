@@ -1,4 +1,4 @@
-"""独立 workspace の component を実際の拡張ホストで起動・停止する。"""
+"""独立 workspace の component を拡張ホストで起動し、操作して停止する。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,8 @@ def main() -> None:
     worker = root / "target/debug" / ("lapis-extension-host.exe" if os.name == "nt" else "lapis-extension-host")
     requests = [
         {"command": "handshake"},
-        {"command": "activate", "id": "dev.example.hello", "component": base64.b64encode(component.read_bytes()).decode("ascii")},
+        {"command": "activate", "id": "dev.example.hello", "component": base64.b64encode(component.read_bytes()).decode("ascii"), "require_dispatch": True},
+        {"command": "dispatch", "id": "dev.example.hello", "operation": "echo", "payload": "hello"},
         {"command": "deactivate", "id": "dev.example.hello"},
         {"command": "shutdown"},
     ]
@@ -29,7 +30,9 @@ def main() -> None:
         raise RuntimeError(f"拡張ホストの応答が不正です: {responses}")
     if responses[0].get("lifecycle_version") != "1.0.0":
         raise RuntimeError("ライフサイクル契約の版が一致しません")
-    print("外部 workspace の component を起動・停止しました")
+    if responses[0].get("dispatch_version") != "1.0.0" or responses[2].get("result") != "hello":
+        raise RuntimeError("拡張操作契約の版または応答が一致しません")
+    print("外部 workspace の component を起動・操作・停止しました")
 
 
 if __name__ == "__main__":

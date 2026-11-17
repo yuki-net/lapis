@@ -17,8 +17,12 @@ class PackageTests(unittest.TestCase):
     def test_external_example_uses_current_public_wit(self):
         root = Path(__file__).resolve().parents[2]
         self.assertEqual(
-            (root / "examples/external-extension/wit/extension.wit").read_bytes(),
+            (root / "examples/external-extension/wit/deps/lifecycle/extension.wit").read_bytes(),
             (root / "contracts/extension-api/wit/v1/extension.wit").read_bytes(),
+        )
+        self.assertEqual(
+            (root / "examples/external-extension/wit/deps/dispatch/dispatch.wit").read_bytes(),
+            (root / "contracts/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
         )
         self.assertEqual(
             (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
