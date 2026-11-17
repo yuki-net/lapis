@@ -252,7 +252,9 @@ fn read_row(screen: &vt100::Screen, row: u16, columns: u16) -> TerminalRow {
                 return TerminalCell::default();
             };
             TerminalCell {
-                text: if cell.has_contents() {
+                text: if cell.is_wide_continuation() {
+                    String::new()
+                } else if cell.has_contents() {
                     cell.contents().to_owned()
                 } else {
                     " ".into()
@@ -376,6 +378,7 @@ mod tests {
         );
         assert_eq!(screen.rows[0].cells[6].width, 2);
         assert_eq!(screen.rows[0].cells[7].width, 0);
+        assert!(screen.rows[0].cells[7].text.is_empty());
         assert!(screen.modes.bracketed_paste);
     }
 
