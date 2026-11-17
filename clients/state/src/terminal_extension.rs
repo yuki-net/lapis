@@ -16,6 +16,9 @@ pub use native_backend::NativeBackend;
 
 pub const EXTENSION_ID: &str = "lapis.terminal";
 
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) mod web_projection;
+
 /// 各 Terminal の生出力を一度だけ、順番に画面へ適用するための位置。
 pub struct OutputCursor {
     id: String,

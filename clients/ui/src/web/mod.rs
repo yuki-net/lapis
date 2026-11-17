@@ -244,11 +244,25 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
     if let Err(error) = desktop_client::web_host::bind_extension_contributions(&settings) {
         web_sys::console::warn_1(&format!("拡張宣言を登録できません: {error}").into());
     }
+    // 拡張版 Terminal の実画面検証用。通常経路の切替は完全な互換確認後に行う。
+    let extension_terminal = web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .is_some_and(|search| {
+            search
+                .trim_start_matches('?')
+                .split('&')
+                .any(|part| part == "terminal-extension=1")
+        });
+    let terminal: Arc<dyn TerminalBackend> = if extension_terminal {
+        Arc::new(desktop_client::web_host::ExtensionTerminalBackend)
+    } else {
+        backend.clone()
+    };
     let mut services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),
         LspSession::new(backend.clone()),
-        TerminalSession::new(backend.clone()),
+        TerminalSession::new(terminal),
         WorkspaceSearchSession::new(backend.clone()),
         conversation,
         settings,

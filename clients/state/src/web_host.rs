@@ -46,6 +46,7 @@ use workspace::{
 mod extension_terminal;
 mod transport;
 
+pub use extension_terminal::ExtensionTerminalBackend;
 pub use extension_terminal::{ExtensionTerminal, ExtensionTerminalUpdate};
 
 pub use crate::web_replica::ROOT;

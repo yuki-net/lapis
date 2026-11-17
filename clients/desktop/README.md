@@ -56,6 +56,8 @@ Host が OIDC を設定している場合、Host の `invite-oidc` で作成し�
 拡張版 Terminal の開発検証では Desktop に `--extension-terminal` を渡す。Host に
 `lapis.terminal` を導入・有効化し、`process.pty` を承認した状態で Host を再起動する必要がある。
 この経路は検証中で、通常起動は従来の Terminal を使う。
+Web の同じ検証にはページ URL の `#` より前に `?terminal-extension=1` を付ける（既に
+query がある場合は `&terminal-extension=1`）。
 
 `.run` の入口は `Run Host`（Host）・`Run Desktop`（Desktop）・`Run Web`（bridge とページ配信）の3つです。`Run Desktop (Hot Reload)` は `Run Desktop` の起動方法だけを変えたものです。Desktop と Web は同じ Host に同時に繋げます。`Run Desktop` は Host を起動しないため、「1つだけ起動して Local Host も自動」の経路は `cargo dev` です。`cargo dev` も `Run Desktop` も Desktop と Host の両方をビルドするため、2段階ビルドはありません。Lapis 内で作成した worktree の Terminal からも、その worktree ルートで同じコマンドを実行できます。単体の回帰テストは `cargo test -p <package> <filter>` で実行します。
 

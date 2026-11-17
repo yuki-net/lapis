@@ -1,14 +1,20 @@
 //! Web の認証済み接続に紐づく Terminal 拡張セッション。
 
+use std::{cell::RefCell, collections::HashMap};
 use std::{path::Path, rc::Rc};
 
 use client_core::browser::BrowserConnection;
 use editor_core::WorkspaceId;
-use terminal::{TerminalInput, TerminalScreen, TerminalSize};
+use futures_channel::mpsc;
+use futures_util::{FutureExt, StreamExt};
+use terminal::{
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalScreen,
+    TerminalSize, TerminalSnapshot, TerminalStatus,
+};
 
 use super::{BACKEND, SWITCHING, TerminalOutputStream, terminal_operation};
 use crate::{
-    terminal_extension::v1,
+    terminal_extension::{v1, web_projection::Projection},
     web_switch::{terminal_relative_cwd, validate_terminal_sessions},
 };
 
@@ -20,6 +26,334 @@ pub struct ExtensionTerminalUpdate {
     pub write_error: Option<String>,
     /// 画面反映は済んだが、PTY 問い合わせへの応答が送れなかった場合。
     pub reply_error: Option<String>,
+}
+
+enum UiCommand {
+    Input(TerminalInput),
+    Resize(TerminalSize),
+    Claim,
+    Release,
+    Close,
+}
+
+struct UiEntry {
+    projection: Projection,
+    commands: mpsc::Sender<UiCommand>,
+}
+
+struct UiRegistry {
+    connection: Rc<BrowserConnection>,
+    workspace: WorkspaceId,
+    entries: HashMap<String, UiEntry>,
+    discovered: Vec<TerminalSnapshot>,
+    changes: Vec<mpsc::UnboundedSender<()>>,
+}
+
+thread_local! {
+    static UI_REGISTRY: RefCell<Option<Rc<RefCell<UiRegistry>>>> = const { RefCell::new(None) };
+}
+
+/// 既存 UI の同期 port を Web の非同期 Terminal 拡張に接続する。
+#[derive(Clone, Copy)]
+pub struct ExtensionTerminalBackend;
+
+fn notify(registry: &mut UiRegistry) {
+    registry
+        .changes
+        .retain(|sender| sender.unbounded_send(()).is_ok());
+}
+
+fn registry() -> Result<Rc<RefCell<UiRegistry>>, TerminalError> {
+    let (connection, workspace) = connected().map_err(TerminalError::new)?;
+    UI_REGISTRY.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(existing) = slot.as_ref() {
+            let state = existing.borrow();
+            if Rc::ptr_eq(&state.connection, &connection) && state.workspace == workspace {
+                return Ok(existing.clone());
+            }
+        }
+        let state = Rc::new(RefCell::new(UiRegistry {
+            connection,
+            workspace,
+            entries: HashMap::new(),
+            discovered: Vec::new(),
+            changes: Vec::new(),
+        }));
+        *slot = Some(state.clone());
+        let active = state.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            loop {
+                let (connection, workspace) = {
+                    let state = active.borrow();
+                    (state.connection.clone(), state.workspace.clone())
+                };
+                if ensure_current(&connection, &workspace).is_err() {
+                    break;
+                }
+                if let Ok(sessions) = ExtensionTerminal::list().await
+                    && ensure_current(&connection, &workspace).is_ok()
+                {
+                    let found = sessions
+                        .into_iter()
+                        .map(|session| {
+                            TerminalSnapshot::empty(
+                                TerminalId::new(session.id),
+                                Path::new(super::ROOT).join(session.working_directory),
+                                TerminalStatus::Running,
+                                TerminalSize::new(session.columns, session.rows),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let mut state = active.borrow_mut();
+                    if state.discovered != found {
+                        state.discovered = found;
+                        notify(&mut state);
+                    }
+                }
+                gloo_timers::future::TimeoutFuture::new(2_000).await;
+            }
+        });
+        Ok(state)
+    })
+}
+
+fn random_id() -> Result<TerminalId, TerminalError> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| TerminalError::new(error.to_string()))?;
+    Ok(TerminalId::new(format!(
+        "client-{}",
+        bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    )))
+}
+
+fn send(id: &TerminalId, command: UiCommand) -> Result<(), TerminalError> {
+    let registry = registry()?;
+    let mut state = registry.borrow_mut();
+    let entry = state
+        .entries
+        .get_mut(id.as_str())
+        .ok_or_else(|| TerminalError::new("Terminal がありません"))?;
+    if entry.projection.finished {
+        return Err(TerminalError::new("Terminal は終了しています"));
+    }
+    entry
+        .commands
+        .try_send(command)
+        .map_err(|_| TerminalError::new("Terminal の送信待ちが一杯です"))
+}
+
+fn create_actor(
+    id: TerminalId,
+    cwd: &Path,
+    size: TerminalSize,
+    attach: bool,
+) -> Result<TerminalSnapshot, TerminalError> {
+    terminal_relative_cwd(cwd).map_err(TerminalError::new)?;
+    if size.columns == 0 || size.rows == 0 || size.columns > 512 || size.rows > 256 {
+        return Err(TerminalError::new("Terminal のサイズが不正です"));
+    }
+    let registry = registry()?;
+    if let Some(existing) = registry.borrow().entries.get(id.as_str()) {
+        return Ok(existing.projection.snapshot.clone());
+    }
+    if registry.borrow().entries.len() >= 64 {
+        return Err(TerminalError::new("Terminal の数が上限に達しました"));
+    }
+    let path = cwd.to_owned();
+    let snapshot = TerminalSnapshot::empty(id.clone(), path.clone(), TerminalStatus::Running, size);
+    let (commands, receiver) = mpsc::channel(32);
+    registry.borrow_mut().entries.insert(
+        id.as_str().into(),
+        UiEntry {
+            projection: Projection::new(snapshot.clone()),
+            commands,
+        },
+    );
+    let state = registry.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let result = if attach {
+            ExtensionTerminal::attach(id.as_str()).await
+        } else {
+            ExtensionTerminal::start_with_id(&path, size, None, Some(id.as_str().into())).await
+        };
+        match result {
+            Ok(session) => run_actor(state, id, session, receiver).await,
+            Err(error) => fail_actor(&state, &id, error),
+        }
+    });
+    Ok(snapshot)
+}
+
+fn fail_actor(registry: &Rc<RefCell<UiRegistry>>, id: &TerminalId, error: String) {
+    let mut state = registry.borrow_mut();
+    if let Some(entry) = state.entries.get_mut(id.as_str()) {
+        entry.projection.fail(error);
+        notify(&mut state);
+    }
+}
+
+async fn run_actor(
+    registry: Rc<RefCell<UiRegistry>>,
+    id: TerminalId,
+    mut session: ExtensionTerminal,
+    mut commands: mpsc::Receiver<UiCommand>,
+) {
+    let mut commands_since_read = 0u8;
+    loop {
+        let command = commands.next().fuse();
+        let timer = gloo_timers::future::TimeoutFuture::new(100).fuse();
+        futures_util::pin_mut!(command, timer);
+        let incoming = futures_util::select! {
+            command = command => Some(command),
+            _ = timer => None,
+        };
+        let timer_fired = incoming.is_none();
+        if let Some(command) = incoming {
+            let result = match command {
+                Some(UiCommand::Input(input)) => session.input(&input).await.map(|_| None),
+                Some(UiCommand::Resize(size)) => session.resize(size).await.map(Some),
+                Some(UiCommand::Claim) => session.claim().await.map(|_| None),
+                Some(UiCommand::Release) => session.release().await.map(|_| None),
+                Some(UiCommand::Close) => {
+                    match session.close().await {
+                        Ok(()) => {
+                            let mut state = registry.borrow_mut();
+                            if state.entries.remove(id.as_str()).is_some() {
+                                notify(&mut state);
+                            }
+                        }
+                        Err(error) => fail_actor(&registry, &id, error),
+                    }
+                    break;
+                }
+                None => break,
+            };
+            match result {
+                Ok(Some(screen)) => publish_screen(
+                    &registry,
+                    &id,
+                    screen,
+                    session.owner().map(str::to_owned),
+                    None,
+                ),
+                Ok(None) => {}
+                Err(error) => {
+                    fail_actor(&registry, &id, error);
+                    break;
+                }
+            }
+            commands_since_read += 1;
+        }
+        if timer_fired || commands_since_read >= 4 {
+            commands_since_read = 0;
+            match session.read(0).await {
+                Ok(update) => {
+                    let error = update
+                        .read_error
+                        .or(update.write_error)
+                        .or(update.reply_error);
+                    let exited = update.exit.map(|exit| exit.code);
+                    if let Some(error) = error {
+                        publish_screen(&registry, &id, update.screen, update.owner, None);
+                        fail_actor(&registry, &id, error);
+                        break;
+                    }
+                    publish_screen(&registry, &id, update.screen, update.owner, exited);
+                    if exited.is_some() {
+                        break;
+                    }
+                }
+                Err(error) => {
+                    fail_actor(&registry, &id, error);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn publish_screen(
+    registry: &Rc<RefCell<UiRegistry>>,
+    id: &TerminalId,
+    screen: TerminalScreen,
+    owner: Option<String>,
+    exit: Option<Option<i32>>,
+) {
+    let mut state = registry.borrow_mut();
+    let Some(entry) = state.entries.get_mut(id.as_str()) else {
+        return;
+    };
+    let changed = entry.projection.update(screen, owner, exit);
+    if changed {
+        notify(&mut state);
+    }
+}
+
+impl TerminalBackend for ExtensionTerminalBackend {
+    fn start(&self, cwd: &Path, columns: u16, rows: u16) -> Result<TerminalId, TerminalError> {
+        let id = random_id()?;
+        create_actor(id.clone(), cwd, TerminalSize::new(columns, rows), false)?;
+        Ok(id)
+    }
+    fn list(&self, _cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
+        let registry = registry()?;
+        let state = registry.borrow();
+        Ok(state.discovered.clone())
+    }
+    fn attach(&self, cwd: &Path, id: &TerminalId) -> Result<TerminalSnapshot, TerminalError> {
+        let registry = registry()?;
+        let size = registry
+            .borrow()
+            .discovered
+            .iter()
+            .find(|item| item.id == *id)
+            .map(|item| item.screen.size)
+            .unwrap_or(TerminalSize::new(80, 24));
+        create_actor(id.clone(), cwd, size, true)
+    }
+    fn input(&self, id: &TerminalId, input: &TerminalInput) -> Result<(), TerminalError> {
+        send(id, UiCommand::Input(input.clone()))
+    }
+    fn resize(&self, id: &TerminalId, columns: u16, rows: u16) -> Result<(), TerminalError> {
+        send(id, UiCommand::Resize(TerminalSize::new(columns, rows)))
+    }
+    fn claim(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        send(id, UiCommand::Claim)
+    }
+    fn release(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        send(id, UiCommand::Release)
+    }
+    fn terminate(&self, id: &TerminalId) -> Result<(), TerminalError> {
+        send(id, UiCommand::Close)
+    }
+    fn poll(&self, id: &TerminalId) -> Result<Vec<TerminalEvent>, TerminalError> {
+        let registry = registry()?;
+        let mut state = registry.borrow_mut();
+        let (events, finished) = {
+            let entry = state
+                .entries
+                .get_mut(id.as_str())
+                .ok_or_else(|| TerminalError::new("Terminal がありません"))?;
+            (
+                std::mem::take(&mut entry.projection.events),
+                entry.projection.finished,
+            )
+        };
+        if finished {
+            state.entries.remove(id.as_str());
+        }
+        Ok(events)
+    }
+    fn changes(&self) -> Option<mpsc::UnboundedReceiver<()>> {
+        let registry = registry().ok()?;
+        let (sender, receiver) = mpsc::unbounded();
+        registry.borrow_mut().changes.push(sender);
+        Some(receiver)
+    }
 }
 
 /// Future の呼び出し元が保持する。破棄・通信切断では PTY を終了しない。
