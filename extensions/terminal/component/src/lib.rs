@@ -5,8 +5,11 @@ wit_bindgen::generate!({ path: "wit", world: "terminal", generate_all });
 use std::{cell::RefCell, collections::BTreeMap};
 
 use lapis::pty::sessions::{self, EnvironmentEntry, Size, SpawnRequest};
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
+use terminal_session_api::v1::{
+    self, Exit, IdRequest, ListRequest, ListResponse, ReadRequest, ReadResponse, ResizeRequest,
+    Session as SessionInfo, StartRequest, StartResponse, WriteRequest,
+};
 
 struct Session {
     attached: bool,
@@ -19,55 +22,12 @@ thread_local! {
     static SESSIONS: RefCell<BTreeMap<String, Session>> = const { RefCell::new(BTreeMap::new()) };
 }
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct List {}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Start {
-    program: String,
-    #[serde(default)]
-    arguments: Vec<String>,
-    #[serde(default)]
-    environment: BTreeMap<String, String>,
-    working_directory: String,
-    columns: u16,
-    rows: u16,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Id {
-    id: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Input {
-    id: String,
-    bytes: Vec<u8>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Resize {
-    id: String,
-    columns: u16,
-    rows: u16,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Read {
-    id: String,
-    offset: u64,
-    max_bytes: u32,
-    timeout_ms: u32,
-}
-
 fn decode<T: serde::de::DeserializeOwned>(payload: &str) -> Result<T, String> {
     serde_json::from_str(payload).map_err(|_| "invalid terminal request".to_owned())
+}
+
+fn encode<T: serde::Serialize>(value: T) -> Result<Value, String> {
+    serde_json::to_value(value).map_err(|error| error.to_string())
 }
 
 fn attached(id: &str) -> Result<(), String> {
@@ -88,18 +48,24 @@ fn reap_closed() {
 fn run(operation: &str, payload: &str) -> Result<Value, String> {
     reap_closed();
     match operation {
-        "list" => {
-            let _: List = decode(payload)?;
+        v1::LIST => {
+            let _: ListRequest = decode(payload)?;
             let active = SESSIONS.with(|sessions| {
-                sessions.borrow().iter()
-                .filter(|(_, session)| session.attached)
-                .map(|(id, session)| json!({"id":id,"columns":session.columns,"rows":session.rows}))
-                .collect::<Vec<_>>()
+                sessions
+                    .borrow()
+                    .iter()
+                    .filter(|(_, session)| session.attached)
+                    .map(|(id, session)| SessionInfo {
+                        id: id.clone(),
+                        columns: session.columns,
+                        rows: session.rows,
+                    })
+                    .collect::<Vec<_>>()
             });
-            Ok(json!({"sessions": active}))
+            encode(ListResponse { sessions: active })
         }
-        "start" => {
-            let input: Start = decode(payload)?;
+        v1::START => {
+            let input: StartRequest = decode(payload)?;
             if input.columns == 0 || input.rows == 0 {
                 return Err("invalid terminal size".into());
             }
@@ -129,16 +95,16 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                     },
                 )
             });
-            Ok(json!({ "id": id }))
+            encode(StartResponse { id })
         }
-        "write" => {
-            let input: Input = decode(payload)?;
+        v1::WRITE => {
+            let input: WriteRequest = decode(payload)?;
             attached(&input.id)?;
             sessions::write(&input.id, &input.bytes)?;
             Ok(Value::Null)
         }
-        "resize" => {
-            let input: Resize = decode(payload)?;
+        v1::RESIZE => {
+            let input: ResizeRequest = decode(payload)?;
             attached(&input.id)?;
             sessions::resize(
                 &input.id,
@@ -155,23 +121,29 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
             });
             Ok(Value::Null)
         }
-        "read" => {
-            let input: Read = decode(payload)?;
+        v1::READ => {
+            let input: ReadRequest = decode(payload)?;
             attached(&input.id)?;
             // JSON の byte 配列が dispatch 応答の上限を超えないよう制限する。
-            if input.max_bytes == 0 || input.max_bytes > 8 * 1024 || input.timeout_ms > 1_000 {
+            if input.max_bytes == 0
+                || input.max_bytes > v1::MAX_READ_BYTES
+                || input.timeout_ms > v1::MAX_READ_WAIT_MS
+            {
                 return Err("invalid terminal read limit".into());
             }
             let output =
                 sessions::read(&input.id, input.offset, input.max_bytes, input.timeout_ms)?;
-            Ok(json!({
-                "bytes": output.bytes, "next": output.next, "lost_before": output.lost_before,
-                "exit": output.exit.map(|exit| json!({ "code": exit.code })),
-                "read_error": output.read_error, "write_error": output.write_error,
-            }))
+            encode(ReadResponse {
+                bytes: output.bytes,
+                next: output.next,
+                lost_before: output.lost_before,
+                exit: output.exit.map(|exit| Exit { code: exit.code }),
+                read_error: output.read_error,
+                write_error: output.write_error,
+            })
         }
-        "close" => {
-            let input: Id = decode(payload)?;
+        v1::CLOSE => {
+            let input: IdRequest = decode(payload)?;
             attached(&input.id)?;
             sessions::kill(&input.id)?;
             sessions::detach(&input.id)?;
