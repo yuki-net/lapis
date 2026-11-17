@@ -17,6 +17,10 @@ PATH_RULES = [
     (["scripts/check.py", "scripts/test_check.py", ".github/workflows/"], {"repository", "rust_core", "host", "desktop", "mobile", "web", "dev_windows"}),
     # Desktop関連
     # clients/state と clients/ui は Web の wasm ビルド（desktop-ui）でもコンパイルされる。
+    (["clients/state/src/web_host.rs", "clients/state/src/web_host/extension_terminal.rs",
+      "clients/state/src/terminal_extension/", "clients/state/src/terminal_extension.rs",
+      "clients/ui/src/web/mod.rs", "clients/ui/wasm-smoke/",
+      "clients/web/wasm/tests/extension_terminal_smoke.py"], {"host", "desktop", "rust_core", "web"}),
     (["clients/state/"], {"desktop", "rust_core", "web"}),
     (["clients/desktop/persistence/"], {"desktop", "rust_core"}),
     (["clients/desktop/launcher/"], {"desktop", "rust_core"}),

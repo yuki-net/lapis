@@ -111,6 +111,7 @@ impl Drop for BackendState {
         if let Some(session) = &self.extension_session {
             session.disconnect();
         }
+        self.connection.disconnect();
     }
 }
 

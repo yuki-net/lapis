@@ -86,3 +86,12 @@ cargo build -p host -p web-bridge
 cargo build -p web --target wasm32-unknown-unknown --profile web --features bridge-smoke
 python clients/web/wasm/tests/bridge_smoke.py
 ```
+
+Windows では拡張 Terminal の起動・再接続も、分離した Host / Bridge を使って検証できます。
+
+```powershell
+cargo build -p host -p web-bridge -p extension-runtime --bins
+cargo build --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component
+cargo build -p web-terminal-smoke --target wasm32-unknown-unknown --profile web
+python clients/web/wasm/tests/extension_terminal_smoke.py
+```

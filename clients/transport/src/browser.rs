@@ -75,6 +75,12 @@ impl Drop for RequestGuard {
 }
 
 impl BrowserConnection {
+    /// 保持中の購読を解除し、接続を明示的に終了する。
+    pub fn disconnect(&self) {
+        self.shared.borrow_mut().fail("WebSocketが終了しました");
+        let _ = self.socket.close();
+    }
+
     /// 認証応答で Host が割り当てた Session。認証前は `None`。
     pub fn session_id(&self) -> Option<client_api::SessionId> {
         self.shared.borrow().session_id.clone()
