@@ -57,6 +57,69 @@ pub struct NativeOutput {
     pub owner: Option<String>,
 }
 
+/// Web でも利用できる描画器と、順序を検証する出力位置。
+pub struct PortableRenderer {
+    cursor: OutputCursor,
+    engine: terminal_portable_renderer::Renderer,
+}
+
+pub struct PortableOutput {
+    pub screen: terminal::TerminalScreen,
+    pub reply: Vec<u8>,
+    pub exit: Option<v1::Exit>,
+    pub read_error: Option<String>,
+    pub write_error: Option<String>,
+    pub owner: Option<String>,
+}
+
+impl PortableRenderer {
+    pub fn new(id: String, size: terminal::TerminalSize) -> Result<Self, String> {
+        Ok(Self {
+            cursor: OutputCursor::new(id),
+            engine: terminal_portable_renderer::Renderer::new(size)?,
+        })
+    }
+
+    pub fn begin(
+        &mut self,
+        max_bytes: u32,
+        timeout_ms: u32,
+    ) -> Result<(ReadTicket, v1::ReadRequest), ReadError> {
+        self.cursor.begin(max_bytes, timeout_ms)
+    }
+
+    pub fn cancel(&mut self) {
+        self.cursor.cancel();
+    }
+
+    pub fn accept(
+        &mut self,
+        ticket: ReadTicket,
+        output: v1::ReadResponse,
+    ) -> Result<PortableOutput, ReadError> {
+        let output = self.cursor.accept(ticket, output)?;
+        let reply = self.engine.process(&output.bytes);
+        let screen = self.engine.snapshot();
+        self.cursor.commit(ticket)?;
+        Ok(PortableOutput {
+            screen,
+            reply,
+            exit: output.exit,
+            read_error: output.read_error,
+            write_error: output.write_error,
+            owner: output.owner,
+        })
+    }
+
+    pub fn resize(
+        &mut self,
+        size: terminal::TerminalSize,
+    ) -> Result<terminal::TerminalScreen, String> {
+        self.engine.resize(size)?;
+        Ok(self.engine.snapshot())
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 impl NativeRenderer {
     /// writer は非同期に Host へ送る入力キューとする。
@@ -416,6 +479,34 @@ mod tests {
             .accept(ticket, output(b" world", 11, None))
             .unwrap();
         assert!(renderer.snapshot().plain_text().contains("hello world"));
+    }
+
+    #[test]
+    fn portable_renderer_checks_order_and_replies_to_cursor_queries() {
+        let mut renderer =
+            PortableRenderer::new("pty-1".into(), terminal::TerminalSize::new(20, 3)).unwrap();
+        let (ticket, _) = renderer.begin(32, 0).unwrap();
+        let applied = renderer
+            .accept(ticket, output(b"abc\x1b[6n", 7, None))
+            .unwrap();
+        assert_eq!(applied.reply, b"\x1b[1;4R");
+        assert!(applied.screen.plain_text().contains("abc"));
+        let (ticket, request) = renderer.begin(32, 0).unwrap();
+        assert_eq!(request.offset, 7);
+        assert!(matches!(
+            renderer.accept(ticket, output(b"x", 21, Some(20))),
+            Err(ReadError::OutputLost { .. })
+        ));
+        let (ticket, request) = renderer.begin(32, 0).unwrap();
+        assert_eq!(request.offset, 7);
+        assert!(
+            renderer
+                .accept(ticket, output(b"d", 8, None))
+                .unwrap()
+                .screen
+                .plain_text()
+                .contains("abcd")
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]

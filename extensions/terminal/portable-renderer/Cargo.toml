@@ -1,0 +1,10 @@
+[package]
+name = "terminal-portable-renderer"
+version.workspace = true
+edition.workspace = true
+description.workspace = true
+license.workspace = true
+
+[dependencies]
+terminal = { package = "terminal-contract", path = "../contract" }
+vt100 = "=0.16.2"
