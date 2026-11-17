@@ -4,16 +4,18 @@ Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Cl
 
 ## 構成
 
-- `component/`: 公開 WIT のみで Host の PTY を利用する独立 Cargo workspace。生データとセッション操作を扱う。既存 UI への接続は未完了で、出荷対象にはまだ含めない。
+- `component/`: 公開 WIT のみで Host の PTY を利用する独立 Cargo workspace。生データとセッション操作を扱う。Desktop・Web に試験用の接続があり、release の同梱入力にも含まれる。通常経路への移行は未完了。
 - `api/`: component とクライアントが共有するセッション操作の v1 DTO。操作名も `terminal.v1.*` で版を持つ。Host 内部型には依存しない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
 - `host/`（crate `terminal-state`）: Host 側の正規状態、画面差分、接続 Session。`TerminalRegistry` がこれを持つ。
 - `adapter/`（crate `local-terminal`）: OS の PTY を使う `TerminalBackend` 実装。
 - `renderer/`（crate `terminal-renderer`）: VT/ANSI の画面状態と入力変換。PTY の所有と分けたネイティブ描画器で、現在の実装は Wasm に未対応。
+- `portable-renderer/`（crate `terminal-portable-renderer`）: Web と Wasm でもビルドできる画面モデル。ターミナル画面を Wasm で描画するものではない。
 
 `component/` と `api/` は同じ親ディレクトリに置けば本体の Cargo workspace 外でも
 ビルドできる。`python -m scripts.extensions.smoke_terminal` はその状態をコピーで再現し、
-Wasm のビルドと PTY 操作を検証する。
+Wasm のビルドと PTY 操作に加え、`contract/` と `portable-renderer/` も本体の
+workspace 設定なしでビルドできることを検証する。
 
 ## ディレクトリ規約の判断
 

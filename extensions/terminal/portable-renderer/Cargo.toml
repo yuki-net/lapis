@@ -1,9 +1,9 @@
 [package]
 name = "terminal-portable-renderer"
-version.workspace = true
-edition.workspace = true
-description.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+description = "Portable terminal screen model for the terminal extension."
+license = "MIT"
 
 [dependencies]
 terminal = { package = "terminal-contract", path = "../contract" }

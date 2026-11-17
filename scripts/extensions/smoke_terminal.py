@@ -27,6 +27,20 @@ def main() -> None:
         shutil.copytree(ROOT / "extensions/terminal/component", standalone / "component")
         subprocess.run(["cargo", "build", "--locked", "--manifest-path", str(standalone / "component/Cargo.toml"),
                         "--target", "wasm32-wasip2", "--target-dir", str(TARGET)], cwd=ROOT, check=True)
+        # 画面モデルも本体の workspace 設定に依存せず、拡張と一緒に持ち出せる。
+        model = standalone / "model"
+        model.mkdir()
+        for name in ("contract", "portable-renderer"):
+            shutil.copytree(ROOT / "extensions/terminal" / name, model / name)
+        (model / "Cargo.toml").write_text(
+            '[workspace]\nresolver = "3"\nmembers = ["contract", "portable-renderer"]\n', encoding="utf-8"
+        )
+        shutil.copyfile(ROOT / "Cargo.lock", model / "Cargo.lock")
+        model_check = ["cargo", "check", "--manifest-path", str(model / "Cargo.toml"),
+                       "--package", "terminal-portable-renderer", "--target", "wasm32-wasip2",
+                       "--target-dir", str(TARGET)]
+        subprocess.run(model_check, cwd=ROOT, check=True)
+        subprocess.run([*model_check, "--locked"], cwd=ROOT, check=True)
     child = subprocess.Popen([str(WORKER)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                              stderr=subprocess.PIPE, text=True,
                              creationflags=0x08000000 if os.name == "nt" else 0)

@@ -1,13 +1,13 @@
 [package]
 name = "terminal-contract"
-version.workspace = true
-edition.workspace = true
-description.workspace = true
-license.workspace = true
+version = "0.1.0"
+edition = "2024"
+description = "Terminal extension contract and portable screen model."
+license = "MIT"
 
 [dependencies]
 futures-channel = "0.3"
-serde.workspace = true
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
-serde_json.workspace = true
+serde_json = "1"
