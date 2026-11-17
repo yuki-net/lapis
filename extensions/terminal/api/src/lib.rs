@@ -4,12 +4,12 @@ pub mod v1 {
     use serde::{Deserialize, Serialize};
     use std::collections::BTreeMap;
 
-    pub const START: &str = "start";
-    pub const LIST: &str = "list";
-    pub const WRITE: &str = "write";
-    pub const RESIZE: &str = "resize";
-    pub const READ: &str = "read";
-    pub const CLOSE: &str = "close";
+    pub const START: &str = "terminal.v1.start";
+    pub const LIST: &str = "terminal.v1.list";
+    pub const WRITE: &str = "terminal.v1.write";
+    pub const RESIZE: &str = "terminal.v1.resize";
+    pub const READ: &str = "terminal.v1.read";
+    pub const CLOSE: &str = "terminal.v1.close";
     pub const MAX_READ_BYTES: u32 = 8 * 1024;
     pub const MAX_READ_WAIT_MS: u32 = 1_000;
 

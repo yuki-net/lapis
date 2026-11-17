@@ -57,12 +57,14 @@ def main() -> None:
             send({"kind": "reply", "id": response["id"], "result": {"Ok": result}})
     def dispatch(operation, payload):
         return request({"command": "dispatch", "id": "lapis.terminal",
-                        "operation": operation, "payload": json.dumps(payload)})
+                        "operation": "terminal.v1." + operation, "payload": json.dumps(payload)})
     try:
         response = request({"command": "activate", "id": "lapis.terminal",
                             "component": base64.b64encode(COMPONENT.read_bytes()).decode("ascii"),
                             "require_dispatch": True})
         assert response["ok"], response
+        assert not request({"command": "dispatch", "id": "lapis.terminal",
+                            "operation": "terminal.v2.list", "payload": "{}"})["ok"]
         assert json.loads(dispatch("list", {})["result"]) == {"sessions": []}
         result = dispatch("start", {"program": "shell", "working_directory": ".",
                                     "columns": 80, "rows": 24})

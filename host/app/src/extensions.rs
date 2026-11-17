@@ -1242,7 +1242,7 @@ mod tests {
         }).to_string();
         assert!(
             supervisor
-                .dispatch("lapis.terminal", "start", &start)
+                .dispatch("lapis.terminal", "terminal.v1.start", &start)
                 .is_err()
         );
         assert_eq!(broker.session_count("lapis.terminal"), 0);
@@ -1251,15 +1251,18 @@ mod tests {
             .unwrap();
         let opened: serde_json::Value = serde_json::from_str(
             &supervisor
-                .dispatch("lapis.terminal", "start", &start)
+                .dispatch("lapis.terminal", "terminal.v1.start", &start)
                 .unwrap(),
         )
         .unwrap();
         let id = opened["id"].as_str().unwrap();
         assert_eq!(broker.session_count("lapis.terminal"), 1);
-        let listed: serde_json::Value =
-            serde_json::from_str(&supervisor.dispatch("lapis.terminal", "list", "{}").unwrap())
-                .unwrap();
+        let listed: serde_json::Value = serde_json::from_str(
+            &supervisor
+                .dispatch("lapis.terminal", "terminal.v1.list", "{}")
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(listed["sessions"][0]["id"], id);
         let mut offset = 0u64;
         let mut output = Vec::new();
@@ -1276,7 +1279,7 @@ mod tests {
             let request = serde_json::json!({"id": id, "offset": offset, "max_bytes": 8192, "timeout_ms": 500});
             let response: serde_json::Value = serde_json::from_str(
                 &supervisor
-                    .dispatch("lapis.terminal", "read", &request.to_string())
+                    .dispatch("lapis.terminal", "terminal.v1.read", &request.to_string())
                     .unwrap(),
             )
             .unwrap();
@@ -1292,7 +1295,7 @@ mod tests {
                 supervisor
                     .dispatch(
                         "lapis.terminal",
-                        "write",
+                        "terminal.v1.write",
                         &serde_json::json!({
                             "id":id,"bytes": [27, 91, 49, 59, 49, 82]
                         })
@@ -1305,20 +1308,20 @@ mod tests {
         supervisor
             .dispatch(
                 "lapis.terminal",
-                "resize",
+                "terminal.v1.resize",
                 &serde_json::json!({"id":id,"columns":100,"rows":30}).to_string(),
             )
             .unwrap();
         supervisor
             .dispatch(
                 "lapis.terminal",
-                "close",
+                "terminal.v1.close",
                 &serde_json::json!({"id":id}).to_string(),
             )
             .unwrap();
         let second: serde_json::Value = serde_json::from_str(
             &supervisor
-                .dispatch("lapis.terminal", "start", &start)
+                .dispatch("lapis.terminal", "terminal.v1.start", &start)
                 .unwrap(),
         )
         .unwrap();
@@ -1331,7 +1334,7 @@ mod tests {
             supervisor
                 .dispatch(
                     "lapis.terminal",
-                    "read",
+                    "terminal.v1.read",
                     &serde_json::json!({"id":second_id,"offset":0,"max_bytes":64,"timeout_ms":0})
                         .to_string(),
                 )
