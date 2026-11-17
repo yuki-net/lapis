@@ -4,6 +4,7 @@ Terminal の契約・Host 側状態・PTY 実装を配置する領域です。Cl
 
 ## 構成
 
+- `component/`: 公開 WIT のみで Host の PTY を利用する独立 Cargo workspace。生データとセッション操作を扱う。既存 UI への接続は未完了で、出荷対象にはまだ含めない。
 - `contract/`（crate `terminal-contract`、参照名 `terminal`）: Terminal の型・wire DTO・`TerminalBackend` port の正本。
 - `host/`（crate `terminal-state`）: Host 側の正規状態、画面差分、接続 Session。`TerminalRegistry` がこれを持つ。
 - `adapter/`（crate `local-terminal`）: OS の PTY を使う `TerminalBackend` 実装。VT/ANSI の解釈もここに閉じる。

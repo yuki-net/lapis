@@ -1,0 +1,7 @@
+package lapis:terminal@1.0.0;
+
+world terminal {
+    include lapis:extension/extension@1.0.0;
+    include lapis:dispatch/extension-dispatch@1.0.0;
+    import lapis:pty/sessions@1.0.0;
+}

@@ -1154,6 +1154,189 @@ mod tests {
         assert_eq!(broker.session_count("dev.example.pty"), 0);
     }
 
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "Terminal component と拡張ホストの事前ビルドが必要"]
+    fn terminal_component_uses_approved_host_pty() {
+        use extension_runtime::supervisor::{ExtensionSupervisor, SupervisorStatus};
+        use std::{
+            os::windows::process::CommandExt,
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let state = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        std::fs::copy(
+            root.join(
+                "target/terminal-component/wasm32-wasip2/debug/lapis_terminal_component.wasm",
+            ),
+            source.path().join("extension.wasm"),
+        )
+        .unwrap();
+        std::fs::copy(
+            root.join("extensions/terminal/component/extension.json"),
+            source.path().join("extension.json"),
+        )
+        .unwrap();
+        let archive = state.path().join("terminal.lapis");
+        assert!(
+            std::process::Command::new("python")
+                .current_dir(&root)
+                .args(["-m", "scripts.extensions.package"])
+                .arg(source.path())
+                .arg(&archive)
+                .arg("--development")
+                .creation_flags(0x08000000)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut extensions = HostExtensions::load_with_development(Some(state.path()), true);
+        let mut contracts = HostContracts::current();
+        for id in [
+            extension_runtime::LIFECYCLE_CONTRACT,
+            extension_runtime::DISPATCH_CONTRACT,
+            "lapis.process.pty",
+        ] {
+            contracts.add_version(
+                ContractId::try_new(id).unwrap(),
+                semver::Version::new(1, 0, 0),
+            );
+        }
+        extensions.loader = Loader::Ready(
+            ExtensionLoader::new(TrustedKeys::repository().unwrap(), contracts)
+                .allow_unsigned_local_development(),
+        );
+        extensions.install(&archive, true).unwrap();
+        let (components, _, _, _, failures) = extensions.startup_components();
+        assert!(failures.is_empty(), "{failures:?}");
+        let digest = extensions
+            .capabilities("lapis.terminal")
+            .unwrap()
+            .manifest_digest;
+        let broker = Arc::new(crate::extension_pty::PtyBroker::new(Arc::new(extensions)));
+        let supervisor = ExtensionSupervisor::start_with_handler(
+            root.join("target/debug/lapis-extension-host.exe"),
+            components,
+            Some(broker.clone()),
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            match supervisor.status() {
+                SupervisorStatus::Running { active, failed, .. } => {
+                    assert!(failed.is_empty(), "{failed:?}");
+                    assert_eq!(active, ["lapis.terminal"]);
+                    break;
+                }
+                SupervisorStatus::Stopped { reason } => panic!("{reason}"),
+                SupervisorStatus::Starting => {}
+            }
+            assert!(Instant::now() < deadline, "extension host did not start");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let start = serde_json::json!({
+            "program":"cmd.exe", "arguments":["/D","/C","echo LapisTerminal & ping -n 30 127.0.0.1 >nul"],
+            "working_directory":state.path().to_string_lossy(), "columns":80, "rows":24
+        }).to_string();
+        assert!(
+            supervisor
+                .dispatch("lapis.terminal", "start", &start)
+                .is_err()
+        );
+        assert_eq!(broker.session_count("lapis.terminal"), 0);
+        broker
+            .set_approval("lapis.terminal", true, &digest)
+            .unwrap();
+        let opened: serde_json::Value = serde_json::from_str(
+            &supervisor
+                .dispatch("lapis.terminal", "start", &start)
+                .unwrap(),
+        )
+        .unwrap();
+        let id = opened["id"].as_str().unwrap();
+        assert_eq!(broker.session_count("lapis.terminal"), 1);
+        let mut offset = 0u64;
+        let mut output = Vec::new();
+        let mut answered_cursor_query = false;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !output
+            .windows(b"LapisTerminal".len())
+            .any(|part| part == b"LapisTerminal")
+        {
+            assert!(
+                Instant::now() < deadline,
+                "terminal produced no output: {output:?}"
+            );
+            let request = serde_json::json!({"id": id, "offset": offset, "max_bytes": 8192, "timeout_ms": 500});
+            let response: serde_json::Value = serde_json::from_str(
+                &supervisor
+                    .dispatch("lapis.terminal", "read", &request.to_string())
+                    .unwrap(),
+            )
+            .unwrap();
+            offset = response["next"].as_u64().unwrap();
+            output.extend(
+                response["bytes"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|byte| byte.as_u64().unwrap() as u8),
+            );
+            if !answered_cursor_query && output.windows(4).any(|part| part == b"\x1b[6n") {
+                supervisor
+                    .dispatch(
+                        "lapis.terminal",
+                        "write",
+                        &serde_json::json!({
+                            "id":id,"bytes": [27, 91, 49, 59, 49, 82]
+                        })
+                        .to_string(),
+                    )
+                    .unwrap();
+                answered_cursor_query = true;
+            }
+        }
+        supervisor
+            .dispatch(
+                "lapis.terminal",
+                "resize",
+                &serde_json::json!({"id":id,"columns":100,"rows":30}).to_string(),
+            )
+            .unwrap();
+        supervisor
+            .dispatch(
+                "lapis.terminal",
+                "close",
+                &serde_json::json!({"id":id}).to_string(),
+            )
+            .unwrap();
+        let second: serde_json::Value = serde_json::from_str(
+            &supervisor
+                .dispatch("lapis.terminal", "start", &start)
+                .unwrap(),
+        )
+        .unwrap();
+        let second_id = second["id"].as_str().unwrap();
+        broker
+            .set_approval("lapis.terminal", false, &digest)
+            .unwrap();
+        assert_eq!(broker.session_count("lapis.terminal"), 0);
+        assert!(
+            supervisor
+                .dispatch(
+                    "lapis.terminal",
+                    "read",
+                    &serde_json::json!({"id":second_id,"offset":0,"max_bytes":64,"timeout_ms":0})
+                        .to_string(),
+                )
+                .is_err()
+        );
+        drop(supervisor);
+        assert_eq!(broker.session_count("lapis.terminal"), 0);
+    }
+
     #[test]
     fn a_host_without_a_state_directory_declares_no_extensions() {
         let extensions = HostExtensions::load(None);

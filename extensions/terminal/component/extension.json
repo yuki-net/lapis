@@ -1,0 +1,12 @@
+{
+  "id": "lapis.terminal",
+  "version": "0.1.0",
+  "requires": [
+    {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.extension.dispatch", "minimum": "1.0.0", "maximum": "1.0.0"},
+    {"contract": "lapis.process.pty", "minimum": "1.0.0", "maximum": "1.0.0"}
+  ],
+  "capabilities": [{"id": "process.pty", "version": "1.0.0"}],
+  "files": ["extension.wasm"]
+}

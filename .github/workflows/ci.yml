@@ -127,6 +127,9 @@ jobs:
           cargo build --locked -p extension-runtime --bin lapis-extension-host
           python3 -m scripts.extensions.smoke
           python3 -m scripts.extensions.smoke_pty
+          python3 -m scripts.extensions.smoke_terminal
+          cargo fmt --manifest-path extensions/terminal/component/Cargo.toml -- --check
+          cargo clippy --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component -- -D warnings
           cargo test --locked -p extensions-entry --test package independent_component_is_packaged_installed_and_activated -- --ignored
 
       - name: Lint Rust Core
@@ -183,6 +186,10 @@ jobs:
           cargo build --locked --manifest-path examples/pty-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/pty-extension
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p host approved_wasm_uses_host_pty_and_shutdown_reclaims_it -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked --manifest-path extensions/terminal/component/Cargo.toml --target wasm32-wasip2 --target-dir target/terminal-component
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p host terminal_component_uses_approved_host_pty -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Test managed Web publication

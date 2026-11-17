@@ -24,6 +24,14 @@ class PackageTests(unittest.TestCase):
             (root / "examples/external-extension/wit/deps/dispatch/dispatch.wit").read_bytes(),
             (root / "contracts/extension-api/wit/dispatch-v1/dispatch.wit").read_bytes(),
         )
+        for name, contract in [("lifecycle", "v1/extension.wit"),
+                               ("dispatch", "dispatch-v1/dispatch.wit"),
+                               ("pty", "pty-v1/pty.wit")]:
+            filename = "extension.wit" if name == "lifecycle" else f"{name}.wit"
+            self.assertEqual(
+                (root / "extensions/terminal/component/wit/deps" / name / filename).read_bytes(),
+                (root / "contracts/extension-api/wit" / contract).read_bytes(),
+            )
         self.assertEqual(
             (root / "examples/pty-extension/wit/deps/pty/pty.wit").read_bytes(),
             (root / "contracts/extension-api/wit/pty-v1/pty.wit").read_bytes(),

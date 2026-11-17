@@ -1,0 +1,53 @@
+package lapis:pty@1.0.0;
+
+/// Host が所有する PTY。所有者と接続の識別は Host が認証済み呼び出し元から決める。
+interface sessions {
+    record size {
+        columns: u16,
+        rows: u16,
+    }
+
+    record environment-entry {
+        name: string,
+        value: string,
+    }
+
+    record spawn-request {
+        program: string,
+        arguments: list<string>,
+        environment: list<environment-entry>,
+        working-directory: string,
+        initial-size: size,
+    }
+
+    record exit-status {
+        code: option<s32>,
+    }
+
+    /// next を次回の from とする。lost-before があれば履歴が失われている。
+    record output {
+        bytes: list<u8>,
+        next: u64,
+        lost-before: option<u64>,
+        exit: option<exit-status>,
+        read-error: option<string>,
+        write-error: option<string>,
+    }
+
+    spawn: func(command: spawn-request) -> result<string, string>;
+    attach: func(id: string) -> result<_, string>;
+    detach: func(id: string) -> result<_, string>;
+    /// 成功は上限付き入力キューへの受理を示す。
+    write: func(id: string, bytes: list<u8>) -> result<_, string>;
+    resize: func(id: string, new-size: size) -> result<_, string>;
+    /// 出力または EOF まで待つ。timeout-ms の上限は Host が決める。
+    read: func(id: string, offset: u64, max-bytes: u32, timeout-ms: u32) -> result<output, string>;
+    kill: func(id: string) -> result<_, string>;
+    /// 終了し、detach 済みの資源を取り除く。
+    forget: func(id: string) -> result<_, string>;
+}
+
+/// ライフサイクルとは独立した Host 能力の契約。
+world pty-host {
+    import sessions;
+}

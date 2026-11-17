@@ -1,0 +1,6 @@
+package lapis:dispatch@1.0.0;
+
+/// 呼び出しの意味と payload の形式は各拡張が定義する。
+world extension-dispatch {
+    export dispatch: func(operation: string, payload: string) -> result<string, string>;
+}
