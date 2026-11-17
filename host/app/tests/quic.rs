@@ -1095,6 +1095,31 @@ async fn extension_contributions_reach_a_remote_reader_after_restart() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extension_operations_reuse_the_authenticated_connection() {
+    let fixture = Fixture::new().await;
+    let config = fixture.config("extension-session-reuse").await;
+    let workspace = fixture.workspace.clone();
+    tokio::task::spawn_blocking(move || {
+        let root = std::env::temp_dir().join("lapis-extension-session-test");
+        let client = host::BackendClient::remote(root, config).unwrap();
+        let connection = client.open_extension_connection(workspace.clone()).unwrap();
+        assert_eq!(connection.workspace_id(), &workspace);
+        let initial = connection.session_id().expect("authenticated session");
+        let request = HostExtensionDispatchRequest {
+            id: "dev.example.missing".into(),
+            operation: "inspect".into(),
+            payload: "{}".into(),
+        };
+        assert!(connection.dispatch(request.clone()).is_err());
+        assert_eq!(connection.session_id(), Some(initial.clone()));
+        assert!(connection.dispatch(request).is_err());
+        assert_eq!(connection.session_id(), Some(initial));
+    })
+    .await
+    .unwrap();
+}
+
 async fn receive(client: &mut QuicClient) -> ServerMessage {
     tokio::time::timeout(Duration::from_secs(10), client.recv())
         .await

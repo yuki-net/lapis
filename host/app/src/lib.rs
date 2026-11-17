@@ -15,7 +15,7 @@ pub use profile::{
     read_invitation, write_invitation, write_invitation_replacing, write_oidc_profile,
 };
 mod document;
-pub use client::BackendClient;
+pub use client::{BackendClient, ExtensionConnection};
 #[cfg(windows)]
 mod extension_pty;
 mod extensions;

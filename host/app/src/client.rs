@@ -40,6 +40,52 @@ pub(crate) enum Client {
     Embedded(EmbeddedClient),
     Quic(QuicConnection),
 }
+
+/// 拡張操作で認証済み Session を共有する接続。Drop は Host の資源を終了しない。
+#[derive(Clone)]
+pub struct ExtensionConnection {
+    client: Client,
+    embedded: Option<BackendHost>,
+}
+
+impl ExtensionConnection {
+    pub fn workspace_id(&self) -> &WorkspaceId {
+        self.client.workspace_id()
+    }
+
+    /// 再接続した場合は Host が新しい Session ID を発行する。
+    pub fn session_id(&self) -> Option<SessionId> {
+        self.client.session_id()
+    }
+
+    /// 呼び出しは worker で行う。
+    pub fn dispatch(
+        &self,
+        request: client_api::HostExtensionDispatchRequest,
+    ) -> Result<client_api::HostExtensionDispatchResponse, BackendServiceError> {
+        if let Some(host) = &self.embedded {
+            return host
+                .dispatch_extension(&request)
+                .map_err(BackendServiceError::Connection);
+        }
+        match self
+            .client
+            .request(RequestBody::HostExtensionDispatch(request.clone()))?
+        {
+            ResponseBody::HostExtensionDispatch(response)
+                if response.id == request.id && response.operation == request.operation =>
+            {
+                Ok(response)
+            }
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+}
 impl Client {
     pub(crate) fn workspace_id(&self) -> &WorkspaceId {
         match self {
@@ -361,27 +407,20 @@ impl BackendClient {
         workspace: WorkspaceId,
         request: client_api::HostExtensionDispatchRequest,
     ) -> Result<client_api::HostExtensionDispatchResponse, BackendServiceError> {
-        if let Source::Embedded(host) = &self.source {
-            return host
-                .dispatch_extension(&request)
-                .map_err(BackendServiceError::Connection);
-        }
-        match self
-            .connect_workspace(workspace)?
-            .request(RequestBody::HostExtensionDispatch(request.clone()))?
-        {
-            ResponseBody::HostExtensionDispatch(response)
-                if response.id == request.id && response.operation == request.operation =>
-            {
-                Ok(response)
-            }
-            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
-                error
-                    .detail
-                    .unwrap_or_else(|| error.code.as_str().to_owned()),
-            )),
-            _ => Err(BackendServiceError::Unavailable),
-        }
+        self.open_extension_connection(workspace)?.dispatch(request)
+    }
+
+    /// 複数操作を同一の認証済み接続で行う。接続切断後の再認証では Session ID が変わる。
+    pub fn open_extension_connection(
+        &self,
+        workspace: WorkspaceId,
+    ) -> Result<ExtensionConnection, BackendServiceError> {
+        let client = self.connect_workspace(workspace)?;
+        let embedded = match &self.source {
+            Source::Embedded(host) => Some(host.clone()),
+            _ => None,
+        };
+        Ok(ExtensionConnection { client, embedded })
     }
 
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
