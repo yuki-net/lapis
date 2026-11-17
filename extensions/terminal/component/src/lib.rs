@@ -4,6 +4,7 @@ wit_bindgen::generate!({ path: "wit", world: "terminal", generate_all });
 
 use std::{cell::RefCell, collections::BTreeMap};
 
+use lapis::process_info::host as process_info;
 use lapis::pty::sessions::{self, EnvironmentEntry, Size, SpawnRequest};
 use serde_json::Value;
 use terminal_session_api::v1::{
@@ -48,6 +49,21 @@ fn reap_closed() {
 fn run(operation: &str, payload: &str) -> Result<Value, String> {
     reap_closed();
     match operation {
+        v1::INFO => {
+            let _: v1::InfoRequest = decode(payload)?;
+            let info = process_info::get()?;
+            let pty = match info.pty {
+                process_info::PtyFlavor::Conpty => v1::PtyFlavor::Conpty,
+                process_info::PtyFlavor::Posix => v1::PtyFlavor::Posix,
+            };
+            encode(v1::InfoResponse {
+                pty,
+                default_shell: v1::ShellCommand {
+                    program: info.default_shell.program,
+                    arguments: info.default_shell.arguments,
+                },
+            })
+        }
         v1::LIST => {
             let _: ListRequest = decode(payload)?;
             let active = SESSIONS.with(|sessions| {

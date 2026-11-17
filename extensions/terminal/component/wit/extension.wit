@@ -4,4 +4,5 @@ world terminal {
     include lapis:extension/extension@1.0.0;
     include lapis:dispatch/extension-dispatch@1.0.0;
     import lapis:pty/sessions@1.0.0;
+    import lapis:process-info/host@1.0.0;
 }

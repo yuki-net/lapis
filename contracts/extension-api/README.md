@@ -6,6 +6,10 @@
 能力は承認が必要で、現在は Windows Host だけが提供する。拡張固有の Rust 型や Host の
 内部参照は境界を越えない。互換性を壊す変更は既存の v1 を書き換えず、別の版を追加する。
 
+`wit/process-info-v1` は Host の PTY 種別と既定シェルを返す汎用プロセス契約。
+利用には `lapis.process.info` 1.0.0 と `process.pty` 能力の宣言・承認が必要。
+拡張が管理するユーザーの shell profile はこの契約に含めない。
+
 `wit/dispatch-v1` は拡張への汎用操作の契約で、操作名とデータの意味は個別の契約が定める。
 実行中の署名済み manifest が `lapis.extension.dispatch` 1.0.0 を要求する場合に使える。
 Workspace 間の拡張状態はまだ分離されていないため、Host 全体の拡張を操作する

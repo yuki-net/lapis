@@ -12,10 +12,12 @@ fn worker_reports_each_supported_contract_version() {
     let capabilities = extension_runtime::supervisor::probe_worker(&worker).unwrap();
     assert_eq!(capabilities.lifecycle_version.as_deref(), Some("1.0.0"));
     assert_eq!(capabilities.pty_version.as_deref(), Some("1.0.0"));
+    assert_eq!(capabilities.process_info_version.as_deref(), Some("1.0.0"));
     assert_eq!(capabilities.dispatch_version.as_deref(), Some("1.0.0"));
     let legacy: extension_runtime::Response =
         serde_json::from_str(r#"{"ok":true,"lifecycle_version":"1.0.0"}"#).unwrap();
     assert!(legacy.pty_version.is_none());
+    assert!(legacy.process_info_version.is_none());
     assert!(legacy.dispatch_version.is_none());
 }
 

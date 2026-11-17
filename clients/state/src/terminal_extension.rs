@@ -54,14 +54,14 @@ impl NativeRenderer {
         id: String,
         size: terminal::TerminalSize,
         writer: Box<dyn std::io::Write + Send>,
-        conpty_quirks: bool,
+        pty_flavor: v1::PtyFlavor,
     ) -> Self {
         Self {
             cursor: OutputCursor::new(id),
             engine: terminal_renderer::TerminalEngine::with_conpty_quirks(
                 size,
                 writer,
-                conpty_quirks,
+                pty_flavor == v1::PtyFlavor::Conpty,
             ),
         }
     }
@@ -380,7 +380,7 @@ mod tests {
             "pty-1".into(),
             terminal::TerminalSize::new(20, 3),
             Box::new(std::io::sink()),
-            false,
+            v1::PtyFlavor::Posix,
         );
         let (ticket, request) = renderer.begin(32, 0).unwrap();
         assert_eq!(request.offset, 0);
@@ -424,7 +424,7 @@ mod tests {
             "pty-1".into(),
             terminal::TerminalSize::new(20, 3),
             Box::new(Capture(sender)),
-            true,
+            v1::PtyFlavor::Conpty,
         );
         let (ticket, _) = renderer.begin(32, 0).unwrap();
         renderer

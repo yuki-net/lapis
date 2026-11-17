@@ -3,6 +3,9 @@ use std::collections::BTreeMap;
 
 use crate::{
     WorkerState,
+    process_info_bindings::lapis::process_info::host::{
+        self as info, Command, Information, PtyFlavor,
+    },
     pty_bindings::lapis::pty::sessions::{self, ExitStatus, Output, Size, SpawnRequest},
 };
 use serde_json::{Value, json};
@@ -19,6 +22,40 @@ impl WorkerState {
     }
     fn pty_empty(&self, method: &str, value: Value) -> Result<(), String> {
         self.host_call(method, value).map(|_| ())
+    }
+}
+
+impl info::Host for WorkerState {
+    fn get(&mut self) -> Result<Information, String> {
+        let value = self.host_call("process.info.v1.get", Value::Null)?;
+        let flavor = match value.get("pty").and_then(Value::as_str) {
+            Some("conpty") => PtyFlavor::Conpty,
+            Some("posix") => PtyFlavor::Posix,
+            _ => return Err("invalid Host process information".into()),
+        };
+        let command = value
+            .get("default_shell")
+            .ok_or("invalid Host process information")?;
+        let program = command
+            .get("program")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty() && value.len() <= 4096)
+            .ok_or("invalid Host process information")?
+            .to_owned();
+        let arguments: Vec<String> = serde_json::from_value(
+            command
+                .get("arguments")
+                .cloned()
+                .ok_or("invalid Host process information")?,
+        )
+        .map_err(|_| "invalid Host process information")?;
+        if arguments.len() > 64 || arguments.iter().any(|arg| arg.len() > 4096) {
+            return Err("invalid Host process information".into());
+        }
+        Ok(Information {
+            pty: flavor,
+            default_shell: Command { program, arguments },
+        })
     }
 }
 

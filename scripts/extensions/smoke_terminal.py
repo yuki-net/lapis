@@ -55,6 +55,8 @@ def main() -> None:
             calls.append(method)
             if method == "pty.v1.spawn":
                 result = "pty-1"
+            elif method == "process.info.v1.get":
+                result = {"pty": "conpty", "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}}
             elif method == "pty.v1.read":
                 result = {"bytes": [65, 66], "next": 2, "lost_before": None,
                           "exited": None, "read_error": None, "write_error": None}
@@ -73,6 +75,10 @@ def main() -> None:
         assert response["ok"], response
         assert not request({"command": "dispatch", "id": "lapis.terminal",
                             "operation": "terminal.v2.list", "payload": "{}"})["ok"]
+        info = dispatch("info", {})
+        assert info["ok"] and json.loads(info["result"]) == {
+            "pty": "conpty", "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}
+        }, info
         assert json.loads(dispatch("list", {})["result"]) == {"sessions": []}
         result = dispatch("start", {"program": "shell", "working_directory": ".",
                                     "columns": 80, "rows": 24})
@@ -89,7 +95,7 @@ def main() -> None:
         assert dispatch("close", {"id": "pty-1"})["ok"]
         assert json.loads(dispatch("list", {})["result"]) == {"sessions": []}
         assert not dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
-        assert calls == ["pty.v1.spawn", "pty.v1.attach", "pty.v1.write", "pty.v1.resize",
+        assert calls == ["process.info.v1.get", "pty.v1.spawn", "pty.v1.attach", "pty.v1.write", "pty.v1.resize",
                          "pty.v1.read", "pty.v1.kill", "pty.v1.detach", "pty.v1.forget"], calls
         assert request({"command": "shutdown"})["ok"]
         assert child.wait(timeout=15) == 0

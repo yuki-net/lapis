@@ -5,6 +5,7 @@ pub mod v1 {
     use std::collections::BTreeMap;
 
     pub const START: &str = "terminal.v1.start";
+    pub const INFO: &str = "terminal.v1.info";
     pub const LIST: &str = "terminal.v1.list";
     pub const WRITE: &str = "terminal.v1.write";
     pub const RESIZE: &str = "terminal.v1.resize";
@@ -16,6 +17,29 @@ pub mod v1 {
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     pub struct ListRequest {}
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct InfoRequest {}
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    pub enum PtyFlavor {
+        Conpty,
+        Posix,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ShellCommand {
+        pub program: String,
+        pub arguments: Vec<String>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct InfoResponse {
+        pub pty: PtyFlavor,
+        pub default_shell: ShellCommand,
+    }
 
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]

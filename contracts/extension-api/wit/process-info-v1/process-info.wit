@@ -1,0 +1,19 @@
+package lapis:process-info@1.0.0;
+
+/// Host のプロセス環境。ユーザー設定の shell profile は拡張が所有する。
+interface host {
+    enum pty-flavor { conpty, posix }
+    record command {
+        program: string,
+        arguments: list<string>,
+    }
+    record information {
+        pty: pty-flavor,
+        default-shell: command,
+    }
+    get: func() -> result<information, string>;
+}
+
+world process-info-host {
+    import host;
+}

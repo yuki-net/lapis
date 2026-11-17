@@ -88,6 +88,15 @@ impl HostCallHandler for PtyBroker {
         let owner = PtyOwnerId(extension.to_owned());
         let attachment = PtyAttachmentId("extension-host".to_owned());
         match method {
+            "process.info.v1.get" => {
+                if !payload.is_null() || !self.extensions.process_info_declared(extension)? {
+                    return Err("process information contract is not declared".into());
+                }
+                Ok(json!({
+                    "pty": "conpty",
+                    "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}
+                }))
+            }
             "pty.v1.spawn" => {
                 let command: PtySpawn = parse(payload)?;
                 let id = self

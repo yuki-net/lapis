@@ -33,6 +33,14 @@ mod pty_bindings {
     });
 }
 #[cfg(feature = "worker")]
+#[allow(dead_code)]
+mod process_info_bindings {
+    wasmtime::component::bindgen!({
+        path: "../../../contracts/extension-api/wit/process-info-v1",
+        world: "process-info-host",
+    });
+}
+#[cfg(feature = "worker")]
 mod pty_worker;
 
 /// 双方向の能力呼び出し。操作名と payload は能力契約側が定める。
@@ -58,6 +66,8 @@ pub struct HostReply {
 pub const LIFECYCLE_CONTRACT: &str = "lapis.extension.lifecycle";
 pub const LIFECYCLE_VERSION: &str = "1.0.0";
 pub const PTY_VERSION: &str = "1.0.0";
+pub const PROCESS_INFO_CONTRACT: &str = "lapis.process.info";
+pub const PROCESS_INFO_VERSION: &str = "1.0.0";
 pub const DISPATCH_CONTRACT: &str = "lapis.extension.dispatch";
 pub const DISPATCH_VERSION: &str = "1.0.0";
 pub const MAX_DISPATCH_BYTES: usize = 64 * 1024;
@@ -103,6 +113,8 @@ pub struct Response {
     pub lifecycle_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_info_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -213,6 +225,11 @@ impl ExtensionRuntime {
             wasmtime::component::HasSelf<WorkerState>,
         >(&mut linker, |state| state)
         .map_err(|error| error.to_string())?;
+        process_info_bindings::lapis::process_info::host::add_to_linker::<
+            WorkerState,
+            wasmtime::component::HasSelf<WorkerState>,
+        >(&mut linker, |state| state)
+        .map_err(|error| error.to_string())?;
         let instance = linker
             .instantiate(&mut store, &component)
             .map_err(|error| error.to_string())?;
@@ -299,6 +316,7 @@ impl ExtensionRuntime {
                 error: None,
                 lifecycle_version: Some(LIFECYCLE_VERSION.to_owned()),
                 pty_version: Some(PTY_VERSION.to_owned()),
+                process_info_version: Some(PROCESS_INFO_VERSION.to_owned()),
                 dispatch_version: Some(DISPATCH_VERSION.to_owned()),
                 result: None,
             };
@@ -315,6 +333,7 @@ impl ExtensionRuntime {
                     error: None,
                     lifecycle_version: None,
                     pty_version: None,
+                    process_info_version: None,
                     dispatch_version: None,
                     result: Some(result),
                 },
@@ -323,6 +342,7 @@ impl ExtensionRuntime {
                     error: Some(error),
                     lifecycle_version: None,
                     pty_version: None,
+                    process_info_version: None,
                     dispatch_version: None,
                     result: None,
                 },
@@ -364,6 +384,7 @@ impl ExtensionRuntime {
                 error: None,
                 lifecycle_version: None,
                 pty_version: None,
+                process_info_version: None,
                 dispatch_version: None,
                 result: None,
             },
@@ -372,6 +393,7 @@ impl ExtensionRuntime {
                 error: Some(error),
                 lifecycle_version: None,
                 pty_version: None,
+                process_info_version: None,
                 dispatch_version: None,
                 result: None,
             },
@@ -457,6 +479,7 @@ pub fn serve(
                     error: Some("invalid request".into()),
                     lifecycle_version: None,
                     pty_version: None,
+                    process_info_version: None,
                     dispatch_version: None,
                     result: None,
                 },

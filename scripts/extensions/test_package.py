@@ -26,7 +26,8 @@ class PackageTests(unittest.TestCase):
         )
         for name, contract in [("lifecycle", "v1/extension.wit"),
                                ("dispatch", "dispatch-v1/dispatch.wit"),
-                               ("pty", "pty-v1/pty.wit")]:
+                               ("pty", "pty-v1/pty.wit"),
+                               ("process-info", "process-info-v1/process-info.wit")]:
             filename = "extension.wit" if name == "lifecycle" else f"{name}.wit"
             self.assertEqual(
                 (root / "extensions/terminal/component/wit/deps" / name / filename).read_bytes(),

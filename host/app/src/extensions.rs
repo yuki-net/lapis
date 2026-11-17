@@ -330,6 +330,12 @@ impl HostExtensions {
         let supports_pty = worker.as_ref().is_some_and(|(_, capabilities)| {
             capabilities.pty_version.as_deref() == Some(extension_runtime::PTY_VERSION)
         });
+        #[cfg(windows)]
+        let supports_process_info = supports_pty
+            && worker.as_ref().is_some_and(|(_, capabilities)| {
+                capabilities.process_info_version.as_deref()
+                    == Some(extension_runtime::PROCESS_INFO_VERSION)
+            });
         let worker_executable = worker.map(|(path, _)| path);
         let mut contracts = HostContracts::current();
         contracts.add_version(
@@ -358,6 +364,15 @@ impl HostExtensions {
                 contracts.add_version(
                     ContractId::try_new("lapis.process.pty").expect("valid contract id"),
                     semver::Version::new(1, 0, 0),
+                );
+            }
+            #[cfg(windows)]
+            if supports_process_info {
+                contracts.add_version(
+                    ContractId::try_new(extension_runtime::PROCESS_INFO_CONTRACT)
+                        .expect("valid contract id"),
+                    semver::Version::parse(extension_runtime::PROCESS_INFO_VERSION)
+                        .expect("valid contract version"),
                 );
             }
         }
@@ -474,6 +489,22 @@ impl HostExtensions {
         extensions_entry::CapabilityApprovals::new(directory.clone())
             .is_granted(package, &capability)
             .map_err(|error| error.to_string())
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn process_info_declared(&self, id: &str) -> Result<bool, String> {
+        let packages = self
+            .runtime_packages
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let package = packages.get(id).ok_or("実行中の拡張がありません")?;
+        let version = semver::Version::parse(extension_runtime::PROCESS_INFO_VERSION)
+            .expect("valid contract version");
+        Ok(package.manifest.requires.iter().any(|requirement| {
+            requirement.contract.as_str() == extension_runtime::PROCESS_INFO_CONTRACT
+                && requirement.minimum.cmp_precedence(&version).is_le()
+                && requirement.maximum.cmp_precedence(&version).is_ge()
+        }))
     }
 
     /// 検証済みの導入 package が宣言した能力だけを承認・取消する。
@@ -1015,6 +1046,15 @@ mod tests {
         broker
             .set_approval("dev.example.pty", true, &digest)
             .unwrap();
+        assert!(
+            broker
+                .call(
+                    "dev.example.pty",
+                    "process.info.v1.get",
+                    serde_json::Value::Null
+                )
+                .is_err()
+        );
         let id = broker
             .call("dev.example.pty", "pty.v1.spawn", spawn)
             .unwrap();
@@ -1198,6 +1238,7 @@ mod tests {
         for id in [
             extension_runtime::LIFECYCLE_CONTRACT,
             extension_runtime::DISPATCH_CONTRACT,
+            extension_runtime::PROCESS_INFO_CONTRACT,
             "lapis.process.pty",
         ] {
             contracts.add_version(
@@ -1246,9 +1287,22 @@ mod tests {
                 .is_err()
         );
         assert_eq!(broker.session_count("lapis.terminal"), 0);
+        assert!(
+            supervisor
+                .dispatch("lapis.terminal", "terminal.v1.info", "{}")
+                .is_err()
+        );
         broker
             .set_approval("lapis.terminal", true, &digest)
             .unwrap();
+        let information: serde_json::Value = serde_json::from_str(
+            &supervisor
+                .dispatch("lapis.terminal", "terminal.v1.info", "{}")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(information["pty"], "conpty");
+        assert_eq!(information["default_shell"]["program"], "powershell.exe");
         let opened: serde_json::Value = serde_json::from_str(
             &supervisor
                 .dispatch("lapis.terminal", "terminal.v1.start", &start)
