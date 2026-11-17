@@ -1,7 +1,7 @@
 //! 拡張ホストの子プロセスを監督する。Host の起動時に確定した bytes を再起動時も使用する。
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -16,13 +16,73 @@ use std::{
 
 use crate::{
     DISPATCH_VERSION, HostCall, HostReply, InvocationContext, LIFECYCLE_VERSION,
-    MAX_DISPATCH_BYTES, Request, Response,
+    MAX_DISPATCH_BYTES, RELEASE_CLAIMS_OPERATION, Request, Response, SESSION_DETACHED_OPERATION,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
 const RESPONSE_LIMIT: u64 = 512 * 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL: Duration = Duration::from_millis(100);
+const MAX_PENDING_DISCONNECTS: usize = 1024;
+
+#[derive(Default)]
+struct Disconnects {
+    pending: VecDeque<InvocationContext>,
+    release_all: bool,
+}
+
+impl Disconnects {
+    fn push(&mut self, context: InvocationContext) {
+        if self.pending.len() >= MAX_PENDING_DISCONNECTS {
+            self.pending.clear();
+            self.release_all = true;
+        } else if !self.release_all {
+            self.pending.push_back(context);
+        }
+    }
+
+    fn pop(&mut self) -> Option<(&'static str, InvocationContext)> {
+        if std::mem::take(&mut self.release_all) {
+            Some((
+                RELEASE_CLAIMS_OPERATION,
+                InvocationContext {
+                    session: "host-internal".into(),
+                    workspace: "host".into(),
+                },
+            ))
+        } else {
+            self.pending
+                .pop_front()
+                .map(|context| (SESSION_DETACHED_OPERATION, context))
+        }
+    }
+}
+
+#[cfg(test)]
+mod disconnect_tests {
+    use super::*;
+
+    #[test]
+    fn overflow_coalesces_and_bounds_disconnects() {
+        let context = InvocationContext {
+            session: "session".into(),
+            workspace: "workspace".into(),
+        };
+        let mut events = Disconnects::default();
+        events.push(context.clone());
+        let (operation, delivered) = events.pop().unwrap();
+        assert_eq!(operation, SESSION_DETACHED_OPERATION);
+        assert_eq!(delivered.session, context.session);
+        for _ in 0..MAX_PENDING_DISCONNECTS + 10 {
+            events.push(context.clone());
+        }
+        assert!(events.pending.is_empty());
+        assert_eq!(events.pop().unwrap().0, RELEASE_CLAIMS_OPERATION);
+        assert!(events.pop().is_none());
+        events.push(context);
+        assert_eq!(events.pop().unwrap().0, SESSION_DETACHED_OPERATION);
+    }
+}
 
 struct Dispatch {
     id: String,
@@ -72,6 +132,7 @@ pub struct ExtensionSupervisor {
     cancelled: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
     status: Arc<Mutex<SupervisorStatus>>,
+    disconnects: Arc<Mutex<Disconnects>>,
 }
 
 /// 実行ファイルの存在だけで能力を宣言せず、別プロセスと版を照合する。
@@ -98,6 +159,8 @@ impl ExtensionSupervisor {
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
         let status = Arc::new(Mutex::new(SupervisorStatus::Starting));
+        let disconnects = Arc::new(Mutex::new(Disconnects::default()));
+        let pending_disconnects = Arc::clone(&disconnects);
         let state = Arc::clone(&status);
         let thread = thread::spawn(move || {
             supervise(
@@ -105,7 +168,7 @@ impl ExtensionSupervisor {
                 &components,
                 receiver,
                 call_receiver,
-                &worker_cancelled,
+                (&worker_cancelled, &pending_disconnects),
                 &state,
                 handler.as_deref(),
             )
@@ -116,6 +179,17 @@ impl ExtensionSupervisor {
             cancelled,
             thread: Some(thread),
             status,
+            disconnects,
+        }
+    }
+
+    /// 切断通知は I/O を行わず監督スレッドへ渡す。過負荷時は所有権のみ解放する。
+    pub fn session_disconnected(&self, context: InvocationContext) {
+        if !context.valid() {
+            return;
+        }
+        if let Ok(mut events) = self.disconnects.lock() {
+            events.push(context);
         }
     }
 
@@ -206,10 +280,11 @@ fn supervise(
     components: &[ComponentImage],
     stop: mpsc::Receiver<()>,
     calls: mpsc::Receiver<Dispatch>,
-    cancelled: &AtomicBool,
+    control: (&AtomicBool, &Mutex<Disconnects>),
     status: &Mutex<SupervisorStatus>,
     handler: Option<&dyn HostCallHandler>,
 ) {
+    let (cancelled, disconnects) = control;
     let mut retries = 0;
     loop {
         if cancelled.load(Ordering::Acquire) || stop.try_recv().is_ok() {
@@ -267,6 +342,30 @@ fn supervise(
                         return Ok(());
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
+                }
+                let notification = disconnects.lock().ok().and_then(|mut events| events.pop());
+                if let Some((operation, context)) = notification {
+                    let targets: Vec<_> = components
+                        .iter()
+                        .filter(|component| {
+                            component.require_dispatch && worker.active.contains(&component.id)
+                        })
+                        .map(|component| component.id.clone())
+                        .collect();
+                    for id in targets {
+                        let _ = worker.request(
+                            Request::Dispatch {
+                                id: id.clone(),
+                                operation: operation.into(),
+                                payload: "{}".into(),
+                                context: context.clone(),
+                            },
+                            REQUEST_TIMEOUT,
+                            Some(cancelled),
+                            handler,
+                            Some(&id),
+                        )?;
+                    }
                 }
                 if let Ok(call) = calls.try_recv() {
                     if call.abandoned.load(Ordering::Acquire) {

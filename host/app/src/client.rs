@@ -46,6 +46,20 @@ pub(crate) enum Client {
 pub struct ExtensionConnection {
     client: Client,
     embedded: Option<BackendHost>,
+    _embedded_guard: Option<Arc<EmbeddedExtensionGuard>>,
+}
+
+struct EmbeddedExtensionGuard {
+    host: BackendHost,
+    session: SessionId,
+    workspace: WorkspaceId,
+}
+
+impl Drop for EmbeddedExtensionGuard {
+    fn drop(&mut self) {
+        self.host
+            .extension_session_disconnected(&self.session, &self.workspace);
+    }
 }
 
 impl ExtensionConnection {
@@ -424,7 +438,18 @@ impl BackendClient {
             Source::Embedded(host) => Some(host.clone()),
             _ => None,
         };
-        Ok(ExtensionConnection { client, embedded })
+        let embedded_guard = embedded.as_ref().map(|host| {
+            Arc::new(EmbeddedExtensionGuard {
+                host: host.clone(),
+                session: client.session_id().expect("embedded client has a session"),
+                workspace: client.workspace_id().clone(),
+            })
+        });
+        Ok(ExtensionConnection {
+            client,
+            embedded,
+            _embedded_guard: embedded_guard,
+        })
     }
 
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。

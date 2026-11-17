@@ -1363,6 +1363,34 @@ mod tests {
                 answered_cursor_query = true;
             }
         }
+        supervisor.session_disconnected(extension_runtime::InvocationContext {
+            session: "host-internal".into(),
+            workspace: "host".into(),
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let listed: serde_json::Value = serde_json::from_str(
+                &supervisor
+                    .dispatch_host_internal("lapis.terminal", "terminal.v1.list", "{}")
+                    .unwrap(),
+            )
+            .unwrap();
+            if listed["sessions"][0]["owner"].is_null() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "disconnect notification not delivered"
+            );
+        }
+        assert_eq!(broker.session_count("lapis.terminal"), 1);
+        supervisor
+            .dispatch_host_internal(
+                "lapis.terminal",
+                "terminal.v1.claim",
+                &serde_json::json!({"id": id}).to_string(),
+            )
+            .unwrap();
         supervisor
             .dispatch_host_internal(
                 "lapis.terminal",

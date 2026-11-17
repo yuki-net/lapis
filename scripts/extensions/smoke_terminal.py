@@ -100,6 +100,19 @@ def main() -> None:
         assert json.loads(dispatch("detach", {"id":"pty-1"}, session="session-2")["result"])["owner"] == "session-1"
         assert json.loads(dispatch("detach", {"id":"pty-1"})["result"])["owner"] is None
         assert json.loads(dispatch("claim", {"id":"pty-1"})["result"])["owner"] == "session-1"
+        notice = {"command": "dispatch", "id": "lapis.terminal", "payload": "{}",
+                  "operation": "lapis.system.session-detached",
+                  "context": {"session": "session-2", "workspace": "workspace-1"}}
+        assert request(notice)["ok"]
+        assert json.loads(dispatch("list", {})["result"])["sessions"][0]["owner"] == "session-1"
+        notice["context"]["session"] = "session-1"
+        assert request(notice)["ok"]
+        assert json.loads(dispatch("list", {})["result"])["sessions"][0]["owner"] is None
+        assert json.loads(dispatch("claim", {"id":"pty-1"})["result"])["owner"] == "session-1"
+        notice["operation"] = "lapis.system.release-claims"
+        assert request(notice)["ok"]
+        assert json.loads(dispatch("list", {})["result"])["sessions"][0]["owner"] is None
+        assert json.loads(dispatch("claim", {"id":"pty-1"})["result"])["owner"] == "session-1"
         assert dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
         assert dispatch("resize", {"id": "pty-1", "columns": 100, "rows": 30})["ok"]
         assert json.loads(dispatch("list", {})["result"])["sessions"][0]["columns"] == 100

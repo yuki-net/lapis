@@ -109,6 +109,19 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
     reap_closed();
     expire_owners();
     match operation {
+        "lapis.system.session-detached" | "lapis.system.release-claims" => {
+            let _: serde_json::Value = decode(payload)?;
+            SESSIONS.with(|sessions| {
+                for session in sessions.borrow_mut().values_mut() {
+                    if operation == "lapis.system.release-claims"
+                        || session.owner.as_deref() == Some(caller)
+                    {
+                        session.owner = None;
+                    }
+                }
+            });
+            Ok(Value::Null)
+        }
         v1::INFO => {
             let _: v1::InfoRequest = decode(payload)?;
             let info = process_info::get()?;

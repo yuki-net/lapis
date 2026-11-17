@@ -1114,6 +1114,18 @@ async fn extension_operations_reuse_the_authenticated_connection() {
         assert!(connection.dispatch(request.clone()).is_err());
         assert_eq!(connection.session_id(), Some(initial.clone()));
         assert!(connection.dispatch(request).is_err());
+        let reserved = HostExtensionDispatchRequest {
+            id: "dev.example.missing".into(),
+            operation: "lapis.system.release-claims".into(),
+            payload: "{}".into(),
+        };
+        assert!(
+            connection
+                .dispatch(reserved)
+                .unwrap_err()
+                .to_string()
+                .contains("reserved extension operation")
+        );
         assert_eq!(connection.session_id(), Some(initial));
     })
     .await

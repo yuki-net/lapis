@@ -341,6 +341,8 @@ impl RemoteRequestHandler for HostRemoteHandler {
         self.inner.subscribe(grant)
     }
     fn disconnect(&self, grant: &SessionGrant) {
+        self.host
+            .extension_session_disconnected(grant.session_id(), grant.workspace_id());
         self.inner.disconnect(grant);
     }
 }

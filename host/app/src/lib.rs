@@ -325,6 +325,12 @@ impl BackendHost {
         session: &client_api::SessionId,
         workspace: &client_api::WorkspaceId,
     ) -> Result<client_api::HostExtensionDispatchResponse, String> {
+        if request
+            .operation
+            .starts_with(extension_runtime::SYSTEM_OPERATION_PREFIX)
+        {
+            return Err("reserved extension operation".into());
+        }
         if !self.inner.extensions.declares_dispatch(&request.id)? {
             return Err("拡張が dispatch 契約を宣言していません".into());
         }
@@ -348,6 +354,19 @@ impl BackendHost {
             operation: request.operation.clone(),
             result,
         })
+    }
+
+    fn extension_session_disconnected(
+        &self,
+        session: &client_api::SessionId,
+        workspace: &client_api::WorkspaceId,
+    ) {
+        if let Some(host) = &self.inner.extension_host {
+            host.session_disconnected(extension_runtime::InvocationContext {
+                session: session.as_str().to_owned(),
+                workspace: workspace.as_str().to_owned(),
+            });
+        }
     }
 
     /// 署名不正や旧形式など、起動時に検証できなかった拡張。

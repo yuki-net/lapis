@@ -71,6 +71,10 @@ pub const PROCESS_INFO_VERSION: &str = "1.0.0";
 pub const DISPATCH_CONTRACT: &str = "lapis.extension.dispatch";
 pub const DISPATCH_VERSION: &str = "1.0.0";
 pub const MAX_DISPATCH_BYTES: usize = 64 * 1024;
+/// Host のみが送信するライフサイクル通知の名前空間。
+pub const SYSTEM_OPERATION_PREFIX: &str = "lapis.system.";
+pub const SESSION_DETACHED_OPERATION: &str = "lapis.system.session-detached";
+pub const RELEASE_CLAIMS_OPERATION: &str = "lapis.system.release-claims";
 
 /// Host が認証済み接続から生成する。Client の payload からは受け取らない。
 #[derive(Clone, Debug, Deserialize, Serialize)]
