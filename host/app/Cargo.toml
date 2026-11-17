@@ -26,6 +26,7 @@ semver = "1"
 client-api = { path = "../../contracts/protocol" }
 platform = { path = "../adapters/local" }
 local-process = { path = "../adapters/process" }
+local-terminal = { path = "../../extensions/terminal/adapter" }
 terminal = { package = "terminal-contract", path = "../../extensions/terminal/contract" }
 remote = { path = "../transport/remote" }
 wire = { path = "../../contracts/transport/wire" }

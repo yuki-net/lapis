@@ -4374,6 +4374,7 @@ dependencies = [
  "git-contract",
  "libc",
  "local-process",
+ "local-terminal",
  "platform",
  "process",
  "rcgen",
@@ -6797,7 +6798,6 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 name = "platform"
 version = "0.1.0"
 dependencies = [
- "backend-state",
  "document",
  "editor-core",
  "git-contract",
@@ -6806,14 +6806,12 @@ dependencies = [
  "local-lsp",
  "local-search",
  "local-tasks",
- "local-terminal",
  "local-workbench",
  "local-workspace",
  "local-workspace-store",
  "lsp",
  "task-runner",
  "tempfile",
- "terminal-contract",
  "workbench",
  "workspace",
 ]
@@ -11852,7 +11850,6 @@ dependencies = [
  "editor-core",
  "serde",
  "serde_json",
- "terminal-contract",
  "workspace",
 ]
 

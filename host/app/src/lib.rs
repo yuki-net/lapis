@@ -63,7 +63,8 @@ use backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };
 use client_api::{SessionId, WorkspaceId};
-use platform::{LocalGitBackend, LocalTaskBackend, LocalTerminalBackend, LocalWorkspaceRepository};
+use local_terminal::LocalTerminalBackend;
+use platform::{LocalGitBackend, LocalTaskBackend, LocalWorkspaceRepository};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -117,11 +118,11 @@ impl HostInner {
 /// Host の Terminal profile 設定を読む。無い場合は OS 既定を使う。
 fn load_terminal_profiles(directory: Option<&Path>) -> TerminalProfiles {
     let Some(directory) = directory else {
-        return platform::default_terminal_profiles();
+        return local_terminal::default_profiles();
     };
     let path = directory.join("terminal-profiles.json");
     let Ok(bytes) = std::fs::read(&path) else {
-        return platform::default_terminal_profiles();
+        return local_terminal::default_profiles();
     };
     match serde_json::from_slice::<TerminalProfiles>(&bytes) {
         Ok(profiles) if !profiles.profiles.is_empty() => profiles,

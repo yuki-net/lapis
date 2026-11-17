@@ -34,7 +34,7 @@ workspace 設定なしでビルドできることを検証する。
 Host は build 時にこの拡張をリンクして注入します。
 
 - `host/runtime`（`backend-state`）は `terminal-state` を path 依存で参照します。
-- `host/adapters/local`（`platform`）は `local-terminal` を参照し、`LocalTerminalBackend` と既定 profile を再エクスポートします。`host/app` はこれを組み立てます。
+- `host/app` は移行途中の旧経路で `local-terminal` を直接参照し、`LocalTerminalBackend` と既定 profile を組み立てます。汎用の `host/adapters/local` は Terminal を参照しません。
 - `host/adapters/terminal` と `host/terminal` は削除済みです。旧位置に re-export を残すと「どちらが正本か」が読めなくなるためです。
 
 workspace は `Cargo.toml` の `extensions/*/*` glob で `contract` / `host` / `adapter` / `renderer` を拾います。

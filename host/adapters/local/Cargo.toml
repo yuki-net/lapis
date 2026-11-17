@@ -6,7 +6,6 @@ description.workspace = true
 license.workspace = true
 
 [dependencies]
-backend-state = { path = "../../runtime" }
 document = { path = "../../../contracts/domain/document" }
 editor-core = { path = "../../../contracts/domain/editor-core" }
 git = { package = "git-contract", path = "../../../extensions/git/contract" }
@@ -15,12 +14,10 @@ local-git = { path = "../../extensions/git" }
 local-lsp = { path = "../lsp" }
 local-tasks = { path = "../tasks" }
 local-search = { path = "../search" }
-local-terminal = { path = "../../../extensions/terminal/adapter" }
 local-workbench = { path = "../workbench" }
 local-workspace = { path = "../workspace" }
 local-workspace-store = { path = "../workspace-store" }
 lsp = { path = "../../../contracts/domain/lsp" }
-terminal = { package = "terminal-contract", path = "../../../extensions/terminal/contract" }
 task-runner = { path = "../agent" }
 workspace = { path = "../../../contracts/domain/workspace" }
 workbench = { path = "../../../contracts/domain/workbench" }
