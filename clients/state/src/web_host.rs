@@ -43,7 +43,10 @@ use workspace::{
     WorkspaceSearchBackend,
 };
 
+mod extension_terminal;
 mod transport;
+
+pub use extension_terminal::{ExtensionTerminal, ExtensionTerminalUpdate};
 
 pub use crate::web_replica::ROOT;
 
