@@ -33,6 +33,8 @@ pub mod v1 {
     pub struct ShellCommand {
         pub program: String,
         pub arguments: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        pub environment: BTreeMap<String, String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +91,8 @@ pub mod v1 {
         pub id: String,
         pub columns: u16,
         pub rows: u16,
+        #[serde(default)]
+        pub working_directory: String,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

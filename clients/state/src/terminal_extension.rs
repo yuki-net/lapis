@@ -5,6 +5,11 @@ use serde::{Serialize, de::DeserializeOwned};
 
 pub use terminal_session_api::v1;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod native_session;
+#[cfg(not(target_arch = "wasm32"))]
+pub use native_session::{NativeSession, NativeTransport};
+
 pub const EXTENSION_ID: &str = "lapis.terminal";
 
 /// 各 Terminal の生出力を一度だけ、順番に画面へ適用するための位置。

@@ -16,6 +16,7 @@ struct Session {
     attached: bool,
     columns: u16,
     rows: u16,
+    working_directory: String,
 }
 
 // attached が false のものは停止・detach 済みで Host の後片付け待ち。
@@ -25,6 +26,28 @@ thread_local! {
 
 fn decode<T: serde::de::DeserializeOwned>(payload: &str) -> Result<T, String> {
     serde_json::from_str(payload).map_err(|_| "invalid terminal request".to_owned())
+}
+
+fn check_directory_budget(directory: &str) -> Result<(), String> {
+    let encoded = serde_json::to_string(directory)
+        .map_err(|error| error.to_string())?
+        .len();
+    let existing = SESSIONS.with(|sessions| {
+        sessions.borrow().values().try_fold(0usize, |sum, session| {
+            serde_json::to_string(&session.working_directory)
+                .ok()
+                .and_then(|value| sum.checked_add(value.len()))
+        })
+    });
+    if directory.is_empty()
+        || encoded > 8 * 1024
+        || existing
+            .and_then(|value| value.checked_add(encoded))
+            .is_none_or(|value| value > 32 * 1024)
+    {
+        return Err("terminal working directory limit exceeded".into());
+    }
+    Ok(())
 }
 
 fn encode<T: serde::Serialize>(value: T) -> Result<Value, String> {
@@ -61,6 +84,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                 default_shell: v1::ShellCommand {
                     program: info.default_shell.program,
                     arguments: info.default_shell.arguments,
+                    environment: Default::default(),
                 },
             })
         }
@@ -75,6 +99,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                         id: id.clone(),
                         columns: session.columns,
                         rows: session.rows,
+                        working_directory: session.working_directory.clone(),
                     })
                     .collect::<Vec<_>>()
             });
@@ -82,6 +107,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
         }
         v1::START => {
             let input: StartRequest = decode(payload)?;
+            check_directory_budget(&input.working_directory)?;
             if input.columns == 0 || input.rows == 0 {
                 return Err("invalid terminal size".into());
             }
@@ -93,7 +119,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                     .into_iter()
                     .map(|(name, value)| EnvironmentEntry { name, value })
                     .collect(),
-                working_directory: input.working_directory,
+                working_directory: input.working_directory.clone(),
                 initial_size: Size {
                     columns: input.columns,
                     rows: input.rows,
@@ -108,6 +134,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                         attached: true,
                         columns: input.columns,
                         rows: input.rows,
+                        working_directory: input.working_directory,
                     },
                 )
             });

@@ -80,11 +80,13 @@ def main() -> None:
             "pty": "conpty", "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}
         }, info
         assert json.loads(dispatch("list", {})["result"]) == {"sessions": []}
+        assert not dispatch("start", {"program": "shell", "working_directory": "x" * 9000,
+                                      "columns": 80, "rows": 24})["ok"]
         result = dispatch("start", {"program": "shell", "working_directory": ".",
                                     "columns": 80, "rows": 24})
         assert result["ok"] and json.loads(result["result"]) == {"id": "pty-1"}, result
         assert json.loads(dispatch("list", {})["result"]) == {
-            "sessions": [{"id": "pty-1", "columns": 80, "rows": 24}]
+            "sessions": [{"id": "pty-1", "columns": 80, "rows": 24, "working_directory": "."}]
         }
         assert dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
         assert dispatch("resize", {"id": "pty-1", "columns": 100, "rows": 30})["ok"]
