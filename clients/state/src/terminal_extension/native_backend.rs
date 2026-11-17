@@ -10,8 +10,8 @@ use std::{
     time::Duration,
 };
 use terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSize,
-    TerminalSnapshot, TerminalStatus,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalProfile,
+    TerminalProfileId, TerminalProfiles, TerminalSize, TerminalSnapshot, TerminalStatus,
 };
 
 use super::{NativeSession, NativeTransport};
@@ -134,6 +134,28 @@ impl NativeBackend {
             .ok_or_else(|| TerminalError::new("Terminal session not attached"))?;
         f(entry).map_err(TerminalError::new)
     }
+
+    fn remember_session(&self, session: NativeSession) -> Result<TerminalId, TerminalError> {
+        let id = TerminalId::new(session.id());
+        let mut sessions = self
+            .sessions
+            .lock()
+            .map_err(|_| TerminalError::new("Terminal state unavailable"))?;
+        if sessions.contains_key(id.as_str()) {
+            return Err(TerminalError::new("duplicate Terminal session ID"));
+        }
+        sessions.insert(
+            id.as_str().to_owned(),
+            Entry {
+                session,
+                revision: 0,
+                events: Vec::new(),
+                last_owner: None,
+            },
+        );
+        self.count.fetch_add(1, Ordering::Release);
+        Ok(id)
+    }
 }
 
 fn snapshot(id: &TerminalId, entry: &Entry, cwd: PathBuf) -> TerminalSnapshot {
@@ -156,25 +178,41 @@ impl TerminalBackend for NativeBackend {
             None,
         )
         .map_err(TerminalError::new)?;
-        let id = TerminalId::new(session.id());
-        let mut sessions = self
-            .sessions
-            .lock()
-            .map_err(|_| TerminalError::new("Terminal state unavailable"))?;
-        if sessions.contains_key(id.as_str()) {
-            return Err(TerminalError::new("duplicate Terminal session ID"));
-        }
-        sessions.insert(
-            id.as_str().to_owned(),
-            Entry {
-                session,
-                revision: 0,
-                events: Vec::new(),
-                last_owner: None,
-            },
-        );
-        self.count.fetch_add(1, Ordering::Release);
-        Ok(id)
+        self.remember_session(session)
+    }
+
+    fn start_profile(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        profile: Option<&TerminalProfileId>,
+    ) -> Result<TerminalId, TerminalError> {
+        let cwd = self.relative_cwd(cwd)?;
+        let session = NativeSession::start_profile(
+            self.transport.clone(),
+            cwd,
+            TerminalSize::new(columns, rows),
+            profile.map(|id| id.as_str().to_owned()),
+        )
+        .map_err(TerminalError::new)?;
+        self.remember_session(session)
+    }
+
+    fn profiles(&self, _cwd: &Path) -> Result<TerminalProfiles, TerminalError> {
+        let result = NativeSession::profiles(&self.transport).map_err(TerminalError::new)?;
+        Ok(TerminalProfiles::new(
+            result
+                .profiles
+                .into_iter()
+                .map(|profile| {
+                    TerminalProfile::new(profile.id, profile.name, profile.command.program)
+                        .with_args(profile.command.arguments)
+                        .with_env(profile.command.environment)
+                })
+                .collect(),
+            result.default.map(TerminalProfileId::new),
+        ))
     }
 
     fn list(&self, _cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
@@ -316,6 +354,51 @@ mod tests {
         let backend =
             NativeBackend::for_workspace(transport, directory.path().canonicalize().unwrap());
         assert_eq!(backend.relative_cwd(directory.path()).unwrap(), ".");
+    }
+
+    #[test]
+    fn profile_listing_and_start_use_extension_operations() {
+        let operations = Arc::new(Mutex::new(Vec::new()));
+        let observed = operations.clone();
+        let transport: NativeTransport = Arc::new(move |request| {
+            observed
+                .lock()
+                .unwrap()
+                .push((request.operation.clone(), request.payload.clone()));
+            let result = match request.operation.as_str() {
+                v1::PROFILES => {
+                    serde_json::json!({"profiles":[{"id":"cmd", "name":"Command Prompt", "command":{"program":"cmd.exe", "arguments":["/D"]}}], "default":"cmd"})
+                }
+                v1::INFO => {
+                    serde_json::json!({"pty":"conpty", "default_shell":{"program":"powershell.exe", "arguments":[]}})
+                }
+                v1::START_PROFILE => serde_json::json!({"id":"one", "owner":"session"}),
+                _ => panic!("unexpected operation {}", request.operation),
+            };
+            Ok(HostExtensionDispatchResponse {
+                id: request.id,
+                operation: request.operation,
+                result: result.to_string(),
+            })
+        });
+        let backend = NativeBackend::new(transport);
+        let profiles = backend.profiles(Path::new("workspace")).unwrap();
+        assert_eq!(profiles.default.unwrap().as_str(), "cmd");
+        assert_eq!(profiles.profiles[0].program, "cmd.exe");
+        let id = backend
+            .start_profile(
+                Path::new("workspace"),
+                80,
+                24,
+                Some(&TerminalProfileId::new("cmd")),
+            )
+            .unwrap();
+        assert_eq!(id.as_str(), "one");
+        let operations = operations.lock().unwrap();
+        let request: v1::StartProfileRequest = serde_json::from_str(&operations[2].1).unwrap();
+        assert_eq!(operations[2].0, v1::START_PROFILE);
+        assert_eq!(request.profile.as_deref(), Some("cmd"));
+        assert_eq!(request.working_directory, "workspace");
     }
 
     #[test]

@@ -14,7 +14,8 @@ use client_api::WorkspaceId;
 use desktop_client::terminal_extension::{NativeBackend, NativeTransport};
 use host::BackendClient;
 use terminal::{
-    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalSnapshot,
+    TerminalBackend, TerminalError, TerminalEvent, TerminalId, TerminalInput, TerminalProfileId,
+    TerminalProfiles, TerminalSnapshot,
 };
 
 pub(crate) struct ExtensionTerminals {
@@ -111,6 +112,23 @@ impl TerminalBackend for ExtensionTerminals {
         let id = backend.start(cwd, columns, rows)?;
         self.remember(&id, &backend)?;
         Ok(id)
+    }
+
+    fn start_profile(
+        &self,
+        cwd: &Path,
+        columns: u16,
+        rows: u16,
+        profile: Option<&TerminalProfileId>,
+    ) -> Result<TerminalId, TerminalError> {
+        let backend = self.workspace(cwd)?;
+        let id = backend.start_profile(cwd, columns, rows, profile)?;
+        self.remember(&id, &backend)?;
+        Ok(id)
+    }
+
+    fn profiles(&self, cwd: &Path) -> Result<TerminalProfiles, TerminalError> {
+        self.workspace(cwd)?.profiles(cwd)
     }
 
     fn list(&self, cwd: &Path) -> Result<Vec<TerminalSnapshot>, TerminalError> {
@@ -298,6 +316,27 @@ mod tests {
                 }
             }
         };
+        let profiles = terminals.profiles(workspace.path()).unwrap();
+        assert_eq!(
+            profiles.default.as_ref().map(|id| id.as_str()),
+            Some("powershell")
+        );
+        assert!(
+            profiles
+                .profiles
+                .iter()
+                .any(|profile| profile.id.as_str() == "cmd")
+        );
+        assert!(
+            terminals
+                .start_profile(
+                    workspace.path(),
+                    80,
+                    24,
+                    Some(terminal::TerminalProfileId::new("unknown"))
+                )
+                .is_err()
+        );
         terminals
             .input(&id, "[console]::WriteLine('lapis'+'proof')\r")
             .unwrap();
@@ -307,6 +346,27 @@ mod tests {
             .contains("lapisproof")
         {
             assert!(Instant::now() < deadline, "terminal output missing");
+            terminals.refresh().unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        terminals.input(&id, "[Console]::OutputEncoding=[Text.Encoding]::UTF8;[Console]::WriteLine(('{0}[31m{1}{0}[0m' -f [char]27,(([string][char]0x65e5)+[char]0x672c)))\r").unwrap();
+        let color_deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let screen = &terminals.terminals()[0].screen;
+            let colored_japanese = screen.rows.iter().any(|row| {
+                row.cells.windows(2).any(|cells| {
+                    cells[0].text == "日"
+                        && cells[0].foreground == terminal::TerminalColor::Indexed(1)
+                })
+            });
+            if colored_japanese {
+                break;
+            }
+            assert!(
+                Instant::now() < color_deadline,
+                "colored Japanese output missing: {:?}",
+                screen.plain_text()
+            );
             terminals.refresh().unwrap();
             std::thread::sleep(Duration::from_millis(50));
         }
@@ -342,6 +402,26 @@ mod tests {
         assert_eq!(terminals.terminals()[0].screen.size.columns, 100);
         terminals.terminate_and_forget(&id).unwrap();
         assert!(terminals.terminals().is_empty());
+        let cmd = terminals
+            .start_profile(
+                workspace.path(),
+                80,
+                24,
+                Some(terminal::TerminalProfileId::new("cmd")),
+            )
+            .unwrap();
+        terminals.input(&cmd, "echo lapis-cmd-proof\r").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !terminals.terminals()[0]
+            .screen
+            .plain_text()
+            .contains("lapis-cmd-proof")
+        {
+            assert!(Instant::now() < deadline, "cmd profile output missing");
+            terminals.refresh().unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        terminals.terminate_and_forget(&cmd).unwrap();
 
         use desktop_client::terminal_extension::{request, response, v1};
         let connection = BackendClient::from(host.clone())

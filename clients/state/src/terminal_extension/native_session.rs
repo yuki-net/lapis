@@ -2,7 +2,8 @@
 
 use std::{
     io::{self, Write},
-    sync::Arc,
+    sync::{Arc, Mutex, mpsc},
+    time::{Duration, Instant},
 };
 
 use client_api::{HostExtensionDispatchRequest, HostExtensionDispatchResponse};
@@ -28,8 +29,48 @@ fn call<T: Serialize, R: DeserializeOwned>(
 }
 
 struct InputWriter {
-    id: String,
-    transport: NativeTransport,
+    sender: mpsc::SyncSender<Vec<u8>>,
+    failure: Arc<Mutex<Option<String>>>,
+}
+
+impl InputWriter {
+    fn new(id: String, transport: NativeTransport) -> Self {
+        let (sender, receiver) = mpsc::sync_channel::<Vec<u8>>(128);
+        let failure = Arc::new(Mutex::new(None));
+        let failure_state = failure.clone();
+        std::thread::spawn(move || {
+            let mut pending = None;
+            while let Some(mut bytes) = pending.take().or_else(|| receiver.recv().ok()) {
+                let deadline = Instant::now() + Duration::from_millis(2);
+                while bytes.len() < v1::MAX_READ_BYTES as usize {
+                    let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                        break;
+                    };
+                    match receiver.recv_timeout(remaining) {
+                        Ok(next) if bytes.len() + next.len() <= v1::MAX_READ_BYTES as usize => {
+                            bytes.extend(next)
+                        }
+                        Ok(next) => {
+                            pending = Some(next);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let request = v1::WriteRequest {
+                    id: id.clone(),
+                    bytes,
+                };
+                if let Err(error) = call::<_, ()>(&transport, v1::WRITE, &request) {
+                    if let Ok(mut failure) = failure_state.lock() {
+                        *failure = Some(error);
+                    }
+                    break;
+                }
+            }
+        });
+        Self { sender, failure }
+    }
 }
 
 impl Write for InputWriter {
@@ -39,11 +80,17 @@ impl Write for InputWriter {
         if count == 0 {
             return Ok(0);
         }
-        let request = v1::WriteRequest {
-            id: self.id.clone(),
-            bytes: bytes[..count].to_vec(),
-        };
-        call::<_, ()>(&self.transport, v1::WRITE, &request).map_err(io::Error::other)?;
+        if let Some(error) = self
+            .failure
+            .lock()
+            .map_err(|_| io::Error::other("Terminal input state unavailable"))?
+            .as_ref()
+        {
+            return Err(io::Error::other(error.clone()));
+        }
+        self.sender
+            .send(bytes[..count].to_vec())
+            .map_err(io::Error::other)?;
         Ok(count)
     }
 
@@ -58,6 +105,7 @@ pub struct NativeSession {
     working_directory: String,
     transport: NativeTransport,
     renderer: NativeRenderer,
+    write_failure: Arc<Mutex<Option<String>>>,
     closed: bool,
     owner: Option<String>,
 }
@@ -86,23 +134,76 @@ impl NativeSession {
                 rows: size.rows,
             },
         )?;
+        Self::from_started(transport, cwd, size, information.pty, started)
+    }
+
+    /// 拡張が管理する profile を ID で選ぶ。実行する command は拡張側で決める。
+    pub fn start_profile(
+        transport: NativeTransport,
+        cwd: String,
+        size: TerminalSize,
+        profile: Option<String>,
+    ) -> Result<Self, String> {
+        let size = checked_size(size)?;
+        let information: v1::InfoResponse = call(&transport, v1::INFO, &v1::InfoRequest {})?;
+        let started = call(
+            &transport,
+            v1::START_PROFILE,
+            &v1::StartProfileRequest {
+                requested_id: None,
+                profile,
+                working_directory: cwd.clone(),
+                columns: size.columns,
+                rows: size.rows,
+            },
+        )?;
+        Self::from_started(transport, cwd, size, information.pty, started)
+    }
+
+    fn from_started(
+        transport: NativeTransport,
+        cwd: String,
+        size: TerminalSize,
+        pty: v1::PtyFlavor,
+        started: v1::StartResponse,
+    ) -> Result<Self, String> {
         if started.id.is_empty() || started.id.len() > 256 {
             return Err("Terminal 拡張の session ID が不正です".into());
         }
-        let writer = InputWriter {
-            id: started.id.clone(),
-            transport: transport.clone(),
-        };
-        let renderer =
-            NativeRenderer::new(started.id.clone(), size, Box::new(writer), information.pty);
+        let writer = InputWriter::new(started.id.clone(), transport.clone());
+        let write_failure = writer.failure.clone();
+        let renderer = NativeRenderer::new(started.id.clone(), size, Box::new(writer), pty);
         Ok(Self {
             id: started.id,
             working_directory: cwd,
             transport,
             renderer,
+            write_failure,
             closed: false,
             owner: started.owner,
         })
+    }
+
+    pub fn profiles(transport: &NativeTransport) -> Result<v1::ProfilesResponse, String> {
+        let profiles: v1::ProfilesResponse =
+            call(transport, v1::PROFILES, &v1::ProfilesRequest {})?;
+        let mut ids = std::collections::BTreeSet::new();
+        if profiles.profiles.len() > 64
+            || profiles.profiles.iter().any(|profile| {
+                profile.id.is_empty()
+                    || profile.id.len() > 128
+                    || profile.name.is_empty()
+                    || profile.name.len() > 256
+                    || !ids.insert(&profile.id)
+            })
+            || profiles
+                .default
+                .as_ref()
+                .is_some_and(|id| !ids.contains(id))
+        {
+            return Err("Terminal profile 一覧が不正です".into());
+        }
+        Ok(profiles)
     }
 
     pub fn id(&self) -> &str {
@@ -150,10 +251,8 @@ impl NativeSession {
                 id: session.id.clone(),
             },
         )?;
-        let writer = InputWriter {
-            id: session.id.clone(),
-            transport: transport.clone(),
-        };
+        let writer = InputWriter::new(session.id.clone(), transport.clone());
+        let write_failure = writer.failure.clone();
         let renderer = NativeRenderer::new(
             session.id.clone(),
             TerminalSize::new(session.columns, session.rows),
@@ -165,6 +264,7 @@ impl NativeSession {
             working_directory: session.working_directory,
             transport,
             renderer,
+            write_failure,
             closed: false,
             owner: attached.owner,
         })
@@ -231,7 +331,14 @@ impl NativeSession {
     }
 
     pub fn take_write_failures(&self) -> Vec<String> {
-        self.renderer.take_write_failures().collect()
+        let mut failures = self.renderer.take_write_failures().collect::<Vec<_>>();
+        if let Ok(mut failure) = self.write_failure.lock()
+            && let Some(error) = failure.take()
+            && !failures.contains(&error)
+        {
+            failures.push(error);
+        }
+        failures
     }
 
     pub fn claim(&mut self) -> Result<Option<String>, String> {
@@ -304,6 +411,91 @@ fn checked_size(size: TerminalSize) -> Result<TerminalSize, String> {
 mod tests {
     use super::*;
     use std::sync::{Mutex, mpsc};
+
+    #[test]
+    fn text_and_keys_are_batched_without_losing_unicode_or_reordering() {
+        let writes = Arc::new(Mutex::new(Vec::<Vec<u8>>::new()));
+        let observed = writes.clone();
+        let transport: NativeTransport = Arc::new(move |request| {
+            let result = match request.operation.as_str() {
+                v1::INFO => {
+                    serde_json::json!({"pty":"posix","default_shell":{"program":"sh","arguments":[]}})
+                }
+                v1::START => serde_json::json!({"id":"pty-1"}),
+                v1::WRITE => {
+                    let input: v1::WriteRequest = serde_json::from_str(&request.payload).unwrap();
+                    observed.lock().unwrap().push(input.bytes);
+                    serde_json::Value::Null
+                }
+                _ => panic!("unexpected operation {}", request.operation),
+            };
+            Ok(HostExtensionDispatchResponse {
+                id: request.id,
+                operation: request.operation,
+                result: result.to_string(),
+            })
+        });
+        let mut session =
+            NativeSession::start(transport, ".".into(), TerminalSize::new(80, 24), None).unwrap();
+        let input = "日本語abc".repeat(200);
+        session.input(&TerminalInput::Text(input.clone())).unwrap();
+        session
+            .input(&TerminalInput::Key(terminal::TerminalKeyEvent {
+                key: terminal::TerminalKey::Enter,
+                modifiers: Default::default(),
+            }))
+            .unwrap();
+        session.input(&TerminalInput::Text("end".into())).unwrap();
+        let expected = format!("{input}\rend").into_bytes();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while writes.lock().unwrap().iter().map(Vec::len).sum::<usize>() < expected.len() {
+            assert!(
+                Instant::now() < deadline,
+                "terminal input was not delivered"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let chunks = writes.lock().unwrap();
+        assert!(chunks.len() < input.chars().count());
+        assert!(
+            chunks
+                .iter()
+                .all(|chunk| chunk.len() <= v1::MAX_READ_BYTES as usize)
+        );
+        assert_eq!(chunks.concat(), expected);
+    }
+
+    #[test]
+    fn background_write_failure_is_reported_without_another_keypress() {
+        let transport: NativeTransport = Arc::new(|request| {
+            let result = match request.operation.as_str() {
+                v1::INFO => {
+                    serde_json::json!({"pty":"posix","default_shell":{"program":"sh","arguments":[]}})
+                }
+                v1::START => serde_json::json!({"id":"pty-1"}),
+                v1::WRITE => return Err("write rejected".into()),
+                _ => panic!("unexpected operation {}", request.operation),
+            };
+            Ok(HostExtensionDispatchResponse {
+                id: request.id,
+                operation: request.operation,
+                result: result.to_string(),
+            })
+        });
+        let mut session =
+            NativeSession::start(transport, ".".into(), TerminalSize::new(80, 24), None).unwrap();
+        session.input(&TerminalInput::Text("abc".into())).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let errors = session.take_write_failures();
+            if !errors.is_empty() {
+                assert!(errors.iter().any(|error| error.contains("write rejected")));
+                break;
+            }
+            assert!(Instant::now() < deadline, "write failure was not reported");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
 
     #[test]
     fn session_uses_host_shell_preserves_position_and_closes_only_explicitly() {

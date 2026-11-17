@@ -117,6 +117,57 @@ fn reap_closed() {
     });
 }
 
+/// Profile は Terminal 拡張が所有し、Host は既定の実行環境だけを提供する。
+fn profiles() -> Result<v1::ProfilesResponse, String> {
+    let info = process_info::get()?;
+    let default_command = v1::ShellCommand {
+        program: info.default_shell.program,
+        arguments: info.default_shell.arguments,
+        environment: Default::default(),
+    };
+    let make = |id: &str, name: &str, program: &str, arguments: &[&str]| v1::Profile {
+        id: id.into(),
+        name: name.into(),
+        command: v1::ShellCommand {
+            program: program.into(),
+            arguments: arguments.iter().map(|value| (*value).into()).collect(),
+            environment: Default::default(),
+        },
+    };
+    let (default, mut profiles) = match info.pty {
+        process_info::PtyFlavor::Conpty => (
+            "powershell",
+            vec![make("cmd", "Command Prompt", "cmd.exe", &["/D"])],
+        ),
+        process_info::PtyFlavor::Posix => (
+            "login-shell",
+            vec![
+                make("bash", "bash", "bash", &[]),
+                make("zsh", "zsh", "zsh", &[]),
+                make("fish", "fish", "fish", &[]),
+                make("pwsh", "PowerShell", "pwsh", &[]),
+            ],
+        ),
+    };
+    profiles.insert(
+        0,
+        v1::Profile {
+            id: default.into(),
+            name: if default == "powershell" {
+                "PowerShell"
+            } else {
+                "Login Shell"
+            }
+            .into(),
+            command: default_command,
+        },
+    );
+    Ok(v1::ProfilesResponse {
+        profiles,
+        default: Some(default.into()),
+    })
+}
+
 fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<Value, String> {
     reap_closed();
     expire_owners();
@@ -149,6 +200,40 @@ fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<
                     environment: Default::default(),
                 },
             })
+        }
+        v1::PROFILES => {
+            let _: v1::ProfilesRequest = decode(payload)?;
+            encode(profiles()?)
+        }
+        v1::START_PROFILE => {
+            let input: v1::StartProfileRequest = decode(payload)?;
+            let profiles = profiles()?;
+            let selected = input
+                .profile
+                .as_ref()
+                .or(profiles.default.as_ref())
+                .ok_or("no default terminal profile")?;
+            let command = &profiles
+                .profiles
+                .iter()
+                .find(|profile| &profile.id == selected)
+                .ok_or("unknown terminal profile")?
+                .command;
+            let start = v1::StartRequest {
+                requested_id: input.requested_id,
+                program: command.program.clone(),
+                arguments: command.arguments.clone(),
+                environment: command.environment.clone(),
+                working_directory: input.working_directory,
+                columns: input.columns,
+                rows: input.rows,
+            };
+            run(
+                v1::START,
+                &serde_json::to_string(&start).map_err(|error| error.to_string())?,
+                caller,
+                workspace,
+            )
         }
         v1::LIST => {
             let _: ListRequest = decode(payload)?;

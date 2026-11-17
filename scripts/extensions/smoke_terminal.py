@@ -50,6 +50,8 @@ def main() -> None:
             lines.put(line)
     threading.Thread(target=reader, daemon=True).start()
     calls = []
+    spawns = []
+    process_info = {"pty": "conpty", "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}}
     def send(value):
         child.stdin.write(json.dumps(value) + "\n")
         child.stdin.flush()
@@ -70,9 +72,10 @@ def main() -> None:
             if method.startswith("pty.v1.") and method != "pty.v1.spawn":
                 assert response["payload"]["id"] == "pty-1", response
             if method == "pty.v1.spawn":
+                spawns.append(response["payload"])
                 result = "pty-1"
             elif method == "process.info.v1.get":
-                result = {"pty": "conpty", "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}}
+                result = process_info
             elif method == "pty.v1.read":
                 result = {"bytes": [65, 66], "next": 2, "lost_before": None,
                           "exited": None, "read_error": None, "write_error": None}
@@ -153,6 +156,25 @@ def main() -> None:
         assert dispatch("close", {"id": stable})["ok"]
         start["requested_id"] = "../unsafe"
         assert not dispatch("start", start)["ok"]
+        profiles = json.loads(dispatch("profiles", {})["result"])
+        assert profiles["default"] == "powershell"
+        assert [profile["id"] for profile in profiles["profiles"]] == ["powershell", "cmd"]
+        before = len(spawns)
+        profile_start = {"profile": "unknown", "working_directory": ".", "columns": 80, "rows": 24}
+        assert not dispatch("start-profile", profile_start)["ok"]
+        assert len(spawns) == before
+        profile_start["profile"] = "cmd"
+        assert json.loads(dispatch("start-profile", profile_start)["result"])["id"] == "pty-1"
+        assert spawns[-1]["program"] == "cmd.exe" and spawns[-1]["args"] == ["/D"]
+        assert dispatch("close", {"id": "pty-1"})["ok"]
+        process_info.update({"pty": "posix", "default_shell": {"program": "/bin/zsh", "arguments": []}})
+        profiles = json.loads(dispatch("profiles", {})["result"])
+        assert profiles["default"] == "login-shell"
+        assert [profile["id"] for profile in profiles["profiles"]] == ["login-shell", "bash", "zsh", "fish", "pwsh"]
+        profile_start["profile"] = None
+        assert json.loads(dispatch("start-profile", profile_start)["result"])["id"] == "pty-1"
+        assert spawns[-1]["program"] == "/bin/zsh"
+        assert dispatch("close", {"id": "pty-1"})["ok"]
         assert request({"command": "shutdown"})["ok"]
         assert child.wait(timeout=15) == 0
     finally:

@@ -6,6 +6,8 @@ pub mod v1 {
 
     pub const START: &str = "terminal.v1.start";
     pub const INFO: &str = "terminal.v1.info";
+    pub const PROFILES: &str = "terminal.v1.profiles";
+    pub const START_PROFILE: &str = "terminal.v1.start-profile";
     pub const LIST: &str = "terminal.v1.list";
     pub const WRITE: &str = "terminal.v1.write";
     pub const RESIZE: &str = "terminal.v1.resize";
@@ -26,6 +28,10 @@ pub mod v1 {
     #[serde(deny_unknown_fields)]
     pub struct InfoRequest {}
 
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct ProfilesRequest {}
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum PtyFlavor {
@@ -45,6 +51,30 @@ pub mod v1 {
     pub struct InfoResponse {
         pub pty: PtyFlavor,
         pub default_shell: ShellCommand,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Profile {
+        pub id: String,
+        pub name: String,
+        pub command: ShellCommand,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct ProfilesResponse {
+        pub profiles: Vec<Profile>,
+        pub default: Option<String>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct StartProfileRequest {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub requested_id: Option<String>,
+        pub profile: Option<String>,
+        pub working_directory: String,
+        pub columns: u16,
+        pub rows: u16,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
