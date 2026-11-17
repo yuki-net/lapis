@@ -455,6 +455,17 @@ impl Shell {
             .update(cx, |center, cx| center.set_locale(&locale, cx));
         cx.notify();
     }
+    /// 新規 View の生成だけを制御する。既存のタブは一時切断で終了しない。
+    pub(crate) fn set_view_available(
+        &mut self,
+        view: ViewId,
+        available: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.feature_registry.set_view_available(view, available);
+        self.synchronize_view_instances(cx);
+        cx.notify();
+    }
     pub(crate) fn set_locale_packs(
         &mut self,
         packs: &[localization::LocalePack],

@@ -35,6 +35,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_THEME_SOURCE: AtomicU64 = AtomicU64::new(1);
 
+/// 有効設定ではなく、現在実行中で有効な表示宣言があるかを使う。
+fn extension_view_available(
+    snapshot: Option<&desktop_client::ExtensionContributionSnapshot>,
+    owner: &str,
+    content_type: &str,
+) -> bool {
+    snapshot.is_some_and(|snapshot| snapshot.has_active_view(owner, content_type))
+}
+
 /// 共有ハンドルから、適用判定を持つ watch を取り出す。
 fn session_view_watch_of(
     handle: &crate::app::SessionViewHandle,
@@ -343,6 +352,7 @@ impl DesktopRoot {
             (id::VIEW_COMMAND_SEARCH.into(), quick_search.clone().into()),
         ]);
         let shell = cx.new(|cx| Shell::new(editor.clone().into(), views, cx));
+        let extension_terminal = services.extension_terminal;
         let branch_picker = cx.new(|cx| features::git::BranchPicker::new(git.clone(), window, cx));
         let terminal_backend = services.terminal.backend();
         // Terminal を設定の供給元として登録する。
@@ -369,6 +379,9 @@ impl DesktopRoot {
             }
             // Terminal を「宣言の供給者＋個体の所有者」として登録する。Shell は
             // ターミナル固有の分岐を持たず、宣言された状態だけを扱う。
+            if extension_terminal {
+                shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
+            }
             shell.configure_view_lifecycles(terminal.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
             if initial.show_tasks {
@@ -684,6 +697,8 @@ impl DesktopRoot {
         crate::gpui_compat::focus(window, &editor.focus_handle(cx), cx);
         if let Some(session) = locale_contributions {
             let receiver = session.subscribe();
+            let mut pending_terminal =
+                extension_terminal && initial.show_terminal && !initial.show_problems;
             cx.spawn(async move |root, cx| {
                 let mut first = true;
                 loop {
@@ -696,6 +711,17 @@ impl DesktopRoot {
                         .update(cx, |root, cx| {
                             if changed {
                                 let snapshot = session.snapshot();
+                                if extension_terminal {
+                                    let available = extension_view_available(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
+                                    let shells = root.group.read(cx).members.values().map(|member| member.shell.clone()).collect::<Vec<_>>();
+                                    for shell in shells {
+                                        shell.update(cx, |shell, cx| shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), available, cx));
+                                    }
+                                    if available && pending_terminal {
+                                        root.shell.update(cx, |shell, cx| shell.open_view_in_zone(ZonePosition::Bottom, id::VIEW_TERMINAL.into(), cx));
+                                        pending_terminal = false;
+                                    }
+                                }
                                 let packs = snapshot
                                     .as_ref()
                                     .map(|snapshot| snapshot.core_locales())

@@ -160,6 +160,15 @@ impl Shell {
     ///
     /// 個体化する View はタブごとに独立した実体を持つため、2つ目は新しい個体になる。
     fn open_new_tab_for_view(&mut self, view: ViewId, cx: &mut Context<Self>) {
+        let Some(declaration) = self.feature_registry.declaration(&view) else {
+            return;
+        };
+        if !self
+            .feature_registry
+            .can_create_view(&view, declaration.instance_policy)
+        {
+            return;
+        }
         let position = self
             .shell
             .focused_panel

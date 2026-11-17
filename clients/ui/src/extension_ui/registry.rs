@@ -104,6 +104,7 @@ pub struct FeatureRegistry {
     lifecycles: HashMap<ViewId, SharedLifecycle>,
     started: HashSet<ViewId>,
     instances: HashMap<ViewInstanceId, (ViewId, AnyView)>,
+    unavailable_views: HashSet<ViewId>,
     workspace_open: bool,
     capabilities: HashSet<WorkspaceCapabilityId>,
     active_commands: HashSet<CommandId>,
@@ -138,9 +139,21 @@ impl FeatureRegistry {
     }
 
     pub(crate) fn can_create_view(&self, view: &ViewId, policy: ToolInstancePolicy) -> bool {
+        if self.unavailable_views.contains(view) {
+            return false;
+        }
         match policy {
             ToolInstancePolicy::Shared => self.shared_views.contains_key(view),
             ToolInstancePolicy::Multiple => self.lifecycles.contains_key(view),
+        }
+    }
+
+    /// 提供元の現在の稼働状態を反映する。既存の個体は切断時に終了しない。
+    pub(crate) fn set_view_available(&mut self, view: ViewId, available: bool) {
+        if available {
+            self.unavailable_views.remove(&view);
+        } else {
+            self.unavailable_views.insert(view);
         }
     }
 
@@ -200,6 +213,9 @@ impl FeatureRegistry {
     ) -> bool {
         if let Some((definition, _)) = self.instances.get(instance) {
             return definition == view;
+        }
+        if self.unavailable_views.contains(view) {
+            return false;
         }
         let policy = self
             .descriptors
@@ -340,7 +356,13 @@ impl FeatureRegistry {
             .descriptors
             .values()
             .flat_map(|descriptor| descriptor.contributions.iter())
-            .filter(|contribution| contribution.slot == slot)
+            .filter(|contribution| {
+                contribution.slot == slot
+                    && contribution
+                        .view
+                        .as_ref()
+                        .is_none_or(|view| !self.unavailable_views.contains(view))
+            })
             .collect::<Vec<_>>();
         contributions.sort_by_key(|contribution| contribution.order);
         contributions
@@ -506,6 +528,38 @@ mod tests {
             self.created.push(entity.clone());
             Some(entity.into())
         }
+    }
+
+    #[gpui::test]
+    fn unavailable_view_keeps_existing_instances_and_blocks_new_ones(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let mut registry = FeatureRegistry::default();
+        let view = ViewId::new("example.view");
+        registry
+            .register(
+                FeatureDescriptor::core("example").contributes(
+                    UiContribution::view(view.clone(), UiSlot::BottomDock, "title", "icon", 0)
+                        .multiple_instances(),
+                ),
+            )
+            .unwrap();
+        registry.register_view_lifecycle(
+            view.clone(),
+            Rc::new(RefCell::new(CounterLifecycle::default())),
+        );
+        let first = ViewInstanceId::new("one");
+        let second = ViewInstanceId::new("two");
+        cx.update(|cx| {
+            assert!(registry.ensure_view_instance(&view, &first, cx));
+            registry.set_view_available(view.clone(), false);
+            assert!(!registry.can_create_view(&view, ToolInstancePolicy::Multiple));
+            assert!(registry.ensure_view_instance(&view, &first, cx));
+            assert!(!registry.ensure_view_instance(&view, &second, cx));
+            assert!(registry.instance_view(&first).is_some());
+            registry.set_view_available(view.clone(), true);
+            assert!(registry.ensure_view_instance(&view, &second, cx));
+        });
     }
 
     #[gpui::test]

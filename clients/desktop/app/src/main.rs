@@ -197,10 +197,10 @@ fn main() {
     } else {
         LspSession::new(Arc::new(lsp_backend))
     };
-    let terminal_backend: Arc<dyn terminal::TerminalBackend> = if arguments
+    let extension_terminal = arguments
         .iter()
-        .any(|value| value == "--extension-terminal")
-    {
+        .any(|value| value == "--extension-terminal");
+    let terminal_backend: Arc<dyn terminal::TerminalBackend> = if extension_terminal {
         Arc::new(extension_terminal::ExtensionTerminals::new(host.clone()))
     } else {
         host.terminals()
@@ -250,6 +250,7 @@ fn main() {
         conversation_session,
         settings_session.clone(),
     )
+    .with_extension_terminal(extension_terminal)
     .with_workbench_watch(workbench_watch)
     .with_session_view(session_view)
     .with_extension_loader({

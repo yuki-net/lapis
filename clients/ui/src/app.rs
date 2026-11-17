@@ -114,6 +114,7 @@ pub struct DesktopServices {
     pub(crate) git: GitSession,
     pub(crate) lsp: LspSession,
     pub(crate) terminal: TerminalSession,
+    pub(crate) extension_terminal: bool,
     pub(crate) search: WorkspaceSearchSession,
     pub(crate) conversation: ConversationSession,
     pub(crate) settings: SettingsSession,
@@ -190,6 +191,7 @@ impl DesktopServices {
             git,
             lsp,
             terminal,
+            extension_terminal: false,
             search,
             conversation,
             settings,
@@ -212,6 +214,11 @@ impl DesktopServices {
         web: std::sync::Arc<dyn desktop_client::WebAccessControl>,
     ) -> Self {
         self.web_access_control = Some(web);
+        self
+    }
+    /// 拡張版 Terminal を使用する構成では Host の宣言で利用可否を決める。
+    pub fn with_extension_terminal(mut self, enabled: bool) -> Self {
+        self.extension_terminal = enabled;
         self
     }
     pub fn with_connection_identity(mut self, connection: ConnectionIdentity) -> Self {
@@ -342,6 +349,7 @@ pub(crate) struct WindowFactory {
     git: std::sync::Arc<dyn git::GitConnection>,
     lsp: std::sync::Arc<dyn lsp::LanguageServerBackend>,
     terminal: std::sync::Arc<dyn terminal::TerminalBackend>,
+    extension_terminal: bool,
     search: std::sync::Arc<dyn workspace::WorkspaceSearchBackend>,
     conversation: std::sync::Arc<dyn desktop_client::ConversationRepository>,
     settings: SettingsSession,
@@ -373,6 +381,7 @@ impl WindowFactory {
             git: services.git.backend(),
             lsp: services.lsp.backend(),
             terminal: services.terminal.backend(),
+            extension_terminal: services.extension_terminal,
             search: services.search.backend(),
             conversation: services.conversation.repository(),
             settings: services.settings.clone(),
@@ -403,6 +412,7 @@ impl WindowFactory {
             self.settings,
         );
         services.connect_host = self.connect_host;
+        services.extension_terminal = self.extension_terminal;
         services.connection = self.connection;
         services.process = self.process;
         services.updater = self.updater;

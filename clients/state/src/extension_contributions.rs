@@ -34,6 +34,21 @@ impl ExtensionContributionSnapshot {
     pub fn contributions(&self) -> &[HostExtensionContributions] {
         &self.0.contributions
     }
+    /// 次回起動の enabled ではなく、現在稼働中の表示宣言を確認する。
+    pub fn has_active_view(&self, owner: &str, content_type: &str) -> bool {
+        self.extensions()
+            .iter()
+            .any(|entry| entry.id == owner && entry.active == Some(true))
+            && self.contributions().iter().any(|entry| {
+                entry.extension_id == owner
+                    && entry.views.as_ref().is_some_and(|views| {
+                        views
+                            .views
+                            .iter()
+                            .any(|view| view.content_type == content_type)
+                    })
+            })
+    }
     /// 拡張が提供する Host 標準 UI の翻訳。
     pub fn core_locales(&self) -> &[LocalePack] {
         &self.0.core_locales
@@ -364,6 +379,30 @@ mod tests {
             "extension_id":"dev.example.japanese",
             "declaration":{"schema":1,"translations":[{"target":"dev.example.terminal","locale":"ja-JP","messages":{"terminal.size":"サイズ"}}]}
         }]})).unwrap()
+    }
+
+    #[test]
+    fn view_availability_uses_running_state_and_matching_declaration() {
+        let mut response: HostExtensionsListResponse = serde_json::from_value(json!({
+            "extensions":[{"id":"dev.example.terminal", "version":"1.0.0", "installed":true, "enabled":false, "active":true}],
+            "contributions":[{"extension_id":"dev.example.terminal",
+                "declaration":{"schema":1,"translations":[{"target":"dev.example.terminal","locale":"en-US","messages":{"terminal.title":"Terminal"}}]},
+                "views":{"schema":1,"views":[{"id":"dev.example.terminal.view", "content_type":"example.grid.v1", "title":"terminal.title", "default_zone":"bottom"}]}}]
+        })).unwrap();
+        let check = |response: &HostExtensionsListResponse| {
+            build_snapshot(response.extensions.clone(), response.contributions.clone())
+                .unwrap()
+                .has_active_view("dev.example.terminal", "example.grid.v1")
+        };
+        assert!(check(&response)); // enabled は次回起動の設定。
+        response.extensions[0].active = Some(false);
+        assert!(!check(&response));
+        response.extensions[0].active = None;
+        assert!(!check(&response));
+        response.extensions[0].active = Some(true);
+        response.contributions[0].views.as_mut().unwrap().views[0].content_type =
+            "other.grid".into();
+        assert!(!check(&response));
     }
 
     fn session() -> (SettingsSession, Arc<Memory>) {

@@ -266,7 +266,8 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
         WorkspaceSearchSession::new(backend.clone()),
         conversation,
         settings,
-    );
+    )
+    .with_extension_terminal(extension_terminal);
     // 表示用の Workspace 名と切替候補は既存の ConnectionInfo をそのまま使う。
     if let Some(info) = desktop_client::web_host::connection_info() {
         services = services.with_connection_identity(crate::ConnectionIdentity {
