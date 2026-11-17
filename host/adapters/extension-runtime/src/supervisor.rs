@@ -15,7 +15,8 @@ use std::{
 };
 
 use crate::{
-    DISPATCH_VERSION, HostCall, HostReply, LIFECYCLE_VERSION, MAX_DISPATCH_BYTES, Request, Response,
+    DISPATCH_VERSION, HostCall, HostReply, InvocationContext, LIFECYCLE_VERSION,
+    MAX_DISPATCH_BYTES, Request, Response,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -27,6 +28,7 @@ struct Dispatch {
     id: String,
     operation: String,
     payload: String,
+    context: InvocationContext,
     abandoned: Arc<AtomicBool>,
     reply: mpsc::Sender<Result<String, String>>,
 }
@@ -117,9 +119,34 @@ impl ExtensionSupervisor {
         }
     }
 
+    /// 接続に属さない Host 内部処理専用。外部の要求は dispatch_with_context を使う。
     /// 同期呼び出しのため UI スレッドから直接実行しない。
-    pub fn dispatch(&self, id: &str, operation: &str, payload: &str) -> Result<String, String> {
-        if id.len() > 128
+    pub fn dispatch_host_internal(
+        &self,
+        id: &str,
+        operation: &str,
+        payload: &str,
+    ) -> Result<String, String> {
+        self.dispatch_with_context(
+            id,
+            operation,
+            payload,
+            &InvocationContext {
+                session: "host-internal".into(),
+                workspace: "host".into(),
+            },
+        )
+    }
+
+    pub fn dispatch_with_context(
+        &self,
+        id: &str,
+        operation: &str,
+        payload: &str,
+        context: &InvocationContext,
+    ) -> Result<String, String> {
+        if !context.valid()
+            || id.len() > 128
             || operation.is_empty()
             || operation.len() > 256
             || payload.len() > MAX_DISPATCH_BYTES
@@ -133,6 +160,7 @@ impl ExtensionSupervisor {
                 id: id.into(),
                 operation: operation.into(),
                 payload: payload.into(),
+                context: context.clone(),
                 abandoned: Arc::clone(&abandoned),
                 reply,
             })
@@ -259,6 +287,7 @@ fn supervise(
                             id: call.id.clone(),
                             operation: call.operation,
                             payload: call.payload,
+                            context: call.context,
                         },
                         REQUEST_TIMEOUT,
                         Some(cancelled),

@@ -59,6 +59,7 @@ pub struct NativeSession {
     transport: NativeTransport,
     renderer: NativeRenderer,
     closed: bool,
+    owner: Option<String>,
 }
 
 impl NativeSession {
@@ -99,6 +100,7 @@ impl NativeSession {
             transport,
             renderer,
             closed: false,
+            owner: started.owner,
         })
     }
 
@@ -107,6 +109,10 @@ impl NativeSession {
     }
     pub fn working_directory(&self) -> &str {
         &self.working_directory
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
     }
 
     /// 拡張側の生存セッション。Host の Workspace や権限は transport 側が管理する。
@@ -136,6 +142,13 @@ impl NativeSession {
             .find(|session| session.id == id)
             .ok_or("Terminal session が見つかりません")?;
         let information: v1::InfoResponse = call(&transport, v1::INFO, &v1::InfoRequest {})?;
+        let attached: v1::OwnerResponse = call(
+            &transport,
+            v1::ATTACH,
+            &v1::IdRequest {
+                id: session.id.clone(),
+            },
+        )?;
         let writer = InputWriter {
             id: session.id.clone(),
             transport: transport.clone(),
@@ -152,6 +165,7 @@ impl NativeSession {
             transport,
             renderer,
             closed: false,
+            owner: attached.owner,
         })
     }
     pub fn snapshot(&self) -> &TerminalScreen {
@@ -181,9 +195,12 @@ impl NativeSession {
                 return Err(error);
             }
         };
-        self.renderer
+        let output = self
+            .renderer
             .accept(ticket, output)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        self.owner = output.owner.clone();
+        Ok(output)
     }
 
     /// 入力は renderer の writer が非同期で送る。失敗は take_write_failures で受け取る。
@@ -214,6 +231,48 @@ impl NativeSession {
 
     pub fn take_write_failures(&self) -> Vec<String> {
         self.renderer.take_write_failures().collect()
+    }
+
+    pub fn claim(&mut self) -> Result<Option<String>, String> {
+        self.ensure_open()?;
+        let response: v1::OwnerResponse = call(
+            &self.transport,
+            v1::CLAIM,
+            &v1::IdRequest {
+                id: self.id.clone(),
+            },
+        )?;
+        self.owner = response.owner.clone();
+        Ok(response.owner)
+    }
+
+    pub fn release(&mut self) -> Result<Option<String>, String> {
+        self.ensure_open()?;
+        let response: v1::OwnerResponse = call(
+            &self.transport,
+            v1::RELEASE,
+            &v1::IdRequest {
+                id: self.id.clone(),
+            },
+        )?;
+        self.owner = response.owner.clone();
+        Ok(response.owner)
+    }
+
+    /// 接続を外しても PTY を残す。
+    pub fn detach(&mut self) -> Result<(), String> {
+        if self.closed {
+            return Ok(());
+        }
+        let _: v1::OwnerResponse = call(
+            &self.transport,
+            v1::DETACH,
+            &v1::IdRequest {
+                id: self.id.clone(),
+            },
+        )?;
+        self.closed = true;
+        Ok(())
     }
 
     pub fn close(&mut self) -> Result<(), String> {
@@ -348,6 +407,7 @@ mod tests {
                 v1::LIST => {
                     serde_json::json!({"sessions":[{"id":"pty-2","columns":20,"rows":3,"working_directory":"."}]})
                 }
+                v1::ATTACH => serde_json::json!({"owner":null}),
                 v1::READ => {
                     let input: v1::ReadRequest = serde_json::from_str(&request.payload).unwrap();
                     assert_eq!(input.offset, 0);

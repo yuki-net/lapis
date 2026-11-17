@@ -16,7 +16,8 @@ def main() -> None:
     requests = [
         {"command": "handshake"},
         {"command": "activate", "id": "dev.example.hello", "component": base64.b64encode(component.read_bytes()).decode("ascii"), "require_dispatch": True},
-        {"command": "dispatch", "id": "dev.example.hello", "operation": "echo", "payload": "hello"},
+        {"command": "dispatch", "id": "dev.example.hello", "operation": "echo", "payload": "hello", "context": {"session":"session-1", "workspace":"workspace-1"}},
+        {"command": "dispatch", "id": "dev.example.hello", "operation": "context", "payload": "", "context": {"session":"session-1", "workspace":"workspace-1"}},
         {"command": "deactivate", "id": "dev.example.hello"},
         {"command": "shutdown"},
     ]
@@ -32,6 +33,8 @@ def main() -> None:
         raise RuntimeError("ライフサイクル契約の版が一致しません")
     if responses[0].get("dispatch_version") != "1.0.0" or responses[2].get("result") != "hello":
         raise RuntimeError("拡張操作契約の版または応答が一致しません")
+    if responses[3].get("result") != "session-1:workspace-1":
+        raise RuntimeError("認証済み呼び出し元の情報が一致しません")
     print("外部 workspace の component を起動・操作・停止しました")
 
 

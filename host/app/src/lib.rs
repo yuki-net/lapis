@@ -322,6 +322,8 @@ impl BackendHost {
     pub fn dispatch_extension(
         &self,
         request: &client_api::HostExtensionDispatchRequest,
+        session: &client_api::SessionId,
+        workspace: &client_api::WorkspaceId,
     ) -> Result<client_api::HostExtensionDispatchResponse, String> {
         if !self.inner.extensions.declares_dispatch(&request.id)? {
             return Err("拡張が dispatch 契約を宣言していません".into());
@@ -331,7 +333,16 @@ impl BackendHost {
             .extension_host
             .as_ref()
             .ok_or("拡張ホストが停止しています")?;
-        let result = host.dispatch(&request.id, &request.operation, &request.payload)?;
+        let context = extension_runtime::InvocationContext {
+            session: session.as_str().to_owned(),
+            workspace: workspace.as_str().to_owned(),
+        };
+        let result = host.dispatch_with_context(
+            &request.id,
+            &request.operation,
+            &request.payload,
+            &context,
+        )?;
         Ok(client_api::HostExtensionDispatchResponse {
             id: request.id.clone(),
             operation: request.operation.clone(),

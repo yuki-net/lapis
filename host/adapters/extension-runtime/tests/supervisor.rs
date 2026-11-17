@@ -40,20 +40,25 @@ fn dispatch_component() -> Vec<u8> {
         (component
           (core module $m
             (memory (export "memory") 1)
+            (global $heap (mut i32) (i32.const 128))
             (data (i32.const 0) "\00\00\00\00\10\00\00\00\02\00\00\00")
             (func (export "activate"))
             (func (export "deactivate"))
             (func (export "realloc") (param i32 i32 i32 i32) (result i32)
-              (i32.const 128))
-            (func (export "dispatch") (param i32 i32 i32 i32) (result i32)
-              (i32.store (i32.const 4) (local.get 2))
-              (i32.store (i32.const 8) (local.get 3))
+              (local $address i32)
+              (local.set $address (global.get $heap))
+              (global.set $heap (i32.add (global.get $heap) (local.get 3)))
+              (local.get $address))
+            (func (export "dispatch") (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)
+              (i32.store (i32.const 4) (local.get 4))
+              (i32.store (i32.const 8) (local.get 5))
               (i32.const 0)))
           (core instance $i (instantiate $m))
           (func (export "activate") (canon lift (core func $i "activate")))
           (func (export "deactivate") (canon lift (core func $i "deactivate")))
           (func (export "dispatch")
             (param "operation" string) (param "payload" string)
+            (param "session" string) (param "workspace" string)
             (result (result string (error string)))
             (canon lift (core func $i "dispatch")
               (memory (core memory $i "memory")) (realloc (core func $i "realloc")))))
@@ -84,20 +89,38 @@ fn dispatch_reaches_only_the_requested_active_component() {
     });
     assert_eq!(
         supervisor
-            .dispatch("test.dispatch", "inspect", "{}")
+            .dispatch_host_internal("test.dispatch", "inspect", "{}")
             .unwrap(),
-        "{}"
+        "host-internal"
     );
-    assert!(supervisor.dispatch("test.legacy", "inspect", "{}").is_err());
+    let context = extension_runtime::InvocationContext {
+        session: "session-123".into(),
+        workspace: "workspace-456".into(),
+    };
+    assert_eq!(
+        supervisor
+            .dispatch_with_context("test.dispatch", "inspect", "{}", &context)
+            .unwrap(),
+        "session-123"
+    );
     assert!(
         supervisor
-            .dispatch("test.missing", "inspect", "{}")
+            .dispatch_host_internal("test.legacy", "inspect", "{}")
             .is_err()
     );
-    assert!(supervisor.dispatch("test.dispatch", "", "{}").is_err());
     assert!(
         supervisor
-            .dispatch(
+            .dispatch_host_internal("test.missing", "inspect", "{}")
+            .is_err()
+    );
+    assert!(
+        supervisor
+            .dispatch_host_internal("test.dispatch", "", "{}")
+            .is_err()
+    );
+    assert!(
+        supervisor
+            .dispatch_host_internal(
                 "test.dispatch",
                 "inspect",
                 &"x".repeat(extension_runtime::MAX_DISPATCH_BYTES + 1)

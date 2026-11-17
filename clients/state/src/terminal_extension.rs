@@ -50,6 +50,7 @@ pub struct NativeOutput {
     pub exit: Option<v1::Exit>,
     pub read_error: Option<String>,
     pub write_error: Option<String>,
+    pub owner: Option<String>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -100,6 +101,7 @@ impl NativeRenderer {
             exit: output.exit,
             read_error: output.read_error,
             write_error: output.write_error,
+            owner: output.owner,
         })
     }
 
@@ -309,6 +311,7 @@ mod tests {
             exit: None,
             read_error: None,
             write_error: None,
+            owner: None,
         }
     }
 

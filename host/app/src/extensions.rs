@@ -1283,13 +1283,13 @@ mod tests {
         }).to_string();
         assert!(
             supervisor
-                .dispatch("lapis.terminal", "terminal.v1.start", &start)
+                .dispatch_host_internal("lapis.terminal", "terminal.v1.start", &start)
                 .is_err()
         );
         assert_eq!(broker.session_count("lapis.terminal"), 0);
         assert!(
             supervisor
-                .dispatch("lapis.terminal", "terminal.v1.info", "{}")
+                .dispatch_host_internal("lapis.terminal", "terminal.v1.info", "{}")
                 .is_err()
         );
         broker
@@ -1297,7 +1297,7 @@ mod tests {
             .unwrap();
         let information: serde_json::Value = serde_json::from_str(
             &supervisor
-                .dispatch("lapis.terminal", "terminal.v1.info", "{}")
+                .dispatch_host_internal("lapis.terminal", "terminal.v1.info", "{}")
                 .unwrap(),
         )
         .unwrap();
@@ -1305,7 +1305,7 @@ mod tests {
         assert_eq!(information["default_shell"]["program"], "powershell.exe");
         let opened: serde_json::Value = serde_json::from_str(
             &supervisor
-                .dispatch("lapis.terminal", "terminal.v1.start", &start)
+                .dispatch_host_internal("lapis.terminal", "terminal.v1.start", &start)
                 .unwrap(),
         )
         .unwrap();
@@ -1313,7 +1313,7 @@ mod tests {
         assert_eq!(broker.session_count("lapis.terminal"), 1);
         let listed: serde_json::Value = serde_json::from_str(
             &supervisor
-                .dispatch("lapis.terminal", "terminal.v1.list", "{}")
+                .dispatch_host_internal("lapis.terminal", "terminal.v1.list", "{}")
                 .unwrap(),
         )
         .unwrap();
@@ -1333,7 +1333,11 @@ mod tests {
             let request = serde_json::json!({"id": id, "offset": offset, "max_bytes": 8192, "timeout_ms": 500});
             let response: serde_json::Value = serde_json::from_str(
                 &supervisor
-                    .dispatch("lapis.terminal", "terminal.v1.read", &request.to_string())
+                    .dispatch_host_internal(
+                        "lapis.terminal",
+                        "terminal.v1.read",
+                        &request.to_string(),
+                    )
                     .unwrap(),
             )
             .unwrap();
@@ -1347,7 +1351,7 @@ mod tests {
             );
             if !answered_cursor_query && output.windows(4).any(|part| part == b"\x1b[6n") {
                 supervisor
-                    .dispatch(
+                    .dispatch_host_internal(
                         "lapis.terminal",
                         "terminal.v1.write",
                         &serde_json::json!({
@@ -1360,14 +1364,14 @@ mod tests {
             }
         }
         supervisor
-            .dispatch(
+            .dispatch_host_internal(
                 "lapis.terminal",
                 "terminal.v1.resize",
                 &serde_json::json!({"id":id,"columns":100,"rows":30}).to_string(),
             )
             .unwrap();
         supervisor
-            .dispatch(
+            .dispatch_host_internal(
                 "lapis.terminal",
                 "terminal.v1.close",
                 &serde_json::json!({"id":id}).to_string(),
@@ -1375,7 +1379,7 @@ mod tests {
             .unwrap();
         let second: serde_json::Value = serde_json::from_str(
             &supervisor
-                .dispatch("lapis.terminal", "terminal.v1.start", &start)
+                .dispatch_host_internal("lapis.terminal", "terminal.v1.start", &start)
                 .unwrap(),
         )
         .unwrap();
@@ -1386,7 +1390,7 @@ mod tests {
         assert_eq!(broker.session_count("lapis.terminal"), 0);
         assert!(
             supervisor
-                .dispatch(
+                .dispatch_host_internal(
                     "lapis.terminal",
                     "terminal.v1.read",
                     &serde_json::json!({"id":second_id,"offset":0,"max_bytes":64,"timeout_ms":0})

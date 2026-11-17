@@ -2,7 +2,11 @@
 
 wit_bindgen::generate!({ path: "wit", world: "terminal", generate_all });
 
-use std::{cell::RefCell, collections::BTreeMap};
+use std::{
+    cell::RefCell,
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use lapis::process_info::host as process_info;
 use lapis::pty::sessions::{self, EnvironmentEntry, Size, SpawnRequest};
@@ -17,6 +21,9 @@ struct Session {
     columns: u16,
     rows: u16,
     working_directory: String,
+    workspace: String,
+    owner: Option<String>,
+    last_activity: Instant,
 }
 
 // attached が false のものは停止・detach 済みで Host の後片付け待ち。
@@ -54,11 +61,40 @@ fn encode<T: serde::Serialize>(value: T) -> Result<Value, String> {
     serde_json::to_value(value).map_err(|error| error.to_string())
 }
 
-fn attached(id: &str) -> Result<(), String> {
+fn owner(id: &str, workspace: &str) -> Result<Option<String>, String> {
     SESSIONS.with(|sessions| match sessions.borrow().get(id) {
-        Some(session) if session.attached => Ok(()),
+        Some(session) if session.attached && session.workspace == workspace => {
+            Ok(session.owner.clone())
+        }
         _ => Err("terminal session is not attached".into()),
     })
+}
+
+fn require_owner(id: &str, workspace: &str, caller: &str) -> Result<(), String> {
+    if owner(id, workspace)?.is_some_and(|owner| owner != caller) {
+        return Err("terminal is owned by another session".into());
+    }
+    Ok(())
+}
+
+fn touch(id: &str) {
+    SESSIONS.with(|sessions| {
+        if let Some(session) = sessions.borrow_mut().get_mut(id) {
+            session.last_activity = Instant::now();
+        }
+    });
+}
+
+fn expire_owners() {
+    SESSIONS.with(|sessions| {
+        for session in sessions.borrow_mut().values_mut() {
+            if session.owner.is_some()
+                && session.last_activity.elapsed() >= Duration::from_secs(300)
+            {
+                session.owner = None;
+            }
+        }
+    });
 }
 
 fn reap_closed() {
@@ -69,8 +105,9 @@ fn reap_closed() {
     });
 }
 
-fn run(operation: &str, payload: &str) -> Result<Value, String> {
+fn run(operation: &str, payload: &str, caller: &str, workspace: &str) -> Result<Value, String> {
     reap_closed();
+    expire_owners();
     match operation {
         v1::INFO => {
             let _: v1::InfoRequest = decode(payload)?;
@@ -94,12 +131,13 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                 sessions
                     .borrow()
                     .iter()
-                    .filter(|(_, session)| session.attached)
+                    .filter(|(_, session)| session.attached && session.workspace == workspace)
                     .map(|(id, session)| SessionInfo {
                         id: id.clone(),
                         columns: session.columns,
                         rows: session.rows,
                         working_directory: session.working_directory.clone(),
+                        owner: session.owner.clone(),
                     })
                     .collect::<Vec<_>>()
             });
@@ -135,20 +173,27 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                         columns: input.columns,
                         rows: input.rows,
                         working_directory: input.working_directory,
+                        workspace: workspace.to_owned(),
+                        owner: Some(caller.to_owned()),
+                        last_activity: Instant::now(),
                     },
                 )
             });
-            encode(StartResponse { id })
+            encode(StartResponse {
+                id,
+                owner: Some(caller.to_owned()),
+            })
         }
         v1::WRITE => {
             let input: WriteRequest = decode(payload)?;
-            attached(&input.id)?;
+            require_owner(&input.id, workspace, caller)?;
             sessions::write(&input.id, &input.bytes)?;
+            touch(&input.id);
             Ok(Value::Null)
         }
         v1::RESIZE => {
             let input: ResizeRequest = decode(payload)?;
-            attached(&input.id)?;
+            require_owner(&input.id, workspace, caller)?;
             sessions::resize(
                 &input.id,
                 Size {
@@ -156,6 +201,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                     rows: input.rows,
                 },
             )?;
+            touch(&input.id);
             SESSIONS.with(|sessions| {
                 if let Some(session) = sessions.borrow_mut().get_mut(&input.id) {
                     session.columns = input.columns;
@@ -166,7 +212,7 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
         }
         v1::READ => {
             let input: ReadRequest = decode(payload)?;
-            attached(&input.id)?;
+            let current_owner = owner(&input.id, workspace)?;
             // JSON の byte 配列が dispatch 応答の上限を超えないよう制限する。
             if input.max_bytes == 0
                 || input.max_bytes > v1::MAX_READ_BYTES
@@ -183,11 +229,12 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
                 exit: output.exit.map(|exit| Exit { code: exit.code }),
                 read_error: output.read_error,
                 write_error: output.write_error,
+                owner: current_owner,
             })
         }
         v1::CLOSE => {
             let input: IdRequest = decode(payload)?;
-            attached(&input.id)?;
+            require_owner(&input.id, workspace, caller)?;
             sessions::kill(&input.id)?;
             sessions::detach(&input.id)?;
             SESSIONS.with(|sessions| {
@@ -197,6 +244,33 @@ fn run(operation: &str, payload: &str) -> Result<Value, String> {
             });
             reap_closed();
             Ok(Value::Null)
+        }
+        v1::ATTACH => {
+            let input: IdRequest = decode(payload)?;
+            encode(v1::OwnerResponse {
+                owner: owner(&input.id, workspace)?,
+            })
+        }
+        v1::CLAIM | v1::RELEASE | v1::DETACH => {
+            let input: IdRequest = decode(payload)?;
+            let current = owner(&input.id, workspace)?;
+            if operation == v1::RELEASE && current.as_deref().is_some_and(|owner| owner != caller) {
+                return Err("terminal is owned by another session".into());
+            }
+            let next = if operation == v1::CLAIM {
+                Some(caller.to_owned())
+            } else if current.as_deref() == Some(caller) {
+                None
+            } else {
+                current
+            };
+            SESSIONS.with(|sessions| {
+                if let Some(session) = sessions.borrow_mut().get_mut(&input.id) {
+                    session.owner = next.clone();
+                    session.last_activity = Instant::now();
+                }
+            });
+            encode(v1::OwnerResponse { owner: next })
         }
         _ => Err("unknown terminal operation".into()),
     }
@@ -223,8 +297,17 @@ impl Guest for Terminal {
         SESSIONS.with(|sessions| sessions.borrow_mut().clear());
     }
 
-    fn dispatch(operation: String, payload: String) -> Result<String, String> {
-        serde_json::to_string(&run(&operation, &payload)?).map_err(|error| error.to_string())
+    fn dispatch(
+        operation: String,
+        payload: String,
+        session: String,
+        workspace: String,
+    ) -> Result<String, String> {
+        if session.is_empty() || workspace.is_empty() {
+            return Err("missing authenticated context".into());
+        }
+        serde_json::to_string(&run(&operation, &payload, &session, &workspace)?)
+            .map_err(|error| error.to_string())
     }
 }
 

@@ -11,6 +11,10 @@ pub mod v1 {
     pub const RESIZE: &str = "terminal.v1.resize";
     pub const READ: &str = "terminal.v1.read";
     pub const CLOSE: &str = "terminal.v1.close";
+    pub const ATTACH: &str = "terminal.v1.attach";
+    pub const DETACH: &str = "terminal.v1.detach";
+    pub const CLAIM: &str = "terminal.v1.claim";
+    pub const RELEASE: &str = "terminal.v1.release";
     pub const MAX_READ_BYTES: u32 = 8 * 1024;
     pub const MAX_READ_WAIT_MS: u32 = 1_000;
 
@@ -93,6 +97,8 @@ pub mod v1 {
         pub rows: u16,
         #[serde(default)]
         pub working_directory: String,
+        #[serde(default)]
+        pub owner: Option<String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +109,13 @@ pub mod v1 {
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
     pub struct StartResponse {
         pub id: String,
+        #[serde(default)]
+        pub owner: Option<String>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct OwnerResponse {
+        pub owner: Option<String>,
     }
 
     #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +131,8 @@ pub mod v1 {
         pub exit: Option<Exit>,
         pub read_error: Option<String>,
         pub write_error: Option<String>,
+        #[serde(default)]
+        pub owner: Option<String>,
     }
 }
 
@@ -145,6 +160,7 @@ mod tests {
             exit: Some(Exit { code: None }),
             read_error: None,
             write_error: None,
+            owner: None,
         };
         let value = serde_json::to_value(&output).unwrap();
         assert_eq!(value["exit"], serde_json::json!({"code": null}));

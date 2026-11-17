@@ -14,9 +14,15 @@ impl Guest for Example {
     }
     fn deactivate() {}
 
-    fn dispatch(operation: String, payload: String) -> Result<String, String> {
+    fn dispatch(
+        operation: String,
+        payload: String,
+        session: String,
+        workspace: String,
+    ) -> Result<String, String> {
         match operation.as_str() {
             "echo" => Ok(payload),
+            "context" => Ok(format!("{session}:{workspace}")),
             _ => Err("unknown operation".into()),
         }
     }

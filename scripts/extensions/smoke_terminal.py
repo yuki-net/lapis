@@ -65,16 +65,18 @@ def main() -> None:
                                   "pty.v1.kill", "pty.v1.detach", "pty.v1.forget"}, method
                 result = None
             send({"kind": "reply", "id": response["id"], "result": {"Ok": result}})
-    def dispatch(operation, payload):
+    def dispatch(operation, payload, session="session-1", workspace="workspace-1"):
         return request({"command": "dispatch", "id": "lapis.terminal",
-                        "operation": "terminal.v1." + operation, "payload": json.dumps(payload)})
+                        "operation": "terminal.v1." + operation, "payload": json.dumps(payload),
+                        "context": {"session": session, "workspace": workspace}})
     try:
         response = request({"command": "activate", "id": "lapis.terminal",
                             "component": base64.b64encode(COMPONENT.read_bytes()).decode("ascii"),
                             "require_dispatch": True})
         assert response["ok"], response
         assert not request({"command": "dispatch", "id": "lapis.terminal",
-                            "operation": "terminal.v2.list", "payload": "{}"})["ok"]
+                            "operation": "terminal.v2.list", "payload": "{}",
+                            "context": {"session":"session-1", "workspace":"workspace-1"}})["ok"]
         info = dispatch("info", {})
         assert info["ok"] and json.loads(info["result"]) == {
             "pty": "conpty", "default_shell": {"program": "powershell.exe", "arguments": ["-NoLogo"]}
@@ -84,10 +86,20 @@ def main() -> None:
                                       "columns": 80, "rows": 24})["ok"]
         result = dispatch("start", {"program": "shell", "working_directory": ".",
                                     "columns": 80, "rows": 24})
-        assert result["ok"] and json.loads(result["result"]) == {"id": "pty-1"}, result
+        assert result["ok"] and json.loads(result["result"]) == {"id": "pty-1", "owner": "session-1"}, result
         assert json.loads(dispatch("list", {})["result"]) == {
-            "sessions": [{"id": "pty-1", "columns": 80, "rows": 24, "working_directory": "."}]
+            "sessions": [{"id": "pty-1", "columns": 80, "rows": 24, "working_directory": ".", "owner": "session-1"}]
         }
+        assert json.loads(dispatch("list", {}, workspace="workspace-2")["result"]) == {"sessions": []}
+        assert not dispatch("read", {"id":"pty-1", "offset":0, "max_bytes":8, "timeout_ms":0}, workspace="workspace-2")["ok"]
+        assert json.loads(dispatch("attach", {"id":"pty-1"}, session="session-2")["result"])["owner"] == "session-1"
+        assert json.loads(dispatch("claim", {"id":"pty-1"}, session="session-2")["result"])["owner"] == "session-2"
+        assert not dispatch("write", {"id":"pty-1", "bytes":[65]})["ok"]
+        assert not dispatch("release", {"id":"pty-1"})["ok"]
+        assert json.loads(dispatch("claim", {"id":"pty-1"})["result"])["owner"] == "session-1"
+        assert json.loads(dispatch("detach", {"id":"pty-1"}, session="session-2")["result"])["owner"] == "session-1"
+        assert json.loads(dispatch("detach", {"id":"pty-1"})["result"])["owner"] is None
+        assert json.loads(dispatch("claim", {"id":"pty-1"})["result"])["owner"] == "session-1"
         assert dispatch("write", {"id": "pty-1", "bytes": [65]})["ok"]
         assert dispatch("resize", {"id": "pty-1", "columns": 100, "rows": 30})["ok"]
         assert json.loads(dispatch("list", {})["result"])["sessions"][0]["columns"] == 100

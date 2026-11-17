@@ -289,7 +289,7 @@ fn independent_component_is_packaged_installed_and_activated() {
     let mut input = worker.stdin.take().unwrap();
     for request in [
         json!({"command": "activate", "id": "dev.example.external", "component": base64::engine::general_purpose::STANDARD.encode(&verified.files["extension.wasm"]), "require_dispatch": true}),
-        json!({"command": "dispatch", "id": "dev.example.external", "operation": "echo", "payload": "hello"}),
+        json!({"command": "dispatch", "id": "dev.example.external", "operation": "echo", "payload": "hello", "context": {"session":"session-1", "workspace":"workspace-1"}}),
         json!({"command": "deactivate", "id": "dev.example.external"}),
         json!({"command": "shutdown"}),
     ] {

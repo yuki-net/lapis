@@ -63,6 +63,7 @@ pub struct HostExtensionSetCapabilityResponse {
 
 /// Host 全体の拡張操作権限で、起動時に検証済みの拡張に操作を送る。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HostExtensionDispatchRequest {
     pub id: String,
     pub operation: String,
@@ -187,6 +188,12 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<RequestBody>(serde_json::to_value(&request).unwrap()).unwrap(),
             request
+        );
+        assert!(
+            serde_json::from_value::<HostExtensionDispatchRequest>(serde_json::json!({
+                "id":"dev.example", "operation":"inspect", "payload":"{}", "session":"forged"
+            }))
+            .is_err()
         );
     }
 

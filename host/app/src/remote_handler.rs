@@ -237,7 +237,11 @@ impl RemoteRequestHandler for HostRemoteHandler {
                         }
                     }
                     RequestBody::HostExtensionDispatch(request) => {
-                        match host.dispatch_extension(&request) {
+                        match host.dispatch_extension(
+                            &request,
+                            grant.session_id(),
+                            grant.workspace_id(),
+                        ) {
                             Ok(response) => ResponseBody::HostExtensionDispatch(response),
                             Err(message) => web_error(message),
                         }

@@ -64,8 +64,12 @@ impl ExtensionConnection {
         request: client_api::HostExtensionDispatchRequest,
     ) -> Result<client_api::HostExtensionDispatchResponse, BackendServiceError> {
         if let Some(host) = &self.embedded {
+            let session = self
+                .client
+                .session_id()
+                .ok_or(BackendServiceError::Unavailable)?;
             return host
-                .dispatch_extension(&request)
+                .dispatch_extension(&request, &session, self.client.workspace_id())
                 .map_err(BackendServiceError::Connection);
         }
         match self

@@ -72,6 +72,23 @@ pub const DISPATCH_CONTRACT: &str = "lapis.extension.dispatch";
 pub const DISPATCH_VERSION: &str = "1.0.0";
 pub const MAX_DISPATCH_BYTES: usize = 64 * 1024;
 
+/// Host が認証済み接続から生成する。Client の payload からは受け取らない。
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct InvocationContext {
+    pub session: String,
+    pub workspace: String,
+}
+
+impl InvocationContext {
+    pub fn valid(&self) -> bool {
+        !self.session.is_empty()
+            && self.session.len() <= 256
+            && !self.workspace.is_empty()
+            && self.workspace.len() <= 256
+    }
+}
+
 #[cfg(feature = "worker")]
 const MAX_COMPONENT_BYTES: usize = 8 * 1024 * 1024;
 #[cfg(feature = "worker")]
@@ -100,6 +117,7 @@ pub enum Request {
         id: String,
         operation: String,
         payload: String,
+        context: InvocationContext,
     },
     Shutdown,
 }
@@ -239,7 +257,9 @@ impl ExtensionRuntime {
             .map_err(|error| error.to_string())?;
         if require_dispatch {
             instance
-                .get_typed_func::<(&str, &str), (Result<String, String>,)>(&mut store, "dispatch")
+                .get_typed_func::<(&str, &str, &str, &str), (Result<String, String>,)>(
+                    &mut store, "dispatch",
+                )
                 .map_err(|_| "extension does not implement dispatch v1".to_owned())?;
         }
         let activate = instance
@@ -277,8 +297,18 @@ impl ExtensionRuntime {
     }
 
     /// 拡張操作を実行する。payload の検証と操作権限は呼び出し元の契約が担う。
-    pub fn dispatch(&mut self, id: &str, operation: &str, payload: &str) -> Result<String, String> {
-        if operation.is_empty() || operation.len() > 256 || payload.len() > MAX_DISPATCH_BYTES {
+    pub fn dispatch(
+        &mut self,
+        id: &str,
+        operation: &str,
+        payload: &str,
+        context: &InvocationContext,
+    ) -> Result<String, String> {
+        if !context.valid()
+            || operation.is_empty()
+            || operation.len() > 256
+            || payload.len() > MAX_DISPATCH_BYTES
+        {
             return Err("invalid dispatch request".into());
         }
         let loaded = self.loaded.get_mut(id).ok_or("extension is not active")?;
@@ -288,13 +318,16 @@ impl ExtensionRuntime {
             .map_err(|error| error.to_string())?;
         let function = loaded
             .instance
-            .get_typed_func::<(&str, &str), (Result<String, String>,)>(
+            .get_typed_func::<(&str, &str, &str, &str), (Result<String, String>,)>(
                 &mut loaded.store,
                 "dispatch",
             )
             .map_err(|_| "extension does not support dispatch v1".to_owned())?;
         let (result,) = function
-            .call(&mut loaded.store, (operation, payload))
+            .call(
+                &mut loaded.store,
+                (operation, payload, &context.session, &context.workspace),
+            )
             .map_err(|error| error.to_string())?;
         function
             .post_return(&mut loaded.store)
@@ -325,9 +358,10 @@ impl ExtensionRuntime {
             id,
             operation,
             payload,
+            context,
         } = request
         {
-            return match self.dispatch(&id, &operation, &payload) {
+            return match self.dispatch(&id, &operation, &payload, &context) {
                 Ok(result) => Response {
                     ok: true,
                     error: None,
