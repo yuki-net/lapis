@@ -75,7 +75,9 @@ impl SessionGrant {
             .expect("built-in request capability must be valid");
         let owner_override = matches!(
             request,
-            RequestBody::HostRegister(_) | RequestBody::HostExtensionSetEnabled(_)
+            RequestBody::HostRegister(_)
+                | RequestBody::HostExtensionSetEnabled(_)
+                | RequestBody::HostExtensionSetCapability(_)
         ) && self
             .capabilities
             .iter()

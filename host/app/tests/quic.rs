@@ -916,6 +916,32 @@ async fn extensions_list_reports_the_host_catalog_to_a_reader() {
             enabled: true
         })
     );
+    let capability = HostExtensionSetCapabilityRequest {
+        id: "dev.example.one".into(),
+        manifest_digest: "a".repeat(64),
+        capability: "process.pty".into(),
+        version: "1.0.0".into(),
+        approved: false,
+    };
+    assert!(
+        matches!(request(&mut reader, 7, RequestBody::HostExtensionSetCapability(capability.clone())).await,
+        ResponseBody::Error(ref error) if error.code.as_str() == FORBIDDEN)
+    );
+    assert_eq!(
+        request(
+            &mut manager,
+            8,
+            RequestBody::HostExtensionSetCapability(capability.clone())
+        )
+        .await,
+        ResponseBody::HostExtensionSetCapability(HostExtensionSetCapabilityResponse {
+            id: capability.id,
+            manifest_digest: capability.manifest_digest,
+            capability: capability.capability,
+            version: capability.version,
+            approved: false,
+        })
+    );
 
     // 宣言を要求しない接続は Host の目録を読めない。
     let mut unread = fixture.connect().await;

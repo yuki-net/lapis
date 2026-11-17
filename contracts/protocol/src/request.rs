@@ -36,6 +36,10 @@ pub enum RequestBody {
     HostExtensions(crate::HostExtensionsListRequest),
     #[serde(rename = "host.extensions.set_enabled")]
     HostExtensionSetEnabled(crate::HostExtensionSetEnabledRequest),
+    #[serde(rename = "host.extensions.capabilities")]
+    HostExtensionCapabilities(crate::HostExtensionCapabilitiesRequest),
+    #[serde(rename = "host.extensions.set_capability")]
+    HostExtensionSetCapability(crate::HostExtensionSetCapabilityRequest),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentRelocateRequest),
     #[serde(rename = "files.create_directory")]
@@ -117,6 +121,8 @@ impl RequestBody {
             Self::HostWebStop(_) => "host.web.stop",
             Self::HostExtensions(_) => "host.extensions.list",
             Self::HostExtensionSetEnabled(_) => "host.extensions.set_enabled",
+            Self::HostExtensionCapabilities(_) => "host.extensions.capabilities",
+            Self::HostExtensionSetCapability(_) => "host.extensions.set_capability",
             Self::DocumentRelocate(_) => "document.relocate",
             Self::CreateDirectory(_) => "files.create_directory",
             Self::DocumentInspect(_) => "document.inspect",
@@ -165,8 +171,12 @@ impl RequestBody {
             | Self::HostWebStatus(_)
             | Self::HostWebStart(_)
             | Self::HostWebStop(_) => capability::HOST_MANAGE,
-            Self::HostExtensionSetEnabled(_) => capability::EXTENSIONS_MANAGE,
-            Self::HostExtensions(_) => capability::EXTENSIONS_READ,
+            Self::HostExtensionSetEnabled(_) | Self::HostExtensionSetCapability(_) => {
+                capability::EXTENSIONS_MANAGE
+            }
+            Self::HostExtensions(_) | Self::HostExtensionCapabilities(_) => {
+                capability::EXTENSIONS_READ
+            }
             Self::CreateDirectory(_) => capability::FILES_WRITE,
             Self::DocumentInspect(_) => capability::DOCUMENTS_READ,
             Self::DocumentUntitled(_)
@@ -214,6 +224,8 @@ impl RequestBody {
             | Self::HostWebStop(_)
             | Self::HostExtensions(_)
             | Self::HostExtensionSetEnabled(_)
+            | Self::HostExtensionCapabilities(_)
+            | Self::HostExtensionSetCapability(_)
             | Self::DocumentRelocate(_) => None,
             Self::CreateDirectory(request) => Some(&request.workspace_id),
             Self::DocumentUntitled(request) => Some(&request.workspace_id),

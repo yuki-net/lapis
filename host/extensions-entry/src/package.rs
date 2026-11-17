@@ -288,6 +288,29 @@ impl ExtensionLoader {
         catalog: &mut ExtensionCatalog,
         id: &ExtensionPackageId,
     ) -> Result<VerifiedPackage, PackageError> {
+        self.read_installed(catalog, id, true)
+    }
+
+    /// 署名と内容を検証して能力を表示する。実行互換性は付与しない。
+    pub fn inspect_installed(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        id: &ExtensionPackageId,
+    ) -> Result<VerifiedPackage, PackageError> {
+        self.read_installed(catalog, id, false)
+    }
+
+    /// 表示用に読み取った package が現在の Host で実行可能かを照合する。
+    pub fn is_compatible(&self, package: &VerifiedPackage) -> bool {
+        self.contracts.check(&package.manifest.requires).is_ok()
+    }
+
+    fn read_installed(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        id: &ExtensionPackageId,
+        require_compatible: bool,
+    ) -> Result<VerifiedPackage, PackageError> {
         let _lock = lock_install(catalog.root())?;
         crate::journal::recover_locked(catalog)?;
         catalog.reload()?;
@@ -315,9 +338,11 @@ impl ExtensionLoader {
                 "package の file 数が上限を超えています".to_owned(),
             ));
         }
-        self.contracts
-            .check(&manifest.requires)
-            .map_err(|error| PackageError::Malformed(format!("拡張が非互換です: {error}")))?;
+        if require_compatible {
+            self.contracts
+                .check(&manifest.requires)
+                .map_err(|error| PackageError::Malformed(format!("拡張が非互換です: {error}")))?;
+        }
         let mut total = raw.len() as u64;
         let mut files = BTreeMap::new();
         for file in &manifest.files {

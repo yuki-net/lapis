@@ -275,6 +275,19 @@ fn main() {
                 .map_err(|error| error.to_string())
         }
     })
+    .with_extension_capability_manager({
+        let host = host.clone();
+        move |workspace, id, action| {
+            let workspace =
+                client_api::WorkspaceId::try_from(&workspace).map_err(|error| error.to_string())?;
+            if let Some(action) = action {
+                host.set_extension_capability(workspace.clone(), action)
+                    .map_err(|error| error.to_string())?;
+            }
+            host.extension_capabilities(workspace, id)
+                .map_err(|error| error.to_string())
+        }
+    })
     .with_process_session(ProcessSession::new(host.processes(), {
         let local: Arc<dyn process::ProcessRegistry> = local_processes;
         Some(local)

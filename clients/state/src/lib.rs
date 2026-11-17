@@ -9,6 +9,9 @@ use std::{
     thread,
 };
 
+pub use client_api::{
+    HostExtensionCapabilitiesResponse, HostExtensionCapability, HostExtensionSetCapabilityRequest,
+};
 pub use document::Encoding;
 use document::{
     Document, DocumentCache, DocumentConnection, DocumentError, ExternalChange, Position, Revision,

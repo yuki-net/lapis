@@ -62,7 +62,9 @@ pub use error::{
 };
 pub use event::EventBody;
 pub use extensions::{
-    HostExtension, HostExtensionContributions, HostExtensionSetEnabledRequest,
+    HostExtension, HostExtensionCapabilitiesRequest, HostExtensionCapabilitiesResponse,
+    HostExtensionCapability, HostExtensionContributions, HostExtensionSetCapabilityRequest,
+    HostExtensionSetCapabilityResponse, HostExtensionSetEnabledRequest,
     HostExtensionSetEnabledResponse, HostExtensionsListRequest, HostExtensionsListResponse,
 };
 pub use files::{

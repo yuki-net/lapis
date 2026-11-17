@@ -20,6 +20,47 @@ pub struct HostExtensionSetEnabledResponse {
     pub enabled: bool,
 }
 
+/// 検証済み package が要求する能力と承認状態を取得する。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionCapabilitiesRequest {
+    pub id: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionCapability {
+    pub id: String,
+    pub version: String,
+    pub approved: bool,
+    pub supported: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionCapabilitiesResponse {
+    pub id: String,
+    /// 承認対象の検証済み manifest。更新後は再確認を要求する。
+    pub manifest_digest: String,
+    pub capabilities: Vec<HostExtensionCapability>,
+}
+
+/// ユーザーが指定した能力の承認だけを変更する。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionSetCapabilityRequest {
+    pub id: String,
+    pub manifest_digest: String,
+    pub capability: String,
+    pub version: String,
+    pub approved: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostExtensionSetCapabilityResponse {
+    pub id: String,
+    pub manifest_digest: String,
+    pub capability: String,
+    pub version: String,
+    pub approved: bool,
+}
+
 /// 導入済み拡張 1 件の宣言。`enabled` は `installed` を含意する。
 ///
 /// 状態は Host の正本をそのまま写した値であり、Client はこれを表示にだけ使い、
@@ -85,6 +126,34 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<RequestBody>(encoded).unwrap(),
             request
+        );
+    }
+
+    #[test]
+    fn capability_inspection_and_changes_have_separate_permissions() {
+        let read = RequestBody::HostExtensionCapabilities(HostExtensionCapabilitiesRequest {
+            id: "dev.example".into(),
+        });
+        let write = RequestBody::HostExtensionSetCapability(HostExtensionSetCapabilityRequest {
+            id: "dev.example".into(),
+            manifest_digest: "a".repeat(64),
+            capability: "process.pty".into(),
+            version: "1.0.0".into(),
+            approved: true,
+        });
+        assert_eq!(
+            read.required_capability(),
+            crate::capability::EXTENSIONS_READ
+        );
+        assert_eq!(
+            write.required_capability(),
+            crate::capability::EXTENSIONS_MANAGE
+        );
+        assert_eq!(read.workspace_id(), None);
+        assert_eq!(write.workspace_id(), None);
+        assert_eq!(
+            serde_json::from_str::<RequestBody>(&serde_json::to_string(&write).unwrap()).unwrap(),
+            write
         );
     }
 

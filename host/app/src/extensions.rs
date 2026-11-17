@@ -28,8 +28,9 @@ pub(crate) struct HostExtensions {
     inconsistent: Mutex<Option<String>>,
     #[cfg(windows)]
     runtime_packages: Mutex<std::collections::BTreeMap<String, extensions_entry::VerifiedPackage>>,
-    #[cfg(windows)]
     permissions_directory: Option<std::path::PathBuf>,
+    #[cfg(windows)]
+    supports_pty: bool,
 }
 
 enum Catalog {
@@ -369,8 +370,9 @@ impl HostExtensions {
                 inconsistent: Mutex::new(None),
                 #[cfg(windows)]
                 runtime_packages: Mutex::new(std::collections::BTreeMap::new()),
-                #[cfg(windows)]
                 permissions_directory: None,
+                #[cfg(windows)]
+                supports_pty,
             };
         };
         let catalog = match ExtensionCatalog::open(directory.join("extensions")) {
@@ -412,8 +414,9 @@ impl HostExtensions {
             inconsistent: Mutex::new(inconsistent),
             #[cfg(windows)]
             runtime_packages: Mutex::new(std::collections::BTreeMap::new()),
-            #[cfg(windows)]
             permissions_directory: Some(directory.join("extensions")),
+            #[cfg(windows)]
+            supports_pty,
         }
     }
 
@@ -447,23 +450,25 @@ impl HostExtensions {
 
     /// 検証済みの導入 package が宣言した能力だけを承認・取消する。
     #[cfg(windows)]
-    pub(crate) fn set_pty_approval(&self, id: &str, granted: bool) -> Result<(), String> {
+    pub(crate) fn set_pty_approval(
+        &self,
+        id: &str,
+        granted: bool,
+        expected_digest: &str,
+    ) -> Result<(), String> {
         let id = ExtensionPackageId::try_new(id).map_err(|error| error.to_string())?;
         let capability_id = ContractId::try_new("process.pty").expect("valid capability");
         if !granted {
-            let directory = self
-                .permissions_directory
-                .as_ref()
-                .ok_or("拡張の状態ディレクトリがありません")?;
-            return extensions_entry::CapabilityApprovals::new(directory.clone())
-                .revoke_capability(&id, &capability_id)
-                .map_err(|error| error.to_string());
+            return self.revoke_capability(&id, &capability_id);
         }
         let loader = self.loader()?;
         let mut catalog = self.catalog_mut()?;
         let package = loader
             .load_installed(&mut catalog, &id)
             .map_err(|error| error.to_string())?;
+        if package.manifest_digest() != expected_digest {
+            return Err("Extension changed; review permissions again".into());
+        }
         if !declares_pty_contract(&package) {
             return Err("PTY v1 契約が宣言されていません".into());
         }
@@ -476,12 +481,63 @@ impl HostExtensions {
             .map_err(|error| error.to_string())
     }
 
+    pub(crate) fn revoke_capability(
+        &self,
+        id: &ExtensionPackageId,
+        capability: &ContractId,
+    ) -> Result<(), String> {
+        let directory = self
+            .permissions_directory
+            .as_ref()
+            .ok_or("拡張の状態ディレクトリがありません")?;
+        extensions_entry::CapabilityApprovals::new(directory.clone())
+            .revoke_capability(id, capability)
+            .map_err(|error| error.to_string())
+    }
+
     #[cfg(windows)]
     pub(crate) fn runtime_ids(&self) -> Vec<String> {
         self.runtime_packages
             .lock()
             .map(|packages| packages.keys().cloned().collect())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn capabilities(
+        &self,
+        id: &str,
+    ) -> Result<client_api::HostExtensionCapabilitiesResponse, String> {
+        let id = ExtensionPackageId::try_new(id).map_err(|error| error.to_string())?;
+        let loader = self.loader()?;
+        let mut catalog = self.catalog_mut()?;
+        let package = loader
+            .inspect_installed(&mut catalog, &id)
+            .map_err(|error| error.to_string())?;
+        let approvals = extensions_entry::CapabilityApprovals::new(catalog.root().to_owned());
+        let mut capabilities = Vec::new();
+        for capability in &package.manifest.capabilities {
+            #[cfg(windows)]
+            let supported = self.supports_pty
+                && loader.is_compatible(&package)
+                && capability.id.as_str() == "process.pty"
+                && capability.version == semver::Version::new(1, 0, 0)
+                && declares_pty_contract(&package);
+            #[cfg(not(windows))]
+            let supported = false;
+            capabilities.push(client_api::HostExtensionCapability {
+                id: capability.id.as_str().to_owned(),
+                version: capability.version.to_string(),
+                approved: approvals
+                    .is_granted(&package, capability)
+                    .map_err(|error| error.to_string())?,
+                supported,
+            });
+        }
+        Ok(client_api::HostExtensionCapabilitiesResponse {
+            id: id.as_str().to_owned(),
+            manifest_digest: package.manifest_digest().to_owned(),
+            capabilities,
+        })
     }
 
     /// 現在の目録を宣言として返す。
@@ -835,6 +891,10 @@ mod tests {
             .lock()
             .unwrap()
             .insert("dev.example.pty".into(), package);
+        let digest = extensions
+            .capabilities("dev.example.pty")
+            .unwrap()
+            .manifest_digest;
         let broker = crate::extension_pty::PtyBroker::new(extensions);
         let spawn = serde_json::json!({"program":"cmd.exe", "args":["/D", "/C", "ping -n 60 127.0.0.1 >nul"],
             "env":{}, "cwd": state.path().to_string_lossy(), "size":{"columns":80,"rows":24}});
@@ -843,7 +903,14 @@ mod tests {
                 .call("dev.example.pty", "pty.v1.spawn", spawn.clone())
                 .is_err()
         );
-        broker.set_approval("dev.example.pty", true).unwrap();
+        assert!(
+            broker
+                .set_approval("dev.example.pty", true, &"a".repeat(64))
+                .is_err()
+        );
+        broker
+            .set_approval("dev.example.pty", true, &digest)
+            .unwrap();
         let id = broker
             .call("dev.example.pty", "pty.v1.spawn", spawn)
             .unwrap();
@@ -854,7 +921,9 @@ mod tests {
                 serde_json::json!({"id":id}),
             )
             .unwrap();
-        broker.set_approval("dev.example.pty", false).unwrap();
+        broker
+            .set_approval("dev.example.pty", false, &digest)
+            .unwrap();
         assert!(
             broker
                 .call(
@@ -864,7 +933,14 @@ mod tests {
                 )
                 .is_err()
         );
-        broker.set_approval("dev.example.pty", true).unwrap();
+        assert!(
+            broker
+                .set_approval("dev.example.pty", true, &"a".repeat(64))
+                .is_err()
+        );
+        broker
+            .set_approval("dev.example.pty", true, &digest)
+            .unwrap();
         assert!(
             broker
                 .call(
@@ -929,6 +1005,10 @@ mod tests {
         extensions.install(&archive, true).unwrap();
         let (components, _, _, _, failures) = extensions.startup_components();
         assert!(failures.is_empty(), "{failures:?}");
+        let digest = extensions
+            .capabilities("dev.example.pty")
+            .unwrap()
+            .manifest_digest;
         let broker = Arc::new(crate::extension_pty::PtyBroker::new(Arc::new(extensions)));
         let wait_for_running = |supervisor: &ExtensionSupervisor| {
             let deadline = Instant::now() + Duration::from_secs(20);
@@ -952,7 +1032,14 @@ mod tests {
         assert!(failed.contains_key("dev.example.pty"));
         assert_eq!(broker.session_count("dev.example.pty"), 0);
         drop(denied);
-        broker.set_approval("dev.example.pty", true).unwrap();
+        assert!(
+            broker
+                .set_approval("dev.example.pty", true, &"a".repeat(64))
+                .is_err()
+        );
+        broker
+            .set_approval("dev.example.pty", true, &digest)
+            .unwrap();
         let supervisor =
             ExtensionSupervisor::start_with_handler(executable, components, Some(broker.clone()));
         let (active, failed) = wait_for_running(&supervisor);

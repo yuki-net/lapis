@@ -35,6 +35,10 @@ pub enum ResponseBody {
     HostExtensions(crate::HostExtensionsListResponse),
     #[serde(rename = "host.extensions.set_enabled")]
     HostExtensionSetEnabled(crate::HostExtensionSetEnabledResponse),
+    #[serde(rename = "host.extensions.capabilities")]
+    HostExtensionCapabilities(crate::HostExtensionCapabilitiesResponse),
+    #[serde(rename = "host.extensions.set_capability")]
+    HostExtensionSetCapability(crate::HostExtensionSetCapabilityResponse),
     #[serde(rename = "document.relocate")]
     DocumentRelocate(crate::DocumentCloseResponse),
     #[serde(rename = "files.create_directory")]
@@ -118,6 +122,8 @@ impl ResponseBody {
             Self::HostWebStop(_) => Some("host.web.stop"),
             Self::HostExtensions(_) => Some("host.extensions.list"),
             Self::HostExtensionSetEnabled(_) => Some("host.extensions.set_enabled"),
+            Self::HostExtensionCapabilities(_) => Some("host.extensions.capabilities"),
+            Self::HostExtensionSetCapability(_) => Some("host.extensions.set_capability"),
             Self::DocumentRelocate(_) => Some("document.relocate"),
             Self::CreateDirectory(_) => Some("files.create_directory"),
             Self::DocumentInspect(_) => Some("document.inspect"),

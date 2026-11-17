@@ -23,9 +23,15 @@ impl PtyBroker {
         }
     }
 
-    pub(crate) fn set_approval(&self, extension: &str, granted: bool) -> Result<(), String> {
+    pub(crate) fn set_approval(
+        &self,
+        extension: &str,
+        granted: bool,
+        expected_digest: &str,
+    ) -> Result<(), String> {
         let _guard = self.gate.lock().map_err(|error| error.to_string())?;
-        self.extensions.set_pty_approval(extension, granted)?;
+        self.extensions
+            .set_pty_approval(extension, granted, expected_digest)?;
         if !granted {
             self.sessions
                 .close_owner(&PtyOwnerId(extension.to_owned()))

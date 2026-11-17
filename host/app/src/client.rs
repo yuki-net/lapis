@@ -298,6 +298,63 @@ impl BackendClient {
         }
     }
 
+    pub fn extension_capabilities(
+        &self,
+        workspace: WorkspaceId,
+        id: String,
+    ) -> Result<client_api::HostExtensionCapabilitiesResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return host
+                .extension_capabilities(&id)
+                .map_err(BackendServiceError::Connection);
+        }
+        let request = client_api::HostExtensionCapabilitiesRequest { id: id.clone() };
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionCapabilities(request))?
+        {
+            ResponseBody::HostExtensionCapabilities(response) if response.id == id => Ok(response),
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
+    pub fn set_extension_capability(
+        &self,
+        workspace: WorkspaceId,
+        request: client_api::HostExtensionSetCapabilityRequest,
+    ) -> Result<client_api::HostExtensionSetCapabilityResponse, BackendServiceError> {
+        if let Source::Embedded(host) = &self.source {
+            return host
+                .set_extension_capability(&request)
+                .map_err(BackendServiceError::Connection);
+        }
+        match self
+            .connect_workspace(workspace)?
+            .request(RequestBody::HostExtensionSetCapability(request.clone()))?
+        {
+            ResponseBody::HostExtensionSetCapability(response)
+                if response.id == request.id
+                    && response.manifest_digest == request.manifest_digest
+                    && response.capability == request.capability
+                    && response.version == request.version
+                    && response.approved == request.approved =>
+            {
+                Ok(response)
+            }
+            ResponseBody::Error(error) => Err(BackendServiceError::Connection(
+                error
+                    .detail
+                    .unwrap_or_else(|| error.code.as_str().to_owned()),
+            )),
+            _ => Err(BackendServiceError::Unavailable),
+        }
+    }
+
     /// Local Host の Web 公開を開始する。呼び出しは worker で行う。
     pub fn start_web(
         &self,

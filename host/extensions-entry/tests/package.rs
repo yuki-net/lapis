@@ -708,6 +708,7 @@ fn installed_package_must_match_catalog_and_current_contracts() {
     let id = id("dev.example.terminal");
     let incompatible = ExtensionLoader::new(trusted_keys(), HostContracts::new([]));
     assert!(incompatible.load_installed(&mut catalog, &id).is_err());
+    assert!(incompatible.inspect_installed(&mut catalog, &id).is_ok());
 
     let directory = catalog.installed_directory(&id).unwrap();
     let other = extension_manifest(
@@ -720,6 +721,7 @@ fn installed_package_must_match_catalog_and_current_contracts() {
     )
     .unwrap();
     assert!(loader().load_installed(&mut catalog, &id).is_err());
+    assert!(incompatible.inspect_installed(&mut catalog, &id).is_err());
 }
 
 #[test]

@@ -906,6 +906,60 @@ pub async fn set_extension_enabled(id: String, enabled: bool) -> Result<(), Stri
     crate::extension_management::validate_response(response, current, &id, enabled)
 }
 
+pub async fn extension_capabilities(
+    id: String,
+) -> Result<client_api::HostExtensionCapabilitiesResponse, String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected {
+                return Err("Host に接続していません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionCapabilities(client_api::HostExtensionCapabilitiesRequest {
+            id: id.clone(),
+        }),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_capabilities_response(response, current, &id)
+}
+
+pub async fn set_extension_capability(
+    input: client_api::HostExtensionSetCapabilityRequest,
+) -> Result<(), String> {
+    let connection = BACKEND
+        .with(|backend| {
+            let backend = backend.borrow();
+            let state = backend.as_ref().ok_or("Host に接続していません")?;
+            if !state.extensions_connected || !state.can_manage_extensions {
+                return Err("拡張の管理権限がありません");
+            }
+            Ok(state.connection.clone())
+        })
+        .map_err(str::to_owned)?;
+    let response = request(
+        &connection,
+        RequestBody::HostExtensionSetCapability(input.clone()),
+    )
+    .await;
+    let current = BACKEND.with(|backend| {
+        backend.borrow().as_ref().is_some_and(|state| {
+            state.extensions_connected && Rc::ptr_eq(&state.connection, &connection)
+        })
+    });
+    crate::extension_management::validate_capability_update_response(response, current, &input)
+}
+
 /// 古い接続の終了通知で新しい接続を解除しない。
 fn disconnect_extensions(connection: &Rc<BrowserConnection>) {
     BACKEND.with(|backend| {

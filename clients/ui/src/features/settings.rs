@@ -79,6 +79,11 @@ pub(crate) struct SettingsFeature {
     #[cfg(not(target_family = "wasm"))]
     extension_manager: Option<ClientWorker<crate::app::ExtensionManager>>,
     extension_management_busy: bool,
+    capability_info: Option<desktop_client::HostExtensionCapabilitiesResponse>,
+    capability_generation: u64,
+    capability_busy: bool,
+    #[cfg(not(target_family = "wasm"))]
+    capability_manager: Option<ClientWorker<crate::app::ExtensionCapabilityManager>>,
 }
 
 struct ExtensionTextEdit {
@@ -198,12 +203,153 @@ impl SettingsFeature {
             #[cfg(not(target_family = "wasm"))]
             extension_manager: None,
             extension_management_busy: false,
+            capability_info: None,
+            capability_generation: 0,
+            capability_busy: false,
+            #[cfg(not(target_family = "wasm"))]
+            capability_manager: None,
         }
     }
 
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn set_extension_manager(&mut self, manager: Option<crate::app::ExtensionManager>) {
         self.extension_manager = manager.map(ClientWorker::new);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) fn set_extension_capability_manager(
+        &mut self,
+        manager: Option<crate::app::ExtensionCapabilityManager>,
+    ) {
+        self.capability_manager = manager.map(ClientWorker::new);
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn manage_capabilities(
+        &mut self,
+        id: String,
+        action: Option<desktop_client::HostExtensionSetCapabilityRequest>,
+        cx: &mut Context<Self>,
+    ) {
+        if action.is_none() {
+            self.capability_info = None;
+        }
+        let Some(workspace) = self
+            .workspace_id
+            .as_ref()
+            .map(editor_core::WorkspaceId::new)
+        else {
+            self.message = self.t("settings.extensions.workspace-required");
+            cx.notify();
+            return;
+        };
+        let Some(worker) = &self.capability_manager else {
+            self.message = self.t("settings.extensions.read-only");
+            cx.notify();
+            return;
+        };
+        self.capability_generation = self.capability_generation.wrapping_add(1);
+        let generation = self.capability_generation;
+        let extension_generation = self.extension_generation;
+        let issued_workspace = self.workspace_id.clone();
+        let requested_id = id.clone();
+        self.capability_busy = true;
+        if let Err(error) = worker.submit(
+            cx,
+            move |manager| manager(workspace, id, action),
+            move |this, result, cx| {
+                if this.capability_generation != generation
+                    || this.extension_generation != extension_generation
+                    || this.workspace_id != issued_workspace
+                {
+                    return;
+                }
+                this.capability_busy = false;
+                if !this.extension_is_current(&requested_id) {
+                    this.capability_info = None;
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(info) => {
+                        this.capability_info = Some(info);
+                        this.message.clear();
+                    }
+                    Err(error) => this.message = error,
+                }
+                cx.notify();
+            },
+        ) {
+            self.capability_busy = false;
+            self.message = error;
+        }
+        cx.notify();
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn manage_capabilities(
+        &mut self,
+        id: String,
+        action: Option<desktop_client::HostExtensionSetCapabilityRequest>,
+        cx: &mut Context<Self>,
+    ) {
+        if action.is_none() {
+            self.capability_info = None;
+        }
+        if action.is_some() && !desktop_client::web_host::can_manage_extensions() {
+            self.message = self.t("settings.extensions.read-only");
+            cx.notify();
+            return;
+        }
+        self.capability_generation = self.capability_generation.wrapping_add(1);
+        let generation = self.capability_generation;
+        let extension_generation = self.extension_generation;
+        let requested_id = id.clone();
+        self.capability_busy = true;
+        cx.spawn(async move |this, cx| {
+            let result = async {
+                if let Some(action) = action {
+                    desktop_client::web_host::set_extension_capability(action).await?;
+                }
+                desktop_client::web_host::extension_capabilities(id).await
+            }
+            .await;
+            let _ = this.update(cx, |this, cx| {
+                if this.capability_generation != generation
+                    || this.extension_generation != extension_generation
+                {
+                    return;
+                }
+                this.capability_busy = false;
+                if !this.extension_is_current(&requested_id) {
+                    this.capability_info = None;
+                    cx.notify();
+                    return;
+                }
+                match result {
+                    Ok(info) => {
+                        this.capability_info = Some(info);
+                        this.message.clear();
+                    }
+                    Err(error) => this.message = error,
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn extension_is_current(&self, id: &str) -> bool {
+        self.extension
+            .as_ref()
+            .and_then(|session| session.snapshot())
+            .is_some_and(|snapshot| {
+                snapshot
+                    .extensions()
+                    .iter()
+                    .any(|entry| entry.id == id && entry.installed)
+            })
     }
 
     #[cfg(not(target_family = "wasm"))]
@@ -290,6 +436,9 @@ impl SettingsFeature {
         let generation = self.extension_generation;
         self.extension_edit = None;
         self.extension_management_busy = false;
+        self.capability_generation = self.capability_generation.wrapping_add(1);
+        self.capability_busy = false;
+        self.capability_info = None;
         self.extension_worker = session.clone().map(ClientWorker::new);
         self.extension = session;
         self.refresh_extension_locales(cx);
@@ -309,6 +458,24 @@ impl SettingsFeature {
                                 return false;
                             }
                             if changed {
+                                let snapshot = this
+                                    .extension
+                                    .as_ref()
+                                    .and_then(|session| session.snapshot());
+                                if this.capability_info.as_ref().is_some_and(|info| {
+                                    !snapshot.as_ref().is_some_and(|snapshot| {
+                                        snapshot
+                                            .extensions()
+                                            .iter()
+                                            .any(|entry| entry.id == info.id && entry.installed)
+                                    })
+                                }) || snapshot.is_none()
+                                {
+                                    this.capability_generation =
+                                        this.capability_generation.wrapping_add(1);
+                                    this.capability_busy = false;
+                                    this.capability_info = None;
+                                }
                                 this.refresh_extension_locales(cx);
                             }
                             true
@@ -396,6 +563,9 @@ impl SettingsFeature {
         if self.root != root || self.workspace_id != workspace_id {
             self.root = root;
             self.workspace_id = workspace_id;
+            self.capability_generation = self.capability_generation.wrapping_add(1);
+            self.capability_busy = false;
+            self.capability_info = None;
             if let Some(web) = &mut self.web {
                 web.generation = web.generation.wrapping_add(1);
                 web.status = None;
@@ -1520,6 +1690,7 @@ impl SettingsFeature {
                                 ])
                             })
                             .map(|entry| {
+                                let capability_id = entry.id.clone();
                                 let current = match entry.active {
                                     Some(true) => self.t("settings.extensions.active"),
                                     Some(false) => self.t("settings.extensions.inactive"),
@@ -1553,6 +1724,25 @@ impl SettingsFeature {
                                             .child(format!("{current} · {next}")),
                                     )
                                     .child(action)
+                                    .when(entry.installed && !entry.incompatible, |row| {
+                                        row.child(
+                                            div()
+                                                .id(gpui::SharedString::from(format!(
+                                                    "capabilities-{}",
+                                                    capability_id
+                                                )))
+                                                .text_size(px(12.0))
+                                                .text_color(theme::colors(cx).text_accent)
+                                                .child(self.t("settings.extensions.permissions"))
+                                                .on_click(cx.listener(move |this, _, _, cx| {
+                                                    this.manage_capabilities(
+                                                        capability_id.clone(),
+                                                        None,
+                                                        cx,
+                                                    )
+                                                })),
+                                        )
+                                    })
                             }),
                     ),
             )
@@ -1566,6 +1756,73 @@ impl SettingsFeature {
                     .gap_3()
                     .children(rows),
             );
+        if let Some(info) = &self.capability_info {
+            let mut panel = div()
+                .p_4()
+                .rounded(px(8.0))
+                .bg(theme::colors(cx).background_tertiary)
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(format!(
+                    "{}: {}",
+                    self.t("settings.extensions.permissions"),
+                    info.id
+                ));
+            if info.capabilities.is_empty() {
+                panel = panel.child(self.t("settings.extensions.permissions-empty"));
+            }
+            for capability in &info.capabilities {
+                let description = if capability.id == "process.pty" {
+                    self.t("settings.extensions.pty-description")
+                } else {
+                    format!("{} {}", capability.id, capability.version)
+                };
+                let status = if capability.approved {
+                    self.t("settings.extensions.permission-granted")
+                } else {
+                    self.t("settings.extensions.permission-denied")
+                };
+                let mut row = div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(description)
+                    .child(status);
+                if capability.supported || capability.approved {
+                    let request = desktop_client::HostExtensionSetCapabilityRequest {
+                        id: info.id.clone(),
+                        manifest_digest: info.manifest_digest.clone(),
+                        capability: capability.id.clone(),
+                        version: capability.version.clone(),
+                        approved: !capability.approved,
+                    };
+                    let text = if capability.approved {
+                        self.t("settings.extensions.permission-revoke")
+                    } else {
+                        self.t("settings.extensions.permission-approve")
+                    };
+                    let id = info.id.clone();
+                    let button = div()
+                        .id(gpui::SharedString::from(format!(
+                            "capability-{}-{}",
+                            id, capability.id
+                        )))
+                        .text_size(px(12.0))
+                        .text_color(theme::colors(cx).text_accent)
+                        .child(text);
+                    row = row.child(button.when(!self.capability_busy, |button| {
+                        button.on_click(cx.listener(move |this, _, _, cx| {
+                            this.manage_capabilities(id.clone(), Some(request.clone()), cx)
+                        }))
+                    }));
+                } else {
+                    row = row.child(self.t("settings.extensions.permission-unsupported"));
+                }
+                panel = panel.child(row);
+            }
+            page = page.child(panel);
+        }
         if let Some(edit) = &self.extension_edit {
             page =
                 page.child(
@@ -2427,6 +2684,82 @@ mod tests {
                     .contains(&"extensions.settings")
             )
         });
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[gpui::test]
+    fn capability_failure_and_workspace_change_do_not_show_stale_approval(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (feature, session) = cx.update(|cx| {
+            theme::init(&ThemeId::new("lapis.dark"), None, cx);
+            let settings = desktop_client::SettingsSession::load(Arc::new(MemorySettings)).unwrap();
+            let session = settings.extension_contributions();
+            let generation = session.begin_reload();
+            session
+                .apply(
+                    generation,
+                    serde_json::from_value(serde_json::json!({"extensions":[{
+                "id":"dev.example.pty", "version":"1.0.0", "installed":true, "enabled":true
+            }], "contributions":[]}))
+                    .unwrap(),
+                )
+                .unwrap();
+            SettingsCoordinator::init(settings, cx);
+            let feature = cx.new(SettingsFeature::new);
+            feature.update(cx, |feature, cx| {
+                feature.set_extension_contributions(Some(session.clone()), cx);
+                feature.set_extension_capability_manager(Some(Arc::new(|_, id, action| {
+                    if action.is_some() {
+                        return Err("forbidden".into());
+                    }
+                    Ok(desktop_client::HostExtensionCapabilitiesResponse {
+                        id,
+                        manifest_digest: "a".repeat(64),
+                        capabilities: vec![desktop_client::HostExtensionCapability {
+                            id: "process.pty".into(),
+                            version: "1.0.0".into(),
+                            approved: false,
+                            supported: true,
+                        }],
+                    })
+                })));
+                feature.set_workspace(None, Some("workspace-1".into()), cx);
+                feature.manage_capabilities("dev.example.pty".into(), None, cx);
+            });
+            (feature, session)
+        });
+        let wait = |cx: &mut gpui::TestAppContext| {
+            let deadline = crate::time::Instant::now() + std::time::Duration::from_secs(3);
+            while cx.update(|cx| feature.read(cx).capability_busy) {
+                cx.run_until_parked();
+                assert!(crate::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+        };
+        wait(cx);
+        feature.update(cx, |feature, cx| {
+            assert!(!feature.capability_info.as_ref().unwrap().capabilities[0].approved);
+            feature.manage_capabilities(
+                "dev.example.pty".into(),
+                Some(desktop_client::HostExtensionSetCapabilityRequest {
+                    id: "dev.example.pty".into(),
+                    manifest_digest: "a".repeat(64),
+                    capability: "process.pty".into(),
+                    version: "1.0.0".into(),
+                    approved: true,
+                }),
+                cx,
+            );
+        });
+        wait(cx);
+        feature.update(cx, |feature, cx| {
+            assert_eq!(feature.message, "forbidden");
+            assert!(!feature.capability_info.as_ref().unwrap().capabilities[0].approved);
+            feature.set_workspace(None, Some("workspace-2".into()), cx);
+            assert!(feature.capability_info.is_none());
+        });
+        session.disconnect();
     }
 
     #[gpui::test]

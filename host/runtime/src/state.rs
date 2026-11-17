@@ -619,6 +619,8 @@ impl BackendState {
             | RequestBody::HostWebStop(_)
             | RequestBody::HostExtensions(_)
             | RequestBody::HostExtensionSetEnabled(_)
+            | RequestBody::HostExtensionCapabilities(_)
+            | RequestBody::HostExtensionSetCapability(_)
             | RequestBody::DocumentRelocate(_) => Err(BackendStateError::Unsupported),
             RequestBody::DocumentUntitled(request) => {
                 self.require_workspace(session, &request.workspace_id)?;

@@ -95,6 +95,17 @@ pub type ExtensionManager = std::sync::Arc<
     dyn Fn(editor_core::WorkspaceId, String, bool) -> Result<(), String> + Send + Sync,
 >;
 
+#[cfg(not(target_family = "wasm"))]
+pub type ExtensionCapabilityManager = std::sync::Arc<
+    dyn Fn(
+            editor_core::WorkspaceId,
+            String,
+            Option<desktop_client::HostExtensionSetCapabilityRequest>,
+        ) -> Result<desktop_client::HostExtensionCapabilitiesResponse, String>
+        + Send
+        + Sync,
+>;
+
 pub struct DesktopServices {
     pub(crate) connect_host: Option<std::sync::Arc<dyn Fn() -> Result<(), String> + Send + Sync>>,
     pub(crate) connection: Option<ConnectionIdentity>,
@@ -120,6 +131,8 @@ pub struct DesktopServices {
     pub(crate) extension_loader: Option<crate::extension_loading::Loader>,
     #[cfg(not(target_family = "wasm"))]
     pub(crate) extension_manager: Option<ExtensionManager>,
+    #[cfg(not(target_family = "wasm"))]
+    pub(crate) extension_capability_manager: Option<ExtensionCapabilityManager>,
 }
 
 /// 更新処理の共有 handle。UI は Controller だけを呼び、状態は Watch を購読する。
@@ -190,6 +203,8 @@ impl DesktopServices {
             extension_loader: None,
             #[cfg(not(target_family = "wasm"))]
             extension_manager: None,
+            #[cfg(not(target_family = "wasm"))]
+            extension_capability_manager: None,
         }
     }
     pub fn with_web_access_control(
@@ -260,6 +275,21 @@ impl DesktopServices {
         self.extension_manager = Some(std::sync::Arc::new(manager));
         self
     }
+    #[cfg(not(target_family = "wasm"))]
+    pub fn with_extension_capability_manager(
+        mut self,
+        manager: impl Fn(
+            editor_core::WorkspaceId,
+            String,
+            Option<desktop_client::HostExtensionSetCapabilityRequest>,
+        ) -> Result<desktop_client::HostExtensionCapabilitiesResponse, String>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.extension_capability_manager = Some(std::sync::Arc::new(manager));
+        self
+    }
     pub fn session_view(&self) -> Option<&SessionViewHandle> {
         self.session_view.as_ref()
     }
@@ -324,6 +354,8 @@ pub(crate) struct WindowFactory {
     extension_loader: Option<crate::extension_loading::Loader>,
     #[cfg(not(target_family = "wasm"))]
     extension_manager: Option<ExtensionManager>,
+    #[cfg(not(target_family = "wasm"))]
+    extension_capability_manager: Option<ExtensionCapabilityManager>,
 }
 impl WindowFactory {
     pub(crate) fn path_scope(&self) -> Option<std::path::PathBuf> {
@@ -353,6 +385,8 @@ impl WindowFactory {
             extension_loader: services.extension_loader.clone(),
             #[cfg(not(target_family = "wasm"))]
             extension_manager: services.extension_manager.clone(),
+            #[cfg(not(target_family = "wasm"))]
+            extension_capability_manager: services.extension_capability_manager.clone(),
         }
     }
     pub(crate) fn build(self) -> (EditorSession, DesktopServices) {
@@ -379,6 +413,7 @@ impl WindowFactory {
         {
             services.extension_loader = self.extension_loader;
             services.extension_manager = self.extension_manager;
+            services.extension_capability_manager = self.extension_capability_manager;
         }
         (editor, services)
     }

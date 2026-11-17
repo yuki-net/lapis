@@ -497,10 +497,44 @@ impl BackendHost {
         self.inner.extensions.set_enabled(id, enabled)
     }
 
-    /// 導入済み拡張の PTY 能力を承認する。取消時は同拡張の PTY を終了する。
-    #[cfg(windows)]
-    pub fn set_extension_pty_approval(&self, id: &str, granted: bool) -> Result<(), String> {
-        self.inner.extension_pty.set_approval(id, granted)
+    pub fn extension_capabilities(
+        &self,
+        id: &str,
+    ) -> Result<client_api::HostExtensionCapabilitiesResponse, String> {
+        self.inner.extensions.capabilities(id)
+    }
+
+    pub fn set_extension_capability(
+        &self,
+        request: &client_api::HostExtensionSetCapabilityRequest,
+    ) -> Result<client_api::HostExtensionSetCapabilityResponse, String> {
+        if request.capability != "process.pty" || request.version != "1.0.0" {
+            return Err("未対応の能力です".into());
+        }
+        #[cfg(windows)]
+        self.inner.extension_pty.set_approval(
+            &request.id,
+            request.approved,
+            &request.manifest_digest,
+        )?;
+        #[cfg(not(windows))]
+        {
+            if request.approved {
+                return Err("この Host は PTY 能力を提供していません".into());
+            }
+            let id = extensions_entry::ExtensionPackageId::try_new(&request.id)
+                .map_err(|error| error.to_string())?;
+            let capability = extensions_entry::ContractId::try_new(&request.capability)
+                .map_err(|error| error.to_string())?;
+            self.inner.extensions.revoke_capability(&id, &capability)?;
+        }
+        Ok(client_api::HostExtensionSetCapabilityResponse {
+            id: request.id.clone(),
+            manifest_digest: request.manifest_digest.clone(),
+            capability: request.capability.clone(),
+            version: request.version.clone(),
+            approved: request.approved,
+        })
     }
 
     /// 導入済み package を取り除く。拡張データは残す。

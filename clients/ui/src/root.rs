@@ -274,7 +274,9 @@ impl DesktopRoot {
         });
         #[cfg(not(target_family = "wasm"))]
         settings.update(cx, |settings, _| {
-            settings.set_extension_manager(services.extension_manager.clone())
+            settings.set_extension_manager(services.extension_manager.clone());
+            settings
+                .set_extension_capability_manager(services.extension_capability_manager.clone());
         });
         let update = services
             .updater
