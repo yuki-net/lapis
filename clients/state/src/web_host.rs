@@ -18,9 +18,9 @@ use crate::{
 use client_api::{
     ClientKind, DocumentInspectRequest, HostExtensionsListRequest, HostExtensionsListResponse,
     RequestBody, ResponseBody, Revision as ApiRevision, SnapshotReason, SnapshotRequest,
-    TerminalListProfilesRequest, WorkbenchGetRequest, WorkspaceCloseRequest,
-    WorkspaceConnectRequest, WorkspaceId as ApiWorkspaceId, WorkspaceListRequest,
-    WorkspaceRelativePath, WorkspaceSummary, WorkspaceViewUnsubscribeRequest,
+    WorkbenchGetRequest, WorkspaceCloseRequest, WorkspaceConnectRequest,
+    WorkspaceId as ApiWorkspaceId, WorkspaceListRequest, WorkspaceRelativePath, WorkspaceSummary,
+    WorkspaceViewUnsubscribeRequest,
 };
 use client_core::browser::{BrowserConnection, WebClientConnectOptions, connect_web_client};
 use document::{
@@ -53,7 +53,7 @@ pub use crate::web_replica::ROOT;
 
 use crate::web_cache::{CachedWorkspace, WorkspaceCache};
 use crate::web_replica::{
-    DocumentState, Replica, TerminalState, cache_of, local_id, terminal_state, versioned_workbench,
+    DocumentState, Replica, TerminalState, cache_of, local_id, versioned_workbench,
 };
 use crate::web_switch::{self, Command, Operation};
 use transport::{event_pump, fetch_tree, preload, preload_workbench, pump, request};
@@ -243,46 +243,14 @@ pub async fn connect(config: HostConfig) -> Result<Option<String>, String> {
         _ => return Err("Workspace identityを取得できません".to_owned()),
     };
     let entries = fetch_tree(&connection, &api_workspace).await?;
-    let terminals = match request(
-        &connection,
-        RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: api_workspace.clone(),
-            reason: SnapshotReason::Reconnect,
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
-        _ => Vec::new(),
-    };
-    let profiles = match request(
-        &connection,
-        RequestBody::TerminalListProfiles(TerminalListProfilesRequest {
-            workspace_id: api_workspace.clone(),
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::TerminalListProfiles(response)) => response.profiles,
-        _ => terminal::TerminalProfiles::default(),
-    };
     let replica = Rc::new(RefCell::new(Replica::new(
         workspace.clone(),
         entries,
         connection
             .session_id()
             .map(|session| SessionId::new(session.as_str())),
-        profiles,
+        terminal::TerminalProfiles::default(),
     )));
-    {
-        let mut replica = replica.borrow_mut();
-        for terminal in terminals {
-            let local = TerminalId::new(format!("web-terminal-{}", replica.next_terminal));
-            replica.next_terminal += 1;
-            let state = terminal_state(&local, &terminal);
-            replica.terminals.insert(local.as_str().to_owned(), state);
-        }
-    }
     if let Ok(ResponseBody::WorkbenchGet(snapshot)) = request(
         &connection,
         RequestBody::WorkbenchGet(WorkbenchGetRequest {
@@ -478,29 +446,6 @@ async fn switch_workspace_inner(
             return Err(fail_switch(connection, &current_api, Some(requested), error).await);
         }
     };
-    let terminals = match request(
-        connection,
-        RequestBody::SnapshotResync(SnapshotRequest {
-            workspace_id: requested.clone(),
-            reason: SnapshotReason::Reconnect,
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::SnapshotResync(response)) => response.snapshot.terminals,
-        _ => Vec::new(),
-    };
-    let profiles = match request(
-        connection,
-        RequestBody::TerminalListProfiles(TerminalListProfilesRequest {
-            workspace_id: requested.clone(),
-        }),
-    )
-    .await
-    {
-        Ok(ResponseBody::TerminalListProfiles(response)) => response.profiles,
-        _ => terminal::TerminalProfiles::default(),
-    };
     let workbench = match request(
         connection,
         RequestBody::WorkbenchGet(WorkbenchGetRequest {
@@ -520,20 +465,17 @@ async fn switch_workspace_inner(
         let replica = replica.borrow();
         (replica.next, replica.next_terminal, replica.session.clone())
     };
-    let mut next_replica = Replica::new(workspace.clone(), entries, session, profiles);
+    let mut next_replica = Replica::new(
+        workspace.clone(),
+        entries,
+        session,
+        terminal::TerminalProfiles::default(),
+    );
     next_replica.next = next;
     next_replica.next_terminal = next_terminal;
     next_replica.workbench = workbench::WorkbenchReplica::default();
     if let Some(state) = workbench {
         let _ = next_replica.workbench.open(state);
-    }
-    for terminal in terminals {
-        let local = TerminalId::new(format!("web-terminal-{}", next_replica.next_terminal));
-        next_replica.next_terminal += 1;
-        let state = terminal_state(&local, &terminal);
-        next_replica
-            .terminals
-            .insert(local.as_str().to_owned(), state);
     }
     let replica = install_workspace(current, workspace, workspace_identity, next_replica, false)?;
     preload_workbench(connection, &replica, requested).await;

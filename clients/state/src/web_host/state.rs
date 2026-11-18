@@ -264,27 +264,6 @@ pub(crate) fn model_terminal_snapshot(
     }
 }
 
-/// Host snapshot から、接続直後に使うローカル Terminal 状態を作る。
-pub(crate) fn terminal_state(local: &TerminalId, snapshot: &WireTerminalSnapshot) -> TerminalState {
-    let modeled = model_terminal_snapshot(local, snapshot);
-    let mut state = TerminalState {
-        host: Some(snapshot.terminal_id.clone()),
-        snapshot: Some(modeled.clone()),
-        owner: None,
-        events: vec![TerminalEvent::Snapshot(modeled)],
-        finished: false,
-    };
-    // 初期 snapshot の owner も UI が知る必要がある。
-    set_terminal_owner(
-        &mut state,
-        snapshot
-            .owner
-            .as_ref()
-            .map(|owner| owner.as_str().to_owned()),
-    );
-    state
-}
-
 pub(crate) fn diff_chars(previous: &str, next: &str) -> (u64, u64, String) {
     let previous_chars: Vec<char> = previous.chars().collect();
     let next_chars: Vec<char> = next.chars().collect();
