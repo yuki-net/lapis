@@ -5,17 +5,13 @@ use std::{
 };
 
 use ::document::Document;
-use ::terminal::TerminalBackend;
 use client_api::git as git_api;
 use client_api::{
     DocumentCloseResponse, DocumentCreateResponse, DocumentEditResponse, DocumentEncoding,
     DocumentHistoryResponse, DocumentId, DocumentOpenResponse, DocumentSaveResponse, ErrorCode,
     EventBody, EventEnvelope, FORBIDDEN, FileTreeEntry, FileTreeKind, FileTreeResponse, INTERNAL,
     INVALID_PATH, INVALID_REQUEST, NOT_FOUND, ProtocolError, RequestBody, RequestEnvelope,
-    ResponseBody, ResponseEnvelope, Revision, SessionId, SnapshotResponse, TerminalClaimRequest,
-    TerminalCommandResponse, TerminalId, TerminalInputRequest, TerminalListProfilesRequest,
-    TerminalListProfilesResponse, TerminalReleaseRequest, TerminalResizeRequest,
-    TerminalStartRequest, TerminalStartResponse, TerminalTerminateRequest, UNSUPPORTED,
+    ResponseBody, ResponseEnvelope, Revision, SessionId, SnapshotResponse, UNSUPPORTED,
     WorkspaceCloseResponse, WorkspaceConnectResponse, WorkspaceId, WorkspaceIdentitySnapshot,
     WorkspaceListResponse, WorkspaceRelativePath, WorkspaceSnapshot, WorkspaceSummary,
 };
@@ -23,12 +19,10 @@ use document_state::{DocumentRegistry, DocumentResource};
 use text::TextEdit;
 
 use crate::{BackendStateError, WorkspaceEntryKind, WorkspaceFileBackend, WorkspacePathResolver};
-use terminal_state::TerminalRegistry;
 
 mod document;
 mod event;
 mod git_state;
-mod terminal;
 mod view;
 mod workspace;
 
@@ -62,10 +56,9 @@ pub struct WorkspaceRegistration {
     pub name: String,
     pub root: PathBuf,
     pub files: Arc<dyn WorkspaceFileBackend>,
-    pub terminal: Option<Arc<dyn TerminalBackend>>,
     pub git: Option<Arc<dyn git_api::GitBackend>>,
     pub tasks: Option<Arc<dyn task::TaskBackend>>,
-    /// Host が spawn したプロセスのレジストリ。Terminal / Task Run の所有関係を登録する。
+    /// Host が spawn したプロセスのレジストリ。
     pub processes: Option<Arc<dyn process::ProcessRegistry>>,
     pub workbench_persistence: Option<Arc<dyn crate::WorkbenchPersistence>>,
     /// Document の編集権を無操作で解放するまでの時間。`None` は既定値。
@@ -85,7 +78,6 @@ impl WorkspaceRegistration {
             name: name.into(),
             root,
             files,
-            terminal: None,
             git: None,
             tasks: None,
             processes: None,
@@ -113,10 +105,6 @@ impl WorkspaceRegistration {
         self.processes = Some(processes);
         self
     }
-    pub fn with_terminal(mut self, terminal: Arc<dyn TerminalBackend>) -> Self {
-        self.terminal = Some(terminal);
-        self
-    }
     pub fn with_workbench_persistence(
         mut self,
         persistence: Arc<dyn crate::WorkbenchPersistence>,
@@ -134,7 +122,6 @@ pub struct BackendState {
     connected_sessions: HashMap<SessionId, WorkspaceId>,
     next_document_id: u64,
     document_epoch: u128,
-    next_terminal_id: u64,
 }
 
 pub(crate) struct DispatchOutcome {
@@ -229,21 +216,19 @@ impl BackendState {
         }
         for (id, workspace) in &self.workspaces {
             let within = workspace.resolver.root().starts_with(&root);
-            if workspace.terminals.active_in(&root)
-                || workspace.documents.values().any(|document| {
-                    (within
-                        || document
-                            .document
-                            .path()
-                            .is_some_and(|path| path.starts_with(&root)))
-                        && (document.document.is_dirty() || !document.attached_sessions.is_empty())
-                })
-                || within
-                    && (self
-                        .connected_sessions
-                        .values()
-                        .any(|connected| connected == id)
-                        || self.active_operations.get(id).copied().unwrap_or(0) != 0)
+            if workspace.documents.values().any(|document| {
+                (within
+                    || document
+                        .document
+                        .path()
+                        .is_some_and(|path| path.starts_with(&root)))
+                    && (document.document.is_dirty() || !document.attached_sessions.is_empty())
+            }) || within
+                && (self
+                    .connected_sessions
+                    .values()
+                    .any(|connected| connected == id)
+                    || self.active_operations.get(id).copied().unwrap_or(0) != 0)
             {
                 return Err(BackendStateError::Operation("Worktreeが使用中です。文書の未保存変更を保存・退避し、Terminalを終了して作業環境を切り替えてください".into()));
             }
@@ -485,7 +470,6 @@ impl BackendState {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_nanos(),
-            next_terminal_id: 1,
         })
     }
 
@@ -533,7 +517,6 @@ impl BackendState {
                     published.push(event);
                 }
             }
-            workspace.terminals.detach(session_id);
         }
         published
     }
@@ -749,34 +732,13 @@ impl BackendState {
                 self.require_connected(session)?;
                 self.snapshot(session)
             }
-            RequestBody::TerminalStart(request) => {
-                self.require_workspace(session, &request.workspace_id)?;
-                self.require_connected(session)?;
-                self.terminal_start(session, request)
-            }
-            RequestBody::TerminalListProfiles(request) => {
-                self.terminal_list_profiles(session, request)
-            }
-            RequestBody::TerminalInput(request) => {
-                self.require_connected(session)?;
-                self.terminal_input(session, request)
-            }
-            RequestBody::TerminalResize(request) => {
-                self.require_connected(session)?;
-                self.terminal_resize(session, request)
-            }
-            RequestBody::TerminalTerminate(request) => {
-                self.require_connected(session)?;
-                self.terminal_terminate(session, request)
-            }
-            RequestBody::TerminalClaim(request) => {
-                self.require_connected(session)?;
-                self.terminal_claim(session, request)
-            }
-            RequestBody::TerminalRelease(request) => {
-                self.require_connected(session)?;
-                self.terminal_release(session, request)
-            }
+            RequestBody::TerminalStart(_)
+            | RequestBody::TerminalListProfiles(_)
+            | RequestBody::TerminalInput(_)
+            | RequestBody::TerminalResize(_)
+            | RequestBody::TerminalTerminate(_)
+            | RequestBody::TerminalClaim(_)
+            | RequestBody::TerminalRelease(_) => Err(BackendStateError::Unsupported),
         }
     }
 
@@ -790,16 +752,13 @@ impl BackendState {
             .values()
             .map(|document| document::document_snapshot(workspace, document))
             .collect::<Result<Vec<_>, _>>()?;
-        let terminals = workspace
-            .terminals
-            .snapshots_for_session(&session.session_id, &workspace.summary.workspace_id);
         Ok((
             ResponseBody::SnapshotResync(SnapshotResponse {
                 snapshot: WorkspaceSnapshot {
                     event_watermark: workspace.events.watermark(),
                     workspace: workspace.summary.clone(),
                     documents,
-                    terminals,
+                    terminals: Vec::new(),
                     git_repositories: workspace.git.statuses().cloned().collect(),
                 },
             }),
@@ -860,41 +819,6 @@ impl BackendState {
             self.document_epoch
         ))
         .map_err(|_| BackendStateError::CounterOverflow)
-    }
-
-    fn allocate_terminal_id(&mut self) -> Result<TerminalId, BackendStateError> {
-        let value = self.next_terminal_id;
-        self.next_terminal_id = self
-            .next_terminal_id
-            .checked_add(1)
-            .ok_or(BackendStateError::CounterOverflow)?;
-        TerminalId::try_new(format!(
-            "terminal-{}-{}-{value}",
-            std::process::id(),
-            self.document_epoch
-        ))
-        .map_err(|_| BackendStateError::CounterOverflow)
-    }
-
-    /// Terminal 出力の到着通知を受け取る。Workspace ごとに 1 度だけ取得する。
-    pub(crate) fn take_terminal_changes(
-        &mut self,
-    ) -> Vec<futures::channel::mpsc::UnboundedReceiver<()>> {
-        self.workspaces
-            .values()
-            .filter_map(|workspace| workspace.terminals.take_changes())
-            .collect()
-    }
-
-    pub(crate) fn poll_terminals(&mut self) -> Result<Vec<PublishedEvent>, BackendStateError> {
-        let mut published = Vec::new();
-        for workspace in self.workspaces.values_mut() {
-            let events = workspace.terminals.poll()?;
-            for event in events {
-                published.push(workspace.publish(event)?);
-            }
-        }
-        Ok(published)
     }
 
     pub(crate) fn poll_document_owners(
@@ -975,7 +899,6 @@ struct WorkspaceState {
     resolver: WorkspacePathResolver,
     files: Arc<dyn WorkspaceFileBackend>,
     documents: DocumentRegistry,
-    terminals: TerminalRegistry,
     operations: Arc<Mutex<crate::operations::WorkspaceOperations>>,
     events: EventJournal,
     git: git_state::GitState,
@@ -1006,13 +929,6 @@ impl WorkspaceState {
             name: registration.name.clone(),
             root_name: root_name(&registration.root),
         };
-        let mut terminals = TerminalRegistry::new(registration.terminal);
-        if let Some(processes) = registration.processes.clone() {
-            terminals = terminals.with_processes(
-                processes,
-                editor_core::WorkspaceId::new(registration.workspace_id.as_str()),
-            );
-        }
         Ok(Self {
             workbench: registration.workbench_initial,
             view: view::SessionViewState::default(),
@@ -1024,7 +940,6 @@ impl WorkspaceState {
             resolver: WorkspacePathResolver::new(registration.root)?,
             files: registration.files,
             documents,
-            terminals,
             operations: Arc::new(Mutex::new(crate::operations::WorkspaceOperations::new(
                 registration.git,
                 registration.tasks,
@@ -1067,10 +982,6 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         return ProtocolError::new(ErrorCode::try_new(INVALID_REQUEST).expect("valid code"))
             .with_detail("他のClientが編集中です");
     }
-    if matches!(&error, BackendStateError::TerminalNotOwner) {
-        return ProtocolError::new(ErrorCode::try_new(INVALID_REQUEST).expect("valid code"))
-            .with_detail("他のClientが操作中です");
-    }
     if let BackendStateError::Document(ref document) = error
         && document.kind() == ::document::DocumentErrorKind::Conflict
     {
@@ -1080,25 +991,15 @@ pub(crate) fn protocol_error(error: BackendStateError) -> ProtocolError {
         return ProtocolError::revision_conflict(conflict);
     }
     let code = match error {
-        BackendStateError::WorkspaceNotFound
-        | BackendStateError::DocumentNotFound
-        | BackendStateError::TerminalNotFound => NOT_FOUND,
-        BackendStateError::WorkspaceDenied
-        | BackendStateError::DocumentNotAttached
-        | BackendStateError::TerminalNotAttached => FORBIDDEN,
+        BackendStateError::WorkspaceNotFound | BackendStateError::DocumentNotFound => NOT_FOUND,
+        BackendStateError::WorkspaceDenied | BackendStateError::DocumentNotAttached => FORBIDDEN,
         BackendStateError::DocumentNotOwner => INVALID_REQUEST,
         BackendStateError::WorkspaceNotConnected
         | BackendStateError::DuplicateWorkspace
         | BackendStateError::Document(_)
-        | BackendStateError::TerminalNotRunning
-        | BackendStateError::TerminalNotOwner
-        | BackendStateError::InvalidWorkbench
-        | BackendStateError::InvalidTerminalSize
-        | BackendStateError::TerminalProfileDenied => INVALID_REQUEST,
+        | BackendStateError::InvalidWorkbench => INVALID_REQUEST,
         BackendStateError::Path(_) => INVALID_PATH,
-        BackendStateError::CounterOverflow
-        | BackendStateError::Terminal(_)
-        | BackendStateError::Operation(_) => INTERNAL,
+        BackendStateError::CounterOverflow | BackendStateError::Operation(_) => INTERNAL,
         BackendStateError::Unsupported => UNSUPPORTED,
         BackendStateError::RevisionConflict(_) => unreachable!("handled above"),
     };

@@ -21,7 +21,6 @@ mod extension_pty;
 mod extensions;
 mod features;
 mod session_view;
-mod terminal;
 mod web_publisher;
 mod workbench;
 mod workspace;
@@ -58,7 +57,6 @@ pub fn supported_capabilities() -> client_api::CapabilitySet {
     .expect("bounded capabilities")
 }
 
-use ::terminal::TerminalBackend;
 use backend_state::{
     BackendService, BackendServiceError, BackendState, EmbeddedClient, WorkspaceRegistration,
 };
@@ -474,9 +472,6 @@ impl BackendHost {
     pub fn tasks(&self) -> Arc<dyn task::TaskConnection> {
         BackendClient::from(self.clone()).tasks()
     }
-    pub fn terminals(&self) -> Arc<dyn TerminalBackend> {
-        BackendClient::from(self.clone()).terminals()
-    }
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         BackendClient::from(self.clone()).processes()
     }
@@ -577,18 +572,5 @@ impl BackendHost {
     /// 導入済み package を取り除く。拡張データは残す。
     pub fn remove_extension(&self, id: &str) -> Result<(), String> {
         self.inner.extensions.remove(id)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn workspace_has_no_builtin_terminal_backend() {
-        let directory = tempfile::tempdir().unwrap();
-        let host = BackendHost::start().unwrap();
-        host.register_workspace(directory.path()).unwrap();
-        assert!(host.terminals().start(directory.path(), 80, 24).is_err());
     }
 }

@@ -519,8 +519,21 @@ fn embedded_clients_share_document_revisions_and_reconnect_state() {
 fn legacy_terminal_requests_are_unavailable_without_an_extension() {
     let root = tempfile::tempdir().unwrap();
     let host = BackendHost::start().unwrap();
-    host.register_workspace(root.path()).unwrap();
-    let terminals = host.terminals();
-    assert!(terminals.start(root.path(), 80, 24).is_err());
-    assert!(terminals.list(root.path()).unwrap().is_empty());
+    let workspace = host.register_workspace(root.path()).unwrap();
+    let client = host.connect(root.path()).unwrap();
+    let response = client
+        .request(RequestBody::TerminalStart(
+            client_api::TerminalStartRequest {
+                workspace_id: workspace,
+                cwd: None,
+                command: None,
+                profile: None,
+                size: client_api::TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                },
+            },
+        ))
+        .unwrap();
+    assert!(matches!(response, ResponseBody::Error(_)));
 }

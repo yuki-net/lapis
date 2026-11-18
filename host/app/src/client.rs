@@ -232,9 +232,6 @@ impl BackendClient {
     pub fn tasks(&self) -> Arc<dyn task::TaskConnection> {
         Arc::new(crate::features::HostTasks::new(self.clone()))
     }
-    pub fn terminals(&self) -> Arc<dyn terminal::TerminalBackend> {
-        Arc::new(crate::terminal::HostTerminals::new(self.clone()))
-    }
     pub fn processes(&self) -> Arc<dyn process::ProcessConnection> {
         Arc::new(crate::features::HostProcesses::new(self.clone()))
     }

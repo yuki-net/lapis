@@ -965,65 +965,12 @@ fn git_snapshots_reject_absolute_backend_file_paths() {
 }
 
 #[test]
-fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
+fn slow_git_does_not_block_documents_or_other_workspaces() {
     use std::sync::mpsc;
     use std::time::Duration;
-    struct Terminal(mpsc::Sender<()>);
-    impl terminal::TerminalBackend for Terminal {
-        fn start(
-            &self,
-            _: &Path,
-            _: u16,
-            _: u16,
-        ) -> Result<terminal::TerminalId, terminal::TerminalError> {
-            Ok(terminal::TerminalId::new("native"))
-        }
-        fn input(
-            &self,
-            _: &terminal::TerminalId,
-            _: &terminal::TerminalInput,
-        ) -> Result<(), terminal::TerminalError> {
-            Ok(())
-        }
-        fn resize(
-            &self,
-            _: &terminal::TerminalId,
-            _: u16,
-            _: u16,
-        ) -> Result<(), terminal::TerminalError> {
-            Ok(())
-        }
-        fn resize_delta(
-            &self,
-            _: &terminal::TerminalId,
-            _: u16,
-            _: u16,
-        ) -> Result<terminal::TerminalDelta, terminal::TerminalError> {
-            Ok(terminal::TerminalDelta {
-                revision: 1,
-                size: terminal::TerminalSize::new(80, 24),
-                changed_rows: Vec::new(),
-                cursor: Default::default(),
-                modes: Default::default(),
-                scrollback: None,
-            })
-        }
-        fn terminate(&self, _: &terminal::TerminalId) -> Result<(), terminal::TerminalError> {
-            Ok(())
-        }
-        fn poll(
-            &self,
-            _: &terminal::TerminalId,
-        ) -> Result<Vec<terminal::TerminalEvent>, terminal::TerminalError> {
-            let _ = self.0.send(());
-            Ok(Vec::new())
-        }
-    }
     let root = tempfile::tempdir().unwrap();
     let other = tempfile::tempdir().unwrap();
     let git = Arc::new(FakeGit::default());
-    let (polled, polls) = mpsc::channel();
-    let terminal = Arc::new(Terminal(polled));
     let registrations = [("first", &root), ("second", &other)].map(|(name, directory)| {
         WorkspaceRegistration::new(
             WorkspaceId::try_new(name).unwrap(),
@@ -1032,7 +979,6 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
             Arc::new(EmptyFiles),
         )
         .with_git(git.clone())
-        .with_terminal(terminal.clone())
     });
     let service = BackendService::start(BackendState::new(registrations).unwrap()).unwrap();
     let connect = |name: &str, workspace: &str| {
@@ -1046,30 +992,12 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
     let slow = connect("slow-git", "first");
     let documents = connect("documents", "first");
     let second = connect("other-workspace", "second");
-    assert!(matches!(
-        documents
-            .request(RequestBody::TerminalStart(
-                client_api::TerminalStartRequest {
-                    workspace_id: documents.workspace_id().clone(),
-                    cwd: None,
-                    command: None,
-                    profile: None,
-                    size: client_api::TerminalSize {
-                        columns: 80,
-                        rows: 24
-                    },
-                }
-            ))
-            .unwrap(),
-        ResponseBody::TerminalStart(_)
-    ));
     let (entered, started) = mpsc::channel();
     let (release, resume) = mpsc::channel();
     *git.blocked_status.lock().unwrap() = Some((entered, resume));
     let slow_thread =
         std::thread::spawn(move || execute(&slow, Operation::GitStatus { worktree: None }));
     started.recv_timeout(Duration::from_secs(2)).unwrap();
-    while polls.try_recv().is_ok() {}
     let (respond, receive) = mpsc::channel();
     let document_thread = std::thread::spawn(move || {
         let document = documents
@@ -1083,7 +1011,6 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
         respond.send((document, other)).unwrap();
     });
     let independent = receive.recv_timeout(Duration::from_secs(2));
-    let polling = polls.recv_timeout(Duration::from_secs(2));
     release.send(()).unwrap();
     assert!(matches!(
         slow_thread.join().unwrap(),
@@ -1093,7 +1020,6 @@ fn slow_git_does_not_block_documents_other_workspaces_or_terminal_polling() {
     let (document, other) = independent.expect("Git I/O must not hold the Runtime worker");
     assert!(matches!(document, ResponseBody::DocumentUntitled(_)));
     assert!(matches!(other, ResponseBody::WorkspaceExecute(_)));
-    polling.expect("Terminal polling must continue while Git is blocked");
 }
 
 #[test]

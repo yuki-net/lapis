@@ -1,4 +1,4 @@
-//! DesktopとRemote clientが共有するWorkspace・Document・Terminalの正規状態。
+//! Desktop と Remote client が共有する Workspace・Document の正規状態。
 
 mod client;
 mod error;
