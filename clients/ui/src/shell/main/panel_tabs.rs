@@ -8,7 +8,7 @@ impl Shell {
                 .zone_contributions(position)
                 .into_iter()
                 .find(|contribution| contribution.view.as_ref() == Some(view))
-                .map(|contribution| self.locale.resolve(&contribution.title))
+                .map(|contribution| self.contribution_title(contribution))
                 .unwrap_or_else(|| view.as_str().to_owned()),
             PanelTab::Document(document_id) => self
                 .session

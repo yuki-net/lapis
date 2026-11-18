@@ -12,7 +12,7 @@ impl Shell {
             .filter_map(|contribution| {
                 Some((
                     contribution.view.clone()?,
-                    self.locale.resolve(&contribution.title),
+                    self.contribution_title(contribution),
                     contribution.icon.as_str().to_owned(),
                     contribution
                         .category

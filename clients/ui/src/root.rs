@@ -44,6 +44,33 @@ fn extension_view_available(
     snapshot.is_some_and(|snapshot| snapshot.has_active_view(owner, content_type))
 }
 
+/// 切断中や起動中は直前の表示状態を維持し、確定した目録だけで切り替える。
+fn extension_view_hidden(
+    snapshot: Option<&desktop_client::ExtensionContributionSnapshot>,
+    owner: &str,
+    content_type: &str,
+) -> Option<bool> {
+    let snapshot = snapshot?;
+    if snapshot
+        .extensions()
+        .iter()
+        .find(|entry| entry.id == owner)
+        .is_some_and(|entry| entry.active.is_none())
+    {
+        return None;
+    }
+    Some(!snapshot.has_active_view(owner, content_type))
+}
+
+fn contributed_zone(zone: extension_ui_contract::ContributedZone) -> ZonePosition {
+    match zone {
+        extension_ui_contract::ContributedZone::Main => ZonePosition::Main,
+        extension_ui_contract::ContributedZone::Left => ZonePosition::Left,
+        extension_ui_contract::ContributedZone::Bottom => ZonePosition::Bottom,
+        extension_ui_contract::ContributedZone::Right => ZonePosition::Right,
+    }
+}
+
 /// 共有ハンドルから、適用判定を持つ watch を取り出す。
 fn session_view_watch_of(
     handle: &crate::app::SessionViewHandle,
@@ -378,9 +405,10 @@ impl DesktopRoot {
                 });
             }
             // Terminal を「宣言の供給者＋個体の所有者」として登録する。Shell は
-            // ターミナル固有の分岐を持たず、宣言された状態だけを扱う。
+            // 試験経路では拡張の現在の稼働状態を受け取るまで View を隠す。
             if extension_terminal {
                 shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
+                shell.set_view_hidden(ViewId::new(id::VIEW_TERMINAL), true, cx);
             }
             shell.configure_view_lifecycles(terminal.clone(), ViewId::new(id::VIEW_TERMINAL), cx);
             shell.open_view_in_zone(ZonePosition::Left, id::VIEW_PROJECT_TASKS.into(), cx);
@@ -713,12 +741,29 @@ impl DesktopRoot {
                                 let snapshot = session.snapshot();
                                 if extension_terminal {
                                     let available = extension_view_available(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
+                                    let hidden = extension_view_hidden(snapshot.as_ref(), "lapis.terminal", "lapis.content.terminal-grid.v1");
+                                    let declaration = snapshot.as_ref().and_then(|snapshot| snapshot.active_view("lapis.terminal", "lapis.content.terminal-grid.v1"));
                                     let shells = root.group.read(cx).members.values().map(|member| member.shell.clone()).collect::<Vec<_>>();
                                     for shell in shells {
-                                        shell.update(cx, |shell, cx| shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), available, cx));
+                                        shell.update(cx, |shell, cx| {
+                                            shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), available, cx);
+                                            if let (Some(snapshot), Some(view)) = (snapshot.as_ref(), declaration) {
+                                                shell.set_extension_view_title(
+                                                    ViewId::new(id::VIEW_TERMINAL),
+                                                    snapshot.clone(),
+                                                    "lapis.terminal".to_owned(),
+                                                    localization::MessageId::new(view.title.clone()),
+                                                    cx,
+                                                );
+                                            }
+                                            if let Some(hidden) = hidden {
+                                                shell.set_view_hidden(ViewId::new(id::VIEW_TERMINAL), hidden, cx);
+                                            }
+                                        });
                                     }
                                     if available && pending_terminal {
-                                        root.shell.update(cx, |shell, cx| shell.open_view_in_zone(ZonePosition::Bottom, id::VIEW_TERMINAL.into(), cx));
+                                        let zone = declaration.map(|view| contributed_zone(view.default_zone)).unwrap_or(ZonePosition::Bottom);
+                                        root.shell.update(cx, |shell, cx| shell.open_view_in_zone(zone, id::VIEW_TERMINAL.into(), cx));
                                         pending_terminal = false;
                                     }
                                 }
@@ -2607,6 +2652,57 @@ mod tests {
     use super::*;
     use desktop_client::ConversationViewState;
     use editor_core::{ConversationId, ExecutionId};
+
+    #[test]
+    fn extension_view_default_zone_is_preserved() {
+        use extension_ui_contract::ContributedZone;
+        assert_eq!(contributed_zone(ContributedZone::Main), ZonePosition::Main);
+        assert_eq!(contributed_zone(ContributedZone::Left), ZonePosition::Left);
+        assert_eq!(
+            contributed_zone(ContributedZone::Bottom),
+            ZonePosition::Bottom
+        );
+        assert_eq!(
+            contributed_zone(ContributedZone::Right),
+            ZonePosition::Right
+        );
+    }
+
+    #[test]
+    fn view_visibility_waits_for_a_definitive_host_state() {
+        struct Memory;
+        impl settings::SettingsRepository for Memory {
+            fn load(&self) -> Result<settings::SettingsDocument, settings::SettingsError> {
+                Ok(settings::SettingsDocument::empty(
+                    settings::SettingsScope::User,
+                ))
+            }
+            fn save(&self, _: &settings::SettingsDocument) -> Result<(), settings::SettingsError> {
+                Ok(())
+            }
+        }
+        let settings = desktop_client::SettingsSession::load(std::sync::Arc::new(Memory)).unwrap();
+        let session = settings.extension_contributions();
+        let response = |active: Option<bool>| {
+            serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"lapis.terminal","version":"1.0.0","installed":true,"enabled":false,"active":active}],
+            "contributions":[{"extension_id":"lapis.terminal",
+                "declaration":{"schema":1,"translations":[{"target":"lapis.terminal","locale":"en-US","messages":{"terminal.title":"Terminal"}}]},
+                "views":{"schema":1,"views":[{"id":"lapis.terminal.view","content_type":"example.grid.v1","title":"terminal.title","default_zone":"bottom"}]}}]
+        })).unwrap()
+        };
+        let generation = session.begin_reload();
+        let hidden = |snapshot: Option<&desktop_client::ExtensionContributionSnapshot>| {
+            extension_view_hidden(snapshot, "lapis.terminal", "example.grid.v1")
+        };
+        assert_eq!(hidden(None), None);
+        session.apply(generation, response(None)).unwrap();
+        assert_eq!(hidden(session.snapshot().as_ref()), None);
+        session.apply(generation, response(Some(false))).unwrap();
+        assert_eq!(hidden(session.snapshot().as_ref()), Some(true));
+        session.apply(generation, response(Some(true))).unwrap();
+        assert_eq!(hidden(session.snapshot().as_ref()), Some(false));
+    }
 
     #[test]
     fn workbench_publication_ignores_client_private_workspace_details() {

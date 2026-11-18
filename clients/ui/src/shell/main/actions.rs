@@ -548,7 +548,7 @@ impl Shell {
         if query.is_empty() {
             return true;
         }
-        let title = self.locale.resolve(&contribution.title).to_lowercase();
+        let title = self.contribution_title(contribution).to_lowercase();
         let view = contribution
             .view
             .as_ref()

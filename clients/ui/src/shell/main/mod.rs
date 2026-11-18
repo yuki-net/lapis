@@ -65,6 +65,14 @@ pub(crate) struct Shell {
     document_view: AnyView,
     focus_handle: FocusHandle,
     feature_registry: FeatureRegistry,
+    extension_view_titles: HashMap<
+        ViewId,
+        (
+            desktop_client::ExtensionContributionSnapshot,
+            String,
+            localization::MessageId,
+        ),
+    >,
     notification_center: gpui::Entity<crate::notification::Center>,
     locale: Localizer,
     languages: language::LanguageRegistry,
@@ -242,6 +250,7 @@ impl Shell {
             document_view,
             focus_handle: cx.focus_handle(),
             feature_registry,
+            extension_view_titles: HashMap::new(),
             notification_center: center,
             locale: Localizer::bundled(),
             languages: language::LanguageRegistry::bundled(),
@@ -465,6 +474,43 @@ impl Shell {
         self.feature_registry.set_view_available(view, available);
         self.synchronize_view_instances(cx);
         cx.notify();
+    }
+    /// 拡張の表示だけを隠す。Layout の保存値と他の非表示条件は変えない。
+    pub(crate) fn set_view_hidden(&mut self, view: ViewId, hidden: bool, cx: &mut Context<Self>) {
+        let changed = if hidden {
+            self.shell.hidden_view_types.insert(view)
+        } else {
+            self.shell.hidden_view_types.remove(&view)
+        };
+        if changed {
+            self.synchronize_view_instances(cx);
+            self.refresh_feature_activation(cx);
+            cx.notify();
+        }
+    }
+    /// View の表示名は提供元の翻訳を使い、選択言語の変更時にも解決し直す。
+    pub(crate) fn set_extension_view_title(
+        &mut self,
+        view: ViewId,
+        snapshot: desktop_client::ExtensionContributionSnapshot,
+        owner: String,
+        title: localization::MessageId,
+        cx: &mut Context<Self>,
+    ) {
+        self.extension_view_titles
+            .insert(view, (snapshot, owner, title));
+        cx.notify();
+    }
+
+    fn contribution_title(&self, contribution: &extension_ui_contract::UiContribution) -> String {
+        contribution
+            .view
+            .as_ref()
+            .and_then(|view| self.extension_view_titles.get(view))
+            .map(|(snapshot, owner, title)| {
+                snapshot.resolve_text(owner, self.locale.active(), title)
+            })
+            .unwrap_or_else(|| self.locale.resolve(&contribution.title))
     }
     pub(crate) fn set_locale_packs(
         &mut self,

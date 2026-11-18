@@ -2204,6 +2204,7 @@ dependencies = [
  "client-core",
  "document",
  "editor-core",
+ "extension-ui-contract",
  "futures-channel",
  "futures-util",
  "getrandom 0.3.4",

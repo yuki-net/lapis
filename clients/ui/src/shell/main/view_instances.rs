@@ -261,6 +261,56 @@ mod tests {
     }
 
     #[gpui::test]
+    fn extension_view_title_tracks_the_selected_language(cx: &mut gpui::TestAppContext) {
+        struct Memory;
+        impl settings::SettingsRepository for Memory {
+            fn load(&self) -> Result<settings::SettingsDocument, settings::SettingsError> {
+                Ok(settings::SettingsDocument::empty(
+                    settings::SettingsScope::User,
+                ))
+            }
+            fn save(&self, _: &settings::SettingsDocument) -> Result<(), settings::SettingsError> {
+                Ok(())
+            }
+        }
+        let settings = desktop_client::SettingsSession::load(std::sync::Arc::new(Memory)).unwrap();
+        let contributions = settings.extension_contributions();
+        let generation = contributions.begin_reload();
+        contributions.apply(generation, serde_json::from_value(serde_json::json!({
+            "extensions":[{"id":"example.terminal","version":"1.0.0","installed":true,"enabled":true,"active":true}],
+            "contributions":[{"extension_id":"example.terminal",
+                "declaration":{"schema":1,"translations":[
+                    {"target":"example.terminal","locale":"en-US","messages":{"terminal.title":"Console"}},
+                    {"target":"example.terminal","locale":"ja-JP","messages":{"terminal.title":"端末"}}
+                ]},
+                "views":{"schema":1,"views":[{"id":"example.terminal.view","content_type":"example.grid.v1","title":"terminal.title","default_zone":"bottom"}]}}]
+        })).unwrap()).unwrap();
+        let snapshot = contributions.snapshot().unwrap();
+        cx.update(|cx| {
+            crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
+        });
+        let shell = cx.new(|cx| {
+            let document = cx.new(|_| Empty);
+            Shell::new(document.into(), HashMap::new(), cx)
+        });
+        shell.update(cx, |shell, cx| {
+            let view = ViewId::new(id::VIEW_TERMINAL);
+            let tab = PanelTab::tool(view.clone());
+            shell.set_extension_view_title(
+                view,
+                snapshot,
+                "example.terminal".into(),
+                "terminal.title".into(),
+                cx,
+            );
+            shell.set_locale("en-US".into(), cx);
+            assert_eq!(shell.tab_title(ZonePosition::Bottom, &tab), "Console");
+            shell.set_locale("ja-JP".into(), cx);
+            assert_eq!(shell.tab_title(ZonePosition::Bottom, &tab), "端末");
+        });
+    }
+
+    #[gpui::test]
     fn a_declared_tab_gets_its_instance_from_the_owning_feature(cx: &mut gpui::TestAppContext) {
         cx.update(|cx| {
             crate::theme::init(&extension_ui_contract::ThemeId::new("lapis.dark"), None, cx)
