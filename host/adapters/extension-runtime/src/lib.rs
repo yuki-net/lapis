@@ -174,11 +174,17 @@ struct Loaded {
     instance: Instance,
 }
 
-/// Host が署名・互換性を確認した component を受け取り、同じプロセス内で管理する。
+#[cfg(feature = "worker")]
+enum LoadedExtension {
+    Component(Loaded),
+    Native(native::NativeExtension),
+}
+
+/// Host が検証した拡張を同じプロセス内で管理する。
 #[cfg(feature = "worker")]
 pub struct ExtensionRuntime {
     engine: Engine,
-    loaded: BTreeMap<String, Loaded>,
+    loaded: BTreeMap<String, LoadedExtension>,
     broker: Option<Broker>,
 }
 
@@ -199,12 +205,7 @@ impl ExtensionRuntime {
         self.activate_with_contracts(id, bytes, false)
     }
 
-    fn activate_with_contracts(
-        &mut self,
-        id: &str,
-        bytes: &[u8],
-        require_dispatch: bool,
-    ) -> Result<(), String> {
+    fn validate_new_id(&self, id: &str) -> Result<(), String> {
         if id.is_empty()
             || id.len() > 128
             || !id.bytes().all(|byte| {
@@ -218,7 +219,37 @@ impl ExtensionRuntime {
         if self.loaded.contains_key(id) {
             return Err("extension is already active".into());
         }
-        if self.loaded.len() >= MAX_EXTENSIONS || bytes.len() > MAX_COMPONENT_BYTES {
+        if self.loaded.len() >= MAX_EXTENSIONS {
+            return Err("extension limit exceeded".into());
+        }
+        Ok(())
+    }
+
+    /// 検証済みの native 拡張を component と同じ目録で管理する。
+    ///
+    /// # Safety
+    /// 呼び出し側は `NativeExtension::load_verified` の安全条件を満たすこと。
+    pub unsafe fn activate_native_verified(
+        &mut self,
+        id: &str,
+        path: &std::path::Path,
+        broker: native::NativeBroker,
+    ) -> Result<(), String> {
+        self.validate_new_id(id)?;
+        let extension = unsafe { native::NativeExtension::load_verified(path, broker) }?;
+        self.loaded
+            .insert(id.to_owned(), LoadedExtension::Native(extension));
+        Ok(())
+    }
+
+    fn activate_with_contracts(
+        &mut self,
+        id: &str,
+        bytes: &[u8],
+        require_dispatch: bool,
+    ) -> Result<(), String> {
+        self.validate_new_id(id)?;
+        if bytes.len() > MAX_COMPONENT_BYTES {
             return Err("extension limit exceeded".into());
         }
         let component = Component::new(&self.engine, bytes).map_err(|error| error.to_string())?;
@@ -277,16 +308,22 @@ impl ExtensionRuntime {
         activate
             .post_return(&mut store)
             .map_err(|error| error.to_string())?;
-        self.loaded
-            .insert(id.to_owned(), Loaded { store, instance });
+        self.loaded.insert(
+            id.to_owned(),
+            LoadedExtension::Component(Loaded { store, instance }),
+        );
         Ok(())
     }
 
     pub fn deactivate(&mut self, id: &str) -> Result<(), String> {
-        let mut loaded = self
+        let loaded = self
             .loaded
             .remove(id)
             .ok_or_else(|| "extension is not active".to_owned())?;
+        let mut loaded = match loaded {
+            LoadedExtension::Native(mut extension) => return extension.deactivate(),
+            LoadedExtension::Component(component) => component,
+        };
         loaded
             .store
             .set_fuel(CALL_FUEL)
@@ -318,6 +355,12 @@ impl ExtensionRuntime {
             return Err("invalid dispatch request".into());
         }
         let loaded = self.loaded.get_mut(id).ok_or("extension is not active")?;
+        let loaded = match loaded {
+            LoadedExtension::Native(extension) => {
+                return extension.dispatch(operation, payload, context);
+            }
+            LoadedExtension::Component(component) => component,
+        };
         loaded
             .store
             .set_fuel(CALL_FUEL)

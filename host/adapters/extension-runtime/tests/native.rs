@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use extension_runtime::{InvocationContext, native::NativeExtension};
+use extension_runtime::{ExtensionRuntime, InvocationContext, Request, native::NativeExtension};
 use serde_json::{Value, json};
 
 /// 実際の共有ライブラリを使うため、先に native Terminal をビルドする。
@@ -109,4 +109,63 @@ fn native_terminal_uses_generic_host_broker_and_lifecycle() {
     );
     assert_eq!(contexts[4], Some(("session".into(), "other".into())));
     assert_eq!(&contexts[5..], &[None, None]);
+}
+
+#[test]
+#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+fn native_and_wasm_share_the_runtime_lifecycle() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let name = if cfg!(windows) {
+        "lapis_terminal_native.dll"
+    } else if cfg!(target_os = "macos") {
+        "liblapis_terminal_native.dylib"
+    } else {
+        "liblapis_terminal_native.so"
+    };
+    let path = root.join("target/debug").join(name).canonicalize().unwrap();
+    let broker = Arc::new(
+        |method: &str, _: Value, context: Option<&InvocationContext>| {
+            assert_eq!(context.unwrap().workspace, "workspace");
+            match method {
+                "process.info.v1.get" => {
+                    Ok(json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}))
+                }
+                _ => Err("unknown Host capability".into()),
+            }
+        },
+    );
+    let bytes = wat::parse_str(
+        r#"
+        (component
+          (core module $m (func (export "activate")) (func (export "deactivate")))
+          (core instance $i (instantiate $m))
+          (func (export "activate") (canon lift (core func $i "activate")))
+          (func (export "deactivate") (canon lift (core func $i "deactivate"))))
+    "#,
+    )
+    .unwrap();
+    let mut runtime = ExtensionRuntime::new().unwrap();
+    runtime.activate("example.wasm", &bytes).unwrap();
+    // ローカルで事前にビルドした fixture だけを読み込む。
+    unsafe { runtime.activate_native_verified("example.native", &path, broker.clone()) }.unwrap();
+    assert!(runtime.activate("example.native", &bytes).is_err());
+    assert!(unsafe { runtime.activate_native_verified("example.wasm", &path, broker) }.is_err());
+    let context = InvocationContext {
+        session: "session".into(),
+        workspace: "workspace".into(),
+    };
+    let response: Value = serde_json::from_str(
+        &runtime
+            .dispatch("example.native", "terminal.v1.info", "{}", &context)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response["pty"], "conpty");
+    assert!(runtime.handle(Request::Shutdown).ok);
+    assert!(
+        runtime
+            .dispatch("example.native", "terminal.v1.info", "{}", &context)
+            .is_err()
+    );
+    assert!(runtime.deactivate("example.wasm").is_err());
 }

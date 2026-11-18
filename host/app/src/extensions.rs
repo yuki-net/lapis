@@ -1324,8 +1324,7 @@ mod tests {
     #[ignore = "Terminal component・native ライブラリ・拡張ホストの事前ビルドが必要"]
     fn terminal_component_uses_approved_host_pty() {
         use extension_runtime::{
-            InvocationContext,
-            native::NativeExtension,
+            ExtensionRuntime, InvocationContext,
             supervisor::{ExtensionSupervisor, HostCallHandler, SupervisorStatus},
         };
         use std::{
@@ -1421,14 +1420,21 @@ mod tests {
             .canonicalize()
             .unwrap();
         // テスト直前にローカルでビルドした信頼済みライブラリを使う。
-        let mut native = unsafe { NativeExtension::load_verified(&native_path, callback) }.unwrap();
+        let mut native = ExtensionRuntime::new().unwrap();
+        unsafe { native.activate_native_verified("lapis.terminal", &native_path, callback) }
+            .unwrap();
         let native_start = serde_json::json!({
             "program":"cmd.exe", "arguments":["/D","/C","echo LapisNative & ping -n 30 127.0.0.1 >nul"],
             "working_directory":".", "columns":80, "rows":24
         }).to_string();
         assert!(
             native
-                .dispatch("terminal.v1.start", &native_start, &context)
+                .dispatch(
+                    "lapis.terminal",
+                    "terminal.v1.start",
+                    &native_start,
+                    &context
+                )
                 .is_err()
         );
         broker
@@ -1440,13 +1446,23 @@ mod tests {
         };
         assert!(
             native
-                .dispatch("terminal.v1.start", &native_start, &unknown_workspace)
+                .dispatch(
+                    "lapis.terminal",
+                    "terminal.v1.start",
+                    &native_start,
+                    &unknown_workspace
+                )
                 .is_err()
         );
         assert_eq!(broker.session_count("lapis.terminal"), 0);
         let opened: serde_json::Value = serde_json::from_str(
             &native
-                .dispatch("terminal.v1.start", &native_start, &context)
+                .dispatch(
+                    "lapis.terminal",
+                    "terminal.v1.start",
+                    &native_start,
+                    &context,
+                )
                 .unwrap(),
         )
         .unwrap();
@@ -1467,7 +1483,12 @@ mod tests {
             let read = serde_json::json!({"id":native_id,"offset":offset,"max_bytes":8192,"timeout_ms":500});
             let response: serde_json::Value = serde_json::from_str(
                 &native
-                    .dispatch("terminal.v1.read", &read.to_string(), &context)
+                    .dispatch(
+                        "lapis.terminal",
+                        "terminal.v1.read",
+                        &read.to_string(),
+                        &context,
+                    )
                     .unwrap(),
             )
             .unwrap();
@@ -1482,6 +1503,7 @@ mod tests {
             if !answered_cursor_query && output.windows(4).any(|part| part == b"\x1b[6n") {
                 native
                     .dispatch(
+                        "lapis.terminal",
                         "terminal.v1.write",
                         &serde_json::json!({"id":native_id,"bytes":[27,91,49,59,49,82]})
                             .to_string(),
@@ -1498,7 +1520,12 @@ mod tests {
         let read = serde_json::json!({"id":native_id,"offset":0,"max_bytes":64,"timeout_ms":0});
         assert!(
             native
-                .dispatch("terminal.v1.read", &read.to_string(), &context)
+                .dispatch(
+                    "lapis.terminal",
+                    "terminal.v1.read",
+                    &read.to_string(),
+                    &context
+                )
                 .is_err()
         );
         drop(native);
