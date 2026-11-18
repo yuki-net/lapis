@@ -78,6 +78,132 @@ fn bundled_first_install_never_overwrites_disabled_or_removed_catalog_entries() 
 }
 
 #[test]
+fn bundled_upgrade_preserves_user_state_and_requires_same_signer_and_newer_version() {
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let requirements = &[(EXTENSION_CONTRACT, host_version(), host_version())];
+    let refs: Vec<_> = requirements
+        .iter()
+        .map(|(id, min, max)| (*id, min.as_str(), max.as_str()))
+        .collect();
+    let old = signed_manifest("extension", "dev.example.update", &refs, files, |m| {
+        m["version"] = json!("0.1.0")
+    });
+    let old_path = write_package(root.path(), "old.lapis", &old, files);
+    let loader = loader();
+    loader
+        .install_or_upgrade_bundled(&mut catalog, &old_path, true)
+        .unwrap();
+    let id = id("dev.example.update");
+    loader.set_enabled(&mut catalog, &id, false).unwrap();
+    let new_files: &[(&str, &[u8])] = &[("extension.wasm", b"new")];
+    let new = signed_manifest("extension", "dev.example.update", &refs, new_files, |m| {
+        m["version"] = json!("0.2.0")
+    });
+    let new_path = write_package(root.path(), "new.lapis", &new, new_files);
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &new_path, true)
+            .unwrap()
+            .unwrap()
+            .is_installed()
+    );
+    let entry = catalog.get(&id).unwrap();
+    assert_eq!(entry.version.as_str(), "0.2.0");
+    assert!(!entry.state.is_enabled());
+    assert_eq!(
+        loader.load_installed(&mut catalog, &id).unwrap().files["extension.wasm"],
+        b"new"
+    );
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &old_path, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &new_path, true)
+            .unwrap()
+            .is_none()
+    );
+    loader.remove(&mut catalog, &id).unwrap();
+    let latest = signed_manifest("extension", "dev.example.update", &refs, new_files, |m| {
+        m["version"] = json!("0.3.0")
+    });
+    let latest_path = write_package(root.path(), "latest.lapis", &latest, new_files);
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &latest_path, true)
+            .unwrap()
+            .is_none()
+    );
+    assert!(!catalog.get(&id).unwrap().state.is_installed());
+}
+
+#[test]
+fn bundled_upgrade_does_not_replace_another_signer_or_incompatible_package() {
+    let root = tempfile::tempdir().unwrap();
+    let mut catalog = ExtensionCatalog::open(root.path().join("extensions")).unwrap();
+    let registry = format!(
+        r#"{{"schema":1,"keys":{{"{KEY_ID}":"{}","other":"{}"}}}}"#,
+        public_key(),
+        public_key()
+    );
+    let loader = ExtensionLoader::new(
+        TrustedKeys::parse(registry.as_bytes()).unwrap(),
+        HostContracts::current(),
+    );
+    let files: &[(&str, &[u8])] = &[("extension.wasm", b"old")];
+    let version = host_version();
+    let requires = &[(EXTENSION_CONTRACT, version.as_str(), version.as_str())];
+    let old = signed_manifest("extension", "dev.example.update", requires, files, |m| {
+        m["version"] = json!("0.1.0")
+    });
+    let path = write_package(root.path(), "old.lapis", &old, files);
+    loader
+        .install_or_upgrade_bundled(&mut catalog, &path, true)
+        .unwrap();
+    let other = signed_manifest("extension", "dev.example.update", requires, files, |m| {
+        m["version"] = json!("0.2.0");
+        m["key_id"] = json!("other");
+    });
+    let path = write_package(root.path(), "other.lapis", &other, files);
+    assert!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &path, true)
+            .unwrap()
+            .is_none()
+    );
+    let incompatible = signed_manifest(
+        "extension",
+        "dev.example.update",
+        &[(EXTENSION_CONTRACT, "999.0.0", "999.0.0")],
+        files,
+        |m| m["version"] = json!("0.2.0"),
+    );
+    let path = write_package(root.path(), "incompatible.lapis", &incompatible, files);
+    assert!(matches!(
+        loader
+            .install_or_upgrade_bundled(&mut catalog, &path, true)
+            .unwrap(),
+        Some(InstallOutcome::Incompatible {
+            kept_previous: true,
+            ..
+        })
+    ));
+    assert_eq!(
+        catalog
+            .get(&id("dev.example.update"))
+            .unwrap()
+            .version
+            .as_str(),
+        "0.1.0"
+    );
+}
+
+#[test]
 fn explicit_publisher_key_can_authorize_an_external_package() {
     let workspace = tempfile::tempdir().unwrap();
     let mut catalog = ExtensionCatalog::open(workspace.path().join("extensions")).unwrap();

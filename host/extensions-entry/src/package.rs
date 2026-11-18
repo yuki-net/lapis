@@ -114,6 +114,13 @@ pub struct VerifiedPackage {
     signature_verified: bool,
 }
 
+#[derive(Clone, Copy)]
+enum InstallPolicy {
+    Explicit,
+    Missing,
+    BundledUpgrade,
+}
+
 impl VerifiedPackage {
     /// 署名省略の開発用 package と、信頼済み鍵で署名検証した package を区別する。
     pub fn signature_verified(&self) -> bool {
@@ -386,7 +393,7 @@ impl ExtensionLoader {
         package: &Path,
         enabled: bool,
     ) -> Result<InstallOutcome, PackageError> {
-        self.install_inner(catalog, package, enabled, false)
+        self.install_inner(catalog, package, enabled, InstallPolicy::Explicit)
             .map(|outcome| outcome.expect("通常の導入は必ず結果を返す"))
     }
 
@@ -397,15 +404,26 @@ impl ExtensionLoader {
         package: &Path,
         enabled: bool,
     ) -> Result<Option<InstallOutcome>, PackageError> {
-        self.install_inner(catalog, package, enabled, true)
+        self.install_inner(catalog, package, enabled, InstallPolicy::Missing)
+    }
+
+    /// 同梱物の初回導入、または同じ署名者による新しい SemVer への更新。
+    /// 削除済みを復元せず、導入済み拡張の有効状態を引き継ぐ。
+    pub fn install_or_upgrade_bundled(
+        &self,
+        catalog: &mut ExtensionCatalog,
+        package: &Path,
+        enabled: bool,
+    ) -> Result<Option<InstallOutcome>, PackageError> {
+        self.install_inner(catalog, package, enabled, InstallPolicy::BundledUpgrade)
     }
 
     fn install_inner(
         &self,
         catalog: &mut ExtensionCatalog,
         package: &Path,
-        enabled: bool,
-        only_missing: bool,
+        mut enabled: bool,
+        policy: InstallPolicy,
     ) -> Result<Option<InstallOutcome>, PackageError> {
         let archive = read_archive(package)?;
         let manifest_value = archive
@@ -423,8 +441,49 @@ impl ExtensionLoader {
         crate::journal::recover_locked(catalog)?;
         // 別の入口が同じ目録を変えている可能性がある。判断の前に file を正本にする。
         catalog.reload()?;
-        if only_missing && catalog.get(&manifest.id).is_some() {
-            return Ok(None);
+        if let Some(entry) = catalog.get(&manifest.id) {
+            match policy {
+                InstallPolicy::Explicit => {}
+                InstallPolicy::Missing => return Ok(None),
+                InstallPolicy::BundledUpgrade => {
+                    if !entry.state.is_installed() {
+                        return Ok(None);
+                    }
+                    let (Ok(old), Ok(new)) = (
+                        semver::Version::parse(entry.version.as_str()),
+                        semver::Version::parse(manifest.version.as_str()),
+                    ) else {
+                        return Ok(None);
+                    };
+                    if !old.cmp_precedence(&new).is_lt() {
+                        return Ok(None);
+                    }
+                    let directory = catalog.installed_directory(&manifest.id)?;
+                    let old_raw = match read_installed_file(&directory, MANIFEST_NAME) {
+                        Ok(raw) => raw,
+                        Err(PackageError::Io(error)) if error.kind() == io::ErrorKind::NotFound => {
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let old_value: Value = serde_json::from_slice(&old_raw)
+                        .map_err(|error| PackageError::Malformed(error.to_string()))?;
+                    let new_value: Value = serde_json::from_slice(manifest_value)
+                        .map_err(|error| PackageError::Malformed(error.to_string()))?;
+                    let old_key = old_value.get("key_id").and_then(Value::as_str);
+                    let new_key = new_value.get("key_id").and_then(Value::as_str);
+                    if old_key.is_none() || old_key != new_key {
+                        return Ok(None);
+                    }
+                    let old_manifest = parse_manifest(&old_raw, &self.keys, false)?;
+                    if old_manifest.id != manifest.id || old_manifest.version != entry.version {
+                        return Err(PackageError::Malformed(
+                            "目録と導入済み manifest が一致しません".into(),
+                        ));
+                    }
+                    enabled = entry.state.is_enabled();
+                }
+            }
         }
         match self.contracts.check(&manifest.requires) {
             Ok(()) => {

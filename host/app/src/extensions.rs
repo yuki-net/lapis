@@ -103,7 +103,7 @@ fn trusted_keys(directory: Option<&std::path::Path>) -> Result<TrustedKeys, Stri
 }
 
 impl HostExtensions {
-    /// 同梱物も通常と同じ署名・互換性検証を通し、初回だけ導入する。
+    /// 同梱物を署名・互換性検証し、同じ署名者による新しい版へ更新する。
     pub(crate) fn install_bundled(&self, directory: &std::path::Path) -> Result<(), String> {
         let entries = match std::fs::read_dir(directory) {
             Ok(entries) => entries,
@@ -129,7 +129,7 @@ impl HostExtensions {
         let mut catalog = self.catalog_mut()?;
         let mut failures = Vec::new();
         for path in paths {
-            if let Err(error) = loader.install_if_missing(&mut catalog, &path, true) {
+            if let Err(error) = loader.install_or_upgrade_bundled(&mut catalog, &path, true) {
                 self.record_recovery_failure(&error);
                 if error.leaves_inconsistent_state() {
                     return Err(error.to_string());

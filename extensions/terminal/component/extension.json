@@ -1,6 +1,6 @@
 {
   "id": "lapis.terminal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "requires": [
     {"contract": "lapis.extension", "minimum": "1.0.0", "maximum": "1.0.0"},
     {"contract": "lapis.extension.lifecycle", "minimum": "1.0.0", "maximum": "1.0.0"},
