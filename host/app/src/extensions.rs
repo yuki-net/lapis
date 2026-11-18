@@ -1324,8 +1324,8 @@ mod tests {
     #[ignore = "Terminal component・native ライブラリ・拡張ホストの事前ビルドが必要"]
     fn terminal_component_uses_approved_host_pty() {
         use extension_runtime::{
-            ExtensionRuntime, InvocationContext,
-            supervisor::{ExtensionSupervisor, HostCallHandler, SupervisorStatus},
+            InvocationContext,
+            supervisor::{ExtensionSupervisor, SupervisorStatus},
         };
         use std::{
             os::windows::process::CommandExt,
@@ -1409,28 +1409,48 @@ mod tests {
             session: "native-test".into(),
             workspace: "host".into(),
         };
-        let native_broker = broker.clone();
-        let callback = Arc::new(
-            move |method: &str, payload, context: Option<&InvocationContext>| {
-                native_broker.call_in_context("lapis.terminal", method, payload, context)
-            },
-        );
         let native_path = root
             .join("target/debug/lapis_terminal_native.dll")
             .canonicalize()
             .unwrap();
         let native_bytes = std::fs::read(native_path).unwrap();
         // テスト直前にローカルでビルドした信頼済みライブラリを使う。
-        let mut native = ExtensionRuntime::new().unwrap();
-        unsafe { native.activate_native_verified_bytes("lapis.terminal", &native_bytes, callback) }
-            .unwrap();
+        let native = unsafe {
+            ExtensionSupervisor::start_with_verified_native(
+                root.join("target/debug/lapis-extension-host.exe"),
+                vec![],
+                vec![extension_runtime::supervisor::ComponentImage {
+                    id: "lapis.terminal".into(),
+                    bytes: native_bytes,
+                    require_dispatch: true,
+                }],
+                Some(broker.clone()),
+            )
+        };
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            match native.status() {
+                SupervisorStatus::Running { active, failed, .. } => {
+                    assert!(failed.is_empty(), "{failed:?}");
+                    assert_eq!(active, ["lapis.terminal"]);
+                    break;
+                }
+                SupervisorStatus::Stopped { reason } => panic!("{reason}"),
+                SupervisorStatus::Starting => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "native extension host did not start"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
         let native_start = serde_json::json!({
             "program":"cmd.exe", "arguments":["/D","/C","echo LapisNative & ping -n 30 127.0.0.1 >nul"],
             "working_directory":".", "columns":80, "rows":24
         }).to_string();
         assert!(
             native
-                .dispatch(
+                .dispatch_with_context(
                     "lapis.terminal",
                     "terminal.v1.start",
                     &native_start,
@@ -1447,7 +1467,7 @@ mod tests {
         };
         assert!(
             native
-                .dispatch(
+                .dispatch_with_context(
                     "lapis.terminal",
                     "terminal.v1.start",
                     &native_start,
@@ -1458,7 +1478,7 @@ mod tests {
         assert_eq!(broker.session_count("lapis.terminal"), 0);
         let opened: serde_json::Value = serde_json::from_str(
             &native
-                .dispatch(
+                .dispatch_with_context(
                     "lapis.terminal",
                     "terminal.v1.start",
                     &native_start,
@@ -1484,7 +1504,7 @@ mod tests {
             let read = serde_json::json!({"id":native_id,"offset":offset,"max_bytes":8192,"timeout_ms":500});
             let response: serde_json::Value = serde_json::from_str(
                 &native
-                    .dispatch(
+                    .dispatch_with_context(
                         "lapis.terminal",
                         "terminal.v1.read",
                         &read.to_string(),
@@ -1503,7 +1523,7 @@ mod tests {
             );
             if !answered_cursor_query && output.windows(4).any(|part| part == b"\x1b[6n") {
                 native
-                    .dispatch(
+                    .dispatch_with_context(
                         "lapis.terminal",
                         "terminal.v1.write",
                         &serde_json::json!({"id":native_id,"bytes":[27,91,49,59,49,82]})
@@ -1521,7 +1541,7 @@ mod tests {
         let read = serde_json::json!({"id":native_id,"offset":0,"max_bytes":64,"timeout_ms":0});
         assert!(
             native
-                .dispatch(
+                .dispatch_with_context(
                     "lapis.terminal",
                     "terminal.v1.read",
                     &read.to_string(),

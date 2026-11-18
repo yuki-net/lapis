@@ -21,6 +21,87 @@ fn worker_reports_each_supported_contract_version() {
     assert!(legacy.dispatch_version.is_none());
 }
 
+#[cfg(windows)]
+#[test]
+#[ignore = "cargo build --locked -p lapis-terminal-native が必要"]
+fn native_image_runs_in_worker_and_preserves_invocation_context() {
+    use extension_runtime::{InvocationContext, supervisor::HostCallHandler};
+    use std::sync::{Arc, Mutex};
+    struct Handler(Mutex<Vec<(String, String)>>);
+    impl HostCallHandler for Handler {
+        fn call(
+            &self,
+            _: &str,
+            _: &str,
+            _: serde_json::Value,
+        ) -> Result<serde_json::Value, String> {
+            Err("context required".into())
+        }
+        fn call_in_context(
+            &self,
+            extension: &str,
+            method: &str,
+            _: serde_json::Value,
+            context: Option<&InvocationContext>,
+        ) -> Result<serde_json::Value, String> {
+            assert_eq!(extension, "lapis.terminal");
+            assert_eq!(method, "process.info.v1.get");
+            let context = context.ok_or("context required")?;
+            self.0
+                .lock()
+                .unwrap()
+                .push((context.session.clone(), context.workspace.clone()));
+            Ok(
+                serde_json::json!({"pty":"conpty","default_shell":{"program":"shell","arguments":[]}}),
+            )
+        }
+    }
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let bytes = std::fs::read(root.join("target/debug/lapis_terminal_native.dll")).unwrap();
+    let handler = Arc::new(Handler(Mutex::new(Vec::new())));
+    // ローカルでビルドしたテスト用 image を使う。
+    let supervisor = unsafe {
+        ExtensionSupervisor::start_with_verified_native(
+            PathBuf::from(env!("CARGO_BIN_EXE_lapis-extension-host")),
+            vec![],
+            vec![ComponentImage {
+                id: "lapis.terminal".into(),
+                bytes,
+                require_dispatch: true,
+            }],
+            Some(handler.clone()),
+        )
+    };
+    let status = wait_for(&supervisor, |status| {
+        matches!(status, SupervisorStatus::Running { .. })
+    });
+    let SupervisorStatus::Running { active, failed, .. } = status else {
+        unreachable!()
+    };
+    assert!(failed.is_empty(), "{failed:?}");
+    assert_eq!(active, ["lapis.terminal"]);
+    for workspace in ["first", "second"] {
+        let context = InvocationContext {
+            session: "session".into(),
+            workspace: workspace.into(),
+        };
+        let result = supervisor
+            .dispatch_with_context("lapis.terminal", "terminal.v1.info", "{}", &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap()["pty"],
+            "conpty"
+        );
+    }
+    assert_eq!(
+        *handler.0.lock().unwrap(),
+        [
+            ("session".into(), "first".into()),
+            ("session".into(), "second".into())
+        ]
+    );
+}
+
 fn component() -> Vec<u8> {
     wat::parse_str(
         r#"

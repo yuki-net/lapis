@@ -38,6 +38,20 @@ fn lifecycle_isolated_per_extension() {
 }
 
 #[test]
+fn public_handler_rejects_untrusted_native_images() {
+    let mut runtime = ExtensionRuntime::new().unwrap();
+    let response = runtime.handle(Request::ActivateNative {
+        id: "example.native".into(),
+        image: STANDARD.encode(b"untrusted"),
+    });
+    assert!(!response.ok);
+    assert_eq!(
+        response.error.as_deref(),
+        Some("native image requires trusted worker input")
+    );
+}
+
+#[test]
 fn trapped_or_nonterminating_component_cannot_stay_active() {
     let mut runtime = ExtensionRuntime::new().unwrap();
     assert!(

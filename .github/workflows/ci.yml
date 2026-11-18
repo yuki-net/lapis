@@ -202,6 +202,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p extension-runtime --lib staged_image_is_locked_until_extension_is_unloaded -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p extension-runtime --test supervisor native_image_runs_in_worker_and_preserves_invocation_context -- --ignored
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p extension-runtime --test native -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p local-process pty::tests

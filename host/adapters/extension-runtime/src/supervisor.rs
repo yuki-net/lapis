@@ -122,6 +122,12 @@ pub struct ComponentImage {
     pub require_dispatch: bool,
 }
 
+#[derive(Clone)]
+struct RuntimeImage {
+    image: ComponentImage,
+    native: bool,
+}
+
 /// 現在動いているものと、次回起動時の設定を混同しないための実行状態。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SupervisorStatus {
@@ -162,6 +168,52 @@ impl ExtensionSupervisor {
     pub fn start_with_handler(
         executable: PathBuf,
         components: Vec<ComponentImage>,
+        handler: Option<Arc<dyn HostCallHandler>>,
+    ) -> Self {
+        Self::start_images(
+            executable,
+            components
+                .into_iter()
+                .map(|image| RuntimeImage {
+                    image,
+                    native: false,
+                })
+                .collect(),
+            handler,
+        )
+    }
+
+    /// 署名・互換性検証済み native image を別プロセスに渡す。
+    ///
+    /// # Safety
+    /// 全 native image が信頼できる実行コードであることを呼び出し側が保証する。
+    #[cfg(windows)]
+    pub unsafe fn start_with_verified_native(
+        executable: PathBuf,
+        components: Vec<ComponentImage>,
+        native: Vec<ComponentImage>,
+        handler: Option<Arc<dyn HostCallHandler>>,
+    ) -> Self {
+        let images = components
+            .into_iter()
+            .map(|image| RuntimeImage {
+                image,
+                native: false,
+            })
+            .chain(native.into_iter().map(|mut image| {
+                image.require_dispatch = true;
+                RuntimeImage {
+                    image,
+                    native: true,
+                }
+            }))
+            .collect();
+        Self::start_images(executable, images, handler)
+    }
+
+    fn start_images(
+        executable: PathBuf,
+        components: Vec<RuntimeImage>,
         handler: Option<Arc<dyn HostCallHandler>>,
     ) -> Self {
         let (stop, receiver) = mpsc::channel();
@@ -287,7 +339,7 @@ fn update(status: &Mutex<SupervisorStatus>, value: SupervisorStatus) {
 
 fn supervise(
     executable: &Path,
-    components: &[ComponentImage],
+    components: &[RuntimeImage],
     stop: mpsc::Receiver<()>,
     calls: mpsc::Receiver<Dispatch>,
     control: (&AtomicBool, &Mutex<Disconnects>),
@@ -303,20 +355,33 @@ fn supervise(
         update(status, SupervisorStatus::Starting);
         let attempt = (|| -> Result<(), String> {
             let mut worker = Worker::spawn(executable)?;
-            worker.handshake(Some(cancelled))?;
+            let handshake = worker.handshake(Some(cancelled))?;
             let mut active = Vec::new();
             let mut failed = BTreeMap::new();
-            for component in components {
+            for entry in components {
+                let component = &entry.image;
                 if stop.try_recv().is_ok() {
                     worker.shutdown(handler);
                     return Ok(());
                 }
-                let response = worker.request(
+                if entry.native && handshake.native_version.as_deref() != Some("1.0.0") {
+                    failed.insert(component.id.clone(), "native ABI v1 is unsupported".into());
+                    continue;
+                }
+                let request = if entry.native {
+                    Request::ActivateNative {
+                        id: component.id.clone(),
+                        image: STANDARD.encode(&component.bytes),
+                    }
+                } else {
                     Request::Activate {
                         id: component.id.clone(),
                         component: STANDARD.encode(&component.bytes),
                         require_dispatch: component.require_dispatch,
-                    },
+                    }
+                };
+                let response = worker.request(
+                    request,
                     REQUEST_TIMEOUT,
                     Some(cancelled),
                     handler,
@@ -357,10 +422,10 @@ fn supervise(
                 if let Some((operation, context)) = notification {
                     let targets: Vec<_> = components
                         .iter()
-                        .filter(|component| {
-                            component.require_dispatch && worker.active.contains(&component.id)
+                        .filter(|entry| {
+                            entry.image.require_dispatch && worker.active.contains(&entry.image.id)
                         })
-                        .map(|component| component.id.clone())
+                        .map(|entry| entry.image.id.clone())
                         .collect();
                     for id in targets {
                         let _ = worker.request(

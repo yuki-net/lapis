@@ -116,6 +116,11 @@ pub enum Request {
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         require_dispatch: bool,
     },
+    /// 呼び出し元が署名・互換性を確認した native image。
+    ActivateNative {
+        id: String,
+        image: String,
+    },
     Deactivate {
         id: String,
     },
@@ -141,6 +146,8 @@ pub struct Response {
     pub process_info_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dispatch_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
 }
@@ -418,6 +425,11 @@ impl ExtensionRuntime {
                 pty_version: Some(PTY_VERSION.to_owned()),
                 process_info_version: Some(PROCESS_INFO_VERSION.to_owned()),
                 dispatch_version: Some(DISPATCH_VERSION.to_owned()),
+                native_version: if cfg!(windows) {
+                    Some("1.0.0".to_owned())
+                } else {
+                    None
+                },
                 result: None,
             };
         }
@@ -436,6 +448,7 @@ impl ExtensionRuntime {
                     pty_version: None,
                     process_info_version: None,
                     dispatch_version: None,
+                    native_version: None,
                     result: Some(result),
                 },
                 Err(error) => Response {
@@ -445,6 +458,7 @@ impl ExtensionRuntime {
                     pty_version: None,
                     process_info_version: None,
                     dispatch_version: None,
+                    native_version: None,
                     result: None,
                 },
             };
@@ -467,6 +481,9 @@ impl ExtensionRuntime {
                         })
                 }
             }
+            Request::ActivateNative { .. } => {
+                Err("native image requires trusted worker input".into())
+            }
             Request::Deactivate { id } => self.deactivate(&id),
             Request::Shutdown => {
                 let ids: Vec<_> = self.loaded.keys().cloned().collect();
@@ -487,6 +504,7 @@ impl ExtensionRuntime {
                 pty_version: None,
                 process_info_version: None,
                 dispatch_version: None,
+                native_version: None,
                 result: None,
             },
             Err(error) => Response {
@@ -496,15 +514,62 @@ impl ExtensionRuntime {
                 pty_version: None,
                 process_info_version: None,
                 dispatch_version: None,
+                native_version: None,
                 result: None,
             },
+        }
+    }
+
+    /// # Safety
+    /// native image は Host が信頼性と互換性を検証済みであること。
+    unsafe fn handle_trusted(&mut self, request: Request) -> Response {
+        let Request::ActivateNative { id, image } = request else {
+            return self.handle(request);
+        };
+        let result = if image.len() > MAX_COMPONENT_BYTES.div_ceil(3) * 4 {
+            Err("native image limit exceeded".to_owned())
+        } else {
+            let bytes = STANDARD
+                .decode(image)
+                .map_err(|_| "invalid native image encoding".to_owned());
+            #[cfg(windows)]
+            {
+                bytes.and_then(|bytes| {
+                    if bytes.len() > MAX_COMPONENT_BYTES {
+                        return Err("native image limit exceeded".into());
+                    }
+                    let broker = self.broker.clone().ok_or("Host capability unavailable")?;
+                    let extension_id = id.clone();
+                    let callback: native::NativeBroker =
+                        Arc::new(move |method, payload, _| broker(&extension_id, method, payload));
+                    unsafe { self.activate_native_verified_bytes(&id, &bytes, callback) }
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (id, bytes);
+                Err("native extensions are unsupported on this platform".into())
+            }
+        };
+        Response {
+            ok: result.is_ok(),
+            error: result.err(),
+            lifecycle_version: None,
+            pty_version: None,
+            process_info_version: None,
+            dispatch_version: None,
+            native_version: None,
+            result: None,
         }
     }
 }
 
 /// 1 行 1 request / response。長すぎる入力は処理せず接続を閉じる。
+///
+/// # Safety
+/// 入力は信頼済み Host が所有し、native image を検証してから送ること。
 #[cfg(feature = "worker")]
-pub fn serve(
+pub unsafe fn serve(
     input: impl BufRead + Send + 'static,
     output: impl Write + Send + 'static,
 ) -> io::Result<()> {
@@ -572,7 +637,7 @@ pub fn serve(
         let (response, shutdown) = match serde_json::from_slice::<Request>(&line) {
             Ok(request) => {
                 let shutdown = matches!(request, Request::Shutdown);
-                (runtime.handle(request), shutdown)
+                (unsafe { runtime.handle_trusted(request) }, shutdown)
             }
             Err(_) => (
                 Response {
@@ -582,6 +647,7 @@ pub fn serve(
                     pty_version: None,
                     process_info_version: None,
                     dispatch_version: None,
+                    native_version: None,
                     result: None,
                 },
                 false,
