@@ -125,6 +125,7 @@ jobs:
         run: |
           cargo build --locked -p lapis-terminal-native
           python3 -m scripts.extensions.smoke_native_terminal
+          cargo test --locked -p extension-runtime --test native -- --ignored
           cargo build --locked --manifest-path examples/external-extension/Cargo.toml --target wasm32-wasip2 --target-dir target/external-extension
           cargo build --locked -p extension-runtime --bin lapis-extension-host
           python3 -m scripts.extensions.smoke
@@ -195,6 +196,8 @@ jobs:
           cargo build --locked -p lapis-terminal-native
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m scripts.extensions.smoke_native_terminal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p extension-runtime --test native -- --ignored
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p local-process pty::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

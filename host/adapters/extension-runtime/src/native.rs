@@ -1,0 +1,235 @@
+//! 検証済み native 拡張を拡張ホスト内で実行する ABI アダプター。
+//!
+//! package の検証と配置は呼び出し側が担当する。未検証のファイルには使用しない。
+
+use std::{ffi::c_void, path::Path, sync::Arc};
+
+use extension_native_api::{
+    ABI_VERSION, ByteView, ENTRY_SYMBOL, EntryV1, ExtensionApiV1, HostApiV1, MAX_MESSAGE_BYTES,
+    OwnedBytes, STATUS_ERROR, STATUS_OK,
+};
+use serde_json::Value;
+
+use crate::InvocationContext;
+
+/// 認証された拡張に対する Host 能力の仲介。許可判定は呼び出し側が行う。
+pub type NativeBroker = Arc<dyn Fn(&str, Value) -> Result<Value, String> + Send + Sync>;
+
+struct HostState {
+    broker: NativeBroker,
+}
+
+/// ライブラリとインスタンスは同じ thread で保持し、操作を直列化する。
+pub struct NativeExtension {
+    library: libloading::Library,
+    api: *const ExtensionApiV1,
+    instance: *mut c_void,
+    _host_state: Box<HostState>,
+    _host_api: Box<HostApiV1>,
+}
+
+impl NativeExtension {
+    /// 署名と版を確認し、検証後に変更されない絶対パスだけを読み込む。
+    ///
+    /// # Safety
+    /// 読み込むファイルは実行コードである。呼び出し側は署名とファイルの同一性を
+    /// 検証し、依存ライブラリを含めた読み込み先を信頼しなければならない。
+    pub unsafe fn load_verified(path: &Path, broker: NativeBroker) -> Result<Self, String> {
+        if !path.is_absolute() {
+            return Err("native extension path must be absolute".into());
+        }
+        let library =
+            unsafe { libloading::Library::new(path) }.map_err(|error| error.to_string())?;
+        let entry: libloading::Symbol<EntryV1> = unsafe { library.get(ENTRY_SYMBOL) }
+            .map_err(|_| "native extension entry not found".to_owned())?;
+        let api = unsafe { entry() };
+        if api.is_null() {
+            return Err("invalid native extension API".into());
+        }
+        let version = unsafe { std::ptr::addr_of!((*api).abi_version).read() };
+        let size = unsafe { std::ptr::addr_of!((*api).struct_size).read() };
+        if version != ABI_VERSION || (size as usize) < std::mem::size_of::<ExtensionApiV1>() {
+            return Err("incompatible native extension ABI".into());
+        }
+        let table = unsafe { &*api };
+        if table.activate.is_none()
+            || table.dispatch.is_none()
+            || table.deactivate.is_none()
+            || table.release.is_none()
+        {
+            return Err("incomplete native extension ABI".into());
+        }
+        let mut host_state = Box::new(HostState { broker });
+        let host_api = Box::new(HostApiV1 {
+            abi_version: ABI_VERSION,
+            struct_size: std::mem::size_of::<HostApiV1>() as u32,
+            context: (&mut *host_state as *mut HostState).cast(),
+            call: Some(host_call),
+            release: Some(host_release),
+        });
+        let mut instance = std::ptr::null_mut();
+        let mut output = OwnedBytes::EMPTY;
+        let status = unsafe { table.activate.unwrap()(&*host_api, &mut instance, &mut output) };
+        let message = unsafe { take_output(table, output) };
+        if status != STATUS_OK || instance.is_null() || message.is_err() {
+            if !instance.is_null() {
+                let mut cleanup = OwnedBytes::EMPTY;
+                unsafe { table.deactivate.unwrap()(instance, &mut cleanup) };
+                let _ = unsafe { take_output(table, cleanup) };
+            }
+            let message = message?;
+            return Err(if message.is_empty() {
+                "native extension activation failed".into()
+            } else {
+                message
+            });
+        }
+        Ok(Self {
+            library,
+            api,
+            instance,
+            _host_state: host_state,
+            _host_api: host_api,
+        })
+    }
+
+    pub fn dispatch(
+        &mut self,
+        operation: &str,
+        payload: &str,
+        context: &InvocationContext,
+    ) -> Result<String, String> {
+        if !context.valid()
+            || operation.is_empty()
+            || operation.len() > 256
+            || payload.len() > MAX_MESSAGE_BYTES
+        {
+            return Err("invalid dispatch request".into());
+        }
+        let table = unsafe { &*self.api };
+        let mut output = OwnedBytes::EMPTY;
+        let status = unsafe {
+            table.dispatch.unwrap()(
+                self.instance,
+                ByteView::from_bytes(operation.as_bytes()),
+                ByteView::from_bytes(payload.as_bytes()),
+                ByteView::from_bytes(context.session.as_bytes()),
+                ByteView::from_bytes(context.workspace.as_bytes()),
+                &mut output,
+            )
+        };
+        let output = unsafe { take_output(table, output) }?;
+        if status == STATUS_OK {
+            Ok(output)
+        } else {
+            Err(output)
+        }
+    }
+
+    pub fn deactivate(&mut self) -> Result<(), String> {
+        if self.instance.is_null() {
+            return Ok(());
+        }
+        let instance = std::mem::replace(&mut self.instance, std::ptr::null_mut());
+        let table = unsafe { &*self.api };
+        let mut output = OwnedBytes::EMPTY;
+        let status = unsafe { table.deactivate.unwrap()(instance, &mut output) };
+        let output = unsafe { take_output(table, output) }?;
+        if status == STATUS_OK {
+            Ok(())
+        } else {
+            Err(output)
+        }
+    }
+}
+
+impl Drop for NativeExtension {
+    fn drop(&mut self) {
+        let _ = self.deactivate();
+        // 関数表とインスタンスの解放より先にライブラリを unload しない。
+        let _ = &self.library;
+    }
+}
+
+unsafe fn take_output(table: &ExtensionApiV1, output: OwnedBytes) -> Result<String, String> {
+    let result = if output.len > MAX_MESSAGE_BYTES || (output.len == 0) != output.ptr.is_null() {
+        Err("invalid native extension output".into())
+    } else {
+        let bytes = if output.len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(output.ptr, output.len) }
+        };
+        std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|_| "invalid native extension UTF-8".into())
+    };
+    unsafe { table.release.unwrap()(output) };
+    result
+}
+
+unsafe fn view(value: ByteView) -> Result<Vec<u8>, String> {
+    if value.len > MAX_MESSAGE_BYTES || (value.len == 0) != value.ptr.is_null() {
+        return Err("invalid native Host request".into());
+    }
+    Ok(if value.len == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(value.ptr, value.len) }.to_vec()
+    })
+}
+
+unsafe extern "C" fn host_call(
+    context: *mut c_void,
+    method: ByteView,
+    payload: ByteView,
+    output: *mut OwnedBytes,
+) -> i32 {
+    if context.is_null() || output.is_null() {
+        return STATUS_ERROR;
+    }
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let state = unsafe { &*context.cast::<HostState>() };
+        let method =
+            String::from_utf8(unsafe { view(method)? }).map_err(|_| "invalid method UTF-8")?;
+        if method.is_empty() || method.len() > 256 {
+            return Err("invalid method".to_owned());
+        }
+        let payload = serde_json::from_slice(&unsafe { view(payload)? })
+            .map_err(|_| "invalid Host request JSON")?;
+        let response = (state.broker)(&method, payload)?;
+        serde_json::to_vec(&response).map_err(|error| error.to_string())
+    }));
+    let (status, bytes) = match result {
+        Ok(Ok(bytes)) if bytes.len() <= MAX_MESSAGE_BYTES => (STATUS_OK, bytes),
+        Ok(Ok(_)) => (STATUS_ERROR, b"Host response too large".to_vec()),
+        Ok(Err(error)) => (STATUS_ERROR, error.into_bytes()),
+        Err(_) => (STATUS_ERROR, b"Host capability failed".to_vec()),
+    };
+    let bytes = if bytes.len() > MAX_MESSAGE_BYTES {
+        b"Host error too large".to_vec()
+    } else {
+        bytes
+    };
+    let mut bytes = bytes.into_boxed_slice();
+    let result = if bytes.is_empty() {
+        OwnedBytes::EMPTY
+    } else {
+        let result = OwnedBytes {
+            ptr: bytes.as_mut_ptr(),
+            len: bytes.len(),
+        };
+        std::mem::forget(bytes);
+        result
+    };
+    unsafe {
+        *output = result;
+    }
+    status
+}
+
+unsafe extern "C" fn host_release(_: *mut c_void, value: OwnedBytes) {
+    if !value.ptr.is_null() && value.len != 0 {
+        drop(unsafe { Box::from_raw(std::ptr::slice_from_raw_parts_mut(value.ptr, value.len)) });
+    }
+}

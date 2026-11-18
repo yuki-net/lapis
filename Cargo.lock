@@ -2755,6 +2755,8 @@ name = "extension-runtime"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "extension-native-api",
+ "libloading",
  "process",
  "serde",
  "serde_json",

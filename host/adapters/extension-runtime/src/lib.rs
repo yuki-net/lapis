@@ -22,6 +22,8 @@ use wasmtime::{
 #[cfg(feature = "worker")]
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
+#[cfg(feature = "worker")]
+pub mod native;
 pub mod supervisor;
 
 #[cfg(feature = "worker")]
