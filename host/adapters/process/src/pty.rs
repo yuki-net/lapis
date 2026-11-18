@@ -136,7 +136,7 @@ impl LocalPtyService {
         };
         let mut first_error = None;
         for session in &removed {
-            // ???? read ???????????????????
+            // 待機中の read が参照を持っていてもプロセスを停止する。
             let result = (|| -> Result<(), PtyError> {
                 session.attachments.lock().map_err(error)?.clear();
                 session.output.1.notify_all();
@@ -690,7 +690,7 @@ mod tests {
         let id = service.spawn(&owner, command()).unwrap();
         service.attach(&owner, &id, attachment.clone()).unwrap();
         wait_for(&service, &owner, &id, &attachment, 0, b"pty-ready");
-        // ????????????????????????????
+        // セッションへの参照が残っていても終了を要求する。
         let session = service.session(&owner, &id).unwrap();
         service.close_owner(&owner).unwrap();
         assert_eq!(service.session_count(&owner).unwrap(), 0);

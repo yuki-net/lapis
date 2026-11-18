@@ -1116,7 +1116,7 @@ mod tests {
                 serde_json::json!({"id":id}),
             )
             .unwrap();
-        // ??????????????? read ???????????
+        // 初期出力を読み切り、次の read を待機させる。
         let mut offset = 0;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
         loop {
