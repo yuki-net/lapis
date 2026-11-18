@@ -413,7 +413,7 @@ impl DesktopRoot {
                 });
             }
             // Terminal を「宣言の供給者＋個体の所有者」として登録する。Shell は
-            // 試験経路では拡張の現在の稼働状態を受け取るまで View を隠す。
+            // 拡張の現在の稼働状態を受け取るまで View を隠す。
             if extension_terminal {
                 shell.set_view_available(ViewId::new(id::VIEW_TERMINAL), false, cx);
                 shell.set_view_hidden(ViewId::new(id::VIEW_TERMINAL), true, cx);
@@ -2717,6 +2717,22 @@ mod tests {
         assert_eq!(hidden(session.snapshot().as_ref()), Some(true));
         session.apply(generation, response(Some(true))).unwrap();
         assert_eq!(hidden(session.snapshot().as_ref()), Some(false));
+        session
+            .apply(
+                generation,
+                serde_json::from_value(serde_json::json!({
+                    "extensions": [], "contributions": []
+                }))
+                .unwrap(),
+            )
+            .unwrap();
+        let snapshot = session.snapshot();
+        assert_eq!(hidden(snapshot.as_ref()), Some(true));
+        assert!(!extension_view_available(
+            snapshot.as_ref(),
+            "lapis.terminal",
+            "example.grid.v1"
+        ));
     }
 
     #[test]

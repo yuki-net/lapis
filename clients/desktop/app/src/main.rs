@@ -197,14 +197,8 @@ fn main() {
     } else {
         LspSession::new(Arc::new(lsp_backend))
     };
-    let extension_terminal = arguments
-        .iter()
-        .any(|value| value == "--extension-terminal");
-    let terminal_backend: Arc<dyn terminal::TerminalBackend> = if extension_terminal {
-        Arc::new(extension_terminal::ExtensionTerminals::new(host.clone()))
-    } else {
-        host.terminals()
-    };
+    let terminal_backend: Arc<dyn terminal::TerminalBackend> =
+        Arc::new(extension_terminal::ExtensionTerminals::new(host.clone()));
     let mut terminal_session = TerminalSession::new(terminal_backend);
     let search_session = if use_loopback {
         WorkspaceSearchSession::new(Arc::new(LoopbackBackend::new(
@@ -250,7 +244,7 @@ fn main() {
         conversation_session,
         settings_session.clone(),
     )
-    .with_extension_terminal(extension_terminal)
+    .with_extension_terminal(true)
     .with_workbench_watch(workbench_watch)
     .with_session_view(session_view)
     .with_extension_loader({

@@ -244,20 +244,8 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
     if let Err(error) = desktop_client::web_host::bind_extension_contributions(&settings) {
         web_sys::console::warn_1(&format!("拡張宣言を登録できません: {error}").into());
     }
-    // 拡張版 Terminal の実画面検証用。通常経路の切替は完全な互換確認後に行う。
-    let extension_terminal = web_sys::window()
-        .and_then(|window| window.location().search().ok())
-        .is_some_and(|search| {
-            search
-                .trim_start_matches('?')
-                .split('&')
-                .any(|part| part == "terminal-extension=1")
-        });
-    let terminal: Arc<dyn TerminalBackend> = if extension_terminal {
-        Arc::new(desktop_client::web_host::ExtensionTerminalBackend)
-    } else {
-        backend.clone()
-    };
+    let terminal: Arc<dyn TerminalBackend> =
+        Arc::new(desktop_client::web_host::ExtensionTerminalBackend);
     let mut services = DesktopServices::new(
         TaskSession::new(backend.clone()),
         GitSession::new(backend.clone()),
@@ -267,7 +255,7 @@ pub(crate) fn host_sessions() -> Result<(EditorSession, DesktopServices), String
         conversation,
         settings,
     )
-    .with_extension_terminal(extension_terminal);
+    .with_extension_terminal(true);
     // 表示用の Workspace 名と切替候補は既存の ConnectionInfo をそのまま使う。
     if let Some(info) = desktop_client::web_host::connection_info() {
         services = services.with_connection_identity(crate::ConnectionIdentity {
